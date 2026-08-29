@@ -54,7 +54,7 @@ final class MaxDurationNoProgressTest {
     private static JsonRunSummaryWriter.Config summaryConfig(Path path) {
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket", "us-east-1", "jsonl", 4, false, null, 30_000L, List.of(),
-                EngineToggles.DEFAULT, null, false, null, false);
+                EngineToggles.DEFAULT, null, false, null, io.varve.swath.sort.SortArm.NONE, false);
         return new JsonRunSummaryWriter.Config(path, Duration.ofMinutes(10), "no-progress-hash", runConfig,
                 List.of("list", "s3://bucket"));
     }

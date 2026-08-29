@@ -7,7 +7,9 @@ package io.varve.swath.cli;
 
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
+import io.varve.swath.sort.MergeBoundaryPolicy;
 import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.StagingRetention;
 import java.io.PrintWriter;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -34,6 +36,12 @@ final class TuneOptions {
                     SortOptions.MIN_MERGE_PARALLELISM + ".."
                             + SortOptions.MAX_MERGE_PARALLELISM,
                     Integer.toString(SortConfig.DEFAULT.mergeParallelism()), "stable", ResumeClass.FREE,
+                    "fresh list and resume"),
+            new KeySpec(SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY, "enum", "distinct|rows",
+                    SortConfig.DEFAULT.mergeBoundaryPolicy().configValue(), "experimental",
+                    ResumeClass.FREE, "fresh list and resume"),
+            new KeySpec(SortConfig.KEEP_STAGING_TUNE_KEY, "boolean", "on|off",
+                    SortConfig.DEFAULT.stagingRetention().tuneValue(), "diagnostic", ResumeClass.FREE,
                     "fresh list and resume"),
             new KeySpec("sort.ignore-disk-check", "boolean", "on|off", "off",
                     "diagnostic", ResumeClass.FREE, "fresh list and resume"));
@@ -94,6 +102,12 @@ final class TuneOptions {
             } else if ("sort.merge-parallelism".equals(key)) {
                 sorting.mergeParallelism = parseMergeParallelism(key, setting.getValue());
                 effectiveValues.put(key, Integer.toString(sorting.mergeParallelism));
+            } else if (SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY.equals(key)) {
+                sorting.mergeBoundaryPolicy = parseMergeBoundaryPolicy(key, setting.getValue());
+                effectiveValues.put(key, sorting.mergeBoundaryPolicy.configValue());
+            } else if (SortConfig.KEEP_STAGING_TUNE_KEY.equals(key)) {
+                sorting.stagingRetention = StagingRetention.fromEnabled(parseOnOff(key, setting.getValue()));
+                effectiveValues.put(key, sorting.stagingRetention.tuneValue());
             } else {
                 throw new AssertionError("resume-applicable tune key has no implementation: " + key);
             }
@@ -102,13 +116,17 @@ final class TuneOptions {
     }
 
     /** Registry-ordered effective configuration, including defaults for settings not supplied. */
-    String effectiveConfiguration(String resolvedSummaryInterval, int resolvedMergeParallelism) {
+    String effectiveConfiguration(String resolvedSummaryInterval, SortConfig resolvedSortConfig) {
         return REGISTRY.stream()
                 .map(spec -> spec.key() + "=" + effectiveValues.getOrDefault(spec.key(),
                         "summary.interval".equals(spec.key())
                                 ? resolvedSummaryInterval
                                 : "sort.merge-parallelism".equals(spec.key())
-                                        ? Integer.toString(resolvedMergeParallelism)
+                                        ? Integer.toString(resolvedSortConfig.mergeParallelism())
+                                        : SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY.equals(spec.key())
+                                                ? resolvedSortConfig.mergeBoundaryPolicy().configValue()
+                                        : SortConfig.KEEP_STAGING_TUNE_KEY.equals(spec.key())
+                                                ? resolvedSortConfig.stagingRetention().tuneValue()
                                         : spec.defaultValue()))
                 .collect(Collectors.joining(", "));
     }
@@ -210,6 +228,14 @@ final class TuneOptions {
                     sorting.mergeParallelism = parseMergeParallelism(key, value);
                     effectiveValues.put(key, Integer.toString(sorting.mergeParallelism));
                 }
+                case SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY -> {
+                    sorting.mergeBoundaryPolicy = parseMergeBoundaryPolicy(key, value);
+                    effectiveValues.put(key, sorting.mergeBoundaryPolicy.configValue());
+                }
+                case SortConfig.KEEP_STAGING_TUNE_KEY -> {
+                    sorting.stagingRetention = StagingRetention.fromEnabled(parseOnOff(key, value));
+                    effectiveValues.put(key, sorting.stagingRetention.tuneValue());
+                }
                 default -> throw new AssertionError("unregistered tune key " + key);
         }
     }
@@ -226,6 +252,15 @@ final class TuneOptions {
             throw valueError(key, value);
         }
         return parallelism;
+    }
+
+    private static MergeBoundaryPolicy parseMergeBoundaryPolicy(String key, String value)
+            throws InvalidArgsException {
+        try {
+            return MergeBoundaryPolicy.fromConfigValue(key, value);
+        } catch (IllegalArgumentException e) {
+            throw valueError(key, value);
+        }
     }
 
     private static boolean parseOnOff(String key, String value) throws InvalidArgsException {

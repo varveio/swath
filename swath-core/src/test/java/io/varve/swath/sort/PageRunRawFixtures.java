@@ -5,7 +5,11 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
+import io.varve.swath.model.CommonPrefixEntry;
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -41,7 +45,7 @@ import java.util.zip.CRC32C;
  * (rather than trust) what is physically stored — or to reproduce a read path that does not enforce that
  * guard on either route — cannot go through them.
  */
-final class PageRunRawFixtures {
+public final class PageRunRawFixtures {
 
     private PageRunRawFixtures() {
     }
@@ -109,6 +113,271 @@ final class PageRunRawFixtures {
             SortTestSupport.writeFully(ch, trailer.flip());
             ch.force(true);
         }
+    }
+
+    /**
+     * Replace one persisted page maximum without changing its payload, then make the record CRC,
+     * type-2 prefix maxima, final prefix maximum, and trailer maximum agree with the lie. Keys in
+     * this deliberately narrow fixture helper must keep their encoded lengths so no physical offset
+     * or cumulative byte claim changes.
+     */
+    static void understatePageMaxAndRepairIndex(Path path, int pageOrdinal, byte[] forgedMax)
+            throws IOException {
+        byte[] bytes = Files.readAllBytes(path);
+        ByteBuffer data = ByteBuffer.wrap(bytes);
+        int fixedTailStart = bytes.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        int trailerStart = Math.toIntExact(data.getLong(fixedTailStart));
+        List<byte[]> pageMaxima = new ArrayList<>();
+        int frameStart = PageRunSegmentWriter.HEADER_BYTES;
+        int ordinal = 0;
+        boolean changed = false;
+        while (frameStart < trailerStart) {
+            int bodyLength = data.getInt(frameStart);
+            int bodyStart = frameStart + 2 * Integer.BYTES;
+            int minLength = unsignedShort(bytes, bodyStart);
+            int maxLengthPosition = bodyStart + Short.BYTES + minLength;
+            int maxLength = unsignedShort(bytes, maxLengthPosition);
+            int maxKeyPosition = maxLengthPosition + Short.BYTES;
+            if (ordinal == pageOrdinal) {
+                replaceSameLength(bytes, maxKeyPosition, maxLength, forgedMax, "page maxKey");
+                rewriteRecordCrc(bytes, frameStart, bodyStart, bodyLength);
+                changed = true;
+            }
+            pageMaxima.add(Arrays.copyOfRange(bytes, maxKeyPosition, maxKeyPosition + maxLength));
+            frameStart += 2 * Integer.BYTES + bodyLength;
+            ordinal++;
+        }
+        if (!changed) {
+            throw new IllegalArgumentException("page ordinal is outside the segment: " + pageOrdinal);
+        }
+
+        byte[] persistedMaximum = pageMaxima.stream()
+                .max(Arrays::compareUnsigned)
+                .orElseThrow();
+        int trailerMinLength = unsignedShort(bytes, trailerStart);
+        int trailerMaxLengthPosition = trailerStart + Short.BYTES + trailerMinLength;
+        int trailerMaxLength = unsignedShort(bytes, trailerMaxLengthPosition);
+        int trailerMaxPosition = trailerMaxLengthPosition + Short.BYTES;
+        replaceSameLength(bytes, trailerMaxPosition, trailerMaxLength,
+                persistedMaximum, "trailer maxKey");
+
+        int extensionStart = trailerMaxPosition + trailerMaxLength;
+        if (data.getInt(extensionStart) != PageRunBoundarySample.MAGIC
+                || data.getShort(extensionStart + Integer.BYTES) != PageRunPageIndex.TYPE) {
+            throw new IllegalArgumentException("fixture requires a type-2 page index");
+        }
+        int entryCount = data.getInt(extensionStart + 3 * Integer.BYTES);
+        int position = extensionStart + PageRunBoundarySample.HEADER_BYTES;
+        for (int entry = 0; entry < entryCount; entry++) {
+            long sampleOrdinal = data.getLong(position);
+            position += 4 * Long.BYTES;
+            int minLength = unsignedShort(bytes, position);
+            position += Short.BYTES + minLength;
+            int prefixLength = unsignedShort(bytes, position);
+            int prefixPosition = position + Short.BYTES;
+            byte[] sampledPrefix = pageMaxima.subList(0, Math.toIntExact(sampleOrdinal) + 1)
+                    .stream().max(Arrays::compareUnsigned).orElseThrow();
+            replaceSameLength(bytes, prefixPosition, prefixLength,
+                    sampledPrefix, "page-index prefixMax");
+            position = prefixPosition + prefixLength;
+        }
+        int finalPrefixLength = unsignedShort(bytes, position);
+        replaceSameLength(bytes, position + Short.BYTES, finalPrefixLength,
+                persistedMaximum, "page-index finalPrefixMax");
+
+        int extensionCrcPosition = fixedTailStart - PageRunBoundarySample.CRC_BYTES;
+        CRC32C extensionCrc = new CRC32C();
+        extensionCrc.update(bytes, extensionStart, extensionCrcPosition - extensionStart);
+        data.putInt(extensionCrcPosition, (int) extensionCrc.getValue());
+        Files.write(path, bytes);
+    }
+
+    /**
+     * Write the Blocker-1 crux page: decoded rows {@code [a,z,m]} behind checksum-valid persisted
+     * bounds {@code [a,m]}, with a coherent production type-2 index and trailer. The production
+     * writer first creates the canonical {@code [a,m,z]} listing page; the fixture then changes only
+     * the two row-key payload bytes and repairs every persisted claim around that mutation.
+     */
+    static Path writeIndexedInteriorRowRegression(Path path) throws IOException {
+        ListEntryComparator comparator = new ListEntryComparator();
+        SortBuffer buffer = new SortBuffer(
+                SortConfigs.base().withSegmentCodec(PageCodec.NONE), comparator);
+        buffer.admit(0L, List.of(
+                prefix("a"), prefix("m"), prefix("z")));
+        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), path);
+
+        byte[] bytes = Files.readAllBytes(path);
+        int frameStart = PageRunSegmentWriter.HEADER_BYTES;
+        int bodyLength = ByteBuffer.wrap(bytes).getInt(frameStart);
+        int bodyStart = frameStart + 2 * Integer.BYTES;
+        ByteBuffer body = ByteBuffer.wrap(bytes, bodyStart, bodyLength).slice();
+        int payloadStart = pageHeaderLayout(body).payloadOffset();
+        // CommonPrefix rows with one-byte keys each encode as [tag][shared=0][suffix=1][key].
+        int secondKey = bodyStart + payloadStart + 7;
+        int thirdKey = bodyStart + payloadStart + 11;
+        if (bytes[secondKey] != 'm' || bytes[thirdKey] != 'z') {
+            throw new IllegalStateException("unexpected canonical crux-page payload layout");
+        }
+        bytes[secondKey] = 'z';
+        bytes[thirdKey] = 'm';
+        Files.write(path, bytes);
+
+        understatePageMaxAndRepairIndex(path, 0, new byte[]{'m'});
+        return path;
+    }
+
+    /** Write a checksum-valid segment with a page bound one byte over the S3 key limit. */
+    static Path writeCrcRepairedOverlongBound(Path path, boolean overlongMinimum) throws IOException {
+        byte[] atLimit = new byte[ByteMidpoint.MAX_KEY_LEN];
+        if (!overlongMinimum) {
+            Arrays.fill(atLimit, (byte) 'z');
+        }
+        List<ListEntry> rows = overlongMinimum
+                ? List.of(objectWithKey(atLimit), SortTestSupport.object("z"))
+                : List.of(SortTestSupport.object("a"), objectWithKey(atLimit));
+        ListEntryComparator comparator = new ListEntryComparator();
+        PageBlock block = PageBlock.pack(rows, comparator, PageCodec.NONE);
+        byte[] validBody = block.serialize();
+        int minLength = unsignedShort(validBody, 0);
+        int lengthPosition = overlongMinimum ? 0 : Short.BYTES + minLength;
+        int oldLength = unsignedShort(validBody, lengthPosition);
+        int insertion = lengthPosition + Short.BYTES + oldLength;
+        byte[] malformedBody = new byte[validBody.length + 1];
+        System.arraycopy(validBody, 0, malformedBody, 0, insertion);
+        malformedBody[insertion] = overlongMinimum ? 0 : (byte) 'z';
+        System.arraycopy(validBody, insertion, malformedBody, insertion + 1,
+                validBody.length - insertion);
+        ByteBuffer.wrap(malformedBody).putShort(lengthPosition, (short) (oldLength + 1));
+
+        // Frame the malformed body directly. The production writer now enforces the same key limit
+        // as the reader, so corruption fixtures must bypass it rather than relying on asymmetry.
+        try (FileChannel ch = FileChannel.open(path, StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            ByteBuffer header = ByteBuffer.allocate(PageRunSegmentWriter.HEADER_BYTES)
+                    .putInt(PageRunSegmentWriter.MAGIC)
+                    .putShort(PageRunSegmentWriter.FORMAT_VERSION);
+            SortTestSupport.writeFully(ch, header.flip());
+            CRC32C crc = new CRC32C();
+            crc.update(malformedBody, 0, malformedBody.length);
+            ByteBuffer frame = ByteBuffer.allocate(2 * Integer.BYTES + malformedBody.length)
+                    .putInt(malformedBody.length)
+                    .putInt((int) crc.getValue())
+                    .put(malformedBody);
+            SortTestSupport.writeFully(ch, frame.flip());
+            long trailerStart = ch.position();
+            byte[] segMin = block.firstKey();
+            byte[] segMax = block.lastKey();
+            ByteBuffer trailer = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length
+                            + PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES)
+                    .putShort((short) segMin.length).put(segMin)
+                    .putShort((short) segMax.length).put(segMax)
+                    .putLong(trailerStart).putInt(1).putLong(block.count())
+                    .putInt(malformedBody.length).putInt(PageRunSegmentWriter.MAGIC);
+            SortTestSupport.writeFully(ch, trailer.flip());
+            ch.force(true);
+        }
+        return path;
+    }
+
+    /** Raw test mutation, intentionally independent of the production sparse-index parser. */
+    public static void repairCrcAfterSecondEntryCumulativeLie(Path segment) throws IOException {
+        byte[] bytes = Files.readAllBytes(segment);
+        ByteBuffer data = ByteBuffer.wrap(bytes);
+        int fixedTailStart = bytes.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        int trailerStart = Math.toIntExact(data.getLong(fixedTailStart));
+        int position = trailerStart;
+        position += Short.BYTES + unsignedShort(bytes, position);
+        position += Short.BYTES + unsignedShort(bytes, position);
+        int extensionStart = position;
+        if (data.getInt(extensionStart) != PageRunBoundarySample.MAGIC) {
+            throw new IllegalStateException("fixture requires the page-index extension magic");
+        }
+        if (data.getShort(extensionStart + Integer.BYTES)
+                != (short) PageRunFormat.PAGE_INDEX_EXTENSION) {
+            throw new IllegalStateException("fixture requires the current page-index extension");
+        }
+        int entryCount = data.getInt(extensionStart + 3 * Integer.BYTES);
+        if (entryCount <= 2) {
+            throw new IllegalStateException("fixture requires more than two page-index entries");
+        }
+        int firstEntry = extensionStart + PageRunBoundarySample.HEADER_BYTES;
+        int firstMinLength = unsignedShort(bytes, firstEntry + 4 * Long.BYTES);
+        int firstPrefixLengthPosition = firstEntry + 4 * Long.BYTES + Short.BYTES
+                + firstMinLength;
+        int firstPrefixLength = unsignedShort(bytes, firstPrefixLengthPosition);
+        int secondEntry = firstPrefixLengthPosition + Short.BYTES + firstPrefixLength;
+        long cumulativeEntries = data.getLong(secondEntry + 2 * Long.BYTES);
+        data.putLong(secondEntry + 2 * Long.BYTES, cumulativeEntries + 1);
+        int crcPosition = fixedTailStart - PageRunBoundarySample.CRC_BYTES;
+        CRC32C crc = new CRC32C();
+        crc.update(bytes, extensionStart, crcPosition - extensionStart);
+        data.putInt(crcPosition, (int) crc.getValue());
+        Files.write(segment, bytes);
+    }
+
+    private static void rewriteRecordCrc(byte[] bytes, int frameStart, int bodyStart, int bodyLength) {
+        CRC32C crc = new CRC32C();
+        crc.update(bytes, bodyStart, bodyLength);
+        ByteBuffer.wrap(bytes).putInt(frameStart + Integer.BYTES, (int) crc.getValue());
+    }
+
+    private static void replaceSameLength(byte[] bytes, int position, int originalLength,
+                                          byte[] replacement, String field) {
+        if (replacement.length != originalLength) {
+            throw new IllegalArgumentException(field + " replacement must keep encoded length");
+        }
+        System.arraycopy(replacement, 0, bytes, position, originalLength);
+    }
+
+    private static int unsignedShort(byte[] bytes, int position) {
+        return ByteBuffer.wrap(bytes).getShort(position) & 0xffff;
+    }
+
+    /** Shared corruption-fixture parser for offsets within one serialized page body. */
+    static PageHeaderLayout pageHeaderLayout(byte[] body) {
+        return pageHeaderLayout(ByteBuffer.wrap(body));
+    }
+
+    /** Shared corruption-fixture parser for offsets within one serialized page body. */
+    static PageHeaderLayout pageHeaderLayout(ByteBuffer body) {
+        ByteBuffer cursor = body.duplicate();
+        int position = Short.BYTES + unsignedShort(cursor, 0);
+        position += Short.BYTES + unsignedShort(cursor, position);
+        int countOffset = position;
+        position += Integer.BYTES + 1; // count and ordered flag
+        for (int dictionary = 0; dictionary < PageBlockCodec.DICT_COLUMN_COUNT; dictionary++) {
+            int values = unsignedShort(cursor, position);
+            position += Short.BYTES;
+            for (int value = 0; value < values; value++) {
+                position += Short.BYTES + unsignedShort(cursor, position);
+            }
+        }
+        position++; // dictionary-use mask
+        int codecOffset = position++;
+        int rawLengthOffset = position;
+        position += Integer.BYTES;
+        int storedLengthOffset = position;
+        position += Integer.BYTES;
+        return new PageHeaderLayout(
+                countOffset, codecOffset, rawLengthOffset, storedLengthOffset, position);
+    }
+
+    record PageHeaderLayout(int countOffset, int codecOffset, int rawLengthOffset,
+                            int storedLengthOffset, int payloadOffset) {
+    }
+
+    private static int unsignedShort(ByteBuffer bytes, int position) {
+        return bytes.getShort(position) & 0xffff;
+    }
+
+    private static ObjectEntry objectWithKey(byte[] key) {
+        return new ObjectEntry(KeyBytes.of(key), 0L, 0L, null, null, null,
+                false, null, null, null, null);
+    }
+
+    private static CommonPrefixEntry prefix(String key) {
+        return new CommonPrefixEntry(KeyBytes.ofUtf8(key));
     }
 
     /** The per-page {@code minKey}s in physical FILE order — proves what a fixture actually stores. */

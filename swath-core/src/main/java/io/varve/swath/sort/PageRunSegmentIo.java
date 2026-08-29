@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -28,7 +29,8 @@ import java.util.zip.CRC32C;
  * trailing-magic truncation check), the framed-record read ({@code [len u32][crc32c u32][body]} with
  * the {@code len<=0 || len>maxRecordLen} bound applied BEFORE allocation and a CRC32C body verify), the
  * end-of-stream completeness cross-check ({@code seenEntries == totalEntries}), the decode-free
- * bounded structural page-body validation/frontier parse, the <b>intra-segment min-monotonicity
+ * bounded single-pass page-header validation/frontier parse (with a zero-copy payload slice), the
+ * <b>intra-segment min-monotonicity
  * guard</b> ({@link #nextPage()}), and
  * the positional/sequential read primitives.
  *
@@ -47,6 +49,8 @@ final class PageRunSegmentIo implements AutoCloseable {
     private final short formatVersion;
     /** Carries the {@code SORT.page_run_min_regression} engagement counter (NO_OP when unwired). */
     private final SortMetrics metrics;
+    /** Maximum decoded page payload admitted by kickoff planning for this segment. */
+    private final int maxRawPayloadLength;
 
     /** Largest framed body length (from the trailer): bounds a record's claimed length before alloc. */
     final long maxRecordLen;
@@ -61,15 +65,41 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /** Previous page's minKey (monotonicity guard); null until the first page is read. */
     private byte[] previousMin;
-    /** Pages read via {@link #nextPage()} so far — the 1-based page number in a violation message. */
+    /** Ordinal of the next page returned by {@link #nextPage()}. */
     private long pagesRead;
+    /** Actual or seek-seeded entries before the next page. */
+    private long cumulativeEntries;
+    /** Framed page bytes physically read by this IO instance. */
+    private long framedBytesRead;
+    /** Tracked sequential frame offset; avoids a native FileChannel.position() query per page. */
+    private long nextFrameOffset = PageRunSegmentWriter.HEADER_BYTES;
+    /** Physical proof accounting is enabled only for original indexed-parallel frontiers. */
+    private boolean proofTracking;
+    private long lastPageOrdinal;
+    private long lastFrameOffset;
+    private long lastCumulativeEntries;
+    private long lastCumulativeFramedBytes;
+    private int lastFramedBytes;
+    /** One-shot verification owed by the first page after an indexed seek. */
+    private SeekExpectation seekExpectation;
+    /** True after a page-index target positioned this reader away from the ordinary header path. */
+    private boolean indexedPosition;
 
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
                             short formatVersion, long maxRecordLen, long totalRecords,
                             long totalEntries, long trailerStart, long fileSize) {
+        this(channel, path, metrics, magic, formatVersion, maxRecordLen, totalRecords,
+                totalEntries, trailerStart, fileSize, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
+                            short formatVersion, long maxRecordLen, long totalRecords,
+                            long totalEntries, long trailerStart, long fileSize,
+                            int maxRawPayloadLength) {
         this.channel = channel;
         this.path = path;
         this.metrics = metrics;
+        this.maxRawPayloadLength = maxRawPayloadLength;
         this.magic = magic;
         this.formatVersion = formatVersion;
         this.maxRecordLen = maxRecordLen;
@@ -87,6 +117,16 @@ final class PageRunSegmentIo implements AutoCloseable {
      * {@code SORT.page_run_min_regression} engagement counter into the run summary.
      */
     static PageRunSegmentIo open(Path path, SortMetrics metrics) throws IOException {
+        return open(path, metrics, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    /** Open with the decoded-page maximum admitted for this segment by kickoff planning. */
+    static PageRunSegmentIo open(Path path, SortMetrics metrics, int maxRawPayloadLength)
+            throws IOException {
+        if (maxRawPayloadLength < 0 || maxRawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
+            throw new IllegalArgumentException("decoded-page limit is outside the format bound: "
+                    + maxRawPayloadLength);
+        }
         FileChannel channel = FileChannel.open(path, StandardOpenOption.READ);
         try {
             long size = channel.size();
@@ -139,7 +179,7 @@ final class PageRunSegmentIo implements AutoCloseable {
 
             channel.position(PageRunSegmentWriter.HEADER_BYTES);
             return new PageRunSegmentIo(channel, path, metrics, magic, version, maxRecordLen,
-                    totalRecords, totalEntries, trailerStart, size);
+                    totalRecords, totalEntries, trailerStart, size, maxRawPayloadLength);
         } catch (IOException | RuntimeException e) {
             channel.close();
             throw e;
@@ -150,12 +190,19 @@ final class PageRunSegmentIo implements AutoCloseable {
     record Record(byte[] body, int framedLen, boolean crcOk) {
     }
 
-    /** The decode-free leading fields of a page record body: {@code [minKeyLen u16][minKey][maxKeyLen u16][maxKey][count u32]}. */
-    record FrontierFields(byte[] minKey, byte[] maxKey, int count) {
+    /**
+     * One CRC-validated page record and its single parsed header. The body array is newly allocated
+     * by this IO instance and is thereafter immutable. A decoded {@link PageBlock} retains that body
+     * directly, so a frontier may advance or close without invalidating a previously returned block.
+     */
+    record Page(byte[] body, PageBlockCodec.Header header) {
+        PageBlock decode(Path sourcePath) {
+            return PageBlockCodec.deserialize(body, header, sourcePath);
+        }
     }
 
-    /** One validated page record: the CRC-verified body bytes plus its parsed {@link FrontierFields}. */
-    record Page(byte[] body, FrontierFields fields) {
+    private record SeekExpectation(long pageOrdinal, long frameOffset, long cumulativeEntries,
+                                   long cumulativeFramedBytes, byte[] minKey) {
     }
 
     /**
@@ -170,18 +217,109 @@ final class PageRunSegmentIo implements AutoCloseable {
      * exactly as the frontier path would.
      */
     Page nextPage() throws IOException {
-        byte[] body = nextBody();
-        FrontierFields fields;
+        long ordinal = pagesRead;
+        long frameOffset = nextFrameOffset;
+        if (indexedPosition && frameOffset >= trailerStart && ordinal < totalRecords) {
+            throw indexMismatch("indexed page offset reached the trailer before page ordinal "
+                    + ordinal + " of " + totalRecords, null);
+        }
+        Record record;
         try {
-            fields = parseFrontierFields(body);
+            record = nextRecord();
+        } catch (IOException e) {
+            throw seekFailureOr(e, "indexed seek did not land on a complete page frame");
+        }
+        if (!record.crcOk()) {
+            throw fail("record CRC32C mismatch (torn or corrupt record)");
+        }
+        byte[] body = record.body();
+        PageBlockCodec.Header header;
+        try {
+            header = parsePageHeader(body);
         } catch (IllegalArgumentException e) {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page body: " + e.getMessage(), e);
         }
+        if (header.rawPayloadLength() > maxRawPayloadLength) {
+            metrics.recordStealReason("SORT", "page_run_decoded_page_limit");
+            throw corruption(SegmentCorruptionException.PAGE_RUN_DECODED_PAGE_LIMIT,
+                    "decoded page payload " + header.rawPayloadLength()
+                            + " exceeds the planned segment maximum " + maxRawPayloadLength,
+                    null);
+        }
+        long cumulativeFramedBytes = proofTracking
+                ? frameOffset - PageRunSegmentWriter.HEADER_BYTES : 0;
+        if (seekExpectation != null) {
+            verifySeekExpectation(ordinal, frameOffset, cumulativeEntries,
+                    cumulativeFramedBytes, header.minKey());
+        }
         pagesRead++;
-        checkMinMonotonic(fields.minKey());
-        previousMin = fields.minKey();
-        return new Page(body, fields);
+        checkMinMonotonic(header.minKey());
+        previousMin = header.minKey();
+        int framedBytes = Math.addExact(8, record.framedLen());
+        // Every page body read by this IO instance contributes to the range's logical framed-byte
+        // total. Proof state applies only to the indexed-original physical coordinates below;
+        // cascade intermediates have no proof state but are still real page-frame reads.
+        framedBytesRead += framedBytes;
+        if (proofTracking) {
+            lastPageOrdinal = ordinal;
+            lastFrameOffset = frameOffset;
+            lastCumulativeEntries = cumulativeEntries;
+            lastCumulativeFramedBytes = cumulativeFramedBytes;
+            lastFramedBytes = framedBytes;
+            cumulativeEntries += header.count();
+        }
+        return new Page(body, header);
+    }
+
+    /**
+     * Position at one untrusted page-index entry. The next page must confirm every directly observable
+     * target field before it is exposed to a frontier; the zone proof later anchors the ordinal and
+     * cumulative entry claim to a header-to-trailer physical chain.
+     */
+    void seekToPage(PageRunPageIndex.IndexEntry target) throws IOException {
+        proofTracking = true;
+        long physicalCumulativeBytes = target.fileOffset() - PageRunSegmentWriter.HEADER_BYTES;
+        if (target.pageOrdinal() < 0 || target.pageOrdinal() >= totalRecords
+                || target.fileOffset() < PageRunSegmentWriter.HEADER_BYTES
+                || target.fileOffset() >= trailerStart
+                || target.cumulativeEntries() < 0
+                || target.cumulativeFramedBytes() != physicalCumulativeBytes) {
+            throw indexMismatch("indexed seek target is outside the physical page region", null);
+        }
+        channel.position(target.fileOffset());
+        nextFrameOffset = target.fileOffset();
+        pagesRead = target.pageOrdinal();
+        cumulativeEntries = target.cumulativeEntries();
+        previousMin = null;
+        indexedPosition = true;
+        seekExpectation = new SeekExpectation(target.pageOrdinal(), target.fileOffset(),
+                target.cumulativeEntries(), target.cumulativeFramedBytes(), target.minKey().clone());
+    }
+
+    private void verifySeekExpectation(long ordinal, long frameOffset, long entries,
+                                       long framedBytes, byte[] minKey) throws IOException {
+        SeekExpectation expected = seekExpectation;
+        if (expected == null) {
+            return;
+        }
+        seekExpectation = null;
+        if (ordinal != expected.pageOrdinal()
+                || frameOffset != expected.frameOffset()
+                || entries != expected.cumulativeEntries()
+                || framedBytes != expected.cumulativeFramedBytes()
+                || !Arrays.equals(minKey, expected.minKey())) {
+            throw indexMismatch("indexed seek target disagrees with the next physical page", null);
+        }
+    }
+
+    private IOException seekFailureOr(IOException failure, String message) {
+        return seekExpectation == null ? failure : indexMismatch(message, failure);
+    }
+
+    SegmentCorruptionException indexMismatch(String message, Throwable cause) {
+        metrics.recordStealReason("SORT", "page_run_index_mismatch");
+        return corruption(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, message, cause);
     }
 
     /**
@@ -215,18 +353,6 @@ final class PageRunSegmentIo implements AutoCloseable {
     }
 
     /**
-     * Read the next framed record and CRC-verify its body, throwing on a mismatch (fail-fast, no silent
-     * skip). Private: page-run readers go through {@link #nextPage()} so the guard cannot be bypassed.
-     */
-    private byte[] nextBody() throws IOException {
-        Record r = nextRecord();
-        if (!r.crcOk()) {
-            throw fail("record CRC32C mismatch (torn or corrupt record)");
-        }
-        return r.body();
-    }
-
-    /**
      * Read the next framed record WITHOUT throwing on a CRC mismatch (the inspection path): the len
      * bound is still enforced (a structurally impossible length is genuine corruption the walk cannot
      * step over and still throws), but a body-only bit-flip is reported via {@link Record#crcOk()}.
@@ -242,6 +368,7 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw fail("record length " + len + " out of bounds (maxRecordLen=" + maxRecordLen + ")");
         }
         byte[] body = readFully(len).array();
+        nextFrameOffset = Math.addExact(nextFrameOffset, 8L + len);
         CRC32C crc = new CRC32C();
         crc.update(body, 0, len);
         boolean crcOk = (int) crc.getValue() == expectedCrc;
@@ -263,19 +390,24 @@ final class PageRunSegmentIo implements AutoCloseable {
         }
     }
 
-    /** Structurally validate a body and return its frontier fields without decoding rows. */
-    static FrontierFields parseFrontierFields(byte[] body) {
-        PageBlockCodec.SerializedFields fields = PageBlockCodec.parseSerializedFields(body);
-        if (Arrays.compareUnsigned(fields.minKey(), fields.maxKey()) > 0) {
+    /** Structurally validate a body once and return its zero-copy persisted-page header. */
+    static PageBlockCodec.Header parsePageHeader(byte[] body) {
+        PageBlockCodec.Header header = PageBlockCodec.parseHeader(body);
+        if (header.minKey().length > ByteMidpoint.MAX_KEY_LEN
+                || header.maxKey().length > ByteMidpoint.MAX_KEY_LEN) {
+            throw new IllegalArgumentException("malformed PageBlock: minKey/maxKey exceeds the S3 key limit of "
+                    + ByteMidpoint.MAX_KEY_LEN + " bytes");
+        }
+        if (Arrays.compareUnsigned(header.minKey(), header.maxKey()) > 0) {
             throw new IllegalArgumentException(
                     "malformed PageBlock: minKey exceeds maxKey under unsigned byte order");
         }
-        if (fields.codec() == PageCodec.NONE
-                && fields.storedPayload().length != fields.rawPayloadLength()) {
+        if (header.codec() == PageCodec.NONE
+                && header.payloadLength() != header.rawPayloadLength()) {
             throw new IllegalArgumentException("malformed PageBlock: NONE payload lengths differ: raw="
-                    + fields.rawPayloadLength() + " stored=" + fields.storedPayload().length);
+                    + header.rawPayloadLength() + " stored=" + header.payloadLength());
         }
-        return new FrontierFields(fields.minKey(), fields.maxKey(), fields.count());
+        return header;
     }
 
     /** Positional read of exactly {@code n} bytes (does not move the channel position). */
@@ -330,6 +462,42 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     Path path() {
         return path;
+    }
+
+    long framedBytesRead() {
+        return framedBytesRead;
+    }
+
+    long nextFrameOffset() {
+        return nextFrameOffset;
+    }
+
+    void enableProofTracking() {
+        proofTracking = true;
+    }
+
+    boolean proofTracking() {
+        return proofTracking;
+    }
+
+    long lastPageOrdinal() {
+        return lastPageOrdinal;
+    }
+
+    long lastFrameOffset() {
+        return lastFrameOffset;
+    }
+
+    long lastCumulativeEntries() {
+        return lastCumulativeEntries;
+    }
+
+    long lastCumulativeFramedBytes() {
+        return lastCumulativeFramedBytes;
+    }
+
+    int lastFramedBytes() {
+        return lastFramedBytes;
     }
 
     int magic() {

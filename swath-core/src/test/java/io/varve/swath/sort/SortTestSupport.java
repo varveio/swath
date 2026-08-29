@@ -17,7 +17,10 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 
 /** Shared fixtures for the {@code io.varve.swath.sort} unit tests (all in-package, so package-private types are reachable). */
 final class SortTestSupport {
@@ -38,6 +41,27 @@ final class SortTestSupport {
         try (SortedCursor cursor = new InMemoryCursor(sorted, comparator, DuplicateHook.NO_OP)) {
             writer.writeIntermediate(cursor, path);
         }
+        return path;
+    }
+
+    /** Write one single-row listing page per ordinal, including the production type-2 index. */
+    static Path writeIndexedPages(Path path, int pages, int keyOffset) throws IOException {
+        List<List<ListEntry>> generated = new ArrayList<>(pages);
+        for (int page = 0; page < pages; page++) {
+            generated.add(List.of(object(String.format("k%05d", keyOffset + page))));
+        }
+        return writeIndexedPages(path, generated);
+    }
+
+    /** Write caller-supplied sorted listing pages, including the production type-2 index. */
+    static Path writeIndexedPages(Path path, List<List<ListEntry>> pages) throws IOException {
+        ListEntryComparator comparator = new ListEntryComparator();
+        SortBuffer buffer = new SortBuffer(SortConfigs.base(), comparator);
+        for (int page = 0; page < pages.size(); page++) {
+            buffer.admit(page, pages.get(page));
+        }
+        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), path);
         return path;
     }
 
@@ -78,6 +102,54 @@ final class SortTestSupport {
     static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
         while (buffer.hasRemaining()) {
             channel.write(buffer);
+        }
+    }
+
+    /** Delegates every {@link SortedFileWriter} method unless a focused test overrides it. */
+    abstract static class DelegatingSortedFileWriter implements SortedFileWriter {
+        private final SortedFileWriter delegate;
+
+        DelegatingSortedFileWriter(SortedFileWriter delegate) {
+            this.delegate = delegate;
+        }
+
+        protected final SortedFileWriter delegate() {
+            return delegate;
+        }
+
+        @Override
+        public void write(ListEntry entry) throws IOException {
+            delegate.write(entry);
+        }
+
+        @Override
+        public long rows() {
+            return delegate.rows();
+        }
+
+        @Override
+        public long dataSize() {
+            return delegate.dataSize();
+        }
+
+        @Override
+        public void markFinal() {
+            delegate.markFinal();
+        }
+
+        @Override
+        public void setFileIndex(int fileIndex) {
+            delegate.setFileIndex(fileIndex);
+        }
+
+        @Override
+        public Optional<FinalPartMetadata> finalMetadata() {
+            return delegate.finalMetadata();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
         }
     }
 
@@ -216,7 +288,17 @@ final class SortTestSupport {
 
     /** Counts recordStealReason calls per {@code outcome.reason}. */
     static final class CountingMetrics implements SortMetrics {
-        final Map<String, Integer> counts = new HashMap<>();
+        final Map<String, Integer> counts = new ConcurrentHashMap<>();
+        final LongAdder rangeFramedBytes = new LongAdder();
+        final LongAdder rangeIndexBytes = new LongAdder();
+        final LongAdder progress = new LongAdder();
+        final LongAdder proofSpoolLogicalExtentBytes = new LongAdder();
+        final LongAdder proofSpoolPreallocationOperations = new LongAdder();
+        final LongAdder proofSpoolPreallocationAttemptedBytes = new LongAdder();
+        final LongAdder proofSpoolMappedOperations = new LongAdder();
+        final LongAdder proofSpoolMappedBytes = new LongAdder();
+        final LongAdder proofSpoolServiceNanos = new LongAdder();
+        final LongAdder proofSpoolMetricUpdates = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -225,10 +307,45 @@ final class SortTestSupport {
 
         @Override
         public void markProgress() {
+            progress.increment();
         }
 
         @Override
         public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        }
+
+        @Override
+        public void recordPageAwareOverlapCluster() {
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+            rangeIndexBytes.add(bytes);
+        }
+
+        @Override
+        public void recordRangeFramedBytes(long bytes) {
+            rangeFramedBytes.add(bytes);
+        }
+
+        @Override
+        public void recordProofSpool(long logicalExtentBytes,
+                                     long preallocationOperations,
+                                     long preallocationAttemptedBytes,
+                                     long mappedOperations,
+                                     long mappedBytes,
+                                     long serviceNanos) {
+            proofSpoolMetricUpdates.increment();
+            proofSpoolLogicalExtentBytes.add(logicalExtentBytes);
+            proofSpoolPreallocationOperations.add(preallocationOperations);
+            proofSpoolPreallocationAttemptedBytes.add(preallocationAttemptedBytes);
+            proofSpoolMappedOperations.add(mappedOperations);
+            proofSpoolMappedBytes.add(mappedBytes);
+            proofSpoolServiceNanos.add(serviceNanos);
         }
 
         int count(String key) {

@@ -22,6 +22,7 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.error.ThrottleType;
+import io.varve.swath.sort.SortArm;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -90,7 +91,7 @@ final class JsonRunSummaryWriterTest {
     private static JsonRunSummaryWriter.RunConfig runConfig() {
         return new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket/prefix", "us-east-2", "parquet", 64, true, null, 30_000L,
-                List.of("include=\\.parquet$"), EngineToggles.DEFAULT, null, false, null, false);
+                List.of("include=\\.parquet$"), EngineToggles.DEFAULT, null, false, null, SortArm.NONE, false);
     }
 
     private static JsonRunSummaryWriter.Config config(Path path, Duration flushInterval) {
@@ -340,7 +341,7 @@ final class JsonRunSummaryWriterTest {
                         .withStructureProbes(false);
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket/prefix", "us-east-2", "parquet", 64, true, null, 30_000L,
-                List.of(), toggles, 300_000L, false, null, false);
+                List.of(), toggles, 300_000L, false, null, SortArm.NONE, false);
         JsonRunSummaryWriter.Config config = new JsonRunSummaryWriter.Config(
                 path, Duration.ofMinutes(10), "abc123hash", runConfig,
                 List.of("list", "s3://bucket/prefix", "--no-owner-split", "--max-duration", "5m"));
@@ -423,7 +424,7 @@ final class JsonRunSummaryWriterTest {
         RunSummary summary = summary();
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket/prefix", "us-east-2", "parquet", 64, true, null, 30_000L,
-                List.of(), EngineToggles.DEFAULT, null, false, null, false)
+                List.of(), EngineToggles.DEFAULT, null, false, null, SortArm.NONE, false)
                         .withSortEnabled(true)
                         .withSortEffectiveFanIn(3);
         JsonRunSummaryWriter.Config config = new JsonRunSummaryWriter.Config(
@@ -438,6 +439,7 @@ final class JsonRunSummaryWriterTest {
         JsonNode sort = MAPPER.readTree(path.toFile()).get("sort");
         assertThat(sort).isNotNull();
         assertThat(sort.get("enabled").asBoolean()).isTrue();
+        assertThat(sort.get("arm").asText()).isEqualTo("LIVE_LIST_SORT");
         assertThat(sort.get("effective_fan_in").asInt()).isEqualTo(3);
     }
 
@@ -449,6 +451,9 @@ final class JsonRunSummaryWriterTest {
         registry.get("swath.sort.merge.latency").timer().record(10, TimeUnit.SECONDS);
         metrics.recordSortMergeRange(TimeUnit.SECONDS.toNanos(2));
         metrics.recordSortMergeBoundaries(TimeUnit.SECONDS.toNanos(1));
+        metrics.recordSortMergeRangeFramedBytes(12_345);
+        metrics.recordSortMergeProofSpool(
+                49_696, 2, 49_696, 777, 8_888, TimeUnit.MILLISECONDS.toNanos(12));
         metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
         metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
         metrics.recordSortManifestMd5(1234, TimeUnit.MILLISECONDS.toNanos(250));
@@ -456,6 +461,14 @@ final class JsonRunSummaryWriterTest {
         metrics.recordSortPublication(TimeUnit.SECONDS.toNanos(4));
         metrics.recordSortFinalizeTail(TimeUnit.SECONDS.toNanos(4));
         metrics.recordSortFinalizeParallelism(4);
+        metrics.recordStealReason("SORT", "pack_on_fetch");
+        metrics.recordStealReason("SORT", "backpressure_engaged");
+        metrics.recordSortBackpressureWait(TimeUnit.MILLISECONDS.toNanos(7));
+        metrics.recordSortStagingBytesLive(1234);
+        metrics.recordSortHandoffQueueDepth(5);
+        metrics.recordSortOffThreadBuffersLive(2);
+        metrics.recordSortMergeOverlapCluster();
+        metrics.recordSortMergeOverlapState(3, 12);
 
         RunSummary snapshot = summary();
         JsonRunSummaryWriter.RunConfig runConfig = runConfig().withSortEnabled(true);
@@ -473,6 +486,18 @@ final class JsonRunSummaryWriterTest {
         assertThat(sort.get("range_merge_ms").asLong()).isEqualTo(2_000);
         assertThat(sort.get("finalize_ms").asLong()).isEqualTo(4_000);
         assertThat(sort.get("finalize_close_ms").asLong()).isEqualTo(6_000);
+        assertThat(sort.get("finalize_close_count").asLong()).isEqualTo(2L);
+        assertThat(sort.get("finalize_close_max_ms").asLong()).isEqualTo(3_000L);
+        assertThat(sort.get("finalize_close_p50_ms").asDouble()).isPositive();
+        assertThat(sort.get("finalize_close_p90_ms").asDouble()).isPositive();
+        assertThat(sort.get("finalize_close_p99_ms").asDouble()).isPositive();
+        assertThat(sort.get("pack_on_fetch_pages").asLong()).isEqualTo(1L);
+        assertThat(sort.get("backpressure_engaged").asLong()).isEqualTo(1L);
+        assertThat(sort.get("backpressure_wait_ms").asLong()).isEqualTo(7L);
+        assertThat(sort.get("backpressure_wait_max_ms").asLong()).isEqualTo(7L);
+        assertThat(sort.get("staging_bytes_peak").asLong()).isEqualTo(1234L);
+        assertThat(sort.get("handoff_queue_depth_peak").asLong()).isEqualTo(5L);
+        assertThat(sort.get("off_thread_buffers_peak").asLong()).isEqualTo(2L);
         assertThat(sort.get("manifest_md5_bytes").asLong()).isEqualTo(1234);
         assertThat(sort.get("manifest_md5_ms").asLong()).isEqualTo(250);
         assertThat(sort.get("manifest_bounds_rows").asLong()).isZero();
@@ -481,6 +506,17 @@ final class JsonRunSummaryWriterTest {
         assertThat(sort.get("local_publication_ms").asLong()).isEqualTo(4_000);
         assertThat(sort.get("finalize_parallelism").asLong()).isEqualTo(4);
         assertThat(sort.get("phase_rows_per_sec").asDouble()).isEqualTo(100.0);
+        assertThat(sort.get("merge_overlap_clusters").asLong()).isEqualTo(1);
+        assertThat(sort.get("merge_overlap_pages_peak").asLong()).isEqualTo(3);
+        assertThat(sort.get("merge_overlap_rows_peak").asLong()).isEqualTo(12);
+        assertThat(sort.get("merge_range_framed_bytes").asLong()).isEqualTo(12_345);
+        assertThat(sort.get("merge_proof_spool_logical_extent_bytes").asLong()).isEqualTo(49_696);
+        assertThat(sort.get("merge_proof_spool_preallocation_operations").asLong()).isEqualTo(2);
+        assertThat(sort.get("merge_proof_spool_preallocation_attempted_bytes").asLong())
+                .isEqualTo(49_696);
+        assertThat(sort.get("merge_proof_spool_mapped_operations").asLong()).isEqualTo(777);
+        assertThat(sort.get("merge_proof_spool_mapped_bytes").asLong()).isEqualTo(8_888);
+        assertThat(sort.get("merge_proof_spool_ms").asLong()).isEqualTo(12);
     }
 
     /** The pre-{@code effective_fan_in} {@code sortEnabled} constructor renders the field as JSON null. */
@@ -491,7 +527,7 @@ final class JsonRunSummaryWriterTest {
         RunSummary summary = summary();
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket/prefix", "us-east-2", "parquet", 64, true, null, 30_000L,
-                List.of(), EngineToggles.DEFAULT, null, false, null, false)
+                List.of(), EngineToggles.DEFAULT, null, false, null, SortArm.NONE, false)
                         .withSortEnabled(true);
         JsonRunSummaryWriter.Config config = new JsonRunSummaryWriter.Config(
                 path, Duration.ofMinutes(10), "abc123hash", runConfig, List.of());
@@ -540,7 +576,7 @@ final class JsonRunSummaryWriterTest {
         RunSummary summary = summary();
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket/prefix", "us-east-2", "parquet", 64, true, null, 30_000L,
-                List.of(), EngineToggles.DEFAULT, null, false, null, false)
+                List.of(), EngineToggles.DEFAULT, null, false, null, SortArm.NONE, false)
                         .withSortEnabled(true)
                         .withSortEffectiveFanIn(3);
         JsonRunSummaryWriter.Config config = new JsonRunSummaryWriter.Config(
@@ -592,7 +628,7 @@ final class JsonRunSummaryWriterTest {
         RunSummary summary = summary();
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket/prefix", "us-east-2", "parquet", 64, true, null, 30_000L,
-                List.of(), EngineToggles.DEFAULT, null, false, null, false)
+                List.of(), EngineToggles.DEFAULT, null, false, null, SortArm.NONE, false)
                         .withSortEnabled(true)
                         .withSortEffectiveFanIn(3);
         JsonRunSummaryWriter.Config config = new JsonRunSummaryWriter.Config(
@@ -686,6 +722,53 @@ final class JsonRunSummaryWriterTest {
         } finally {
             writer.close();
         }
+    }
+
+    @Test
+    void rangeFramedBytesAreCumulativeInPeriodicAndFinalSortSnapshots(@TempDir Path dir)
+            throws Exception {
+        Path path = dir.resolve("summary.json");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Counter rangeFramedBytes = Counter.builder("swath.sort.merge.range.framed.bytes")
+                .baseUnit("bytes").register(registry);
+        JsonRunSummaryWriter.RunConfig runConfig = runConfig().withSortEnabled(true);
+        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
+                new JsonRunSummaryWriter.Config(path, Duration.ofMillis(20), "abc123hash",
+                        runConfig, List.of()),
+                registry, Instant.now(), JsonRunSummaryWriterTest::summary);
+        try {
+            rangeFramedBytes.increment(1_024);
+            await().atMost(5, TimeUnit.SECONDS).until(() -> Files.exists(path)
+                    && MAPPER.readTree(path.toFile()).get("sort").get("merge_range_framed_bytes")
+                    .asLong() == 1_024L);
+
+            rangeFramedBytes.increment(2_048);
+            writer.complete(summary());
+            JsonNode sort = MAPPER.readTree(path.toFile()).get("sort");
+            assertThat(sort.get("merge_range_framed_bytes").asLong())
+                    .as("final snapshot keeps the cumulative byte counter, not the last delta")
+                    .isEqualTo(3_072L);
+        } finally {
+            writer.close();
+        }
+    }
+
+    @Test
+    void serialSortSummaryKeepsRangeFramedBytesAtZero(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("summary.json");
+        JsonRunSummaryWriter.RunConfig runConfig = runConfig().withSortEnabled(true);
+        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
+                new JsonRunSummaryWriter.Config(path, Duration.ofMinutes(10), "abc123hash",
+                        runConfig, List.of()),
+                new SimpleMeterRegistry(), Instant.now(), JsonRunSummaryWriterTest::summary);
+        try {
+            writer.complete(summary());
+        } finally {
+            writer.close();
+        }
+
+        assertThat(MAPPER.readTree(path.toFile()).get("sort").get("merge_range_framed_bytes")
+                .asLong()).isZero();
     }
 
     @Test

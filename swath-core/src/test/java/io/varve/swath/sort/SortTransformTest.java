@@ -18,6 +18,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -142,6 +144,265 @@ class SortTransformTest {
         // a directory-stream listing would now throw NoSuchFileException, so assert non-existence
         // directly.
         assertThat(Files.exists(dirs.staging)).isFalse();
+    }
+
+    @Test
+    void retainedStagingKeepsOnlyOriginalSegmentsAndSignalsItsEngagement(@TempDir Path root)
+            throws IOException {
+        Dirs dirs = dirs(root);
+        List<Path> originals = new ArrayList<>();
+        for (String key : List.of("e", "b", "d", "a", "c")) {
+            originals.add(writeSegment(dirs.staging, "seg-" + originals.size() + ".parquet", objects(key)));
+        }
+        // These model the leftovers that can coexist with retained originals after a prior crash.
+        Path staleCascade = Files.createFile(dirs.staging.resolve("merge-99.pageseg"));
+        Path staleRangeTmp = Files.createFile(dirs.staging.resolve("prange-0-99.parquet.tmp"));
+        Path staleFinalTmp = Files.createFile(dirs.staging.resolve("part-99.parquet.tmp"));
+        Path arbitraryOrphan = Files.createFile(dirs.staging.resolve("orphan.pageseg"));
+        Path orphanTree = Files.createDirectories(dirs.staging.resolve("orphan-tree"));
+        Files.createFile(orphanTree.resolve("nested.tmp"));
+        Path external = Files.writeString(root.resolve("external.txt"), "keep");
+        Path orphanLink = Files.createSymbolicLink(
+                dirs.staging.resolve("orphan-link"), external);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        SortConfig retained = SortConfigs.base().withFanIn(2)
+                .withStagingRetention(StagingRetention.RETAIN_ORIGINALS);
+        SortTransformResult result = transformWithMetrics(retained, metrics)
+                .transform(originals, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
+
+        assertThat(result.cascadedPasses()).isPositive();
+        assertThat(originals).allMatch(Files::exists);
+        assertThat(staleCascade).doesNotExist();
+        assertThat(staleRangeTmp).doesNotExist();
+        assertThat(staleFinalTmp).doesNotExist();
+        assertThat(arbitraryOrphan).doesNotExist();
+        assertThat(orphanTree).doesNotExist();
+        assertThat(orphanLink).doesNotExist();
+        assertThat(external).hasContent("keep");
+        try (var entries = Files.list(dirs.staging)) {
+            assertThat(entries.toList()).containsExactlyInAnyOrderElementsOf(originals);
+        }
+        assertThat(metrics.count("SORT.staging_retained")).isEqualTo(1);
+    }
+
+    @Test
+    void retainedStagingRejectsAnOriginalOutsideTheOwnedDirectoryBeforePublishing(
+            @TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        Path outside = writeSegment(root, "outside.parquet", objects("a"));
+        Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
+
+        assertThatThrownBy(() -> transform(SortConfigs.base()
+                .withStagingRetention(StagingRetention.RETAIN_ORIGINALS))
+                .transform(List.of(outside), dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("not an immediate child");
+
+        assertThat(priorFinal).hasContent("prior");
+        assertThat(outside).exists();
+    }
+
+    @Test
+    void defaultStagingPolicyRejectsAnOriginalOutsideTheOwnedDirectoryBeforeOpeningOrPublishing(
+            @TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        Path outside = writeSegment(root, "outside.parquet", objects("a"));
+        Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
+        AtomicInteger opens = new AtomicInteger();
+        SortTransform transform = countingTransform(opens);
+
+        assertThatThrownBy(() -> transform.transform(List.of(outside), dirs.output, dirs.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("not an immediate child");
+
+        assertThat(opens).hasValue(0);
+        assertThat(priorFinal).hasContent("prior");
+        assertThat(outside).exists();
+    }
+
+    @Test
+    void symlinkedInputInsideStagingIsRejectedBeforeOpeningAndItsOutsideTargetSurvives(
+            @TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        Path outside = writeSegment(root, "outside.parquet", objects("a"));
+        Path link = Files.createSymbolicLink(
+                dirs.staging.resolve("linked" + StagingNames.PAGE_RUN_SUFFIX), outside);
+        Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
+        AtomicInteger opens = new AtomicInteger();
+        SortTransform transform = countingTransform(opens);
+
+        assertThatThrownBy(() -> transform.transform(List.of(link), dirs.output, dirs.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("missing or not an ordinary file");
+
+        assertThat(opens).hasValue(0);
+        assertThat(Files.isSymbolicLink(link)).isTrue();
+        assertThat(outside).exists();
+        assertThat(priorFinal).hasContent("prior");
+    }
+
+    @Test
+    void exactDuplicateInputsAreRejectedBeforeOpeningOrPublishing(@TempDir Path root)
+            throws IOException {
+        Dirs dirs = dirs(root);
+        Path segment = writeSegment(dirs.staging, "seg-0.parquet", objects("a"));
+        Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
+        AtomicInteger opens = new AtomicInteger();
+        SortTransform transform = countingTransform(opens);
+
+        assertThatThrownBy(() -> transform.transform(List.of(segment, segment), dirs.output,
+                dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("duplicate sort staging segment");
+
+        assertThat(opens).hasValue(0);
+        assertThat(segment).exists();
+        assertThat(priorFinal).hasContent("prior");
+    }
+
+    @Test
+    void hardLinkedInputAliasesAreRejectedBeforeOpeningOrPublishing(@TempDir Path root)
+            throws IOException {
+        Dirs dirs = dirs(root);
+        Path segment = writeSegment(dirs.staging, "seg-0.parquet", objects("a"));
+        Path hardLink = Files.createLink(dirs.staging.resolve("seg-1.pageseg"), segment);
+        Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
+        AtomicInteger opens = new AtomicInteger();
+        SortTransform transform = countingTransform(opens);
+
+        assertThatThrownBy(() -> transform.transform(List.of(segment, hardLink), dirs.output,
+                dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("duplicate physical sort staging segment");
+
+        assertThat(opens).hasValue(0);
+        assertThat(segment).exists();
+        assertThat(hardLink).exists();
+        assertThat(priorFinal).hasContent("prior");
+    }
+
+    @Test
+    void normalizedAliasInputsAreRejectedBeforeOpeningOrPublishing(@TempDir Path root)
+            throws IOException {
+        Dirs dirs = dirs(root);
+        Path segment = writeSegment(dirs.staging, "seg-0.parquet", objects("a"));
+        Path alias = dirs.staging.resolve(".").resolve(segment.getFileName());
+        Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
+        AtomicInteger opens = new AtomicInteger();
+        SortTransform transform = countingTransform(opens);
+
+        assertThatThrownBy(() -> transform.transform(List.of(segment, alias), dirs.output,
+                dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("duplicate sort staging segment");
+
+        assertThat(opens).hasValue(0);
+        assertThat(priorFinal).hasContent("prior");
+        assertThat(segment).exists();
+    }
+
+    @Test
+    void catalogIndependentlyRejectsNormalizedAliasInputsBeforeOpening(@TempDir Path root)
+            throws IOException {
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        Path segment = writeSegment(staging, "seg-0.parquet", objects("a"));
+        Path alias = staging.resolve(".").resolve(segment.getFileName());
+        AtomicInteger opens = new AtomicInteger();
+
+        assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment, alias), path -> {
+            opens.incrementAndGet();
+            return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
+        }, Optional.empty()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("duplicate page-run catalog path");
+
+        assertThat(opens).hasValue(0);
+        assertThat(segment).exists();
+    }
+
+    @Test
+    void catalogDescriptorAssemblyRejectsNormalizedAliasesInsteadOfKeepingTheFirst(
+            @TempDir Path root) throws IOException {
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        Path segment = writeSegment(staging, "seg-0.parquet", objects("a"));
+        PageRunSegmentDescriptor descriptor = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty())
+                .descriptors().getFirst();
+        Path alias = staging.resolve(".").resolve(segment.getFileName());
+        PageRunSegmentDescriptor duplicate = new PageRunSegmentDescriptor(alias,
+                descriptor.fileSize(), descriptor.trailerStart(), descriptor.trailer(),
+                descriptor.extension());
+
+        assertThatThrownBy(() -> PageRunCatalog.fromDescriptors(List.of(descriptor, duplicate)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate page-run catalog path");
+    }
+
+    @Test
+    void sourceDrainAndClosedFinalRowsMustAgreeBeforePublication(@TempDir Path root)
+            throws IOException {
+        Dirs dirs = dirs(root);
+        Path segment = writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b"));
+        Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
+        SortedFileWriterFactory dropsSecondRow = (path, fileIndex) -> {
+            SortedFileWriter delegate = SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
+            return new SortTestSupport.DelegatingSortedFileWriter(delegate) {
+                @Override
+                public void write(ListEntry entry) throws IOException {
+                    if (!entry.key().asString().equals("b")) {
+                        delegate().write(entry);
+                    }
+                }
+            };
+        };
+        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, dropsSecondRow,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+
+        assertThatThrownBy(() -> new SortTransform(run).transform(List.of(segment), dirs.output,
+                dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("sort output cardinality mismatch before publication")
+                .hasMessageContaining("source_rows=2")
+                .hasMessageContaining("drained_rows=2")
+                .hasMessageContaining("final_part_rows=1");
+
+        assertThat(priorFinal).hasContent("prior");
+        assertThat(segment).exists();
+        assertThatThrownBy(() -> DatasetPublisher.requireExactCardinality(3, 1, 1))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("source_rows=3")
+                .hasMessageContaining("drained_rows=1");
+    }
+
+    @Test
+    void checkpointRetentionNamesRejectTraversal(@TempDir Path root)
+            throws IOException {
+        assertThatThrownBy(() -> StagingReconciliation.fromNames(List.of("../escape.pageseg")))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("unsafe retained sort staging segment name");
+    }
+
+    @Test
+    void pageAwareKWayRouteClassifiesSourceRuns(@TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        List<Path> staging = List.of(
+                writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c", "e")),
+                writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d", "f")),
+                writeSegment(dirs.staging, "seg-2.parquet", objects("x", "y")));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        transformWithMetrics(SortConfigs.base(), metrics).transform(staging, dirs.output, dirs.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
+
+        assertThat(metrics.count("SORT.merge_interleaved_segment")).isEqualTo(2);
+        assertThat(metrics.count("SORT.merge_disjoint_copyable")).isEqualTo(1);
     }
 
     @Test
@@ -302,6 +563,31 @@ class SortTransformTest {
 
         assertThat(published).isEmpty();
         assertThat(Files.readAllBytes(priorFinal)).containsExactly(priorContents);
+    }
+
+    @Test
+    void serialInteriorRowRegressionFailsBeforePublication(@TempDir Path root)
+            throws IOException {
+        Dirs dirs = dirs(root);
+        Path corrupt = PageRunRawFixtures.writeIndexedInteriorRowRegression(
+                dirs.staging.resolve("seg-0.pageseg"));
+        Path priorFinal = dirs.output.resolve(StagingNames.finalPart(0));
+        byte[] priorContents = "prior published output".getBytes(
+                java.nio.charset.StandardCharsets.UTF_8);
+        Files.write(priorFinal, priorContents);
+        List<List<FinalPart>> published = new ArrayList<>();
+
+        assertThatThrownBy(() -> transform(SortConfigs.base().withMergeParallelism(1))
+                .transform(List.of(corrupt), dirs.output, dirs.staging,
+                        (parts, rows) -> published.add(parts), units -> { },
+                        FinalPassListener.NO_OP))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_body_corruption")
+                .hasStackTraceContaining("decoded row order regressed inside persisted page");
+
+        assertThat(published).isEmpty();
+        assertThat(priorFinal).hasBinaryContent(priorContents);
+        assertThat(corrupt).exists();
     }
 
     @Test
@@ -500,6 +786,18 @@ class SortTransformTest {
                 EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
                 MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+    }
+
+    private SortTransform countingTransform(AtomicInteger opens) {
+        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+        return new SortTransform(run, PublicationStepHook.NO_OP,
+                PageRunProofSpool.Reader::new, System::nanoTime, path -> {
+                    opens.incrementAndGet();
+                    return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
+                });
     }
 
     private record Dirs(Path output, Path staging) {

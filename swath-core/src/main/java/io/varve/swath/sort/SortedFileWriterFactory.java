@@ -9,7 +9,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 /**
- * Creates a {@link SortedFileWriter} for one final output file. {@link SortTransform} writes through
+ * Creates a {@link SortedFileWriter} for one final output file. {@link DatasetPublisher} writes through
  * this factory so an alternate writer implementation can be swapped in without touching the
  * merge/publish logic. {@link #DEFAULT} is the plain part-writer path (no stamp, standard row groups);
  * the stamped, small-row-group implementation replaces it for real --sort runs.

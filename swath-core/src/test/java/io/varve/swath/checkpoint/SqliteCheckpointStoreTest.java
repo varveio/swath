@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import io.varve.swath.error.CheckpointException;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.model.ListingMode;
+import io.varve.swath.sort.PageRunFormat;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -39,6 +40,100 @@ import org.junit.jupiter.api.io.TempDir;
  * RES-1/2/4 fault-injection tests drive it through the runner.
  */
 final class SqliteCheckpointStoreTest {
+
+    @Test
+    void finalizedPartFormatMetadataRoundTripsWithoutClassifyingOrdinaryParquet(@TempDir Path dir)
+            throws Exception {
+        try (SqliteCheckpointStore store = open(dir)) {
+            RunMeta run = store.openRun(key("format-metadata"), false, false);
+            PageRunFormat pageRun = PageRunFormat.currentListing();
+            store.partFinalized(new PartFinalize(run.id(), 0, "seg-0.pageseg", pageRun,
+                    3, 100, List.of()));
+            store.partFinalized(new PartFinalize(run.id(), 1, "data/part-0.parquet", "parquet",
+                    5, 200, List.of()));
+
+            assertThat(store.finalizedParts(run.id())).satisfiesExactly(
+                    staged -> {
+                        assertThat(staged.formatVersion()).isEqualTo(pageRun.formatVersion());
+                        assertThat(staged.extensionType()).isEqualTo(pageRun.extensionType());
+                    },
+                    output -> {
+                        assertThat(output.formatVersion()).isNull();
+                        assertThat(output.extensionType()).isNull();
+                    });
+        }
+    }
+
+    @Test
+    void ordinaryOutputCannotCarryPageRunFormatMetadata() {
+        PageRunFormat pageRun = PageRunFormat.currentListing();
+
+        assertThatThrownBy(() -> new PartFinalize(1, 0, "part-0.parquet", "parquet",
+                pageRun.formatVersion(), pageRun.extensionType(), 1, 1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("only page-run staging parts");
+    }
+
+    @Test
+    void newPageRunFinalizationRequiresExplicitSupportedMetadata() {
+        assertThatThrownBy(() -> new PartFinalize(1, 0, "seg-0.pageseg", PageRunFormat.NAME,
+                1, 1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("complete supported format metadata")
+                .hasMessageContaining("LEGACY_UNRECORDED");
+        assertThatThrownBy(() -> new PartFinalize(1, 0, "seg-0.pageseg", PageRunFormat.NAME,
+                PageRunFormat.CURRENT_FORMAT_VERSION, PageRunFormat.PAGE_INDEX_EXTENSION + 1,
+                1, 1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("complete supported format metadata")
+                .hasMessageContaining("UNKNOWN_EXTENSION_TYPE");
+    }
+
+    @Test
+    void pageRunCompatibilityClassifiesSupportedIncompleteAndFutureMetadata() {
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
+                PageRunFormat.ABSENT_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
+                PageRunFormat.LEGACY_MINIMA_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
+                PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION))
+                .isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
+                PageRunFormat.PAGE_INDEX_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
+        assertThat(PageRunFormat.compatibility(null, null))
+                .isEqualTo(PageRunFormat.Compatibility.LEGACY_UNRECORDED);
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION, null))
+                .isEqualTo(PageRunFormat.Compatibility.INCOMPLETE);
+        assertThat(PageRunFormat.compatibility(null, PageRunFormat.PAGE_INDEX_EXTENSION))
+                .isEqualTo(PageRunFormat.Compatibility.INCOMPLETE);
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION + 1,
+                PageRunFormat.PAGE_INDEX_EXTENSION))
+                .isEqualTo(PageRunFormat.Compatibility.UNKNOWN_FORMAT_VERSION);
+    }
+
+    @Test
+    void preColumnPartRowsMigrateAsUnrecordedLegacyMetadata(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("ckpt.sqlite");
+        long runId;
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db)) {
+            RunMeta run = store.openRun(key("legacy-format-metadata"), false, false);
+            runId = run.id();
+            store.partFinalized(new PartFinalize(runId, 0, "seg-legacy.pageseg",
+                    PageRunFormat.currentListing(), 2, 128, List.of()));
+        }
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db.toAbsolutePath());
+             var st = c.createStatement()) {
+            st.execute("ALTER TABLE part_file DROP COLUMN extension_type");
+            st.execute("ALTER TABLE part_file DROP COLUMN format_version");
+        }
+
+        try (SqliteCheckpointStore migrated = SqliteCheckpointStore.open(db)) {
+            PartRef legacy = migrated.finalizedParts(runId).getFirst();
+            assertThat(legacy.format()).isEqualTo(PageRunFormat.NAME);
+            assertThat(legacy.formatVersion()).isNull();
+            assertThat(legacy.extensionType()).isNull();
+        }
+    }
 
     /**
      * Raw {@code byte[]} literal — for the I10 unsigned-BLOB byte-order tests. These keys

@@ -33,7 +33,8 @@ import java.util.List;
  *   <li><b>Disjoint pages (the common case) — decode-once fast path.</b> When the next page's
  *       {@code minKey} is strictly greater (unsigned) than the current page's {@code maxKey}, the
  *       page is decoded once and streamed whole in file order ({@code
- *       SORT.page_run_entry_whole_page}). No key comparison per entry, no heap.</li>
+ *       SORT.page_run_entry_whole_page}). There is no merge heap; the persisted-page cursor still
+ *       compares adjacent rows to prove that the body is internally ordered.</li>
  *   <li><b>Overlapping pages — key-merged.</b> Otherwise the overlapping pages are decoded and
  *       merged at the key level under the full comparator (the merger's existing overlap
  *       fallback), so the emitted stream is sorted by construction ({@code
@@ -62,8 +63,9 @@ import java.util.List;
  * are drained.
  *
  * <p><b>Memory.</b> On the fast path this holds the frontier's retained successor page body plus
- * the page being streamed — whose cursor pins the whole {@link PageBlock}, so both its compressed
- * payload and its lazily-decoded payload cache stay live; an overlap event additionally holds the
+ * the page being streamed — whose cursor pins the whole {@link PageBlock} and therefore its one
+ * record-body owner plus any lazily-decoded compressed payload; there is no second stored-payload
+ * array. An overlap event additionally holds the
  * decoded pages it is key-merging, exactly as {@link PageAwareMerger} does on the all-page-run
  * route. {@link SortConfig#mergePerStreamBytes()} is an advisory
  * per-stream ESTIMATE (the merge fan-in denominator), not a bound this footprint is clamped to:

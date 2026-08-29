@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.function.Consumer;
@@ -36,7 +37,7 @@ final class Sweeps {
 
     /** Recursively delete one caller-owned tree; a no-op when it is absent. */
     static void deleteTree(Path dir) throws IOException {
-        if (!Files.exists(dir)) {
+        if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
             return;
         }
         try (var stream = Files.walk(dir)) {

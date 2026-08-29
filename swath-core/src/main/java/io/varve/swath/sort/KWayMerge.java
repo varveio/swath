@@ -111,6 +111,14 @@ final class KWayMerge<S> {
         default PageFrontierStream openFrontier(S segment) throws IOException {
             throw new UnsupportedOperationException("segment does not support a page frontier: " + segment);
         }
+
+        /**
+         * Aggregate decoded-page residency available to one merger instance. Called before any
+         * frontier body is opened so a page-run implementation can preflight intermediate trailers.
+         */
+        default long decodedPageBudgetBytes(List<S> segments) throws IOException {
+            return Long.MAX_VALUE;
+        }
     }
 
     private final Comparator<ListEntry> comparator;
@@ -188,12 +196,14 @@ final class KWayMerge<S> {
      * a genuinely sorted run before the heap sees it — so a cascade intermediate is never mis-ordered,
      * whichever merger the group selects.
      */
-    private SortedCursor openMerger(List<S> group, StreamingMerger.DisjointSink disjointSink)
+    private SortedCursor openMerger(List<S> group, MergeRunSink disjointSink)
             throws IOException {
         SortedCursor merger;
         if (allSupportPageFrontier(group)) {
+            long decodedBudget = io.decodedPageBudgetBytes(group);
             List<PageFrontierStream> frontiers = openFrontiers(group);
-            merger = new PageAwareMerger(frontiers, comparator, MergeScope.CROSS_SEGMENT, metrics);
+            merger = new PageAwareMerger(frontiers, comparator, MergeScope.CROSS_SEGMENT, metrics,
+                    disjointSink, decodedBudget);
         } else {
             List<EntryStream> streams = open(group);
             merger = new StreamingMerger(streams, comparator, this::recordFastPath, disjointSink);
@@ -263,9 +273,8 @@ final class KWayMerge<S> {
             S dest;
             // Select the group's merger through the SAME openMerger factory the final
             // pass uses — so a cascade group of page-run segments is merged (and its intermediate
-            // written) through the guarded PageAwareMerger, not the trusting StreamingMerger. The
-            // disjoint-copyable classification only fires for the StreamingMerger branch (the
-            // PageAwareMerger does not classify), matching the final-pass behaviour.
+            // written) through the guarded PageAwareMerger, not the trusting StreamingMerger. Both
+            // raw merger branches report source-run classification through the same sink.
             try (SortedCursor m = openMerger(group,
                     (copyable, interleaved) -> {
                         passCopyable[0] += copyable;
@@ -314,9 +323,8 @@ final class KWayMerge<S> {
     }
 
     /**
-     * Called once per {@link StreamingMerger} (i.e. per cascade group, or once for the final
-     * streaming pass) with that pass's disjoint-copyable classification (see
-     * {@link StreamingMerger}'s class javadoc). Unlike {@link #recordFastPath}, this fires the
+     * Called once per raw merger (i.e. per cascade group, or once for the final pass) with that
+     * pass's disjoint-copyable classification. Unlike {@link #recordFastPath}, this fires the
      * metric once per <em>segment</em> (not once per pass with the total) so the fraction
      * copyable-vs-interleaved is directly countable post-hoc.
      */

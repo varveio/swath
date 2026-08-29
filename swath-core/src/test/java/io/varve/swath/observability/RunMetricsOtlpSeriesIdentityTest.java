@@ -33,8 +33,8 @@ import org.junit.jupiter.api.io.TempDir;
  * {@code MeterRegistries} builds a {@code SimpleMeterRegistry} by default and an {@link
  * OtlpMeterRegistry} when {@code SWATH_OTLP_ENDPOINT}/{@code --metrics-export=otlp} is set, and the
  * two do NOT register the same meters: {@code SimpleMeterRegistry.newTimer} registers {@code
- * HistogramGauges} — 54 extra {@code *.percentile{phi}} GAUGE meters for the 18
- * percentile-publishing timers — that {@code OtlpMeterRegistry.newTimer} never creates, because
+ * HistogramGauges} — 69 extra {@code *.percentile{phi}} GAUGE meters for the 23
+ * percentile-publishing timer series — that {@code OtlpMeterRegistry.newTimer} never creates, because
  * OTLP encodes those percentiles as {@code SUMMARY} quantiles on the wire instead. So the same run
  * is {@value RunMetricsSimpleRegistrySeriesIdentityTest#EXPECTED_SIMPLE_METER_COUNT} Simple meters
  * and {@value #EXPECTED_OTLP_METER_COUNT} OTLP meters.
@@ -45,7 +45,7 @@ import org.junit.jupiter.api.io.TempDir;
  * swath-owned, environment-independent, and precisely what an extraction can break.
  *
  * <p><b>Deliberately NOT pinned: a full literal snapshot of the exported protobuf payload.</b> An
- * earlier draft froze all 134 exported data points. That is a worse guard than it looks, because
+ * earlier draft froze the entire exported series set. That is a worse guard than it looks, because
  * most of what it pins is Micrometer exporter behaviour rather than swath behaviour:
  * <ul>
  *   <li>The bucket layout and datapoint encoding a histogram produces are Micrometer exporter
@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 140;
+    static final int EXPECTED_OTLP_METER_COUNT = 151;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -136,7 +136,15 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "COUNTER|swath.sort.merge.boundaries.embedded.bytes|{}",
             "COUNTER|swath.sort.merge.boundaries.embedded.entries|{}",
             "COUNTER|swath.sort.merge.boundaries.scan.bytes|{}",
+            "COUNTER|swath.sort.merge.overlap.clusters|{}",
             "COUNTER|swath.sort.merge.passes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.logical_extent.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.mapped.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.mapped.operations|{}",
+            "COUNTER|swath.sort.merge.proof_spool.preallocation.attempted.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.preallocation.operations|{}",
+            "COUNTER|swath.sort.merge.range.framed.bytes|{}",
+            "COUNTER|swath.sort.merge.range.index.bytes|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
             "COUNTER|swath.split.guard_aborts|{}",
@@ -189,6 +197,8 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "GAUGE|swath.s3.pool.pending_acquisition|{}",
             "GAUGE|swath.sort.finalize.parallelism|{}",
             "GAUGE|swath.sort.handoff.queue.depth.peak|{}",
+            "GAUGE|swath.sort.merge.overlap.pages.peak|{}",
+            "GAUGE|swath.sort.merge.overlap.rows.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
             "GAUGE|swath.sort.staging.bytes.peak|{}",
             "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=10}",
@@ -230,11 +240,12 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.sort.manifest.md5.latency|{}",
             "TIMER|swath.sort.merge.boundaries.latency|{}",
             "TIMER|swath.sort.merge.latency|{}",
+            "TIMER|swath.sort.merge.proof_spool.latency|{}",
             "TIMER|swath.sort.merge.range.latency|{}",
             "TIMER|swath.sort.publication.latency|{}");
 
     /**
-     * The 22 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
+     * The 23 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
      * single {@code swath.api.latency} op series, all fifteen {@code swath.fetch.latency.phase}
      * call_class/phase distributions, and the six client-service-cost spans. Asserting the EXACT
      * set (not just count + allowed names) catches one attribute set being duplicated while another
@@ -262,7 +273,8 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "SUMMARY|swath.parquet.write.latency|{}",
-            "SUMMARY|swath.queue.wait|{}");
+            "SUMMARY|swath.queue.wait|{}",
+            "SUMMARY|swath.sort.finalize.close.latency|{}");
 
     @Test
     void otlpMeterSetIdentityIsFrozen(@TempDir Path scratchDir) {

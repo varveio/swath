@@ -134,11 +134,14 @@ The following table is machine-checked against the code registry.
 | `parquet.writers` | `integer 2..64 (heap-admitted above 4)` | `3` | stable | free | fresh list | Set the writer count for unsorted Parquet output. For counts above four, swath checks that the configured heap is large enough. Counts 2–4 are the tested range. Higher counts can use more memory and create more small parts; benchmark before adopting them. Unless `--output-type dir` overrides the default inference, a path ending in `.parquet` uses one writer. `--sort` does not use this writer pool, so the setting has no effect under `--sort`. |
 | `summary.interval` | `positive duration` | `--progress-interval`, otherwise `30s` | stable | free | fresh list | Set `_swath_summary.json` heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
 | `sort.merge-parallelism` | `integer 1..16` | core-derived, capped at `8` | stable | free | fresh list and resume | Set the maximum number of contiguous key ranges in the final sorted merge. Runtime heap, fan-in, staged-size, and file-descriptor gates may lower it. Each engaged range produces at least one final file, so benchmark merge wall, peak memory, and consumer-visible file count together. A pre-publication resume may change this value because partial range finals are disposable staging files and the merge is rerun from durable PageRuns. |
+| `sort.merge-boundary-policy` | `distinct, or rows` | `distinct` | experimental | free | fresh list and resume | Choose parallel-merge split points. `distinct` preserves the shipped evenly spaced selection over the bounded distinct page-minimum sample. `rows` uses validated type-2/type-3 cumulative entry mass to approximate row quantiles; any extensionless, type-1, invalid, or mixed input falls back to `distinct` for the whole merge. Boundaries remain strictly increasing raw keys, so equal keys remain in one range. The default does not change without a separate benchmark decision. |
+| `sort.keep-staging` | `on or off` | `off` | diagnostic | free | fresh list and resume | Retain exactly the original checkpoint-tracked page-run staging segments and the co-located checkpoint after a successful sorted publish. Every other staging entry, including cascade intermediates and temporary/range files, remains disposable. This is diagnostic-only and increases retained disk; the tested zero-LIST merge-replay procedure is in [Performance](performance.md#diagnostic-zero-list-merge-replay). |
 | `sort.ignore-disk-check` | `on or off` | `off` | diagnostic | free | fresh list and resume | Bypass sorted-output free-space checks. Size the staging volume independently first. |
 
 `seed.mode` contributes to the run identity and cannot change on resume.
-`sort.merge-parallelism` and `sort.ignore-disk-check` apply to `swath resume`; the other
-keys affect fresh-list construction or output lanes.
+`sort.merge-parallelism`, `sort.merge-boundary-policy`, `sort.keep-staging`, and
+`sort.ignore-disk-check` apply to `swath resume`; the other keys affect fresh-list construction or
+output lanes.
 
 ## Diagnostic engine toggles
 
@@ -192,9 +195,11 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.buffers` | `2`, minimum `2` | Fill buffer plus bounded off-thread encode buffers. |
 | `swath.sort.segment-codec` | `LZ4` | Staging payload codec: `NONE`, `LZ4`, or `ZSTD1`. |
 | `swath.sort.fan-in` | `10000` | Per-range merge-stream ceiling, further limited by the planning budget and open files. |
-| `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Capacity-planning budget for open merge streams; not a JVM heap meter. |
-| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Configured per-stream planning price. Trailers can raise it for large encoded records; neither value is a hard decoded-heap bound. |
+| `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Runtime capacity budget for page-run merge residency. Planning charges two encoded bodies plus the type-3 decoded maximum per normal stream, then the page-aware merger charges every additional retained overlap body/raw payload before allocation. A truthful minimum width that cannot fit is a resumable merge-pending refusal. |
+| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Configured per-stream floor. Current type-3 trailers can raise it through exact encoded/decoded maxima; legacy inputs remain readable and their actual header claims are bounded by the runtime aggregate guard. |
 | `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | Maximum contiguous key ranges in the final merge; `1` forces serial. Prefer `--tune sort.merge-parallelism=N` for an operator-selected value; the typed CLI value wins over this property. |
+| `swath.sort.merge-boundary-policy` | `distinct` | Experimental parallel-range boundary policy. Prefer `--tune sort.merge-boundary-policy=distinct\|rows`; the typed CLI value wins over this property. `rows` is default-off and falls back to `distinct` unless every original input carries a validated type-2 or type-3 page index. |
+| `swath.sort.keep-staging` | `off` | Diagnostic retention of exactly the original checkpoint-tracked page-run staging and the co-located checkpoint after successful sorted publication. `--tune sort.keep-staging=on` wins over this property. Every other immediate staging entry is deleted. |
 | `swath.sort.min-parallel-staged-bytes` | `256 MiB` | Keep smaller merges serial. |
 | `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts; an equal-key group is never split across files. |
 | `swath.sort.final-row-group-bytes` | `8 MiB` | Final Parquet seek granularity. |

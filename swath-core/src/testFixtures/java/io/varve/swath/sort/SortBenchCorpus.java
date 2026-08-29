@@ -14,7 +14,6 @@ import java.lang.management.ManagementFactory;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -56,20 +55,34 @@ public final class SortBenchCorpus {
         return new GeneratedCursor(segment, numSegments, blockRows, totalRows, rowsPerDay, base);
     }
 
-    /** Copy page-run inputs in deterministic filename order. */
-    public static List<Path> copyCorpus(Path master, Path target) throws IOException {
-        List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.pageseg")) {
-            ds.forEach(files::add);
-        }
-        files.sort(Comparator.comparing(path -> path.getFileName().toString()));
+    /**
+     * Materialize a benchmark arm by hard-linking an already-snapshotted catalog.
+     *
+     * <p>A physical copy can warm the source files and turn a cold-storage measurement into a
+     * filesystem-copy benchmark. Refuse it rather than quietly changing the measurement arm.
+     */
+    public static List<Path> hardLinkCorpus(List<Path> files, Path target) throws IOException {
         List<Path> out = new ArrayList<>();
         for (Path file : files) {
             Path destination = target.resolve(file.getFileName().toString());
-            Files.copy(file, destination, StandardCopyOption.COPY_ATTRIBUTES);
+            if (!Files.getFileStore(file).equals(Files.getFileStore(target))) {
+                throw new IOException("benchmark arm requires same-filesystem hard links; refusing a physical"
+                        + " copy from " + file + " to " + target);
+            }
+            Files.createLink(destination, file);
             out.add(destination);
         }
         return out;
+    }
+
+    /** List page-run inputs in deterministic filename order without copying or opening them. */
+    public static List<Path> pageRunSegments(Path directory) throws IOException {
+        List<Path> files = new ArrayList<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(directory, "*.pageseg")) {
+            ds.forEach(files::add);
+        }
+        files.sort(Comparator.comparing(path -> path.getFileName().toString()));
+        return List.copyOf(files);
     }
 
     /** Process CPU time in nanoseconds, or {@code -1} when the platform cannot provide it. */

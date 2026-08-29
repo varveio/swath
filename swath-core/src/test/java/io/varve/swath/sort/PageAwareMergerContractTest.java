@@ -482,6 +482,28 @@ class PageAwareMergerContractTest {
         public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
         }
 
+        @Override
+        public void recordPageAwareOverlapCluster() {
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
+        @Override
+        public void recordRangeFramedBytes(long bytes) {
+        }
+
+        @Override
+        public void recordProofSpool(long logicalExtentBytes, long preallocationOperations,
+                long preallocationAttemptedBytes, long mappedOperations, long mappedBytes,
+                long serviceNanos) {
+        }
+
         int count(String key) {
             return counts.getOrDefault(key, 0);
         }

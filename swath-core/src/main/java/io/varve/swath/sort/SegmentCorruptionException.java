@@ -37,6 +37,15 @@ public final class SegmentCorruptionException extends IOException {
     /** A CRC-valid page body failed structural or decoded-row validation. */
     static final String PAGE_RUN_BODY_CORRUPTION = "page_run_body_corruption";
 
+    /** A page's decoded payload claim exceeds the residency admitted for its segment. */
+    static final String PAGE_RUN_DECODED_PAGE_LIMIT = "page_run_decoded_page_limit";
+
+    /** A CRC-valid page-index claim disagreed with the physical page-run body. */
+    static final String PAGE_RUN_INDEX_MISMATCH = "page_run_index_mismatch";
+
+    /** Checkpoint-declared PageRun format metadata disagreed with the physical segment. */
+    static final String PAGE_RUN_FORMAT_MISMATCH = "page_run_format_mismatch";
+
     private final String errorClass;
 
     SegmentCorruptionException(Path path, String errorClass, String message) {

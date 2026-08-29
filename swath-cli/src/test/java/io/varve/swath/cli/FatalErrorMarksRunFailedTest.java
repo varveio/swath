@@ -27,6 +27,8 @@ import io.varve.swath.error.CancelledException;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.error.ListingException;
+import io.varve.swath.error.MergePendingException;
+import io.varve.swath.error.OutputException;
 import io.varve.swath.error.ProtocolViolationException;
 import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.filter.FilterChain;
@@ -36,6 +38,7 @@ import io.varve.swath.output.OutputFormat;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.runtime.ListRunner;
 import io.varve.swath.runtime.RunContext;
+import io.varve.swath.sort.SortOrderException;
 import io.varve.swath.testkit.ForwardingCheckpointStore;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.MockPageFetcher;
@@ -95,7 +98,7 @@ final class FatalErrorMarksRunFailedTest {
     private static JsonRunSummaryWriter.Config summaryConfig(Path path) {
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket", "us-east-1", "jsonl", 4, false, null, 30_000L, List.of(),
-                EngineToggles.DEFAULT, null, false, null, false);
+                EngineToggles.DEFAULT, null, false, null, io.varve.swath.sort.SortArm.NONE, false);
         return new JsonRunSummaryWriter.Config(path, Duration.ofMinutes(10), "fatal-hash", runConfig,
                 List.of("list", "s3://bucket"));
     }
@@ -193,6 +196,49 @@ final class FatalErrorMarksRunFailedTest {
         assertThat(markedFailed)
                 .as("durable parts must remain resumable for a publication-only retry")
                 .isFalse();
+    }
+
+    /** Merge-start disk admission is a zero-LIST-resumable refusal, never a fatal run poison. */
+    @Test
+    void mergePendingDiskRefusalLeavesTheRunEligibleForRetry(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db)) {
+            RunMeta run = store.openRun(textKey(), false, false);
+            long node = store.insertNode(NodeSpec.rootRange(run.id()));
+            store.commitPage(new PageCommit(node, "k9".getBytes(StandardCharsets.UTF_8), true));
+            MergePendingException refusal = new MergePendingException(
+                    "sort merge deferred for insufficient disk", new IOException("injected"));
+
+            assertThatThrownBy(() -> ListCommand.runEngineGuarded(store, run.id(), () -> {
+                throw refusal;
+            })).isSameAs(refusal);
+
+            RunMeta retry = store.openRun(textKey(), true, false);
+            assertThat(retry.status()).isEqualTo(RunStatus.RUNNING);
+            assertThat(retry.fatalError()).isFalse();
+            assertThat(store.loadResumable(run.id(), false))
+                    .as("all listing nodes remain complete, so retry can take merge-only")
+                    .isEmpty();
+        }
+    }
+
+    /** A deterministic sorted-output invariant failure must poison retry, but remain classified. */
+    @Test
+    void sortedOutputOrderRegressionMarksTheRunFatal(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db)) {
+            RunMeta run = store.openRun(textKey(), false, false);
+            OutputException failure = new OutputException("sort merge emitted rows out of order",
+                    new SortOrderException("merged output order regressed"));
+
+            assertThatThrownBy(() -> ListCommand.runEngineGuarded(store, run.id(), () -> {
+                throw failure;
+            })).isSameAs(failure);
+
+            RunMeta reopened = store.openRun(textKey(), true, false);
+            assertThat(reopened.status()).isEqualTo(RunStatus.FAILED);
+            assertThat(reopened.fatalError()).isTrue();
+        }
     }
 
     /**

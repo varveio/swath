@@ -31,7 +31,7 @@ import java.util.function.LongConsumer;
  *       path ({@code true}) knows its own last file, so it force-publishes one valid empty file for an
  *       empty listing and marks the last file final. A parallel range does not: its parts' positions in
  *       the output depend on the other ranges, so it uses {@link #drainOpen} instead and
- *       {@link SortTransform} stamps once every range has drained.</li>
+ *       {@link DatasetPublisher} stamps once every range has drained.</li>
  * </ul>
  */
 final class RolledPartWriter {
@@ -128,8 +128,8 @@ final class RolledPartWriter {
                 byte[] entryKey = entry.key().rawUnsafe();
                 boolean rollReady = writer != null && shouldRoll(writer, finalFileBytes);
                 // The equality check can scan a 1 KiB key. Keep it off the ordinary unique-key hot
-                // path for ALLOW runs until the soft byte target has actually been reached. REJECT
-                // is the fixture-only integrity policy and must inspect every adjacent pair.
+                // path for VERSIONS/ALLOW until the soft byte target has actually been reached.
+                // OBJECTS/REJECT is a key-uniqueness integrity policy and inspects every pair.
                 boolean sameKey = (equalKeyPolicy == EqualKeyPolicy.REJECT || rollReady)
                         && previousKey != null
                         && KeyBytes.compareUnsigned(previousKey, entryKey) == 0;

@@ -8,6 +8,7 @@ package io.varve.swath.replay.fixture;
 import io.micrometer.core.instrument.Timer;
 import io.varve.swath.sort.CaptureSorter;
 import io.varve.swath.sort.DuplicateKeyException;
+import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortTransformResult;
 import io.varve.swath.sort.VersionedCaptureException;
@@ -79,10 +80,18 @@ public final class SortFixtureCommand implements Callable<Integer> {
         long wallMs = (System.nanoTime() - wallStartNanos) / 1_000_000;
         // segments has no field on SortTransformResult, so it's read back from the registry-backed
         // metrics adapter above (SORT.segment_flushed) — see FixtureMetrics#segmentsFlushed.
-        System.out.printf("sort_fixture rows=%d files=%d bytes=%d wall_ms=%d segments=%d "
-                        + "merge_passes=%d cascaded_passes=%d output=%s%n",
-                result.totalRows(), result.finalFiles().size(), outputBytes, wallMs,
+        System.out.printf("sort_fixture arm=%s rows=%d files=%d bytes=%d wall_ms=%d segments=%d "
+                        + "merge_passes=%d cascaded_passes=%d "
+                        + "proof_spool_logical_extent_bytes=%d "
+                        + "proof_spool_preallocation_operations=%d "
+                        + "proof_spool_preallocation_attempted_bytes=%d "
+                        + "proof_spool_mapped_operations=%d proof_spool_mapped_bytes=%d "
+                        + "proof_spool_ms=%d output=%s%n",
+                SortArm.SORT_FIXTURE, result.totalRows(), result.finalFiles().size(), outputBytes, wallMs,
                 metrics.segmentsFlushed(), result.mergePasses(), result.cascadedPasses(),
+                metrics.proofSpoolLogicalExtentBytes(), metrics.proofSpoolPreallocationOperations(),
+                metrics.proofSpoolPreallocationAttemptedBytes(), metrics.proofSpoolMappedOperations(),
+                metrics.proofSpoolMappedBytes(), metrics.proofSpoolMillis(),
                 output.toAbsolutePath());
         return 0;
     }

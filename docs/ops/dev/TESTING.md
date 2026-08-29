@@ -56,6 +56,19 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
     -Dswath.bench=on`, filtered to that class). It prints `WRITER_BENCH_RESULT` rows for an encode/dispatch arm and a
     row-rotation arm, including submit/HOL blocking plus digest/manifest time. Results are host and
     workload evidence, never a relative-throughput assertion in CI.
+  - `PageBlockAllocationCharacterizationTest` is the exact opt-in guard for persisted page-body
+    copy removal. It forks a small interpreted child JVM with `-XX:-UseTLAB`, verifies that VM flag,
+    requires a named 8 KiB positive-control `byte[]` allocation to appear in JFR, and only then
+    accepts zero >=2 KiB byte arrays under legacy/current PageBlock parse/decode stacks. Run it as:
+
+    ```bash
+    JAVA_TOOL_OPTIONS='-Dswath.profile.allocations=exact' ./gradlew \
+      :swath-core:test \
+      --tests 'io.varve.swath.sort.PageBlockAllocationCharacterizationTest'
+    ```
+
+    The default build skips it; a zero target count without the positive control is a failure, not
+    evidence.
 - **`-Pdeep`** `./gradlew test -Pdeep` — runs **only** the `@Tag("deep")` tier:
   schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle/timeout
   timing tests, demoted off the per-commit gate because they are slow (real `Thread.sleep`)
@@ -102,6 +115,71 @@ or moves a seed cut count should assume the default build cannot see it.
 > **no RSS budget**. PERF-2 therefore asserts RSS against a *derived* bound (heap budget +
 > ~2 GB JVM/native headroom), flagged in `ParquetPerf2Test` for a spec follow-up so the test
 > can assert against the pack instead of a derived bound.
+
+## Parallel range-merge harness
+
+`ParallelMergeBenchmark` measures the production merge over page-run staging only; every result
+is labelled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never evidence for
+live `swath list --sort` listing throughput.
+
+By default it generates and validates a non-empty corpus. Create external staging through the
+organic diagnostic lifecycle (never by editing SQLite):
+
+```
+swath list s3://<bucket>/<prefix> --format parquet -o /path/to/out --sort \
+  --tune sort.keep-staging=on
+```
+
+The resulting `<out>/_staging` is accepted only alongside its retained co-located checkpoint:
+the harness reads `<out>/.swath/checkpoint.sqlite` and
+the run identity through an immutable read-only SQLite connection, requiring matching
+`args_hash`/`run_id`, the current checkpoint schema, OBJECTS mode, completed/PUBLISHED state, and
+`_SUCCESS`, to snapshot exactly the checkpoint-tracked original listing segments. It rejects live
+SQLite journal/WAL companions, symlinked authority directories, and untracked `*.pageseg` files
+(including stale cascade or fixture debris), and hashes every regular file to verify the retained
+tree is byte-identical after every arm.
+
+```
+./gradlew :swath-core:test --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  -Dswath.bench=on -Pperf -Dswath.bench.staging-dir=/path/to/_staging
+```
+
+The harness snapshots and validates the catalog once, then materializes every arm with
+same-filesystem hard links; it refuses physical-copy fallback so a cold-storage result cannot
+measure copying instead of merging. Before timing, it fully reads and CRC-validates the source into
+a constant-memory row-count/multiset oracle, then opens every input for the per-stream heap probe.
+The source oracle hashes the canonical Parquet row representation: timestamps are epoch
+microseconds, and a versionless object's schema-omitted `is_latest` decodes as false. It still
+includes every representable field and exact multiplicity; this normalization prevents the live
+OBJECTS mapper's in-memory `isLatest=true` convenience value from being misreported as output loss.
+Every arm is therefore explicitly `cache_state=warm_primed`; this harness cannot produce a cold
+result. A true cold bracket needs a separate fresh-process protocol that prepares first, drops
+caches under external control, and launches exactly one measured arm without the oracle/heap probe
+in that process.
+
+The warm-cache sweep first runs one complete **untimed** R=1 transform to absorb class loading, JIT,
+Parquet initialization, and RSS-sampler first use. Measurements then run serial A, candidates in
+ascending order, serial B, candidates in descending order, and serial C. Speedups use the median of
+the three serial brackets and the two candidate samples. `swath.bench.max-variance-pct` defaults to
+`15.0`; a baseline or candidate spread above it produces `status=invalid_variance` and
+`speedup=unavailable`, never a publishable speedup. An inconsistent clamp/engagement disposition is
+likewise invalid. Every output must be physically sorted and match the independent source oracle.
+Every `BENCH_*` line carries cache state, retained run identity (or generated sentinels), `git_sha`,
+`corpus_id`, and the stable ordered logical-output fingerprint when output exists.
+The row reports proof-spool logical extent, preallocation operations/attempted bytes, mapped
+operations/bytes, and summed service time with the same scope as the live log and run summary.
+`PageRunZoneProofAdversarialTest` pins fixed extent/preallocation while requiring mapped work to grow
+with pages/source switches. `PageRunProofSpoolLargeMapTest` performs an actual sparse >2-GiB FFM
+first/last touch, arena unmap, and delete. The opt-in `PageRunProofSpoolRssCharacterizationTest`
+touches a representative mapping, bounds its RSS rise with an explicit noise caveat, and checks
+post-arena-close RSS behavior:
+
+```bash
+./gradlew :swath-core:test -PonlyPerf \
+  --tests 'io.varve.swath.sort.PageRunProofSpoolRssCharacterizationTest'
+```
+
+Its `PROOF_SPOOL_RSS_RESULT` line is characterization evidence, not a portable memory promise.
 
 ## JMH micro-benchmarks
 

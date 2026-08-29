@@ -24,7 +24,6 @@ import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.runtime.ArgsHashFields;
-import io.varve.swath.runtime.ListRunner;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.SegmentSink;
@@ -94,12 +93,10 @@ final class SortForeignManifestTest {
             SegmentSink sink = result -> {
                 List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                         .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
-                // The staging namespace marker on a part_file row — must match the format the current
-                // build stages (SortLane writes real page-run segments here), else the resume
-                // staging-format refusal correctly rejects this checkpoint. SORT_SEGMENT_FORMAT
-                // is public.
+                // Record the typed format the real SortLane encoder emitted, so the checkpoint's
+                // staging identity cannot diverge from these page-run bytes.
                 store.partFinalized(new PartFinalize(run.id(), 0, result.path().getFileName().toString(),
-                        ListRunner.SORT_SEGMENT_FORMAT, result.rows(), result.bytes(), advances));
+                        result.pageRunFormat(), result.rows(), result.bytes(), advances));
             };
             SortLane lane = new SortLane(sortConfig(), new ListEntryComparator(),
                     DuplicateHook.NO_OP, SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir,

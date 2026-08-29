@@ -33,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * OtlpMeterRegistry} when {@code SWATH_OTLP_ENDPOINT}/{@code --metrics-export=otlp} is set, and the
  * two do NOT emit the same set. In particular Micrometer's {@code SimpleMeterRegistry.newTimer}
  * registers {@code HistogramGauges} — 3 extra {@code *.percentile{phi}} GAUGE meters per
- * percentile-publishing timer, 66 in total here — that {@code OtlpMeterRegistry.newTimer} does not
+ * percentile-publishing timer series, 69 in total here — that {@code OtlpMeterRegistry.newTimer} does not
  * create at all (OTLP encodes percentiles as Summary quantiles on the wire instead). So this
  * snapshot holds {@value #EXPECTED_SIMPLE_METER_COUNT} ids where the same run yields
  * {@value RunMetricsOtlpSeriesIdentityTest#EXPECTED_OTLP_METER_COUNT} meters under OTLP. That side
@@ -120,7 +120,15 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "COUNTER|swath.sort.merge.boundaries.embedded.bytes|{}",
             "COUNTER|swath.sort.merge.boundaries.embedded.entries|{}",
             "COUNTER|swath.sort.merge.boundaries.scan.bytes|{}",
+            "COUNTER|swath.sort.merge.overlap.clusters|{}",
             "COUNTER|swath.sort.merge.passes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.logical_extent.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.mapped.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.mapped.operations|{}",
+            "COUNTER|swath.sort.merge.proof_spool.preallocation.attempted.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.preallocation.operations|{}",
+            "COUNTER|swath.sort.merge.range.framed.bytes|{}",
+            "COUNTER|swath.sort.merge.range.index.bytes|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
             "COUNTER|swath.split.guard_aborts|{}",
@@ -237,8 +245,13 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.s3.pool.leased|{}",
             "GAUGE|swath.s3.pool.max|{}",
             "GAUGE|swath.s3.pool.pending_acquisition|{}",
+            "GAUGE|swath.sort.finalize.close.latency.percentile|{phi=0.5}",
+            "GAUGE|swath.sort.finalize.close.latency.percentile|{phi=0.99}",
+            "GAUGE|swath.sort.finalize.close.latency.percentile|{phi=0.9}",
             "GAUGE|swath.sort.finalize.parallelism|{}",
             "GAUGE|swath.sort.handoff.queue.depth.peak|{}",
+            "GAUGE|swath.sort.merge.overlap.pages.peak|{}",
+            "GAUGE|swath.sort.merge.overlap.rows.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
             "GAUGE|swath.sort.staging.bytes.peak|{}",
             "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=10}",
@@ -280,6 +293,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "TIMER|swath.sort.manifest.md5.latency|{}",
             "TIMER|swath.sort.merge.boundaries.latency|{}",
             "TIMER|swath.sort.merge.latency|{}",
+            "TIMER|swath.sort.merge.proof_spool.latency|{}",
             "TIMER|swath.sort.merge.range.latency|{}",
             "TIMER|swath.sort.publication.latency|{}");
 
@@ -363,7 +377,16 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.sort.merge.boundaries.latency{}=0",
             "swath.sort.merge.boundaries.scan.bytes{}=0",
             "swath.sort.merge.latency{}=1",
+            "swath.sort.merge.overlap.clusters{}=1",
             "swath.sort.merge.passes{}=3",
+            "swath.sort.merge.proof_spool.latency{}=1",
+            "swath.sort.merge.proof_spool.logical_extent.bytes{}=6212",
+            "swath.sort.merge.proof_spool.mapped.bytes{}=992",
+            "swath.sort.merge.proof_spool.mapped.operations{}=13",
+            "swath.sort.merge.proof_spool.preallocation.attempted.bytes{}=6212",
+            "swath.sort.merge.proof_spool.preallocation.operations{}=2",
+            "swath.sort.merge.range.framed.bytes{}=0",
+            "swath.sort.merge.range.index.bytes{}=0",
             "swath.sort.merge.range.latency{}=1",
             "swath.sort.page_runs_per_buffer{}=1",
             "swath.sort.publication.latency{}=0",
@@ -399,7 +422,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 206;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 220;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

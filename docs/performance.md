@@ -307,6 +307,67 @@ an explicit `--tune` value wins. See
 [configuration](configuration.md#sorted-output-jvm-properties) and
 [using sorted output](usage.md#sorted-output).
 
+Range split points continue to use the bounded distinct-key policy by default. The explicit
+`--tune sort.merge-boundary-policy=rows` arm uses validated type-2 cumulative entry mass to target
+row quantiles and can change the number of rows in each final part without changing global order or
+multiplicity. Treat it as an experimental A/B arm: compare max/median per-range rows and wall time,
+and expect a whole-run fallback to `distinct` for legacy, invalid, or mixed staging. The focused
+skew fixture establishes mechanism, not production evidence, so it does not justify a default
+change.
+
+For merge-only measurements, `boundary_ms` includes both structured catalog/index preflight and
+the selected final boundary policy (`rows` therefore includes its additional full index pass).
+The proof-spool fields separately report logical extent, physical preallocation attempts, mapped
+field/key access, and summed service time with the same scope as the live run log and JSON report.
+Mapped operations intentionally expose page/source-switch scaling, and mapped pages are visible in
+process RSS while resident. Serial `R=1` records none of these proof-spool values.
+
+### Diagnostic zero-LIST merge replay
+
+This procedure isolates the sorted merge from listing by deliberately re-entering a completed
+diagnostic run. It is tested end to end with a fetcher that fails on any LIST request: the replay
+issues zero LIST calls, preserves the checkpoint's finalized metadata and exact original staging
+set, and republishes identical part bytes, manifest file rows/sizes, state identity, and symlink.
+It is not an ordinary recovery operation and must not be used against a production dataset.
+
+Create the retained corpus once:
+
+```bash
+RUN=/tmp/swath-merge-corpus
+HASHES=/tmp/swath-merge-corpus.pageseg.sha256
+
+swath list s3://<bucket>/<prefix> --format parquet -o "$RUN" --sort \
+  --tune sort.keep-staging=on
+
+find "$RUN/_staging" -maxdepth 1 -type f -name '*.pageseg' -print0 \
+  | sort -z | xargs -0 -r sha256sum > "$HASHES"
+```
+
+For each sequential benchmark arm, remove only the last-written completion marker and resume with
+retention still enabled. Save the report before starting the next arm because publication replaces
+the prior finals and report:
+
+```bash
+ARM=serial
+RANGES=1
+rm -- "$RUN/_SUCCESS"
+swath resume "$RUN" \
+  --tune sort.keep-staging=on \
+  --tune sort.merge-parallelism="$RANGES"
+
+sha256sum -c "$HASHES"
+test "$(jq -r '.cost.api_calls' "$RUN/_swath_summary.json")" = 0
+mkdir -p "/tmp/swath-merge-$ARM"
+cp "$RUN/manifest.json" "$RUN/.swath-state.json" "$RUN/symlink.txt" \
+  "$RUN/_swath_summary.json" "/tmp/swath-merge-$ARM/"
+```
+
+The retained page runs are the immutable input corpus; hash them after every arm. Also compare the
+manifest file set, row/byte totals, output checksums, effective range count, merge wall, peak RSS,
+and the `SORT.staging_retained`/`SORT.merge_redone` engagement reasons. A zero API-call count proves
+only that this invocation re-ran the merge without listing; it does not turn the retained staging
+into a general S3 replay fixture or reproduce object-store timing.
+
 The final PR #99 campaign ran serial A → default → serial B at fixed `-Xmx12g` and
 `--concurrency 256`; serial values below are the bracket mean.
 
@@ -381,3 +442,8 @@ method, not as an advertised envelope.
 
 The separate [S3-listing comparison study](https://github.com/varveio/s3-listing-study)
 publishes a methodology and tool roster; it does not currently publish comparative results.
+
+A dated [local sort-policy investigation](ops/dev/field-investigations.md#2026-08-28--local-sort-policy-evidence)
+found exact, zero-LIST warm merge replays across the tested range counts without sustained staging
+backpressure. It does not change the default `distinct` policy or establish portable throughput;
+the field note owns the raw timings, provenance, and limitations.

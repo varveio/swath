@@ -6,6 +6,7 @@
 package io.varve.swath.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.Counter;
 import io.varve.swath.checkpoint.Node;
@@ -27,6 +28,9 @@ import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.PageRunRawFixtures;
+import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
@@ -120,6 +124,11 @@ final class SortPipelineTest {
             assertThat(Files.exists(stagingDir)).as("staging dir removed after publish").isFalse();
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);
             assertThat(store.loadResumable(run.id(), true)).as("output-complete: nothing to resume").isEmpty();
+            assertThat(store.finalizedParts(run.id())).isNotEmpty().allSatisfy(part -> {
+                assertThat(part.format()).isEqualTo(PageRunFormat.NAME);
+                assertThat(part.formatVersion()).isEqualTo(PageRunFormat.CURRENT_FORMAT_VERSION);
+                assertThat(part.extensionType()).isEqualTo(PageRunFormat.PAGE_INDEX_EXTENSION);
+            });
 
             // durable_cursor advanced via the reused part-finalize machinery (segments carried it).
             assertThat(nodesWithDurableCursor(db, run.id())).isPositive();
@@ -156,7 +165,7 @@ final class SortPipelineTest {
                 List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                         .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
                 store.partFinalized(new PartFinalize(run.id(), 0, result.path().getFileName().toString(),
-                        ListRunner.SORT_SEGMENT_FORMAT, result.rows(), result.bytes(), advances));
+                        result.pageRunFormat(), result.rows(), result.bytes(), advances));
             };
             SortLane lane = new SortLane(smallSegments(), new ListEntryComparator(), DuplicateHook.NO_OP,
                     SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir, "seg-" + run.id() + "-x", sink);
@@ -167,6 +176,10 @@ final class SortPipelineTest {
 
             List<PartRef> segmentRows = store.finalizedParts(run.id());
             assertThat(segmentRows).allMatch(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()));
+            assertThat(segmentRows).allSatisfy(part -> {
+                assertThat(part.formatVersion()).isEqualTo(PageRunFormat.CURRENT_FORMAT_VERSION);
+                assertThat(part.extensionType()).isEqualTo(PageRunFormat.PAGE_INDEX_EXTENSION);
+            });
             assertThat(Files.exists(DatasetLayout.of(outputDir).manifest())).isFalse();
 
             // Merge-pending re-entry: re-run ONLY the merge (no fetcher ⇒ zero LIST fetches).
@@ -180,6 +193,118 @@ final class SortPipelineTest {
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);
             assertThat(counter(ctx, "swath.steal_reason", "SORT", "merge_redone")).isEqualTo(1.0);
             assertThat(Files.exists(stagingDir)).as("staging dir removed after republish").isFalse();
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    void mergePendingResumeRejectsCheckpointFormatThatDisagreesWithPhysicalSegment(
+            @TempDir Path tmp) throws Exception {
+        Path outputDir = Files.createDirectories(tmp.resolve("out"));
+        Path stagingDir = Files.createDirectories(outputDir.resolve("_staging"));
+        Path db = tmp.resolve("c.sqlite");
+        RunContext ctx = RunContext.create();
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db, ctx.metrics())) {
+            RunMeta run = store.openRun(sortKey(), false, false);
+            long nodeId = store.insertNode(NodeSpec.rootRange(run.id()));
+            SegmentSink sink = result -> store.partFinalized(new PartFinalize(
+                    run.id(), 0, result.path().getFileName().toString(), PageRunFormat.NAME,
+                    PageRunFormat.CURRENT_FORMAT_VERSION,
+                    PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION,
+                    result.rows(), result.bytes(), result.perNodeMaxKeys().entrySet().stream()
+                    .map(entry -> new PartFinalize.DurableAdvance(
+                            entry.getKey(), entry.getValue())).toList()));
+            SortLane lane = new SortLane(SortConfigs.base(), new ListEntryComparator(),
+                    DuplicateHook.NO_OP, SortMetrics.NO_OP, SortLaneMeters.NO_OP,
+                    stagingDir, "seg-" + run.id() + "-format", sink);
+            lane.admit(nodeId, pages(Keyspaces.singlePrefixFlat(40), MAX_KEYS).getFirst());
+            lane.close();
+            PartRef tracked = store.finalizedParts(run.id()).getFirst();
+            Path segment = stagingDir.resolve(tracked.path());
+
+            assertThatThrownBy(() -> new ListRunner().runSortMergeOnly(
+                    ctx, outputDir, stagingDir, store, run.id(), SortConfigs.base(),
+                    SortMode.OBJECTS, spec()))
+                    .rootCause()
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .extracting(cause -> ((SegmentCorruptionException) cause).errorClass())
+                    .isEqualTo("page_run_format_mismatch");
+
+            assertThat(segment).exists();
+            assertThat(DatasetLayout.of(outputDir).manifest()).doesNotExist();
+            assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.MERGING);
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    /*
+     * This is the production zero-LIST re-entry seam: the checkpoint-tracked segment is mutated only
+     * after listing has finalized it. The fresh-run test above drives real type-2 emission through
+     * ListRunner; adversarial mutations of the immediately-entered fresh merge stay in
+     * PageRunZoneProofAdversarialTest so production does not gain a test-only between-phase hook.
+     */
+    void mergePendingResumeRejectsCrcRepairedIndexLieWithZeroListAndNoPublish(
+            @TempDir Path tmp) throws Exception {
+        Path outputDir = Files.createDirectories(tmp.resolve("out"));
+        Path stagingDir = Files.createDirectories(outputDir.resolve("_staging"));
+        Path db = tmp.resolve("c.sqlite");
+        SortConfig proofConfig = SortConfigs.base()
+                .withSegmentEntries(1024)
+                .withMergeParallelism(4)
+                .withMinParallelStagedBytes(0)
+                .withMergeBudgetBytes(64L << 20);
+
+        RunContext ctx = RunContext.create();
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db, ctx.metrics())) {
+            RunMeta run = store.openRun(sortKey(), false, false);
+            long nodeId = store.insertNode(NodeSpec.rootRange(run.id()));
+            List<byte[]> keyspace = Keyspaces.singlePrefixFlat(160);
+            SegmentSink sink = result -> store.partFinalized(new PartFinalize(run.id(), 0,
+                    result.path().getFileName().toString(), result.pageRunFormat(), result.rows(),
+                    result.bytes(), result.perNodeMaxKeys().entrySet().stream()
+                    .map(entry -> new PartFinalize.DurableAdvance(
+                            entry.getKey(), entry.getValue())).toList()));
+            SortLane lane = new SortLane(proofConfig, new ListEntryComparator(), DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir,
+                    "seg-" + run.id() + "-proof", sink);
+            for (List<ListEntry> page : pages(keyspace, MAX_KEYS)) {
+                lane.admit(nodeId, page);
+            }
+            lane.close();
+            List<PartRef> tracked = store.finalizedParts(run.id());
+            assertThat(tracked).singleElement().satisfies(part -> {
+                assertThat(part.extensionType()).isEqualTo(PageRunFormat.PAGE_INDEX_EXTENSION);
+                assertThat(part.rows()).isEqualTo(keyspace.size());
+            });
+            Path segment = stagingDir.resolve(tracked.getFirst().path());
+            PageRunRawFixtures.repairCrcAfterSecondEntryCumulativeLie(segment);
+
+            assertThatThrownBy(() -> new ListRunner().runSortMergeOnly(
+                    ctx, outputDir, stagingDir, store, run.id(), proofConfig,
+                    SortMode.OBJECTS, spec()))
+                    .rootCause()
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .extracting(cause -> ((SegmentCorruptionException) cause).errorClass())
+                    .isEqualTo("page_run_index_mismatch");
+
+            assertThat(store.finalizedParts(run.id())).containsExactlyElementsOf(tracked);
+            assertThat(segment).exists();
+            assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.MERGING);
+            assertThat(DatasetLayout.of(outputDir).manifest()).doesNotExist();
+            assertThat(DatasetLayout.of(outputDir).dataFile("part-00000.parquet")).doesNotExist();
+            try (var files = Files.list(stagingDir)) {
+                assertThat(files.map(path -> path.getFileName().toString()))
+                        .noneMatch(name -> name.startsWith("prange-")
+                                || name.startsWith("merge-r"));
+            }
+            assertThat(counter(ctx, "swath.steal_reason", "SORT", "page_run_index_mismatch"))
+                    .isEqualTo(1.0);
+            assertThat(counter(ctx, "swath.steal_reason", "SORT", "merge_zone_proof_complete"))
+                    .isZero();
+            assertThat(counter(ctx, "swath.api.calls"))
+                    .as("merge-only re-entry has no PageFetcher and issues zero LIST/API calls")
+                    .isZero();
         }
     }
 
@@ -225,4 +350,5 @@ final class SortPipelineTest {
             }
         }
     }
+
 }

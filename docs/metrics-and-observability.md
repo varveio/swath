@@ -106,7 +106,42 @@ on field order. Dedicated `*_ms` fields use milliseconds. Generic percentile gau
 For page-run staging, the `sort` block reports `merge_boundary_embedded_entries`,
 `merge_boundary_embedded_bytes`, and `merge_boundary_scan_bytes` to distinguish validated
 trailer samples from compatibility fallback scans. `merge_boundary_bytes` is the sum of
-the two byte fields.
+the two byte fields. `merge_range_framed_bytes` counts every page frame read by parallel workers,
+including cascade intermediates; `merge_range_index_bytes` separately counts type-2 entry bytes read after
+descriptor preflight for optional row-weighted boundary selection, seek planning, and physical
+proof. Proof-spool fields separate requested fixed-slot address space
+(`merge_proof_spool_logical_extent_bytes`), attempted physical allocation operations/bytes,
+mapped key/field access operations/bytes, and summed service time (`merge_proof_spool_ms`). They
+are zero on the serial path; logical extent is not transferred bytes or a memory-neutral claim.
+Before worker startup, the merge planner charges the exact fixed extent against the configured
+merge budget alongside stream capacity. `SORT.merge_range_proof_budget_limited` reports a range
+clamp caused specifically by that backing cost; its warning includes requested and effective proof
+extents.
+An allocation or writable-map failure emits `SORT.proof_spool_allocation_failed` and terminates with
+`error_class=proof_spool_allocation_failed` after attempted work is published; cooperative
+cancellation remains cancellation.
+
+Page-aware merge reports `merge_overlap_clusters`, `merge_overlap_pages_peak`, and
+`merge_overlap_rows_peak`. They describe decoded overlap clusters only: zero is the ordinary
+whole-page path, while nonzero identifies the bounded key-merge fallback and its largest retained
+decoded page/row state. `merge_disjoint_copyable` and `merge_interleaved_segment` remain separate
+source-run classifications, so they can be compared without conflating overlap with row ordering.
+
+For an alternating sort campaign, `sort.pack_on_fetch_pages`, `segment_bytes`, and `segments` are
+cumulative snapshots: their deltas across periodic reports describe packed arrival and segment
+production. `backpressure_engaged`, `backpressure_wait_ms`, and
+`backpressure_wait_max_ms` describe the sort-lane handoff only; `staging_bytes_peak`,
+`handoff_queue_depth_peak`, and `off_thread_buffers_peak` are high-water marks. The report does
+not currently echo the configured `sort.buffers` or `sort.segment-bytes` target, and it does not
+label generic `swath.queue.wait` as an upstream sort queue, so those must be recorded in the
+campaign command rather than inferred from this block.
+
+`sort.arm` identifies the typed entry path: `LIVE_LIST_SORT` means this process performed the
+listing, `MERGE_ONLY_PAGE_RUN` is a checkpoint-authorized zero-LIST merge re-entry, and
+`PUBLISHED_REENTRY` is a checkpoint-authorized no-op resume that found this run already published
+(so it ran neither listing nor merge). It is independent of the retained `merge_only_resume`
+compatibility marker. `sort-fixture` has no run summary artifact; its existing stdout result line
+is labelled `arm=SORT_FIXTURE` instead.
 
 The `sort` block decomposes terminal work into `finalize_ms`, `finalize_close_ms`,
 `local_publication_ms`, `finalize_parallelism`, and `manifest_*` fields. `finalize_ms` is wall
@@ -115,6 +150,9 @@ close service. Final writers close sequentially in publish order; `finalize_para
 the ranges that encoded final output concurrently, not close concurrency. Fresh final parts derive
 their digest, byte count, row count, and exact bounds while writing; nonzero manifest bounds-read
 metrics identify the compatibility path that reopened a carried part.
+The same existing final-writer close timer is also exposed as `finalize_close_count`,
+`finalize_close_max_ms`, and `finalize_close_p50_ms`/`_p90_ms`/`_p99_ms`; these are service-time
+observations, not a second timing surface.
 
 The report can contain the target URI, arguments, filter values, slow-range bounds, and
 key samples. Treat it as operational data and redact it before sharing.
@@ -185,7 +223,7 @@ values and implementation details.
 | Idle workers | `swath.idle_backoff.level`, `swath.idle_backoff.resets`, `swath.idle_backoff.slot_denied`, `swath.idle_backoff.park_time` | Whether idle workers repeatedly searched, backed off, or lacked probe slots. |
 | Checkpoint | `swath.checkpoint.commit.latency`, `swath.checkpoint.commit_batch_size`, `swath.checkpoint.queue.wait`, `swath.checkpoint.commit.wait`, `swath.checkpoint.queue.depth` | Whether SQLite durability is the limiting stage. |
 | Parquet | `swath.parquet.rotation`, `swath.parquet.parts`, `swath.parquet.finalize.latency`, `swath.parquet.write.latency` | How the managed Parquet sink rotated and finalized parts. |
-| Sorted output | `swath.sort.entries`, `swath.sort.segments.written`, `swath.sort.segment.bytes`, `swath.sort.merge.passes`, `swath.sort.merge.latency`, `swath.sort.merge.range.latency`, `swath.sort.merge.boundaries.latency`, `swath.sort.merge.boundaries.embedded.entries`, `swath.sort.merge.boundaries.embedded.bytes`, `swath.sort.merge.boundaries.scan.bytes`, `swath.sort.finalize.close.latency`, `swath.sort.manifest.md5.bytes`, `swath.sort.manifest.md5.latency`, `swath.sort.manifest.bounds.rows`, `swath.sort.manifest.bounds.bytes`, `swath.sort.manifest.bounds.latency`, `swath.sort.publication.latency`, `swath.sort.finalize.latency`, `swath.sort.finalize.parallelism`, `swath.sort.backpressure.wait`, `swath.sort.page_runs_per_buffer`, `swath.sort.staging.bytes.peak`, `swath.sort.handoff.queue.depth.peak`, `swath.sort.off_thread.buffers.peak` | How much staging and merge work sorting required, and what constrained it. |
+| Sorted output | `swath.sort.entries`, `swath.sort.segments.written`, `swath.sort.segment.bytes`, `swath.sort.merge.passes`, `swath.sort.merge.latency`, `swath.sort.merge.range.latency`, `swath.sort.merge.boundaries.latency`, `swath.sort.merge.boundaries.embedded.entries`, `swath.sort.merge.boundaries.embedded.bytes`, `swath.sort.merge.boundaries.scan.bytes`, `swath.sort.merge.range.framed.bytes`, `swath.sort.merge.range.index.bytes`, `swath.sort.merge.proof_spool.logical_extent.bytes`, `swath.sort.merge.proof_spool.preallocation.operations`, `swath.sort.merge.proof_spool.preallocation.attempted.bytes`, `swath.sort.merge.proof_spool.mapped.operations`, `swath.sort.merge.proof_spool.mapped.bytes`, `swath.sort.merge.proof_spool.latency`, `swath.sort.merge.overlap.clusters`, `swath.sort.merge.overlap.pages.peak`, `swath.sort.merge.overlap.rows.peak`, `swath.sort.finalize.close.latency`, `swath.sort.manifest.md5.bytes`, `swath.sort.manifest.md5.latency`, `swath.sort.manifest.bounds.rows`, `swath.sort.manifest.bounds.bytes`, `swath.sort.manifest.bounds.latency`, `swath.sort.publication.latency`, `swath.sort.finalize.latency`, `swath.sort.finalize.parallelism`, `swath.sort.backpressure.wait`, `swath.sort.page_runs_per_buffer`, `swath.sort.staging.bytes.peak`, `swath.sort.handoff.queue.depth.peak`, `swath.sort.off_thread.buffers.peak` | How much staging and merge work sorting required, and what constrained it. |
 | Local resources | `swath.disk.free_bytes`, `swath.s3.pool.leased`, `swath.s3.pool.idle_available`, `swath.s3.pool.pending_acquisition`, `swath.s3.pool.max`, `swath.s3.pool.connection_aborted`, `swath.s3.pool.handshakes`, `swath.s3.socket_closure_recovered` | Whether disk, the connection pool, or connection churn constrained the client. |
 | Phase and output | `swath.phase`, `swath.output.files`, `swath.output.bytes`, `swath.output.broken_pipe`, `swath.emit.latency` | What phase is active and how the selected sink behaves. |
 | Run result | `swath.run.duration`, `swath.run.throughput` | Final wall time and lifetime-average throughput. These are end-of-run, not live, values. |

@@ -7,6 +7,8 @@ package io.varve.swath.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.varve.swath.checkpoint.NodeSpec;
 import io.varve.swath.checkpoint.PageCommit;
 import io.varve.swath.checkpoint.RunKey;
@@ -39,20 +41,21 @@ import org.junit.jupiter.api.io.TempDir;
  */
 final class SortPublishedReentryTest {
 
-    private static final String BUCKET = "bucket";
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String ENDPOINT = "http://localhost:4566";
-    private static final String PREFIX = "data/";
 
     private static final String NO_FILTER_SPEC =
             FilterSpecCodec.encode(null, null, null, null, null, null, null);
 
     @Test
     void publishedReentry_marksRunCompletedInsteadOfLeavingItRunningForever(@TempDir Path dir) throws Exception {
-        String argsHash = ArgsHashFields.forListing("s3", ENDPOINT, BUCKET, PREFIX).hash();
+        String argsHash = ArgsHashFields.forListing("s3", ENDPOINT, CliTestS3Defaults.BUCKET,
+                CliTestS3Defaults.PREFIX).hash();
         Path outputDir = Files.createDirectories(dir.resolve("out"));
         Path db = dir.resolve("c.sqlite");
 
-        RunKey key = new RunKey("s3", ENDPOINT, BUCKET, PREFIX.getBytes(StandardCharsets.UTF_8),
+        RunKey key = new RunKey("s3", ENDPOINT, CliTestS3Defaults.BUCKET,
+                CliTestS3Defaults.PREFIX.getBytes(StandardCharsets.UTF_8),
                 argsHash, "auto", ListingMode.OBJECTS, NO_FILTER_SPEC, OutputFormat.PARQUET.name(),
                 new SoftRestoreContext(false, null, null, false, false, outputDir.toString(), false, null, null), true);
         long runId;
@@ -89,7 +92,7 @@ final class SortPublishedReentryTest {
         assertThat(CheckpointDbProbe.runStatus(db, runId)).isEqualTo("RUNNING");
 
         ListCommand cmd = new ListCommand();
-        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.uri = "s3://" + CliTestS3Defaults.BUCKET + "/" + CliTestS3Defaults.PREFIX;
         cmd.connection.endpointUrl = ENDPOINT;
         cmd.output.format = OutputFormat.PARQUET;
         cmd.output.destination = outputDir.toString();
@@ -108,16 +111,27 @@ final class SortPublishedReentryTest {
         assertThat(finalizedPart)
                 .as("a resumed run must NOT clear finalized parts")
                 .exists();
+        JsonNode summary = MAPPER.readTree(outputDir.resolve("_swath_summary.json").toFile());
+        assertThat(summary.get("completed").asBoolean()).isTrue();
+        assertThat(summary.get("sort").get("arm").asText())
+                .as("published re-entry is neither a live listing nor a merge-only resume")
+                .isEqualTo("PUBLISHED_REENTRY");
+        assertThat(summary.get("sort").get("merge_only_resume").asBoolean()).isFalse();
+        assertThat(summary.get("objects").asLong()).isZero();
+        assertThat(summary.get("sort").get("passes").asLong()).isZero();
+        assertThat(summary.get("sort").get("merge_ms").asLong()).isZero();
     }
 
     @Test
     void publishIncompleteWithoutSuccessMarker_reRunsMergeInsteadOfShortCircuiting(@TempDir Path dir)
             throws Exception {
-        String argsHash = ArgsHashFields.forListing("s3", ENDPOINT, BUCKET, PREFIX).hash();
+        String argsHash = ArgsHashFields.forListing("s3", ENDPOINT, CliTestS3Defaults.BUCKET,
+                CliTestS3Defaults.PREFIX).hash();
         Path outputDir = Files.createDirectories(dir.resolve("out"));
         Path db = dir.resolve("c.sqlite");
 
-        RunKey key = new RunKey("s3", ENDPOINT, BUCKET, PREFIX.getBytes(StandardCharsets.UTF_8),
+        RunKey key = new RunKey("s3", ENDPOINT, CliTestS3Defaults.BUCKET,
+                CliTestS3Defaults.PREFIX.getBytes(StandardCharsets.UTF_8),
                 argsHash, "auto", ListingMode.OBJECTS, NO_FILTER_SPEC, OutputFormat.PARQUET.name(),
                 new SoftRestoreContext(false, null, null, false, false, outputDir.toString(), false, null, null), true);
         long runId;
@@ -139,7 +153,7 @@ final class SortPublishedReentryTest {
         assertThat(Files.exists(layout.success())).as("fixture: _SUCCESS is absent (crash pre-marker)").isFalse();
 
         ListCommand cmd = new ListCommand();
-        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.uri = "s3://" + CliTestS3Defaults.BUCKET + "/" + CliTestS3Defaults.PREFIX;
         cmd.connection.endpointUrl = ENDPOINT;
         cmd.output.format = OutputFormat.PARQUET;
         cmd.output.destination = outputDir.toString();

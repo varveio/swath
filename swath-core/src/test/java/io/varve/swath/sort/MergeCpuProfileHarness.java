@@ -38,7 +38,9 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * <p>Run: {@code JAVA_TOOL_OPTIONS="-Dswath.profile=on -Dswath.profile.jfr=<path>" ./gradlew
  * :swath-core:test --tests 'io.varve.swath.sort.MergeCpuProfileHarness' -Pperf} — {@code -D} on the
  * {@code ./gradlew} command line does not reach the forked test-worker JVM;
- * {@code JAVA_TOOL_OPTIONS} does.
+ * {@code JAVA_TOOL_OPTIONS} does. Persisted-page copy allocation has its separate exact,
+ * no-TLAB characterization in {@link PageBlockAllocationCharacterizationTest}; this CPU harness
+ * deliberately retains ordinary profile settings.
  */
 @EnabledIfSystemProperty(named = "swath.profile", matches = "on")
 class MergeCpuProfileHarness {
@@ -72,7 +74,8 @@ class MergeCpuProfileHarness {
 
             Path output = Files.createDirectory(root.resolve("data"));
             Path staging = Files.createDirectory(root.resolve("_staging"));
-            List<Path> stagingSegments = SortBenchCorpus.copyCorpus(master, staging);
+            List<Path> stagingSegments = SortBenchCorpus.hardLinkCorpus(
+                    SortBenchCorpus.pageRunSegments(master), staging);
 
             // Force R=1 (serial merge) regardless of ambient swath.sort.merge-parallelism.
             SortConfig config = SortConfig.fromProperties(
@@ -138,4 +141,5 @@ class MergeCpuProfileHarness {
         }
         return new SortBenchCorpus.Stats(NUM_SEGMENTS, totalRows, totalBytes);
     }
+
 }

@@ -160,6 +160,12 @@ These are internal seams used by the CLI, tests, simulator, and replay tooling. 
 not a supported Java API or third-party SPI; v0.x does not promise source or binary
 compatibility.
 
+The CLI is swath's only supported public API before 1.0. Public Java types exist where the
+modules need them, but they remain internal implementation seams rather than an embedding API. In
+particular, `SortConfig` is an immutable CLI-configuration snapshot; its former record/canonical
+constructor was internal and unsupported, and its flat accessors and copy methods do not establish
+a generic Java configuration API.
+
 ### Store and page model
 
 `PageFetcher.fetchPage(PageRequest)` is the engine's only listing call. A request carries
@@ -355,7 +361,9 @@ CREATE TABLE part_file (
   writer_id INTEGER NOT NULL,              -- sticky: node_id % num_writers
   path TEXT NOT NULL, format TEXT NOT NULL,
   finalized INTEGER NOT NULL DEFAULT 0,    -- 1 ⇔ footer flushed+fsynced (durable); else discard on resume
-  rows INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0);
+  rows INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0,
+  format_version INTEGER,                  -- page-run header version; NULL for ordinary output and legacy rows
+  extension_type INTEGER);                 -- page-run trailer extension type; NULL with format_version
 
 -- output_journal (for --resume-output, v1.1): RAW, PRE-FILTER, byte-exact page entries.
 -- NOT created in v1.0 DDL — CREATE TABLE is deferred to v1.1. Shape reserved here for
@@ -633,11 +641,19 @@ its checkpoint/publication state.
     failure in a post-completion step inside the same guarded region), and not
     a flag-unset `FAILED` a caller chose above — a publish failure rethrown
     into that guard stays resumable.
-    Direct-dataset terminal publication is the other explicit exception: it throws
+    Direct-dataset terminal publication is one explicit exception: it throws
     `PublicationPendingException`, leaves the run `RUNNING`, and can be retried from finalized
-    checkpoint parts. Sorted merge/publication currently remains a plain `OutputException` and
-    therefore follows this fatal-error rule; its checkpointed merge-pending re-entry covers raw
-    process death, not a caught in-process publication failure.
+    checkpoint parts. Sorted publication has the same typed recovery only after its authority
+    listener returns: `manifest.json`, `.swath-state.json`, `symlink.txt`, and last-written
+    `_SUCCESS` already describe the valid dataset, so a subsequent sorter-local hook or staging
+    cleanup failure latches `sort_phase=PUBLISHED`, throws `PublicationPendingException`, and leaves
+    the run non-fatal for cleanup-only resume. The cleanup-only re-entry verifies that exact
+    identity + `_SUCCESS` before creating or mutating staging, latches PUBLISHED before cleanup,
+    and applies the same classification to every cleanup/reconciliation/sweep failure; any number
+    of failed cleanup invocations therefore remain `RUNNING`/`PUBLISHED` with `fatal_error=0` until
+    one succeeds and marks `COMPLETED`. A failure before the listener returns remains a plain
+    `OutputException` and follows the fatal-error rule; it must re-enter neither PUBLISHED cleanup
+    nor claim that publication committed.
   - A **protocol violation** (a response no conforming store may produce, e.g.
     `oversized_page`) is the one failure the run must never resume into, so it
     marks `FAILED` with `fatal_error=1` whatever ended the scan — including an
@@ -775,15 +791,25 @@ which owns the at-most-once-text durability questions it would reopen):
 - **Staging-format mismatch on resume is refused**: if a
   resuming `--sort` run's checkpoint carries staging `part_file` rows tagged
   with a format other than the current `SORT_SEGMENT_FORMAT` (`page-run`) — an
-  older `parquet-segment` in-flight run, or any future format-version
-  mismatch — the run **refuses cleanly** (`InvalidArgsException`, exit 2, same
+  older `parquet-segment` in-flight run — the run **refuses cleanly**
+  (`InvalidArgsException`, exit 2, same
   as the `--sort`/`--no-sort` refusal) naming the recorded vs expected format
   and pointing at `--restart`. Without this, the reattach path (which selects
   staging by `page-run`) would treat the un-recognized old-format finalized
   segments as non-finalized, sweep them, and silently re-list their data
-  (dup/loss). *(The page-run `FORMAT_VERSION` is not yet recorded in the
-  checkpoint, so a version bump is caught later/loudly by the segment reader
-  rather than refused here — recording it is a noted future hardening.)*
+  (dup/loss). New page-run rows additionally record the segment header
+  `format_version` and trailer `extension_type`; the current listing writer
+  records type 3, while type 1 is legacy minima-only metadata and type 2 is the prior sparse index;
+  the listing writer
+  and `PageRunFormat.currentListing()` change together. A resume refuses
+  an explicit value this binary does not understand before opening or sweeping staging.
+  Merge kickoff also compares every recorded pair with the physical segment header and optional
+  extension header; disagreement is typed `page_run_format_mismatch` and occurs before working-file
+  cleanup. Thus checkpoint metadata describes the bytes it adopted rather than only a supported
+  reader choice. A legacy `NULL`/`NULL` row remains physically reader-authoritative.
+  Both columns are nullable additive migrations: a pre-column page-run row has
+  both `NULL` and retains the legacy reader-validation path, while non-page-run
+  output rows also remain `NULL` and are never classified as page-run version 0.
 - **Sort-phase state machine:** run phases **LISTING → MERGING → PUBLISHED**
   are recorded in `run_meta` (`sort_phase`). Resume dispatch: nodes incomplete ⇒
   resume listing (keep durable segments, re-list only the non-durable tail); nodes
@@ -801,8 +827,43 @@ which owns the at-most-once-text durability questions it would reopen):
   and re-run the merge idempotently (rewriting manifest/state/symlink/`_SUCCESS`);
   a crash between the manifest write and staging deletion leaves double data,
   which the same re-entry path cleans up.
-- Staging dir cleaned on successful publish; **a crash mid-sort redoes only
-  the sort (the LIST work is checkpointed).**
+- **Replacement publication order is crash-matrix tested, not inferred from filenames.**
+  Serial output, parallel range output, and the empty-output serial fallback use the same ordered
+  tail: sweep disposable working files; finish and fsync the complete replacement under temporary
+  names; only then sweep stale finals; rename each dense part in ordinal order; fsync `data/`; invoke
+  the publication listener; then delete or reconcile original staging. Thus an output-close or
+  post-worker range-proof failure leaves the prior finals and checkpoint-tracked originals intact.
+  A failure during the rename loop may expose only a prefix of replacement parts, but no transform
+  step writes `manifest.json` or `_SUCCESS`: those authority artifacts belong exclusively to the
+  listener/runtime and `_SUCCESS` remains the last one. Re-entry from the same originals removes
+  every owned final/range/cascade/proof temporary and converges to one dense, gap-free part set;
+  staging is still present while the listener runs and is completed only after it returns. Once the
+  listener returns, publication is committed and cannot be rolled back: an `IOException` or runtime
+  failure after the publication listener returns, including disposable-intermediate deletion,
+  staging deletion/reconciliation,
+  or final hook is classified as post-publish cleanup pending, records
+  `SORT.post_publish_cleanup_pending` plus the stable
+  `sort_post_publish_cleanup_pending publication_committed=true cleanup_pending=true stage=...` log,
+  and leaves/marks the managed checkpoint `PUBLISHED` rather than fatal. The completed transform
+  facts travel with that typed failure, so the failed invocation still reports the exact committed
+  file/byte counts, merge passes, finalization parallelism, and merge latency rather than zeros.
+  Each resume first validates this run's identity + `_SUCCESS`, then performs cleanup only with zero
+  LIST requests. Another cleanup failure repeats the same non-fatal PUBLISHED disposition; the
+  first successful attempt marks the run `COMPLETED`. `sort.keep-staging=on` reconciles back to the
+  checkpoint originals while the default removes them. Pre-listener failures retain their existing
+  merge/publish failure behavior. If the durable originals themselves are no longer available
+  before publication, the separately tested `--restart` route discards that run and lists fresh.
+- By default the staging dir is cleaned on successful publish and a co-located
+  checkpoint is deleted; **a crash mid-sort redoes only the sort (the LIST work
+  is checkpointed).** Diagnostic `sort.keep-staging=on` retains only the
+  original checkpoint-tracked page-run segments plus that co-located checkpoint
+  after successful sorted publication. Cascade intermediates, range output, and
+  temporary files remain disposable. Both the actual merge completion and a
+  PUBLISHED re-entry with retention enabled validate the original names and
+  reconcile every immediate staging entry back to exactly the checkpoint-finalized
+  original segment set. Retention alone does not trigger another merge; the
+  diagnostic zero-LIST recipe deliberately removes `_SUCCESS`, then invokes
+  `swath resume` to re-enter MERGING from those originals.
 - **Cascade-scale resume semantics**:
   every `SortTransform.transform` (the merge-pending re-entry, whether from a
   fresh-listing hand-off or a `runSortMergeOnly` redo) unconditionally sweeps
@@ -835,24 +896,61 @@ which owns the at-most-once-text durability questions it would reopen):
   (`SORT.merge_redone`), regardless of how many cascade passes the redo
   itself needs to run.
 
-### 6.1 Page-run v1 trailer extension
+### 6.1 Page-run v1 trailer extensions
 
-Each original listing-phase page-run segment embeds the parallel merge's exact bounded page-minimum
-sample in an optional extension between `segMaxKey` and the existing fixed EOF tail. Cascade
-intermediates are created only after boundary selection and omit the unused extension, avoiding a
-write-side reread of their streamed pages. `FORMAT_VERSION` remains 1,
-`trailerStart` still points at `segMinKey`, and the final 28 bytes are unchanged, so a pre-extension
-reader continues to stream exactly `totalRecords` and ignores the extra bytes:
+Each original listing-phase page-run segment embeds a bounded type-3 sparse page index in the
+optional extension between `segMaxKey` and the existing fixed EOF tail. Type 1 is the legacy
+minima-only block; type 2 is the prior sparse index without decoded-page metadata. Both remain
+readable. Cascade intermediates and fixture
+chunks are streamed after boundary selection or outside the structured live path and remain
+extensionless. `FORMAT_VERSION` remains 1, `trailerStart` still points at `segMinKey`, and the final
+28 bytes are unchanged, so older page-run readers continue to stream exactly `totalRecords` and
+ignore the extension:
 
 ```text
 records*
 segMinKey u16-len-prefixed
 segMaxKey u16-len-prefixed
 [extensionMagic u32][type u16][version u16][payloadLength u32][entryCount u32]
-payload: entryCount * [keyLength u16][key]
+
+type 1 payload (legacy):
+  entryCount * [keyLength u16][minKey]
+
+type 2 payload (legacy sparse index):
+  entryCount * [pageOrdinal u64]
+               [fileOffset u64]
+               [cumulativeEntries u64]
+               [cumulativeFramedBytes u64]
+               [minKeyLength u16][minKey]
+               [prefixMaxLength u16][prefixMax]
+  [finalPrefixMaxLength u16][finalPrefixMax]
+
+type 3 payload (current):
+  entryCount * [pageOrdinal u64]
+               [fileOffset u64]
+               [cumulativeEntries u64]
+               [cumulativeFramedBytes u64]
+               [minKeyLength u16][minKey]
+               [prefixMaxLength u16][prefixMax]
+  [finalPrefixMaxLength u16][finalPrefixMax]
+  [maxRawPayloadLength u32]
+
 [crc32c u32]
 [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
 ```
+
+The u16 key-length fields preserve the extension envelope, but sparse listing indexes
+accept at most the S3 key limit of 1,024 bytes for each minimum/prefix maximum. This supplies an
+up-front extension-size ceiling of roughly 8 MiB at the 4,096-entry cap; a corrupt block cannot turn
+the bounded boundary sample into hundreds of MiB of provisional key arrays.
+
+`fileOffset` is the absolute offset of the sampled page's frame-length word. `cumulativeEntries`
+and `cumulativeFramedBytes` describe pages before the sample; the byte value therefore equals
+`fileOffset - HEADER_BYTES`. `prefixMax` is the unsigned maximum page maximum through and including
+the sampled page, while `finalPrefixMax` covers all pages and equals `segMaxKey`. The writer records
+these values while it writes each frame, with no page-body reread. For `P` listing pages it uses the
+same `max(1, ceil(P / 4096))` stride and ordinals `0, stride, 2*stride, ...` as the type-1 sample, so
+the page minima supplied to boundary selection are unchanged.
 
 For non-empty segments, `segMinKey` is the unsigned minimum of all persisted page minima and
 `segMaxKey` is the unsigned maximum of all persisted page maxima. Nested legal page ranges such as
@@ -860,42 +958,218 @@ For non-empty segments, `segMinKey` is the unsigned minimum of all persisted pag
 
 Every CRC-valid record body is structurally checked before its frontier is trusted: fixed fields,
 dictionary counts and lengths, positive row count, codec, raw/stored payload lengths, no trailing
-bytes, and `minKey <= maxKey` are bounded and validated before allocation. When a page is decoded,
-the decoded row count/payload exhaustion and first/last raw keys are checked against that header.
-Malformed bodies raise typed `page_run_body_corruption`; no replacement output is published.
+bytes, and `minKey <= maxKey` are bounded and validated before allocation. Every persisted Java
+string (dictionary values, raw dictionary-column values, version IDs, and raw ETags) must be strict
+UTF-8: overlong encodings, isolated continuations, surrogate encodings, truncation, and code points
+above U+10FFFF are rejected as typed `page_run_body_corruption`; replacement decoding is forbidden.
+Payload decoding uses
+bounded non-negative int32 varints and checks every prefix, suffix, string, dictionary index,
+boolean, and fixed-width field before allocation or access. The production writer enforces the
+same 1,024-byte row/header key, u16 dictionary-value, and raw-payload
+limits that the reader treats as format truth. When a persisted page is decoded, every adjacent row
+must be non-decreasing under the complete `ListEntryComparator`; the decoded row count/payload
+exhaustion and first/last raw keys are also checked against the header.
+If a range cutoff or downstream close stops partway through a decoded page, the page-aware merger
+drains every cursor it already owns solely to complete those checks; it emits none of the drained
+rows and records no source-run, duplicate, engagement, or progress signal for them. It does not
+decode untouched frontier pages, so cutoff validation work is bounded by the whole/overlap pages
+already decoded for that range. Malformed bodies raise typed `page_run_body_corruption`; no
+replacement output is published. An earlier read/consumer failure remains primary, with validation
+and stream-close failures suppressed, and every opened frontier stream is still closed.
+The read side owns one immutable CRC-validated record-body array for the required page lifetime and
+parses its header exactly once into a stored-payload offset/length. A decoded `PageBlock` retains
+that same body when the frontier advances or closes. Persisted dictionary headers are validated
+without constructing Strings and retain only two five-int coordinate arrays into that body (40 raw
+coordinate-data bytes per page, conservatively reserved as 128 heap bytes including array/object
+headers). Referenced values are strict-decoded lazily into a cursor-local cache;
+the page-aware reservation conservatively charges the complete possible cache before constructing
+the cursor, including UTF-16 expansion and object/array overhead. `NONE` cursors read the slice directly;
+compressed codecs decompress from the slice into only the decoded payload. No second
+`storedPayloadLength` array is allocated, and serialization remains byte-exact.
+Current type-3 metadata records the exact maximum raw payload across the segment. Parallel/full-index
+preflight validates that field with the complete extension CRC and prices a normal stream as the
+larger of the configured floor and two maximum encoded bodies plus that raw maximum and 256 bytes of
+current/successor dictionary-coordinate heap: a decoded current page retains its body and one
+128-byte conservative coordinate reservation while its successor frontier retains another.
+Before codec allocation
+every physical header on that path must stay at or below the validated claim; a CRC-valid underclaim
+raises typed `page_run_decoded_page_limit` corruption. Serial/no-boundary preflight deliberately does
+not read or trust the trailing field: it treats the maximum as unknown and prices/admit each actual
+page header through the runtime residency guard before decompression. Legacy and extensionless input
+use the same runtime path without an O(staging-bytes) kickoff scan.
+At runtime each page-aware merger reserves the retained encoded body, the complete possible lazy
+dictionary cache, and any separate compressed raw allocation for every whole/active page before
+cursor construction/decompression, after reserving one frontier body
+per open stream. Legal overlap clusters therefore cannot exceed the serial budget or a parallel
+range's post-proof share; exhaustion is resumable as `sort_merge_memory_exhausted`.
+PageRun format v1 has no persisted comparator identifier and is therefore explicitly fixed to
+`ListEntryComparator`. Both `SortRun` and every `PageRunSegmentWriter` reject alternate comparator
+implementations before merge or persistence; a future comparator requires a new identified format.
 Each page's ordered flag records full-comparator order: comparator ties remain ordered, while a strict
 regression clears the flag. The writer repacks only pages whose flag is false, and every codec
 preserves the flag in the serialized header.
 
-For `P` pages the sample stride is `max(1, ceil(P / 4096))`; minima at physical page ordinals
-`0, stride, 2*stride, ...` are retained, including repeats. The block CRC covers its complete header
-and payload, excluding only the CRC field. A reader bounds the extension against the fixed tail,
-validates lengths before allocation, caps the declared count at `min(P, 4096)`, requires the exact
-systematic count and non-decreasing unsigned keys, and publishes no provisional key until every
-check passes. The first sampled key must equal `segMinKey`, the last must not exceed `segMaxKey`,
-and an empty sample requires empty bounds. An absent, unknown, or invalid extension falls back for that segment to the legacy
-full-page scan. Mixed legacy/new input therefore selects the same boundaries as an all-legacy scan.
+The block CRC covers its complete header and payload, excluding only the CRC field. Before retaining
+a locator or publishing any provisional minimum, the sparse-index reader bounds all lengths and counts,
+requires the exact systematic ordinals, strictly increasing in-file frame offsets, non-decreasing
+minima/prefix maxima, strictly increasing cumulative entries and framed bytes after the first sample
+with `cumulativeEntries >= pageOrdinal`,
+`cumulativeFramedBytes == fileOffset - HEADER_BYTES`, an
+exact first offset of `HEADER_BYTES`, a first minimum equal to `segMinKey`, and a final prefix maximum
+equal to `segMaxKey`. These checks establish a bounded, self-consistent index representation; direct
+positioning treats that representation only as an untrusted hint. The first frame after every seek
+must match the selected offset/accounting/minimum, and the complete physical-zone proof below must
+succeed before any range writer can be returned. Type 1 continues to receive its existing
+length/count/order/bounds/CRC checks.
+An absent, unknown, or structurally invalid extension falls back for that segment to the legacy
+full-page boundary scan. Mixed absent/type-1/type-2/type-3 input retains the same boundary rule.
 
 Both sides use fixed 64 KiB chunk buffers: the writer batches header, prefixes, and keys instead of
-issuing per-key writes; the reader streams the bounded extension with O(extension bytes / 64 KiB)
-positioned reads. At a structured parallel kickoff, each segment's trailer and extension are read
-during the descriptor's single open. The reader validates one segment's sample transactionally,
-then feeds its keys into the merge-wide capped candidate set before closing that descriptor;
-descriptors retain only status, count, and byte metadata. Explicit `R=1` and arbitrary-sorted-run
-merges do not read the extension. Reader peak boundary state is the global candidate cap plus at
-most one segment's 4,096-key validation sample and one 64 KiB scratch buffer, never
-O(segments × samples).
+issuing per-key writes; the reader first streams CRC validation without allocating keys, then parses
+the CRC-valid bounded payload transactionally. At a structured parallel kickoff, each segment's
+trailer and extension are read during the descriptor's single preflight open. The reader validates
+one segment's sample transactionally, then feeds its keys into the merge-wide capped candidate set
+before closing that descriptor; descriptors retain only status, counts, primitive offsets, and a
+page-index payload locator — never a sample-key collection. After boundaries are fixed and before any
+worker starts, the planner streams each valid type-2/type-3 locator once into `O(segments × R)` primitive
+seek seams. There is no worker positioning barrier and no retained per-descriptor sample list.
+Serial/no-boundary kickoff reads only the fixed 16-byte optional-extension header to identify the
+physical extension type; it does not CRC-walk, parse, or allocate keys from the sparse payload merely
+to reach type 3's trailing decoded maximum. Its decoded maximum is consequently unknown and the
+runtime page-header/residency guard admits each allocation safely. Arbitrary-sorted-run merges remain
+outside boundary parsing. Reader peak boundary
+state is the global candidate cap plus at most one segment's 4,096-key validation sample, one 64 KiB
+scratch buffer, and the primitive seek seams, never `O(segments × samples)`.
+
+Planning uses one shared 64 KiB cursor per segment because it consumes that segment's whole bounded
+entry region. Worker target/sample verification uses exact positional entry reads instead: fixed
+fields plus the two actual keys, with no adjacent-entry prefetch or 64 KiB per-seam buffer. Those
+post-boundary metadata bytes are counted separately as `sort.merge_range_index_bytes` /
+`swath.sort.merge.range.index.bytes`; under the explicit row-weighted boundary policy this total also
+includes its one extra streamed entry-region read per indexed segment. The per-range log carries
+worker-local `index_bytes_read`. The serial reader
+uses a tracked primitive frame offset: after its one open-time channel positioning it performs no
+per-page `FileChannel.position()` query, allocates no physical-position record/observer, and updates
+no proof or index-byte accounting.
 
 Across all segments, boundary selection deduplicates candidates and retains the deterministic
 bottom-hash 16,384 keys (1,024 per range at the supported 16-range maximum). This whole-run cap makes
 retained boundary state independent of segment
 count and input order; it can change range balance only, never key inclusion or global ordering.
 
-The embedded sample replaces only the boundary prologue's integrity pass. The last unbounded
-parallel range still drains every page of every original segment and performs the authoritative
-page CRC, min-monotonicity, and trailer-count checks before publication can succeed. A late failure
-cancels sibling ranges and sweeps partial range output; no manifest, state, or success marker is
-published.
+The parallel boundary policy is a resume-free run setting. `distinct` is the default and preserves
+the existing evenly spaced split indices over that capped candidate set. The default-off `rows` arm
+streams each validated type-2/type-3 entry region one segment at a time, assigns each interval's positive
+`cumulativeEntries` delta to its retained predecessor candidate, and holds only one
+`long[candidateCount]` histogram plus the cursor's current entry. It chooses strictly increasing
+candidate indices whose prefix masses are nearest the global row quantiles, constraining later
+indices so every requested boundary remains distinct. Thus peak policy state is `O(candidateCap)`,
+not `O(segments × candidateCap)`, and bottom-hash candidates remain the sole retained key set.
+These are approximate mass boundaries: a stride groups several physical pages at its sampled
+minimum, and page ranges may overlap. Exact per-row range filtering still owns correctness and keeps
+all rows with one raw key in one range. If any original is extensionless, type 1, invalid/unknown,
+or mixed with another input kind, the whole `rows` arm falls back to the unchanged `distinct`
+selector and emits one exact fallback classification; it never combines weighted and unweighted
+denominators. No evidence in this change promotes `rows` to the default.
+
+For segment `S`, let `start_r(S)` be range `r`'s planned page ordinal. Type-2 starts are sampled
+ordinals selected by monotone `prefixMax`; absent/type-1/invalid indexes use ordinal 0 for every
+range. The physical proof zones are `[start_r,start_(r+1))`, with the last ending at
+`totalRecords`. Starts are non-decreasing; repeated starts are explicit empty zones. Before a range
+stops at its exclusive high key it necessarily reads through the next range's start, so the owner of
+each non-empty zone CRC-validates and structurally parses all of its pages without a separate pass.
+
+Each range returns exactly one primitive topology summary plus a temporary exact-key proof spool.
+Variable minima/maxima are never retained in a `segments × ranges` heap matrix: each range keeps
+three reusable fixed key buffers (last minimum, zone maximum, and rolling sample prefix), and the
+coordinator consumes one spooled segment/range summary at a time. Additional proof peak is therefore
+`O(segments × R)` primitives plus `O(R)` heap key material, while all comparisons remain byte-exact
+(no hash-only proof). The writer first materializes the fixed-slot extent sequentially and forces
+its allocation, so insufficient disk is an ordinary constructor failure rather than a mapped-write
+SIGBUS. The file is then mapped through a shared foreign-memory arena while
+workers update disjoint absolute slots; source switches copy through the reusable range buffers
+without positional channel calls or per-key buffer allocation. Every mapped field/key update and
+read remains counted; this work can scale with page/source-switch count even though positional
+syscalls do not. The arena is
+closed deterministically before the read mapping and again before delete; offsets and mapping size
+remain `long`; an actual sparse mapping above 2 GiB is touched at both ends, unmapped, and deleted in
+the compatibility test. Mapped pages are file-backed but contribute to process RSS while resident:
+the opt-in touched-mapping characterization and ordinary peak-RSS meter are the memory evidence, and
+no memory-neutral claim follows from the `O(R)` heap-key bound. Preallocation polls cancellation and
+marks progress per at-most-64-KiB chunk. Allocation/map failure records attempted work, emits the
+stable `proof_spool_allocation_failed` classification, cleans the path, and stays a checked
+`IOException`; a pre-latched interrupt or `ClosedByInterruptException` during write/force/map keeps
+the interrupt, publishes attempted work, cleans the path, and translates to merge cancellation
+without that failure reason. The coordinator reads and requires the fixed slot's reserved four-byte
+field to remain zero, so its mapped-byte accounting covers all 56 fixed bytes. Spools use one shared
+open descriptor for the whole range fleet. That descriptor is an explicit
+one-FD reservation in both the effective-range clamp and the dynamic output-writer allowance, not
+generic process headroom. Its exact `ranges × original segments × 6,212` extent is charged to the
+configured merge budget before ranges are admitted, and the read-only coordinator requires that
+exact file size before mapping. On proof failure the spool joins range/cascade temporaries in the
+pre-publication cleanup. After successful proof the transform owns the verified spool until it
+either deletes it on a later pre-commit failure or hands it to publisher-owned disposable state.
+The authoritative dataset is then committed first and spool deletion occurs in post-publication
+cleanup, so an unlink failure becomes cleanup-pending rather than forcing the merge to repeat.
+
+Merge-start disk admission runs after the validated ownership scope has swept only canonical
+disposable proof/range/cascade/output temporaries from an earlier attempt, but before it allocates
+any new proof or output file. Let `S` be the exact current bytes of checkpoint-owned original
+segments and `P(R)` the exact proof extent for candidate range count `R`. The existing 3×-staged
+headroom is decomposed into named estimates of `S` for final output, `S` for live cascade
+intermediates, and `S` for staged-size/encoding variance; these estimates are policy reserves, not
+claims that final Parquet bytes are knowable exactly from compressed PageRuns. On one shared
+filesystem the required free bytes are `P(R) + max(3S, 1 GiB)`. If staging and output resolve to
+different `FileStore`s, each keeps its own safety allowance. Final Parquet temporaries are written
+under staging before their move, so staging still requires `P(R) + max(3S, 1 GiB)` (final temporary,
+cascade, and safety), while output requires `max(2S, 1 GiB)` (the copied/moved final plus safety).
+The cross-store fallback is not an atomic rename; `_SUCCESS` remains the authority boundary and
+pre-publication resume cleanup repairs any partial copy. An unknown usable-space query fails open,
+preserving the earlier disk guard's behavior.
+
+Filesystem admission is a separate pass after heap/FD/proof-budget planning. It decrements `R`
+until the exact proof extent and policy reserves fit, recording `SORT.merge_range_disk_limited`; if
+only `R=1` fits, the untouched serial merge runs without a proof spool. If the serial reserves do
+not fit, the transform refuses before merge with `error_class=sort_disk_exhausted`, leaves the
+checkpoint merge-pending and resumable, and allocates no proof/output state. Parallel execution
+samples usable space again after actual boundaries and seek planning, immediately before proof
+file creation/zero-fill; a changed filesystem that no longer admits that exact range count refuses
+there. `sort.ignore-disk-check=on` is explicitly threaded into the core policy and bypasses both
+samples, as well as the startup/listing guards.
+
+The coordinator requires the independently planned range count even for an empty segment set and
+rejects missing, extra, out-of-range, or duplicate range summaries. It chains zones from
+`HEADER_BYTES` to `trailerStart`, checks claimed
+cumulative seams against prior physical totals, checks cross-zone min monotonicity, verifies every
+sampled ordinal/offset/cumulative/minimum/prefix maximum, and anchors total pages/entries/framed bytes
+plus first minimum/global maximum to the fixed trailer. Because a structurally valid type-2/type-3 block
+already requires `finalPrefixMax == segMaxKey`, that last body/trailer comparison also anchors the
+final prefix maximum. A sample/seek disagreement is `page_run_index_mismatch`. A physical-zone seam
+or tiling disagreement is index mismatch only when one of that zone's usable sparse-index seams
+participated; extensionless, type-1, and rejected-index inputs remain
+`page_run_body_corruption`, as do body/trailer total or bound disagreements. An actual min
+regression remains `page_run_min_regression`.
+
+The coordinator performs this proof before returning the ranges' still-open writers. Cancellation
+is polled during planning and proof. Any worker or post-worker proof failure closes writers after
+worker quiescence and sweeps range/cascade temporaries; no manifest, state, or success marker is
+published. Independently, every final merge compares the sum of validated original trailer entries,
+the rows drained by the merge, and the sum reported by all closed final writers before the first
+stale-final sweep. The adjacent-row guard also rejects a comparator regression as fatal
+`error_class=sort_output_order_regression`: replaying the same durable inputs cannot repair a
+deterministic ordering invariant failure, so it is classified but deliberately not merge-pending.
+Cardinality disagreement is likewise fatal/classified as
+`error_class=sort_output_cardinality_mismatch` and emits
+`SORT.sort_output_cardinality_mismatch` once. Live `OBJECTS` final drains reject adjacent equal raw
+keys (`sort_duplicate_key`); the dormant `VERSIONS` mode retains equal raw-key groups under the full
+comparator. Any disagreement refuses publication. Successful parallel merges emit
+`SORT.merge_zone_proof_complete` once plus exactly one
+`SORT.merge_zone_proof_page_ranges_disjoint|overlap` classification derived from the bounds already
+verified; per-range logs
+carry `pages_seeked_over`, logical framed `bytes_read` (every page frame read by that range,
+including cascade intermediates), and exact worker `index_bytes_read` alongside the existing page
+counts. `summary.json.sort.merge_range_framed_bytes` is the cumulative run total of those frame
+bytes; it is zero on serial merges.
 
 ---
 
@@ -925,17 +1199,18 @@ published.
 | `swath.sort.segment-bytes` | heap-adaptive: ≈8% of `Runtime.maxMemory()` estimated pre-encode bytes, floored at 64 MB | primary segment-flush gate (§6); ~160 MB at `-Xmx2g` ⇒ ~1.3M-row segments, ~5M-row at `-Xmx8g`; bigger heap ⇒ fewer, bigger segments ⇒ single-pass merge as the design point. Active segment buffers are a function of `-Xmx`; retained staging metadata is separately `O(segments)`. |
 | `swath.sort.segment-entries` | secondary cap alongside `segment-bytes` | backstop entry-count cap on a sealed buffer |
 | `swath.sort.heap-fraction` | `0.08` | the adaptive ratio `segment-bytes` derives from `Runtime.maxMemory()`; raise only after measurement, never unattended |
-| `swath.sort.buffers` | 2 | in-flight sealed buffers (fill buffer while the sealed buffer encodes off-thread); **must be `>= 2`**: `SortLane` bounds live sealed buffers to exactly `buffers` (fill + `buffers - 1` off-thread); `buffers=1` would either deadlock (0 off-thread slots to hand a sealed buffer to) or, if floored instead, silently allow 2 live buffers while claiming a cap of 1 — `SortConfig` rejects `buffers < 2` outright (`IllegalArgumentException`), consistent with every other knob's validation in that record |
+| `swath.sort.buffers` | 2 | in-flight sealed buffers (fill buffer while the sealed buffer encodes off-thread); **must be `>= 2`**: `SortLane` bounds live sealed buffers to exactly `buffers` (fill + `buffers - 1` off-thread); `buffers=1` would either deadlock (0 off-thread slots to hand a sealed buffer to) or, if floored instead, silently allow 2 live buffers while claiming a cap of 1 — `SortConfig` rejects `buffers < 2` outright (`IllegalArgumentException`), consistent with every other knob's validation in that immutable snapshot |
 | `swath.sort.fan-in` | 10000 | merge fan-in `F` (§6); open page-run segment readers never exceed `F` per pass. The pass width actually used is clamped at runtime by (a) the **fd budget** — `min(fan-in, usable-fds)` derived from `ulimit -n` with headroom — and (b) the **per-open-stream capacity plan**, `effectiveFanIn = min(fan-in, max(2, merge-budget-bytes / merge-per-stream-bytes))`. `fan-in` alone is a correctness/fd ceiling, not a memory promise; raise `ulimit -n` (below) so the fd clamp does not force a cascade |
 | `swath.sort.segment-codec` | `LZ4` | payload compression for page-run STAGING segments — `NONE` \| `LZ4` \| `ZSTD1`. Trades staging-disk ratio for pack/merge CPU: `LZ4` (default) is fast; `ZSTD1` is smaller-on-disk but slower; `NONE` skips compression. Governs staging only, never the final Parquet output |
-| `swath.sort.merge-per-stream-bytes` | ≈64 KiB fixed per-open-stream estimate (`DEFAULT_MERGE_PER_STREAM_BYTES`, to be validated at the perf gate) | planning estimate for one open page-run stream. The runtime planner prices a stream at `max(merge-per-stream-bytes, maxRecordLen)`, reading the largest encoded record O(1) from each trailer, so an unusually large frame can tighten but never relax the configured estimate. `maxRecordLen` is not a byte-exact heap bound: the current/next encoded bodies, decoded payload, metadata, and a legal overlap cluster add resident state. Active state remains a function of segment/fan-in knobs rather than total object count (I11), but this property is a capacity estimate, not a JVM heap meter |
+| `swath.sort.merge-per-stream-bytes` | ≈64 KiB configured floor (`DEFAULT_MERGE_PER_STREAM_BYTES`) | runtime planning price for one normal open page-run stream. For a fully validated parallel type-3 input the planner uses `max(configured floor, 2 × maxRecordLen + maxRawPayloadLength + 2 × persisted-dictionary-coordinate reserve)`: a decoded current page retains its encoded body, raw payload, and dictionary coordinates while its successor frontier retains another encoded body/coordinate set. Serial/no-boundary, legacy, and extensionless inputs have no trusted kickoff decoded maximum, so they keep the floor/encoded/coordinate price and the runtime guard checks actual header claims before allocation. Cascade intermediates are split to the admitted raw-page ceiling and their actual trailer `maxRecordLen` joins later-pass base reservation. |
 | `swath.sort.final-file-bytes` | 1 GiB | soft roll target for multi-file sorted output — after a part reaches the target, rotation waits until the next distinct raw key so an equal-key/version group never straddles files. Parts are strictly key-disjoint and named in key order; one key with many versions can exceed the target by the size of that indivisible group. The wait is streaming/O(1) in rows, and each deferred group records `SORT.final_roll_equal_key_deferred` once |
 | `swath.sort.final-row-group-bytes` | ≈4–8 MB | the served file's seek granularity (row-group size) |
 | `swath.sort.final-page-rows` | 1024 | the served file's seek granularity WITHIN a row group: the cap on a data page's rows. A page is Parquet's smallest addressable unit — the page index prunes pages, never rows, and every encoding decodes strictly forward — so this is the floor on what a bounded key-range read decodes per column, however few rows it wanted. Parquet's own default caps a page at 20,000 rows and 1 MB, and the byte cap only binds on columns wide enough to reach it, so every narrow column sat at 20,000. Governs FINAL Parquet only; custom page-run staging has no Parquet pages or row groups. Not to be confused with the 1 MB data-page BYTE cap, which two independent gates (2026-07-04 P1/P4) measured dead in both directions |
-| `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | capacity budget used to cap `effectiveFanIn` as `budget / per-stream planning price`; it bounds the priced stream slots, not every allocation made while decoding or resolving page overlap. **The `effectiveFanIn` floor of 2 streams is documented, not rejected**: a merge needs at least 2 streams to merge anything, so a smaller budget still admits the minimum two-stream merge. Page-aware overlap remains bounded by staged segment geometry (and therefore the configured segment gate), while arbitrary capture chunks use the bounded entry-stream policy rather than this frontier optimization |
-| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | the configured maximum number of contiguous key ranges in the final sorted merge; `1` is the explicit serial opt-out. `--tune sort.merge-parallelism=N` exposes the supported operator override (`1..16`) and wins over the JVM property without changing this default. The tune is resume-free because range finals remain disposable staging files until the complete manifest barrier; a pre-publication resume reruns the merge from durable PageRuns. For an admitted run, the effective range count is clamped to the minimum of this configured/core-derived maximum, configured-`fan-in` viability (`fan-in >= segments`, else 1), the heap/per-stream/segment bound, and the fd bound that reserves one initial output part per candidate range (`usableFds / (segments + 1)`); additional rolled output writers are hard-bounded during execution after reserving the range fleet's input streams. A result below 2 takes the untouched serial path. Reason attribution follows the binding constraint with an explicit tie rule: FD wins an exact partial heap/FD tie (`byFd <= byBudget`), recording `SORT.merge_range_fd_limited` for final `R>1`; heap or configured fan-in records `SORT.merge_range_would_cascade` when it alone tightens the result further, including to `R=1`; an FD final bound of `R=1` records `SORT.merge_range_fd_exhausted`. `SORT.merge_range_unsplittable` remains reserved for boundary sampling that finds fewer than two distinct keys |
+| `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | runtime page-run residency budget. For a candidate parallel range count, exact proof backing (`ranges × original segments × 6,212`) is charged first and the remainder prices normal streams. Before cursor construction/decompression, the page-aware merger reserves the current retained body, its conservative 128-byte dictionary-coordinate heap, the complete possible lazy dictionary cache, and any separate raw payload after the already-budgeted successor frontier/body coordinates were loaded; legal overlap clusters cannot grow beyond the serial budget or one range's post-proof share. The static config helper still exposes a two-stream floor, but runtime admission refuses resumably if the truthful minimum width cannot fit. Arbitrary non-page-frontier capture merges retain their existing entry-stream policy. |
+| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | the configured maximum number of contiguous key ranges in the final sorted merge; `1` is the explicit serial opt-out. Both the CLI tune and core configuration enforce the supported override range `1..16`, so JVM properties and internal callers cannot bypass the ceiling. The tune is resume-free because range finals remain disposable staging files until the complete manifest barrier; a pre-publication resume reruns the merge from durable PageRuns. For an admitted run, the effective range count is clamped to the minimum of this configured/core-derived maximum, configured-`fan-in` viability (`fan-in >= segments`, else 1), the combined merge budget, and the fd bound that reserves the shared proof-spool descriptor plus one initial output part per candidate range (`(usableFds - 1) / (segments + 1)`). The combined budget prices open streams plus the exact fixed proof extent (`ranges × original segments × 6,212` bytes); proof backing is subtracted before per-range stream capacity is calculated. Additional rolled output writers are hard-bounded during execution after reserving the range fleet's input streams and that same spool FD. A result below 2 takes the untouched serial path. `SORT.merge_range_proof_budget_limited` distinguishes a proof-backed clamp from stream/fan-in cascade avoidance and FD limits. `SORT.merge_range_unsplittable` remains reserved for boundary sampling that finds fewer than two distinct keys |
+| `swath.sort.merge-boundary-policy` | `distinct` | resume-free/default-off range-split policy. `distinct` is the shipped bounded distinct-key selection. `rows` is an experimental explicit arm using validated type-2 or type-3 cumulative-entry mass; it changes only parallel part split points, never row order/content, and falls back whole-run to `distinct` for extensionless/type-1/invalid/mixed inputs. Prefer the typed `--tune sort.merge-boundary-policy=distinct\|rows`, which wins over this JVM property. No result in this change promotes `rows` to the default |
 | `swath.sort.min-parallel-staged-bytes` | 256 MiB | staged-input eligibility floor for the default parallel merge. A run below it stays serial and records `SORT.merge_range_below_staged_floor`; this size decision is not an unsplittable keyspace or a resource-clamp result |
-| `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`); a resume whose checkpoint records any other staging format is refused (§6) — informational, not user-tunable |
+| `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`), alongside the actual page-run header version and trailer-extension type; a resume refuses another format or explicit unknown page-run metadata while preserving pre-column `NULL` metadata (§6) — informational, not user-tunable |
 | `ulimit -n` (OS, not a swath knob) | raise to ~65536 for single-pass | with fan-in 10000, a single merge pass opens up to ~`min(segments, fan-in)` page-run readers at once; a low `ulimit -n` forces the fd clamp to shrink `effectiveFanIn` and **degrade to a multi-pass cascade**. Raise the soft limit (`ulimit -n 65536`, or the launcher does it) for single-pass merges on large buckets |
 | `--checkpoint` | `auto` (co-located at `<dir>/.swath/checkpoint.sqlite` for a managed Parquet directory; ephemeral for stdout), deleted on clean completion | FILE kind and TSV/JSONL directories accept only `none`; `none` ⇒ in-memory worklist and **no resume**. An explicit path is valid only with a Parquet directory, but the public `swath resume` command opens the managed co-located layout, not an arbitrary SQLite path. |
 

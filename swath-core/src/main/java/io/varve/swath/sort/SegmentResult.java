@@ -17,6 +17,8 @@ import java.util.Map;
  * @param bytes          on-disk segment size in bytes
  * @param perNodeMaxKeys the max key each node contributed to this segment (accumulated at ingest)
  *                       — {@code durable_cursor} for a node advances to its value here
+ * @param pageRunFormat  the exact page-run header/extension identity written to this segment
  */
-public record SegmentResult(Path path, long rows, long bytes, Map<Long, byte[]> perNodeMaxKeys) {
+public record SegmentResult(Path path, long rows, long bytes, Map<Long, byte[]> perNodeMaxKeys,
+                            PageRunFormat pageRunFormat) {
 }

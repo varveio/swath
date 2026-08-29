@@ -45,6 +45,11 @@ class PageRunSegmentInspectorTest {
 
         assertThat(dump.magic()).isEqualTo(PageRunSegmentWriter.MAGIC);
         assertThat(dump.formatVersion()).isEqualTo(PageRunSegmentWriter.FORMAT_VERSION);
+        assertThat(dump.pageIndex().type()).isEqualTo(PageRunPageIndex.TYPE);
+        assertThat(dump.pageIndex().status()).isEqualTo(PageRunPageIndex.Status.EMBEDDED.name());
+        assertThat(dump.pageIndex().entries()).isEqualTo(2);
+        assertThat(dump.pageIndex().firstOffset()).isEqualTo(PageRunSegmentWriter.HEADER_BYTES);
+        assertThat(dump.pageIndex().lastOffset()).isGreaterThan(dump.pageIndex().firstOffset());
 
         // The inspector exposes the shared trailer, and the record count/entry totals agree.
         PageRunTrailer.Trailer canonical = PageRunTrailer.read(path);

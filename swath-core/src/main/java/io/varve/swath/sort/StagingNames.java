@@ -21,6 +21,7 @@ final class StagingNames {
     static final String LEGACY_CASCADE_PARQUET_GLOB = "merge-*.parquet";
     static final String RANGE_CASCADE_PAGE_RUN_GLOB = "merge-r*-*.pageseg";
     static final String RANGE_LEGACY_CASCADE_PARQUET_GLOB = "merge-r*-*.parquet";
+    static final String RANGE_PROOF_TMP_GLOB = "prange-proof*.tmp";
 
     private StagingNames() {
     }
@@ -35,6 +36,10 @@ final class StagingNames {
 
     static String rangeTmp(int range, int localIndex) {
         return "prange-" + range + "-" + localIndex + PARQUET_SUFFIX + TMP_SUFFIX;
+    }
+
+    static String rangeProofTmp() {
+        return "prange-proof" + TMP_SUFFIX;
     }
 
     static String cascadeIntermediate(String prefix, int sequence) {

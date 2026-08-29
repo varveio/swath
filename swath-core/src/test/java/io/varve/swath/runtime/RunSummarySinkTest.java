@@ -209,7 +209,8 @@ final class RunSummarySinkTest {
     private static JsonRunSummaryWriter.Config jsonSummaryConfig(Path path) {
         return new JsonRunSummaryWriter.Config(path, Duration.ofMinutes(10), "sink-hash",
                 new JsonRunSummaryWriter.RunConfig("s3://bucket/", null, "jsonl", 4, false, null,
-                        30_000L, List.of(), EngineToggles.DEFAULT, null, false, null, false),
+                        30_000L, List.of(), EngineToggles.DEFAULT, null, false, null,
+                        io.varve.swath.sort.SortArm.NONE, false),
                 List.of("list", "s3://bucket/"));
     }
 

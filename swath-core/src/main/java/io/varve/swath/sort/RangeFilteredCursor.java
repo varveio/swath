@@ -30,7 +30,7 @@ import java.util.NoSuchElementException;
  * then stream until the first key {@code >= hi}, after which the view is exhausted (the underlying
  * cursor may still hold rows; closing this closes it).
  */
-final class RangeFilteredCursor implements SortedCursor {
+final class RangeFilteredCursor implements SortedCursor, LogicalMergeCompletion {
 
     private final SortedCursor inner;
     private final byte[] lo;   // inclusive, or null for -inf
@@ -63,7 +63,11 @@ final class RangeFilteredCursor implements SortedCursor {
             if (belowLo(e)) {
                 continue;   // skip the < lo prefix
             }
-            return atOrAboveHi(e) ? null : e;
+            if (atOrAboveHi(e)) {
+                completeLogicalMerge();
+                return null;
+            }
+            return e;
         }
         return null;
     }
@@ -73,7 +77,11 @@ final class RangeFilteredCursor implements SortedCursor {
             return null;
         }
         ListEntry e = inner.next();
-        return atOrAboveHi(e) ? null : e;
+        if (atOrAboveHi(e)) {
+            completeLogicalMerge();
+            return null;
+        }
+        return e;
     }
 
     private boolean belowLo(ListEntry e) {
@@ -102,5 +110,10 @@ final class RangeFilteredCursor implements SortedCursor {
     @Override
     public void close() {
         inner.close();
+    }
+
+    @Override
+    public void completeLogicalMerge() {
+        LogicalMergeCompletion.complete(inner);
     }
 }

@@ -21,8 +21,9 @@ import picocli.CommandLine.Spec;
  * {@code swath dump-run <file.pageseg>} — a hidden, read-only debug inspector for a page-run
  * staging segment. It prints the header (magic/version), one line per framed record
  * ({@code [minKey, maxKey, count, codec, len]} with a CRC32C {@code OK}/{@code FAIL} verdict), and the
- * completeness trailer ({@code segMin}/{@code segMax}/{@code totalRecords}/{@code totalEntries}/
- * {@code maxRecordLen}). This is the page-run equivalent of the inspectability {@code duckdb} gives
+ * trailer-extension index summary, and completeness trailer ({@code segMin}/{@code segMax}/
+ * {@code totalRecords}/{@code totalEntries}/{@code maxRecordLen}). This is the page-run equivalent of
+ * the inspectability {@code duckdb} gives
  * columnar Parquet staging; the file is never modified.
  *
  * <p>Exit code: {@code 0} when every record's CRC verifies, {@code 1} when any record reports
@@ -68,6 +69,9 @@ public final class DumpRunCommand implements Callable<Integer>, GlobalOptions.Ca
                     r.index(), hex(r.minKey()), hex(r.maxKey()), r.count(), r.codec(),
                     r.framedLen(), r.crcOk() ? "OK" : "FAIL");
         }
+        PageRunSegmentInspector.PageIndexInfo index = dump.pageIndex();
+        out.printf("page-index: type=%d status=%s entries=%d firstOffset=%d lastOffset=%d%n",
+                index.type(), index.status(), index.entries(), index.firstOffset(), index.lastOffset());
         PageRunTrailer.Trailer t = dump.trailer();
         out.printf("trailer: segMin=%s segMax=%s totalRecords=%d totalEntries=%d maxRecordLen=%d%n",
                 hex(t.segMinKey()), hex(t.segMaxKey()), t.totalRecords(), t.totalEntries(),

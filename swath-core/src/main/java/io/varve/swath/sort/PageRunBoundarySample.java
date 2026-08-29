@@ -19,16 +19,16 @@ final class PageRunBoundarySample {
 
     /**
      * The sample only resolves {@code R-1} split points, so thousands of candidates per segment is
-     * ample. {@link ParallelRangeMerge} applies a second whole-run cap across segment samples.
+     * ample. {@link MergePlanner} applies a second whole-run cap across segment samples.
      */
     static final int MAX_ENTRIES = 4_096;
     static final int IO_BUFFER_BYTES = 64 * 1_024;
 
-    private static final int MAGIC = 0x53504758; // "SPGX"
-    private static final short TYPE = 1;
-    private static final short VERSION = 1;
-    private static final int HEADER_BYTES = 4 + 2 + 2 + 4 + 4;
-    private static final int CRC_BYTES = 4;
+    static final int MAGIC = 0x53504758; // "SPGX"
+    static final short TYPE = PageRunFormat.LEGACY_MINIMA_EXTENSION;
+    static final short VERSION = 1;
+    static final int HEADER_BYTES = 4 + 2 + 2 + 4 + 4;
+    static final int CRC_BYTES = 4;
 
     enum Status {
         EMBEDDED,
@@ -65,15 +65,6 @@ final class PageRunBoundarySample {
 
     static ReadResult skipped(long totalRecords) {
         return new ReadResult(Status.SKIPPED, 0, totalRecords, 0);
-    }
-
-    static List<byte[]> select(List<PageBlock> pages) {
-        long stride = stride(pages.size());
-        List<byte[]> sample = new ArrayList<>(expectedCount(pages.size()));
-        for (long i = 0; i < pages.size(); i += stride) {
-            sample.add(pages.get(Math.toIntExact(i)).firstKeyUnsafe().clone());
-        }
-        return sample;
     }
 
     static void write(WritableByteChannel channel, List<byte[]> keys) throws IOException {
@@ -116,6 +107,12 @@ final class PageRunBoundarySample {
     /** Validate the complete extension before feeding any key to {@code validKeySink}. */
     static ReadResult read(PageRunSegmentIo io, PageRunTrailer.Trailer trailer,
                            Consumer<byte[]> validKeySink) throws IOException {
+        return read(io, trailer, validKeySink, null);
+    }
+
+    /** Type-1 parser with an optional header already read by the extension dispatcher. */
+    static ReadResult read(PageRunSegmentIo io, PageRunTrailer.Trailer trailer,
+                           Consumer<byte[]> validKeySink, byte[] prefetchedHeader) throws IOException {
         long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
         long extensionStart = trailer.extensionStart();
         long extensionBytes = fixedTailStart - extensionStart;
@@ -127,7 +124,9 @@ final class PageRunBoundarySample {
             return invalid(Status.INVALID_LENGTH, trailer.totalRecords(), bytesRead);
         }
 
-        byte[] header = io.readAt(extensionStart, HEADER_BYTES).array();
+        byte[] header = prefetchedHeader == null
+                ? io.readAt(extensionStart, HEADER_BYTES).array()
+                : prefetchedHeader;
         bytesRead += HEADER_BYTES;
         ByteBuffer fields = ByteBuffer.wrap(header);
         int magic = fields.getInt();
@@ -199,15 +198,16 @@ final class PageRunBoundarySample {
         return new ReadResult(status, 0, totalRecords, bytesRead);
     }
 
-    private static final class ChunkedWriter {
+    /** Shared bounded extension writer used by the legacy sample and the current page index. */
+    static final class ChunkedWriter {
         private final WritableByteChannel channel;
         private final ByteBuffer buffer = ByteBuffer.allocate(IO_BUFFER_BYTES);
 
-        private ChunkedWriter(WritableByteChannel channel) {
+        ChunkedWriter(WritableByteChannel channel) {
             this.channel = channel;
         }
 
-        private void write(byte[] bytes) throws IOException {
+        void write(byte[] bytes) throws IOException {
             int offset = 0;
             while (offset < bytes.length) {
                 if (!buffer.hasRemaining()) {
@@ -219,21 +219,28 @@ final class PageRunBoundarySample {
             }
         }
 
-        private void writeShort(int value) throws IOException {
+        void writeShort(int value) throws IOException {
             if (buffer.remaining() < Short.BYTES) {
                 flush();
             }
             buffer.putShort((short) value);
         }
 
-        private void writeInt(int value) throws IOException {
+        void writeInt(int value) throws IOException {
             if (buffer.remaining() < Integer.BYTES) {
                 flush();
             }
             buffer.putInt(value);
         }
 
-        private void flush() throws IOException {
+        void writeLong(long value) throws IOException {
+            if (buffer.remaining() < Long.BYTES) {
+                flush();
+            }
+            buffer.putLong(value);
+        }
+
+        void flush() throws IOException {
             buffer.flip();
             while (buffer.hasRemaining()) {
                 channel.write(buffer);
@@ -242,21 +249,23 @@ final class PageRunBoundarySample {
         }
     }
 
-    private static final class ChunkedReader {
+    /** Shared bounded positional extension reader used by the legacy sample and current page index. */
+    static final class ChunkedReader {
         private final PageRunSegmentIo io;
         private final ByteBuffer buffer = ByteBuffer.allocate(IO_BUFFER_BYTES);
         private long position;
         private long remaining;
         private long bytesRead;
+        private long consumed;
 
-        private ChunkedReader(PageRunSegmentIo io, long position, long length) {
+        ChunkedReader(PageRunSegmentIo io, long position, long length) {
             this.io = io;
             this.position = position;
             this.remaining = length;
             buffer.limit(0);
         }
 
-        private int readUnsignedShort(CRC32C crc) throws IOException {
+        int readUnsignedShort(CRC32C crc) throws IOException {
             int high = readByte();
             int low = readByte();
             crc.update(high);
@@ -264,11 +273,21 @@ final class PageRunBoundarySample {
             return high << 8 | low;
         }
 
-        private int readInt() throws IOException {
+        long readLong(CRC32C crc) throws IOException {
+            long value = 0;
+            for (int i = 0; i < Long.BYTES; i++) {
+                int next = readByte();
+                crc.update(next);
+                value = value << 8 | next;
+            }
+            return value;
+        }
+
+        int readInt() throws IOException {
             return readByte() << 24 | readByte() << 16 | readByte() << 8 | readByte();
         }
 
-        private void read(byte[] destination, CRC32C crc) throws IOException {
+        void read(byte[] destination, CRC32C crc) throws IOException {
             int offset = 0;
             while (offset < destination.length) {
                 refillIfEmpty();
@@ -276,11 +295,13 @@ final class PageRunBoundarySample {
                 buffer.get(destination, offset, length);
                 crc.update(destination, offset, length);
                 offset += length;
+                consumed += length;
             }
         }
 
         private int readByte() throws IOException {
             refillIfEmpty();
+            consumed++;
             return buffer.get() & 0xff;
         }
 
@@ -300,8 +321,12 @@ final class PageRunBoundarySample {
             bytesRead += length;
         }
 
-        private long bytesRead() {
+        long bytesRead() {
             return bytesRead;
+        }
+
+        long consumed() {
+            return consumed;
         }
     }
 }

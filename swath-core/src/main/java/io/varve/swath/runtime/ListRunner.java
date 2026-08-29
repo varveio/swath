@@ -19,7 +19,9 @@ import io.varve.swath.engine.TransientRetryFetcher;
 import io.varve.swath.engine.WorkStealingScan;
 import io.varve.swath.error.CheckpointException;
 import io.varve.swath.error.ListingException;
+import io.varve.swath.error.MergePendingException;
 import io.varve.swath.error.OutputException;
+import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListEntry;
@@ -53,20 +55,31 @@ import io.varve.swath.output.parquet.PartListener;
 import io.varve.swath.output.text.TextWriterPool;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.pipeline.Pipeline;
+import io.varve.swath.sort.CommittedPublicationCleanupException;
 import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.DuplicateKeyException;
 import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.MergeDiskExhaustedException;
+import io.varve.swath.sort.MergeDiskPolicy;
 import io.varve.swath.sort.MergeInputProfile;
+import io.varve.swath.sort.MergeMemoryExhaustedException;
+import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.ProofSpoolAllocationException;
+import io.varve.swath.sort.PublicationStepHook;
 import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
+import io.varve.swath.sort.SortArm;
+import io.varve.swath.sort.SortCardinalityException;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortOrderException;
 import io.varve.swath.sort.SortPagePacker;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortTransform;
@@ -92,8 +105,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -116,6 +132,17 @@ import org.slf4j.LoggerFactory;
 public final class ListRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ListRunner.class);
+    private final PublicationStepHook publicationStepHook;
+
+    /** Build a production runner with no publication crash injection. */
+    public ListRunner() {
+        this(PublicationStepHook.NO_OP);
+    }
+
+    /** Build a runner with the internal deterministic publication crash-test seam. */
+    public ListRunner(PublicationStepHook publicationStepHook) {
+        this.publicationStepHook = Objects.requireNonNull(publicationStepHook, "publicationStepHook");
+    }
 
     /**
      * The process exit code a CLASSIFIED fatal crash reports in the JSON summary. Every
@@ -672,9 +699,7 @@ public final class ListRunner {
 
     /**
      * Staging {@code part_file} format namespace, so segment rows never pollute the root manifest.
-     * Runs stage page-run segments — this MUST equal {@code PageRunSegmentWriter.FORMAT_NAME}
-     * ("page-run"), the value the writer/reader agree on (that constant is package-private to
-     * {@code io.varve.swath.sort}, so it is mirrored here rather than referenced). Both the write side
+     * Runs stage page-run segments — this is the value the writer/reader agree on. Both the write side
      * ({@code SegmentSink.onSegmentFinalized}) and the select side ({@code sortedSegmentRows}) use this
      * one constant, so new segments are tagged and selected consistently.
      *
@@ -682,7 +707,7 @@ public final class ListRunner {
      * checkpoint carries staging segments tagged with a different, unsupported
      * staging format rather than silently sweep+relist them.
      */
-    public static final String SORT_SEGMENT_FORMAT = "page-run";
+    public static final String SORT_SEGMENT_FORMAT = PageRunFormat.NAME;
 
     /**
      * Engine-backed <b>sorted</b> Parquet run: the listing feeds the single ordered
@@ -713,7 +738,8 @@ public final class ListRunner {
             SortConfig sortConfig, SortMode mode, EngineToggles toggles,
             TraceSink trace, boolean reattach) throws SwathException, InterruptedException {
         return runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, spec, store, runId,
-                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, RetryConfig.DEFAULT);
+                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, RetryConfig.DEFAULT,
+                false);
     }
 
     /**
@@ -726,6 +752,17 @@ public final class ListRunner {
             CheckpointStore store, long runId, int workerCount, List<Node> seeds,
             SortConfig sortConfig, SortMode mode, EngineToggles toggles,
             TraceSink trace, boolean reattach, RetryConfig retryConfig)
+            throws SwathException, InterruptedException {
+        return runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, spec, store, runId,
+                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, retryConfig, false);
+    }
+
+    /** Full overload including the explicit CLI {@code sort.ignore-disk-check} core policy. */
+    public ListingStatistics runToSortedParquetWorkStealing(
+            RunContext ctx, PageFetcher fetcher, Path outputDir, Path stagingDir, ParquetSpec spec,
+            CheckpointStore store, long runId, int workerCount, List<Node> seeds,
+            SortConfig sortConfig, SortMode mode, EngineToggles toggles,
+            TraceSink trace, boolean reattach, RetryConfig retryConfig, boolean ignoreDiskCheck)
             throws SwathException, InterruptedException {
 
         WorkStealingScan producer = new WorkStealingScan(
@@ -784,7 +821,7 @@ public final class ListRunner {
             List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                     .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
             store.partFinalized(new PartFinalize(runId, 0, result.path().getFileName().toString(),
-                    SORT_SEGMENT_FORMAT, result.rows(), result.bytes(), advances));
+                    result.pageRunFormat(), result.rows(), result.bytes(), advances));
         };
         String segmentPrefix = "seg-" + runId + "-" + Long.toHexString(System.nanoTime());
         SortLane lane = new SortLane(sortConfig, comparator, DuplicateHook.NO_OP, sortMetrics,
@@ -805,11 +842,12 @@ public final class ListRunner {
                         "WORK_STEALING", true, runId, "PARQUET", workerCount, true))
                 .producer(producer).consumerStage(stage)
                 .jsonSummaryConfig(spec.jsonSummary())
-                // During listing the merge has not run, so the periodic snapshot reports zero final files;
-                // the terminal summary reads the true published-file count off the completed merge result.
-                .snapshotSummary(el -> ctx.metrics().summary(el, "WORK_STEALING", 0L, 0L))
+                // During listing the merge has not run, so periodic snapshots report zero final
+                // files. If publication commits and only cleanup fails, the exception path fills
+                // this same holder before the unwound snapshot is taken.
+                .snapshotSummary(el -> sortedSummary(ctx, el, merged[0]))
                 .terminalSummary(el -> ctx.metrics().summary(el, "WORK_STEALING",
-                        merged[0].finalFiles().size(), sortedOutputBytes(merged[0].finalFiles())))
+                        merged[0].finalFiles().size(), merged[0].outputBytes()))
                 .statistics(stage::statistics)
                 .drain(laneDrain(lane, ctx.metrics()))
                 .complete(() -> {
@@ -820,10 +858,15 @@ public final class ListRunner {
                     ctx.metrics().setPhase(Phase.MERGING);
                     // Normal listing-completion publish: no identity-verified merge-reentry guarantee here,
                     // so the NARROW part-*.parquet stale-finals sweep only (see sortMergeAndPublish javadoc).
-                    merged[0] = sortMergeAndPublish(ctx, outputDir, stagingDir,
-                            sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
-                            spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                            StaleFinalSweep.OWN_PARTS_ONLY);
+                    try {
+                        merged[0] = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
+                                sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
+                                spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
+                                StaleFinalSweep.OWN_PARTS_ONLY, ignoreDiskCheck);
+                    } catch (PublicationPendingException e) {
+                        merged[0] = committedSortResult(e);
+                        throw e;
+                    }
                     store.setSortPhase(runId, SortPhase.PUBLISHED);
                     store.markRunFinished(runId, RunStatus.COMPLETED);
                 })
@@ -832,7 +875,7 @@ public final class ListRunner {
                 // swath.output.{files,bytes}{format=parquet} series as the non-sort Parquet sinks (the
                 // sort-specific swath.sort.* meters already distinguish the code path that produced it).
                 .epilogue(() -> ctx.metrics().recordOutput("parquet", "written",
-                        merged[0].finalFiles().size(), sortedOutputBytes(merged[0].finalFiles())))
+                        merged[0].finalFiles().size(), merged[0].outputBytes()))
                 .build());
     }
 
@@ -844,6 +887,15 @@ public final class ListRunner {
     public ListingStatistics runSortMergeOnly(RunContext ctx, Path outputDir, Path stagingDir,
             CheckpointStore store, long runId, SortConfig sortConfig, SortMode mode, ParquetSpec spec)
             throws SwathException, InterruptedException {
+        return runSortMergeOnly(ctx, outputDir, stagingDir, store, runId, sortConfig, mode, spec,
+                false);
+    }
+
+    /** Merge-only resume with the explicit CLI {@code sort.ignore-disk-check} core policy. */
+    public ListingStatistics runSortMergeOnly(RunContext ctx, Path outputDir, Path stagingDir,
+            CheckpointStore store, long runId, SortConfig sortConfig, SortMode mode, ParquetSpec spec,
+            boolean ignoreDiskCheck)
+            throws SwathException, InterruptedException {
 
         long startedNs = System.nanoTime();
         ctx.metrics().markRunStarted();
@@ -853,9 +905,21 @@ public final class ListRunner {
         ctx.metrics().setPrefix(spec.prefix());
         ctx.metrics().setPhase(Phase.LISTING);
         ctx.metrics().recordStealReason("SORT", "merge_redone");
-        Supplier<RunSummary> snapshot =
-                () -> ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING", 0L, 0L);
-        JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, spec.jsonSummary(), snapshot);
+        SortTransformResult[] published = new SortTransformResult[1];
+        Supplier<RunSummary> snapshot = () -> {
+            SortTransformResult result = published[0];
+            if (result == null) {
+                return ctx.metrics().summary(
+                        elapsedSince(startedNs), "WORK_STEALING", 0L, 0L);
+            }
+            return ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING",
+                    result.finalFiles().size(), result.outputBytes(),
+                    result.totalRows());
+        };
+        JsonRunSummaryWriter.Config mergeOnlySummary = spec.jsonSummary() == null ? null
+                : spec.jsonSummary().withRunConfig(
+                        spec.jsonSummary().runConfig().withSortArm(SortArm.MERGE_ONLY_PAGE_RUN));
+        JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, mergeOnlySummary, snapshot);
         log.info("list_sort_merge_resume run_id={} (re-running merge from staging, zero LIST fetches)", runId);
         // The sink is contracted to observe every run exactly once, the unwound ones included: a
         // merge that throws still writes a CRASH partial to the sidecar, and the operator-facing
@@ -870,10 +934,20 @@ public final class ListRunner {
             List<PartRef> segRows = sortedSegmentRows(store, runId);
             // Merge-only resume: identity-verified merge-reentry (ListCommand#isPublishedByThisRun
             // gated this call), so the WIDE data/*.parquet stale-finals sweep is safe here.
-            SortTransformResult result = sortMergeAndPublish(ctx, outputDir, stagingDir,
-                    segRows, sortConfig, mode, spec.bucket(),
-                    spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                    StaleFinalSweep.ALL_PARQUET);
+            SortTransformResult result;
+            try {
+                result = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
+                        segRows, sortConfig, mode, spec.bucket(),
+                        spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
+                        StaleFinalSweep.ALL_PARQUET, ignoreDiskCheck);
+                published[0] = result;
+            } catch (PublicationPendingException e) {
+                result = committedSortResult(e);
+                published[0] = result;
+                ctx.metrics().recordRecoveredSortSegments(segRows.size());
+                ctx.metrics().recordRecoveredSortRows(result.totalRows());
+                throw e;
+            }
             store.setSortPhase(runId, SortPhase.PUBLISHED);
             store.markRunFinished(runId, RunStatus.COMPLETED);
 
@@ -893,11 +967,11 @@ public final class ListRunner {
             ctx.metrics().finishProgress();
             Duration elapsed = elapsedSince(startedNs);
             RunSummary summary = ctx.metrics().summary(elapsed, "WORK_STEALING",
-                    result.finalFiles().size(), sortedOutputBytes(result.finalFiles()), result.totalRows());
+                    result.finalFiles().size(), result.outputBytes(), result.totalRows());
             ctx.metrics().setPhase(Phase.COMPLETE);
             ctx.metrics().recordRunCompletion(elapsed, summary.keysPerSecond());
             ctx.metrics().recordOutput("parquet", "written",
-                    result.finalFiles().size(), sortedOutputBytes(result.finalFiles()));
+                    result.finalFiles().size(), result.outputBytes());
             logSummary(summary);
             summaryEmitted = true;
             emitQuietly(() -> ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(elapsed),
@@ -920,7 +994,8 @@ public final class ListRunner {
     }
 
     /**
-     * Merge the durable staging segments into the published sorted output; manifest written LAST.
+     * Merge the durable staging segments into the published sorted output; authority listener writes
+     * {@code _SUCCESS} last.
      * The final sorted files are written under {@code <root>/data/}, the pure-parquet subdir,
      * so the transform operates on the {@code data/} directory while the consumer manifest + markers
      * land at the dataset root.
@@ -936,9 +1011,11 @@ public final class ListRunner {
      *         reaching this method. The normal listing-completion caller ({@link #run}) passes
      *         {@code false}: it has no such identity guarantee.
      */
-    private SortTransformResult sortMergeAndPublish(RunContext ctx, Path outputDir, Path stagingDir,
+    private SortTransformResult sortMergeAndPublish(RunContext ctx, CheckpointStore store,
+            Path outputDir, Path stagingDir,
             List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
-            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep)
+            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep,
+            boolean ignoreDiskCheck)
             throws SwathException {
         // The exact merge denominator, recorded HERE because this is the one point both merge
         // callers pass through with the staged parts in hand: rows merged is measured against the
@@ -946,6 +1023,18 @@ public final class ListRunner {
         ctx.metrics().recordSortStaged(stagedParts.size(),
                 stagedParts.stream().mapToLong(PartRef::rows).sum());
         List<Path> segments = stagedParts.stream().map(p -> stagingDir.resolve(p.path())).toList();
+        Map<Path, PageRunFormat> expectedPageRunFormats = new LinkedHashMap<>();
+        for (PartRef part : stagedParts) {
+            if (part.formatVersion() == null && part.extensionType() == null) {
+                continue; // pre-metadata checkpoint row: physical format remains authoritative
+            }
+            if (part.formatVersion() == null || part.extensionType() == null) {
+                throw new OutputException("checkpoint has incomplete page-run format metadata for "
+                        + part.path());
+            }
+            expectedPageRunFormats.put(stagingDir.resolve(part.path()),
+                    new PageRunFormat(part.formatVersion(), part.extensionType()));
+        }
         Comparator<ListEntry> comparator = new ListEntryComparator();
         SortMetrics sortMetrics = new RunSortMetrics(ctx.metrics());
         // Wrap the final-file writer factory so each row streamed into the merged output marks
@@ -965,7 +1054,7 @@ public final class ListRunner {
         // SortTransform caller (e.g. CaptureSorter's sort-fixture path) has no such guard and must NOT
         // opt in.
         // Not a method reference any more: the parallel path reports TWO wall times -- each range's own
-        // merge, and the serial boundary-sampling prologue that runs once before all of them.
+        // merge, and the serial boundary-planning prologue that runs once before all of them.
         RangeMergeTimer rangeTimer = new RangeMergeTimer() {
             @Override
             public void recordRangeMerge(long nanos) {
@@ -978,10 +1067,12 @@ public final class ListRunner {
             }
         };
         SortTransform transform = new SortTransform(
-                new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                new SortRun(config, comparator, DuplicateHook.NO_OP, equalKeyPolicy(mode),
                         sortMetrics, writerFactory, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
                         rangeTimer, SortRun.PROCESS_SOFT_FD_LIMIT,
-                        staleFinalSweep));
+                        staleFinalSweep, ignoreDiskCheck
+                                ? MergeDiskPolicy.bypassed() : MergeDiskPolicy.enforced()),
+                publicationStepHook);
         Path dataDir = DatasetLayout.of(outputDir).dataDir();
         // Mark a phase-boundary progress tick so the merge/finalize tail starts with a fresh stall
         // window (the LISTING phase just quiesced; the watchdog must not count listing-idle time here).
@@ -996,7 +1087,8 @@ public final class ListRunner {
         // exception path.
         try (RunProgressReporter progress = startProgress(ctx, progressInterval)) {
             Files.createDirectories(dataDir);
-            SortTransformResult result = transform.transform(segments, dataDir, stagingDir,
+            SortTransformResult result = transform.transform(
+                    segments, expectedPageRunFormats, dataDir, stagingDir,
                     (finalParts, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
                             finalParts, ctx.metrics(), finalizeClock),
                     ctx.metrics()::recordProgress,
@@ -1009,9 +1101,49 @@ public final class ListRunner {
             ctx.metrics().recordSortMergePasses(result.mergePasses());
             ctx.metrics().recordSortFinalizeParallelism(result.finalizationParallelism());
             return result;
+        } catch (CommittedPublicationCleanupException e) {
+            // The listener returned, so _SUCCESS already commits the dataset. Preserve that fact in
+            // the checkpoint when possible and route through the existing non-fatal publication
+            // seam. If the phase latch itself is unavailable, identity + _SUCCESS still makes the
+            // next resume choose PUBLISHED cleanup; retain the latch error only as a suppressed
+            // diagnostic rather than poisoning an otherwise valid dataset.
+            ctx.metrics().recordSortMerge(mergeSample);
+            SortTransformResult result = e.publishedResult();
+            ctx.metrics().recordSortMergePasses(result.mergePasses());
+            ctx.metrics().recordSortFinalizeParallelism(result.finalizationParallelism());
+            ctx.metrics().recordOutput("parquet", "written",
+                    result.finalFiles().size(), result.outputBytes());
+            try {
+                store.setSortPhase(runId, SortPhase.PUBLISHED);
+            } catch (CheckpointException phaseFailure) {
+                e.addSuppressed(phaseFailure);
+                ctx.metrics().recordStealReason("SORT", "post_publish_phase_latch_failed");
+                log.warn("sort_post_publish_phase_latch_failed publication_committed=true "
+                                + "cleanup_pending=true run_id={} stage={} message={}",
+                        runId, e.stage().logValue(), phaseFailure.getMessage());
+            }
+            throw new PublicationPendingException(
+                    "sorted dataset publication committed; cleanup pending", e);
+        } catch (MergeDiskExhaustedException e) {
+            ctx.metrics().recordFatalErrorClass(e.errorClass());
+            throw new MergePendingException("sort merge deferred for insufficient disk; "
+                    + "free space and resume, or use sort.ignore-disk-check=on", e);
+        } catch (MergeMemoryExhaustedException e) {
+            ctx.metrics().recordFatalErrorClass(e.errorClass());
+            throw new MergePendingException("sort merge deferred because decoded pages do not fit "
+                    + "the merge budget; raise swath.sort.merge-budget-bytes and resume", e);
+        } catch (SortOrderException e) {
+            // Re-running the same durable staging deterministically repeats this invariant failure;
+            // classify it and keep the ordinary fatal OutputException disposition rather than
+            // advertising a merge-only retry that cannot heal the inputs or implementation.
+            ctx.metrics().recordFatalErrorClass(e.errorClass());
+            throw new OutputException("sort merge emitted rows out of order", e);
+        } catch (DuplicateKeyException e) {
+            ctx.metrics().recordFatalErrorClass(e.errorClass());
+            throw new OutputException("current-object sort emitted a duplicate raw key", e);
         } catch (IOException | UncheckedIOException e) {
-            // A CLASSIFIED merge failure (today: a staged page-run segment whose
-            // page minKeys regress — SegmentCorruptionException, error_class=page_run_min_regression) must
+            // A CLASSIFIED merge failure (a staged page-run invariant or proof-spool allocation)
+            // must
             // be greppable in summary.json, not just in stderr. The run unwinds without complete(), so the
             // sidecar's terminal write comes from JsonRunSummaryWriter#close via terminalStatus() below,
             // which reads this class off RunMetrics; an unclassified merge failure records nothing and
@@ -1024,8 +1156,8 @@ public final class ListRunner {
             // FIRST page can never regress) therefore arrives as an UncheckedIOException, not an
             // IOException. With only the checked catch this whole classification was INERT on the very
             // path it was written for: recordFatalErrorClass never ran and summary.json said
-            // error_class:null. segmentErrorClass walks the cause chain, so the wrapper is transparent.
-            ctx.metrics().recordFatalErrorClass(segmentErrorClass(e));
+            // error_class:null. sortErrorClass walks the cause chain, so the wrapper is transparent.
+            ctx.metrics().recordFatalErrorClass(sortErrorClass(e));
             throw new OutputException("sort merge/publish failed", e);
         }
     }
@@ -1033,16 +1165,57 @@ public final class ListRunner {
     /**
      * The classified {@code error_class} fingerprint of a sort merge/publish failure — walks the
      * cause chain (mirroring {@code ListCommand#seedErrorClass} / {@code ExitCodes#forThrowable}) for the
-     * first {@link SegmentCorruptionException}. {@code null} for a generic merge failure (disk, Parquet,
-     * an unclassified {@link IOException}), which keeps its {@code error_class:null} shape.
+     * first {@link SegmentCorruptionException} or {@link ProofSpoolAllocationException}. {@code null}
+     * for a generic merge failure (Parquet or an unclassified {@link IOException}), which keeps its
+     * {@code error_class:null} shape.
      */
-    private static String segmentErrorClass(Throwable t) {
+    static String sortErrorClass(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             if (c instanceof SegmentCorruptionException sce) {
                 return sce.errorClass();
             }
+            if (c instanceof ProofSpoolAllocationException allocation) {
+                return allocation.errorClass();
+            }
+            if (c instanceof MergeDiskExhaustedException exhausted) {
+                return exhausted.errorClass();
+            }
+            if (c instanceof MergeMemoryExhaustedException exhausted) {
+                return exhausted.errorClass();
+            }
+            if (c instanceof SortOrderException order) {
+                return order.errorClass();
+            }
+            if (c instanceof SortCardinalityException cardinality) {
+                return cardinality.errorClass();
+            }
+            if (c instanceof DuplicateKeyException duplicate) {
+                return duplicate.errorClass();
+            }
         }
         return null;
+    }
+
+    /** Current-object listings are key-unique; future all-versions listings are not. */
+    static EqualKeyPolicy equalKeyPolicy(SortMode mode) {
+        return mode == SortMode.OBJECTS ? EqualKeyPolicy.REJECT : EqualKeyPolicy.ALLOW;
+    }
+
+    private static SortTransformResult committedSortResult(PublicationPendingException pending) {
+        if (pending.getCause() instanceof CommittedPublicationCleanupException committed) {
+            return committed.publishedResult();
+        }
+        throw new IllegalStateException(
+                "sorted publication-pending error has no committed transform result", pending);
+    }
+
+    private static RunSummary sortedSummary(
+            RunContext ctx, Duration elapsed, SortTransformResult result) {
+        if (result == null) {
+            return ctx.metrics().summary(elapsed, "WORK_STEALING", 0L, 0L);
+        }
+        return ctx.metrics().summary(elapsed, "WORK_STEALING",
+                result.finalFiles().size(), result.outputBytes());
     }
 
     /**
@@ -1151,18 +1324,6 @@ public final class ListRunner {
             }
         }
         return Hex.encodeHexString(md.digest());
-    }
-
-    private static long sortedOutputBytes(List<Path> finalFiles) {
-        long bytes = 0;
-        for (Path f : finalFiles) {
-            try {
-                bytes += Files.size(f);
-            } catch (IOException ignored) {
-                // best effort for the summary's compressed-size line
-            }
-        }
-        return bytes;
     }
 
     private static List<PartRef> sortedSegmentRows(CheckpointStore store, long runId) throws CheckpointException {
@@ -1321,7 +1482,7 @@ public final class ListRunner {
         } catch (SwathException | InterruptedException e) {
             throw e;
         } catch (Exception e) {
-            metrics.recordFatalErrorClass(segmentErrorClass(e));
+            metrics.recordFatalErrorClass(sortErrorClass(e));
             throw new OutputException("sort segment encode failed", e);
         }
     }

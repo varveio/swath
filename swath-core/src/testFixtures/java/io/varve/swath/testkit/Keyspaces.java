@@ -137,7 +137,7 @@ public final class Keyspaces {
      * short numeric tail — exercises {@code byteMidpoint}'s long-key / cap-fallback path.
      */
     public static List<byte[]> longKeys1024(int n) {
-        int padLen = 1020;
+        int padLen = 1018;
         byte[] pad = new byte[padLen];
         Arrays.fill(pad, (byte) 'a');
         List<byte[]> keys = new ArrayList<>(n);
@@ -145,7 +145,7 @@ public final class Keyspaces {
             byte[] tail = String.format("/%05d", i).getBytes(StandardCharsets.UTF_8);
             byte[] k = Arrays.copyOf(pad, padLen + tail.length);
             System.arraycopy(tail, 0, k, padLen, tail.length);
-            keys.add(k);   // 1026 bytes total — long, multi-page-prefix, valid ASCII
+            keys.add(k);   // 1024 bytes total — long, multi-page-prefix, valid ASCII
         }
         return keys;
     }

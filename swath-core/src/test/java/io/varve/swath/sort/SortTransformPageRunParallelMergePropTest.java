@@ -17,7 +17,10 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.Manifest;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +29,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +39,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.LockSupport;
@@ -42,6 +47,7 @@ import java.util.function.IntSupplier;
 import net.jqwik.api.Example;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
+import net.jqwik.api.Tag;
 import net.jqwik.api.constraints.IntRange;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
@@ -61,6 +67,13 @@ import org.slf4j.LoggerFactory;
  * symmetric bugs that both drop the same row cannot pass).
  */
 class SortTransformPageRunParallelMergePropTest {
+
+    // Contracts §7.2's documented Parquet characterization budget. This process/merge stress has
+    // eight merge ranges and deliberately keeps rolled writers open, so it is not a new production
+    // envelope or an attribution of this heap to final writers alone.
+    private static final long PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES = 1L << 30;
+    private static final long PROCESS_MERGE_PERF_WORKER_HEAP_BYTES = 2L << 30;
+    private static final int MAX_GC_ATTEMPTS = 50;
 
     private final ListEntryComparator cmp = new ListEntryComparator();
 
@@ -98,8 +111,8 @@ class SortTransformPageRunParallelMergePropTest {
     }
 
     /**
-     * The same property with each range forced to CASCADE (a 1-byte merge budget pins every range at
-     * the {@code max(2, …)} fan-in floor). This is the arm that exercises
+     * The same property with each range forced to CASCADE (the helper prices exactly two safe
+     * decoded streams per range). This is the arm that exercises
      * {@code writeIntermediate}'s page-run cascade output and the re-scoping of an intermediate that
      * is already range-filtered — neither of which the single-pass property reaches.
      */
@@ -141,6 +154,38 @@ class SortTransformPageRunParallelMergePropTest {
         }
     }
 
+    @Example
+    void forcedParallelCascadeAccountsForOriginalAndIntermediatePageFrames() throws IOException {
+        Scenario scenario = build(4, 200, KeyStyle.DENSE_SEQUENTIAL, 17L);
+        Path root = Files.createTempDirectory("prange-pagerun-cascade-bytes-");
+        CountingMetrics metrics = new CountingMetrics();
+        Logger logger = (Logger) LoggerFactory.getLogger(ParallelRangeMerge.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            CascadeRun parallel = runParallelUnclamped(scenario, 3, root, "parallel", 1L, metrics);
+            assertThat(parallel).isNotNull();
+            assertThat(parallel.cascadedPasses()).isPositive();
+
+            long loggedBytes = appender.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.startsWith("sort_merge_range range="))
+                    .mapToLong(message -> longField(message, "bytes_read"))
+                    .sum();
+            assertThat(metrics.rangeFramedBytes.sum())
+                    .as("range framed-byte metric equals the exact per-range log total")
+                    .isEqualTo(loggedBytes);
+            assertThat(loggedBytes)
+                    .as("forced cascade reads every original plus its page-run intermediates")
+                    .isGreaterThan(parallel.originalFramedBytes());
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+            deleteTreeBestEffort(root);
+        }
+    }
+
     /**
      * Drive {@link ParallelRangeMerge} directly, past {@link SortTransform}'s clamp, so the cascade
      * branches are genuinely reached. Cascade intermediates keep the page-run format, which is what
@@ -148,31 +193,48 @@ class SortTransformPageRunParallelMergePropTest {
      */
     private CascadeRun runParallelUnclamped(Scenario s, int ranges, Path root, String name,
                                             long mergeBudgetBytes) throws IOException {
+        return runParallelUnclamped(s, ranges, root, name, mergeBudgetBytes, SortMetrics.NO_OP);
+    }
+
+    private CascadeRun runParallelUnclamped(Scenario s, int ranges, Path root, String name,
+                                            long mergeBudgetBytes, SortMetrics metrics) throws IOException {
         Path output = Files.createDirectories(root.resolve(name));
         Path staging = Files.createDirectories(output.resolve("_staging"));
         List<Path> segs = stage(staging, s.segments());
-        SortConfig config = SortConfigs.base()
-                .withFinalFileBytes(Long.MAX_VALUE)
-                .withMergeBudgetBytes(mergeBudgetBytes)
-                .withMergeParallelism(ranges);
-        SortRun run = sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP,
-                SortedFileWriterFactory.DEFAULT, SortRun.PROCESS_SOFT_FD_LIMIT);
-        ParallelRangeMerge merge = new ParallelRangeMerge(run);
+        long originalFramedBytes = framedPageBytes(segs);
         ParallelKickoff kickoff = parallelKickoff(segs);
         List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+        List<byte[]> boundaries = MergePlanner.boundaries(
                 descriptors, kickoff.candidates(), ranges, SortMetrics.NO_OP);
         if (boundaries == null) {
             return null;
         }
-        List<ParallelRangeMerge.RangeResult> results =
-                merge.run(descriptors, staging, boundaries, units -> { });
+        PageRunCatalog catalog = PageRunCatalog.fromDescriptors(descriptors);
+        if (mergeBudgetBytes == 1L) {
+            int actualRanges = boundaries.size() + 1;
+            long streamPrice = Math.max(SortConfigs.base().mergePerStreamBytes(),
+                    Math.addExact(Math.multiplyExact(2L, catalog.maxRecordLen()),
+                            catalog.maxRawPayloadLength()
+                                    + 2L * PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES));
+            mergeBudgetBytes = Math.addExact(
+                    PageRunProofSpool.logicalBytes(actualRanges, descriptors.size()),
+                    Math.multiplyExact(Math.multiplyExact((long) actualRanges, 2L), streamPrice));
+        }
+        SortConfig config = SortConfigs.base()
+                .withFinalFileBytes(Long.MAX_VALUE)
+                .withMergeBudgetBytes(mergeBudgetBytes)
+                .withMergeParallelism(ranges);
+        SortRun run = sortRun(config, DuplicateHook.NO_OP, metrics,
+                SortedFileWriterFactory.DEFAULT, SortRun.PROCESS_SOFT_FD_LIMIT);
+        ParallelRangeMerge merge = new ParallelRangeMerge(run);
+        List<ParallelRangeWorker.Result> results =
+                merge.run(catalog, staging, boundaries, units -> { });
 
         List<Path> parts = new ArrayList<>();
         List<SortedFileWriter> writers = new ArrayList<>();
         long cascaded = 0;
         long rows = 0;
-        for (ParallelRangeMerge.RangeResult rr : results) {
+        for (ParallelRangeWorker.Result rr : results) {
             parts.addAll(rr.tmpParts());
             writers.addAll(rr.writers());
             cascaded += rr.cascadedPasses();
@@ -185,29 +247,35 @@ class SortTransformPageRunParallelMergePropTest {
             writers.get(writers.size() - 1).markFinal();
         }
         RolledPartWriter.closeInOrder(writers);
-        return new CascadeRun(parts, rows, cascaded);
+        return new CascadeRun(parts, rows, cascaded, originalFramedBytes);
     }
 
     private static ParallelKickoff parallelKickoff(List<Path> paths) throws IOException {
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(paths,
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(paths,
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
-                Optional.of(candidates::add));
+                Optional.of(candidates::add)).descriptors();
         return new ParallelKickoff(descriptors, candidates);
     }
 
     private static List<PageRunSegmentDescriptor> descriptorTrailers(List<Path> paths)
             throws IOException {
-        return PageRunSegmentDescriptor.readAll(paths,
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
+        return PageRunCatalog.preflight(paths,
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty())
+                .descriptors();
     }
 
     private record ParallelKickoff(List<PageRunSegmentDescriptor> descriptors,
-                                   ParallelRangeMerge.BoundaryCandidates candidates) {
+                                   MergePlanner.BoundaryCandidates candidates) {
     }
 
-    private record CascadeRun(List<Path> parts, long rows, long cascadedPasses) {
+    private record WideStressStaging(ParallelKickoff kickoff, List<byte[]> boundaries,
+                                     WeakReference<Scenario> fixture) {
+    }
+
+    private record CascadeRun(List<Path> parts, long rows, long cascadedPasses,
+                              long originalFramedBytes) {
     }
 
     /**
@@ -319,6 +387,8 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(metrics.count("SORT.merge_range_page_skipped"))
                     .as("at least one range stepped over or left unread >=1 page")
                     .isGreaterThan(0);
+            assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
+            assertThat(metrics.count("SORT.page_run_index_mismatch")).isZero();
             assertThat(parallel.finalFiles())
                     .as("one part per range").hasSize(ranges);
 
@@ -355,10 +425,11 @@ class SortTransformPageRunParallelMergePropTest {
             // Price an open page-run stream as the planner does: the larger of the configured
             // working-set estimate and the trailer's encoded maxRecordLen.
             Path probeDir = Files.createDirectories(root.resolve("probe"));
-            long perStream = PageRunSegmentDescriptor.maxRecordLen(
-                    descriptorTrailers(stage(probeDir, s.segments())));
+            long perStream = PageRunCatalog.fromDescriptors(
+                    descriptorTrailers(stage(probeDir, s.segments()))).maxRecordLen();
             perStream = Math.max(perStream, SortConfigs.base().mergePerStreamBytes());
-            long budget = perStream * segmentCount * allowed;
+            long budget = perStream * segmentCount * allowed
+                    + PageRunProofSpool.logicalBytes(allowed, segmentCount);
 
             CountingMetrics metrics = new CountingMetrics();
             SortTransformResult serial =
@@ -389,30 +460,24 @@ class SortTransformPageRunParallelMergePropTest {
     }
 
     /**
-     * The floor of the same clamp: when not even ONE range fits the budget, the parallel path hands
-     * back to the serial merge instead of paying its boundary-sampling prologue to cascade anyway.
+     * A budget below the safe minimum merge width is refused resumably instead of allowing the old
+     * two-stream floor to allocate outside the declared budget.
      */
     @Example
-    void aBudgetTooSmallForEvenOneRangeFallsBackToSerial() throws IOException {
+    void aBudgetTooSmallForMinimumWidthIsRefused() throws IOException {
         Scenario s = manyDistinctKeys(6, 8400);
         Path root = Files.createTempDirectory("prange-pagerun-clamp-floor-");
         try {
             CountingMetrics metrics = new CountingMetrics();
-            SortTransformResult serial =
-                    run(s, 1, root, "serial", Long.MAX_VALUE, Long.MAX_VALUE, DuplicateHook.NO_OP,
-                            SortMetrics.NO_OP);
-            SortTransformResult fellBack =
-                    run(s, 8, root, "fallback", Long.MAX_VALUE, 1L, DuplicateHook.NO_OP, metrics);
+            assertThatThrownBy(() -> run(s, 8, root, "refused", Long.MAX_VALUE, 1L,
+                    DuplicateHook.NO_OP, metrics))
+                    .isInstanceOf(MergeMemoryExhaustedException.class)
+                    .hasMessageContaining("minimum merge width");
 
             assertThat(metrics.count("SORT.merge_range_parallel"))
                     .as("no range ran: the parallel path declined").isZero();
-            assertThat(metrics.count("SORT.merge_range_would_cascade"))
-                    .as("and the budget decline is classified, not called unsplittable").isEqualTo(1);
+            assertThat(metrics.count("SORT.merge_decoded_page_budget_exhausted")).isEqualTo(1);
             assertThat(metrics.count("SORT.merge_range_unsplittable")).isZero();
-            assertThat(fellBack.finalFiles())
-                    .as("serial output shape").hasSize(serial.finalFiles().size());
-            assertThat(readAll(fellBack.finalFiles()))
-                    .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
             deleteTreeBestEffort(root);
         }
@@ -515,7 +580,22 @@ class SortTransformPageRunParallelMergePropTest {
             // Three inputs plus one initially reserved output per range let descriptors reduce
             // R=4 to R=2. The configured fan-in of two cannot carry all three segments at any R,
             // however, and is therefore the constraint that ultimately declines parallel merge.
-            int partiallyLimitedFd = MergeFdBudget.FD_HEADROOM + 8;
+            int partiallyLimitedFd = MergeFdBudget.FD_HEADROOM
+                    + MergePlanner.PROOF_SPOOL_FDS + 8;
+            List<PageRunSegmentDescriptor> descriptors = parallelKickoff(segments).descriptors();
+            PageRunCatalog catalog = PageRunCatalog.fromDescriptors(descriptors);
+            MergePlanner fdOnly = new MergePlanner(sortRun(
+                    config.withFanIn(3), DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                    SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd));
+            assertThat(fdOnly.effectiveRanges(4, catalog))
+                    .isEqualTo(new MergePlanner.EffectiveRanges(
+                            2, MergePlanner.ClampReason.FD_LIMITED));
+            MergePlanner combined = new MergePlanner(sortRun(
+                    config, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                    SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd));
+            assertThat(combined.effectiveRanges(4, catalog))
+                    .isEqualTo(new MergePlanner.EffectiveRanges(
+                            1, MergePlanner.ClampReason.WOULD_CASCADE));
 
             new SortTransform(sortRun(config, DuplicateHook.NO_OP, metrics,
                     SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd))
@@ -535,6 +615,85 @@ class SortTransformPageRunParallelMergePropTest {
     }
 
     @Example
+    void exactProofBackingClampsRangesWithinTheConfiguredMergeBudget() throws IOException {
+        Scenario scenario = manyDistinctKeys(3, 60);
+        Path root = Files.createTempDirectory("prange-proof-budget-clamp-");
+        ListAppender<ILoggingEvent> appender = attachTransformLog();
+        try {
+            Path staging = Files.createDirectories(root.resolve("_staging"));
+            List<Path> segments = stage(staging, scenario.segments());
+            PageRunCatalog catalog = PageRunCatalog.fromDescriptors(
+                    parallelKickoff(segments).descriptors());
+            long perStream = SortConfig.DEFAULT.mergePerStreamBytes();
+            long streamOnlyThreeRanges = 3L * 3L * perStream;
+            long combinedThreeRanges = streamOnlyThreeRanges
+                    + PageRunProofSpool.logicalBytes(3, 3);
+            long budget = streamOnlyThreeRanges;
+            assertThat(budget).isLessThan(combinedThreeRanges);
+
+            MergePlanner planner = new MergePlanner(sortRun(
+                    SortConfigs.base().withMergeParallelism(4).withMergeBudgetBytes(budget),
+                    DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                    SortedFileWriterFactory.DEFAULT, () -> -1));
+
+            assertThat(planner.effectiveRanges(4, catalog))
+                    .isEqualTo(new MergePlanner.EffectiveRanges(
+                            2, MergePlanner.ClampReason.PROOF_BUDGET_LIMITED));
+            assertThat(planner.perRangeFanIn(2, catalog)).isGreaterThanOrEqualTo(3);
+
+            CountingMetrics metrics = new CountingMetrics();
+            SortTransformResult result = run(scenario, 4, root, "proof-clamped",
+                    Long.MAX_VALUE, budget, DuplicateHook.NO_OP, metrics);
+            assertThat(result.finalFiles()).hasSize(2);
+            assertThat(metrics.count("SORT.merge_range_proof_budget_limited")).isEqualTo(1);
+            assertThat(metrics.count("SORT.merge_range_parallel")).isEqualTo(2);
+            assertThat(appender.list.stream().map(ILoggingEvent::getFormattedMessage))
+                    .anyMatch(message -> message.contains("reason=proof_budget_limited")
+                            && message.contains("requested_proof_spool_bytes=")
+                            && message.contains("effective_proof_spool_bytes="));
+        } finally {
+            detachTransformLog(appender);
+            deleteTreeBestEffort(root);
+        }
+    }
+
+    @Example
+    void tinyTenThousandSegmentShapeChargesNearlyOneGiBOfProofBeforeWorkerStartup()
+            throws IOException {
+        Path root = Files.createTempDirectory("prange-proof-budget-many-tiny-");
+        try {
+            Path staging = Files.createDirectories(root.resolve("_staging"));
+            Path seed = SortTestSupport.writeIndexedPages(
+                    staging.resolve("seed.pageseg"),
+                    List.of(List.of(SortTestSupport.object("a"))));
+            PageRunSegmentDescriptor base = parallelKickoff(List.of(seed)).descriptors().getFirst();
+            int segments = 10_000;
+            List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(segments);
+            for (int i = 0; i < segments; i++) {
+                descriptors.add(new PageRunSegmentDescriptor(
+                        staging.resolve("logical-" + i + ".pageseg"), base.fileSize(),
+                        base.trailerStart(), base.trailer(), base.extension()));
+            }
+            PageRunCatalog catalog = PageRunCatalog.fromDescriptors(descriptors);
+            long streamOnlyR16 = Math.multiplyExact(
+                    16L * segments, SortConfig.DEFAULT.mergePerStreamBytes());
+            SortConfig config = SortConfigs.base().withFanIn(segments)
+                    .withMergeParallelism(16)
+                    .withMinParallelStagedBytes(0)
+                    .withMergeBudgetBytes(streamOnlyR16);
+            MergePlanner planner = new MergePlanner(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, () -> -1));
+
+            assertThat(PageRunProofSpool.logicalBytes(16, segments)).isEqualTo(993_920_000L);
+            assertThat(planner.effectiveRanges(16, catalog))
+                    .isEqualTo(new MergePlanner.EffectiveRanges(
+                            14, MergePlanner.ClampReason.PROOF_BUDGET_LIMITED));
+        } finally {
+            deleteTreeBestEffort(root);
+        }
+    }
+
+    @Example
     void outputPartFdGuardFailsBeforeOverOpeningAndLeavesNoWorkersWritersOrDebris()
             throws Exception {
         Scenario scenario = manyDistinctKeys(2, 40);
@@ -542,28 +701,152 @@ class SortTransformPageRunParallelMergePropTest {
         try {
             Path staging = Files.createDirectories(root.resolve("_staging"));
             List<Path> segments = stage(staging, scenario.segments());
-            TrackingWriterFactory writers = new TrackingWriterFactory(null, null);
+            TrackingWriterFactory writers = new TrackingWriterFactory(2L);
             SortConfig config = SortConfigs.base()
                     .withFinalFileBytes(1L)
                     .withMergeParallelism(2);
             // usable=6: four input readers (2 ranges x 2 segments) leave exactly two output
             // writers. Each range can open its first part; the first attempted roll must fail before
             // a third writer/descriptor is opened.
-            int softLimit = MergeFdBudget.FD_HEADROOM + 6;
+            int softLimit = MergeFdBudget.FD_HEADROOM + MergePlanner.PROOF_SPOOL_FDS + 6;
             ParallelRangeMerge merge = new ParallelRangeMerge(
                     sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers,
                             () -> softLimit));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+            List<byte[]> boundaries = MergePlanner.boundaries(
                     descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
-            assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
+            assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(descriptors), staging, boundaries, units -> { }))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("output-part fd budget exhausted");
             assertThat(writers.opened.get()).isEqualTo(2);
             assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
             assertThat(writers.openNow.get()).as("all real file channels closed").isZero();
+            assertNoOwnedDebris(staging);
+            assertNoLiveWorkers(merge.workerThreadPrefix());
+        } finally {
+            deleteTreeBestEffort(root);
+        }
+    }
+
+    @Example
+    void outputPartFdGuardR8BudgetMathSmoke() throws Exception {
+        Scenario scenario = manyDistinctKeys(8, 320);
+        Path root = Files.createTempDirectory("prange-output-fd-guard-r8-");
+        try {
+            Path staging = Files.createDirectories(root.resolve("_staging"));
+            ParallelKickoff kickoff = parallelKickoff(stage(staging, scenario.segments()));
+            TrackingWriterFactory writers = new TrackingWriterFactory(1L);
+            SortConfig config = SortConfigs.base()
+                    .withFanIn(8)
+                    .withFinalFileBytes(1L)
+                    .withMergeParallelism(8);
+            int ranges = 8;
+            int perRangeFanIn = 8;
+            int outputAllowance = 40;
+            int softLimit = MergeFdBudget.FD_HEADROOM + MergePlanner.PROOF_SPOOL_FDS
+                    + ranges * perRangeFanIn + outputAllowance;
+            SortRun run = sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, writers, () -> softLimit);
+            MergePlanner planner = new MergePlanner(run);
+            ParallelRangeMerge merge = new ParallelRangeMerge(run);
+            List<byte[]> boundaries = MergePlanner.boundaries(kickoff.descriptors(),
+                    kickoff.candidates(), ranges, SortMetrics.NO_OP);
+
+            assertThat(boundaries).hasSize(ranges - 1);
+            PageRunCatalog catalog = PageRunCatalog.fromDescriptors(kickoff.descriptors());
+            assertThat(planner.effectiveRanges(ranges, catalog).ranges())
+                    .as("the production planner admits all requested ranges")
+                    .isEqualTo(ranges);
+            assertThat(planner.perRangeFanIn(ranges, catalog)).isEqualTo(perRangeFanIn);
+            assertThat(rangeRows(scenario.allEntries(), boundaries))
+                    .as("page-minimum boundaries leave one row in each early range")
+                    .containsExactly(1, 1, 1, 1, 1, 1, 1, 313);
+            assertThat(softLimit - MergeFdBudget.FD_HEADROOM - MergePlanner.PROOF_SPOOL_FDS
+                    - ranges * Math.min(perRangeFanIn, kickoff.descriptors().size()))
+                    .as("open output allowance after actual input reservation")
+                    .isEqualTo(outputAllowance);
+            assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(kickoff.descriptors()), staging, boundaries, units -> { }))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("output-part fd budget exhausted: limit=" + outputAllowance
+                            + ", attempted=" + (outputAllowance + 1));
+            assertThat(writers.opened.get()).isEqualTo(outputAllowance);
+            assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
+            assertThat(writers.openNow.get()).isZero();
+            assertNoOwnedDebris(staging);
+            assertNoLiveWorkers(merge.workerThreadPrefix());
+        } finally {
+            deleteTreeBestEffort(root);
+        }
+    }
+
+    @Example
+    @Tag("perf")
+    void processMergePerfR8WideOwnersCharacterizesHeapAndFdGuard() throws Exception {
+        Path root = Files.createTempDirectory("prange-process-merge-perf-");
+        try {
+            Path staging = Files.createDirectories(root.resolve("_staging"));
+            SortConfig config = SortConfigs.base()
+                    .withFanIn(8)
+                    .withFinalFileBytes(4L << 20)
+                    .withMergeParallelism(8);
+            int ranges = 8;
+            int perRangeFanIn = 8;
+            int outputAllowance = 40;
+            int softLimit = MergeFdBudget.FD_HEADROOM + MergePlanner.PROOF_SPOOL_FDS
+                    + ranges * perRangeFanIn + outputAllowance;
+            WideStressStaging wide = stageWideWriterStress(staging, ranges);
+            CountingWriterFactory writers = new CountingWriterFactory(
+                    new SortedParquetWriterFactory(config, SortMode.OBJECTS));
+            SortRun run = sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, writers, () -> softLimit);
+            MergePlanner planner = new MergePlanner(run);
+            ParallelRangeMerge merge = new ParallelRangeMerge(run);
+
+            assertThat(wide.boundaries()).hasSize(ranges - 1);
+            PageRunCatalog catalog = PageRunCatalog.fromDescriptors(wide.kickoff().descriptors());
+            assertThat(planner.effectiveRanges(ranges, catalog).ranges())
+                    .as("the production planner admits all requested ranges")
+                    .isEqualTo(ranges);
+            assertThat(planner.perRangeFanIn(ranges, catalog))
+                    .isEqualTo(perRangeFanIn);
+            assertThat(softLimit - MergeFdBudget.FD_HEADROOM - MergePlanner.PROOF_SPOOL_FDS
+                    - ranges * Math.min(perRangeFanIn, wide.kickoff().descriptors().size()))
+                    .as("open output allowance after actual input reservation")
+                    .isEqualTo(outputAllowance);
+            awaitCollected(wide.fixture());
+            long settledBaseline = settleHeapBytes();
+            long testWorkerMaxHeap = Runtime.getRuntime().maxMemory();
+            assertThat(testWorkerMaxHeap)
+                    .as("the perf tier runs this heap characterization in its isolated 2 GiB worker")
+                    .isGreaterThanOrEqualTo(PROCESS_MERGE_PERF_WORKER_HEAP_BYTES);
+            HeapSampler sampler = HeapSampler.start(settledBaseline);
+            long sampledPeak;
+            try {
+                assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(wide.kickoff().descriptors()), staging,
+                        wide.boundaries(), units -> { }))
+                        .isInstanceOf(IOException.class)
+                        .hasMessageContaining("output-part fd budget exhausted: limit=" + outputAllowance
+                                + ", attempted=" + (outputAllowance + 1));
+            } finally {
+                sampledPeak = sampler.stop();
+            }
+            long sampledDelta = Math.max(0L, sampledPeak - settledBaseline);
+            System.out.printf("WP5_1_PROCESS_MERGE_PERF ranges=%d per_range_fan_in=%d soft_fd_limit=%d "
+                            + "initial_output_allowance=%d final_file_bytes=%d "
+                            + "test_worker_max_heap_bytes=%d "
+                            + "settled_baseline_heap_bytes=%d sampled_peak_heap_bytes=%d "
+                            + "sampled_incremental_heap_bytes=%d heap_characterization_budget_bytes=%d%n",
+                    ranges, perRangeFanIn, softLimit, outputAllowance, config.finalFileBytes(),
+                    testWorkerMaxHeap, settledBaseline, sampledPeak, sampledDelta,
+                    PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES);
+            assertThat(sampledPeak)
+                    .as("sampled process heap is under the §7.2 Parquet characterization budget")
+                    .isLessThan(PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES);
+            assertThat(writers.opened.get()).isEqualTo(outputAllowance);
+            assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
+            assertThat(writers.openNow.get()).isZero();
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
@@ -613,11 +896,11 @@ class SortTransformPageRunParallelMergePropTest {
                     sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers, () -> -1));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+            List<byte[]> boundaries = MergePlanner.boundaries(
                     descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
             assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
-                    assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
+                    assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(descriptors), staging, boundaries, units -> { }))
                             .isInstanceOf(IOException.class)
                             .hasMessageContaining("injected later range failure"));
             assertThat(writers.cooperativelyCancelled.get())
@@ -646,13 +929,13 @@ class SortTransformPageRunParallelMergePropTest {
                     sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers, () -> -1));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+            List<byte[]> boundaries = MergePlanner.boundaries(
                     descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
             AtomicReference<Throwable> failure = new AtomicReference<>();
             AtomicBoolean interruptRestored = new AtomicBoolean();
             Thread caller = new Thread(() -> {
                 try {
-                    merge.run(descriptors, staging, boundaries, units -> { });
+                    merge.run(PageRunCatalog.fromDescriptors(descriptors), staging, boundaries, units -> { });
                 } catch (Throwable t) {
                     failure.set(t);
                     interruptRestored.set(Thread.currentThread().isInterrupted());
@@ -805,6 +1088,75 @@ class SortTransformPageRunParallelMergePropTest {
     // ---------------------------------------------------------------------
 
     /**
+     * Full Blocker-1 crux: the first page decodes as {@code [a,z,m]} while every persisted claim
+     * coherently says {@code [a,m]}. With the independently asserted boundary {@code n}, the lower
+     * range consumes {@code z} at its exclusive upper bound and only encounters {@code z -> m}
+     * while closing/draining the page tail; the upper range trusts {@code max=m} and skips it. The
+     * page-owned order proof must therefore fail the whole transform before either the physical
+     * final or listener-owned authority marker can replace the prior dataset.
+     */
+    @Example
+    void interiorRowRegressionAtParallelBoundaryFailsBeforePublicationAndQuiesces()
+            throws Exception {
+        Path root = Files.createTempDirectory("prange-pagerun-interior-regression-");
+        try {
+            Path output = Files.createDirectories(root.resolve("out"));
+            Path staging = Files.createDirectories(output.resolve("_staging"));
+            Path corrupt = PageRunRawFixtures.writeIndexedInteriorRowRegression(
+                    staging.resolve("seg-0.pageseg"));
+            Path healthy = SortTestSupport.writeIndexedPages(
+                    staging.resolve("seg-1.pageseg"),
+                    List.of(List.of(SortTestSupport.object("n"))));
+            List<Path> segments = List.of(corrupt, healthy);
+
+            ParallelKickoff kickoff = parallelKickoff(segments);
+            List<byte[]> boundaries = MergePlanner.boundaries(
+                    kickoff.descriptors(), kickoff.candidates(), 2, SortMetrics.NO_OP);
+            assertThat(boundaries).hasSize(1);
+            assertThat(boundaries.getFirst()).as("the crux range boundary").containsExactly((byte) 'n');
+
+            Path priorFinal = output.resolve(StagingNames.finalPart(0));
+            Files.writeString(priorFinal, "prior-final");
+            Path success = output.resolve(Manifest.SUCCESS_FILE_NAME);
+            AtomicInteger publications = new AtomicInteger();
+            PublishListener authorityPublisher = (parts, rows) -> {
+                publications.incrementAndGet();
+                Files.writeString(success, "published");
+            };
+            TrackingWriterFactory writers = new TrackingWriterFactory(1L);
+            SortConfig config = SortConfigs.base().withMergeParallelism(2);
+            SortTransform transform = new SortTransform(sortRun(
+                    config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers,
+                    SortRun.PROCESS_SOFT_FD_LIMIT));
+            List<String> workersBefore = liveRangeWorkers();
+
+            assertTimeoutPreemptively(Duration.ofSeconds(5), () ->
+                    assertThatThrownBy(() -> transform.transform(
+                            segments, output, staging, authorityPublisher,
+                            units -> { }, FinalPassListener.NO_OP))
+                            .isInstanceOf(SegmentCorruptionException.class)
+                            .hasMessageContaining("error_class=page_run_body_corruption")
+                            .hasStackTraceContaining(
+                                    "decoded row order regressed inside persisted page"));
+
+            assertThat(publications).as("publication listener never became authoritative").hasValue(0);
+            assertThat(priorFinal).hasContent("prior-final");
+            assertThat(success).doesNotExist();
+            assertThat(corrupt).exists();
+            assertThat(healthy).exists();
+            // Failure may win before any range opens its first final writer; either schedule is
+            // correct as long as every writer that did open is closed and none remains live.
+            assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
+            assertThat(writers.openNow.get()).as("all temporary writers closed").isZero();
+            assertNoOwnedDebris(staging);
+            assertThat(liveRangeWorkers()).as("no new parallel workers survive the failure")
+                    .containsExactlyElementsOf(workersBefore);
+        } finally {
+            deleteTreeBestEffort(root);
+        }
+    }
+
+    /**
      * A segment whose trailer under-declares {@code totalEntries} must still fail an R&gt;1 parallel
      * merge — the worst failure this path could have is publishing a segment that silently lost
      * rows.
@@ -876,6 +1228,124 @@ class SortTransformPageRunParallelMergePropTest {
             seg.sort(cmp);   // each staging segment is individually sorted
         }
         return new Scenario(segs, all);
+    }
+
+    private Scenario wideOwnerScenario(int segmentCount, int rowsPerSegment, int ownerBytes) {
+        List<List<ListEntry>> segments = new ArrayList<>();
+        List<ListEntry> all = new ArrayList<>();
+        for (int segment = 0; segment < segmentCount; segment++) {
+            List<ListEntry> rows = new ArrayList<>();
+            for (int row = 0; row < rowsPerSegment; row++) {
+                int ordinal = segment * rowsPerSegment + row;
+                ListEntry entry = new ObjectEntry(KeyBytes.ofUtf8(String.format("k%08d", ordinal)), ordinal,
+                        0L, null, null, null, false, "owner-" + segment,
+                        wideOwner(ordinal, ownerBytes), null, null);
+                rows.add(entry);
+                all.add(entry);
+            }
+            segments.add(rows);
+        }
+        return new Scenario(segments, all);
+    }
+
+    /**
+     * Build and persist the wide-owner fixture in a separate frame, then return only durable inputs
+     * and a weak canary. The perf measurement proves that this construction state is reclaimable
+     * before it samples merge-process heap.
+     *
+     * <p>The real writer's compressed {@code dataSize()} controls the 4 MiB roll threshold. Thus
+     * the 112,000-row shape is characterization-only evidence that this encoding reaches the 41st
+     * writer; {@link #outputPartFdGuardR8BudgetMathSmoke()} is the deterministic writer-41 contract.
+     */
+    private WideStressStaging stageWideWriterStress(Path staging, int ranges) throws IOException {
+        // 112,000 rows × 2 KiB clears 41 × 4 MiB after Parquet compression, while each 1,000-row
+        // page-run page remains 2 MiB so the 8 × 8 input-frontier fleet fits in the perf test JVM.
+        Scenario scenario = wideOwnerScenario(ranges, 14_000, 2 * 1024);
+        WeakReference<Scenario> fixture = new WeakReference<>(scenario);
+        ParallelKickoff kickoff = parallelKickoff(stage(staging, scenario.segments()));
+        List<byte[]> boundaries = MergePlanner.boundaries(kickoff.descriptors(),
+                kickoff.candidates(), ranges, SortMetrics.NO_OP);
+        assertThat(boundaries).hasSize(ranges - 1);
+        assertThat(rangeRows(scenario.allEntries(), boundaries))
+                .as("wide rows yield enough page-minimum samples to balance every range")
+                .containsExactly(14_000, 14_000, 14_000, 14_000,
+                        14_000, 14_000, 14_000, 14_000);
+        return new WideStressStaging(kickoff, boundaries, fixture);
+    }
+
+    private static String wideOwner(int ordinal, int bytes) {
+        char[] chars = new char[bytes];
+        int state = 0x9e3779b9 ^ ordinal;
+        for (int i = 0; i < chars.length; i++) {
+            state ^= state << 13;
+            state ^= state >>> 17;
+            state ^= state << 5;
+            chars[i] = (char) ('!' + Math.floorMod(state, 90));
+        }
+        return new String(chars);
+    }
+
+    private static List<Integer> rangeRows(List<ListEntry> entries, List<byte[]> boundaries) {
+        List<Integer> rows = new ArrayList<>(Collections.nCopies(boundaries.size() + 1, 0));
+        for (ListEntry entry : entries) {
+            int range = 0;
+            while (range < boundaries.size()
+                    && KeyBytes.compareUnsigned(entry.key().rawUnsafe(), boundaries.get(range)) >= 0) {
+                range++;
+            }
+            rows.set(range, rows.get(range) + 1);
+        }
+        return rows;
+    }
+
+    private static void awaitCollected(WeakReference<?> fixture) throws InterruptedException {
+        for (int i = 0; i < MAX_GC_ATTEMPTS && fixture.get() != null; i++) {
+            System.gc();
+            Thread.sleep(10);
+        }
+        assertThat(fixture.get())
+                .as("wide fixture construction state is reclaimable before heap characterization")
+                .isNull();
+    }
+
+    private static long settleHeapBytes() throws InterruptedException {
+        for (int i = 0; i < 2; i++) {
+            System.gc();
+            Thread.sleep(10);
+        }
+        return ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+    }
+
+    /** Samples one simultaneous process-heap total while the range workers execute. */
+    private static final class HeapSampler {
+        private final AtomicBoolean running;
+        private final AtomicLong sampledPeak;
+        private final Thread thread;
+
+        private HeapSampler(AtomicBoolean running, AtomicLong sampledPeak, Thread thread) {
+            this.running = running;
+            this.sampledPeak = sampledPeak;
+            this.thread = thread;
+        }
+
+        static HeapSampler start(long baseline) {
+            AtomicBoolean running = new AtomicBoolean(true);
+            AtomicLong sampledPeak = new AtomicLong(baseline);
+            Thread thread = Thread.ofPlatform().name("wp5-process-heap-sampler").daemon().start(() -> {
+                while (running.get()) {
+                    sampledPeak.accumulateAndGet(
+                            ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(), Math::max);
+                    LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+                }
+            });
+            return new HeapSampler(running, sampledPeak, thread);
+        }
+
+        long stop() throws InterruptedException {
+            running.set(false);
+            thread.join();
+            return sampledPeak.get();
+        }
     }
 
     /** Four splittable key ranges, with every key's versions divided across two page-run segments. */
@@ -1051,6 +1521,7 @@ class SortTransformPageRunParallelMergePropTest {
     /** {@link SortMetrics} that counts engagement reasons; ranges record from several threads. */
     private static final class CountingMetrics implements SortMetrics {
         private final Map<String, LongAdder> counts = new ConcurrentHashMap<>();
+        private final LongAdder rangeFramedBytes = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -1065,6 +1536,29 @@ class SortTransformPageRunParallelMergePropTest {
         public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
         }
 
+        @Override
+        public void recordPageAwareOverlapCluster() {
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
+        @Override
+        public void recordRangeFramedBytes(long bytes) {
+            rangeFramedBytes.add(bytes);
+        }
+
+        @Override
+        public void recordProofSpool(long logicalExtentBytes, long preallocationOperations,
+                long preallocationAttemptedBytes, long mappedOperations, long mappedBytes,
+                long serviceNanos) {
+        }
+
         long count(String key) {
             LongAdder a = counts.get(key);
             return a == null ? 0 : a.sum();
@@ -1077,6 +1571,22 @@ class SortTransformPageRunParallelMergePropTest {
             total += Files.size(segment);
         }
         return total;
+    }
+
+    private static long framedPageBytes(List<Path> segments) throws IOException {
+        long total = 0;
+        for (Path segment : segments) {
+            try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
+                total += io.trailerStart - PageRunSegmentWriter.HEADER_BYTES;
+            }
+        }
+        return total;
+    }
+
+    private static long longField(String message, String field) {
+        int start = message.indexOf(field + "=") + field.length() + 1;
+        int end = message.indexOf(' ', start);
+        return Long.parseLong(end < 0 ? message.substring(start) : message.substring(start, end));
     }
 
     private static ListAppender<ILoggingEvent> attachTransformLog() {
@@ -1095,7 +1605,8 @@ class SortTransformPageRunParallelMergePropTest {
     private static void assertNoOwnedDebris(Path staging) throws IOException {
         for (String glob : List.of(StagingNames.RANGE_TMP_GLOB,
                 StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB,
-                StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB)) {
+                StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB,
+                StagingNames.RANGE_PROOF_TMP_GLOB)) {
             try (var files = Files.newDirectoryStream(staging, glob)) {
                 assertThat(files.iterator().hasNext()).as("no debris matching %s", glob).isFalse();
             }
@@ -1110,11 +1621,21 @@ class SortTransformPageRunParallelMergePropTest {
                 .isEmpty();
     }
 
+    private static List<String> liveRangeWorkers() {
+        return Thread.getAllStackTraces().keySet().stream()
+                .filter(Thread::isAlive)
+                .map(Thread::getName)
+                .filter(name -> name.startsWith("swath-sort-range-"))
+                .sorted()
+                .toList();
+    }
+
     /** Writer double with deterministic failure/blocking modes and explicit close accounting. */
     private static final class TrackingWriterFactory implements SortedFileWriterFactory {
         private final CountDownLatch writerReached;
         private final CountDownLatch releaseSibling;
         private final boolean blockAll;
+        private final long bytesPerRow;
         private final AtomicInteger opened = new AtomicInteger();
         private final AtomicInteger closed = new AtomicInteger();
         private final AtomicInteger openNow = new AtomicInteger();
@@ -1124,12 +1645,21 @@ class SortTransformPageRunParallelMergePropTest {
             this.writerReached = writerReached;
             this.releaseSibling = releaseSibling;
             this.blockAll = false;
+            this.bytesPerRow = 1;
+        }
+
+        TrackingWriterFactory(long bytesPerRow) {
+            this.writerReached = null;
+            this.releaseSibling = null;
+            this.blockAll = false;
+            this.bytesPerRow = bytesPerRow;
         }
 
         TrackingWriterFactory(CountDownLatch writerReached) {
             this.writerReached = writerReached;
             this.releaseSibling = null;
             this.blockAll = true;
+            this.bytesPerRow = 1;
         }
 
         @Override
@@ -1182,7 +1712,7 @@ class SortTransformPageRunParallelMergePropTest {
 
                 @Override
                 public long dataSize() {
-                    return rows;
+                    return rows * bytesPerRow;
                 }
 
                 @Override
@@ -1194,6 +1724,70 @@ class SortTransformPageRunParallelMergePropTest {
                     if (isClosed.compareAndSet(false, true)) {
                         try {
                             channel.close();
+                        } finally {
+                            openNow.decrementAndGet();
+                            closed.incrementAndGet();
+                        }
+                    }
+                }
+            };
+        }
+    }
+
+    /** Counts the real final writers used by the perf fixture without changing their roll behavior. */
+    private static final class CountingWriterFactory implements SortedFileWriterFactory {
+        private final SortedFileWriterFactory delegate;
+        private final AtomicInteger opened = new AtomicInteger();
+        private final AtomicInteger closed = new AtomicInteger();
+        private final AtomicInteger openNow = new AtomicInteger();
+
+        CountingWriterFactory(SortedFileWriterFactory delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public SortedFileWriter create(Path path, int fileIndex) throws IOException {
+            SortedFileWriter writer = delegate.create(path, fileIndex);
+            opened.incrementAndGet();
+            openNow.incrementAndGet();
+            return new SortedFileWriter() {
+                private final AtomicBoolean isClosed = new AtomicBoolean();
+
+                @Override
+                public void write(ListEntry entry) throws IOException {
+                    writer.write(entry);
+                }
+
+                @Override
+                public long rows() {
+                    return writer.rows();
+                }
+
+                @Override
+                public long dataSize() {
+                    return writer.dataSize();
+                }
+
+                @Override
+                public void markFinal() {
+                    writer.markFinal();
+                }
+
+                @Override
+                public void setFileIndex(int index) {
+                    writer.setFileIndex(index);
+                }
+
+                @Override
+                public Optional<FinalPartMetadata> finalMetadata() {
+                    return writer.finalMetadata();
+                }
+
+                @Override
+                public void close() throws IOException {
+                    if (isClosed.compareAndSet(false, true)) {
+                        try {
+                            writer.close();
                         } finally {
                             openNow.decrementAndGet();
                             closed.incrementAndGet();

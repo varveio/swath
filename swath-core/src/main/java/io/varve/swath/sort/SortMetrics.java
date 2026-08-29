@@ -32,6 +32,31 @@ public interface SortMetrics {
         @Override
         public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
         }
+
+        @Override
+        public void recordPageAwareOverlapCluster() {
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
+        @Override
+        public void recordRangeFramedBytes(long bytes) {
+        }
+
+        @Override
+        public void recordProofSpool(long logicalExtentBytes,
+                                     long preallocationOperations,
+                                     long preallocationAttemptedBytes,
+                                     long mappedOperations,
+                                     long mappedBytes,
+                                     long serviceNanos) {
+        }
     };
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
@@ -55,4 +80,35 @@ public interface SortMetrics {
      * traversed by fallback scans. Parquet index metadata is deliberately outside these byte totals.
      */
     void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes);
+
+    /** Record one page-aware overlap cluster engagement. */
+    void recordPageAwareOverlapCluster();
+
+    /** Observe one active overlap-cluster size for peak gauges. */
+    void recordPageAwareOverlapState(long activePages, long retainedRows);
+
+    /** Record page-index metadata bytes read by seek planning and exact worker proof reads. */
+    void recordRangeIndexBytes(long bytes);
+
+    /** Record logical page-frame bytes read by parallel range workers, including cascades. */
+    void recordRangeFramedBytes(long bytes);
+
+    /**
+     * Record one aggregate delta of bounded proof-spool work.
+     *
+     * @param logicalExtentBytes fixed-slot address space requested, not bytes transferred
+     * @param preallocationOperations physical write/force attempts made while materializing backing
+     *        space
+     * @param preallocationAttemptedBytes bytes submitted to physical preallocation writes, including
+     *        a failed attempt
+     * @param mappedOperations exact mapped field/key reads and updates
+     * @param mappedBytes exact bytes covered by those mapped reads and updates
+     * @param serviceNanos sum of operation service times; concurrent worker times intentionally add
+     */
+    void recordProofSpool(long logicalExtentBytes,
+                          long preallocationOperations,
+                          long preallocationAttemptedBytes,
+                          long mappedOperations,
+                          long mappedBytes,
+                          long serviceNanos);
 }

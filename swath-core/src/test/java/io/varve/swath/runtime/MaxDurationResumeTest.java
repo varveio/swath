@@ -76,7 +76,7 @@ final class MaxDurationResumeTest {
         // a durable, resumable tail. summaryConfig lands the sidecar so we can read stop_reason.
         JsonRunSummaryWriter.RunConfig rc = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket", "us-east-1", "parquet", WORKERS, false, null, 30_000L, List.of(),
-                EngineToggles.DEFAULT, null, false, null, false);
+                EngineToggles.DEFAULT, null, false, null, io.varve.swath.sort.SortArm.NONE, false);
         JsonRunSummaryWriter.Config summary =
                 new JsonRunSummaryWriter.Config(sidecar, Duration.ofMinutes(10), ARGS_HASH, rc,
                         List.of("list", "s3://bucket"));

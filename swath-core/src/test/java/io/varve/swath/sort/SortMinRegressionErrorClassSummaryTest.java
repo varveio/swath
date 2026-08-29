@@ -159,7 +159,9 @@ final class SortMinRegressionErrorClassSummaryTest {
     private static void recordSegment(SqliteCheckpointStore store, long runId, long nodeId, Path segment,
                                       long rows) throws Exception {
         store.partFinalized(new PartFinalize(runId, 0, segment.getFileName().toString(),
-                ListRunner.SORT_SEGMENT_FORMAT, rows, Files.size(segment),
+                new PageRunFormat(PageRunSegmentWriter.FORMAT_VERSION,
+                        PageRunFormat.ABSENT_EXTENSION),
+                rows, Files.size(segment),
                 List.of(new PartFinalize.DurableAdvance(nodeId, KeyBytes.ofUtf8("z").raw()))));
     }
 
@@ -173,7 +175,7 @@ final class SortMinRegressionErrorClassSummaryTest {
     private static ListRunner.ParquetSpec spec(Path sidecar) {
         JsonRunSummaryWriter.RunConfig rc = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket", "us-east-1", "parquet", 2, false, null, 30_000L, List.of(),
-                EngineToggles.DEFAULT, null, false, null, false)
+                EngineToggles.DEFAULT, null, false, null, SortArm.NONE, false)
                         .withSortEnabled(true);
         JsonRunSummaryWriter.Config summary =
                 new JsonRunSummaryWriter.Config(sidecar, Duration.ofMinutes(10), ARGS_HASH, rc,

@@ -26,6 +26,10 @@ import java.util.Set;
  * exceed {@link #DICT_CAP}. {@code owner_id} and {@code owner_display_name} may legitimately exceed
  * that cap, in which case the entire column uses raw values. Payload compression is selected once
  * at pack time; record headers remain uncompressed for decode-free frontier reads.
+ * A persisted block retains the one CRC-validated record-body array read from disk and addresses
+ * its stored payload by offset/length. Header parsing never copies that payload. For {@link
+ * PageCodec#NONE}, cursors read the slice in place; compressed codecs allocate only the required
+ * decompressed payload.
  *
  * <p>{@link #pack} also records whether entries are non-decreasing under the full comparator and
  * retains the first and last entries. Persisted blocks lazily reconstruct those entries from their
@@ -43,11 +47,14 @@ final class PageBlock {
     /** Hard allocation ceiling for one decoded S3 page payload read from an internal segment. */
     static final int MAX_RAW_PAYLOAD_BYTES = 256 * 1024 * 1024;
 
-    private final byte[] storedPayload;
+    /** Packed payload array, or the complete owned record body for a persisted block. */
+    private final byte[] payloadOwner;
+    private final int payloadOffset;
+    private final int payloadLength;
     private final int rawPayloadLength;
     private final PageCodec codec;
     private byte[] decodedPayloadCache;
-    private final String[][] dicts;
+    private final PageBlockCodec.Dictionaries dictionaries;
     private final boolean[] useDict;
     private final int count;
     private final byte[] firstKeyBytes;
@@ -58,15 +65,19 @@ final class PageBlock {
     private final boolean orderedUnderFullComparator;
     /** Non-null only for a persisted page, so cursor-time decode faults retain typed path context. */
     private final Path sourcePath;
+    /** The one header parse that produced a persisted block; null for admission-packed blocks. */
+    private final PageBlockCodec.Header parsedHeader;
 
     PageBlock(byte[] storedPayload, int rawPayloadLength, PageCodec codec, String[][] dicts,
               boolean[] useDict, int count, byte[] firstKeyBytes, byte[] lastKeyBytes,
               ListEntry firstEntry, ListEntry lastEntry, long estimatedBytes,
               boolean orderedUnderFullComparator, Path sourcePath) {
-        this.storedPayload = storedPayload;
+        this.payloadOwner = storedPayload;
+        this.payloadOffset = 0;
+        this.payloadLength = storedPayload.length;
         this.rawPayloadLength = rawPayloadLength;
         this.codec = codec;
-        this.dicts = dicts;
+        this.dictionaries = PageBlockCodec.Dictionaries.packed(dicts);
         this.useDict = useDict;
         this.count = count;
         this.firstKeyBytes = firstKeyBytes;
@@ -76,6 +87,28 @@ final class PageBlock {
         this.estimatedBytes = estimatedBytes;
         this.orderedUnderFullComparator = orderedUnderFullComparator;
         this.sourcePath = sourcePath;
+        this.parsedHeader = null;
+    }
+
+    /** Persisted-page constructor: retains the one owned record body and its parsed payload slice. */
+    PageBlock(PageBlockCodec.Header header, byte[] recordBody,
+              ListEntry firstEntry, ListEntry lastEntry, long estimatedBytes, Path sourcePath) {
+        this.payloadOwner = recordBody;
+        this.payloadOffset = header.payloadOffset();
+        this.payloadLength = header.payloadLength();
+        this.rawPayloadLength = header.rawPayloadLength();
+        this.codec = header.codec();
+        this.dictionaries = header.dictionaries();
+        this.useDict = header.useDict();
+        this.count = header.count();
+        this.firstKeyBytes = header.minKey();
+        this.lastKeyBytes = header.maxKey();
+        this.firstEntry = firstEntry;
+        this.lastEntry = lastEntry;
+        this.estimatedBytes = estimatedBytes;
+        this.orderedUnderFullComparator = header.ordered();
+        this.sourcePath = sourcePath;
+        this.parsedHeader = header;
     }
 
     /** Pack a page without payload compression. */
@@ -89,8 +122,18 @@ final class PageBlock {
      * sorted-input assumption.
      */
     static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec) {
+        return pack(entries, comparator, codec, MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    /** Pack while refusing to grow the raw payload beyond a merge-planned page residency limit. */
+    static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec,
+                          int maxRawPayloadBytes) {
         if (entries.isEmpty()) {
             throw new IllegalArgumentException("cannot pack an empty page");
+        }
+        if (maxRawPayloadBytes <= 0 || maxRawPayloadBytes > MAX_RAW_PAYLOAD_BYTES) {
+            throw new IllegalArgumentException("raw page limit is outside the format bound: "
+                    + maxRawPayloadBytes);
         }
 
         boolean ordered = true;
@@ -126,7 +169,8 @@ final class PageBlock {
             useDict[i] = probes[i].useDict();
         }
 
-        PageBlockCodec.Writer writer = new PageBlockCodec.Writer(entries.size(), useDict);
+        PageBlockCodec.Writer writer =
+                new PageBlockCodec.Writer(entries.size(), useDict, maxRawPayloadBytes);
         long estimate = 0;
         for (ListEntry entry : entries) {
             estimate += estimatedBytes(entry);
@@ -139,6 +183,15 @@ final class PageBlock {
         return new PageBlock(stored, raw.length, codec, writer.dictArrays(), useDict,
                 entries.size(), first.key().rawUnsafe(), last.key().rawUnsafe(), first, last,
                 estimate, ordered, null);
+    }
+
+    /** Internal control signal used to split a cascade batch before it exceeds planned residency. */
+    static final class RawPayloadLimitException extends IllegalArgumentException {
+        private static final long serialVersionUID = 1L;
+
+        RawPayloadLimitException(int limit) {
+            super("raw page payload exceeds the planned " + limit + " byte limit");
+        }
     }
 
     /** The first entry's key as a defensive copy. */
@@ -204,13 +257,22 @@ final class PageBlock {
 
     /** Compressed payload footprint, excluding the plain record header. */
     long packedBytes() {
-        return storedPayload.length;
+        return payloadLength;
     }
 
     /** A fresh sequential decoder, lazily decompressing this block's payload once. */
     PageBlockCursor cursor() {
         try {
-            return new PageBlockCursor(this, decodedPayload());
+            if (codec == PageCodec.NONE) {
+                if (payloadLength != rawPayloadLength) {
+                    throw new IllegalStateException(
+                            "PageBlock NONE codec length mismatch: expected " + rawPayloadLength
+                                    + " but stored is " + payloadLength);
+                }
+                return new PageBlockCursor(this, payloadOwner, payloadOffset, payloadLength);
+            }
+            byte[] decoded = decodedPayload();
+            return new PageBlockCursor(this, decoded, 0, decoded.length);
         } catch (RuntimeException e) {
             throw decodedCorruption(e);
         }
@@ -220,24 +282,59 @@ final class PageBlock {
         return PageBlockCodec.serialize(this);
     }
 
+    /**
+     * Parse a persisted body and transfer its immutable ownership to the returned block. Package
+     * callers must not mutate {@code record} afterwards.
+     */
     static PageBlock deserialize(byte[] record) {
         return PageBlockCodec.deserialize(record, null);
     }
 
+    /** As {@link #deserialize(byte[])}, retaining typed corruption path context. */
     static PageBlock deserialize(byte[] record, Path sourcePath) {
         return PageBlockCodec.deserialize(record, sourcePath);
     }
 
-    byte[] storedPayloadUnsafe() {
-        return storedPayload;
+    byte[] payloadOwnerUnsafe() {
+        return payloadOwner;
+    }
+
+    int payloadOffset() {
+        return payloadOffset;
+    }
+
+    int payloadLength() {
+        return payloadLength;
+    }
+
+    PageBlockCodec.Header parsedHeaderUnsafe() {
+        return parsedHeader;
+    }
+
+    /** True for a deserialized page, where stored row order is format truth. */
+    boolean validatesPersistedOrder() {
+        return parsedHeader != null;
     }
 
     int rawPayloadLength() {
         return rawPayloadLength;
     }
 
-    String[][] dictsUnsafe() {
-        return dicts;
+    /** Bytes of the retained CRC-verified record body backing a persisted page. */
+    int retainedRecordBytes() {
+        return payloadOwner.length;
+    }
+
+    long dictionaryCacheBudgetBytes() {
+        return dictionaries.decodedCacheBudgetBytes();
+    }
+
+    int dictionaryCoordinateBytes() {
+        return dictionaries.coordinateBytes();
+    }
+
+    PageBlockCodec.Dictionaries dictionariesUnsafe() {
+        return dictionaries;
     }
 
     boolean[] useDictUnsafe() {
@@ -251,7 +348,8 @@ final class PageBlock {
     private byte[] decodedPayload() {
         byte[] cached = decodedPayloadCache;
         if (cached == null) {
-            cached = codec.decompress(storedPayload, rawPayloadLength);
+            cached = codec.decompress(payloadOwner, payloadOffset, payloadLength,
+                    rawPayloadLength);
             decodedPayloadCache = cached;
         }
         return cached;

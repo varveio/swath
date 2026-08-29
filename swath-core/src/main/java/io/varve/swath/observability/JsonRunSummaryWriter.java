@@ -17,6 +17,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Timer;
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.sort.SortArm;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -767,9 +768,20 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
 
     private void writeSort(ObjectNode sortNode, RunConfig rc, RunSummary summary) {
         sortNode.put("enabled", true);
+        sortNode.put("arm", rc.sortArm().name());
         sortNode.put("segments", (long) counterCount("swath.sort.segments.written"));
         sortNode.put("passes", (long) counterCount("swath.sort.merge.passes"));
         sortNode.put("segment_bytes", (long) counterCount("swath.sort.segment.bytes"));
+        // Cumulative, so two periodic snapshots yield segment-arrival and staging-throughput deltas.
+        sortNode.put("pack_on_fetch_pages", (long) stealReasonCount("SORT", "pack_on_fetch"));
+        sortNode.put("backpressure_engaged", (long) stealReasonCount("SORT", "backpressure_engaged"));
+        sortNode.put("backpressure_wait_ms", timerTotalMs("swath.sort.backpressure.wait"));
+        sortNode.put("backpressure_wait_max_ms", timerMaxMs("swath.sort.backpressure.wait"));
+        sortNode.put("staging_bytes_peak", (long) gaugeValue("swath.sort.staging.bytes.peak"));
+        sortNode.put("handoff_queue_depth_peak",
+                (long) gaugeValue("swath.sort.handoff.queue.depth.peak"));
+        sortNode.put("off_thread_buffers_peak",
+                (long) gaugeValue("swath.sort.off_thread.buffers.peak"));
         long mergeMs = timerTotalMs("swath.sort.merge.latency");
         long boundariesMs = timerTotalMs("swath.sort.merge.boundaries.latency");
         long finalizeMs = timerTotalMs("swath.sort.finalize.latency");
@@ -777,7 +789,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("merge_ms", mergeMs);
         // The parallel range merge's serial prologue. INCLUDED in merge_ms above and broken out here
         // because it is the one term that does not shrink as R rises: subtract it to see the ranges'
-        // own scaling. Zero on the default serial merge, which never samples boundaries.
+        // own scaling. Zero on explicit R=1/arbitrary serial input; a resource decline after
+        // structured parallel preflight retains the preflight time it actually spent.
         sortNode.put("merge_boundaries_ms", boundariesMs);
         sortNode.put("merge_boundary_embedded_entries",
                 (long) counterCount("swath.sort.merge.boundaries.embedded.entries"));
@@ -786,6 +799,28 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("merge_boundary_embedded_bytes", (long) embeddedBytes);
         sortNode.put("merge_boundary_scan_bytes", (long) scanBytes);
         sortNode.put("merge_boundary_bytes", (long) (embeddedBytes + scanBytes));
+        sortNode.put("merge_overlap_clusters", (long) counterCount("swath.sort.merge.overlap.clusters"));
+        sortNode.put("merge_overlap_pages_peak",
+                (long) gaugeValue("swath.sort.merge.overlap.pages.peak"));
+        sortNode.put("merge_overlap_rows_peak",
+                (long) gaugeValue("swath.sort.merge.overlap.rows.peak"));
+        sortNode.put("merge_range_framed_bytes",
+                (long) counterCount("swath.sort.merge.range.framed.bytes"));
+        sortNode.put("merge_range_index_bytes",
+                (long) counterCount("swath.sort.merge.range.index.bytes"));
+        sortNode.put("merge_proof_spool_logical_extent_bytes",
+                (long) counterCount("swath.sort.merge.proof_spool.logical_extent.bytes"));
+        sortNode.put("merge_proof_spool_preallocation_operations",
+                (long) counterCount("swath.sort.merge.proof_spool.preallocation.operations"));
+        sortNode.put("merge_proof_spool_preallocation_attempted_bytes",
+                (long) counterCount(
+                        "swath.sort.merge.proof_spool.preallocation.attempted.bytes"));
+        sortNode.put("merge_proof_spool_mapped_operations",
+                (long) counterCount("swath.sort.merge.proof_spool.mapped.operations"));
+        sortNode.put("merge_proof_spool_mapped_bytes",
+                (long) counterCount("swath.sort.merge.proof_spool.mapped.bytes"));
+        sortNode.put("merge_proof_spool_ms",
+                timerTotalMs("swath.sort.merge.proof_spool.latency"));
         // Concurrent range timers overlap; their maximum, not their sum, is the parallel range
         // wall. The serial path has no range samples, so its range term is the whole merge less the
         // separately measured boundary/finalize tail (clamped for millisecond truncation).
@@ -793,6 +828,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 : Math.max(0L, mergeMs - boundariesMs - finalizeMs));
         sortNode.put("finalize_ms", finalizeMs);
         sortNode.put("finalize_close_ms", timerTotalMs("swath.sort.finalize.close.latency"));
+        putTimerDistribution(sortNode, "finalize_close", "swath.sort.finalize.close.latency");
         sortNode.put("manifest_md5_bytes", (long) counterCount("swath.sort.manifest.md5.bytes"));
         sortNode.put("manifest_md5_ms", timerTotalMs("swath.sort.manifest.md5.latency"));
         sortNode.put("manifest_bounds_rows", (long) counterCount("swath.sort.manifest.bounds.rows"));
@@ -1140,6 +1176,28 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         return t == null ? 0L : t.count();
     }
 
+    /** Adds count/max and the configured whole-run percentiles from one existing timer. */
+    private void putTimerDistribution(ObjectNode node, String fieldPrefix, String meterName) {
+        Timer timer = registry.find(meterName).timer();
+        node.put(fieldPrefix + "_count", timer == null ? 0L : timer.count());
+        node.put(fieldPrefix + "_max_ms", timer == null ? 0L : (long) timer.max(TimeUnit.MILLISECONDS));
+        putDoubleOrNullBoxed(node, fieldPrefix + "_p50_ms", timerPercentileMs(timer, 0.5));
+        putDoubleOrNullBoxed(node, fieldPrefix + "_p90_ms", timerPercentileMs(timer, 0.90));
+        putDoubleOrNullBoxed(node, fieldPrefix + "_p99_ms", timerPercentileMs(timer, 0.99));
+    }
+
+    private static Double timerPercentileMs(Timer timer, double percentile) {
+        if (timer == null) {
+            return null;
+        }
+        for (var value : timer.takeSnapshot().percentileValues()) {
+            if (Math.abs(value.percentile() - percentile) < 1e-9) {
+                return value.value(TimeUnit.MILLISECONDS);
+            }
+        }
+        return null;
+    }
+
     private double distributionMean(String name) {
         DistributionSummary s = registry.find(name).summary();
         return s == null ? 0.0 : s.mean();
@@ -1193,6 +1251,10 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             // future non-CLI caller from accidentally bypassing the central endpoint/control policy.
             argv = SafeInput.argv(argv);
         }
+
+        public Config withRunConfig(RunConfig runConfig) {
+            return new Config(path, flushInterval, argsHash, runConfig, argv);
+        }
     }
 
     /**
@@ -1216,24 +1278,34 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             Long maxDurationMs,
             boolean sortEnabled,
             Integer sortEffectiveFanIn,
+            SortArm sortArm,
             boolean requestPayer) {
 
         public RunConfig withSortEnabled(boolean sortEnabled) {
+            SortArm arm = sortEnabled
+                    ? (sortArm == SortArm.NONE ? SortArm.LIVE_LIST_SORT : sortArm)
+                    : SortArm.NONE;
             return new RunConfig(target, region, format, maxParallelListings, noSignRequest, rateLimitApi,
                     progressIntervalMs, filters, engineToggles, maxDurationMs, sortEnabled,
-                    sortEffectiveFanIn, requestPayer);
+                    sortEffectiveFanIn, arm, requestPayer);
         }
 
         public RunConfig withSortEffectiveFanIn(Integer sortEffectiveFanIn) {
             return new RunConfig(target, region, format, maxParallelListings, noSignRequest, rateLimitApi,
                     progressIntervalMs, filters, engineToggles, maxDurationMs, sortEnabled,
-                    sortEffectiveFanIn, requestPayer);
+                    sortEffectiveFanIn, sortArm, requestPayer);
+        }
+
+        public RunConfig withSortArm(SortArm sortArm) {
+            return new RunConfig(target, region, format, maxParallelListings, noSignRequest, rateLimitApi,
+                    progressIntervalMs, filters, engineToggles, maxDurationMs, sortEnabled,
+                    sortEffectiveFanIn, sortArm, requestPayer);
         }
 
         public RunConfig withRequestPayer(boolean requestPayer) {
             return new RunConfig(target, region, format, maxParallelListings, noSignRequest, rateLimitApi,
                     progressIntervalMs, filters, engineToggles, maxDurationMs, sortEnabled,
-                    sortEffectiveFanIn, requestPayer);
+                    sortEffectiveFanIn, sortArm, requestPayer);
         }
     }
 }

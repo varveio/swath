@@ -27,6 +27,7 @@ import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.error.InvalidUriException;
 import io.varve.swath.error.ListingException;
+import io.varve.swath.error.MergePendingException;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.error.ProtocolViolationException;
 import io.varve.swath.error.PublicationPendingException;
@@ -60,9 +61,13 @@ import io.varve.swath.runtime.LivenessWatchdog;
 import io.varve.swath.runtime.OutputPublisher;
 import io.varve.swath.runtime.RunContext;
 import io.varve.swath.runtime.SignalHandlers;
+import io.varve.swath.sort.CommittedPublicationCleanupException;
+import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortDiskGuard;
 import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.StagingReconciliation;
 import io.varve.swath.store.FirstRequestMarkerFetcher;
 import io.varve.swath.store.PageFetcher;
 import io.varve.swath.store.s3.S3ClientFactory;
@@ -73,7 +78,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.Writer;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -198,6 +202,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      */
     PageFetcher fetcherOverride;
 
+    /** Test-only deterministic sorted-publication runner seam. */
+    ListRunner listRunnerOverride;
+
+    /** Test-only deterministic PUBLISHED cleanup/retry seam. */
+    PublishedSortCleanup publishedSortCleanupOverride;
+
     /** Test-only deterministic maximum-heap seam for writer-admission ordering checks. */
     Long maxHeapBytesOverride;
 
@@ -274,9 +284,16 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      */
     private RetryPolicy retryPolicy = RetryPolicy.RIDE_OUT;
 
+    /** Immutable sort-property/tune snapshot for one {@link #call()} invocation. */
+    private SortConfig invocationSortConfig;
+
     /** Bundle the resolved retry policy + (test-only) backoff sleeper for the engine seam. */
     private RetryConfig retryConfig() {
         return new RetryConfig(retryPolicy, backoffSleeperOverride);
+    }
+
+    private ListRunner listRunner() {
+        return listRunnerOverride != null ? listRunnerOverride : new ListRunner();
     }
 
     @Override
@@ -289,12 +306,16 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         }
         int verbosity = spec != null
                 ? GlobalOptions.effectiveVerbosity(spec.commandLine()) : global.verbosity.length;
+        // System properties are process-global and mutable. Resolve the complete SortConfig exactly
+        // once for this invocation, after typed tune precedence is settled, then carry that immutable
+        // value through the merge, PUBLISHED reconciliation, summary, and checkpoint-deletion finally.
+        invocationSortConfig = sorting.sort || verbosity > 0 ? sorting.resolveConfig() : null;
         if (verbosity > 0) {
             PrintWriter commandErr = spec != null
                     ? spec.commandLine().getErr() : new PrintWriter(System.err, true);
             commandErr.println("tune effective: " + tune.effectiveConfiguration(
                     liveness.resolveEffectiveProgressInterval().toString(),
-                    sorting.resolveConfig().mergeParallelism()));
+                    invocationSortConfig));
             commandErr.flush();
         }
         if (uri == null) {
@@ -495,7 +516,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // mode + its swath resume/--sort refusals were already validated above, before ctx/the
             // MeterRegistry/the watchdogs were ever constructed.
             return runWithCheckpoint(s3uri, resolved, channelCapacity, pageMax, filterChain, ctx,
-                    argsHash, mode, quiet);
+                    argsHash, mode, quiet, invocationSortConfig);
         } catch (CancelledException e) {
             return timeboxExitOrRethrow(ctx.cancellation(), ctx.metrics(), e, argsHash);
         } finally {
@@ -595,7 +616,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     private Integer runWithCheckpoint(S3Uri s3uri, OutputFormat resolved,
                                       int channelCapacity, int pageMax, FilterChain filterChain,
                                       RunContext ctx, String argsHash, CheckpointOptions.CheckpointMode mode,
-                                      boolean quiet) throws Exception {
+                                      boolean quiet, SortConfig sortConfig) throws Exception {
         // A run keeps no durable checkpoint (ephemeral, in-memory store) when --checkpoint none is
         // set, or when auto resolves against a non-directory destination (stdout / single-file):
         // resolve() returns null for both. auto with a directory dataset co-locates the checkpoint at
@@ -843,21 +864,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             + String.join(", ", changedIdentity)
                             + " changed since the checkpointed run; use --restart to discard it");
                 }
-                // A --sort run whose checkpoint carries staging segments tagged with an older
-                // (or otherwise-unsupported) staging format must REFUSE, not silently
-                // sweep+relist. The reattach path (ListRunner.runToSortedParquetWorkStealing) selects
-                // segments by SORT_SEGMENT_FORMAT ("page-run"); a stale "parquet-segment" row is
-                // invisible to that filter, so its finalized segment would be swept as "non-finalized"
-                // and its data re-listed — wrong/duplicated work, potential loss. Refuse exactly like
-                // the --sort/--no-sort mismatch above. (Past the mismatch guard, sort==run.sortEnabled().)
-                // TODO(future hardening): the page-run FORMAT_VERSION is NOT recorded in the
-                // checkpoint (part_file.format stores only the format string), so a future page-run
-                // version bump cannot be refused here on the recorded metadata alone — it is caught
-                // later/loudly by PageRunSegmentReader's version check when a segment is opened. Record
-                // the format version in the checkpoint to refuse a version mismatch as cleanly as this
-                // format-string mismatch.
+                // A --sort run whose checkpoint carries unsupported staging must REFUSE before
+                // loadResumable or either sort path can inspect/delete a staging file. Null version/type
+                // pairs are pre-column page-run rows and remain compatible; explicit metadata is
+                // checked against the reader's page-run compatibility seam. Non-page-run rows are
+                // governed solely by the format-name mismatch and are never assigned page-run meaning.
                 if (sorting.sort) {
-                    List<String> staleFormats = store.finalizedPartFormats(run.id()).stream()
+                    List<PartRef> finalizedParts = store.finalizedParts(run.id());
+                    List<String> staleFormats = finalizedParts.stream().map(PartRef::format).distinct()
                             .filter(f -> !ListRunner.SORT_SEGMENT_FORMAT.equals(f))
                             .toList();
                     if (!staleFormats.isEmpty()) {
@@ -869,6 +883,30 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                 + ListRunner.SORT_SEGMENT_FORMAT + "') — the old staging segments "
                                 + "cannot be safely reused; use --restart to discard the run and "
                                 + "start fresh");
+                    }
+                    List<PartRef> incompatiblePageRuns = finalizedParts.stream()
+                            .filter(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()))
+                            .filter(p -> switch (PageRunFormat.compatibility(
+                                    p.formatVersion(), p.extensionType())) {
+                                case LEGACY_UNRECORDED, SUPPORTED -> false;
+                                case INCOMPLETE, UNKNOWN_FORMAT_VERSION, UNKNOWN_EXTENSION_TYPE -> true;
+                            })
+                            .toList();
+                    if (!incompatiblePageRuns.isEmpty()) {
+                        writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
+                                false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
+                        throw new InvalidArgsException("swath resume refused: the checkpoint's "
+                                + "page-run staging metadata is not supported by this build "
+                                + incompatiblePageRuns.stream().map(ListCommand::pageRunMetadata)
+                                        .toList()
+                                + " (this build reads format_version="
+                                + PageRunFormat.CURRENT_FORMAT_VERSION + " with extension_type in ["
+                                + PageRunFormat.ABSENT_EXTENSION + ", "
+                                + PageRunFormat.LEGACY_MINIMA_EXTENSION + ", "
+                                + PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION + ", "
+                                + PageRunFormat.PAGE_INDEX_EXTENSION + "]) — the staging "
+                                + "segments cannot be safely reused; use --restart to discard the "
+                                + "run and start fresh");
                     }
                 }
             }
@@ -1032,7 +1070,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     try (TraceSink traceSink = engine.openTraceSink()) {
                         return runEngineGuarded(store, run.id(), () -> runSortedParquet(s3uri, channelCapacity,
                                 pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config, traceSink,
-                                runStartedNs, writer));
+                                runStartedNs, writer, sortConfig));
                     }
                 }
 
@@ -1087,7 +1125,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                 s3uri, resolved, channelCapacity, pageMax, filterChain,
                                 argsHash, config);
                         return runEngineGuarded(store, run.id(), () -> {
-                            new ListRunner().runWorkStealingDiscard(
+                            listRunner().runWorkStealingDiscard(
                                     ctx, fetcher, listSpec, store, run.id(),
                                     connection.maxParallelListings, nodes, engine.toggles,
                                     traceSink, retryConfig());
@@ -1115,7 +1153,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     try {
                         try (Writer out = output.openSink()) {
                             runEngineGuarded(store, run.id(), () -> {
-                                new ListRunner().runWorkStealing(ctx, fetcher, out, listSpec, store, run.id(),
+                                listRunner().runWorkStealing(ctx, fetcher, out, listSpec, store, run.id(),
                                         connection.maxParallelListings, nodes, engine.toggles, traceSink,
                                         retryConfig(), publisher);
                                 return null;
@@ -1131,11 +1169,18 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             cleanExit = false;   // a partial/refused/failed exit keeps the checkpoint resumable
             throw e;
         } finally {
-            if (cleanExit) {
+            if (cleanExit && !(sorting.sort && sortConfig != null
+                    && sortConfig.stagingRetention().retainsOriginals())) {
                 DatasetDirGuard.deleteColocatedRunHandleCheckpointIfComplete(
                         dbPath, output.resolvedKind, output.destination);
             }
         }
+    }
+
+    private static String pageRunMetadata(PartRef part) {
+        return part.path() + "(format_version=" + part.formatVersion()
+                + ", extension_type=" + part.extensionType() + ", compatibility="
+                + PageRunFormat.compatibility(part.formatVersion(), part.extensionType()) + ")";
     }
 
     /**
@@ -1155,8 +1200,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * its own {@code markRunFinished(COMPLETED)}) nor the flag-unset {@code FAILED} {@link
      * ListRunner} records for a failed single-file output publish before rethrowing through here.
      * A {@link PublicationPendingException} from terminal dataset publication is likewise passed
-     * through without the generic fatal mark: its checkpoint-finalized parts are sufficient to
-     * retry publication after an external failure without re-listing the bucket.
+     * through without the generic fatal mark: direct output can retry from checkpoint-finalized
+     * parts, while sorted output whose authority listener already returned re-enters PUBLISHED
+     * cleanup. Neither path re-lists the bucket.
      *
      * <p>Deliberately scoped to {@link ListCommand} rather than {@link ListRunner} itself: several
      * engine-level crash-resume tests (e.g. {@code HardCrashResumeExactlyOnceTest}) inject a
@@ -1190,10 +1236,17 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         try {
             return body.get();
         } catch (PublicationPendingException e) {
-            // Every part is already checkpoint-authoritative. Leave managed Parquet RUNNING so an
-            // operator can fix the local publication failure (for example free disk space) and
-            // resume into the empty-worklist publication-pending branch. One-shot sinks have no
-            // persistent checkpoint, so the same classification changes nothing for them.
+            // Direct parts are checkpoint-authoritative; sorted output may instead have committed
+            // its listener-owned _SUCCESS and be waiting only on PUBLISHED cleanup. Leave managed
+            // Parquet non-fatal so resume can take the corresponding zero-LIST branch. One-shot
+            // sinks have no persistent checkpoint, so the same classification changes nothing.
+            markUnresumableIfProtocolViolation(store, runId, e);
+            throw e;
+        } catch (MergePendingException e) {
+            // Listing and every original staging segment are durable. Any pre-publication proof,
+            // range, cascade, or output work is disposable and is cleaned during unwind or at the
+            // next kickoff. Keep the checkpoint resumable so retry takes the zero-LIST merge-only
+            // path after space/budget is corrected (or the explicit disk bypass is selected).
             markUnresumableIfProtocolViolation(store, runId, e);
             throw e;
         } catch (CancelledException | InterruptedException | InvalidUriException
@@ -1266,6 +1319,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     @FunctionalInterface
     interface DirectoryProbe {
         boolean isDirectory(Path path) throws Exception;
+    }
+
+    @FunctionalInterface
+    interface PublishedSortCleanup {
+        StagingReconciliation.Result clean(Path outputDir, Path stagingDir,
+                SortConfig sortConfig, List<String> finalizedSegments)
+                throws IOException, InvalidArgsException;
     }
 
     /**
@@ -1345,7 +1405,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     p.path(), p.writerId(), p.rows(), p.bytes(), md5));
         }
 
-        new ListRunner().runToParquetWorkStealing(ctx, fetcher, dir, parquetSpec, store, run.id(),
+        listRunner().runToParquetWorkStealing(ctx, fetcher, dir, parquetSpec, store, run.id(),
                 connection.maxParallelListings, nodes, existing, engine.toggles, traceSink, retryConfig());
         return ExitCodes.SUCCESS;
     }
@@ -1366,7 +1426,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 directory, argsHash, run.id(), freshDatasetDirectoryState);
         ListRunner.Spec listing = listSpec(
                 s3uri, format, channelCapacity, pageMax, filterChain, argsHash, config);
-        new ListRunner().runToTextDatasetWorkStealing(
+        listRunner().runToTextDatasetWorkStealing(
                 ctx, fetcher, new ListRunner.TextDatasetSpec(listing, writer), store, run.id(),
                 connection.maxParallelListings, nodes, engine.toggles, traceSink, retryConfig());
         return ExitCodes.SUCCESS;
@@ -1482,7 +1542,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                      List<Node> nodes,
                                      PageFetcher fetcher, S3Config config,
                                      TraceSink traceSink, long runStartedNs,
-                                     ListRunner.ParquetSpec parquetSpec) throws Exception {
+                                     ListRunner.ParquetSpec parquetSpec,
+                                     SortConfig sortConfig) throws Exception {
         Path outputDir = output.openParquetDir();
         // Sample free space on the volume that takes the write load — sort-staging segments +
         // Parquet parts both live under outputDir (a prior incident crashed on sort-segment disk exhaustion).
@@ -1496,25 +1557,57 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // this is deliberately fresh-only, so resume retains checkpoint-finalized segments.
             clearSortStagingContents(outputDir, stagingDir);
         }
-        Files.createDirectories(stagingDir);
-        SortConfig sortConfig = sorting.resolveConfig();
         SortMode sortMode = run.mode() == ListingMode.VERSIONS
                 ? SortMode.VERSIONS : SortMode.OBJECTS;
 
         if (nodes.isEmpty()) {
             if (isPublishedByThisRun(outputDir, argsHash, run.id())) {
-                // PUBLISHED: idempotent re-entry cleans leftover staging + stale *.tmp, then exits.
+                // PUBLISHED: idempotent re-entry cleans disposable staging + stale *.tmp, then exits.
+                // Diagnostic retention keeps exactly the original segments this checkpoint finalized;
+                // otherwise this short-circuit would preserve the checkpoint below while deleting every
+                // file it names, making a later merge-only replay impossible.
                 // markRunFinished is required here too — the merge/publish path
                 // (runToSortedParquetWorkStealing / runSortMergeOnly) marks the run COMPLETED itself,
                 // but a re-entry that finds a PUBLISHED run (e.g. a fresh process re-invoked after a
                 // crash strictly between manifest-write and the terminal-status commit) must still
                 // close out run_meta, or it stays RUNNING forever. Idempotent: re-marking an already
                 // COMPLETED run is a harmless no-op UPDATE.
-                cleanSortStagingAndStaleTmp(outputDir, stagingDir);
+                // Identity + last-written _SUCCESS were verified before any cleanup mutation. Latch
+                // PUBLISHED before entering the retryable suffix so every cleanup failure remains a
+                // PUBLISHED/RUNNING checkpoint rather than falling back into MERGING or the fatal guard.
                 store.setSortPhase(run.id(), SortPhase.PUBLISHED);
+                List<String> retainedSegments = sortConfig.stagingRetention().retainsOriginals()
+                        && Files.isDirectory(stagingDir)
+                        ? store.finalizedParts(run.id()).stream()
+                                .filter(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()))
+                                .map(PartRef::path)
+                                .toList()
+                        : List.of();
+                StagingReconciliation.Result retentionResult;
+                try {
+                    retentionResult = cleanPublishedSort(
+                            outputDir, stagingDir, sortConfig, retainedSegments);
+                } catch (IOException | InvalidArgsException | RuntimeException cleanupFailure) {
+                    ctx.metrics().recordStealReason("SORT", "post_publish_cleanup_pending");
+                    log.warn("sort_post_publish_cleanup_pending source=published_reentry "
+                                    + "publication_committed=true cleanup_pending=true stage={} "
+                                    + "output_dir={} staging_dir={} message={}",
+                            CommittedPublicationCleanupException.Stage.PUBLISHED_REENTRY_CLEANUP.logValue(),
+                            outputDir, stagingDir, cleanupFailure.getMessage());
+                    throw new PublicationPendingException(
+                            "sorted dataset publication committed; PUBLISHED cleanup pending",
+                            CommittedPublicationCleanupException.publishedReentry(cleanupFailure));
+                }
+                if (retentionResult != null) {
+                    ctx.metrics().recordStealReason("SORT", "staging_retained");
+                    log.info("sort_staging_retained source=published_reentry path={} "
+                                    + "retained_segments={} removed_entries={}",
+                            stagingDir, retentionResult.retainedEntries(),
+                            retentionResult.removedEntries());
+                }
                 store.markRunFinished(run.id(), RunStatus.COMPLETED);
                 writeEarlyExitSummary(OutputFormat.PARQUET, config, argsHash, ctx, run.id(), runStartedNs,
-                        true, StopReason.COMPLETED, STRATEGY_WORK_STEALING);
+                        true, StopReason.COMPLETED, STRATEGY_WORK_STEALING, SortArm.PUBLISHED_REENTRY);
                 return ExitCodes.SUCCESS;
             }
             // Merge pending (crashed post-listing, pre-publish; or a foreign manifest.json logged
@@ -1522,19 +1615,21 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // merge-budget fix; widened to ALL data/*.parquet) sweeps any stale finals before
             // this run writes its own, so a foreign manifest's finals never survive into this run's
             // published output.
-            new ListRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
-                    sortConfig, sortMode, parquetSpec);
+            Files.createDirectories(stagingDir);
+            listRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
+                    sortConfig, sortMode, parquetSpec, sorting.forceSort);
             return ExitCodes.SUCCESS;
         }
         // The periodic half of the disk pre-check — polls the LIVE swath.sort.segment.bytes
         // counter against usable free space while the (possibly multi-hour) listing runs, so a
         // brand-new giant bucket's true disk trajectory trips this well before the merge, not after
         // it. See SortDiskGuard's class javadoc for why it halts directly rather than throwing.
+        Files.createDirectories(stagingDir);
         try (SortDiskGuard diskGuard = SortDiskGuard.arm(
                 outputDir, ctx.metrics()::sortSegmentBytesWritten, sorting.forceSort)) {
-            new ListRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
+            listRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
                     store, run.id(), connection.maxParallelListings, nodes, sortConfig, sortMode, engine.toggles,
-                    traceSink, run.resumed(), retryConfig());
+                    traceSink, run.resumed(), retryConfig(), sorting.forceSort);
         }
         return ExitCodes.SUCCESS;
     }
@@ -1613,13 +1708,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     private static void clearSortStagingContents(Path outputDir, Path stagingDir)
             throws IOException, InvalidArgsException {
         DatasetDirGuard.requireNoManagedSymlinks(outputDir);
-        if (Files.isDirectory(stagingDir)) {
-            try (Stream<Path> entries = Files.list(stagingDir)) {
-                for (Path p : entries.toList()) {
-                    Files.deleteIfExists(p);
-                }
-            }
-        }
+        StagingReconciliation.discardAll().reconcile(stagingDir);
     }
 
     /**
@@ -1629,19 +1718,40 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      */
     static void cleanSortStagingAndStaleTmp(Path outputDir,
                                             Path stagingDir) throws IOException, InvalidArgsException {
-        clearSortStagingContents(outputDir, stagingDir);
+        DatasetDirGuard.requireNoManagedSymlinks(outputDir);
+        StagingReconciliation.discardAll().reconcile(stagingDir);
         if (Files.isDirectory(stagingDir)) {
             Files.deleteIfExists(stagingDir);
         }
-        Path dataDir = DatasetLayout.of(outputDir).dataDir();
-        if (Files.isDirectory(dataDir)) {
-            try (DirectoryStream<Path> tmp =
-                         Files.newDirectoryStream(dataDir, "part-*.parquet.tmp")) {
-                for (Path p : tmp) {
-                    Files.deleteIfExists(p);
-                }
-            }
+        StagingReconciliation.sweepFinalTemporaries(DatasetLayout.of(outputDir).dataDir());
+    }
+
+    private StagingReconciliation.Result cleanPublishedSort(
+            Path outputDir, Path stagingDir, SortConfig sortConfig,
+            List<String> finalizedSegments) throws IOException, InvalidArgsException {
+        if (publishedSortCleanupOverride != null) {
+            return publishedSortCleanupOverride.clean(
+                    outputDir, stagingDir, sortConfig, finalizedSegments);
         }
+        return cleanSortStagingAndStaleTmp(
+                outputDir, stagingDir, sortConfig, finalizedSegments);
+    }
+
+    static StagingReconciliation.Result cleanSortStagingAndStaleTmp(
+            Path outputDir, Path stagingDir, SortConfig sortConfig,
+            List<String> finalizedSegments)
+            throws IOException, InvalidArgsException {
+        DatasetDirGuard.requireNoManagedSymlinks(outputDir);
+        boolean retain = sortConfig.stagingRetention().retainsOriginals();
+        StagingReconciliation reconciliation = retain && Files.isDirectory(stagingDir)
+                ? StagingReconciliation.fromNames(finalizedSegments)
+                : StagingReconciliation.discardAll();
+        StagingReconciliation.Result result = reconciliation.reconcile(stagingDir);
+        if (!retain && Files.isDirectory(stagingDir)) {
+            Files.deleteIfExists(stagingDir);
+        }
+        StagingReconciliation.sweepFinalTemporaries(DatasetLayout.of(outputDir).dataDir());
+        return retain ? result : null;
     }
 
     ListRunner.Spec listSpec(S3Uri s3uri, OutputFormat resolved, int channelCapacity, int pageMax,
@@ -1861,18 +1971,20 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         Duration flushInterval = resolveSummaryJsonInterval();
         Duration resolvedMaxDuration = liveness.resolveMaxDuration();
         Long maxDurationMs = resolvedMaxDuration == null ? null : resolvedMaxDuration.toMillis();
-        // Sort observability polish: resolveConfig() is a cheap, idempotent re-read of the same -D
-        // knobs plus the typed --tune override runSortedParquet() reads independently — echoing
-        // effectiveFanIn() here makes the binding merge-pass-width knob self-describing in the
-        // summary without threading a SortConfig through the whole call chain.
-        Integer sortEffectiveFanIn = sorting.sort
-                ? sorting.resolveConfig().effectiveFanIn() : null;
+        // A real invocation uses the immutable snapshot resolved once in call(). Direct unit tests
+        // that exercise this builder without call() retain the historical lazy construction.
+        SortConfig sortConfig = invocationSortConfig != null
+                ? invocationSortConfig
+                : sorting.sort ? sorting.resolveConfig() : null;
+        Integer sortEffectiveFanIn = sorting.sort && sortConfig != null
+                ? sortConfig.effectiveFanIn() : null;
         JsonRunSummaryWriter.RunConfig runConfig =
                 new JsonRunSummaryWriter.RunConfig(
                         uri, config.region() == null ? null : config.region().id(),
                         resolved.name().toLowerCase(Locale.ROOT), connection.maxParallelListings, connection.noSignRequest,
                         connection.rateLimitApi, liveness.resolveEffectiveProgressInterval().toMillis(), filters.descriptions(),
-                        engine.toggles, maxDurationMs, sorting.sort, sortEffectiveFanIn, connection.requestPayerEnabled);
+                        engine.toggles, maxDurationMs, sorting.sort, sortEffectiveFanIn,
+                        sorting.sort ? SortArm.LIVE_LIST_SORT : SortArm.NONE, connection.requestPayerEnabled);
         return new JsonRunSummaryWriter.Config(
                 path, flushInterval, argsHash, runConfig, resolveArgv());
     }
@@ -1925,6 +2037,15 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 strategy, null, null);
     }
 
+    /** As above, with an explicit sorted-output entry path for a completed no-op re-entry. */
+    private void writeEarlyExitSummary(OutputFormat resolved, S3Config config, String argsHash,
+                                       RunContext ctx, long runId, long startedNs, boolean completed,
+                                       StopReason reason, String strategy, SortArm sortArm)
+            throws InvalidConfigException {
+        writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, startedNs, completed, reason,
+                strategy, null, null, sortArm);
+    }
+
     /**
      * As the 9-arg {@link #writeEarlyExitSummary}, but the seed-failure path threads the
      * resolved process {@code exitCode} (so the summary reports the true exit 1, not {@code null})
@@ -1938,8 +2059,20 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                RunContext ctx, long runId, long startedNs, boolean completed,
                                StopReason reason, String strategy, Integer exitCode, String errorClass)
             throws InvalidConfigException {
+        writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, startedNs, completed, reason,
+                strategy, exitCode, errorClass, null);
+    }
+
+    private void writeEarlyExitSummary(OutputFormat resolved, S3Config config, String argsHash,
+                                       RunContext ctx, long runId, long startedNs, boolean completed,
+                                       StopReason reason, String strategy, Integer exitCode, String errorClass,
+                                       SortArm sortArm)
+            throws InvalidConfigException {
         JsonRunSummaryWriter.Config summaryConfig =
                 buildJsonSummaryConfig(resolved, config, argsHash);
+        if (summaryConfig != null && sortArm != null) {
+            summaryConfig = summaryConfig.withRunConfig(summaryConfig.runConfig().withSortArm(sortArm));
+        }
         ctx.metrics().setRunId(runId);
         RunSummary summary =
                 ctx.metrics().summary(elapsedSince(startedNs), strategy, 0L, 0L);

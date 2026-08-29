@@ -56,49 +56,36 @@ import java.util.function.LongConsumer;
  * contributed zero rows, e.g. an empty input, is reported as neither). Cost is O(1) extra per emitted
  * row (a reference compare plus, on a run change only, one map lookup) — no extra decode pass.
  */
-final class StreamingMerger implements SortedCursor {
-
-    /**
-     * Reports, once at {@link #close()}, this merge's count of "fully disjoint copyable" input
-     * segments (every emitted row formed one uninterrupted run) versus "interleaved" segments (more
-     * than one run) — see the class javadoc's disjoint-copyable classification. {@link #NO_OP} is the
-     * default for callers that don't need the counters (e.g. {@link SealedBuffer}'s in-memory
-     * seal-path merge, out of scope for this measurement).
-     */
-    @FunctionalInterface
-    interface DisjointSink {
-        DisjointSink NO_OP = (copyableSegments, interleavedSegments) -> { };
-
-        void accept(long copyableSegments, long interleavedSegments);
-    }
+final class StreamingMerger implements SortedCursor, LogicalMergeCompletion {
 
     private final Comparator<ListEntry> comparator;
     private final LongConsumer fastPathSink;
-    private final DisjointSink disjointSink;
+    private final MergeRunSink disjointSink;
     private final List<EntryStream> allStreams;
     private final PriorityQueue<EntryStream> heap;
     private final IdentityHashMap<EntryStream, Integer> streamIndex;
-    private final int[] runCounts;   // per-input-stream count of runs it contributed to the output
+    private final MergeRunTracker runTracker;
 
     private EntryStream currentStream;   // stream held out of the heap (fast-path candidate)
     private ListEntry pending;           // next entry to return; null once fully drained
     private long fastPathCount;
+    private boolean logicalMergeComplete;
     private boolean closed;
 
     StreamingMerger(List<EntryStream> streams, Comparator<ListEntry> comparator,
                     LongConsumer fastPathSink) {
-        this(streams, comparator, fastPathSink, DisjointSink.NO_OP);
+        this(streams, comparator, fastPathSink, MergeRunSink.NO_OP);
     }
 
     StreamingMerger(List<EntryStream> streams, Comparator<ListEntry> comparator,
-                    LongConsumer fastPathSink, DisjointSink disjointSink) {
+                    LongConsumer fastPathSink, MergeRunSink disjointSink) {
         this.comparator = comparator;
         this.fastPathSink = fastPathSink;
         this.disjointSink = disjointSink;
         this.allStreams = streams;
         this.heap = new PriorityQueue<>((a, b) -> comparator.compare(a.peek(), b.peek()));
         this.streamIndex = new IdentityHashMap<>(streams.size());
-        this.runCounts = new int[streams.size()];
+        this.runTracker = new MergeRunTracker(streams.size());
         for (int i = 0; i < streams.size(); i++) {
             streamIndex.put(streams.get(i), i);
         }
@@ -152,6 +139,7 @@ final class StreamingMerger implements SortedCursor {
                 }
                 if (heap.isEmpty()) {
                     currentStream = null;
+                    logicalMergeComplete = true;
                     return null;
                 }
                 src = heap.poll();
@@ -159,7 +147,7 @@ final class StreamingMerger implements SortedCursor {
             if (src != currentStream) {
                 // A new run starts for src (the sorted-merge invariant makes this exact — see the
                 // class javadoc's disjoint-copyable classification).
-                runCounts[streamIndex.get(src)]++;
+                runTracker.emittedFrom(streamIndex.get(src));
             }
             currentStream = src;
             return src.next();
@@ -169,23 +157,17 @@ final class StreamingMerger implements SortedCursor {
     }
 
     @Override
+    public void completeLogicalMerge() {
+        logicalMergeComplete = true;
+    }
+
+    @Override
     public void close() {
         if (closed) {
             return;
         }
         closed = true;
         fastPathSink.accept(fastPathCount);   // once per merge/pass, not once per row
-        long copyableSegments = 0;
-        long interleavedSegments = 0;
-        for (int runCount : runCounts) {
-            if (runCount == 1) {
-                copyableSegments++;
-            } else if (runCount > 1) {
-                interleavedSegments++;
-            }
-            // runCount == 0: the input contributed no row (e.g. an empty segment) — counted as neither.
-        }
-        disjointSink.accept(copyableSegments, interleavedSegments);
         List<IOException> failures = new ArrayList<>();
         for (EntryStream s : allStreams) {
             try {
@@ -200,6 +182,20 @@ final class StreamingMerger implements SortedCursor {
                 wrapped.addSuppressed(failures.get(i));
             }
             throw wrapped;
+        }
+        if (logicalMergeComplete) {
+            long copyableSegments = 0;
+            long interleavedSegments = 0;
+            for (int source = 0; source < allStreams.size(); source++) {
+                int runCount = runTracker.count(source);
+                if (runCount == 1) {
+                    copyableSegments++;
+                } else if (runCount > 1) {
+                    interleavedSegments++;
+                }
+                // runCount == 0: an empty input is counted as neither.
+            }
+            disjointSink.accept(copyableSegments, interleavedSegments);
         }
     }
 }
