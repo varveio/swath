@@ -793,6 +793,24 @@ which owns the at-most-once-text durability questions it would reopen):
   design realizes this alternative literally: the merge k-way-merges the
   sealed segments straight into the final sorted output; parallel unsorted
   part files are not globally ordered.
+- **Finalization has two stateless arms above the same sealed segments.** `sort.finalization=ranges`
+  remains the default range-owned merge. The default-off `pipeline` spike starts one sequential
+  reader slot per retained segment, bounds each slot from the merge budget, and feeds one ordered
+  page-minimum router. Disjoint pages are forwarded whole; overlapping page ranges share the same
+  row heap as the page-aware merge. The router alone chooses part boundaries and assigns dense
+  ordinals; bounded encoder lanes receive part `k` on lane `k mod N`, and the calling thread orders
+  completed parts before the unchanged publication protocol. The pipeline does not seek, construct
+  range boundaries, or depend on type-2/type-3 indexes for correctness. If fan-in requires cascades,
+  it first uses the normal page-run cascade and then runs this pipeline over the survivors.
+
+  The byte policy compares each pending payload's logical size (raw payload bytes for a whole page,
+  estimated entry bytes for clustered rows) with a target calibrated from completed parts' actual
+  encoded/logical ratio. The first target uses a fixed conservative ratio; later targets use the
+  cumulative measured ratio. This is soft geometry only: a boundary may occur only when adjacent raw
+  keys differ, so an equal-key group can exceed the target but never cross files. A package-private
+  fixed-rows policy exists only for the benchmark comparison. Completed parts retain the same dense
+  `file_index`, last-part-only `file_final`, raw-byte cross-part adjacency check, cardinality check,
+  crash-safe temporary naming, and publish commit point as range output.
 - **Served-file footer stamp**: each published
   file carries static footer key-value metadata — `swath.sort.order` (the
   comparator order), `swath.sort.mode` (`objects` | `versions`),

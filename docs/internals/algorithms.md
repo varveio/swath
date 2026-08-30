@@ -1681,3 +1681,11 @@ legacy, and mixed inputs therefore feed the same deterministic selection rule.
 Boundary choice affects balance only: every range still filters every retained page row against its
 exact `[lo, hi)` bounds. The final unbounded range drains every original segment to EOF, retaining
 the whole-input CRC/order/count proof even though all-new boundary selection reads no page bodies.
+
+The experimental `sort.finalization=pipeline` arm bypasses boundary selection entirely. After the
+usual cascade reduces the input to the admitted fan-in, bounded sequential segment readers publish
+decoded pages to one ordered router. The router forwards a page without row materialization when its
+maximum raw key is below the next page minimum; transitively overlapping pages enter the shared
+page-aware row heap and leave in batches of at most 4,096 rows. The router owns calibrated part
+geometry and raw-key-atomic boundaries, while bounded striped encoders only execute its stamped
+batch stream. This preserves a single global merge order without `R` duplicate range frontiers.
