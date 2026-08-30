@@ -125,11 +125,6 @@ final class NarrowTailProbeVsWorkerAttributionTest {
         return c == null ? 0.0 : c.count();
     }
 
-    private static double counter(RunMetrics m, String name) {
-        Counter c = m.registry().find(name).counter();
-        return c == null ? 0.0 : c.count();
-    }
-
     @Test
     @Timeout(60)
     void narrowTail_permanentAttemptTimeoutStorm_probeFetchesNeverStart(@TempDir Path dir)
@@ -172,8 +167,6 @@ final class NarrowTailProbeVsWorkerAttributionTest {
             double attemptTimeoutWorker = steal(metrics, "TRANSIENT", "attempt_timeout_worker");
             double attemptTimeoutProbe = steal(metrics, "TRANSIENT", "attempt_timeout_probe");
             double stormRideOutProbe = steal(metrics, "TRANSIENT", "storm_ride_out_probe");
-            double stealAttempted = steal(metrics, "STEAL", "attempted");
-            double slotDenied = counter(metrics, "swath.idle_backoff.slot_denied");
 
             assertThat(attemptTimeoutWorker)
                     .as("the storm produced worker-attributed attempt-timeout retries").isGreaterThan(0.0);
@@ -188,12 +181,11 @@ final class NarrowTailProbeVsWorkerAttributionTest {
                             + "(worker=%.0f)", attemptTimeoutWorker)
                     .isEqualTo(0.0);
             assertThat(stormRideOutProbe).as("no probe ever entered ride-out either").isEqualTo(0.0);
-            // The idle-steal backoff gate is doing real work: idle-worker park cycles are denied a fresh
-            // probe slot (or, once NO_VICTIM resolves, simply find nothing worth attempting) rather than
-            // each of the WORKERS-1 idle workers independently hammering its own concurrent probe.
-            assertThat(slotDenied)
-                    .as("idle workers are mostly slot-denied, not each independently probing")
-                    .isGreaterThanOrEqualTo(stealAttempted);
+            // Deliberately do not compare steal-attempt and slot-denial counts here. A worker can
+            // acquire the sole slot, resolve NO_VICTIM, and release it before another idle worker
+            // contends, legitimately producing attempted=1 and slot_denied=0. The fleet-wide
+            // one-attempt bound is guarded deterministically by IdleStealSlotOwnershipTest and
+            // IdleStealProbeConcurrencyTest; this test owns the structural no-probe contract.
         }
     }
 
@@ -278,7 +270,6 @@ final class NarrowTailProbeVsWorkerAttributionTest {
             double attemptTimeoutProbe = steal(metrics, "TRANSIENT", "attempt_timeout_probe");
             double probeRetryCapFailfast = steal(metrics, "TRANSIENT", "probe_retry_cap_failfast");
             double stealAttempted = steal(metrics, "STEAL", "attempted");
-            double slotDenied = counter(metrics, "swath.idle_backoff.slot_denied");
 
             assertThat(attemptTimeoutWorker).isGreaterThan(0.0);
             double total = attemptTimeoutWorker + attemptTimeoutProbe;
@@ -337,10 +328,6 @@ final class NarrowTailProbeVsWorkerAttributionTest {
             // else: no probe ever engaged with the storm this run (slow/contended hardware lost the
             // real-time race to reach the victim at all) — the anti-camping property is vacuously
             // satisfied; nothing further to assert.
-
-            assertThat(slotDenied)
-                    .as("idle workers are mostly slot-denied, not each independently probing")
-                    .isGreaterThanOrEqualTo(0.0);
         }
     }
 
