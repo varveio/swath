@@ -14,7 +14,12 @@ import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Coordinates cascade reduction, bounded pipeline execution, ordered assembly, and publication. */
+/**
+ * Finalization lifecycle owner for the pipeline arm. It admits one immutable resource plan, uses
+ * that plan for cascade output descriptors and the final readers/encoders, then hands only durable,
+ * globally ordered parts to the shared publisher. Any failure quiesces every stage before owned
+ * pipeline temporaries are swept; source segments and prior published parts remain recoverable.
+ */
 final class PipelineFinalization {
     private static final Logger log = LoggerFactory.getLogger(PipelineFinalization.class);
 
@@ -28,11 +33,16 @@ final class PipelineFinalization {
         this.publisher = publisher;
     }
 
+    /** Execute cascade, routing, encoding, verification, and publication as one failure domain. */
     SortTransformResult run(PageRunCatalog sourceCatalog, Request request, int encoderCount)
             throws IOException {
         SortConfig config = run.config();
         SortMetrics metrics = run.metrics();
         metrics.recordStealReason("SORT", "finalization_pipeline");
+
+        MergePlanner.PipelinePlan cascadePlan =
+                planner.pipelineParallelism(encoderCount, sourceCatalog);
+        recordEncoderClamp(encoderCount, cascadePlan, sourceCatalog);
 
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(
                 run.comparator(), run.hook(), metrics, config.segmentCodec(), run.orderingMode());
@@ -40,7 +50,7 @@ final class PipelineFinalization {
                 request.ownedInputs(),
                 "merge-", null, sourceCatalog.byPath(), frontier -> { }, -1, null, null);
         KWayMerge<Path> cascade = new KWayMerge<>(run.comparator(),
-                planner.pipelineFanIn(sourceCatalog, encoderCount),
+                planner.pipelineFanIn(sourceCatalog, cascadePlan.encoders()),
                 io, run.hook(), metrics);
         List<Path> survivors = cascade.reduceToFanIn(
                 sourceCatalog.paths(), request.progressCallback());
@@ -48,13 +58,17 @@ final class PipelineFinalization {
         PageRunCatalog pipelineCatalog = survivors.equals(sourceCatalog.paths())
                 ? sourceCatalog
                 : PageRunCatalog.preflight(survivors,
-                        path -> PageRunSegmentIo.open(path, metrics), Optional.empty(),
+                        path -> PageRunSegmentIo.open(path, metrics),
+                        Optional.of(ignored -> { }),
                         Map.of(), metrics);
-
+        MergePlanner.PipelinePlan plan = survivors.equals(sourceCatalog.paths())
+                ? cascadePlan
+                : planner.pipelineParallelism(cascadePlan.encoders(), pipelineCatalog);
+        if (plan.encoders() < cascadePlan.encoders()) {
+            recordEncoderClamp(cascadePlan.encoders(), plan, pipelineCatalog);
+        }
+        int effectiveEncoders = plan.encoders();
         PipelineFailure failure = new PipelineFailure();
-        MergePlanner.PipelinePlan plan = planner.pipelineParallelism(encoderCount, pipelineCatalog);
-        recordEncoderClamp(encoderCount, plan, pipelineCatalog);
-        encoderCount = plan.encoders();
         PipelinePartSizer sizer = new PipelinePartSizer(
                 run.pipelinePartTarget(), config.finalFileBytes());
         SegmentReaderSlots readers = null;
@@ -63,7 +77,8 @@ final class PipelineFinalization {
             readers = new SegmentReaderSlots(
                     pipelineCatalog, SegmentReaderSlots.planned(
                             plan, pipelineCatalog.descriptors().size()), metrics, failure);
-            encoders = new PartEncoders(encoderCount, request.stagingDir(), run.finalWriterFactory(),
+            encoders = new PartEncoders(effectiveEncoders, request.stagingDir(),
+                    run.finalWriterFactory(),
                     run.comparator(), run.hook(), run.equalKeyPolicy(), metrics, failure, sizer,
                     request.progressCallback());
             request.onFinalPassStarting().onFinalPassStarting(true);
@@ -85,7 +100,7 @@ final class PipelineFinalization {
             SortTransformResult result = new SortTransformResult(
                     pending.finalFiles(), pending.outputBytes(), routed.rows(),
                     cascade.mergePasses(), cascade.cascadedPasses(), routed.pagesForwarded(),
-                    encoderCount);
+                    effectiveEncoders);
             try {
                 publisher.publish(pending, routed.rows(), request.publishListener(),
                         request.ownedInputs(), request.retainedOriginals(), io.intermediates());
@@ -106,44 +121,45 @@ final class PipelineFinalization {
             } catch (IOException cleanupFailure) {
                 thrown.addSuppressed(cleanupFailure);
             }
-            throw checkedFailure(thrown);
+            Throwable cause = failureCause(thrown);
+            if (cause instanceof MergeCancellation.Cancelled cancelled) {
+                throw cancelled;
+            }
+            if (cause instanceof IOException ioFailure) {
+                throw ioFailure;
+            }
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IOException("sort finalization pipeline failed", cause);
         }
     }
 
-    private static IOException checkedFailure(Throwable failure) {
-        Throwable cause = failure instanceof PipelineFailure.Failed && failure.getCause() != null
+    /** Unwrap the relay exception without changing the original checked/unchecked failure type. */
+    private static Throwable failureCause(Throwable failure) {
+        return failure instanceof PipelineFailure.Failed && failure.getCause() != null
                 ? failure.getCause() : failure;
-        if (cause instanceof MergeCancellation.Cancelled cancelled) {
-            throw cancelled;
-        }
-        if (cause instanceof IOException io) {
-            return io;
-        }
-        if (cause instanceof RuntimeException runtime) {
-            throw runtime;
-        }
-        if (cause instanceof Error error) {
-            throw error;
-        }
-        return new IOException("sort finalization pipeline failed", cause);
     }
 
+    /** Record the single binding encoder resource without duplicating the no-clamp guard. */
     private void recordEncoderClamp(int requested, MergePlanner.PipelinePlan plan,
             PageRunCatalog catalog) {
-        if (plan.reason() == MergePlanner.PipelineClampReason.NONE) {
-            return;
+        switch (plan.reason()) {
+            case NONE -> {
+                return;
+            }
+            case FD_CLAMPED ->
+                    run.metrics().recordStealReason("SORT", "pipeline_encoders_fd_clamped");
+            case HEAP_CLAMPED ->
+                    run.metrics().recordStealReason("SORT", "pipeline_encoders_heap_clamped");
         }
         log.warn("sort_pipeline_encoders_clamped requested={} effective={} segments={} reason={} "
                         + "merge_budget_bytes={} slot_depth={} page_bytes={}",
                 requested, plan.encoders(), catalog.descriptors().size(), plan.reason().logValue(),
                 run.config().mergeBudgetBytes(), plan.slotDepth(), plan.pageBytes());
-        switch (plan.reason()) {
-            case FD_CLAMPED ->
-                    run.metrics().recordStealReason("SORT", "pipeline_encoders_fd_clamped");
-            case HEAP_CLAMPED ->
-                    run.metrics().recordStealReason("SORT", "pipeline_encoders_heap_clamped");
-            case NONE -> throw new AssertionError("unreachable pipeline clamp");
-        }
     }
 
     /** Immutable invocation state keeps the lifecycle entry point independent of argument order. */

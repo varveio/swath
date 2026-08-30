@@ -25,9 +25,14 @@ final class PageRowMerger {
         pages = new PriorityQueue<>((left, right) -> comparator.compare(left.head, right.head));
     }
 
+    /** Admit one non-empty page and retain its exact decoded-byte reservation until exhaustion. */
     void add(int source, PageBlock page, long retainedBytes) {
-        pages.add(new PageCursor(source, page.cursor(), page.count(), retainedBytes,
-                page.logicalBytes() / page.count()));
+        int count = page.count();
+        if (count < 1) {
+            throw new IllegalArgumentException("decoded page must contain at least one row");
+        }
+        pages.add(new PageCursor(source, page.cursor(), count, retainedBytes,
+                page.rawPayloadLength()));
         rows += page.count();
     }
 
@@ -41,11 +46,12 @@ final class PageRowMerger {
         return page == null ? null : page.head.key().rawUnsafe();
     }
 
+    /** Emit the globally least row and expose this row's exact logical-byte attribution. */
     ListEntry next() {
         PageCursor page = pages.poll();
         ListEntry result = page.head;
         lastSource = page.source;
-        lastLogicalBytes = page.logicalBytesPerRow;
+        lastLogicalBytes = page.currentLogicalBytes();
         page.advance();
         rows--;
         if (page.head == null) {
@@ -107,22 +113,33 @@ final class PageRowMerger {
         private final int source;
         private final PageBlockCursor cursor;
         private final long logicalBytesPerRow;
+        private final long logicalByteRemainder;
         private long retainedBytes;
+        private int rowIndex;
         private ListEntry head;
 
         PageCursor(int source, PageBlockCursor cursor, int count, long retainedBytes,
-                long logicalBytesPerRow) {
+                long logicalBytes) {
+            if (count < 1) {
+                throw new IllegalArgumentException("decoded page must contain at least one row");
+            }
             this.source = source;
             this.cursor = cursor;
-            this.logicalBytesPerRow = logicalBytesPerRow;
+            this.logicalBytesPerRow = logicalBytes / count;
+            this.logicalByteRemainder = logicalBytes % count;
             this.retainedBytes = retainedBytes;
             this.head = cursor.hasNext() ? cursor.next() : null;
-            if (count < 1 || head == null) {
+            if (head == null) {
                 throw new IllegalArgumentException("decoded page must contain at least one row");
             }
         }
 
+        long currentLogicalBytes() {
+            return logicalBytesPerRow + (rowIndex < logicalByteRemainder ? 1 : 0);
+        }
+
         void advance() {
+            rowIndex++;
             head = cursor.hasNext() ? cursor.next() : null;
         }
     }

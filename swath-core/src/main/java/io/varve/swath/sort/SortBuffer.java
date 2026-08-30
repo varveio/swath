@@ -73,7 +73,7 @@ final class SortBuffer {
         byte[] last = block.lastKey();
         maxKeys.merge(nodeId, last,
                 (prev, next) -> KeyBytes.compareUnsigned(next, prev) > 0 ? next : prev);
-        estimatedBytes += block.estimatedBytes();
+        estimatedBytes += block.stagingEstimatedBytes();
         entryCount += block.count();
     }
 

@@ -65,6 +65,49 @@ final class FinalizationPipelineTest {
     }
 
     @Test
+    void preparedCompressedPageReleasesItsEncodedOwner() {
+        PageBlock packed = PageBlock.pack(List.of(
+                SortTestSupport.object("repeated-prefix/alpha"),
+                SortTestSupport.object("repeated-prefix/bravo")), comparator, PageCodec.LZ4);
+        PageBlock persisted = PageBlock.deserialize(packed.serialize());
+        int encodedOwnerBytes = persisted.retainedRecordBytes();
+
+        persisted.prepareDecoded();
+
+        assertThat(encodedOwnerBytes).isPositive();
+        assertThat(persisted.retainedRecordBytes()).isZero();
+        assertThat(persisted.cursor().next().key().asString())
+                .isEqualTo("repeated-prefix/alpha");
+    }
+
+    @Test
+    void clusteredRowsAttributeEveryRawPayloadByteExactlyOnce() {
+        PageBlock page = null;
+        for (int count = 2; count < 20; count++) {
+            List<ListEntry> rows = new ArrayList<>();
+            for (int row = 0; row < count; row++) {
+                rows.add(SortTestSupport.object(String.format("key-%02d", row)));
+            }
+            PageBlock candidate = PageBlock.pack(rows, comparator);
+            if (candidate.rawPayloadLength() % candidate.count() != 0) {
+                page = candidate;
+                break;
+            }
+        }
+        assertThat(page).as("fixture must exercise logical-byte remainder").isNotNull();
+        PageRowMerger merger = new PageRowMerger(comparator);
+        merger.add(0, page, 0);
+
+        long attributed = 0;
+        while (merger.hasNext()) {
+            merger.next();
+            attributed += merger.lastLogicalBytes();
+        }
+
+        assertThat(attributed).isEqualTo(page.rawPayloadLength());
+    }
+
+    @Test
     void moreReaderSlotsThanDecodePermitsCompleteAtDepthOne(@TempDir Path root) throws IOException {
         int segmentCount = 2;
         Path staging = Files.createDirectories(root.resolve("reader-staging"));
@@ -84,17 +127,17 @@ final class FinalizationPipelineTest {
         CountDownLatch firstReaderAtSecondPut = new CountDownLatch(1);
         SegmentReaderSlots.Hook schedule = new SegmentReaderSlots.Hook() {
             @Override
-            public void beforeDecode(int slot, long page) throws InterruptedException {
-                if (slot == 1 && page == 0
-                        && !firstReaderAtSecondPut.await(10, TimeUnit.SECONDS)) {
-                    throw new IllegalStateException("first reader did not reach its blocked put");
+            public void beforeCapacityAcquire(int slot, long page) {
+                if (slot == 0 && page == 1) {
+                    firstReaderAtSecondPut.countDown();
                 }
             }
 
             @Override
-            public void beforeEnqueue(int slot, long page) {
-                if (slot == 0 && page == 1) {
-                    firstReaderAtSecondPut.countDown();
+            public void beforeDecode(int slot, long page) throws InterruptedException {
+                if (slot == 1 && page == 0
+                        && !firstReaderAtSecondPut.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("first reader did not reach full slot capacity");
                 }
             }
         };
@@ -245,11 +288,12 @@ final class FinalizationPipelineTest {
                 .containsExactly(2, MergePlanner.PipelineClampReason.FD_CLAMPED);
 
         int pageBytes = catalog.maxRawPayloadLength();
-        long readerBytes = 4L * pageBytes;
-        long perEncoder = PartEncoders.QUEUE_DEPTH * (long) pageBytes
+        long readerBytes = 5L * pageBytes;
+        long pendingBytes = pageBytes;
+        long perEncoder = (PartEncoders.QUEUE_DEPTH + 1L) * pageBytes
                 + PartEncoders.WRITER_HEAP_ESTIMATE_BYTES;
         MergePlanner heapPlanner = new MergePlanner(
-                base.withMergeBudgetBytes(readerBytes + 2 * perEncoder),
+                base.withMergeBudgetBytes(readerBytes + pendingBytes + 2 * perEncoder),
                 SortMetrics.NO_OP, () -> -1);
         assertThat(heapPlanner.pipelineParallelism(4, catalog))
                 .extracting(MergePlanner.PipelinePlan::encoders,
@@ -258,21 +302,28 @@ final class FinalizationPipelineTest {
     }
 
     @Test
-    void legacySegmentsUseObservedFrameSizeForSlotDepth(@TempDir Path root) throws IOException {
-        Path segment = SortTestSupport.writePageRun(
+    void mixedCatalogPricesLegacySegmentsAtTheirAdmittedDecodedLimit(@TempDir Path root)
+            throws IOException {
+        Path legacy = SortTestSupport.writePageRun(
                 root.resolve("legacy" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(SortTestSupport.object("a"), SortTestSupport.object("b")), comparator);
-        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
+        Path current = SortTestSupport.writeIndexedPages(
+                root.resolve("current" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("c"))));
+        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(legacy, current),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(ignored -> { }));
+        int mergeBudgetBytes = 64 << 20;
         MergePlanner planner = new MergePlanner(
-                SortConfigs.base().withMergeBudgetBytes(64L << 20),
+                SortConfigs.base().withMergeBudgetBytes(mergeBudgetBytes),
                 SortMetrics.NO_OP, () -> -1);
 
         MergePlanner.PipelinePlan plan = planner.pipelineParallelism(4, catalog);
 
-        assertThat(catalog.maxRawPayloadLength()).isZero();
-        assertThat(plan.pageBytes()).isLessThan(64 << 20);
-        assertThat(plan.slotDepth()).isEqualTo(4);
+        assertThat(catalog.maxRawPayloadLength()).isPositive().isLessThan(mergeBudgetBytes);
+        assertThat(plan.pageBytes()).isEqualTo(mergeBudgetBytes);
+        assertThat(plan.legacyDecodedLimit()).isEqualTo(plan.pageBytes());
+        assertThat(plan.slotDepth()).isEqualTo(1);
     }
 
     @Test

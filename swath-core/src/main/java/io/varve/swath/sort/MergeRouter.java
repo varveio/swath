@@ -14,8 +14,10 @@ import java.util.Comparator;
 import java.util.PriorityQueue;
 
 /**
- * Single ordered router over decoded reader slots. Disjoint pages move directly to encoders;
- * overlap clusters use the same {@link PageRowMerger} as the existing page-aware merge.
+ * Single ordering and part-boundary owner over decoded reader slots. Its frontier contains at most
+ * one page per segment. Strictly disjoint pages move whole to encoders; overlaps enter an incremental
+ * row heap that admits a frontier page before emitting any key it could precede. Only this thread
+ * assigns part ordinals, so striped encoders never race on global order or equal-key boundaries.
  */
 final class MergeRouter {
     static final int BATCH_ROWS = 4_096;
@@ -51,6 +53,7 @@ final class MergeRouter {
         this.batcher = new PartBatcher();
     }
 
+    /** Drain every segment in global order and finish exactly one final part, even for empty input. */
     Result route(int segments) throws IOException {
         for (int segment = 0; segment < segments; segment++) {
             PageBlock page = readers.next(segment);
@@ -79,6 +82,10 @@ final class MergeRouter {
         return new Result(rows, pagesForwarded, parts, decodedBudget.peakResidentBytes());
     }
 
+    /**
+     * Merge one transitive overlap component while releasing each page reservation at cursor
+     * exhaustion. Admission follows the next emitted key, avoiding retention of the component tail.
+     */
     private void mergeCluster(Head first) throws IOException {
         metrics.recordStealReason("SORT", "pipeline_cluster_merge");
         PageRowMerger cluster = new PageRowMerger(comparator);
@@ -131,6 +138,7 @@ final class MergeRouter {
         metrics.recordPipelineCluster(clusterPages, clusterRows);
     }
 
+    /** Replace one consumed frontier head with that segment's next page, if any. */
     private void advance(int segment) {
         PageBlock next = readers.next(segment);
         if (next != null) {
@@ -153,6 +161,7 @@ final class MergeRouter {
         private int ordinal;
         private int batchesInPart;
 
+        /** Hold one look-ahead payload so a strict next-key boundary can be proven before close. */
         void offer(PipelineBatch.Payload next) {
             MergeCancellation.check();
             if (pending != null) {
@@ -171,6 +180,7 @@ final class MergeRouter {
             partRows = Math.addExact(partRows, next.rowCount());
         }
 
+        /** Normalize empty input to one durable final file and return the dense part count. */
         int finish() {
             MergeCancellation.check();
             if (pending == null) {
@@ -182,6 +192,7 @@ final class MergeRouter {
             return ordinal + 1;
         }
 
+        /** Stamp one batch with its global sequence and part position before striped submission. */
         private void dispatch(PipelineBatch.Payload payload, boolean last, boolean mergeEnd) {
             PipelineBatch batch = new PipelineBatch(sequence++, ordinal, batchesInPart == 0,
                     last, mergeEnd, payload);

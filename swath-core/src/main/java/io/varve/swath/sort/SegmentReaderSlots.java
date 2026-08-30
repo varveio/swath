@@ -13,14 +13,17 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Sequential reader slots over page-run segments. Each slot is bounded independently, while one
- * shared semaphore limits active decompression only; decoded pages release that permit before they
- * wait for bounded slot capacity.
+ * One sequential reader per page-run segment, with a bounded decoded-page handoff to the ordered
+ * router. Per-slot permits are acquired before frame read/decode, so a full queue cannot retain an
+ * extra producer-local page; reader residency is at most queue depth plus one router frontier head
+ * per segment. A separate shared semaphore limits active decompression without coupling progress
+ * across slots.
  */
 final class SegmentReaderSlots implements AutoCloseable {
     private static final long FAILURE_CHECK_MILLIS = 100;
 
     private final List<ArrayBlockingQueue<Item>> slots;
+    private final List<Semaphore> slotPermits;
     private final List<Thread> readers = new ArrayList<>();
     private final PipelineFailure failure;
     private final SortMetrics metrics;
@@ -35,8 +38,10 @@ final class SegmentReaderSlots implements AutoCloseable {
         this.failure = failure;
         this.metrics = metrics;
         this.slots = new ArrayList<>(segmentCount);
+        this.slotPermits = new ArrayList<>(segmentCount);
         for (int i = 0; i < segmentCount; i++) {
             slots.add(new ArrayBlockingQueue<>(settings.slotDepth()));
+            slotPermits.add(new Semaphore(settings.slotDepth()));
         }
         for (int i = 0; i < segmentCount; i++) {
             int slot = i;
@@ -47,12 +52,17 @@ final class SegmentReaderSlots implements AutoCloseable {
         }
     }
 
+    /** Bind the planned depth/legacy limit and cap concurrent decoders at available processors. */
     static Settings planned(MergePlanner.PipelinePlan plan, int segments) {
         int decoders = Math.max(1, Math.min(segments,
                 Runtime.getRuntime().availableProcessors()));
         return new Settings(plan.slotDepth(), decoders, plan.legacyDecodedLimit(), Hook.NO_OP);
     }
 
+    /**
+     * Take the next page from one segment, surfacing peer failure while idle. Releasing capacity at
+     * poll time lets that segment prepare its successor while the router owns the frontier page.
+     */
     PageBlock next(int slot) {
         ArrayBlockingQueue<Item> queue = slots.get(slot);
         Item item = queue.poll();
@@ -72,12 +82,16 @@ final class SegmentReaderSlots implements AutoCloseable {
                 metrics.recordPipelineRouterWait(waited);
             }
         }
+        if (item instanceof Item.Page) {
+            slotPermits.get(slot).release();
+        }
         return switch (item) {
             case Item.Page page -> page.block();
             case Item.End ignored -> null;
         };
     }
 
+    /** Read, eagerly decode, and enqueue one segment without ever holding an unpriced extra page. */
     private void read(int slot, PageRunSegmentDescriptor descriptor, Semaphore decodePermits,
             Hook hook) {
         long seenEntries = 0;
@@ -89,22 +103,32 @@ final class SegmentReaderSlots implements AutoCloseable {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new InterruptedException();
                 }
-                PageRunSegmentIo.Page encoded = io.nextPage();
-                hook.beforeDecode(slot, page);
-                decodePermits.acquire();
-                PageBlock block;
+                Semaphore capacity = slotPermits.get(slot);
+                hook.beforeCapacityAcquire(slot, page);
+                capacity.acquire();
+                boolean enqueued = false;
                 try {
-                    block = encoded.decode(descriptor.path());
-                    block.prepareDecoded();
+                    PageRunSegmentIo.Page encoded = io.nextPage();
+                    hook.beforeDecode(slot, page);
+                    decodePermits.acquire();
+                    PageBlock block;
+                    try {
+                        block = encoded.decode(descriptor.path());
+                        block.prepareDecoded();
+                    } finally {
+                        decodePermits.release();
+                    }
+                    hook.beforeEnqueue(slot, page);
+                    if (!slots.get(slot).offer(new Item.Page(block))) {
+                        throw new IllegalStateException("reader slot permit disagrees with queue capacity");
+                    }
+                    enqueued = true;
+                    seenEntries = Math.addExact(seenEntries, block.count());
                 } finally {
-                    decodePermits.release();
+                    if (!enqueued) {
+                        capacity.release();
+                    }
                 }
-                // Slot back-pressure must not retain a scarce decode permit: with K > decoders and
-                // depth one, permit holders can otherwise fill their slots while the requested
-                // segment waits forever to begin decoding.
-                hook.beforeEnqueue(slot, page);
-                slots.get(slot).put(new Item.Page(block));
-                seenEntries = Math.addExact(seenEntries, block.count());
             }
             io.checkComplete(seenEntries);
             slots.get(slot).put(Item.End.INSTANCE);
@@ -132,10 +156,14 @@ final class SegmentReaderSlots implements AutoCloseable {
         default void beforeDecode(int slot, long page) throws InterruptedException {
         }
 
+        default void beforeCapacityAcquire(int slot, long page) throws InterruptedException {
+        }
+
         default void beforeEnqueue(int slot, long page) throws InterruptedException {
         }
     }
 
+    /** Interrupt and join every segment reader; no decoded page may outlive pipeline teardown. */
     @Override
     public void close() {
         closing.set(true);

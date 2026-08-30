@@ -49,7 +49,7 @@ record PipelineBatch(long sequence, int partOrdinal, boolean partFirst, boolean 
     record WholePage(PageBlock page) implements Payload {
         @Override
         public long logicalBytes() {
-            return page.logicalBytes();
+            return page.rawPayloadLength();
         }
 
         @Override

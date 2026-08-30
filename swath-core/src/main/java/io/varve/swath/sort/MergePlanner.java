@@ -134,13 +134,18 @@ final class MergePlanner {
             throw new IllegalArgumentException("pipeline encoder count must be positive");
         }
         int segments = catalog.descriptors().size();
-        int pageBytes = pipelinePageBytes(catalog);
+        int legacyDecodedLimit = decodedPageLimit(config.mergeBudgetBytes());
+        int pageBytes = pipelinePageBytes(catalog, legacyDecodedLimit);
         int slotDepth = pipelineSlotDepth(segments, config.mergeBudgetBytes(), pageBytes);
-        long readerBytes = saturatedMultiply((long) segments * slotDepth, pageBytes);
-        long queueBytes = saturatedMultiply(PartEncoders.QUEUE_DEPTH, pageBytes);
+        long readerPages = saturatedMultiply(segments, (long) slotDepth + 1L);
+        long readerBytes = saturatedMultiply(readerPages, pageBytes);
+        long pendingBytes = pageBytes;
+        long queueBytes = saturatedMultiply(PartEncoders.QUEUE_DEPTH + 1L, pageBytes);
         long perEncoderBytes = saturatedAdd(
                 queueBytes, PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
-        long remaining = Math.max(0L, config.mergeBudgetBytes() - readerBytes);
+        long fixedBytes = saturatedAdd(readerBytes, pendingBytes);
+        long remaining = fixedBytes >= config.mergeBudgetBytes()
+                ? 0L : config.mergeBudgetBytes() - fixedBytes;
         long byHeap = perEncoderBytes == 0 ? Long.MAX_VALUE : remaining / perEncoderBytes;
         long usableFds = usableFdBudget();
         long byFd = usableFds == Long.MAX_VALUE
@@ -152,18 +157,24 @@ final class MergePlanner {
                     ? PipelineClampReason.FD_CLAMPED : PipelineClampReason.HEAP_CLAMPED;
         }
         return new PipelinePlan(admitted, reason, slotDepth, pageBytes,
-                decodedPageLimit(config.mergeBudgetBytes()));
+                legacyDecodedLimit);
     }
 
-    private int pipelinePageBytes(PageRunCatalog catalog) {
-        long observed = catalog.maxRawPayloadLength() > 0
-                ? catalog.maxRawPayloadLength() : catalog.maxRecordLen();
-        if (observed <= 0) {
-            observed = config.mergePerStreamBytes();
+    /**
+     * Price every reader at the largest decoded payload it can admit. A segment without a persisted
+     * maximum is not evidence of a small page: its reader accepts the legacy compatibility limit.
+     */
+    private int pipelinePageBytes(PageRunCatalog catalog, int legacyDecodedLimit) {
+        int maximum = 0;
+        for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
+            int admitted = descriptor.hasDecodedPageMaximum()
+                    ? descriptor.maxRawPayloadLength() : legacyDecodedLimit;
+            maximum = Math.max(maximum, admitted);
         }
-        return (int) Math.max(1L, Math.min(PageBlock.MAX_RAW_PAYLOAD_BYTES, observed));
+        return Math.max(1, maximum);
     }
 
+    /** Derive the per-segment queue depth from the same worst-case page price used by admission. */
     static int pipelineSlotDepth(int segments, long mergeBudgetBytes, int pageBytes) {
         if (segments <= 0 || mergeBudgetBytes <= 0 || pageBytes <= 0) {
             return 1;
@@ -570,6 +581,7 @@ final class MergePlanner {
         }
     }
 
+    /** One immutable pipeline admission result shared by cascade, readers, and encoders. */
     record PipelinePlan(int encoders, PipelineClampReason reason, int slotDepth,
                         int pageBytes, int legacyDecodedLimit) {
         PipelinePlan {

@@ -108,7 +108,7 @@ final class DatasetPublisher {
         }
 
         return assembleParallelParts(outputDir, stagingDir, tmpFiles, writers, ownedInputs,
-                outputAuthority, true);
+                outputAuthority);
     }
 
     /**
@@ -124,22 +124,19 @@ final class DatasetPublisher {
         }
         requireDisjointParts(tmpFiles, writers);
         return assembleParallelParts(outputDir, stagingDir, tmpFiles, writers, ownedInputs,
-                outputAuthority, false);
+                outputAuthority);
     }
 
     private PendingParts assembleParallelParts(Path outputDir, Path stagingDir,
             List<Path> tmpFiles, List<SortedFileWriter> writers,
             StagingReconciliation ownedInputs,
-            StagingReconciliation.DirectoryAuthority outputAuthority, boolean normalizeEmpty)
+            StagingReconciliation.DirectoryAuthority outputAuthority)
             throws IOException {
         PendingParts pending = new PendingParts(outputDir, stagingDir,
                 finalWriterFactory.forOutputSequence(), ownedInputs, outputAuthority);
         pending.tmpFiles.addAll(tmpFiles);
         pending.writers.addAll(writers);
         if (pending.tmpFiles.isEmpty()) {
-            if (!normalizeEmpty) {
-                throw new IllegalArgumentException("preclosed part sequence must not be empty");
-            }
             SortedFileWriter writer = pending.openNext();
             writer.markFinal();
             writer.close();

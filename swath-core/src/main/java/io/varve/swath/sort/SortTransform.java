@@ -176,13 +176,14 @@ public final class SortTransform {
                 new MergePlanner.BoundaryCandidates();
         Optional<Consumer<byte[]>> boundaryKeySink = parallelKickoff
                 ? Optional.of(boundaryCandidates::add)
-                : Optional.empty();
+                : pipelineKickoff ? Optional.of(ignored -> { }) : Optional.empty();
         // Validate and retain every trailer before deleting any disposable working file. Fan-in and
         // range planning consume these descriptors; parallel candidates also stream their embedded
         // sample keys into one globally bounded set during this same open. An unreadable segment is
         // not an optional memory refinement and must fail at kickoff while the prior output and
-        // working evidence are intact. Serial/arbitrary merges read only the fixed extension header;
-        // they do not engage sparse boundary parsing and rely on runtime decoded-page admission.
+        // working evidence are intact. Pipeline kickoff validates current sparse metadata to retain
+        // its decoded-page maximum but discards its boundary keys; invalid/legacy metadata falls back
+        // to the compatibility decode limit. Serial merges read only the fixed extension header.
         long boundaryPreflightStarted = parallelKickoff ? boundaryNanoClock.getAsLong() : 0;
         PageRunCatalog catalog = PageRunCatalog.preflight(
                 stagingSegments, catalogOpener, boundaryKeySink, expectedFormats, metrics);
@@ -196,18 +197,6 @@ public final class SortTransform {
         // originals and prior finals are not part of this narrowly-owned disposable sweep.
         datasetPublisher.sweepWorking(
                 outputDir, stagingDir, ownedInputs, outputAuthority);
-        MergePlanner.EffectiveRanges resourcePlan = parallelKickoff
-                ? mergePlanner.effectiveRanges(config.mergeParallelism(), catalog)
-                : new MergePlanner.EffectiveRanges(1, MergePlanner.ClampReason.NONE);
-        if (parallelKickoff) {
-            recordResourceRangeClamp(config.mergeParallelism(), resourcePlan, catalog);
-        }
-        // First allocation gate: a refusal creates no proof/output state. A parallel candidate may
-        // clamp down to the serial path while leaving every checkpoint-owned original untouched.
-        MergePlanner.EffectiveRanges diskPlan = parallelKickoff
-                ? resourcePlan : new MergePlanner.EffectiveRanges(1, MergePlanner.ClampReason.NONE);
-        MergePlanner.EffectiveRanges rangePlan =
-                mergePlanner.admitDisk(diskPlan, catalog, stagingDir, outputDir);
 
         if (pipelineKickoff) {
             PipelineFinalization.Request request = new PipelineFinalization.Request(
@@ -217,6 +206,17 @@ public final class SortTransform {
                     run, mergePlanner, datasetPublisher)
                     .run(catalog, request, config.mergeParallelism());
         }
+
+        MergePlanner.EffectiveRanges resourcePlan = parallelKickoff
+                ? mergePlanner.effectiveRanges(config.mergeParallelism(), catalog)
+                : new MergePlanner.EffectiveRanges(1, MergePlanner.ClampReason.NONE);
+        if (parallelKickoff) {
+            recordResourceRangeClamp(config.mergeParallelism(), resourcePlan, catalog);
+        }
+        // First allocation gate: a refusal creates no proof/output state. A parallel candidate may
+        // clamp down to the serial path while leaving every checkpoint-owned original untouched.
+        MergePlanner.EffectiveRanges rangePlan =
+                mergePlanner.admitDisk(resourcePlan, catalog, stagingDir, outputDir);
 
         // When the configured/default swath.sort.merge-parallelism survives the staged-size,
         // memory, and fd gates, split the keyspace into

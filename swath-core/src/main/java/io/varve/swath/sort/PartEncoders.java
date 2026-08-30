@@ -20,8 +20,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongConsumer;
 
 /**
- * Bounded final-part encoders. Ordinal {@code k} stays on lane {@code k mod N}, so every batch of a
- * part reaches one writer in sequence while independent parts can close out of order.
+ * Bounded striped final-part encoders with one writer-owning thread per lane. Ordinal {@code k}
+ * stays on lane {@code k mod N}, so every batch of a part reaches one writer in sequence while
+ * independent parts can close out of order. Queues provide the router's only encoder back-pressure;
+ * the completion list contains durably closed parts and is reordered only after every lane stops.
  */
 final class PartEncoders implements AutoCloseable {
     static final int QUEUE_DEPTH = 4;
@@ -64,6 +66,10 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
+    /**
+     * Submit in merge order, waiting only on the selected lane. Timed offers surface peer failure
+     * instead of allowing a full lane to strand the router after another encoder has failed.
+     */
     void submit(PipelineBatch batch) {
         ArrayBlockingQueue<Item> queue = lanes.get(batch.partOrdinal() % lanes.size()).queue;
         if (queue.offer(new Item.Batch(batch))) {
@@ -84,6 +90,7 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
+    /** Stop all lanes, join them, and return a complete dense ordinal sequence or fail atomically. */
     List<CompletedPart> finish(int expectedParts) {
         for (Lane lane : lanes) {
             putStop(lane.queue);
@@ -104,6 +111,7 @@ final class PartEncoders implements AutoCloseable {
         return result;
     }
 
+    /** Deliver a normal stop without bypassing queued batches or masking a peer failure. */
     private void putStop(ArrayBlockingQueue<Item> queue) {
         try {
             while (!queue.offer(Item.Stop.INSTANCE, FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {
@@ -115,6 +123,7 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
+    /** Abort every lane and wait until all open writers have been discarded. */
     @Override
     public void close() {
         if (aborting.compareAndSet(false, true)) {
@@ -125,6 +134,7 @@ final class PartEncoders implements AutoCloseable {
         joinAll();
     }
 
+    /** Join uninterruptibly for cleanup, restoring the caller's interrupt state afterwards. */
     private void joinAll() {
         boolean interrupted = false;
         for (Thread thread : threads) {
@@ -160,10 +170,11 @@ final class PartEncoders implements AutoCloseable {
                     comparator, hook, equalKeyPolicy, metrics, "pipeline");
         }
 
+        /** Own this lane's writer lifecycle; a peer failure is observed even while the queue is idle. */
         void run() {
             try {
                 while (true) {
-                    Item item = queue.take();
+                    Item item = nextItem();
                     if (item instanceof Item.Stop) {
                         if (writer != null) {
                             throw new IllegalStateException("encoder stopped with an open part");
@@ -184,6 +195,15 @@ final class PartEncoders implements AutoCloseable {
             }
         }
 
+        private Item nextItem() throws InterruptedException {
+            Item item;
+            while ((item = queue.poll(FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) == null) {
+                failure.check();
+            }
+            return item;
+        }
+
+        /** Enforce per-lane sequence/part ownership and close each completed writer exactly once. */
         private void encode(PipelineBatch batch) throws IOException {
             failure.check();
             if (batch.sequence() <= lastSequence) {
@@ -244,6 +264,7 @@ final class PartEncoders implements AutoCloseable {
             writer.write(entry);
         }
 
+        /** Discard, rather than finalize, the sole writer this lane may own after abnormal exit. */
         private void discardOpen() {
             if (writer == null) {
                 return;

@@ -48,7 +48,7 @@ final class PageBlock {
     static final int MAX_RAW_PAYLOAD_BYTES = 256 * 1024 * 1024;
 
     /** Packed payload array, or the complete owned record body for a persisted block. */
-    private final byte[] payloadOwner;
+    private byte[] payloadOwner;
     private final int payloadOffset;
     private final int payloadLength;
     private final int rawPayloadLength;
@@ -61,7 +61,7 @@ final class PageBlock {
     private final byte[] lastKeyBytes;
     private ListEntry firstEntry;
     private ListEntry lastEntry;
-    private final long estimatedBytes;
+    private final long stagingEstimatedBytes;
     private final boolean orderedUnderFullComparator;
     /** Non-null only for a persisted page, so cursor-time decode faults retain typed path context. */
     private final Path sourcePath;
@@ -84,7 +84,7 @@ final class PageBlock {
         this.lastKeyBytes = lastKeyBytes;
         this.firstEntry = firstEntry;
         this.lastEntry = lastEntry;
-        this.estimatedBytes = estimatedBytes;
+        this.stagingEstimatedBytes = estimatedBytes;
         this.orderedUnderFullComparator = orderedUnderFullComparator;
         this.sourcePath = sourcePath;
         this.parsedHeader = null;
@@ -105,7 +105,7 @@ final class PageBlock {
         this.lastKeyBytes = header.maxKey();
         this.firstEntry = firstEntry;
         this.lastEntry = lastEntry;
-        this.estimatedBytes = header.rawPayloadLength();
+        this.stagingEstimatedBytes = -1;
         this.orderedUnderFullComparator = header.ordered();
         this.sourcePath = sourcePath;
         this.parsedHeader = header;
@@ -245,14 +245,12 @@ final class PageBlock {
         return codec;
     }
 
-    /** Logical bytes used by the pre-encode staging gate. */
-    long estimatedBytes() {
-        return estimatedBytes;
-    }
-
-    /** Uncompressed payload bytes used by pipeline part calibration. */
-    long logicalBytes() {
-        return rawPayloadLength;
+    /** Entry-shape estimate used only while an admission-packed block enters the staging gate. */
+    long stagingEstimatedBytes() {
+        if (stagingEstimatedBytes < 0) {
+            throw new IllegalStateException("persisted pages do not carry a staging estimate");
+        }
+        return stagingEstimatedBytes;
     }
 
     /** The shared logical-byte estimate used by every staging-segment gate. */
@@ -283,10 +281,15 @@ final class PageBlock {
         }
     }
 
-    /** Materialize the decompressed payload without decoding rows; repeated calls reuse the same bytes. */
+    /**
+     * Materialize a compressed payload and dictionaries, then release the encoded record owner.
+     * Pipeline queues retain only the decoded representation they were admission-priced for.
+     */
     void prepareDecoded() {
         if (codec != PageCodec.NONE) {
             decodedPayload();
+            dictionaries.materialize();
+            payloadOwner = null;
         }
     }
 
@@ -308,6 +311,9 @@ final class PageBlock {
     }
 
     byte[] payloadOwnerUnsafe() {
+        if (payloadOwner == null) {
+            throw new IllegalStateException("encoded page owner was released after decode");
+        }
         return payloadOwner;
     }
 
@@ -334,7 +340,7 @@ final class PageBlock {
 
     /** Bytes of the retained CRC-verified record body backing a persisted page. */
     int retainedRecordBytes() {
-        return payloadOwner.length;
+        return payloadOwner == null ? 0 : payloadOwner.length;
     }
 
     long dictionaryCacheBudgetBytes() {
@@ -360,6 +366,9 @@ final class PageBlock {
     private byte[] decodedPayload() {
         byte[] cached = decodedPayloadCache;
         if (cached == null) {
+            if (payloadOwner == null) {
+                throw new IllegalStateException("decoded page lost both encoded and decoded payloads");
+            }
             cached = codec.decompress(payloadOwner, payloadOffset, payloadLength,
                     rawPayloadLength);
             decodedPayloadCache = cached;

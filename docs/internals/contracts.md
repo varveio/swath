@@ -795,25 +795,34 @@ which owns the at-most-once-text durability questions it would reopen):
   part files are not globally ordered.
 - **Finalization has two stateless arms above the same sealed segments.** `sort.finalization=ranges`
   remains the default range-owned merge. The default-off `pipeline` spike starts one sequential
-  reader slot per retained segment and feeds one ordered page-minimum router. For `K` surviving
-  segments, `page` is the catalog's maximum raw payload (or the bounded observed frame size for
-  legacy metadata), and slot depth is `clamp(1, mergeBudgetBytes / (K * page), 4)`. Disjoint pages
-  are forwarded whole; overlapping page ranges use the pipeline's incremental row heap. It admits
-  frontier pages against the next emitted raw key and releases each exhausted page's exact decoded
-  reservation, so a transitive chain does not retain its full page count.
+  reader slot per retained segment and feeds one ordered page-minimum router. Let `B` be
+  `mergeBudgetBytes`, `K` the surviving segment count, and `P` the largest decoded raw payload any
+  reader admits. A segment with a persisted decoded-page maximum contributes that maximum; a legacy
+  segment contributes `min(PageBlock.MAX_RAW_PAYLOAD_BYTES, B)`, regardless of another segment's
+  smaller persisted maximum. Slot depth `D` is `clamp(1, B / (K * P), 4)`. A reader acquires slot
+  capacity before reading or decoding, so its queue cannot retain an additional blocked-producer
+  page. Compressed pages eagerly decode and release the encoded record owner before enqueue.
+  Reader-side page residency is therefore at most `K * (D + 1)` pages: `D` queued pages plus one
+  router frontier head per segment. Disjoint pages are forwarded whole; overlapping page ranges use
+  the pipeline's incremental row heap. It admits frontier pages against the next emitted raw key and
+  releases each exhausted page's exact decoded reservation, so a transitive chain does not retain
+  its full page count.
 
   Pipeline encoder admission prices only resources this arm owns. After the fixed FD headroom and
   `K` reader descriptors, each admitted encoder reserves one output descriptor. Heap admission first
-  subtracts `K * slotDepth * page`, then prices each encoder as `4 * page` for its bounded queue plus
-  an 8 MiB open-writer estimate. It has no proof-spool charge and no staged-size floor. The router's
-  decoded-page ledger is independently bounded by `mergeBudgetBytes`; therefore router plus slot and
-  encoder-queue page residency is bounded by `mergeBudgetBytes + K * slotDepth * page + 4 * N * page`
-  (open-writer estimates are separately admission-priced). The cascade reserves all concurrent
-  output descriptors. The router alone chooses part boundaries and assigns dense ordinals; bounded
-  encoder lanes receive part `k` on lane `k mod N`, and the calling thread orders durably preclosed
-  parts before the shared verification and publication sequence. The pipeline does not seek,
-  construct range boundaries, or depend on type-2/type-3 indexes for correctness. If fan-in requires
-  cascades, it first uses the normal page-run cascade and then runs this pipeline over the survivors.
+  subtracts `K * (D + 1) * P` for reader queues/frontiers and one `P` router-pending payload, then
+  prices each encoder as `(QUEUE_DEPTH + 1) * P` for its four queued and one active payloads plus an
+  8 MiB open-writer estimate. It has no proof-spool charge and no staged-size floor. The router's
+  overlap-cluster decoded-page ledger is independently bounded by `B`. Thus the enforced payload
+  residency bound is `B + K * (D + 1) * P + (N * (QUEUE_DEPTH + 1) + 1) * P`; the `N` writer heap
+  estimates are admission prices rather than a byte ledger. Encoder admission retains a one-encoder
+  liveness floor when the fixed reader/pending cost already consumes `B`. The cascade reserves
+  descriptors for the admitted `N` outputs, not the requested count. The router alone chooses part
+  boundaries and assigns dense ordinals; bounded encoder lanes receive part `k` on lane `k mod N`,
+  and the calling thread orders durably preclosed parts before the shared verification and publication
+  sequence. The pipeline does not seek, construct range boundaries, or depend on type-2/type-3
+  indexes for correctness. If fan-in requires cascades, it first uses the normal page-run cascade and
+  then runs this pipeline over the survivors.
 
   Pipeline logical bytes always mean uncompressed raw page-payload bytes. A forwarded whole page uses
   its header's `rawPayloadLength`, which is available without decoding. A clustered page computes the

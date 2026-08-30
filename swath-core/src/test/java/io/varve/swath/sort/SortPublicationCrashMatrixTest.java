@@ -256,7 +256,7 @@ final class SortPublicationCrashMatrixTest {
 
     private static Stream<Arguments> publicationMatrix() {
         return Stream.of(MergeShape.SERIAL, MergeShape.PARALLEL, MergeShape.PIPELINE,
-                        MergeShape.EMPTY_PARALLEL_REQUEST)
+                        MergeShape.EMPTY_PARALLEL_REQUEST, MergeShape.EMPTY_PIPELINE_REQUEST)
                 .flatMap(shape -> Stream.of(false, true)
                         .flatMap(prior -> Stream.of(false, true)
                                 .map(retain -> Arguments.of(shape, prior, retain))));
@@ -362,7 +362,8 @@ final class SortPublicationCrashMatrixTest {
         PIPELINE(3, Long.MAX_VALUE,
                 List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
                 1),
-        EMPTY_PARALLEL_REQUEST(3, Long.MAX_VALUE, List.of(), 1);
+        EMPTY_PARALLEL_REQUEST(3, Long.MAX_VALUE, List.of(), 1),
+        EMPTY_PIPELINE_REQUEST(3, Long.MAX_VALUE, List.of(), 1);
 
         private final int parallelism;
         private final long rollBytes;
@@ -382,7 +383,7 @@ final class SortPublicationCrashMatrixTest {
                     .withMergeParallelism(parallelism)
                     .withMergeBudgetBytes(64L << 20)
                     .withFinalFileBytes(rollBytes)
-                    .withFinalization(this == PIPELINE
+                    .withFinalization(this == PIPELINE || this == EMPTY_PIPELINE_REQUEST
                             ? SortFinalization.PIPELINE : SortFinalization.RANGES)
                     .withStagingRetention(retain
                             ? StagingRetention.RETAIN_ORIGINALS
