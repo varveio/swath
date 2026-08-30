@@ -736,10 +736,14 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                                         inRange.size(), cursorTo, completed);
                             }
                             if (inRange.isEmpty()) {
+                                sendSortCompletionIfNeeded(
+                                        ctx, channel, claim.nodeId(), pageSeq, completed);
                                 return;
                             }
                             List<ListEntry> kept = filters.apply(inRange);
                             if (kept.isEmpty()) {
+                                sendSortCompletionIfNeeded(
+                                        ctx, channel, claim.nodeId(), pageSeq, completed);
                                 return;
                             }
                             if (hiAtCommit == null) {
@@ -765,9 +769,11 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                                     throw new OutputException("sort segment encode failed", parseFailure);
                                 }
                                 metrics.recordStealReason("SORT", "pack_on_fetch");
-                                pageBatch = PageBatch.ofPacked(claim.nodeId(), pageSeq.getAndIncrement(), packed);
+                                pageBatch = PageBatch.ofPacked(
+                                        claim.nodeId(), pageSeq.getAndIncrement(), packed, completed);
                             } else {
-                                pageBatch = new PageBatch(claim.nodeId(), pageSeq.getAndIncrement(), kept);
+                                pageBatch = new PageBatch(
+                                        claim.nodeId(), pageSeq.getAndIncrement(), kept, completed);
                             }
                             Timer.Sample queueWait = metrics.startQueueWaitTimer();
                             boolean sent = channel.send(new Item<>(pageBatch));
@@ -821,6 +827,17 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         long remaining = worklist.decrement();
         if (remaining == 0L) {
             log.info("quiescence_reached run_id={} outstanding={}", runId, remaining);
+        }
+    }
+
+    /** Deliver node completion to the sort assertion tripwire when no retained rows carry it. */
+    private void sendSortCompletionIfNeeded(RunContext ctx, Channel<PageBatch> channel,
+            long nodeId, AtomicLong pageSeq, boolean completed) throws InterruptedException {
+        if (!completed || pagePacker == null) {
+            return;
+        }
+        if (!channel.send(new Item<>(PageBatch.completion(nodeId, pageSeq.getAndIncrement())))) {
+            stopForReceiverGone(ctx);
         }
     }
 

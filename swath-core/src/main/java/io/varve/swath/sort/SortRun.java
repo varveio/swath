@@ -45,6 +45,11 @@ public record SortRun(
         PageRunFormat.requireCanonicalComparator(comparator);
     }
 
+    /** Ordering mode persisted into every cascade segment produced by this run. */
+    SortMode orderingMode() {
+        return equalKeyPolicy == EqualKeyPolicy.REJECT ? SortMode.OBJECTS : SortMode.VERSIONS;
+    }
+
     /** Compatibility constructor for library callers; merge-start disk admission remains enforced. */
     public SortRun(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
             EqualKeyPolicy equalKeyPolicy, SortMetrics metrics,

@@ -42,6 +42,34 @@ class DatasetPublisherInvariantTest {
     }
 
     @Test
+    void nonUtf8RawBoundsRejectCrossPartOverlap() {
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        FinalPartMetadata high = metadata(new byte[] {(byte) 0x80}, new byte[] {(byte) 0x80});
+        FinalPartMetadata low = metadata(new byte[] {0x7f}, new byte[] {0x7f});
+
+        assertThatThrownBy(() -> DatasetPublisher.requireDisjointParts(
+                List.of(high, low), metrics))
+                .isInstanceOfSatisfying(SortOrderException.class, failure ->
+                        assertThat(failure.errorClass()).isEqualTo(SortOrderException.ERROR_CLASS))
+                .hasMessageContaining("raw unsigned key order");
+        assertThat(metrics.count("SORT.cross_part_overlap_rejected")).isEqualTo(1);
+    }
+
+    @Test
+    void nonUtf8RawBoundsPermitStrictUnsignedAdjacency() {
+        DatasetPublisher.requireDisjointParts(List.of(
+                metadata(new byte[] {0x7f}, new byte[] {0x7f}),
+                metadata(new byte[] {(byte) 0x80}, new byte[] {(byte) 0x80})),
+                SortMetrics.NO_OP);
+    }
+
+    private static FinalPartMetadata metadata(byte[] min, byte[] max) {
+        // Both invalid-UTF-8 bounds would become the same replacement-character String. The publisher
+        // must compare these raw bytes instead of the lossy display fields.
+        return new FinalPartMetadata(1, 1, "md5", "�", "�", 0, 0, 0, min, max);
+    }
+
+    @Test
     void stagingReplacementBeforePublishCannotDeletePriorFinal(@TempDir Path root)
             throws IOException {
         Path output = Files.createDirectories(root.resolve("data"));

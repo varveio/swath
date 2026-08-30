@@ -147,14 +147,14 @@ class PageRunPageIndexTest {
         }
 
         byte[] bytes = Files.readAllBytes(segment);
-        ByteBuffer.wrap(bytes).putShort(Integer.BYTES, (short) 2);
+        ByteBuffer.wrap(bytes).putShort(Integer.BYTES, (short) 1);
         Files.write(segment, bytes);
         assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment),
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty(),
                 java.util.Map.of(segment, physical)))
                 .isInstanceOf(SegmentCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_format_mismatch")
-                .hasMessageContaining("physical_format_version=2");
+                .hasMessageContaining("physical_format_version=1");
     }
 
     @Test
@@ -254,12 +254,12 @@ class PageRunPageIndexTest {
     }
 
     @Test
-    void prefixMaximumAndCumulativeEntriesCoverNestedPages(@TempDir Path dir) throws IOException {
+    void prefixMaximumAndCumulativeEntriesCoverDisjointPages(@TempDir Path dir) throws IOException {
         SortBuffer buffer = new SortBuffer(SortConfigs.base(), CMP);
-        buffer.admit(1, List.of(object("a"), object("z")));
-        buffer.admit(2, List.of(object("b"), object("c")));
-        buffer.admit(3, List.of(object("d"), object("e")));
-        Path segment = dir.resolve("nested.pageseg");
+        buffer.admit(1, List.of(object("a"), object("b")));
+        buffer.admit(2, List.of(object("c"), object("d")));
+        buffer.admit(3, List.of(object("e"), object("f")));
+        Path segment = dir.resolve("disjoint.pageseg");
         new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
                 .flush(buffer.seal(SealTrigger.DRAIN), segment);
 
@@ -276,7 +276,7 @@ class PageRunPageIndexTest {
                         java.nio.charset.StandardCharsets.UTF_8));
             }
             assertThat(cumulativeEntries).containsExactly(0L, 2L, 4L);
-            assertThat(prefixMaxima).containsExactly("z", "z", "z");
+            assertThat(prefixMaxima).containsExactly("b", "d", "f");
         }
     }
 

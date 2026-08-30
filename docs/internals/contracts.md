@@ -124,21 +124,26 @@ already packed — `--sort` mode, so the channel and the sort drain hold a compa
 packed page instead of parsed entry objects, and packing runs on the fetch
 worker, not the single drain thread). The canonical constructor **rejects** a
 batch that has neither or both non-null; `isPacked()` distinguishes them and
-`entryCount()` is the queue-budget weight (I11). Channel close/failure is carried
+`entryCount()` is its logical row count. A terminal batch carries `nodeCompleted=true` so the
+assertion-only sort tripwire can release per-node state. When filtering removes every terminal
+row, the worker emits a zero-row completion batch; `channelWeight()` prices that control batch as
+one unit so completion signals remain bounded by the same channel gate (I11). Channel close/failure is carried
 by a sealed envelope, never by polluting `ListEntry`:
 
 ```java
-public record PageBatch(long nodeId, long pageSeq, List<ListEntry> entries, PackedPage packed) {}
+public record PageBatch(long nodeId, long pageSeq, List<ListEntry> entries,
+                        PackedPage packed, boolean nodeCompleted) {}
 // exactly-one-of(entries, packed) enforced by the canonical constructor.
 // Convenience: 3-arg PageBatch(nodeId, pageSeq, entries) (packed=null) and
 // static PageBatch.ofPacked(nodeId, pageSeq, packed) (entries=null).
 
 // PackedPage (swath-model seam): the drain-thread view of a packed page — entryCount,
-// objectCount, commonPrefixCount, deleteMarkerCount, totalObjectSize — without decoding
+// objectCount, commonPrefixCount, deleteMarkerCount, totalObjectSize, firstKey, lastKey — without decoding
 // the payload; the sort package downcasts to recover the concrete packed block.
 public interface PackedPage {
     long entryCount(); long objectCount(); long commonPrefixCount();
     long deleteMarkerCount(); long totalObjectSize();
+    byte[] firstKey(); byte[] lastKey();
 }
 
 public sealed interface Msg<T> permits Item, End, Failure {}
@@ -492,7 +497,8 @@ its checkpoint/publication state.
   (sorted or not); `minKey`/`maxKey` (plain UTF-8 key text, **not**
   base64/hex) are present only when `sorted`, and are each file's TRUE first/
   last key (never derived from Parquet footer min/max statistics, for the
-  same truncation reason as `SortedFileIndex`) — a consumer can verify
+  same truncation reason as `SortedFileIndex`) — the publisher verifies the corresponding retained
+  raw-byte bounds before renaming, and a consumer holding valid UTF-8 keys can verify
   `files[i].maxKey < files[i+1].minKey` (unsigned byte, strict) across the
   whole dataset without opening a single Parquet file. Final rolling preserves that strictness by
   treating every equal-raw-key group as one indivisible file atom: once a part reaches its byte
@@ -754,6 +760,11 @@ which owns the at-most-once-text durability questions it would reopen):
   the safe per-node durable maximum. A raw-key regression is rejected before segment fsync and
   `partFinalized`, because sorting such a page could persist a key above the admission-time durable
   cursor and make resume relist already-durable rows.
+  After pages are sorted by first key, the seal requires every adjacent page range to be disjoint:
+  `previous.maxKey < next.minKey` under unsigned raw-byte order for `OBJECTS`. `VERSIONS` alone may
+  use an equal boundary when one key's versions span pages; `previous.maxKey > next.minKey` is always
+  corruption. The check runs before file fsync and checkpoint `partFinalized`, and the shared reader
+  enforces the same mode-aware invariant on every sequential page advance.
 - **Comparator** equals the in-memory comparator exactly. The dormant `VERSIONS` plumbing currently
   uses `(key, version_id)` with null first and then unsigned UTF-8 `version_id`, and stamps that exact
   order. This is an implementation order for synthetic tests, not the planned `--all-versions`
@@ -896,18 +907,24 @@ which owns the at-most-once-text durability questions it would reopen):
   (`SORT.merge_redone`), regardless of how many cascade passes the redo
   itself needs to run.
 
-### 6.1 Page-run v1 trailer extensions
+### 6.1 Page-run v2 envelope, disjoint pages, and trailer extensions
 
 Each original listing-phase page-run segment embeds a bounded type-3 sparse page index in the
-optional extension between `segMaxKey` and the existing fixed EOF tail. Type 1 is the legacy
+optional extension between `segMaxKey` and the fixed EOF tail. Type 1 is the legacy
 minima-only block; type 2 is the prior sparse index without decoded-page metadata. Both remain
 readable. Cascade intermediates and fixture
 chunks are streamed after boundary selection or outside the structured live path and remain
-extensionless. `FORMAT_VERSION` remains 1, `trailerStart` still points at `segMinKey`, and the final
-28 bytes are unchanged, so older page-run readers continue to stream exactly `totalRecords` and
-ignore the extension:
+extensionless. Page-run format 2 is a hard cut: an older header format fails the existing version
+check, with no compatibility reader or migration path. The header is a bounded, versioned metadata
+envelope. Unknown TLV field IDs are skipped by their declared length; ordering mode is required and
+understood by this version. `trailerStart` still points at `segMinKey`:
 
 ```text
+[magic u32][formatVersion u16 = 2][headerVersion u16 = 1][metadataLength u32]
+metadataLength bytes of: [fieldId u16][fieldLength u16][fieldValue bytes]
+  field 1, length 1: ordering mode (1 = OBJECTS, 2 = VERSIONS)
+[headerCrc32c u32]  // over the header prefix and metadata
+
 records*
 segMinKey u16-len-prefixed
 segMaxKey u16-len-prefixed
@@ -936,8 +953,15 @@ type 3 payload (current):
   [maxRawPayloadLength u32]
 
 [crc32c u32]
-[trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
+[trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32]
+[fixedTrailerCrc32c u32][magic u32]
 ```
+
+The fixed-trailer CRC covers exactly `trailerStart`, `totalRecords`, `totalEntries`, and
+`maxRecordLen`, so a torn or bit-flipped count cannot terminate a read early while still appearing
+complete. The header and fixed-trailer CRCs, record CRCs, and extension CRC detect accidental
+corruption, torn writes, and writer/reader bugs. They are integrity checks, not authentication and
+do not defend against deliberate modification by an actor who can recompute them.
 
 The u16 key-length fields preserve the extension envelope, but sparse listing indexes
 accept at most the S3 key limit of 1,024 bytes for each minimum/prefix maximum. This supplies an
@@ -953,8 +977,10 @@ same `max(1, ceil(P / 4096))` stride and ordinals `0, stride, 2*stride, ...` as 
 the page minima supplied to boundary selection are unchanged.
 
 For non-empty segments, `segMinKey` is the unsigned minimum of all persisted page minima and
-`segMaxKey` is the unsigned maximum of all persisted page maxima. Nested legal page ranges such as
-`[a,z]` followed by `[b,c]` therefore retain `z`, not merely the last stored page's maximum.
+`segMaxKey` is the unsigned maximum of all persisted page maxima. Adjacent pages must satisfy the
+mode-aware disjointness rule above. A CRC-valid hand-built `[a,z]`, `[b,c]` segment is rejected as
+typed `page_run_page_overlap`; it is never repaired by merge fallback. Minima that go backwards are
+still the more specific `page_run_min_regression` classification.
 
 Every CRC-valid record body is structurally checked before its frontier is trusted: fixed fields,
 dictionary counts and lengths, positive row count, codec, raw/stored payload lengths, no trailing
@@ -1002,7 +1028,7 @@ dictionary cache, and any separate compressed raw allocation for every whole/act
 cursor construction/decompression, after reserving one frontier body
 per open stream. Legal overlap clusters therefore cannot exceed the serial budget or a parallel
 range's post-proof share; exhaustion is resumable as `sort_merge_memory_exhausted`.
-PageRun format v1 has no persisted comparator identifier and is therefore explicitly fixed to
+PageRun format v2 persists ordering mode but no comparator identifier and is therefore explicitly fixed to
 `ListEntryComparator`. Both `SortRun` and every `PageRunSegmentWriter` reject alternate comparator
 implementations before merge or persistence; a future comparator requires a new identified format.
 Each page's ordered flag records full-comparator order: comparator ties remain ordered, while a strict
@@ -1147,8 +1173,9 @@ already requires `finalPrefixMax == segMaxKey`, that last body/trailer compariso
 final prefix maximum. A sample/seek disagreement is `page_run_index_mismatch`. A physical-zone seam
 or tiling disagreement is index mismatch only when one of that zone's usable sparse-index seams
 participated; extensionless, type-1, and rejected-index inputs remain
-`page_run_body_corruption`, as do body/trailer total or bound disagreements. An actual min
-regression remains `page_run_min_regression`.
+  `page_run_body_corruption`, as do body/trailer total or bound disagreements. An actual min
+  regression remains `page_run_min_regression`; an ascending-min overlap is
+  `page_run_page_overlap`. The same check is applied across indexed physical-zone seams.
 
 The coordinator performs this proof before returning the ranges' still-open writers. Cancellation
 is polled during planning and proof. Any worker or post-worker proof failure closes writers after
@@ -1160,7 +1187,11 @@ stale-final sweep. The adjacent-row guard also rejects a comparator regression a
 deterministic ordering invariant failure, so it is classified but deliberately not merge-pending.
 Cardinality disagreement is likewise fatal/classified as
 `error_class=sort_output_cardinality_mismatch` and emits
-`SORT.sort_output_cardinality_mismatch` once. Live `OBJECTS` final drains reject adjacent equal raw
+  `SORT.sort_output_cardinality_mismatch` once. After all parallel final parts close and before any
+  stale-final sweep or rename, the publisher also requires each non-empty part's raw-byte maximum to
+  be strictly below the next part's raw-byte minimum. These bounds are retained as `byte[]` alongside
+  the manifest's UTF-8 display strings, so malformed fixture bytes cannot collapse through replacement
+  decoding and evade the check; failure is typed `sort_output_order_regression`. Live `OBJECTS` final drains reject adjacent equal raw
 keys (`sort_duplicate_key`); the dormant `VERSIONS` mode retains equal raw-key groups under the full
 comparator. Any disagreement refuses publication. Successful parallel merges emit
 `SORT.merge_zone_proof_complete` once plus exactly one
@@ -1179,7 +1210,7 @@ bytes; it is zero on serial merges.
 | --- | --- | --- |
 | `--concurrency` = `Tmax` | 64 | the AIMD **ceiling**; the live concurrency `T` ∈ [1, `Tmax`], starts at `min(4, Tmax)` (slow-start ramp) and is lowered/raised by AIMD (algorithms.md §5) |
 | HTTP client `maxConnections` | `Tmax + 16` | built **once** from the configured `--concurrency` ceiling `Tmax` (not live AIMD `T`); **must exceed `T`** or it silently caps concurrency |
-| `--object-listing-queue-size` | 50_000 **entries** | a `PageBatch` is admitted while in-flight entry count < cap; budget ≈ cap × (max\_key\_len + ~200 B fixed per-entry overhead: etag, storageClass, versionId, owner, checksum strings + 11-field record header) × #queues; admission is at `PageBatch` granularity (≤ 1000 entries), so each queue may transiently overshoot the entry cap by up to one page |
+| `--object-listing-queue-size` | 50_000 **entries** | a `PageBatch` is admitted while in-flight channel weight < cap; ordinary batches weigh their entry count and zero-row node-completion control batches weigh one, so control traffic is bounded too. Budget ≈ cap × (max\_key\_len + ~200 B fixed per-entry overhead: etag, storageClass, versionId, owner, checksum strings + 11-field record header) × #queues; admission is at `PageBatch` granularity (≤ 1000 entries), so each queue may transiently overshoot the entry cap by up to one page |
 | page batch size | one S3 page (≤1000) | pipeline granularity |
 | seed delimiter levels | adaptive | a shallow `delimiter=/` seed that starts at the top level and **adaptively descends narrow sub-levels** while cut-point and probe budgets permit; a truncated flat-wide level is radix-banded rather than descended (algorithms.md §8) |
 | steal probe | `max_keys=1` | one key per split attempt |

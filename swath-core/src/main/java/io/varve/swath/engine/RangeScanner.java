@@ -266,18 +266,18 @@ public final class RangeScanner {
                 // committed or emitted (preserving exactly-once even on the default sink). Adopted
                 // pages carry keys already proven > startAfter and non-empty, so these never trip on
                 // them — but running the identical guard keeps the property source-independent.
-                if (!done) {
-                    if (batch.isEmpty()) {
+                if (!done && batch.isEmpty()) {
                         // Truncated, in-range, yet no keys ≤ hi and bound not reached: a broken page.
-                        throw new ListingException("truncated page returned no keys <= hi (prefix="
-                                + describe(prefix) + ")");
-                    }
-                    // start_after is exclusive, so a correct page advances: lastKey > startAfter.
-                    // lastKey <= startAfter ⇒ the server did not move forward ⇒ stuck.
-                    if (startAfter != null && KeyBytes.compareUnsigned(lastKey, startAfter) <= 0) {
-                        throw new ListingException("no forward progress (stuck listing) at "
-                                + describe(startAfter));
-                    }
+                    throw new ListingException("truncated page returned no keys <= hi (prefix="
+                            + describe(prefix) + ")");
+                }
+                // start_after is exclusive, so every non-empty page advances, including the terminal
+                // (non-truncated) page. lastKey <= startAfter means the server repeated or regressed.
+                // An empty terminal page is legitimate and leaves the cursor unchanged.
+                if (lastKey != null && startAfter != null
+                        && KeyBytes.compareUnsigned(lastKey, startAfter) <= 0) {
+                    throw new ListingException("no forward progress (stuck listing) at "
+                            + describe(startAfter));
                 }
 
                 // One callback per page (incl. an empty terminal page), so the checkpoint

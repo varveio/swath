@@ -825,7 +825,7 @@ public final class ListRunner {
         };
         String segmentPrefix = "seg-" + runId + "-" + Long.toHexString(System.nanoTime());
         SortLane lane = new SortLane(sortConfig, comparator, DuplicateHook.NO_OP, sortMetrics,
-                sortLaneMeters(ctx.metrics()), stagingDir, segmentPrefix, sink);
+                sortLaneMeters(ctx.metrics()), stagingDir, segmentPrefix, sink, mode);
         SortOutputStage stage = new SortOutputStage(lane);
 
         // The merge result is produced by the completion chain and read by the terminal summary +
@@ -1264,7 +1264,7 @@ public final class ListRunner {
                                     : new String(bounds.firstKey(), StandardCharsets.UTF_8),
                             bounds.lastKey() == null ? null
                                     : new String(bounds.lastKey(), StandardCharsets.UTF_8),
-                            0L, 0L, 0L);
+                            0L, 0L, 0L, bounds.firstKey(), bounds.lastKey());
                 }
                 parts.add(new PartInfo(relPath, 0, metadata.rows(), metadata.bytes(), metadata.md5(),
                         metadata.minKey(), metadata.maxKey()));
@@ -1848,7 +1848,7 @@ public final class ListRunner {
         }
         ctx.metrics().setPrefix(plan.prefix);
         ctx.metrics().setPhase(Phase.LISTING);
-        Pipeline<PageBatch> pipeline = new Pipeline<>((long) plan.queueCapacity, PageBatch::entryCount);
+        Pipeline<PageBatch> pipeline = new Pipeline<>((long) plan.queueCapacity, PageBatch::channelWeight);
         JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, plan.jsonSummaryConfig,
                 () -> plan.snapshotSummary.apply(elapsedSince(startedNs)), plan.outputStage);
         plan.startLog.run();

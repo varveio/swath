@@ -60,4 +60,14 @@ final class PackedPageBlock implements PackedPage {
     public long totalObjectSize() {
         return totalObjectSize;
     }
+
+    @Override
+    public byte[] firstKey() {
+        return block.firstKey();
+    }
+
+    @Override
+    public byte[] lastKey() {
+        return block.lastKey();
+    }
 }

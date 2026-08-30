@@ -116,7 +116,8 @@ final class PageRunCatalog {
                         ? extension.maxRawPayloadLength()
                         : -1;
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
-                        trailer, extension, maxRawPayloadLength, physicalFormat));
+                        trailer, extension, maxRawPayloadLength, physicalFormat,
+                        io.headerBytes, io.orderingMode()));
             }
         }
         return new PageRunCatalog(descriptors);

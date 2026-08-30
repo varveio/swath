@@ -47,6 +47,9 @@ final class PageRunSegmentIo implements AutoCloseable {
     private final Path path;
     private final int magic;
     private final short formatVersion;
+    private final SortMode orderingMode;
+    /** Absolute offset of the first framed page after the variable-length header envelope. */
+    final int headerBytes;
     /** Carries the {@code SORT.page_run_min_regression} engagement counter (NO_OP when unwired). */
     private final SortMetrics metrics;
     /** Maximum decoded page payload admitted by kickoff planning for this segment. */
@@ -65,6 +68,8 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /** Previous page's minKey (monotonicity guard); null until the first page is read. */
     private byte[] previousMin;
+    /** Previous page's maxKey (disjointness guard); null until the first page is read. */
+    private byte[] previousMax;
     /** Ordinal of the next page returned by {@link #nextPage()}. */
     private long pagesRead;
     /** Actual or seek-seeded entries before the next page. */
@@ -72,7 +77,7 @@ final class PageRunSegmentIo implements AutoCloseable {
     /** Framed page bytes physically read by this IO instance. */
     private long framedBytesRead;
     /** Tracked sequential frame offset; avoids a native FileChannel.position() query per page. */
-    private long nextFrameOffset = PageRunSegmentWriter.HEADER_BYTES;
+    private long nextFrameOffset;
     /** Physical proof accounting is enabled only for original indexed-parallel frontiers. */
     private boolean proofTracking;
     private long lastPageOrdinal;
@@ -86,14 +91,17 @@ final class PageRunSegmentIo implements AutoCloseable {
     private boolean indexedPosition;
 
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
-                            short formatVersion, long maxRecordLen, long totalRecords,
+                            short formatVersion, SortMode orderingMode, int headerBytes,
+                            long maxRecordLen, long totalRecords,
                             long totalEntries, long trailerStart, long fileSize) {
-        this(channel, path, metrics, magic, formatVersion, maxRecordLen, totalRecords,
+        this(channel, path, metrics, magic, formatVersion, orderingMode, headerBytes,
+                maxRecordLen, totalRecords,
                 totalEntries, trailerStart, fileSize, PageBlock.MAX_RAW_PAYLOAD_BYTES);
     }
 
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
-                            short formatVersion, long maxRecordLen, long totalRecords,
+                            short formatVersion, SortMode orderingMode, int headerBytes,
+                            long maxRecordLen, long totalRecords,
                             long totalEntries, long trailerStart, long fileSize,
                             int maxRawPayloadLength) {
         this.channel = channel;
@@ -102,17 +110,20 @@ final class PageRunSegmentIo implements AutoCloseable {
         this.maxRawPayloadLength = maxRawPayloadLength;
         this.magic = magic;
         this.formatVersion = formatVersion;
+        this.orderingMode = orderingMode;
+        this.headerBytes = headerBytes;
         this.maxRecordLen = maxRecordLen;
         this.totalRecords = totalRecords;
         this.totalEntries = totalEntries;
         this.trailerStart = trailerStart;
         this.fileSize = fileSize;
+        this.nextFrameOffset = headerBytes;
     }
 
     /**
      * Open {@code path}, validate the header magic/version and the fixed trailer tail (recovering the
      * record/entry counts, {@code maxRecordLen}, {@code trailerStart}, and the trailing magic /
-     * truncation check), then position the channel at the first record ({@link PageRunSegmentWriter#HEADER_BYTES}).
+     * truncation check), then position the channel after the variable-length header at the first record.
      * Closes the channel on any open-time failure. {@code metrics} carries the
      * {@code SORT.page_run_min_regression} engagement counter into the run summary.
      */
@@ -130,41 +141,50 @@ final class PageRunSegmentIo implements AutoCloseable {
         FileChannel channel = FileChannel.open(path, StandardOpenOption.READ);
         try {
             long size = channel.size();
-            long minSize = PageRunSegmentWriter.HEADER_BYTES + PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+            long minSize = PageRunHeader.PREFIX_BYTES + PageRunHeader.CRC_BYTES
+                    + PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
             if (size < minSize) {
                 throw failFor(path, "file too small to be a page-run segment (" + size + " bytes)");
             }
 
-            ByteBuffer header = readAt(channel, path, 0, PageRunSegmentWriter.HEADER_BYTES);
-            int magic = header.getInt();
-            short version = header.getShort();
-            if (magic != PageRunSegmentWriter.MAGIC) {
-                throw failFor(path, "bad page-run magic 0x" + Integer.toHexString(magic));
-            }
-            if (version != PageRunSegmentWriter.FORMAT_VERSION) {
-                throw failFor(path, "unsupported page-run format version " + version);
-            }
+            PageRunHeader.Header header = PageRunHeader.read(channel, path, size, metrics);
+            int magic = PageRunSegmentWriter.MAGIC;
+            short version = header.formatVersion();
 
             // The fixed trailer tail carries trailerStart/totalRecords/totalEntries/maxRecordLen and the
             // trailing magic — reading it lets us stop after exactly totalRecords records (so we never
             // misread the trailer as a record) and validates the file is complete (a truncated file has
             // no valid trailing magic here).
-            ByteBuffer tail = readAt(channel, path, size - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES,
-                    PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES);
+            byte[] tailBytes = readAt(channel, path,
+                    size - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES,
+                    PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES).array();
+            ByteBuffer tail = ByteBuffer.wrap(tailBytes);
             long trailerStart = tail.getLong();
             long totalRecords = tail.getInt() & 0xFFFFFFFFL;
             long totalEntries = tail.getLong();
             long maxRecordLen = tail.getInt() & 0xFFFFFFFFL;
+            int expectedTrailerCrc = tail.getInt();
             int trailerMagic = tail.getInt();
+            CRC32C trailerCrc = new CRC32C();
+            trailerCrc.update(tailBytes, 0, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
+            if ((int) trailerCrc.getValue() != expectedTrailerCrc) {
+                metrics.recordStealReason("SORT", "page_run_trailer_corruption");
+                throw new SegmentCorruptionException(path,
+                        SegmentCorruptionException.PAGE_RUN_TRAILER_CORRUPTION,
+                        "fixed trailer CRC32C mismatch");
+            }
             if (trailerMagic != PageRunSegmentWriter.MAGIC) {
-                throw failFor(path, "bad or missing page-run trailer (truncated segment?)");
+                metrics.recordStealReason("SORT", "page_run_trailer_corruption");
+                throw new SegmentCorruptionException(path,
+                        SegmentCorruptionException.PAGE_RUN_TRAILER_CORRUPTION,
+                        "bad or missing page-run trailer magic (truncated segment?)");
             }
             long fixedTailStart = size - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-            if (trailerStart < PageRunSegmentWriter.HEADER_BYTES
+            if (trailerStart < header.encodedBytes()
                     || trailerStart > fixedTailStart - 4) {
                 throw failFor(path, "invalid page-run trailer offset " + trailerStart);
             }
-            long recordBytes = trailerStart - PageRunSegmentWriter.HEADER_BYTES;
+            long recordBytes = trailerStart - header.encodedBytes();
             if (totalRecords == 0) {
                 if (recordBytes != 0 || totalEntries != 0 || maxRecordLen != 0) {
                     throw failFor(path, "inconsistent empty page-run trailer counts");
@@ -177,8 +197,9 @@ final class PageRunSegmentIo implements AutoCloseable {
                 throw failFor(path, "inconsistent page-run trailer record metadata");
             }
 
-            channel.position(PageRunSegmentWriter.HEADER_BYTES);
-            return new PageRunSegmentIo(channel, path, metrics, magic, version, maxRecordLen,
+            channel.position(header.encodedBytes());
+            return new PageRunSegmentIo(channel, path, metrics, magic, version,
+                    header.orderingMode(), header.encodedBytes(), maxRecordLen,
                     totalRecords, totalEntries, trailerStart, size, maxRawPayloadLength);
         } catch (IOException | RuntimeException e) {
             channel.close();
@@ -209,7 +230,7 @@ final class PageRunSegmentIo implements AutoCloseable {
      * <b>The single page-advance primitive for every page-run READ path</b> ({@link PageFrontierReader}'s
      * decode-free frontier AND {@link PageRunSegmentReader}'s entry-typed stream): read the next framed
      * record, CRC-verify its body, parse its frontier fields, and enforce the intra-segment
-     * min-monotonicity invariant. Returning the parsed fields alongside the body costs the entry-typed
+     * min-monotonicity and mode-aware disjointness invariants. Returning the parsed fields alongside the body costs the entry-typed
      * reader nothing (the leading min/max/count parse is a few bytes of the body it already holds) and buys
      * the guarantee that a third reader added later CANNOT skip the LOGICAL guard the way a bare
      * {@code nextBody()} let {@link PageRunSegmentReader} skip it: {@code StreamingMerger} assumes each
@@ -248,14 +269,16 @@ final class PageRunSegmentIo implements AutoCloseable {
                     null);
         }
         long cumulativeFramedBytes = proofTracking
-                ? frameOffset - PageRunSegmentWriter.HEADER_BYTES : 0;
+                ? frameOffset - headerBytes : 0;
         if (seekExpectation != null) {
             verifySeekExpectation(ordinal, frameOffset, cumulativeEntries,
                     cumulativeFramedBytes, header.minKey());
         }
         pagesRead++;
         checkMinMonotonic(header.minKey());
+        checkDisjoint(header.minKey());
         previousMin = header.minKey();
+        previousMax = header.maxKey();
         int framedBytes = Math.addExact(8, record.framedLen());
         // Every page body read by this IO instance contributes to the range's logical framed-byte
         // total. Proof state applies only to the indexed-original physical coordinates below;
@@ -279,9 +302,9 @@ final class PageRunSegmentIo implements AutoCloseable {
      */
     void seekToPage(PageRunPageIndex.IndexEntry target) throws IOException {
         proofTracking = true;
-        long physicalCumulativeBytes = target.fileOffset() - PageRunSegmentWriter.HEADER_BYTES;
+        long physicalCumulativeBytes = target.fileOffset() - headerBytes;
         if (target.pageOrdinal() < 0 || target.pageOrdinal() >= totalRecords
-                || target.fileOffset() < PageRunSegmentWriter.HEADER_BYTES
+                || target.fileOffset() < headerBytes
                 || target.fileOffset() >= trailerStart
                 || target.cumulativeEntries() < 0
                 || target.cumulativeFramedBytes() != physicalCumulativeBytes) {
@@ -292,6 +315,7 @@ final class PageRunSegmentIo implements AutoCloseable {
         pagesRead = target.pageOrdinal();
         cumulativeEntries = target.cumulativeEntries();
         previousMin = null;
+        previousMax = null;
         indexedPosition = true;
         seekExpectation = new SeekExpectation(target.pageOrdinal(), target.fileOffset(),
                 target.cumulativeEntries(), target.cumulativeFramedBytes(), target.minKey().clone());
@@ -323,14 +347,12 @@ final class PageRunSegmentIo implements AutoCloseable {
     }
 
     /**
-     * Read-time verification of the merger's ONE logical precondition: a segment's page {@code
-     * minKey}s never go backwards (unsigned). Strictly {@code newMin < previousMin} is corruption — the
+     * Read-time verification that a segment's page {@code minKey}s never go backwards (unsigned).
+     * This diagnostic runs before the stronger mode-aware disjointness check so a regression keeps
+     * its established error class. Strictly {@code newMin < previousMin} is corruption — the
      * page-aware merger's whole-page fast path would trust a frontier that is no longer a lower bound on
      * the segment's remaining keys, and the entry-typed {@link StreamingMerger} would trust a run that is
-     * not sorted; either way the merged output is silently misordered (the {@code page_overlap_keymerge}
-     * alarm fires only AFTER such damage, so it is an alarm, not a proof). Equal mins and OVERLAPPING page
-     * ranges (a page starting at/inside the previous page's span, as long as its min does not regress) are
-     * LEGAL and pass untouched — the merger resolves those with its key-merge fallback. Costs exactly one
+     * not sorted; either way the merged output could be silently misordered. Costs exactly one
      * {@code compareUnsigned} per page advance and is a pure no-op on every well-formed segment
      * ({@link PageRunSegmentWriter#flush()} establishes the ascent by sorting pages on their first key).
      */
@@ -350,6 +372,25 @@ final class PageRunSegmentIo implements AutoCloseable {
                         + " that ascent (the page-aware merger's frontier is a valid lower bound only under"
                         + " it, and the streaming merger assumes each input run is sorted), so a regression"
                         + " would silently misorder the merged output");
+    }
+
+    /** Reject true page-range overlap universally, and an equal boundary for OBJECTS. */
+    private void checkDisjoint(byte[] newMin) throws IOException {
+        if (previousMax == null) {
+            return;
+        }
+        int comparison = Arrays.compareUnsigned(previousMax, newMin);
+        if (comparison < 0 || (comparison == 0 && orderingMode == SortMode.VERSIONS)) {
+            return;
+        }
+        metrics.recordStealReason("SORT", "page_run_page_overlap");
+        HexFormat hex = HexFormat.of();
+        throw new SegmentCorruptionException(path,
+                SegmentCorruptionException.PAGE_RUN_PAGE_OVERLAP,
+                "adjacent page ranges overlap under " + orderingMode + " ordering (page "
+                        + pagesRead + " of " + totalRecords + ": previous maxKey 0x"
+                        + hex.formatHex(previousMax) + " >= next minKey 0x"
+                        + hex.formatHex(newMin) + ")");
     }
 
     /**
@@ -506,6 +547,10 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     short formatVersion() {
         return formatVersion;
+    }
+
+    SortMode orderingMode() {
+        return orderingMode;
     }
 
     private static IOException failFor(Path path, String message) {

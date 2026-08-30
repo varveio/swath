@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.column.statistics.Statistics;
 import org.apache.parquet.example.data.Group;
@@ -51,6 +52,7 @@ public final class SortedFileIndex {
     private static final String ROW_TYPE_FIELD = "row_type";
     private static final ColumnPath ROW_TYPE_PATH = ColumnPath.get(ROW_TYPE_FIELD);
     private static final byte[] OBJECT_ROW_TYPE_BYTES = "OBJECT".getBytes(StandardCharsets.UTF_8);
+    private static final Runnable NO_CANCELLATION_CHECK = () -> { };
 
     private SortedFileIndex() {
     }
@@ -241,6 +243,12 @@ public final class SortedFileIndex {
 
     /** See {@link Bounds}. */
     public static Bounds bounds(Path file) throws IOException {
+        return bounds(file, NO_CANCELLATION_CHECK);
+    }
+
+    /** Exact bounds scan with a cooperative check for merge/publication callers. */
+    static Bounds bounds(Path file, Runnable cancellationCheck) throws IOException {
+        Objects.requireNonNull(cancellationCheck, "cancellationCheck");
         try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
             MessageType full = reader.getFooter().getFileMetaData().getSchema();
             MessageType keyOnly = new MessageType(full.getName(), full.getType(KEY_FIELD));
@@ -251,13 +259,21 @@ public final class SortedFileIndex {
             byte[] last = null;
             long total = 0;
             PageReadStore pages;
-            while ((pages = reader.readNextRowGroup()) != null) {
+            while (true) {
+                cancellationCheck.run();
+                pages = reader.readNextRowGroup();
+                if (pages == null) {
+                    break;
+                }
                 long rowCount = pages.getRowCount();
                 if (rowCount == 0) {
                     continue;
                 }
                 RecordReader<Group> rowReader = columnIo.getRecordReader(pages, new GroupRecordConverter(keyOnly));
                 for (long i = 0; i < rowCount; i++) {
+                    if ((i & 0xfffL) == 0) {
+                        cancellationCheck.run();
+                    }
                     byte[] key = rowReader.read().getBinary(KEY_FIELD, 0).getBytes();
                     if (first == null) {
                         first = key;

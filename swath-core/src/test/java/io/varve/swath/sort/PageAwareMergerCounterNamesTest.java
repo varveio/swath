@@ -26,25 +26,27 @@ class PageAwareMergerCounterNamesTest {
     @Test
     void theScopeSwitchEmitsRouteSpecificReasonsAndTheOverlapClusterReason(@TempDir Path dir)
             throws IOException {
-        // Three pages that force BOTH paths in one run: [a..c] and [b..d] OVERLAP (key-merge fallback),
-        // while [x..z] is disjoint from everything ahead of it (whole-page fast path). Page mins ascend
-        // (a, b, x), so this is a perfectly legal segment — the min-regression guard stays silent.
-        Path segment = dir.resolve("seg.pageseg");
+        // Three pages that force BOTH paths in one run: cross-segment [a..c] and [b..d] overlap,
+        // while [x..z] is the disjoint successor of [a..c]. Each persisted segment remains disjoint.
+        Path first = dir.resolve("first.pageseg");
         PageRunRawFixtures.writeRawPageRun(
-                segment,
+                first,
                 List.of(
                         List.of(entry("a"), entry("c")),
-                        List.of(entry("b"), entry("d")),
                         List.of(entry("x"), entry("z"))),
                 cmp);
+        Path second = dir.resolve("second.pageseg");
+        PageRunRawFixtures.writeRawPageRun(
+                second, List.of(List.of(entry("b"), entry("d"))), cmp);
+        List<Path> segments = List.of(first, second);
 
-        assertScope(segment, MergeScope.CROSS_SEGMENT,
+        assertScope(segments, MergeScope.CROSS_SEGMENT,
                 "page_whole_emitted", "page_overlap_keymerge");
-        assertScope(segment, MergeScope.INTRA_SEGMENT,
+        assertScope(segments, MergeScope.INTRA_SEGMENT,
                 "page_run_entry_whole_page", "page_run_entry_overlap_keymerge");
     }
 
-    private void assertScope(Path segment, MergeScope scope, String wholeReason,
+    private void assertScope(List<Path> segments, MergeScope scope, String wholeReason,
                              String overlapReason) throws IOException {
         List<String> reasons = new ArrayList<>();
         SortMetrics capturing = new SortMetrics() {
@@ -86,9 +88,11 @@ class PageAwareMergerCounterNamesTest {
         };
 
         List<String> merged = new ArrayList<>();
-        try (PageFrontierReader frontier = new PageFrontierReader(segment, capturing);
-                PageAwareMerger merger =
-                        new PageAwareMerger(List.of(frontier), cmp, scope, capturing)) {
+        List<PageFrontierStream> frontiers = new ArrayList<>();
+        for (Path segment : segments) {
+            frontiers.add(new PageFrontierReader(segment, capturing));
+        }
+        try (PageAwareMerger merger = new PageAwareMerger(frontiers, cmp, scope, capturing)) {
             while (merger.hasNext()) {
                 merged.add(merger.next().key().asString());
             }

@@ -229,7 +229,8 @@ public final class SortTransform {
 
         DatasetPublisher.PendingParts pending = datasetPublisher.serialParts(
                 outputDir, stagingDir, ownedInputs, outputAuthority);
-        PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
+        PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(
+                comparator, hook, metrics, config.segmentCodec(), run.orderingMode());
         PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir, ownedInputs,
                 "merge-", null, catalog.byPath(), frontier -> { }, -1, null, null);
         // Fan-in: see the class javadoc for the runtime-clamp policy. serialFanIn() computes it and,

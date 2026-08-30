@@ -92,6 +92,27 @@ class RangeScannerTest {
     }
 
     @Test
+    void terminalPageRepeatingStartAfterIsAnErrorBeforeEmit() {
+        ObjectEntry stuck = ObjectEntry.withoutOwnerDisplayNameAndChecksumType(
+                KeyBytes.ofUtf8("frozen/key"), 1L, 0L,
+                "etag", "STANDARD", null, true, null, null);
+        MockPageFetcher f = MockPageFetcher.builder()
+                .keys(Keyspaces.exactly(2))
+                .interceptor((req, idx, computed) -> new ListPage(
+                        List.<ListEntry>of(stuck), List.of(), idx == 0,
+                        null, null, null, 200, Duration.ZERO))
+                .build();
+        List<String> emitted = new ArrayList<>();
+
+        assertThatThrownBy(() -> RangeScanners.of(f).runRange(
+                new byte[0], ListingMode.OBJECTS, null, null, null,
+                batch -> batch.forEach(e -> emitted.add(e.key().asString()))))
+                .isInstanceOf(ListingException.class)
+                .hasMessageContaining("no forward progress");
+        assertThat(emitted).containsExactly("frozen/key");
+    }
+
+    @Test
     void stuckPageIsNotEmittedBeforeTheErrorNoDuplicates() {
         // A fixed truncated page [k1,k2,k3] is returned every call (ignores start_after).
         ObjectEntry k1 = ObjectEntry.withoutOwnerDisplayNameAndChecksumType(KeyBytes.ofUtf8("k1"), 1, 0, "e", "STANDARD", null, true, null, null);

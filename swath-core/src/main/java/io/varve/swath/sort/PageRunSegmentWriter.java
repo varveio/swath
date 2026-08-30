@@ -23,9 +23,10 @@ import java.util.List;
  * {@link PageBlock#firstKey()} and writes each page's {@link PageBlock#serialize()} bytes verbatim,
  * in minKey order. Correctness rests on the OBJECTS invariant that work-stealing nodes own disjoint
  * key ranges, so pages are range-disjoint by construction and concatenating them in minKey order is
- * globally sorted. The read-time intra-segment guard is the reader's job, not this writer's — and it
- * rejects only a page whose minKey regresses below the previous page's (decreasing minKey); equal or
- * ascending minima whose ranges overlap are legal and resolved by the merger's key-merge fallback.
+ * globally sorted. Before any page bytes become durable, the encoder rejects adjacent page ranges
+ * that overlap. OBJECTS requires {@code previous.maxKey < next.minKey}; VERSIONS permits equality so
+ * rows for one key may straddle a page boundary, but still rejects a descending range seam. Readers
+ * independently enforce the same persisted ordering-mode contract.
  *
  * <p><b>Per-page re-sort.</b> Every persisted page must be internally ordered under the full
  * §0.3 comparator. A page that arrived out of order ({@code !orderedUnderFullComparator()}) is
@@ -38,11 +39,13 @@ import java.util.List;
  *
  * <p><b>On-disk format, big-endian:</b>
  * <pre>
- * [magic u32][format-version u16 = 1]
+ * [magic u32][format-version u16 = 2][header-version u16][metadata-length u32]
+ * [metadata TLVs: ordering mode][header crc32c u32]
  * record* : [len u32][crc32c u32][ &lt;PageBlock.serialize() body&gt; ]   // crc32c over the body bytes
  * trailer : [segMinKey u16-len-prefixed][segMaxKey u16-len-prefixed]
  *           [optional trailer extension: type-1 minima, legacy type-2 index, or type-3 page index]
- *           [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
+ *           [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32]
+ *           [trailer crc32c u32][magic u32]
  * </pre>
  * {@code segMinKey}/{@code segMaxKey} are the ACTUAL unsigned minimum of all page minima and
  * unsigned maximum of all page maxima — the drop-in for {@code SortedFileIndex.bounds} with no
@@ -53,7 +56,7 @@ import java.util.List;
  * to tighten its configured per-stream estimate, and the reader uses it to bound a claimed length before
  * allocating). A listing-phase segment's optional extension stores the exact capped systematic
  * sparse page-offset index plus the exact largest decoded page payload used by merge planning, while
- * preserving format version 1 and the fixed 28-byte EOF tail; post-boundary cascade intermediates
+ * preserving the shared v2 body format; post-boundary cascade intermediates
  * omit it. The trailer is written LAST: with
  * the file-then-directory fsync below, a half-written page-run file has no valid trailer and is
  * discarded whole on resume (I6 — durable iff finalized; segment-granularity, not sub-file).
@@ -69,17 +72,17 @@ final class PageRunSegmentWriter {
     /** The segment-format name constant, wired into the checkpoint/segment-IO selector. */
     static final String FORMAT_NAME = PageRunFormat.NAME;
 
-    /** Header size: magic u32 + version u16. Package-private: the reader shares this constant instead
-     *  of open-coding {@code 6}. */
-    static final int HEADER_BYTES = 6;
+    /** Bytes in the header emitted by this build. Readers honor the envelope's dynamic metadata length. */
+    static final int HEADER_BYTES = PageRunHeader.CURRENT_BYTES;
 
     /** Fixed trailer tail after the two length-prefixed keys: trailerStart u64 + totalRecords u32 +
-     *  totalEntries u64 + maxRecordLen u32 + magic u32 = 28 bytes. The reader reads exactly this
+     *  totalEntries u64 + maxRecordLen u32 + CRC32C u32 + magic u32 = 32 bytes. The reader reads exactly this
      *  (positioned from EOF) to recover {@code trailerStart} (an O(1) seek straight to the key bounds,
      *  no per-record walk), {@code totalRecords}/{@code totalEntries} (end-of-stream completeness
      *  cross-check), {@code maxRecordLen} (the per-record length bound), and validate the trailing
      *  magic (truncation check) — all without scanning records. */
-    static final int TRAILER_FIXED_TAIL_BYTES = 8 + 4 + 8 + 4 + 4;
+    static final int TRAILER_FIELDS_BYTES = 8 + 4 + 8 + 4;
+    static final int TRAILER_FIXED_TAIL_BYTES = TRAILER_FIELDS_BYTES + 4 + 4;
 
     /** Rows per page when batching an already-sorted {@link SortedCursor} in {@link #writeIntermediate}
      *  (the CASCADE backstop — the multi-pass merge path taken when the runtime-clamped fan-in falls
@@ -90,14 +93,21 @@ final class PageRunSegmentWriter {
     private final DuplicateHook hook;
     private final SortMetrics metrics;
     private final PageCodec codec;
+    private final SortMode orderingMode;
 
     PageRunSegmentWriter(Comparator<ListEntry> comparator, DuplicateHook hook, SortMetrics metrics,
                         PageCodec codec) {
+        this(comparator, hook, metrics, codec, SortMode.OBJECTS);
+    }
+
+    PageRunSegmentWriter(Comparator<ListEntry> comparator, DuplicateHook hook, SortMetrics metrics,
+                         PageCodec codec, SortMode orderingMode) {
         PageRunFormat.requireCanonicalComparator(comparator);
         this.comparator = comparator;
         this.hook = hook;
         this.metrics = metrics;
         this.codec = codec;
+        this.orderingMode = orderingMode;
     }
 
     /**
@@ -147,7 +157,7 @@ final class PageRunSegmentWriter {
 
         long totalEntries;
         try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics,
-                PageRunPageIndex.exactBuilder(pages.size()))) {
+                PageRunPageIndex.exactBuilder(pages.size()), orderingMode)) {
             PageBlock previous = null;
             for (PageBlock page : pages) {
                 if (previous != null
@@ -192,7 +202,8 @@ final class PageRunSegmentWriter {
 
     private long writeSorted(SortedCursor sorted, Path path, SegmentKind kind,
                              int maxRawPayloadBytes) throws IOException {
-        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics, null)) {
+        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(
+                path, metrics, null, orderingMode)) {
             List<ListEntry> batch = new ArrayList<>(INTERMEDIATE_PAGE_ENTRIES);
             while (sorted.hasNext()) {
                 batch.add(sorted.next());

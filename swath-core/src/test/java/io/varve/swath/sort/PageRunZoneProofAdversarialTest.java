@@ -109,7 +109,7 @@ class PageRunZoneProofAdversarialTest {
             equalMinPages.add(List.of(SortTestSupport.object("equal-min")));
         }
         Path equalMin = SortTestSupport.writeIndexedPages(
-                staging.resolve("equal-min.pageseg"), equalMinPages);
+                staging.resolve("equal-min.pageseg"), equalMinPages, SortMode.VERSIONS);
         PageRunSeekPlan equalMinPlan = PageRunSeekPlan.plan(descriptors(equalMin),
                 List.of(bytes("g"), bytes("h"), bytes("i")), SortMetrics.NO_OP);
         assertThat(equalMinPlan.segments().getFirst().zone(1).empty()).isTrue();
@@ -194,6 +194,7 @@ class PageRunZoneProofAdversarialTest {
         int fixedTailStart = bytes.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
         ByteBuffer tail = ByteBuffer.wrap(bytes);
         tail.putLong(fixedTailStart + 12, tail.getLong(fixedTailStart + 12) - 1);
+        rewriteFixedTrailerCrc(bytes, fixedTailStart);
         Files.write(segment, bytes);
         Files.deleteIfExists(source);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
@@ -496,6 +497,21 @@ class PageRunZoneProofAdversarialTest {
     }
 
     @Test
+    void minRegressionAtAPhysicalZoneSeamKeepsItsSpecificClassification(
+            @TempDir Path root) {
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> PageRunZoneVerifier.checkPhysicalZoneSeam(
+                root.resolve("segment.pageseg"), SortMode.OBJECTS,
+                bytes("m"), bytes("z"), bytes("c"), 2, metrics))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .extracting(error -> ((SegmentCorruptionException) error).errorClass())
+                .isEqualTo(SegmentCorruptionException.PAGE_RUN_MIN_REGRESSION);
+        assertThat(metrics.count("SORT.page_run_min_regression")).isEqualTo(1);
+        assertThat(metrics.count("SORT.page_run_page_overlap")).isZero();
+    }
+
+    @Test
     void serialR1IsByteExactAcrossType2AndExtensionlessInputsAndDoesZeroProofIo(
             @TempDir Path root) throws IOException {
         Path indexedOutput = Files.createDirectories(root.resolve("indexed-out"));
@@ -617,6 +633,14 @@ class PageRunZoneProofAdversarialTest {
     }
 
     private static long middleOwnedOrdinal(Path path, int ranges) throws IOException {
+        PageRunSeekPlan.Zone middle = middleZone(path, ranges);
+        assertThat(middle.end().pageOrdinal() - middle.start().pageOrdinal())
+                .as("range 1 owns at least two pages, so the mutation is not a seam")
+                .isGreaterThan(1);
+        return middle.start().pageOrdinal() + 1;
+    }
+
+    private static PageRunSeekPlan.Zone middleZone(Path path, int ranges) throws IOException {
         MergePlanner.BoundaryCandidates candidates =
                 new MergePlanner.BoundaryCandidates();
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
@@ -626,11 +650,7 @@ class PageRunZoneProofAdversarialTest {
                 descriptors, candidates, ranges, SortMetrics.NO_OP);
         PageRunSeekPlan.SegmentPlan segment = PageRunSeekPlan.plan(
                 descriptors, boundaries, SortMetrics.NO_OP).segments().getFirst();
-        PageRunSeekPlan.Zone middle = segment.zone(1);
-        assertThat(middle.end().pageOrdinal() - middle.start().pageOrdinal())
-                .as("range 1 owns at least two pages, so the mutation is not a seam")
-                .isGreaterThan(1);
-        return middle.start().pageOrdinal() + 1;
+        return segment.zone(1);
     }
 
     private static List<String> readKeys(List<Path> files) throws IOException {
@@ -676,6 +696,7 @@ class PageRunZoneProofAdversarialTest {
         assertThat(tail.getLong(fixedTailStart + Long.BYTES + Integer.BYTES)).isEqualTo(24);
         tail.putInt(fixedTailStart + Long.BYTES, 7);
         tail.putLong(fixedTailStart + Long.BYTES + Integer.BYTES, 21);
+        rewriteFixedTrailerCrc(bytes, fixedTailStart);
         Files.write(path, bytes);
     }
 
@@ -771,6 +792,7 @@ class PageRunZoneProofAdversarialTest {
             Layout layout = layout(bytes);
             apply(bytes, layout, target.index(selection));
             rewriteExtensionCrc(bytes, layout);
+            rewriteFixedTrailerCrc(bytes, layout.fixedTailStart());
             Files.write(path, bytes);
         }
 
@@ -957,6 +979,14 @@ class PageRunZoneProofAdversarialTest {
         CRC32C crc = new CRC32C();
         crc.update(bytes, layout.extensionStart(), crcPosition - layout.extensionStart());
         ByteBuffer.wrap(bytes).putInt(crcPosition, (int) crc.getValue());
+    }
+
+    private static void rewriteFixedTrailerCrc(byte[] bytes, int fixedTailStart) {
+        CRC32C crc = new CRC32C();
+        crc.update(bytes, fixedTailStart, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
+        ByteBuffer.wrap(bytes).putInt(
+                fixedTailStart + PageRunSegmentWriter.TRAILER_FIELDS_BYTES,
+                (int) crc.getValue());
     }
 
     private enum EntryTarget {

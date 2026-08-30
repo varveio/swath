@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import static io.varve.swath.sort.SortTestSupport.drain;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
@@ -25,15 +26,12 @@ import org.junit.jupiter.api.io.TempDir;
  * Every cascade reduction pass ({@link KWayMerge#onePass}) selects its merger through the SAME
  * {@code openMerger} factory {@link KWayMerge}'s final pass uses: {@link PageAwareMerger} guards
  * the final pass, and this factory keeps {@link PageAwareMerger}'s guards in force on every
- * cascade pass too. A cascade group that instead opened its page-run inputs through the trusting
- * {@link StreamingMerger} + {@link PageRunSegmentReader} would read a segment's pages in FILE order
- * and apply neither the intra-segment nor cross-segment overlap guard: a segment with intra-segment
- * overlapping adjacent pages would then be merged into a mis-ordered intermediate
- * <em>silently</em>, with {@code SORT.page_overlap_keymerge} never firing for the cascade.
+ * cascade pass too. The common page-I/O primitive now rejects intra-segment overlap on either route;
+ * this suite pins that a corrupt segment cannot reach an intermediate and that valid cross-segment
+ * overlap still uses the page-aware merge path.
  *
  * <p>These tests drive real {@code .pageseg} files through {@link KWayMerge} with the fan-in pinned to
- * 2 so a cascade fires, against a decode-all-then-sort oracle. The guard-engagement assertion fails
- * ({@code page_overlap_keymerge == 0} during the cascade) if any cascade pass bypasses the guard.
+ * 2 so a cascade fires, against a decode-all-then-sort oracle.
  */
 class KWayMergeCascadePageGuardTest {
 
@@ -42,38 +40,27 @@ class KWayMergeCascadePageGuardTest {
     private int seq;
 
     @Test
-    void cascadeOverIntraSegmentOverlapEngagesTheKeyMergeGuardAndStaysSorted(@TempDir Path dir)
+    void cascadeRejectsIntraSegmentOverlapBeforeWritingAnIntermediate(@TempDir Path dir)
             throws IOException {
         // seg0 holds two node runs whose ranges INTERLEAVE: flush orders pages by firstKey, so the file
         // holds [a..m] then [c..z] — minKeys monotone (a<c) but maxKey(page0)="m" >= minKey(page1)="c".
-        // A file-order reader emits a,m,c,z (mis-ordered); the intra-segment guard MUST fall back to a
-        // key-merge. Two further disjoint segments make three inputs, so fan-in 2 forces a cascade whose
+        // A file-order reader would emit a,m,c,z (mis-ordered); the intra-segment guard must reject it.
+        // Two further disjoint segments make three inputs, so fan-in 2 forces a cascade whose
         // first group [seg0, seg1] contains the overlapping segment.
-        Path seg0 = writeSegment(dir, "overlap.pageseg",
-                List.of(List.of(obj("a"), obj("m")), List.of(obj("c"), obj("z"))));
+        Path seg0 = dir.resolve("overlap.pageseg");
+        PageRunRawFixtures.writeRawPageRun(seg0,
+                List.of(List.of(obj("a"), obj("m")), List.of(obj("c"), obj("z"))), cmp);
         Path seg1 = writeSegment(dir, "mid.pageseg", List.of(List.of(obj("n"), obj("o"))));
         Path seg2 = writeSegment(dir, "high.pageseg", List.of(List.of(obj("r"), obj("s"))));
         List<Path> originals = List.of(seg0, seg1, seg2);
 
-        assertThat(hasOverlappingAdjacentPages(seg0))
-                .as("seg0 must physically contain overlapping adjacent pages to exercise the cascade "
-                        + "overlap-guard hazard")
-                .isTrue();
-
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         KWayMerge<Path> merge = new KWayMerge<>(cmp, 2, pageRunIo(dir, metrics), DuplicateHook.NO_OP, metrics);
-        List<ListEntry> out = drain(merge.merge(new ArrayList<>(originals)));
-
-        assertThat(merge.cascadedPasses()).as("fan-in 2 over 3 segments must cascade").isGreaterThan(0);
-        assertThat(metrics.count("SORT.merge_pass_cascaded")).isGreaterThan(0);
-        // The overlap guard must engage DURING the cascade: a cascade group that instead merges seg0
-        // through the trusting StreamingMerger leaves this counter at 0.
-        assertThat(metrics.count("SORT.page_overlap_keymerge"))
-                .as("intra-segment overlap in a cascade group must trigger the key-merge guard")
-                .isGreaterThan(0);
-        // And the final output is globally correct (== the decode-all-then-sort oracle).
-        assertThat(out).isEqualTo(sortedOracle(originals));
-        assertGloballySorted(out);
+        assertThatThrownBy(() -> drain(merge.merge(new ArrayList<>(originals))))
+                .isInstanceOfAny(IOException.class, java.io.UncheckedIOException.class)
+                .hasStackTraceContaining("error_class=page_run_page_overlap");
+        assertThat(metrics.count("SORT.page_run_page_overlap")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_pass_cascaded")).isZero();
     }
 
     @Test

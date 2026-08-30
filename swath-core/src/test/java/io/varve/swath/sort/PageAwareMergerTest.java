@@ -136,7 +136,7 @@ class PageAwareMergerTest {
             left.add(taggedDuplicate(0, i));
             right.add(taggedDuplicate(1, i));
         }
-        List<Path> files = stage(dir, List.of(left, right));
+        List<Path> files = stage(dir, List.of(left, right), SortMode.VERSIONS);
         // Page-run staging is itself allowed to choose an arbitrary stable order for comparator
         // ties. Read its physical source order once as the merge oracle; do not accidentally make
         // this test assume an order that the comparator never promised.
@@ -314,17 +314,14 @@ class PageAwareMergerTest {
     }
 
     @Test
-    void nestedPagesFormOneBoundedOverlapCluster(@TempDir Path dir) throws IOException {
-        SortBuffer buffer = new SortBuffer(SortConfigs.base(), cmp);
-        buffer.admit(1, sorted("a", "z"));
-        buffer.admit(2, sorted("b", "c"));
-        buffer.admit(3, sorted("d", "e"));
-        Path segment = dir.resolve("nested.pageseg");
-        new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
-                .flush(buffer.seal(SealTrigger.DRAIN), segment);
+    void nestedSegmentsFormOneBoundedOverlapCluster(@TempDir Path dir) throws IOException {
+        List<Path> segments = stage(dir, List.of(
+                sorted("a", "z"),
+                sorted("b", "c"),
+                sorted("d", "e")));
         CountingMetrics metrics = new CountingMetrics();
 
-        List<String> merged = drainKeys(List.of(segment), metrics);
+        List<String> merged = drainKeys(segments, metrics);
 
         assertThat(merged).containsExactly("a", "b", "c", "d", "e", "z");
         assertThat(metrics.overlapClusters).isEqualTo(1);
@@ -364,8 +361,14 @@ class PageAwareMergerTest {
     }
 
     private List<Path> stage(Path dir, List<List<ListEntry>> segs) throws IOException {
+        return stage(dir, segs, SortMode.OBJECTS);
+    }
+
+    private List<Path> stage(Path dir, List<List<ListEntry>> segs, SortMode orderingMode)
+            throws IOException {
         Files.createDirectories(dir);
-        PageRunSegmentWriter writer = new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
+        PageRunSegmentWriter writer = new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP,
+                SortMetrics.NO_OP, PageCodec.NONE, orderingMode);
         List<Path> out = new ArrayList<>();
         for (int i = 0; i < segs.size(); i++) {
             Path path = dir.resolve("seg-" + i + ".pageseg");

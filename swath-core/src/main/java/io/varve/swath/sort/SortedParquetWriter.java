@@ -216,7 +216,7 @@ public final class SortedParquetWriter implements SortedFileWriter {
         finalMetadata = new FinalPartMetadata(rows, tracked.bytes(), tracked.md5(),
                 firstKey == null ? null : new String(firstKey, StandardCharsets.UTF_8),
                 lastKey == null ? null : new String(lastKey, StandardCharsets.UTF_8),
-                closeNanos, tracked.digestNanos(), boundsBytes);
+                closeNanos, tracked.digestNanos(), boundsBytes, firstKey, lastKey);
         if (syncMetrics != null) {
             tracked.periodicSyncResidualBytes().ifPresent(syncMetrics::recordResidual);
         }

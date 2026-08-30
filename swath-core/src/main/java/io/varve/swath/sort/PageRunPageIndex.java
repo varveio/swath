@@ -329,8 +329,8 @@ final class PageRunPageIndex {
             if (ordinal != expectedOrdinal || ordinal >= trailer.totalRecords()) {
                 return invalid(Status.INVALID_COUNT, type, trailer, bytesRead + in.bytesRead());
             }
-            if (offset < PageRunSegmentWriter.HEADER_BYTES || offset >= io.trailerStart
-                    || (i == 0 && offset != PageRunSegmentWriter.HEADER_BYTES)
+            if (offset < io.headerBytes || offset >= io.trailerStart
+                    || (i == 0 && offset != io.headerBytes)
                     || (previousOffset >= 0 && offset <= previousOffset)) {
                 return invalid(Status.INVALID_OFFSET, type, trailer, bytesRead + in.bytesRead());
             }
@@ -338,7 +338,7 @@ final class PageRunPageIndex {
                     || (i == 0 && cumulativeEntries != 0)
                     || cumulativeEntries < ordinal
                     || (previousEntries >= 0 && cumulativeEntries <= previousEntries)
-                    || cumulativeFramedBytes != offset - PageRunSegmentWriter.HEADER_BYTES
+                    || cumulativeFramedBytes != offset - io.headerBytes
                     || (i == 0 && cumulativeFramedBytes != 0)
                     || (previousFramedBytes >= 0 && cumulativeFramedBytes <= previousFramedBytes)) {
                 return invalid(Status.INVALID_CUMULATIVE, type, trailer, bytesRead + in.bytesRead());

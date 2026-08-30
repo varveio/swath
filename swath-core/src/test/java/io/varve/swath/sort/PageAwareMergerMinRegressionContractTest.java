@@ -47,10 +47,8 @@ import org.junit.jupiter.api.io.TempDir;
  *       the same real merger through an unguarded (trusting) frontier, reproduces the exact silent
  *       misorder {@code c,d,a,b,m,n}. This is what proves the fixture reaches the defect, and that the
  *       guard — not luck — is what saves the merge.</li>
- *   <li>{@link #overlappingPagesWithAscendingMinsAreStillAcceptedAndMergeCorrectly} /
- *       {@link #equalPageMinsAreAcceptedNotRejectedAsARegression} — NEGATIVE CONTROLS against
- *       over-rejection: page-range OVERLAP is legal and common (the key-merge fallback exists for it), and
- *       so are EQUAL mins. Only a strict min <em>regression</em> is illegal.</li>
+ *   <li>{@link #overlappingPagesWithAscendingMinsAreRejected} verifies the stronger disjointness
+ *       contract; {@link #equalBoundaryIsAcceptedForVersions} is its mode-aware negative control.</li>
  * </ol>
  */
 class PageAwareMergerMinRegressionContractTest {
@@ -110,10 +108,8 @@ class PageAwareMergerMinRegressionContractTest {
     // ------------------------------------------------------- (3) negative controls: no over-rejection
 
     @Test
-    void overlappingPagesWithAscendingMinsAreStillAcceptedAndMergeCorrectly(@TempDir Path dir) throws IOException {
-        // Pages [a..m] then [c..z]: mins ASCEND (a < c) but the ranges OVERLAP (m >= c). This is legal and
-        // common (two work-stealing node runs, sorted by first key) — the merger resolves it with the
-        // key-merge fallback. A guard that rejected overlap instead of regression would break real runs.
+    void overlappingPagesWithAscendingMinsAreRejected(@TempDir Path dir) throws IOException {
+        // Pages [a..m] then [c..z]: mins ascend, but the raw ranges overlap.
         List<ListEntry> pageLow = List.of(obj("a"), obj("m"));
         List<ListEntry> pageHigh = List.of(obj("c"), obj("z"));
         Path file = dir.resolve("overlap-ascending.pageseg");
@@ -124,25 +120,23 @@ class PageAwareMergerMinRegressionContractTest {
                 .as("control precondition: the mins must ASCEND (only the ranges overlap)").isPositive();
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        List<ListEntry> out = drainThroughRealReaders(List.of(file), metrics);
-
-        assertThat(out).isEqualTo(sortedOracle(pageLow, pageHigh));   // a, c, m, z
-        assertThat(isGloballySorted(out)).isTrue();
+        assertThatThrownBy(() -> drainThroughRealReaders(List.of(file), metrics))
+                .isInstanceOf(UncheckedIOException.class)
+                .hasRootCauseInstanceOf(SegmentCorruptionException.class)
+                .hasStackTraceContaining("error_class=page_run_page_overlap");
         assertThat(metrics.count("SORT.page_run_min_regression"))
-                .as("range OVERLAP is not a min regression — the guard must not reject it").isZero();
-        assertThat(metrics.count("SORT.page_overlap_keymerge"))
-                .as("overlap is resolved by the key-merge fallback, as before").isGreaterThan(0);
+                .as("ascending mins are not a min regression").isZero();
+        assertThat(metrics.count("SORT.page_run_page_overlap")).isEqualTo(1);
     }
 
     @Test
-    void equalPageMinsAreAcceptedNotRejectedAsARegression(@TempDir Path dir) throws IOException {
-        // Two pages whose minKeys are EQUAL ("m" in both — two node runs that both start on the same key,
-        // distinct versions). The precondition is NON-DECREASING mins, so this is legal: a guard written
-        // with `<= 0` instead of `< 0` would reject a segment the shipped writer can legitimately produce.
-        List<ListEntry> page0 = List.of(obj("m", "x"), obj("n", "x"));
+    void equalBoundaryIsAcceptedForVersions(@TempDir Path dir) throws IOException {
+        // VERSIONS may split one equal-key cluster across a page boundary: prev.max == next.min.
+        List<ListEntry> page0 = List.of(obj("m", "x"));
         List<ListEntry> page1 = List.of(obj("m", "y"), obj("z", "y"));
         Path file = dir.resolve("equal-mins.pageseg");
-        PageRunRawFixtures.writeRawPageRun(file, List.of(page0, page1), cmp);
+        PageRunRawFixtures.writeRawPageRun(
+                file, List.of(page0, page1), cmp, SortMode.VERSIONS);
 
         List<byte[]> mins = PageRunRawFixtures.pageMinKeysInFileOrder(file);
         assertThat(Arrays.compareUnsigned(mins.get(1), mins.get(0)))
@@ -151,10 +145,11 @@ class PageAwareMergerMinRegressionContractTest {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         List<ListEntry> out = drainThroughRealReaders(List.of(file), metrics);
 
-        assertThat(out).isEqualTo(sortedOracle(page0, page1));   // m/x, m/y, n/x, z/y
+        assertThat(out).isEqualTo(sortedOracle(page0, page1));
         assertThat(isGloballySorted(out)).isTrue();
         assertThat(metrics.count("SORT.page_run_min_regression"))
                 .as("equal mins are non-decreasing — legal, must not be rejected").isZero();
+        assertThat(metrics.count("SORT.page_run_page_overlap")).isZero();
     }
 
     // ------------------------------------------------------------------------------------- fixtures

@@ -310,7 +310,8 @@ class MergeBoundaryPolicyTest {
         List<Path> segments = new ArrayList<>();
         for (int i = 0; i < scenario.pages().size(); i++) {
             segments.add(SortTestSupport.writeIndexedPages(
-                    staging.resolve("segment-" + i + ".pageseg"), scenario.pages().get(i)));
+                    staging.resolve("segment-" + i + ".pageseg"), scenario.pages().get(i),
+                    SortMode.VERSIONS));
         }
         SortTransform transform = new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,

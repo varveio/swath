@@ -10,6 +10,7 @@ import io.varve.swath.error.OutputException;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.model.PackedPage;
@@ -23,6 +24,8 @@ import io.varve.swath.pipeline.Msg;
 import io.varve.swath.pipeline.Pipeline;
 import io.varve.swath.sort.SortLane;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Output stage for {@code --sort}: admits each {@link PageBatch} into the single ordered
@@ -39,6 +42,8 @@ public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
     private long commonPrefixes;
     private long deleteMarkers;
     private long estimatedBytes;
+    /** Allocated only when JVM assertions engage the live-page ordering tripwire. */
+    private Map<Long, AcceptedPage> acceptedPages;
 
     public SortOutputStage(SortLane lane) {
         this.lane = lane;
@@ -82,6 +87,10 @@ public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
 
     private void admit(PageBatch batch) throws SwathException, InterruptedException {
         try {
+            assert verifyPageOrder(batch);
+            if (batch.completionOnly()) {
+                return;
+            }
             if (batch.isPacked()) {
                 lane.admit(batch.nodeId(), batch.packed());   // Already packed on the fetch worker
             } else {
@@ -92,6 +101,47 @@ public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
         } catch (Exception e) {
             throw new OutputException("sort lane failed", e);
         }
+    }
+
+    /** Debug-only tripwire: observation and assertion, never a sorting or recovery mechanism. */
+    boolean verifyPageOrder(PageBatch batch) {
+        if (acceptedPages == null) {
+            acceptedPages = new HashMap<>();
+        }
+        byte[] firstKey;
+        byte[] lastKey;
+        if (batch.isPacked()) {
+            firstKey = batch.packed().firstKey();
+            lastKey = batch.packed().lastKey();
+        } else if (batch.entries().isEmpty()) {
+            firstKey = null;
+            lastKey = null;
+        } else {
+            firstKey = batch.entries().getFirst().key().rawUnsafe();
+            lastKey = batch.entries().getLast().key().rawUnsafe();
+        }
+        AcceptedPage previous = acceptedPages.get(batch.nodeId());
+        if (previous != null && batch.pageSeq() <= previous.pageSeq()) {
+            throw new AssertionError("sort page sequence did not increase for node "
+                    + batch.nodeId() + ": " + batch.pageSeq() + " <= " + previous.pageSeq());
+        }
+        if (previous != null && firstKey != null && previous.lastKey() != null
+                && KeyBytes.compareUnsigned(firstKey, previous.lastKey()) <= 0) {
+            throw new AssertionError("sort page key did not advance for node " + batch.nodeId());
+        }
+        if (batch.nodeCompleted()) {
+            acceptedPages.remove(batch.nodeId());
+        } else {
+            acceptedPages.put(batch.nodeId(), new AcceptedPage(batch.pageSeq(), lastKey));
+        }
+        return true;
+    }
+
+    int trackedPageCountForTesting() {
+        return acceptedPages == null ? 0 : acceptedPages.size();
+    }
+
+    private record AcceptedPage(long pageSeq, byte[] lastKey) {
     }
 
     private void count(RunContext ctx, PageBatch batch) {

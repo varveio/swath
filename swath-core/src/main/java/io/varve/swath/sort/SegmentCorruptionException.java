@@ -34,6 +34,15 @@ public final class SegmentCorruptionException extends IOException {
     /** An admitted page's raw keys regressed, making its checkpoint durable cursor unsafe. */
     static final String PAGE_RUN_RAW_KEY_REGRESSION = "page_run_raw_key_regression";
 
+    /** Adjacent pages in one segment violate the persisted disjointness contract. */
+    static final String PAGE_RUN_PAGE_OVERLAP = "page_run_page_overlap";
+
+    /** The CRC-protected page-run header envelope is malformed or corrupt. */
+    static final String PAGE_RUN_HEADER_CORRUPTION = "page_run_header_corruption";
+
+    /** The CRC-protected fixed trailer is malformed or corrupt. */
+    static final String PAGE_RUN_TRAILER_CORRUPTION = "page_run_trailer_corruption";
+
     /** A CRC-valid page body failed structural or decoded-row validation. */
     static final String PAGE_RUN_BODY_CORRUPTION = "page_run_body_corruption";
 

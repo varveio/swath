@@ -28,31 +28,39 @@ final class PageRunSegmentEncoder implements AutoCloseable {
     private final FileChannel channel;
     private final SortMetrics metrics;
     private final PageRunPageIndexBuilder pageIndexBuilder;
+    private final SortMode orderingMode;
+    private final int headerBytes;
     private byte[] segmentMin = EMPTY_KEY;
     private byte[] segmentMax = EMPTY_KEY;
     private int totalRecords;
     private long totalEntries;
     private int maxRecordLen;
+    private byte[] previousPageMax;
     private boolean closed;
 
     private PageRunSegmentEncoder(Path path, FileChannel channel, SortMetrics metrics,
-                                  PageRunPageIndexBuilder pageIndexBuilder) {
+                                  PageRunPageIndexBuilder pageIndexBuilder, SortMode orderingMode,
+                                  int headerBytes) {
         this.path = path;
         this.channel = channel;
         this.metrics = metrics;
         this.pageIndexBuilder = pageIndexBuilder;
+        this.orderingMode = orderingMode;
+        this.headerBytes = headerBytes;
     }
 
     static PageRunSegmentEncoder open(Path path, SortMetrics metrics,
-                                      PageRunPageIndexBuilder pageIndexBuilder) throws IOException {
+                                      PageRunPageIndexBuilder pageIndexBuilder,
+                                      SortMode orderingMode) throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(metrics, "metrics");
         FileChannel channel = FileChannel.open(path,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING);
         try {
-            writeHeader(channel);
-            return new PageRunSegmentEncoder(path, channel, metrics, pageIndexBuilder);
+            int headerBytes = PageRunHeader.write(channel, orderingMode);
+            return new PageRunSegmentEncoder(path, channel, metrics, pageIndexBuilder,
+                    orderingMode, headerBytes);
         } catch (IOException | RuntimeException | Error failure) {
             try {
                 channel.close();
@@ -67,6 +75,16 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         requireOpen();
         byte[] pageMin = page.firstKeyUnsafe();
         byte[] pageMax = page.lastKeyUnsafe();
+        if (previousPageMax != null) {
+            int comparison = Arrays.compareUnsigned(previousPageMax, pageMin);
+            if (comparison > 0 || (comparison == 0 && orderingMode == SortMode.OBJECTS)) {
+                metrics.recordStealReason("SORT", "buffer_page_overlap");
+                throw new SegmentCorruptionException(path,
+                        SegmentCorruptionException.PAGE_RUN_PAGE_OVERLAP,
+                        "adjacent pages are not disjoint under " + orderingMode
+                                + " ordering (previous maxKey must be below next minKey)");
+            }
+        }
         if (totalRecords == 0 || Arrays.compareUnsigned(pageMin, segmentMin) < 0) {
             segmentMin = pageMin;
         }
@@ -77,13 +95,14 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         long frameOffset = channel.position();
         if (pageIndexBuilder != null) {
             pageIndexBuilder.recordPage(totalRecords, frameOffset, totalEntries,
-                    frameOffset - PageRunSegmentWriter.HEADER_BYTES, page);
+                    frameOffset - headerBytes, page);
         }
         byte[] body = page.serialize();
         writeFrame(channel, body);
         maxRecordLen = Math.max(maxRecordLen, body.length);
         totalEntries += page.count();
         totalRecords++;
+        previousPageMax = pageMax;
     }
 
     long finish(SegmentKind kind) throws IOException {
@@ -117,13 +136,6 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         }
     }
 
-    private static void writeHeader(FileChannel channel) throws IOException {
-        ByteBuffer header = ByteBuffer.allocate(PageRunSegmentWriter.HEADER_BYTES);
-        header.putInt(PageRunSegmentWriter.MAGIC);
-        header.putShort(PageRunSegmentWriter.FORMAT_VERSION);
-        writeFully(channel, header.flip());
-    }
-
     private static void writeFrame(FileChannel channel, byte[] body) throws IOException {
         CRC32C crc = new CRC32C();
         crc.update(body, 0, body.length);
@@ -149,6 +161,9 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         trailer.putInt(totalRecords);
         trailer.putLong(totalEntries);
         trailer.putInt(maxRecordLen);
+        CRC32C crc = new CRC32C();
+        crc.update(trailer.array(), 0, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
+        trailer.putInt((int) crc.getValue());
         trailer.putInt(PageRunSegmentWriter.MAGIC);
         writeFully(channel, trailer.flip());
     }

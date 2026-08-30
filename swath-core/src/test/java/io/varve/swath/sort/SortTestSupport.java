@@ -55,12 +55,19 @@ final class SortTestSupport {
 
     /** Write caller-supplied sorted listing pages, including the production type-2 index. */
     static Path writeIndexedPages(Path path, List<List<ListEntry>> pages) throws IOException {
+        return writeIndexedPages(path, pages, SortMode.OBJECTS);
+    }
+
+    /** Write caller-supplied sorted listing pages with an explicit persisted ordering mode. */
+    static Path writeIndexedPages(Path path, List<List<ListEntry>> pages, SortMode orderingMode)
+            throws IOException {
         ListEntryComparator comparator = new ListEntryComparator();
         SortBuffer buffer = new SortBuffer(SortConfigs.base(), comparator);
         for (int page = 0; page < pages.size(); page++) {
             buffer.admit(page, pages.get(page));
         }
-        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE,
+                orderingMode)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
         return path;
     }

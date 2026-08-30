@@ -17,7 +17,17 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
                                 PageRunTrailer.Trailer trailer,
                                 PageRunPageIndex.ReadResult extension,
                                 int maxRawPayloadLength,
-                                PageRunFormat physicalFormat) {
+                                PageRunFormat physicalFormat,
+                                int headerBytes,
+                                SortMode orderingMode) {
+
+    /** Compatibility constructor for focused tests using the current header envelope. */
+    PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
+            PageRunTrailer.Trailer trailer, PageRunPageIndex.ReadResult extension,
+            int maxRawPayloadLength, PageRunFormat physicalFormat) {
+        this(path, fileSize, trailerStart, trailer, extension, maxRawPayloadLength,
+                physicalFormat, PageRunSegmentWriter.HEADER_BYTES, SortMode.OBJECTS);
+    }
 
     /** Compatibility constructor for already validated descriptors assembled in focused tests. */
     PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
@@ -27,7 +37,8 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
                         ? extension.maxRawPayloadLength()
                         : -1,
                 new PageRunFormat(PageRunFormat.CURRENT_FORMAT_VERSION,
-                        Short.toUnsignedInt(extension.extensionType())));
+                        Short.toUnsignedInt(extension.extensionType())),
+                PageRunSegmentWriter.HEADER_BYTES, SortMode.OBJECTS);
     }
 
     boolean hasDecodedPageMaximum() {

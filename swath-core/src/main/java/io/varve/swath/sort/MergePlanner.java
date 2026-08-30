@@ -258,9 +258,9 @@ final class MergePlanner {
             }
         }
         long fixedTailStart = descriptor.fileSize() - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-        long framedRecordBytes = descriptor.trailerStart() >= PageRunSegmentWriter.HEADER_BYTES
+        long framedRecordBytes = descriptor.trailerStart() >= descriptor.headerBytes()
                         && descriptor.trailerStart() <= fixedTailStart
-                ? descriptor.trailerStart() - PageRunSegmentWriter.HEADER_BYTES
+                ? descriptor.trailerStart() - descriptor.headerBytes()
                 : 0;
         metrics.recordBoundaryIo(0, embedded.bytesRead(), framedRecordBytes);
         return SampleSource.SCAN;
