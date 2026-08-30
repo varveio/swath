@@ -44,7 +44,10 @@ SeedStep ──► SQLite worklist ──► WorkStealingScan workers
                   ▼                                       ▼
              text / Parquet                         sort staging
                   │                                       │
-                  └──────────────► publish ◄──── external merge
+                  │                                finalization
+                  │                              (ranges | pipeline)
+                  │                                       │
+                  └──────────────► publish ◄───────────────┘
                                          │
                               report + manifest + checkpoint
 ```
@@ -114,30 +117,37 @@ boundary in `output.parquet`. That lower layer owns the pinned parquet-mr config
 caller-supplied geometry and `WriteSupport`, emitted-byte and digest accounting, optional
 data-only sync on the writer's existing channel, and the final file-plus-parent durability step.
 Above it, direct output retains sticky lanes, part rotation, checkpoint callbacks, and monotone
-manifest publication; sorted output retains staging, range merge, late global footer stamps,
-ordered final-file rolling, and sorted publication. Sharing the byte transport must not merge
-those state machines or let a physical sync advance either one's durable checkpoint boundary.
+manifest publication; sorted output retains staging, mechanism-specific finalization, late global
+footer stamps, ordered final-file rolling, and sorted publication. Sharing the byte transport must
+not merge those state machines or let a physical sync advance either one's durable checkpoint
+boundary.
 
 Page-run staging is outside that Parquet boundary. It remains a checkpoint-tracked framed format
 with its own strict seal-order durability protocol; any periodic writeback there is an adapter to
 the shared cadence policy, admitted only by measurement, not a reason to route page-run bytes
 through the Parquet writer abstraction.
 
-The sorted merge keeps one public façade, `SortTransform(SortRun)`, over package-private owners:
-`PageRunCatalog` validates names and performs the one-open trailer/index preflight without retaining
-sample arrays; `MergePlanner` owns all serial fan-in, parallel boundary-policy, heap, staged-size,
-and FD arithmetic (including the shared proof-spool reservation); `ParallelRangeMerge` owns the
-executor, seek-plan construction, global proof, cancellation/quiescence, writer registry, and
-failure sweep, while `ParallelRangeWorker` executes exactly one range; and `DatasetPublisher` owns
-sorted tmp/stamp/close, stale-final replacement, rename/fsync/listener ordering, and staging
-completion. `DatasetPublisher` deliberately stops at the listener seam—`ListRunner` remains the
-owner of consumer `manifest.json`, state, symlink, and last-written `_SUCCESS`. After that listener
-returns, `DatasetPublisher` owns only disposable-intermediate and staging reconciliation. A failure
-in that suffix is typed as committed-publication cleanup pending; the runtime records PUBLISHED and
-retains the completed transform facts for the unwound summary. PUBLISHED re-entry revalidates
-identity + `_SUCCESS` before cleanup and repeats the same non-fatal classification on cleanup
-failure, so retries clean without LIST work instead of sending the valid dataset through the fatal
-merge/publish guard.
+The sorted merge keeps one public façade, `SortTransform(SortRun)`. `SortFinalization` selects the
+default `ranges` path or the experimental `pipeline` path without changing durable staging or
+publication. Shared owners are `PageRunCatalog`, which validates names and preflights trailers and
+indexes; `MergePlanner`, which owns fan-in and mechanism-specific heap/FD admission; and
+`DatasetPublisher`, which owns temporary parts, cross-part verification, stale-final replacement,
+rename/fsync/listener ordering, and staging completion.
+
+On `ranges`, `ParallelRangeMerge` owns boundary and seek planning, executor lifecycle, global
+physical-zone proof, writer registration, and failure cleanup; each `ParallelRangeWorker` executes
+one key range. On `pipeline`, `PipelineFinalization` owns the common failure domain:
+`SegmentHeaderCursors` produces bounded header-only reference streams, `MergeRouter` is the single
+global order and part-boundary owner, and `PartEncoders` positionally reads complete plans from one
+shared bounded work queue. Encoder completion order is reconciled by dense plan ordinal before the
+shared publisher sees any part.
+
+`DatasetPublisher` deliberately stops at the listener seam—`ListRunner` remains the owner of
+consumer `manifest.json`, state, symlink, and last-written `_SUCCESS`. After that listener returns,
+`DatasetPublisher` owns only disposable-intermediate and staging reconciliation. A failure in that
+suffix is typed as committed-publication cleanup pending; the runtime records PUBLISHED and retains
+the completed transform facts for the unwound summary. PUBLISHED re-entry revalidates identity plus
+`_SUCCESS` before cleanup, so retries clean without LIST work.
 
 The terminal output stage is observed first so broken pipes, full disks, and writer failures
 cancel producers promptly. On shutdown, downstream receivers close before producer joins;
