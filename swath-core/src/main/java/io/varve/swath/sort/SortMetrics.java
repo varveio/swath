@@ -5,6 +5,8 @@
  */
 package io.varve.swath.sort;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * Engagement-counter hook for the sort library (metrics discipline,
  * {@code docs/internals/metrics-internals.md} §5). Mirrors the signature of
@@ -58,29 +60,6 @@ public interface SortMetrics {
                                      long serviceNanos) {
         }
 
-        @Override
-        public void recordPipelinePagesForwarded(long pages) {
-        }
-
-        @Override
-        public void recordPipelineCluster(long pages, long rows) {
-        }
-
-        @Override
-        public void recordPipelineRouterWait(long nanos) {
-        }
-
-        @Override
-        public void recordPipelineReaderWait(long nanos) {
-        }
-
-        @Override
-        public void recordPipelineEncoderQueueFull(long nanos) {
-        }
-
-        @Override
-        public void recordPipelinePartsOpen(int parts) {
-        }
     };
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
@@ -144,7 +123,7 @@ public interface SortMetrics {
     default void recordPipelineCluster(long pages, long rows) {
     }
 
-    /** Record time the router spent blocked by encoder back-pressure. */
+    /** Record total time the router spent blocked on reader input or encoder back-pressure. */
     default void recordPipelineRouterWait(long nanos) {
     }
 
@@ -156,7 +135,7 @@ public interface SortMetrics {
     default void recordPipelineEncoderQueueFull(long nanos) {
     }
 
-    /** Set the current number of pipeline output parts with an open writer. */
-    default void recordPipelinePartsOpen(int parts) {
+    /** Bind the pipeline's owning counter directly to the live open-part gauge. */
+    default void bindPipelinePartsOpen(AtomicInteger partsOpen) {
     }
 }

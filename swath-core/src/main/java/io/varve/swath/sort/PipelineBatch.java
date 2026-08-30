@@ -49,7 +49,7 @@ record PipelineBatch(long sequence, int partOrdinal, boolean partFirst, boolean 
     record WholePage(PageBlock page) implements Payload {
         @Override
         public long logicalBytes() {
-            return page.rawPayloadLength();
+            return page.estimatedBytes();
         }
 
         @Override
@@ -68,9 +68,9 @@ record PipelineBatch(long sequence, int partOrdinal, boolean partFirst, boolean 
         }
     }
 
+    /** Router-owned list transferred without copying; the router never mutates it after construction. */
     record Rows(List<ListEntry> entries, long logicalBytes) implements Payload {
         Rows {
-            entries = List.copyOf(entries);
             if (entries.isEmpty() || logicalBytes <= 0) {
                 throw new IllegalArgumentException("row batches must be non-empty with positive logical bytes");
             }

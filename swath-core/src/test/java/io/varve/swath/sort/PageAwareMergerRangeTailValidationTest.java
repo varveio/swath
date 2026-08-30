@@ -117,13 +117,18 @@ class PageAwareMergerRangeTailValidationTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(ActiveTail.class)
-    void closeValidatesSelectedUnselectedAndEqualMinimumActivePages(
+    void closeValidatesDecodedActivePagesWithoutPullingADeferredFrontier(
             ActiveTail tail, @TempDir Path dir) throws IOException {
         List<TrackingFrontier> frontiers = tail.frontiers(dir);
         PageAwareMerger merger = new PageAwareMerger(new ArrayList<>(frontiers), COMPARATOR,
                 MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP);
 
-        assertBodyCorruption(catchThrowable(merger::close));
+        Throwable closeFailure = catchThrowable(merger::close);
+        if (tail == ActiveTail.UNSELECTED) {
+            assertThat(closeFailure).isNull();
+        } else {
+            assertBodyCorruption(closeFailure);
+        }
         assertThat(frontiers).allSatisfy(frontier -> assertThat(frontier.closes).isEqualTo(1));
     }
 
@@ -144,7 +149,7 @@ class PageAwareMergerRangeTailValidationTest {
     }
 
     @Test
-    void constructorKeepsItsReadFailureAndSuppressesTailValidationAndCloseFailures(
+    void lazyAdmissionKeepsItsReadFailureAndSuppressesTailValidationAndCloseFailures(
             @TempDir Path dir) throws IOException {
         TrackingFrontier decoded = new TrackingFrontier(List.of(corruptBlock(
                 dir.resolve("constructor-tail.pageseg"),
@@ -154,10 +159,14 @@ class PageAwareMergerRangeTailValidationTest {
                 true, true);
         AtomicInteger classifications = new AtomicInteger();
 
-        Throwable thrown = catchThrowable(() -> new PageAwareMerger(
-                List.of(decoded, failing), COMPARATOR,
+        PageAwareMerger merger = new PageAwareMerger(List.of(decoded, failing), COMPARATOR,
                 MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP,
-                (copyable, interleaved) -> classifications.incrementAndGet()));
+                (copyable, interleaved) -> classifications.incrementAndGet());
+        Throwable thrown = catchThrowable(() -> {
+            try (merger) {
+                merger.next();
+            }
+        });
 
         assertThat(thrown).isInstanceOf(UncheckedIOException.class)
                 .hasMessageContaining("page-aware merge read failed")

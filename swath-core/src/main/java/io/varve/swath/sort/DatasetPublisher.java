@@ -107,11 +107,39 @@ final class DatasetPublisher {
             throw e;
         }
 
+        return assembleParallelParts(outputDir, stagingDir, tmpFiles, writers, ownedInputs,
+                outputAuthority, true);
+    }
+
+    /**
+     * Verify and assemble parts whose producer already assigned global stamps and durably closed them.
+     * The publisher deliberately does not restamp or close: pipeline encoders are the sole footer owner.
+     */
+    PendingParts preclosedParts(Path outputDir, Path stagingDir, List<Path> tmpFiles,
+            List<SortedFileWriter> writers, StagingReconciliation ownedInputs,
+            StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
+        if (tmpFiles.isEmpty() || tmpFiles.size() != writers.size()) {
+            throw new IllegalArgumentException(
+                    "preclosed part paths and writers must be non-empty and equally sized");
+        }
+        requireDisjointParts(tmpFiles, writers);
+        return assembleParallelParts(outputDir, stagingDir, tmpFiles, writers, ownedInputs,
+                outputAuthority, false);
+    }
+
+    private PendingParts assembleParallelParts(Path outputDir, Path stagingDir,
+            List<Path> tmpFiles, List<SortedFileWriter> writers,
+            StagingReconciliation ownedInputs,
+            StagingReconciliation.DirectoryAuthority outputAuthority, boolean normalizeEmpty)
+            throws IOException {
         PendingParts pending = new PendingParts(outputDir, stagingDir,
                 finalWriterFactory.forOutputSequence(), ownedInputs, outputAuthority);
         pending.tmpFiles.addAll(tmpFiles);
         pending.writers.addAll(writers);
         if (pending.tmpFiles.isEmpty()) {
+            if (!normalizeEmpty) {
+                throw new IllegalArgumentException("preclosed part sequence must not be empty");
+            }
             SortedFileWriter writer = pending.openNext();
             writer.markFinal();
             writer.close();

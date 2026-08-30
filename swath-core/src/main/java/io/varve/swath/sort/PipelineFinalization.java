@@ -17,48 +17,53 @@ final class PipelineFinalization {
     private final SortRun run;
     private final MergePlanner planner;
     private final DatasetPublisher publisher;
+    private final PipelinePartSizer.Target partTarget;
 
-    PipelineFinalization(SortRun run, MergePlanner planner, DatasetPublisher publisher) {
+    PipelineFinalization(SortRun run, MergePlanner planner, DatasetPublisher publisher,
+            PipelinePartSizer.Target partTarget) {
         this.run = run;
         this.planner = planner;
         this.publisher = publisher;
+        this.partTarget = partTarget;
     }
 
-    SortTransformResult run(PageRunCatalog sourceCatalog, Path outputDir, Path stagingDir,
-            PublishListener publishListener, LongConsumer progressCallback,
-            FinalPassListener onFinalPassStarting, StagingReconciliation ownedInputs,
-            StagingReconciliation retainedOriginals,
-            StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
+    SortTransformResult run(PageRunCatalog sourceCatalog, Request request, int encoderCount)
+            throws IOException {
         SortConfig config = run.config();
         SortMetrics metrics = run.metrics();
         metrics.recordStealReason("SORT", "finalization_pipeline");
 
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(
                 run.comparator(), run.hook(), metrics, config.segmentCodec(), run.orderingMode());
-        PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir, ownedInputs,
+        PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, request.stagingDir(),
+                request.ownedInputs(),
                 "merge-", null, sourceCatalog.byPath(), frontier -> { }, -1, null, null);
-        KWayMerge<Path> cascade = new KWayMerge<>(run.comparator(), planner.serialFanIn(sourceCatalog),
+        KWayMerge<Path> cascade = new KWayMerge<>(run.comparator(),
+                planner.pipelineFanIn(sourceCatalog, encoderCount),
                 io, run.hook(), metrics);
-        List<Path> survivors = cascade.reduceToFanIn(sourceCatalog.paths(), progressCallback);
+        List<Path> survivors = cascade.reduceToFanIn(
+                sourceCatalog.paths(), request.progressCallback());
         cascade.recordFinalPass();
-        PageRunCatalog pipelineCatalog = PageRunCatalog.preflight(survivors,
-                path -> PageRunSegmentIo.open(path, metrics), Optional.empty(),
-                Map.of(), metrics);
+        PageRunCatalog pipelineCatalog = survivors.equals(sourceCatalog.paths())
+                ? sourceCatalog
+                : PageRunCatalog.preflight(survivors,
+                        path -> PageRunSegmentIo.open(path, metrics), Optional.empty(),
+                        Map.of(), metrics);
 
-        int encoderCount = config.mergeParallelism();
         PipelineFailure failure = new PipelineFailure();
-        PipelinePartSizer sizer = new PipelinePartSizer(config.finalFileBytes());
+        PipelinePartSizer sizer = new PipelinePartSizer(partTarget, config.finalFileBytes());
         SegmentReaderSlots readers = null;
         PartEncoders encoders = null;
         try {
             readers = new SegmentReaderSlots(
                     pipelineCatalog, config.mergeBudgetBytes(), metrics, failure);
-            encoders = new PartEncoders(encoderCount, stagingDir, run.finalWriterFactory(),
+            encoders = new PartEncoders(encoderCount, request.stagingDir(), run.finalWriterFactory(),
                     run.comparator(), run.hook(), run.equalKeyPolicy(), metrics, failure, sizer,
-                    progressCallback);
-            onFinalPassStarting.onFinalPassStarting(true);
+                    request.progressCallback());
+            request.onFinalPassStarting().onFinalPassStarting(true);
             MergeRouter.Result routed = new MergeRouter(
-                    readers, encoders, sizer, run.comparator(), metrics, failure)
+                    readers, encoders, sizer, run.comparator(), config.mergeBudgetBytes(), metrics,
+                    failure)
                     .route(pipelineCatalog.descriptors().size());
             readers.close();
             readers = null;
@@ -67,16 +72,17 @@ final class PipelineFinalization {
             List<Path> paths = completed.stream().map(PartEncoders.CompletedPart::path).toList();
             List<SortedFileWriter> writers = completed.stream()
                     .map(PartEncoders.CompletedPart::writer).toList();
-            DatasetPublisher.PendingParts pending = publisher.parallelParts(
-                    outputDir, stagingDir, paths, writers, ownedInputs, outputAuthority);
+            DatasetPublisher.PendingParts pending = publisher.preclosedParts(
+                    request.outputDir(), request.stagingDir(), paths, writers,
+                    request.ownedInputs(), request.outputAuthority());
             publisher.verifyCardinality(pending, sourceCatalog.totalEntries(), routed.rows());
             SortTransformResult result = new SortTransformResult(
                     pending.finalFiles(), pending.outputBytes(), routed.rows(),
                     cascade.mergePasses(), cascade.cascadedPasses(), routed.pagesForwarded(),
                     encoderCount);
             try {
-                publisher.publish(pending, routed.rows(), publishListener, ownedInputs,
-                        retainedOriginals, io.intermediates());
+                publisher.publish(pending, routed.rows(), request.publishListener(),
+                        request.ownedInputs(), request.retainedOriginals(), io.intermediates());
             } catch (CommittedPublicationCleanupException e) {
                 throw e.withPublishedResult(result);
             }
@@ -90,29 +96,36 @@ final class PipelineFinalization {
                 encoders.close();
             }
             try {
-                ownedInputs.sweepDisposables(StagingNames.PIPELINE_TMP_GLOB);
+                request.ownedInputs().sweepDisposables(StagingNames.PIPELINE_TMP_GLOB);
             } catch (IOException cleanupFailure) {
                 thrown.addSuppressed(cleanupFailure);
             }
-            throw rethrow(thrown);
+            throw asRuntimeFailure(thrown);
         }
     }
 
-    private static IOException rethrow(Throwable failure) throws IOException {
+    private static RuntimeException asRuntimeFailure(Throwable failure) throws IOException {
         Throwable cause = failure instanceof PipelineFailure.Failed && failure.getCause() != null
                 ? failure.getCause() : failure;
         if (cause instanceof MergeCancellation.Cancelled cancelled) {
-            throw cancelled;
+            return cancelled;
         }
         if (cause instanceof IOException io) {
-            return io;
+            throw io;
         }
         if (cause instanceof RuntimeException runtime) {
-            throw runtime;
+            return runtime;
         }
         if (cause instanceof Error error) {
             throw error;
         }
-        return new IOException("sort finalization pipeline failed", cause);
+        throw new IOException("sort finalization pipeline failed", cause);
+    }
+
+    /** Immutable invocation state keeps the lifecycle entry point independent of argument order. */
+    record Request(Path outputDir, Path stagingDir, PublishListener publishListener,
+                   LongConsumer progressCallback, FinalPassListener onFinalPassStarting,
+                   StagingReconciliation ownedInputs, StagingReconciliation retainedOriginals,
+                   StagingReconciliation.DirectoryAuthority outputAuthority) {
     }
 }

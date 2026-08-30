@@ -5,7 +5,6 @@
  */
 package io.varve.swath.sort;
 
-import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -119,23 +118,20 @@ final class RolledPartWriter {
         long batchRows = 0;
         try {
             SortedFileWriter writer = null;
-            byte[] previousKey = null;
             ListEntry previousEntry = null;
             boolean deferredForCurrentKey = false;
             while (merged.hasNext()) {
                 MergeCancellation.check();
                 ListEntry entry = merged.next();
-                byte[] entryKey = entry.key().rawUnsafe();
                 boolean rollReady = writer != null && shouldRoll(writer, finalFileBytes);
                 // The equality check can scan a 1 KiB key. Keep it off the ordinary unique-key hot
                 // path for VERSIONS/ALLOW until the soft byte target has actually been reached.
                 // OBJECTS/REJECT is a key-uniqueness integrity policy and inspects every pair.
                 boolean sameKey = (equalKeyPolicy == EqualKeyPolicy.REJECT || rollReady)
-                        && previousKey != null
-                        && KeyBytes.compareUnsigned(previousKey, entryKey) == 0;
+                        && previousEntry != null
+                        && AdjacentEntryGuard.sameRawKey(previousEntry, entry);
                 if (equalKeyPolicy == EqualKeyPolicy.REJECT && sameKey) {
-                    metrics.recordStealReason("SORT", "equal_key_rejected");
-                    throw DuplicateKeyException.forAdjacentEntries(previousEntry, entry, comparator);
+                    AdjacentEntryGuard.rejectEqualKey(previousEntry, entry, comparator, metrics);
                 }
                 if (rollReady && sameKey) {
                     // A key is the future VERSIONS path's unsplittable atom. Record once for the
@@ -160,9 +156,8 @@ final class RolledPartWriter {
                 }
                 MergeCancellation.check();
                 writer.write(entry);
-                // KeyBytes treats this hot-path array as immutable. Retain one no-copy reference:
-                // final rolling uses O(1) extra state even for arbitrarily many versions of one key.
-                previousKey = entryKey;
+                // Retain one immutable entry reference: final rolling uses O(1) extra state even for
+                // arbitrarily many versions of one key.
                 previousEntry = entry;
                 totalRows++;
                 // §3.2: batched merge-progress feed (never per-row) — see KWayMerge.PROGRESS_BATCH_ROWS.

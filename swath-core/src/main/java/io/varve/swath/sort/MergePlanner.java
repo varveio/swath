@@ -112,14 +112,29 @@ final class MergePlanner {
 
     /** Runtime-clamped serial fan-in plus its exact predicted-cascade signal. */
     int serialFanIn(PageRunCatalog catalog) throws MergeMemoryExhaustedException {
+        return runtimeFanIn(catalog, 1);
+    }
+
+    /** Clamp cascade inputs while reserving descriptors for every concurrently open pipeline output. */
+    int pipelineFanIn(PageRunCatalog catalog, int encoderCount)
+            throws MergeMemoryExhaustedException {
+        if (encoderCount < 1) {
+            throw new IllegalArgumentException("pipeline encoder count must be positive");
+        }
+        return runtimeFanIn(catalog, encoderCount);
+    }
+
+    private int runtimeFanIn(PageRunCatalog catalog, int outputWriters)
+            throws MergeMemoryExhaustedException {
         requireDecodedPageFits(catalog);
         int staticFanIn = config.effectiveFanIn();
         int softFdLimit = softFdLimitSupplier.getAsInt();
         int recordSizedFanIn = recordSizedFanIn(catalog);
+        int headroom = saturatedHeadroom(outputWriters);
         int clamped = MergeFdBudget.clampedFanIn(staticFanIn, softFdLimit,
-                MergeFdBudget.FD_HEADROOM, recordSizedFanIn);
+                headroom, recordSizedFanIn);
         if (clamped < staticFanIn) {
-            int fdBound = MergeFdBudget.fdBoundedFanIn(softFdLimit, MergeFdBudget.FD_HEADROOM);
+            int fdBound = MergeFdBudget.fdBoundedFanIn(softFdLimit, headroom);
             metrics.recordStealReason("SORT", "merge_fanin_clamped");
             if (fdBound < staticFanIn) {
                 metrics.recordStealReason("SORT", "merge_fanin_fd_clamped");
@@ -134,6 +149,11 @@ final class MergePlanner {
         }
         warnIfCascadePredicted(catalog.descriptors().size(), clamped);
         return clamped;
+    }
+
+    private static int saturatedHeadroom(int outputWriters) {
+        long adjusted = (long) MergeFdBudget.FD_HEADROOM + outputWriters - 1L;
+        return (int) Math.min(Integer.MAX_VALUE, adjusted);
     }
 
     /** Exact pass-count warning shared by serial and admitted parallel planning. */

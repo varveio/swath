@@ -526,8 +526,10 @@ taxonomy so the signal set stays comparable:
 
 Sort finalization follows the same rule. The pipeline records whether it was selected, whether its
 overlap heap engaged, whole-page/cluster work, reader and router waits, encoder back-pressure, and
-open writers. The summary exposes reader/router wait shares of merge wall so a completed benchmark
-can distinguish input starvation from encoder saturation without reconstructing the run.
+open writers. `swath.sort.pipeline.router_wait` is the router's total blocked time; reader-slot wait
+and encoder-queue-full time are its separately reported components. The summary exposes all three
+wait shares of merge wall so a completed benchmark can distinguish input starvation from encoder
+saturation without reconstructing the run.
 
   **Pivot-mechanism attribution.** A winning `CHILD_CREATED` split also records which of the seven
   pivot mechanisms produced it, via a second `recordStealReason("PIVOT", <mechanism>)` at the same
@@ -1048,6 +1050,11 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `merge_overlap_cluster` | page-aware merge entered one decoded overlap cluster. The exact live meters are `swath.sort.merge.overlap.clusters`, `swath.sort.merge.overlap.pages.peak`, and `swath.sort.merge.overlap.rows.peak`; the exact `summary.json.sort` fields are `merge_overlap_clusters`, `merge_overlap_pages_peak`, and `merge_overlap_rows_peak`. Source-run counters above remain independent of page overlap | |
 | `SORT` | `finalization_pipeline` | the default-off finalization pipeline was selected for this merge. Fires once before cascade/pipeline work, including an empty merge; absent on the default range/serial arm. Pipeline work meters are `swath.sort.pipeline.pages_forwarded`, `.cluster_pages`, `.cluster_rows`, `.router_wait`, `.reader_wait`, `.encoder_queue_full`, and `.parts_open` | |
 | `SORT` | `pipeline_cluster_merge` | the pipeline router found a transitively overlapping page cluster and engaged the shared page-aware row heap. Fires once per cluster, not per page or row; read with `pipeline_cluster_pages` and `pipeline_cluster_rows` to classify overlap shape | |
+| `SORT` | `pipeline_encoder_below_staged_floor` | the shared parallelism admission reduced the pipeline to one encoder because staged input was below the parallel threshold | |
+| `SORT` | `pipeline_encoder_fd_exhausted` | the shared parallelism admission reduced the pipeline to one encoder because no additional descriptor budget remained | |
+| `SORT` | `pipeline_encoder_fd_limited` | the shared parallelism admission reduced the requested pipeline encoder count because file descriptors bound first | |
+| `SORT` | `pipeline_encoder_budget_limited` | the shared parallelism admission reduced the requested pipeline encoder count because merge residency bound first | |
+| `SORT` | `pipeline_encoder_would_cascade` | the shared parallelism admission reduced the requested pipeline encoder count to avoid multiplying cascade work | |
 | `SORT` | `merge_cascade_predicted` | at merge kickoff, `segments > effectiveFanIn` was already known to force a cascade — engagement counter for the up-front `sort_merge_cascade_predicted` warn log | |
 | `SORT` | `equal_key_rejected` | the final drain rejected the second row of an adjacent equal raw-key pair under `EqualKeyPolicy.REJECT`. Fires once per failing final drain, before the offending row is written. Live `OBJECTS` uses `REJECT`; the dormant `VERSIONS` mode uses `ALLOW` because one raw key may own several ordered versions | |
 | `SORT` | `sort_output_cardinality_mismatch` | source-trailer, merge-drain, and closed-final-writer row totals disagreed before publication. Fires once per failing transform; the checked failure is fatal/classified as `error_class=sort_output_cardinality_mismatch`, and no stale-final sweep or publication follows | |

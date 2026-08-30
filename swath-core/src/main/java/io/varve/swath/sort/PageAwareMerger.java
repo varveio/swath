@@ -74,16 +74,12 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
     private final SortMetrics metrics;
     private final MergeRunSink runSink;
     private final List<PageFrontierStream> allStreams;
-    /** Per-merger share of the process merge budget; checked before compressed payload allocation. */
-    private final long decodedPageBudgetBytes;
-    private long residentDecodedBytes;
+    private final DecodedPageBudget decodedBudget;
 
     /** Segments whose CURRENT (undecoded) page is still a frontier candidate, keyed by unsigned minKey. */
     private final PriorityQueue<Seg> frontier;
     /** Decoded pages currently being key-merged (overlap fallback), keyed by head entry. */
     private final PageRowMerger active;
-    /** Monotone upper bound (max page maxKey) over the current key-merge event; null when active is empty. */
-    private byte[] ceiling;
     /** A single decoded page being streamed whole (fast path); null otherwise. */
     private PageBlockCursor wholeCursor;
     private long wholeDecodedBytes;
@@ -111,7 +107,7 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
         this.metrics = metrics;
         this.runSink = runSink;
         this.allStreams = streams;
-        this.decodedPageBudgetBytes = decodedPageBudgetBytes;
+        this.decodedBudget = new DecodedPageBudget(decodedPageBudgetBytes, metrics);
         this.frontier = new PriorityQueue<>((a, b) -> Arrays.compareUnsigned(a.minKey(), b.minKey()));
         this.active = new PageRowMerger(comparator);
         this.sourceRuns = new MergeRunTracker(streams.size());
@@ -171,9 +167,6 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
                     closeActiveUnderFrontier();
                     ListEntry e = active.next();
                     releaseDecoded(active.releasedBytes());
-                    if (!active.hasNext()) {
-                        ceiling = null;   // event resolved; the next plan() starts a fresh one
-                    }
                     recordSource(active.lastSource());
                     return e;
                 }
@@ -201,7 +194,7 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
         // Reserve the current body-as-extra plus its decompression target BEFORE advance() can
         // allocate the successor body. The per-stream base already reserves one frontier body;
         // this reservation is what makes the transient current+successor overlap safe.
-        long reserved = reserveDecoded(page);
+        long reserved = decodedBudget.reserve(page);
         try {
             m.advance();
             if (m.stream.hasPage()) {
@@ -224,27 +217,23 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
                 metrics.recordPageAwareOverlapCluster();
                 addActive(m.source, page, reserved);
                 reserved = 0;
-                ceiling = pageMax;
             }
         } finally {
-            releaseDecoded(reserved);
+            decodedBudget.release(reserved);
         }
     }
 
     /**
-     * Ensure {@link #active} is closed under overlap: pull in every frontier segment whose current
-     * page starts at/inside the active region ({@code minKey <= ceiling}, unsigned) so the entry heap
-     * holds the true global minimum. {@code ceiling} is kept monotone non-decreasing within an event
-     * (a pulled page can only widen it) — over-pulling a page slightly early is harmless and stays
-     * byte-identical, but never under-pulls a page that could interleave.
+     * Admit only frontier pages that can precede or tie the active heap's next row. Repeating this
+     * before every row preserves the global minimum while allowing exhausted pages to release their
+     * decoded bytes before later portions of a transitive overlap chain become resident.
      */
     private void closeActiveUnderFrontier() throws IOException {
         while (!frontier.isEmpty()
-                && Arrays.compareUnsigned(frontier.peek().minKey(), ceiling) <= 0) {
+                && Arrays.compareUnsigned(frontier.peek().minKey(), active.nextKey()) <= 0) {
             Seg f = frontier.poll();
-            byte[] fMax = f.maxKey().clone();
             PageBlock page = f.decodeCurrentPage();
-            long reserved = reserveDecoded(page);
+            long reserved = decodedBudget.reserve(page);
             try {
                 f.advance();
                 if (f.stream.hasPage()) {
@@ -252,11 +241,8 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
                 }
                 addActive(f.source, page, reserved);
                 reserved = 0;
-                if (Arrays.compareUnsigned(fMax, ceiling) > 0) {
-                    ceiling = fMax;
-                }
             } finally {
-                releaseDecoded(reserved);
+                decodedBudget.release(reserved);
             }
         }
     }
@@ -287,44 +273,8 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
         metrics.recordPageAwareOverlapState(active.pageCount(), active.rowCount());
     }
 
-    /**
-     * Reserve the decoded page's retained record body plus any separate decompression target before
-     * {@link PageBlock#cursor()} can allocate it. The per-merger base budget has already reserved one
-     * encoded frontier body per open stream; after advance, this page owner is an additional retained
-     * body alongside that stream's successor frontier.
-     */
-    private long reserveDecoded(PageBlock page) throws MergeMemoryExhaustedException {
-        long decodedBytes;
-        try {
-            decodedBytes = Math.addExact((long) page.retainedRecordBytes(),
-                    page.codec() == PageCodec.NONE ? 0L : page.rawPayloadLength());
-            decodedBytes = Math.addExact(decodedBytes, page.dictionaryCoordinateBytes());
-            decodedBytes = Math.addExact(decodedBytes, page.dictionaryCacheBudgetBytes());
-        } catch (ArithmeticException overflow) {
-            decodedBytes = Long.MAX_VALUE;
-        }
-        long next;
-        try {
-            next = Math.addExact(residentDecodedBytes, decodedBytes);
-        } catch (ArithmeticException overflow) {
-            next = Long.MAX_VALUE;
-        }
-        if (next > decodedPageBudgetBytes) {
-            metrics.recordStealReason("SORT", "merge_decoded_residency_exhausted");
-            throw new MergeMemoryExhaustedException(
-                    "decoded-page retained residency exceeds the per-merger merge budget: resident_bytes="
-                            + residentDecodedBytes + ", next_page_bytes=" + decodedBytes
-                            + ", budget_bytes=" + decodedPageBudgetBytes);
-        }
-        residentDecodedBytes = next;
-        return decodedBytes;
-    }
-
     private void releaseDecoded(long decodedBytes) {
-        residentDecodedBytes -= decodedBytes;
-        if (residentDecodedBytes < 0) {
-            throw new IllegalStateException("decoded-page residency accounting underflow");
-        }
+        decodedBudget.release(decodedBytes);
     }
 
     /** Track source runs with an int comparison only; no row key comparison or allocation is added. */

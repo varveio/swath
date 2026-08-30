@@ -278,7 +278,7 @@ final class PageBlock {
         }
     }
 
-    /** Materialize the compressed payload without decoding rows; repeated calls reuse the same bytes. */
+    /** Materialize the decompressed payload without decoding rows; repeated calls reuse the same bytes. */
     void prepareDecoded() {
         if (codec != PageCodec.NONE) {
             decodedPayload();

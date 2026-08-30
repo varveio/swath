@@ -812,14 +812,19 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) counterCount("swath.sort.pipeline.cluster_rows"));
         long pipelineRouterWaitMs = timerTotalMs("swath.sort.pipeline.router_wait");
         long pipelineReaderWaitMs = timerTotalMs("swath.sort.pipeline.reader_wait");
+        long pipelineEncoderQueueFullMs =
+                timerTotalMs("swath.sort.pipeline.encoder_queue_full");
+        // Router wait is the total blocked span; the following two timers classify its reader and
+        // encoder-queue components without requiring summary consumers to reconstruct the total.
         sortNode.put("pipeline_router_wait_ms", pipelineRouterWaitMs);
         sortNode.put("pipeline_reader_wait_ms", pipelineReaderWaitMs);
         sortNode.put("pipeline_router_wait_share", mergeMs <= 0
                 ? 0.0 : (double) pipelineRouterWaitMs / mergeMs);
         sortNode.put("pipeline_reader_wait_share", mergeMs <= 0
                 ? 0.0 : (double) pipelineReaderWaitMs / mergeMs);
-        sortNode.put("pipeline_encoder_queue_full_ms",
-                timerTotalMs("swath.sort.pipeline.encoder_queue_full"));
+        sortNode.put("pipeline_encoder_queue_full_ms", pipelineEncoderQueueFullMs);
+        sortNode.put("pipeline_encoder_queue_full_share", mergeMs <= 0
+                ? 0.0 : (double) pipelineEncoderQueueFullMs / mergeMs);
         sortNode.put("pipeline_parts_open",
                 (long) gaugeValue("swath.sort.pipeline.parts_open"));
         sortNode.put("merge_range_framed_bytes",

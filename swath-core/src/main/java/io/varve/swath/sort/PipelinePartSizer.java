@@ -7,23 +7,28 @@ package io.varve.swath.sort;
 
 /** Router-owned part geometry with an internal fixed-row benchmark control. */
 final class PipelinePartSizer {
-    static final String POLICY_PROPERTY = "swath.sort.pipeline-part-policy";
-    static final String FIXED_ROWS_PROPERTY = "swath.sort.pipeline-fixed-rows";
     static final double INITIAL_ENCODED_TO_LOGICAL_RATIO = 0.25;
     static final long DEFAULT_FIXED_ROWS = 1_000_000L;
 
     enum Policy {
         CALIBRATED_BYTES,
-        FIXED_ROWS;
+        FIXED_ROWS
+    }
 
-        static Policy fromSystemProperties() {
-            String raw = System.getProperty(POLICY_PROPERTY, "calibrated").trim();
-            return switch (raw) {
-                case "calibrated" -> CALIBRATED_BYTES;
-                case "fixed-rows" -> FIXED_ROWS;
-                default -> throw new IllegalArgumentException(POLICY_PROPERTY
-                        + ": expected calibrated or fixed-rows, got '" + raw + "'");
-            };
+    /** Immutable benchmark-selected policy; production always supplies {@link #calibrated()}. */
+    record Target(Policy policy, long fixedRows) {
+        Target {
+            if (fixedRows <= 0) {
+                throw new IllegalArgumentException("pipeline fixed-row target must be positive");
+            }
+        }
+
+        static Target calibrated() {
+            return new Target(Policy.CALIBRATED_BYTES, DEFAULT_FIXED_ROWS);
+        }
+
+        static Target fixedRows(long rows) {
+            return new Target(Policy.FIXED_ROWS, rows);
         }
     }
 
@@ -34,17 +39,20 @@ final class PipelinePartSizer {
     private long logicalBytes;
 
     PipelinePartSizer(long finalFileBytes) {
-        this(Policy.fromSystemProperties(), finalFileBytes,
-                Long.getLong(FIXED_ROWS_PROPERTY, DEFAULT_FIXED_ROWS));
+        this(Target.calibrated(), finalFileBytes);
     }
 
     PipelinePartSizer(Policy policy, long finalFileBytes, long fixedRows) {
-        if (finalFileBytes <= 0 || fixedRows <= 0) {
-            throw new IllegalArgumentException("pipeline part targets must be positive");
+        this(new Target(policy, fixedRows), finalFileBytes);
+    }
+
+    PipelinePartSizer(Target target, long finalFileBytes) {
+        if (finalFileBytes <= 0) {
+            throw new IllegalArgumentException("pipeline byte target must be positive");
         }
-        this.policy = policy;
+        this.policy = target.policy();
         this.finalFileBytes = finalFileBytes;
-        this.fixedRows = fixedRows;
+        this.fixedRows = target.fixedRows();
     }
 
     synchronized void completed(long actualBytes, long partLogicalBytes) {

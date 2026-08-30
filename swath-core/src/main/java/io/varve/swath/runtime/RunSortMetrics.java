@@ -7,6 +7,7 @@ package io.varve.swath.runtime;
 
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.sort.SortMetrics;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Wires the sort library's {@link SortMetrics} hook to the live {@link RunMetrics}.
@@ -88,7 +89,7 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     }
 
     @Override
-    public void recordPipelinePartsOpen(int parts) {
-        metrics.recordSortPipelinePartsOpen(parts);
+    public void bindPipelinePartsOpen(AtomicInteger partsOpen) {
+        metrics.bindSortPipelinePartsOpen(partsOpen);
     }
 }

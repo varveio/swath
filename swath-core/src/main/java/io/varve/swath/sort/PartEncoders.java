@@ -5,7 +5,6 @@
  */
 package io.varve.swath.sort;
 
-import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -20,13 +19,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongConsumer;
 
-/** Bounded, ordinal-striped final-part encoders. Each lane owns at most one open writer. */
+/**
+ * Bounded final-part encoders. Ordinal {@code k} stays on lane {@code k mod N}, so every batch of a
+ * part reaches one writer in sequence while independent parts can close out of order.
+ */
 final class PartEncoders implements AutoCloseable {
     static final int QUEUE_DEPTH = 4;
     private static final long FAILURE_CHECK_MILLIS = 100;
 
-    record CompletedPart(int ordinal, Path path, SortedFileWriter writer,
-                         FinalPartMetadata metadata, long bytes, long logicalBytes) {
+    /** One durably closed part, retaining only the state the ordered assembler consumes. */
+    record CompletedPart(int ordinal, Path path, SortedFileWriter writer) {
     }
 
     private final List<Lane> lanes;
@@ -50,6 +52,7 @@ final class PartEncoders implements AutoCloseable {
         this.sizer = sizer;
         this.metrics = metrics;
         this.progressCallback = progressCallback;
+        metrics.bindPipelinePartsOpen(partsOpen);
         this.lanes = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             Lane lane = new Lane(stagingDir, factory.forOutputSequence(), comparator, hook,
@@ -140,23 +143,19 @@ final class PartEncoders implements AutoCloseable {
         private final ArrayBlockingQueue<Item> queue = new ArrayBlockingQueue<>(QUEUE_DEPTH);
         private final Path stagingDir;
         private final SortedFileWriterFactory factory;
-        private final Comparator<ListEntry> comparator;
-        private final DuplicateHook hook;
-        private final EqualKeyPolicy equalKeyPolicy;
+        private final AdjacentEntryGuard entryGuard;
         private SortedFileWriter writer;
         private Path path;
         private int ordinal = -1;
         private long logicalBytes;
         private long lastSequence = -1;
-        private ListEntry previous;
 
         Lane(Path stagingDir, SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
                 DuplicateHook hook, EqualKeyPolicy equalKeyPolicy) {
             this.stagingDir = stagingDir;
             this.factory = factory;
-            this.comparator = comparator;
-            this.hook = hook;
-            this.equalKeyPolicy = equalKeyPolicy;
+            this.entryGuard = new AdjacentEntryGuard(
+                    comparator, hook, equalKeyPolicy, metrics, "pipeline");
         }
 
         void run() {
@@ -184,7 +183,7 @@ final class PartEncoders implements AutoCloseable {
         }
 
         private void encode(PipelineBatch batch) throws IOException {
-            MergeCancellation.check();
+            failure.check();
             if (batch.sequence() <= lastSequence) {
                 throw new IllegalStateException("pipeline batch sequence regressed");
             }
@@ -196,7 +195,7 @@ final class PartEncoders implements AutoCloseable {
                 ordinal = batch.partOrdinal();
                 path = stagingDir.resolve(StagingNames.pipelineTmp(ordinal));
                 writer = factory.create(path, ordinal + 1);
-                metrics.recordPipelinePartsOpen(partsOpen.incrementAndGet());
+                partsOpen.incrementAndGet();
             } else if (writer == null || ordinal != batch.partOrdinal()) {
                 throw new IllegalStateException("pipeline batch arrived without its open part");
             }
@@ -219,14 +218,15 @@ final class PartEncoders implements AutoCloseable {
                 }
                 writer.close();
                 long bytes = Files.size(path);
-                FinalPartMetadata metadata = writer.finalMetadata().orElse(null);
-                completed.add(new CompletedPart(ordinal, path, writer, metadata, bytes, logicalBytes));
+                completed.add(new CompletedPart(ordinal, path, writer));
                 sizer.completed(bytes, logicalBytes);
                 writer = null;
                 path = null;
-                previous = null;
+                // The router closes parts only across a strict raw-key boundary, so no adjacent
+                // comparator-equal pair can straddle this part-local guard reset.
+                entryGuard.reset();
                 logicalBytes = 0;
-                metrics.recordPipelinePartsOpen(partsOpen.decrementAndGet());
+                partsOpen.decrementAndGet();
             }
         }
 
@@ -238,24 +238,8 @@ final class PartEncoders implements AutoCloseable {
         }
 
         private void write(ListEntry entry) throws IOException {
-            if (previous != null) {
-                int order = comparator.compare(previous, entry);
-                if (order > 0) {
-                    throw new SortOrderException("pipeline output order regressed from key "
-                            + previous.key() + " to " + entry.key());
-                }
-                if (order == 0) {
-                    hook.onDuplicate(previous, entry);
-                }
-                if (equalKeyPolicy == EqualKeyPolicy.REJECT
-                        && KeyBytes.compareUnsigned(previous.key().rawUnsafe(),
-                                entry.key().rawUnsafe()) == 0) {
-                    metrics.recordStealReason("SORT", "equal_key_rejected");
-                    throw DuplicateKeyException.forAdjacentEntries(previous, entry, comparator);
-                }
-            }
+            entryGuard.accept(entry);
             writer.write(entry);
-            previous = entry;
         }
 
         private void discardOpen() {
@@ -268,7 +252,7 @@ final class PartEncoders implements AutoCloseable {
                 failure.record(e);
             } finally {
                 writer = null;
-                metrics.recordPipelinePartsOpen(partsOpen.decrementAndGet());
+                partsOpen.decrementAndGet();
             }
         }
     }

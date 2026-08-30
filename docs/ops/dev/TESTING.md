@@ -169,6 +169,10 @@ the three serial brackets and the two candidate samples. `swath.bench.max-varian
 likewise invalid. Every output must be physically sorted and match the independent source oracle.
 Every `BENCH_*` line carries cache state, retained run identity (or generated sentinels), `git_sha`,
 `corpus_id`, and the stable ordered logical-output fingerprint when output exists.
+With `-Dswath.bench.finalization=pipeline`, every requested encoder count runs both immutable
+part-sizing controls in the same sweep: calibrated bytes and fixed rows. Set the fixed-row target
+with `-Dswath.bench.pipeline-fixed-rows=N`; each `BENCH_ROW` identifies the control and reports total
+router wait plus its reader and encoder-queue components.
 The row reports proof-spool logical extent, preallocation operations/attempted bytes, mapped
 operations/bytes, and summed service time with the same scope as the live log and run summary.
 `PageRunZoneProofAdversarialTest` pins fixed extent/preallocation while requiring mapped work to grow

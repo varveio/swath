@@ -1686,6 +1686,10 @@ The experimental `sort.finalization=pipeline` arm bypasses boundary selection en
 usual cascade reduces the input to the admitted fan-in, bounded sequential segment readers publish
 decoded pages to one ordered router. The router forwards a page without row materialization when its
 maximum raw key is below the next page minimum; transitively overlapping pages enter the shared
-page-aware row heap and leave in batches of at most 4,096 rows. The router owns calibrated part
+page-aware row heap lazily as their minimum reaches the heap's next row. Exhausted cursors release
+their exact decoded-page reservation before later overlap pages are admitted, so long transitive
+clusters are bounded by bytes rather than a page-count cutoff. Rows leave in batches of at most
+4,096. The router owns calibrated part
 geometry and raw-key-atomic boundaries, while bounded striped encoders only execute its stamped
-batch stream. This preserves a single global merge order without `R` duplicate range frontiers.
+batch stream. Encoder count and cascade width retain the normal heap/file-descriptor clamps. This
+preserves a single global merge order without `R` duplicate range frontiers.

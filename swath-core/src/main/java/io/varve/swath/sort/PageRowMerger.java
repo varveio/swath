@@ -33,6 +33,12 @@ final class PageRowMerger {
         return !pages.isEmpty();
     }
 
+    /** Raw key of the next row; frontier pages at or below it must be admitted before emission. */
+    byte[] nextKey() {
+        PageCursor page = pages.peek();
+        return page == null ? null : page.head.key().rawUnsafe();
+    }
+
     ListEntry next() {
         PageCursor page = pages.poll();
         ListEntry result = page.head;

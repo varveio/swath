@@ -12,15 +12,13 @@ import java.util.Comparator;
 final class DuplicateReporting implements SortedCursor, LogicalMergeCompletion {
 
     private final SortedCursor inner;
-    private final Comparator<ListEntry> comparator;
-    private final DuplicateHook hook;
-    private ListEntry previous;
+    private final AdjacentEntryGuard guard;
     private boolean closed;
 
     DuplicateReporting(SortedCursor inner, Comparator<ListEntry> comparator, DuplicateHook hook) {
         this.inner = inner;
-        this.comparator = comparator;
-        this.hook = hook;
+        this.guard = new AdjacentEntryGuard(comparator, hook, EqualKeyPolicy.ALLOW,
+                SortMetrics.NO_OP, "merged");
     }
 
     @Override
@@ -31,17 +29,7 @@ final class DuplicateReporting implements SortedCursor, LogicalMergeCompletion {
     @Override
     public ListEntry next() {
         ListEntry current = inner.next();
-        if (previous != null) {
-            int order = comparator.compare(previous, current);
-            if (order > 0) {
-                throw new SortOrderException("merged output order regressed from key "
-                        + previous.key() + " to " + current.key());
-            }
-            if (order == 0) {
-                hook.onDuplicate(previous, current);
-            }
-        }
-        previous = current;
+        guard.accept(current);
         return current;
     }
 

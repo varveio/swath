@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntSupplier;
@@ -260,7 +261,8 @@ public final class RunMetrics {
     private final Timer sortPipelineRouterWait;
     private final Timer sortPipelineReaderWait;
     private final Timer sortPipelineEncoderQueueFull;
-    private final AtomicLong sortPipelinePartsOpen = new AtomicLong();
+    private final AtomicReference<AtomicInteger> sortPipelinePartsOpen =
+            new AtomicReference<>(new AtomicInteger());
     private final Timer sortFinalizeCloseLatency;
     private final Timer sortFinalizeLatency;
     private final Timer sortPublicationLatency;
@@ -635,7 +637,8 @@ public final class RunMetrics {
                 runScopedTimer("swath.sort.pipeline.reader_wait").register(registry);
         sortPipelineEncoderQueueFull =
                 runScopedTimer("swath.sort.pipeline.encoder_queue_full").register(registry);
-        Gauge.builder("swath.sort.pipeline.parts_open", sortPipelinePartsOpen, AtomicLong::get)
+        Gauge.builder("swath.sort.pipeline.parts_open", sortPipelinePartsOpen,
+                        current -> current.get().get())
                 .register(registry);
         sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
         sortPublicationLatency = runScopedTimer("swath.sort.publication.latency").register(registry);
@@ -1247,8 +1250,8 @@ public final class RunMetrics {
         sortPipelineEncoderQueueFull.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
-    public void recordSortPipelinePartsOpen(int parts) {
-        sortPipelinePartsOpen.set(Math.max(0, parts));
+    public void bindSortPipelinePartsOpen(AtomicInteger partsOpen) {
+        sortPipelinePartsOpen.set(Objects.requireNonNull(partsOpen, "partsOpen"));
     }
 
     /** One final part's footer-write + fsync durability span. */
