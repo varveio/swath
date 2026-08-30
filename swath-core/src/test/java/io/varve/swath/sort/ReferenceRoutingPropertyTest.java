@@ -56,7 +56,8 @@ final class ReferenceRoutingPropertyTest {
             try (SegmentHeaderCursors cursors = new SegmentHeaderCursors(channels,
                     SegmentHeaderCursors.planned(channels.size()), SortMetrics.NO_OP, failure)) {
                 MergeRouter.Result result = new MergeRouter(
-                        cursors, plans::add, sizer, SortMetrics.NO_OP, failure, () -> { })
+                        cursors, plans::add, sizer, SortMetrics.NO_OP, failure, () -> { },
+                        MergePlanner.MAX_PIPELINE_PLAN_REFS)
                         .route(channels.size());
 
                 List<PageRef> routed = plans.stream().flatMap(plan -> plan.items().stream())

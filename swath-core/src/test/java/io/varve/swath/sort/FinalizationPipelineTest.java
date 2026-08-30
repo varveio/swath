@@ -162,8 +162,25 @@ final class FinalizationPipelineTest {
         for (Path segment : segments) {
             channels.add(PageRunSegmentIo.open(segment, SortMetrics.NO_OP));
         }
+        CountDownLatch firstCursorAtBlockedHandoff = new CountDownLatch(1);
+        SegmentHeaderCursors.Hook schedule = new SegmentHeaderCursors.Hook() {
+            @Override
+            public void beforePermitAcquire(int segment, long page) throws InterruptedException {
+                if (segment == 1 && page == 0
+                        && !firstCursorAtBlockedHandoff.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("first cursor did not fill its handoff queue");
+                }
+            }
+
+            @Override
+            public void beforeHandoff(int segment, long page) {
+                if (segment == 0 && page == 1) {
+                    firstCursorAtBlockedHandoff.countDown();
+                }
+            }
+        };
         SegmentHeaderCursors.Settings settings = new SegmentHeaderCursors.Settings(
-                1, 1);
+                1, 1, schedule);
 
         assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
             PipelineFailure failure = new PipelineFailure();
@@ -295,7 +312,8 @@ final class FinalizationPipelineTest {
         long plannedPageBytes = DecodedPageBudget.retainedPageUpperBound(
                 sample.rawPayloadLength(), sample.serialize().length);
         long retainedRefs = (100L * (SegmentHeaderCursors.QUEUE_DEPTH + 2L)
-                + 100L * (PartEncoders.QUEUE_DEPTH + 2L)) * PageRef.retainedBytes(5);
+                + 100L * (PartEncoders.QUEUE_DEPTH + 2L))
+                * PageRef.retainedBytes(sample.serialize().length);
         long mergeBudget = PartEncoders.WRITER_HEAP_ESTIMATE_BYTES + retainedRefs
                 + sample.serialize().length + 3L * plannedPageBytes - 1L;
 
@@ -311,7 +329,9 @@ final class FinalizationPipelineTest {
                 0, PageCodec.NONE, 1);
 
         assertThat(result.totalRows()).isEqualTo(200);
-        assertThat(metrics.pipelineDecodedPageBytesPeak.get()).isLessThan(3L * pageBytes);
+        assertThat(metrics.pipelineDecodedPageBytesPeak.get())
+                .isPositive()
+                .isLessThan(3L * pageBytes);
     }
 
     @Test
@@ -416,10 +436,12 @@ final class FinalizationPipelineTest {
     @Test
     void longKeyCatalogPricesScannerPendingQueuedAndExecutingReferences(@TempDir Path root)
             throws IOException {
-        String maximumKey = "x".repeat(1_024);
+        String maximumKey = "m" + "x".repeat(1_023);
         Path segment = SortTestSupport.writeIndexedPages(
                 root.resolve("long-key" + StagingNames.PAGE_RUN_SUFFIX),
-                List.of(List.of(SortTestSupport.object(maximumKey))));
+                List.of(List.of(SortTestSupport.object("a")),
+                        List.of(SortTestSupport.object(maximumKey)),
+                        List.of(SortTestSupport.object("z"))));
         PageRunCatalog physical = PageRunCatalog.preflight(List.of(segment),
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
                 Optional.of(ignored -> { }));
@@ -438,14 +460,14 @@ final class FinalizationPipelineTest {
         }
         PageRunCatalog catalog = PageRunCatalog.fromDescriptors(descriptors);
         int refBytes = PageRef.retainedBytes(maximumKey.length());
-        int admittedEncoders = 3;
+        int budgetedEncoders = 3;
         long cursorRefs = (long) segments * (SegmentHeaderCursors.QUEUE_DEPTH + 2L);
         long planRefs = (long) MergePlanner.MAX_PIPELINE_PLAN_REFS
-                * (1L + admittedEncoders * (PartEncoders.QUEUE_DEPTH + 1L));
+                * (1L + budgetedEncoders * (PartEncoders.QUEUE_DEPTH + 1L));
         long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
                 catalog.maxRawPayloadLength(), catalog.maxRecordLen());
         long budgetForThree = (cursorRefs + planRefs) * refBytes
-                + admittedEncoders * (PartEncoders.WRITER_HEAP_ESTIMATE_BYTES
+                + budgetedEncoders * (PartEncoders.WRITER_HEAP_ESTIMATE_BYTES
                 + catalog.maxRecordLen() + retainedPageBytes);
         SortConfig config = SortConfigs.base()
                 .withFinalFileBytes(1L << 40)
@@ -454,11 +476,49 @@ final class FinalizationPipelineTest {
         MergePlanner.PipelinePlan plan = new MergePlanner(
                 config, SortMetrics.NO_OP, () -> -1).pipelineParallelism(4, catalog);
 
+        assertThat(base.trailer().segMinKey()).hasSize(1);
+        assertThat(base.trailer().segMaxKey()).hasSize(1);
         assertThat(catalog.maxKeyLength()).isEqualTo(maximumKey.length());
         assertThat(plan.refBytes()).isEqualTo(refBytes).isGreaterThan(200);
-        assertThat(plan.encoders()).isEqualTo(admittedEncoders);
-        assertThat(plan.reason()).isEqualTo(MergePlanner.PipelineClampReason.HEAP_CLAMPED);
-        assertThat(plan.clusterBudgetBytes()).isEqualTo(retainedPageBytes);
+        assertThat(plan.encoders()).isEqualTo(4);
+        assertThat(plan.reason()).isEqualTo(MergePlanner.PipelineClampReason.NONE);
+        assertThat(plan.planRefLimit()).isLessThan(MergePlanner.MAX_PIPELINE_PLAN_REFS);
+        assertThat(plan.clusterBudgetBytes()).isGreaterThanOrEqualTo(retainedPageBytes);
+    }
+
+    @Test
+    void mediumKeyCatalogAdmitsByReducingTheRuntimePlanCap(@TempDir Path root)
+            throws IOException {
+        String key = "k".repeat(230);
+        Path segment = SortTestSupport.writeIndexedPages(
+                root.resolve("medium-key" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object(key))));
+        PageRunCatalog physical = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(ignored -> { }));
+        PageRunSegmentDescriptor base = physical.descriptors().getFirst();
+        PageRunTrailer.Trailer largeTrailer = new PageRunTrailer.Trailer(
+                base.trailer().segMinKey(), base.trailer().segMaxKey(),
+                base.trailer().extensionStart(), 1_000_000, 1_000_000,
+                base.trailer().maxRecordLen());
+        PageRunCatalog catalog = PageRunCatalog.fromDescriptors(List.of(
+                new PageRunSegmentDescriptor(base.path(), base.fileSize(), base.trailerStart(),
+                        largeTrailer, base.extension(), base.maxRawPayloadLength(),
+                        base.physicalFormat())));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        MergePlanner planner = new MergePlanner(SortConfigs.base()
+                .withFinalFileBytes(Long.MAX_VALUE)
+                .withMergeBudgetBytes(64L << 20), metrics, () -> -1);
+
+        MergePlanner.PipelinePlan plan = planner.pipelineParallelism(1, catalog);
+
+        assertThat(planner.pipelinePlanRefs(catalog))
+                .isEqualTo(MergePlanner.MAX_PIPELINE_PLAN_REFS);
+        assertThat(plan.encoders()).isEqualTo(1);
+        assertThat(plan.planRefLimit())
+                .isBetween(MergePlanner.MIN_PIPELINE_PLAN_REFS,
+                        MergePlanner.MAX_PIPELINE_PLAN_REFS - 1);
+        assertThat(metrics.count("SORT.pipeline_plan_ref_capped")).isEqualTo(1);
     }
 
     @Test
@@ -478,7 +538,8 @@ final class FinalizationPipelineTest {
                 .isInstanceOf(MergeMemoryExhaustedException.class)
                 .hasMessageContaining("minimum pipeline lane does not fit descriptor budget")
                 .hasMessageContaining("reason=fd_exhausted");
-        assertThat(metrics.count("SORT.pipeline_encoders_fd_clamped")).isEqualTo(1);
+        assertThat(metrics.count("SORT.pipeline_encoders_fd_floor_exhausted")).isEqualTo(1);
+        assertThat(metrics.count("SORT.pipeline_encoders_fd_clamped")).isZero();
     }
 
     @Test

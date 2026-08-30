@@ -19,7 +19,9 @@ import java.util.function.Consumer;
  * Plans contain coordinates rather than bodies so the router can expose independent parts to a
  * shared encoder pool without retaining decoded part-sized buffers. For calibrated byte sizing it
  * exposes exactly one initial plan, waits for its durable size, and only then routes the remaining
- * plans; this bounds calibration lag to the intentionally conservative warm-up part.
+ * plans; this bounds calibration lag to the intentionally conservative warm-up part. Heap
+ * admission may lower the usual 16,384-reference cap, which this router enforces for both ordinary
+ * plans and indivisible overlap clusters.
  */
 final class MergeRouter {
     /** Independent counts used to reconcile header refs, source rows, and completed parts. */
@@ -32,6 +34,7 @@ final class MergeRouter {
     private final SortMetrics metrics;
     private final PipelineFailure failure;
     private final Runnable awaitFirstCompletion;
+    private final int maxPlanRefs;
     private final PriorityQueue<PageRef> frontier = new PriorityQueue<>((left, right) -> {
         int order = Arrays.compareUnsigned(left.minKey(), right.minKey());
         return order != 0 ? order : Integer.compare(left.segmentId(), right.segmentId());
@@ -47,13 +50,17 @@ final class MergeRouter {
      */
     MergeRouter(SegmentHeaderCursors cursors, Consumer<PartPlan> plans,
             PipelinePartSizer sizer, SortMetrics metrics, PipelineFailure failure,
-            Runnable awaitFirstCompletion) {
+            Runnable awaitFirstCompletion, int maxPlanRefs) {
+        if (maxPlanRefs < 1 || maxPlanRefs > MergePlanner.MAX_PIPELINE_PLAN_REFS) {
+            throw new IllegalArgumentException("pipeline plan reference cap is out of bounds");
+        }
         this.cursors = cursors;
         this.plans = plans;
         this.sizer = sizer;
         this.metrics = metrics;
         this.failure = failure;
         this.awaitFirstCompletion = awaitFirstCompletion;
+        this.maxPlanRefs = maxPlanRefs;
     }
 
     /**
@@ -101,11 +108,11 @@ final class MergeRouter {
         long clusterRows = first.count();
         while (!frontier.isEmpty()
                 && Arrays.compareUnsigned(frontier.peek().minKey(), high) <= 0) {
-            if (cluster.size() == MergePlanner.MAX_PIPELINE_PLAN_REFS) {
+            if (cluster.size() == maxPlanRefs) {
                 metrics.recordStealReason("SORT", "pipeline_plan_ref_capped");
                 throw new MergeMemoryExhaustedException(
                         "transitive overlap cluster exceeds pipeline plan ref cap: cap="
-                                + MergePlanner.MAX_PIPELINE_PLAN_REFS);
+                                + maxPlanRefs);
             }
             PageRef overlapping = frontier.poll();
             cluster.add(overlapping);
@@ -139,15 +146,16 @@ final class MergeRouter {
          * Close before adding an item when either soft geometry or the hard reference cap engages.
          * The cap is independent of {@code final-file-bytes}, so a nominal single-file merge may
          * still produce several strictly adjacent files rather than retaining O(total pages) refs.
+         * Admission may lower the usual cap, but does not weaken the raw-key boundary rule.
          */
         void offer(PartPlan.Item item) {
             MergeCancellation.check();
             int itemRefs = item.refs().size();
-            if (itemRefs > MergePlanner.MAX_PIPELINE_PLAN_REFS) {
+            if (itemRefs > maxPlanRefs) {
                 throw new IllegalStateException("overlap cluster exceeds pipeline plan ref cap: refs="
-                        + itemRefs + " cap=" + MergePlanner.MAX_PIPELINE_PLAN_REFS);
+                        + itemRefs + " cap=" + maxPlanRefs);
             }
-            boolean refCapped = partRefs > MergePlanner.MAX_PIPELINE_PLAN_REFS - itemRefs;
+            boolean refCapped = partRefs > maxPlanRefs - itemRefs;
             if (!items.isEmpty() && (sizer.shouldClose(logicalBytes, partRows) || refCapped)
                     // Items are already disjoint, but equal raw keys must remain atomic even if a
                     // future routing item shape weakens that construction-time guarantee.

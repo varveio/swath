@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -57,9 +58,8 @@ final class PageRunCatalog {
             if (descriptor.hasDecodedPageMaximum()) {
                 maximumRaw = Math.max(maximumRaw, descriptor.maxRawPayloadLength());
             }
-            maximumKey = Math.max(maximumKey, Math.max(
-                    descriptor.trailer().segMinKey().length,
-                    descriptor.trailer().segMaxKey().length));
+            maximumKey = Math.max(maximumKey, (int) Math.min(
+                    ByteMidpoint.MAX_KEY_LEN, descriptor.trailer().maxRecordLen()));
             records = Math.addExact(records, descriptor.trailer().totalRecords());
             entries = Math.addExact(entries, descriptor.trailer().totalEntries());
         }
@@ -209,7 +209,7 @@ final class PageRunCatalog {
         return maxRawPayloadLength;
     }
 
-    /** Largest actual segment-bound key retained by the validated post-cascade catalog. */
+    /** Largest key a record can contain, capped by the object-store key contract. */
     int maxKeyLength() {
         return maxKeyLength;
     }

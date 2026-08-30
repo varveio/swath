@@ -9,6 +9,7 @@ import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
@@ -566,13 +567,41 @@ class PageRunSegmentTest {
 
     @Test
     void admissionRejectsAKeyThePersistedReaderWouldReject() {
-        byte[] overlong = new byte[io.varve.swath.model.ByteMidpoint.MAX_KEY_LEN + 1];
+        byte[] overlong = new byte[ByteMidpoint.MAX_KEY_LEN + 1];
         SortBuffer buffer = new SortBuffer(config, CMP);
 
         assertThatThrownBy(() -> buffer.admit(1L, List.of(
                 new CommonPrefixEntry(KeyBytes.of(overlong)))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exceeds the S3 key limit");
+    }
+
+    @Test
+    void trailerRejectsAnOverlongDeclaredKeyAsTypedCorruption(@TempDir Path dir)
+            throws IOException {
+        Path path = dir.resolve("overlong-trailer-key.pageseg");
+        writeSimpleSegment(path, 2);
+        byte[] raw = Files.readAllBytes(path);
+        int fixedTailStart = raw.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        long trailerStart = ByteBuffer.wrap(raw, fixedTailStart, Long.BYTES).getLong();
+        byte[] padded = new byte[raw.length + ByteMidpoint.MAX_KEY_LEN + 1];
+        System.arraycopy(raw, 0, padded, 0, fixedTailStart);
+        System.arraycopy(raw, fixedTailStart, padded,
+                fixedTailStart + ByteMidpoint.MAX_KEY_LEN + 1,
+                PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES);
+        ByteBuffer.wrap(padded, Math.toIntExact(trailerStart), Short.BYTES)
+                .putShort((short) (ByteMidpoint.MAX_KEY_LEN + 1));
+        Files.write(path, padded);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> {
+            try (PageRunSegmentIo io = PageRunSegmentIo.open(path, metrics)) {
+                PageRunTrailer.read(io);
+            }
+        }).isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_trailer_corruption")
+                .hasMessageContaining("trailer key length 1025");
+        assertThat(metrics.count("SORT.page_run_trailer_corruption")).isEqualTo(1);
     }
 
     @Test

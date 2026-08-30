@@ -203,7 +203,7 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.merge-boundary-policy` | `distinct` | Experimental parallel-range boundary policy. Prefer `--tune sort.merge-boundary-policy=distinct\|rows`; the typed CLI value wins over this property. `rows` is default-off and falls back to `distinct` unless every original input carries a validated type-2 or type-3 page index. |
 | `swath.sort.keep-staging` | `off` | Diagnostic retention of exactly the original checkpoint-tracked page-run staging and the co-located checkpoint after successful sorted publication. `--tune sort.keep-staging=on` wins over this property. Every other immediate staging entry is deleted. |
 | `swath.sort.min-parallel-staged-bytes` | `256 MiB` | Keep smaller range-partitioned merges serial; pipeline encoder admission does not use this floor. |
-| `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts; an equal-key group is never split across files. The experimental pipeline may roll earlier at its 16,384 refs-per-plan memory cap. |
+| `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts; an equal-key group is never split across files. The experimental pipeline may roll earlier at its heap-admitted 256–16,384 refs-per-plan cap. |
 | `swath.sort.final-row-group-bytes` | `8 MiB` | Final Parquet seek granularity. |
 | `swath.sort.final-page-rows` | `1024` | Maximum rows per final-file data page; the within-row-group seek granularity. |
 | `swath.git.sha` | unset | Optional commit value included in the run fingerprint. |

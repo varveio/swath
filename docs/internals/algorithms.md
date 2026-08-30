@@ -1727,8 +1727,9 @@ encoder identity or completion order, determines final part order.
 
 Admission also prices the transient ownership between those structures: each scanner may hold one
 reference while its queue is full, and each encoder may own one executing plan in addition to the
-`2 * N` queued plans. A reference's price includes both key arrays at the post-cascade catalog's
-largest actual segment-bound key length. The retained-page price adds the format-derived maximum
+`2 * N` queued plans. A reference's price includes both key arrays at the largest per-segment
+`min(1,024, maxRecordLen)` bound in the post-cascade catalog. This covers interior page keys without
+an admission-time page scan. The retained-page price adds the format-derived maximum
 dictionary-cache object overhead to its encoded/decoded payload multiplier, so a planner-admitted
 page cannot fail the lane guard solely because all five dictionaries reached their 64-value cap.
 If the surviving segment channels consume the entire usable descriptor budget, pipeline admission
@@ -1747,9 +1748,11 @@ logical unit. The first target assumes a 1:1 encoded/logical ratio. After dispat
 the router waits for its durable Parquet size; later targets use the cumulative observed ratio. This
 single-part warm-up prevents an uncalibrated queueful of plans. Footer cost makes very small targets
 noisy, and an equal-key group may exceed the soft target because a boundary is allowed only between
-distinct raw keys. Independently, a plan holds at most 16,384 references. Reaching the cap closes the
-current plan even for nominal single-file output; one overlap cluster larger than the cap is refused
-because splitting it could interleave rows across parts.
+distinct raw keys. Independently, a plan normally holds at most 16,384 references. If that reference
+wave does not fit, admission lowers the runtime cap to as few as 256 before reducing encoder count.
+Reaching either cap closes the current plan even before the calibrated byte target, including for
+nominal single-file output; one overlap cluster larger than the effective cap is refused because
+splitting it could interleave rows across parts.
 
 ### Cascade fallback
 

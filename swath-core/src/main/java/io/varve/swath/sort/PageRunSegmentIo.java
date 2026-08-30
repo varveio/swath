@@ -620,6 +620,12 @@ final class PageRunSegmentIo implements AutoCloseable {
         return new SegmentCorruptionException(path, errorClass, message, cause);
     }
 
+    /** Classify variable-trailer corruption found after the fixed tail admitted the segment. */
+    SegmentCorruptionException trailerCorruption(String message) {
+        metrics.recordStealReason("SORT", "page_run_trailer_corruption");
+        return corruption(SegmentCorruptionException.PAGE_RUN_TRAILER_CORRUPTION, message, null);
+    }
+
     Path path() {
         return path;
     }

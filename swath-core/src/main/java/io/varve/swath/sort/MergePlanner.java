@@ -37,6 +37,8 @@ final class MergePlanner {
      * case independent of catalog size; reaching it may create another correctly ordered part.
      */
     static final int MAX_PIPELINE_PLAN_REFS = 16_384;
+    /** Smallest runtime plan cap used to trade part geometry for truthful heap admission. */
+    static final int MIN_PIPELINE_PLAN_REFS = 256;
 
     private final SortConfig config;
     private final SortMetrics metrics;
@@ -154,19 +156,23 @@ final class MergePlanner {
         long byFd = usableFds == Long.MAX_VALUE
                 ? Long.MAX_VALUE : Math.max(0L, usableFds - segments);
         if (byFd == 0) {
-            metrics.recordStealReason("SORT", "pipeline_encoders_fd_clamped");
+            metrics.recordStealReason("SORT", "pipeline_encoders_fd_floor_exhausted");
             throw new MergeMemoryExhaustedException(
                     "minimum pipeline lane does not fit descriptor budget: usable_fds="
                             + usableFds + ", segments=" + segments + ", reason=fd_exhausted");
         }
         int fdAdmitted = (int) Math.max(1L, Math.min(requested, byFd));
         int admitted = fdAdmitted;
-        while (admitted > 1 && !pipelineHeapFits(
-                admitted, catalog, cursorRefs, refBytes, readPageBytes, retainedPageBytes)) {
-            admitted--;
+        long requestedPlanRefs = pipelinePlanRefs(catalog);
+        long admittedPlanRefs = -1;
+        while (admittedPlanRefs < 0 && admitted > 0) {
+            admittedPlanRefs = largestFittingPlanRefs(admitted, cursorRefs, refBytes,
+                    readPageBytes, retainedPageBytes, requestedPlanRefs);
+            if (admittedPlanRefs < 0) {
+                admitted--;
+            }
         }
-        if (!pipelineHeapFits(admitted, catalog, cursorRefs,
-                refBytes, readPageBytes, retainedPageBytes)) {
+        if (admitted == 0) {
             metrics.recordStealReason("SORT", "pipeline_encoder_heap_floor_exhausted");
             throw new MergeMemoryExhaustedException(
                     "minimum pipeline lane does not fit retained-page residency: "
@@ -174,30 +180,62 @@ final class MergePlanner {
                             + ", retained_page_bytes=" + retainedPageBytes
                             + ", merge_budget_bytes=" + config.mergeBudgetBytes());
         }
+        boolean planRefCapped = admittedPlanRefs < requestedPlanRefs;
+        if (planRefCapped) {
+            metrics.recordStealReason("SORT", "pipeline_plan_ref_capped");
+            log.warn("sort_pipeline_plan_refs_capped requested={} effective={} encoders={} "
+                            + "ref_bytes={} merge_budget_bytes={}",
+                    requestedPlanRefs, admittedPlanRefs, admitted, refBytes,
+                    config.mergeBudgetBytes());
+        }
         PipelineClampReason reason = PipelineClampReason.NONE;
         if (admitted < requested) {
             reason = fdAdmitted < requested && admitted == fdAdmitted
                     ? PipelineClampReason.FD_CLAMPED : PipelineClampReason.HEAP_CLAMPED;
         }
         long fixedBytes = pipelineFixedBytes(
-                admitted, catalog, cursorRefs, refBytes, readPageBytes);
+                admitted, cursorRefs, refBytes, readPageBytes, admittedPlanRefs);
         long clusterPool = fixedBytes >= config.mergeBudgetBytes()
                 ? 0L : config.mergeBudgetBytes() - fixedBytes;
         long clusterBudget = clusterPool / admitted;
+        int planRefLimit = planRefCapped
+                ? Math.toIntExact(admittedPlanRefs) : MAX_PIPELINE_PLAN_REFS;
         return new PipelinePlan(admitted, reason, SegmentHeaderCursors.QUEUE_DEPTH,
                 refBytes, readPageBytes, retainedPageBytes,
-                clusterBudget, legacyDecodedLimit);
+                clusterBudget, legacyDecodedLimit, planRefLimit);
     }
 
     /**
-     * Require the fixed plan plus one runtime-admissible retained page for every lane. The one-lane
-     * floor is not exempt: returning an over-budget floor would merely defer deterministic failure
-     * until after output writers and shared channels had been opened.
+     * Find the largest plan reference price that fits this encoder count. The floor is relative to
+     * the catalog: a smaller catalog keeps its natural bound, while a larger one may trade earlier
+     * raw-key-safe part boundaries for admission down to {@link #MIN_PIPELINE_PLAN_REFS}.
      */
-    private boolean pipelineHeapFits(int encoders, PageRunCatalog catalog,
-            long cursorRefs, int refBytes, long readPageBytes, long retainedPageBytes) {
+    private long largestFittingPlanRefs(int encoders, long cursorRefs, int refBytes,
+            long readPageBytes, long retainedPageBytes, long requestedPlanRefs) {
+        long floor = Math.min(requestedPlanRefs, MIN_PIPELINE_PLAN_REFS);
+        if (!pipelineHeapFits(encoders, cursorRefs, refBytes,
+                readPageBytes, retainedPageBytes, floor)) {
+            return -1;
+        }
+        long low = floor;
+        long high = requestedPlanRefs;
+        while (low < high) {
+            long candidate = low + (high - low + 1) / 2;
+            if (pipelineHeapFits(encoders, cursorRefs, refBytes,
+                    readPageBytes, retainedPageBytes, candidate)) {
+                low = candidate;
+            } else {
+                high = candidate - 1;
+            }
+        }
+        return low;
+    }
+
+    /** Require the priced ref wave plus one runtime-admissible retained page for every lane. */
+    private boolean pipelineHeapFits(int encoders, long cursorRefs, int refBytes,
+            long readPageBytes, long retainedPageBytes, long planRefs) {
         long fixedBytes = pipelineFixedBytes(
-                encoders, catalog, cursorRefs, refBytes, readPageBytes);
+                encoders, cursorRefs, refBytes, readPageBytes, planRefs);
         long clusterBytes = saturatedMultiply(encoders, retainedPageBytes);
         return saturatedAdd(fixedBytes, clusterBytes) <= config.mergeBudgetBytes();
     }
@@ -207,10 +245,9 @@ final class MergePlanner {
      * happens before exact reservation. The retained-page shares are charged by the caller because
      * those bytes become the lane budgets returned in the plan.
      */
-    private long pipelineFixedBytes(int encoders, PageRunCatalog catalog,
-            long cursorRefs, int refBytes, long readPageBytes) {
-        long targetPages = pipelinePlanRefs(catalog);
-        long retainedPlanRefs = saturatedMultiply(targetPages,
+    private long pipelineFixedBytes(int encoders, long cursorRefs, int refBytes,
+            long readPageBytes, long planRefs) {
+        long retainedPlanRefs = saturatedMultiply(planRefs,
                 saturatedAdd(1L, saturatedMultiply(
                         PartEncoders.QUEUE_DEPTH + 1L, encoders)));
         long routerBytes = saturatedMultiply(
@@ -684,16 +721,19 @@ final class MergePlanner {
     /**
      * One immutable pipeline admission result shared by cursor open and encoders. Both page fields
      * are bytes but have distinct lifetimes: {@code readPageBytes} is the pre-reservation transient,
-     * while {@code retainedPageBytes} is the conservative unit required of every lane guard.
+     * while {@code retainedPageBytes} is the conservative unit required of every lane guard. The
+     * router enforces {@code planRefLimit}; it is the structural maximum unless heap admission
+     * lowered that maximum to preserve a truthful bound.
      */
     record PipelinePlan(int encoders, PipelineClampReason reason, int cursorDepth,
                         int refBytes, long readPageBytes, long retainedPageBytes,
                         long clusterBudgetBytes,
-                        int legacyDecodedLimit) {
+                        int legacyDecodedLimit, int planRefLimit) {
         PipelinePlan {
             if (encoders < 1 || cursorDepth < 1 || refBytes < 1 || readPageBytes < 1
                     || retainedPageBytes < 1
-                    || clusterBudgetBytes < 1 || legacyDecodedLimit < 1) {
+                    || clusterBudgetBytes < 1 || legacyDecodedLimit < 1
+                    || planRefLimit < 1 || planRefLimit > MAX_PIPELINE_PLAN_REFS) {
                 throw new IllegalArgumentException("pipeline resource plan must be positive");
             }
         }

@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import java.io.IOException;
 import java.nio.file.Path;
 
@@ -52,6 +53,10 @@ public final class PageRunTrailer {
         int length = io.readAt(position, Short.BYTES).getShort() & 0xFFFF;
         if (length > limit - position - Short.BYTES) {
             throw io.fail("trailer key exceeds trailer bounds");
+        }
+        if (length > ByteMidpoint.MAX_KEY_LEN) {
+            throw io.trailerCorruption("trailer key length " + length
+                    + " exceeds the S3 key limit of " + ByteMidpoint.MAX_KEY_LEN + " bytes");
         }
         return io.readAt(position + Short.BYTES, length).array();
     }

@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -46,7 +47,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
         for (int i = 0; i < segments.size(); i++) {
             int segment = i;
             Thread cursor = Thread.ofVirtual().name("sort-pipeline-header-" + i).start(
-                    () -> scan(segment, segments.get(segment), scanPermits));
+                    () -> scan(segment, segments.get(segment), scanPermits, settings.hook()));
             cursors.add(cursor);
         }
     }
@@ -58,7 +59,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
     static Settings planned(int segments) {
         int parallelism = Math.max(1, Math.min(segments,
                 Runtime.getRuntime().availableProcessors()));
-        return new Settings(QUEUE_DEPTH, parallelism);
+        return new Settings(QUEUE_DEPTH, parallelism, Hook.NO_OP);
     }
 
     /**
@@ -93,9 +94,11 @@ final class SegmentHeaderCursors implements AutoCloseable {
      * header-to-trailer tiling and totals. The scan permit is released before queue handoff so a full
      * slot cannot monopolize the only permit and deadlock an unstarted segment's frontier head.
      */
-    private void scan(int segment, PageRunSegmentIo io, Semaphore scanPermits) {
+    private void scan(int segment, PageRunSegmentIo io, Semaphore scanPermits, Hook hook) {
+        long pageNumber = 0;
         try {
             while (true) {
+                hook.beforePermitAcquire(segment, pageNumber);
                 scanPermits.acquire();
                 PageRunSegmentIo.RoutingPage page;
                 long started = System.nanoTime();
@@ -116,7 +119,9 @@ final class SegmentHeaderCursors implements AutoCloseable {
                 PageRef ref = new PageRef(segment, page.ordinal(), page.offset(), page.framedLen(),
                         header.minKey(), header.maxKey(), header.count(),
                         header.rawPayloadLength());
+                hook.beforeHandoff(segment, page.ordinal());
                 put(segment, new Item.Ref(ref));
+                pageNumber++;
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -143,11 +148,23 @@ final class SegmentHeaderCursors implements AutoCloseable {
     }
 
     /** Immutable bounds shared with admission tests and reference-memory planning. */
-    record Settings(int queueDepth, int scanParallelism) {
+    record Settings(int queueDepth, int scanParallelism, Hook hook) {
         Settings {
             if (queueDepth < 1 || scanParallelism < 1) {
                 throw new IllegalArgumentException("header cursor settings must be positive");
             }
+            hook = Objects.requireNonNull(hook, "hook");
+        }
+    }
+
+    /** Package-test scheduling seam; production always supplies the allocation-free no-op. */
+    interface Hook {
+        Hook NO_OP = new Hook() { };
+
+        default void beforePermitAcquire(int segment, long page) throws InterruptedException {
+        }
+
+        default void beforeHandoff(int segment, long page) throws InterruptedException {
         }
     }
 

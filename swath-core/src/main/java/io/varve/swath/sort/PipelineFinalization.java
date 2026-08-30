@@ -98,7 +98,7 @@ final class PipelineFinalization {
             request.onFinalPassStarting().onFinalPassStarting(true);
             MergeRouter.Result routed = new MergeRouter(
                     cursors, encoders::submit, sizer, metrics, failure,
-                    encoders::awaitFirstCompletion)
+                    encoders::awaitFirstCompletion, plan.planRefLimit())
                     .route(pipelineCatalog.descriptors().size());
             if (routed.refs() != pipelineCatalog.totalRecords()) {
                 throw new IllegalStateException("pipeline reference count mismatch: planned="
