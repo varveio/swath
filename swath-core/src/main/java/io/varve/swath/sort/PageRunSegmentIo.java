@@ -18,11 +18,11 @@ import java.util.zip.CRC32C;
 
 /**
  * Shared read-side IO/framing/validation for one {@link PageRunSegmentWriter} page-run segment.
- * The three consumers — {@link PageRunSegmentReader} (entry-typed {@link EntryStream}),
+ * The consumers — {@link PageRunSegmentReader} (entry-typed {@link EntryStream}),
  * {@link PageFrontierReader} (decode-free {@link PageFrontierStream}), and
- * {@link PageRunSegmentInspector} (the {@code dump-run} debug tool) — all frame, bound, and CRC-verify
- * records identically; this class owns that single corruption-detection contract so it lives in exactly
- * one place instead of being hand-copied per reader.
+ * {@link PageRunSegmentInspector} (the {@code dump-run} debug tool), plus reference-routing header
+ * cursors and positional encoders — share this framing owner. This class keeps the corruption contract
+ * in one place instead of hand-copying it per reader.
  *
  * <p><b>What is single-sourced here:</b> the header magic/version check, the fixed trailer-tail read
  * (recovering {@code trailerStart}/{@code totalRecords}/{@code totalEntries}/{@code maxRecordLen} + the
@@ -225,6 +225,11 @@ final class PageRunSegmentIo implements AutoCloseable {
         }
     }
 
+    /** Header-pass result for one physical frame; the stored payload was not read. */
+    record RoutingPage(long ordinal, long offset, int framedLen,
+                       PageBlockCodec.RoutingHeader header) {
+    }
+
     private record SeekExpectation(long pageOrdinal, long frameOffset, long cumulativeEntries,
                                    long cumulativeFramedBytes, byte[] minKey) {
     }
@@ -296,6 +301,105 @@ final class PageRunSegmentIo implements AutoCloseable {
             cumulativeEntries += header.count();
         }
         return new Page(body, header);
+    }
+
+    /**
+     * Advance one frame using positional metadata reads only. The body CRC is intentionally deferred
+     * to the encoder's positional read; this pass proves frame tiling, routing bounds, and totals.
+     */
+    RoutingPage nextRoutingPage() throws IOException {
+        if (pagesRead == totalRecords) {
+            return null;
+        }
+        long ordinal = pagesRead;
+        long frameOffset = nextFrameOffset;
+        ByteBuffer prefix = readAt(frameOffset, 8);
+        int bodyLength = prefix.getInt();
+        validateRecordLength(bodyLength);
+        int framedLen = Math.addExact(8, bodyLength);
+        long frameEnd = Math.addExact(frameOffset, framedLen);
+        if (frameEnd > trailerStart) {
+            throw fail("page frame at offset " + frameOffset + " crosses trailer at "
+                    + trailerStart);
+        }
+        PageBlockCodec.RoutingHeader header;
+        try {
+            long bodyOffset = frameOffset + 8;
+            header = PageBlockCodec.parseRoutingHeader(bodyLength,
+                    (position, bytes) -> readAt(bodyOffset + position, bytes));
+            validateRoutingHeader(header);
+        } catch (IllegalArgumentException e) {
+            throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                    "malformed page routing header: " + e.getMessage(), e);
+        }
+        pagesRead++;
+        checkMinMonotonic(header.minKey());
+        checkDisjoint(header.minKey());
+        previousMin = header.minKey();
+        previousMax = header.maxKey();
+        cumulativeEntries = Math.addExact(cumulativeEntries, header.count());
+        framedBytesRead = Math.addExact(framedBytesRead, framedLen);
+        nextFrameOffset = frameEnd;
+        return new RoutingPage(ordinal, frameOffset, framedLen, header);
+    }
+
+    /** Validate the exact header-to-trailer frame chain and both trailer totals. */
+    void checkRoutingComplete() throws IOException {
+        if (pagesRead != totalRecords) {
+            throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                    "record count mismatch: saw " + pagesRead
+                            + " but trailer declared totalRecords=" + totalRecords, null);
+        }
+        if (nextFrameOffset != trailerStart) {
+            throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                    "page frames end at " + nextFrameOffset
+                            + " but trailer starts at " + trailerStart, null);
+        }
+        checkComplete(cumulativeEntries);
+    }
+
+    /** Positional CRC/read/decode input for a reference, safe across concurrent encoder lanes. */
+    PageBlock readPage(PageRef ref) throws IOException {
+        if (ref.offset() < headerBytes || ref.offset() >= trailerStart
+                || ref.ordinal() >= totalRecords) {
+            throw fail("page reference is outside the physical frame region");
+        }
+        ByteBuffer prefix = readAt(ref.offset(), 8);
+        int bodyLength = prefix.getInt();
+        int expectedCrc = prefix.getInt();
+        validateRecordLength(bodyLength);
+        int framedLen = Math.addExact(8, bodyLength);
+        if (framedLen != ref.framedLen()
+                || Math.addExact(ref.offset(), framedLen) > trailerStart) {
+            throw fail("page reference frame length disagrees with the segment");
+        }
+        byte[] body = readAt(ref.offset() + 8, bodyLength).array();
+        CRC32C crc = new CRC32C();
+        crc.update(body, 0, body.length);
+        if ((int) crc.getValue() != expectedCrc) {
+            throw fail("record CRC32C mismatch (torn or corrupt record)");
+        }
+        PageBlockCodec.Header header;
+        try {
+            header = parsePageHeader(body);
+        } catch (IllegalArgumentException e) {
+            throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                    "malformed page body: " + e.getMessage(), e);
+        }
+        if (header.rawPayloadLength() > maxRawPayloadLength) {
+            metrics.recordStealReason("SORT", "page_run_decoded_page_limit");
+            throw corruption(SegmentCorruptionException.PAGE_RUN_DECODED_PAGE_LIMIT,
+                    "decoded page payload " + header.rawPayloadLength()
+                            + " exceeds the planned segment maximum " + maxRawPayloadLength, null);
+        }
+        if (!Arrays.equals(header.minKey(), ref.minKey())
+                || !Arrays.equals(header.maxKey(), ref.maxKey())
+                || header.count() != ref.count()
+                || header.rawPayloadLength() != ref.rawPayloadLength()) {
+            throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                    "page body metadata disagrees with its routed reference", null);
+        }
+        return PageBlockCodec.deserialize(body, header, path);
     }
 
     /**
@@ -408,15 +512,32 @@ final class PageRunSegmentIo implements AutoCloseable {
         // Bound the claimed length against maxRecordLen (from the trailer) BEFORE allocating: an
         // un-CRC-protected len-prefix bit-flip must not be able to drive an up-to-~2GB allocation
         // ahead of the CRC check.
-        if (len <= 0 || len > maxRecordLen) {
-            throw fail("record length " + len + " out of bounds (maxRecordLen=" + maxRecordLen + ")");
-        }
+        validateRecordLength(len);
         byte[] body = readFully(len).array();
         nextFrameOffset = Math.addExact(nextFrameOffset, 8L + len);
         CRC32C crc = new CRC32C();
         crc.update(body, 0, len);
         boolean crcOk = (int) crc.getValue() == expectedCrc;
         return new Record(body, len, crcOk);
+    }
+
+    private void validateRecordLength(int length) throws IOException {
+        if (length <= 0 || length > maxRecordLen) {
+            throw fail("record length " + length
+                    + " out of bounds (maxRecordLen=" + maxRecordLen + ")");
+        }
+    }
+
+    private void validateRoutingHeader(PageBlockCodec.RoutingHeader header) {
+        if (Arrays.compareUnsigned(header.minKey(), header.maxKey()) > 0) {
+            throw new IllegalArgumentException(
+                    "malformed PageBlock: minKey exceeds maxKey under unsigned byte order");
+        }
+        if (header.rawPayloadLength() > maxRawPayloadLength) {
+            throw new IllegalArgumentException("decoded page payload "
+                    + header.rawPayloadLength() + " exceeds the planned segment maximum "
+                    + maxRawPayloadLength);
+        }
     }
 
     /**

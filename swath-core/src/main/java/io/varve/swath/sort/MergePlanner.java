@@ -32,6 +32,8 @@ final class MergePlanner {
     static final int MAX_BOUNDARY_CANDIDATES = 16_384;
     /** One shared temporary proof spool descriptor, independent of the range count. */
     static final int PROOF_SPOOL_FDS = 1;
+    /** Conservative shallow size for one immutable page reference and its two key arrays. */
+    static final int PIPELINE_REF_BYTES = 200;
 
     private final SortConfig config;
     private final SortMetrics metrics;
@@ -124,11 +126,7 @@ final class MergePlanner {
         return runtimeFanIn(catalog, encoderCount);
     }
 
-    /**
-     * Admit pipeline encoders against the resources the pipeline actually opens: one reader per
-     * surviving segment and one writer plus one bounded queue per encoder. Range proof, seek, and
-     * staged-size costs deliberately do not participate.
-     */
+    /** Admit encoders for shared segment channels, reference plans, cluster shares, and writers. */
     PipelinePlan pipelineParallelism(int requested, PageRunCatalog catalog) {
         if (requested < 1) {
             throw new IllegalArgumentException("pipeline encoder count must be positive");
@@ -136,16 +134,14 @@ final class MergePlanner {
         int segments = catalog.descriptors().size();
         int legacyDecodedLimit = decodedPageLimit(config.mergeBudgetBytes());
         int pageBytes = pipelinePageBytes(catalog, legacyDecodedLimit);
-        int slotDepth = pipelineSlotDepth(segments, config.mergeBudgetBytes(), pageBytes);
-        long readerPages = saturatedMultiply(segments, (long) slotDepth + 1L);
-        long readerBytes = saturatedMultiply(readerPages, pageBytes);
-        long pendingBytes = pageBytes;
-        long queueBytes = saturatedMultiply(PartEncoders.QUEUE_DEPTH + 1L, pageBytes);
-        long perEncoderBytes = saturatedAdd(
-                queueBytes, PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
-        long fixedBytes = saturatedAdd(readerBytes, pendingBytes);
-        long remaining = fixedBytes >= config.mergeBudgetBytes()
-                ? 0L : config.mergeBudgetBytes() - fixedBytes;
+        long cursorRefs = saturatedMultiply(segments,
+                SegmentHeaderCursors.QUEUE_DEPTH + 1L);
+        long retainedRefs = saturatedAdd(cursorRefs, catalog.totalRecords());
+        long routerBytes = saturatedMultiply(retainedRefs, PIPELINE_REF_BYTES);
+        long perEncoderBytes = saturatedAdd(pageBytes,
+                PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
+        long remaining = routerBytes >= config.mergeBudgetBytes()
+                ? 0L : config.mergeBudgetBytes() - routerBytes;
         long byHeap = perEncoderBytes == 0 ? Long.MAX_VALUE : remaining / perEncoderBytes;
         long usableFds = usableFdBudget();
         long byFd = usableFds == Long.MAX_VALUE
@@ -156,32 +152,27 @@ final class MergePlanner {
             reason = byFd <= byHeap
                     ? PipelineClampReason.FD_CLAMPED : PipelineClampReason.HEAP_CLAMPED;
         }
-        return new PipelinePlan(admitted, reason, slotDepth, pageBytes,
-                legacyDecodedLimit);
+        long clusterBudget = Math.max(pageBytes, config.mergeBudgetBytes() / admitted);
+        return new PipelinePlan(admitted, reason, SegmentHeaderCursors.QUEUE_DEPTH,
+                PIPELINE_REF_BYTES, pageBytes, clusterBudget, legacyDecodedLimit);
     }
 
     /**
-     * Price every reader at the largest decoded payload it can admit. A segment without a persisted
-     * maximum is not evidence of a small page: its reader accepts the legacy compatibility limit.
+     * Estimate one encoder's transient page from validated trailer metadata. Current inputs persist
+     * the exact maximum raw payload. Legacy inputs expose only their maximum encoded record, so use
+     * that available signal here and leave actual header claims to the runtime cluster guard.
+     * Charging the legacy compatibility ceiling would consume the entire merge budget per encoder.
      */
     private int pipelinePageBytes(PageRunCatalog catalog, int legacyDecodedLimit) {
         int maximum = 0;
         for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
             int admitted = descriptor.hasDecodedPageMaximum()
-                    ? descriptor.maxRawPayloadLength() : legacyDecodedLimit;
+                    ? descriptor.maxRawPayloadLength()
+                    : (int) Math.min(legacyDecodedLimit,
+                            Math.max(1L, descriptor.trailer().maxRecordLen()));
             maximum = Math.max(maximum, admitted);
         }
         return Math.max(1, maximum);
-    }
-
-    /** Derive the per-segment queue depth from the same worst-case page price used by admission. */
-    static int pipelineSlotDepth(int segments, long mergeBudgetBytes, int pageBytes) {
-        if (segments <= 0 || mergeBudgetBytes <= 0 || pageBytes <= 0) {
-            return 1;
-        }
-        long denominator = saturatedMultiply(segments, pageBytes);
-        long affordable = denominator == 0 ? 1 : mergeBudgetBytes / denominator;
-        return (int) Math.max(1L, Math.min(4L, affordable));
     }
 
     private static int decodedPageLimit(long mergeBudgetBytes) {
@@ -581,11 +572,13 @@ final class MergePlanner {
         }
     }
 
-    /** One immutable pipeline admission result shared by cascade, readers, and encoders. */
-    record PipelinePlan(int encoders, PipelineClampReason reason, int slotDepth,
-                        int pageBytes, int legacyDecodedLimit) {
+    /** One immutable pipeline admission result shared by cascade, cursors, and encoders. */
+    record PipelinePlan(int encoders, PipelineClampReason reason, int cursorDepth,
+                        int refBytes, int pageBytes, long clusterBudgetBytes,
+                        int legacyDecodedLimit) {
         PipelinePlan {
-            if (encoders < 1 || slotDepth < 1 || pageBytes < 1 || legacyDecodedLimit < 1) {
+            if (encoders < 1 || cursorDepth < 1 || refBytes < 1 || pageBytes < 1
+                    || clusterBudgetBytes < 1 || legacyDecodedLimit < 1) {
                 throw new IllegalArgumentException("pipeline resource plan must be positive");
             }
         }

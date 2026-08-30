@@ -71,25 +71,32 @@ final class PipelineFinalization {
         PipelineFailure failure = new PipelineFailure();
         PipelinePartSizer sizer = new PipelinePartSizer(
                 run.pipelinePartTarget(), config.finalFileBytes());
-        SegmentReaderSlots readers = null;
+        List<PageRunSegmentIo> channels = List.of();
+        SegmentHeaderCursors cursors = null;
         PartEncoders encoders = null;
         try {
-            readers = new SegmentReaderSlots(
-                    pipelineCatalog, SegmentReaderSlots.planned(
-                            plan, pipelineCatalog.descriptors().size()), metrics, failure);
-            encoders = new PartEncoders(effectiveEncoders, request.stagingDir(),
+            channels = openChannels(pipelineCatalog, plan, metrics);
+            cursors = new SegmentHeaderCursors(channels,
+                    SegmentHeaderCursors.planned(channels.size()), metrics, failure);
+            encoders = new PartEncoders(effectiveEncoders, channels, plan.clusterBudgetBytes(),
+                    request.stagingDir(),
                     run.finalWriterFactory(),
                     run.comparator(), run.hook(), run.equalKeyPolicy(), metrics, failure, sizer,
                     request.progressCallback());
             request.onFinalPassStarting().onFinalPassStarting(true);
             MergeRouter.Result routed = new MergeRouter(
-                    readers, encoders, sizer, run.comparator(), config.mergeBudgetBytes(), metrics,
-                    failure)
+                    cursors, encoders::submit, sizer, metrics, failure)
                     .route(pipelineCatalog.descriptors().size());
-            readers.close();
-            readers = null;
+            if (routed.refs() != pipelineCatalog.totalRecords()) {
+                throw new IllegalStateException("pipeline reference count mismatch: planned="
+                        + routed.refs() + " source=" + pipelineCatalog.totalRecords());
+            }
+            cursors.close();
+            cursors = null;
             List<PartEncoders.CompletedPart> completed = encoders.finish(routed.parts());
             encoders = null;
+            closeChannels(channels);
+            channels = List.of();
             List<Path> paths = completed.stream().map(PartEncoders.CompletedPart::path).toList();
             List<SortedFileWriter> writers = completed.stream()
                     .map(PartEncoders.CompletedPart::writer).toList();
@@ -110,11 +117,16 @@ final class PipelineFinalization {
             return result;
         } catch (Throwable thrown) {
             failure.record(thrown);
-            if (readers != null) {
-                readers.close();
+            if (cursors != null) {
+                cursors.close();
             }
             if (encoders != null) {
                 encoders.close();
+            }
+            try {
+                closeChannels(channels);
+            } catch (IOException closeFailure) {
+                thrown.addSuppressed(closeFailure);
             }
             try {
                 request.ownedInputs().sweepDisposables(StagingNames.PIPELINE_TMP_GLOB);
@@ -138,6 +150,54 @@ final class PipelineFinalization {
         }
     }
 
+    /** Open exactly one shared positional-read channel per surviving segment. */
+    private static List<PageRunSegmentIo> openChannels(PageRunCatalog catalog,
+            MergePlanner.PipelinePlan plan, SortMetrics metrics) throws IOException {
+        List<PageRunSegmentIo> channels = new java.util.ArrayList<>(catalog.descriptors().size());
+        try {
+            for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
+                int decodedLimit = descriptor.hasDecodedPageMaximum()
+                        ? descriptor.maxRawPayloadLength() : plan.legacyDecodedLimit();
+                channels.add(PageRunSegmentIo.open(descriptor.path(), metrics, decodedLimit));
+            }
+            return List.copyOf(channels);
+        } catch (Throwable failure) {
+            try {
+                closeChannels(channels);
+            } catch (IOException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            if (failure instanceof IOException ioFailure) {
+                throw ioFailure;
+            }
+            if (failure instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (failure instanceof Error error) {
+                throw error;
+            }
+            throw new IOException("failed to open pipeline segment channels", failure);
+        }
+    }
+
+    private static void closeChannels(List<PageRunSegmentIo> channels) throws IOException {
+        IOException failure = null;
+        for (PageRunSegmentIo channel : channels) {
+            try {
+                channel.close();
+            } catch (IOException closeFailure) {
+                if (failure == null) {
+                    failure = closeFailure;
+                } else {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
     /** Unwrap the relay exception without changing the original checked/unchecked failure type. */
     private static Throwable failureCause(Throwable failure) {
         return failure instanceof PipelineFailure.Failed && failure.getCause() != null
@@ -157,9 +217,11 @@ final class PipelineFinalization {
                     run.metrics().recordStealReason("SORT", "pipeline_encoders_heap_clamped");
         }
         log.warn("sort_pipeline_encoders_clamped requested={} effective={} segments={} reason={} "
-                        + "merge_budget_bytes={} slot_depth={} page_bytes={}",
+                        + "merge_budget_bytes={} cursor_depth={} ref_bytes={} page_bytes={} "
+                        + "cluster_budget_bytes={}",
                 requested, plan.encoders(), catalog.descriptors().size(), plan.reason().logValue(),
-                run.config().mergeBudgetBytes(), plan.slotDepth(), plan.pageBytes());
+                run.config().mergeBudgetBytes(), plan.cursorDepth(), plan.refBytes(), plan.pageBytes(),
+                plan.clusterBudgetBytes());
     }
 
     /** Immutable invocation state keeps the lifecycle entry point independent of argument order. */

@@ -20,18 +20,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongConsumer;
 
 /**
- * Bounded striped final-part encoders with one writer-owning thread per lane. Ordinal {@code k}
- * stays on lane {@code k mod N}, so every batch of a part reaches one writer in sequence while
- * independent parts can close out of order. Queues provide the router's only encoder back-pressure;
- * the completion list contains durably closed parts and is reordered only after every lane stops.
+ * Striped complete-plan encoders. Each lane reads referenced pages positionally through the shared
+ * segment channels, owns at most one writer, and either reports a durably closed part or discards it.
  */
 final class PartEncoders implements AutoCloseable {
-    static final int QUEUE_DEPTH = 4;
-    /** Planning estimate for one open parquet writer's buffered heap. */
+    static final int QUEUE_DEPTH = 2;
     static final long WRITER_HEAP_ESTIMATE_BYTES = 8L << 20;
     private static final long FAILURE_CHECK_MILLIS = 100;
 
-    /** One durably closed part, retaining only the state the ordered assembler consumes. */
     record CompletedPart(int ordinal, Path path, SortedFileWriter writer) {
     }
 
@@ -45,39 +41,37 @@ final class PartEncoders implements AutoCloseable {
     private final AtomicInteger partsOpen = new AtomicInteger();
     private final LongConsumer progressCallback;
 
-    PartEncoders(int count, Path stagingDir, SortedFileWriterFactory factory,
-            Comparator<ListEntry> comparator, DuplicateHook hook, EqualKeyPolicy equalKeyPolicy,
-            SortMetrics metrics, PipelineFailure failure, PipelinePartSizer sizer,
-            LongConsumer progressCallback) {
-        if (count < 1) {
-            throw new IllegalArgumentException("pipeline encoder count must be positive");
+    PartEncoders(int count, List<PageRunSegmentIo> segments, long clusterBudgetBytes,
+            Path stagingDir, SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
+            DuplicateHook hook, EqualKeyPolicy equalKeyPolicy, SortMetrics metrics,
+            PipelineFailure failure, PipelinePartSizer sizer, LongConsumer progressCallback) {
+        if (count < 1 || clusterBudgetBytes < 1) {
+            throw new IllegalArgumentException("pipeline encoder settings must be positive");
         }
         this.failure = failure;
         this.sizer = sizer;
         this.metrics = metrics;
         this.progressCallback = progressCallback;
         metrics.bindPipelinePartsOpen(partsOpen);
-        this.lanes = new ArrayList<>(count);
+        lanes = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            Lane lane = new Lane(stagingDir, factory.forOutputSequence(), comparator, hook,
-                    equalKeyPolicy);
+            Lane lane = new Lane(segments, clusterBudgetBytes, stagingDir,
+                    factory.forOutputSequence(), comparator, hook, equalKeyPolicy);
             lanes.add(lane);
             threads.add(Thread.ofVirtual().name("sort-pipeline-encoder-" + i).start(lane::run));
         }
     }
 
-    /**
-     * Submit in merge order, waiting only on the selected lane. Timed offers surface peer failure
-     * instead of allowing a full lane to strand the router after another encoder has failed.
-     */
-    void submit(PipelineBatch batch) {
-        ArrayBlockingQueue<Item> queue = lanes.get(batch.partOrdinal() % lanes.size()).queue;
-        if (queue.offer(new Item.Batch(batch))) {
+    /** Submit one complete plan, recording the router's only encoder-side blocking span. */
+    void submit(PartPlan plan) {
+        ArrayBlockingQueue<Item> queue = lanes.get(plan.ordinal() % lanes.size()).queue;
+        Item.Plan item = new Item.Plan(plan);
+        if (queue.offer(item)) {
             return;
         }
         long started = System.nanoTime();
         try {
-            while (!queue.offer(new Item.Batch(batch), FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {
+            while (!queue.offer(item, FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {
                 failure.check();
             }
         } catch (InterruptedException e) {
@@ -86,11 +80,11 @@ final class PartEncoders implements AutoCloseable {
         } finally {
             long waited = System.nanoTime() - started;
             metrics.recordPipelineRouterWait(waited);
-            metrics.recordPipelineEncoderQueueFull(waited);
+            metrics.recordPipelinePlanQueueWait(waited);
         }
     }
 
-    /** Stop all lanes, join them, and return a complete dense ordinal sequence or fail atomically. */
+    /** Stop after all submitted plans, then return the dense merge-order completion sequence. */
     List<CompletedPart> finish(int expectedParts) {
         for (Lane lane : lanes) {
             putStop(lane.queue);
@@ -111,7 +105,6 @@ final class PartEncoders implements AutoCloseable {
         return result;
     }
 
-    /** Deliver a normal stop without bypassing queued batches or masking a peer failure. */
     private void putStop(ArrayBlockingQueue<Item> queue) {
         try {
             while (!queue.offer(Item.Stop.INSTANCE, FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {
@@ -123,7 +116,6 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
-    /** Abort every lane and wait until all open writers have been discarded. */
     @Override
     public void close() {
         if (aborting.compareAndSet(false, true)) {
@@ -134,7 +126,6 @@ final class PartEncoders implements AutoCloseable {
         joinAll();
     }
 
-    /** Join uninterruptibly for cleanup, restoring the caller's interrupt state afterwards. */
     private void joinAll() {
         boolean interrupted = false;
         for (Thread thread : threads) {
@@ -143,6 +134,12 @@ final class PartEncoders implements AutoCloseable {
                     thread.join();
                 } catch (InterruptedException e) {
                     interrupted = true;
+                    failure.record(new MergeCancellation.Cancelled());
+                    if (aborting.compareAndSet(false, true)) {
+                        for (Thread peer : threads) {
+                            peer.interrupt();
+                        }
+                    }
                 }
             }
         }
@@ -153,35 +150,35 @@ final class PartEncoders implements AutoCloseable {
 
     private final class Lane {
         private final ArrayBlockingQueue<Item> queue = new ArrayBlockingQueue<>(QUEUE_DEPTH);
+        private final List<PageRunSegmentIo> segments;
+        private final long clusterBudgetBytes;
         private final Path stagingDir;
         private final SortedFileWriterFactory factory;
+        private final Comparator<ListEntry> comparator;
         private final AdjacentEntryGuard entryGuard;
         private SortedFileWriter writer;
         private Path path;
-        private int ordinal = -1;
-        private long logicalBytes;
-        private long lastSequence = -1;
 
-        Lane(Path stagingDir, SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
+        Lane(List<PageRunSegmentIo> segments, long clusterBudgetBytes, Path stagingDir,
+                SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
                 DuplicateHook hook, EqualKeyPolicy equalKeyPolicy) {
+            this.segments = segments;
+            this.clusterBudgetBytes = clusterBudgetBytes;
             this.stagingDir = stagingDir;
             this.factory = factory;
-            this.entryGuard = new AdjacentEntryGuard(
+            this.comparator = comparator;
+            entryGuard = new AdjacentEntryGuard(
                     comparator, hook, equalKeyPolicy, metrics, "pipeline");
         }
 
-        /** Own this lane's writer lifecycle; a peer failure is observed even while the queue is idle. */
         void run() {
             try {
                 while (true) {
                     Item item = nextItem();
                     if (item instanceof Item.Stop) {
-                        if (writer != null) {
-                            throw new IllegalStateException("encoder stopped with an open part");
-                        }
                         return;
                     }
-                    encode(((Item.Batch) item).batch());
+                    execute(((Item.Plan) item).value());
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -203,52 +200,46 @@ final class PartEncoders implements AutoCloseable {
             return item;
         }
 
-        /** Enforce per-lane sequence/part ownership and close each completed writer exactly once. */
-        private void encode(PipelineBatch batch) throws IOException {
+        /** Open, execute, and durably close one complete plan without retaining decoded pages. */
+        private void execute(PartPlan plan) throws IOException {
             failure.check();
-            if (batch.sequence() <= lastSequence) {
-                throw new IllegalStateException("pipeline batch sequence regressed");
+            if (!plan.partFirst() || !plan.partLast() || writer != null) {
+                throw new IllegalStateException("encoder received an incomplete or overlapping plan");
             }
-            lastSequence = batch.sequence();
-            if (batch.partFirst()) {
-                if (writer != null) {
-                    throw new IllegalStateException("pipeline encoder opened overlapping parts");
+            path = stagingDir.resolve(StagingNames.pipelineTmp(plan.ordinal()));
+            writer = factory.create(path, plan.ordinal() + 1);
+            partsOpen.incrementAndGet();
+            for (PartPlan.Item item : plan.items()) {
+                MergeCancellation.check();
+                switch (item) {
+                    case PartPlan.Page page -> writePage(read(page.ref()));
+                    case PartPlan.Cluster cluster -> writeCluster(cluster.refs());
                 }
-                ordinal = batch.partOrdinal();
-                path = stagingDir.resolve(StagingNames.pipelineTmp(ordinal));
-                writer = factory.create(path, ordinal + 1);
-                partsOpen.incrementAndGet();
-            } else if (writer == null || ordinal != batch.partOrdinal()) {
-                throw new IllegalStateException("pipeline batch arrived without its open part");
             }
-            logicalBytes = Math.addExact(logicalBytes, batch.payload().logicalBytes());
-            switch (batch.payload()) {
-                case PipelineBatch.WholePage whole -> writePage(whole.page());
-                case PipelineBatch.Rows rows -> {
-                    for (ListEntry entry : rows.entries()) {
-                        write(entry);
-                    }
-                }
-                case PipelineBatch.Empty ignored -> { }
+            if (plan.mergeEnd()) {
+                writer.markFinal();
             }
-            if (batch.payload().rowCount() > 0) {
-                progressCallback.accept(batch.payload().rowCount());
+            writer.close();
+            long bytes = Files.size(path);
+            completed.add(new CompletedPart(plan.ordinal(), path, writer));
+            sizer.completed(bytes, plan.logicalBytes());
+            writer = null;
+            path = null;
+            entryGuard.reset();
+            partsOpen.decrementAndGet();
+            if (plan.rows() > 0) {
+                progressCallback.accept(plan.rows());
             }
-            if (batch.partLast()) {
-                if (batch.mergeEnd()) {
-                    writer.markFinal();
-                }
-                writer.close();
-                long bytes = Files.size(path);
-                completed.add(new CompletedPart(ordinal, path, writer));
-                sizer.completed(bytes, logicalBytes);
-                writer = null;
-                path = null;
-                // The router closes parts only across a strict raw-key boundary, so no adjacent
-                // comparator-equal pair can straddle this part-local guard reset.
-                entryGuard.reset();
-                logicalBytes = 0;
-                partsOpen.decrementAndGet();
+        }
+
+        private PageBlock read(PageRef ref) throws IOException {
+            long started = System.nanoTime();
+            try {
+                PageBlock page = segments.get(ref.segmentId()).readPage(ref);
+                metrics.recordPipelineEncoderPageReads(1);
+                return page;
+            } finally {
+                metrics.recordPipelineEncoderReadWait(System.nanoTime() - started);
             }
         }
 
@@ -259,12 +250,49 @@ final class PartEncoders implements AutoCloseable {
             }
         }
 
+        /** Incrementally admit a cluster so a long transitive chain need not be resident at once. */
+        private void writeCluster(List<PageRef> refs) throws IOException {
+            PageRowMerger merger = new PageRowMerger(comparator);
+            DecodedPageBudget budget = new DecodedPageBudget(clusterBudgetBytes, metrics);
+            int next = 0;
+            long reserved = 0;
+            try {
+                PageBlock first = read(refs.get(next));
+                reserved = budget.reserve(first);
+                merger.add(refs.get(next).segmentId(), first, reserved);
+                reserved = 0;
+                next++;
+                while (merger.hasNext()) {
+                    while (next < refs.size()
+                            && io.varve.swath.model.KeyBytes.compareUnsigned(
+                                    refs.get(next).minKey(), merger.nextKey()) <= 0) {
+                        PageRef ref = refs.get(next++);
+                        PageBlock page = read(ref);
+                        long pageBytes = budget.reserve(page);
+                        try {
+                            merger.add(ref.segmentId(), page, pageBytes);
+                            pageBytes = 0;
+                        } finally {
+                            budget.release(pageBytes);
+                        }
+                    }
+                    write(merger.next());
+                    budget.release(merger.releasedBytes());
+                }
+                if (next != refs.size()) {
+                    throw new IllegalStateException("cluster refs were not fully consumed");
+                }
+            } finally {
+                budget.release(reserved);
+                budget.release(merger.releaseAllBytes());
+            }
+        }
+
         private void write(ListEntry entry) throws IOException {
             entryGuard.accept(entry);
             writer.write(entry);
         }
 
-        /** Discard, rather than finalize, the sole writer this lane may own after abnormal exit. */
         private void discardOpen() {
             if (writer == null) {
                 return;
@@ -275,13 +303,14 @@ final class PartEncoders implements AutoCloseable {
                 failure.record(e);
             } finally {
                 writer = null;
+                path = null;
                 partsOpen.decrementAndGet();
             }
         }
     }
 
     private sealed interface Item {
-        record Batch(PipelineBatch batch) implements Item {
+        record Plan(PartPlan value) implements Item {
         }
 
         enum Stop implements Item {

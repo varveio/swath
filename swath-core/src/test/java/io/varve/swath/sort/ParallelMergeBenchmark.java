@@ -630,8 +630,10 @@ class ParallelMergeBenchmark {
         ar.pageSkipEngagedCount = metrics.count("SORT.merge_range_page_skipped");
         ar.sampleCappedSegments = metrics.count("SORT.merge_range_sample_capped");
         ar.pipelineRouterWaitNanos = metrics.pipelineRouterWaitNanos.sum();
-        ar.pipelineReaderWaitNanos = metrics.pipelineReaderWaitNanos.sum();
-        ar.pipelineEncoderQueueFullNanos = metrics.pipelineEncoderQueueFullNanos.sum();
+        ar.pipelineHeaderScanNanos = metrics.pipelineHeaderScanNanos.sum();
+        ar.pipelinePlanQueueWaitNanos = metrics.pipelinePlanQueueWaitNanos.sum();
+        ar.pipelineEncoderPageReads = metrics.pipelineEncoderPageReads.sum();
+        ar.pipelineEncoderReadWaitNanos = metrics.pipelineEncoderReadWaitNanos.sum();
         ar.pageWholeEmissions = metrics.count("SORT.page_whole_emitted");
         ar.pageOverlapKeyMerges = metrics.count("SORT.page_overlap_keymerge");
         ar.proofSpoolLogicalExtentBytes = metrics.proofSpoolLogicalExtentBytes.sum();
@@ -975,8 +977,8 @@ class ParallelMergeBenchmark {
     // stays narrow (real page-skip opportunity).
     // =====================================================================
 
-    private static SortBenchCorpus.Stats buildCorpus(Path master, int numSegments, long totalRows,
-                                                      int blockRows, int pageRows) throws IOException {
+    static SortBenchCorpus.Stats buildCorpus(Path master, int numSegments, long totalRows,
+                                             int blockRows, int pageRows) throws IOException {
         if (pageRows <= 0) {
             throw new IllegalArgumentException("swath.bench.pageRows must be > 0, got " + pageRows);
         }
@@ -1175,8 +1177,10 @@ class ParallelMergeBenchmark {
         long proofSpoolServiceNanos;
         long boundaryNanos;
         long pipelineRouterWaitNanos;
-        long pipelineReaderWaitNanos;
-        long pipelineEncoderQueueFullNanos;
+        long pipelineHeaderScanNanos;
+        long pipelinePlanQueueWaitNanos;
+        long pipelineEncoderPageReads;
+        long pipelineEncoderReadWaitNanos;
         List<Long> rangeLatenciesNanos;
         boolean fullRowExact = true;   // R=1 baseline is trivially exact against itself
 
@@ -1190,10 +1194,8 @@ class ParallelMergeBenchmark {
                     rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).toList();
             double routerWaitShare = elapsedNanos <= 0 ? 0.0
                     : (double) pipelineRouterWaitNanos / elapsedNanos;
-            double readerWaitShare = elapsedNanos <= 0 ? 0.0
-                    : (double) pipelineReaderWaitNanos / elapsedNanos;
-            double encoderQueueFullShare = elapsedNanos <= 0 ? 0.0
-                    : (double) pipelineEncoderQueueFullNanos / elapsedNanos;
+            double planQueueWaitShare = elapsedNanos <= 0 ? 0.0
+                    : (double) pipelinePlanQueueWaitNanos / elapsedNanos;
             return String.format(
                     "BENCH_ROW %s label=%s staging_format=page-run finalization=%s "
                             + "pipeline_part_policy=%s "
@@ -1211,9 +1213,10 @@ class ParallelMergeBenchmark {
                             + "proof_spool_preallocation_operations=%d "
                             + "proof_spool_preallocation_attempted_bytes=%d "
                             + "proof_spool_mapped_operations=%d proof_spool_mapped_bytes=%d "
-                            + "proof_spool_ms=%d page_reads=unavailable "
-                            + "pipeline_router_wait_share=%.4f pipeline_reader_wait_share=%.4f "
-                            + "pipeline_encoder_queue_full_share=%.4f "
+                            + "proof_spool_ms=%d page_reads=%d "
+                            + "pipeline_router_wait_share=%.4f "
+                            + "pipeline_plan_queue_wait_share=%.4f "
+                            + "pipeline_header_scan_ms=%d pipeline_encoder_read_wait_ms=%d "
                             + "part_bytes=%s part_rows=%s "
                             + "read_amplification=unavailable identity_check=full-row "
                             + "full_row_exact=%s multiset_digest=%s sampler_cleanup_ms=%d "
@@ -1231,8 +1234,10 @@ class ParallelMergeBenchmark {
                     pageOverlapKeyMerges, proofSpoolLogicalExtentBytes,
                     proofSpoolPreallocationOperations, proofSpoolPreallocationAttemptedBytes,
                     proofSpoolMappedOperations, proofSpoolMappedBytes,
-                    proofSpoolServiceNanos / 1_000_000L, routerWaitShare, readerWaitShare,
-                    encoderQueueFullShare,
+                    proofSpoolServiceNanos / 1_000_000L, pipelineEncoderPageReads,
+                    routerWaitShare, planQueueWaitShare,
+                    pipelineHeaderScanNanos / 1_000_000L,
+                    pipelineEncoderReadWaitNanos / 1_000_000L,
                     partBytes, partRows, fullRowExact, multisetDigest,
                     samplerCleanupNanos / 1_000_000, rangeLatenciesMs);
         }
@@ -1264,8 +1269,10 @@ class ParallelMergeBenchmark {
         private final LongAdder proofSpoolMappedBytes = new LongAdder();
         private final LongAdder proofSpoolServiceNanos = new LongAdder();
         private final LongAdder pipelineRouterWaitNanos = new LongAdder();
-        private final LongAdder pipelineReaderWaitNanos = new LongAdder();
-        private final LongAdder pipelineEncoderQueueFullNanos = new LongAdder();
+        private final LongAdder pipelineHeaderScanNanos = new LongAdder();
+        private final LongAdder pipelinePlanQueueWaitNanos = new LongAdder();
+        private final LongAdder pipelineEncoderPageReads = new LongAdder();
+        private final LongAdder pipelineEncoderReadWaitNanos = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -1317,13 +1324,23 @@ class ParallelMergeBenchmark {
         }
 
         @Override
-        public void recordPipelineReaderWait(long nanos) {
-            pipelineReaderWaitNanos.add(nanos);
+        public void recordPipelineHeaderScan(long nanos) {
+            pipelineHeaderScanNanos.add(nanos);
         }
 
         @Override
-        public void recordPipelineEncoderQueueFull(long nanos) {
-            pipelineEncoderQueueFullNanos.add(nanos);
+        public void recordPipelinePlanQueueWait(long nanos) {
+            pipelinePlanQueueWaitNanos.add(nanos);
+        }
+
+        @Override
+        public void recordPipelineEncoderPageReads(long pages) {
+            pipelineEncoderPageReads.add(pages);
+        }
+
+        @Override
+        public void recordPipelineEncoderReadWait(long nanos) {
+            pipelineEncoderReadWaitNanos.add(nanos);
         }
 
         long count(String key) {

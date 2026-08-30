@@ -259,8 +259,10 @@ public final class RunMetrics {
     private final Counter sortPipelineClusterPages;
     private final Counter sortPipelineClusterRows;
     private final Timer sortPipelineRouterWait;
-    private final Timer sortPipelineReaderWait;
-    private final Timer sortPipelineEncoderQueueFull;
+    private final Timer sortPipelineHeaderScan;
+    private final Timer sortPipelinePlanQueueWait;
+    private final Counter sortPipelineEncoderPageReads;
+    private final Timer sortPipelineEncoderReadWait;
     private final AtomicReference<AtomicInteger> sortPipelinePartsOpen =
             new AtomicReference<>(new AtomicInteger());
     private final Timer sortFinalizeCloseLatency;
@@ -633,10 +635,14 @@ public final class RunMetrics {
                 Counter.builder("swath.sort.pipeline.cluster_rows").register(registry);
         sortPipelineRouterWait =
                 runScopedTimer("swath.sort.pipeline.router_wait").register(registry);
-        sortPipelineReaderWait =
-                runScopedTimer("swath.sort.pipeline.reader_wait").register(registry);
-        sortPipelineEncoderQueueFull =
-                runScopedTimer("swath.sort.pipeline.encoder_queue_full").register(registry);
+        sortPipelineHeaderScan =
+                runScopedTimer("swath.sort.pipeline.header_scan").register(registry);
+        sortPipelinePlanQueueWait =
+                runScopedTimer("swath.sort.pipeline.plan_queue_wait").register(registry);
+        sortPipelineEncoderPageReads =
+                Counter.builder("swath.sort.pipeline.encoder_page_reads").register(registry);
+        sortPipelineEncoderReadWait =
+                runScopedTimer("swath.sort.pipeline.encoder_read_wait").register(registry);
         Gauge.builder("swath.sort.pipeline.parts_open", sortPipelinePartsOpen,
                         current -> current.get().get())
                 .register(registry);
@@ -1242,12 +1248,20 @@ public final class RunMetrics {
         sortPipelineRouterWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
-    public void recordSortPipelineReaderWait(long nanos) {
-        sortPipelineReaderWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    public void recordSortPipelineHeaderScan(long nanos) {
+        sortPipelineHeaderScan.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
-    public void recordSortPipelineEncoderQueueFull(long nanos) {
-        sortPipelineEncoderQueueFull.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    public void recordSortPipelinePlanQueueWait(long nanos) {
+        sortPipelinePlanQueueWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelineEncoderPageReads(long pages) {
+        sortPipelineEncoderPageReads.increment(Math.max(0L, pages));
+    }
+
+    public void recordSortPipelineEncoderReadWait(long nanos) {
+        sortPipelineEncoderReadWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
     public void bindSortPipelinePartsOpen(AtomicInteger partsOpen) {

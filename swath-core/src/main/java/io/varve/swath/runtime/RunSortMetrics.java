@@ -79,13 +79,23 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     }
 
     @Override
-    public void recordPipelineReaderWait(long nanos) {
-        metrics.recordSortPipelineReaderWait(nanos);
+    public void recordPipelineHeaderScan(long nanos) {
+        metrics.recordSortPipelineHeaderScan(nanos);
     }
 
     @Override
-    public void recordPipelineEncoderQueueFull(long nanos) {
-        metrics.recordSortPipelineEncoderQueueFull(nanos);
+    public void recordPipelinePlanQueueWait(long nanos) {
+        metrics.recordSortPipelinePlanQueueWait(nanos);
+    }
+
+    @Override
+    public void recordPipelineEncoderPageReads(long pages) {
+        metrics.recordSortPipelineEncoderPageReads(pages);
+    }
+
+    @Override
+    public void recordPipelineEncoderReadWait(long nanos) {
+        metrics.recordSortPipelineEncoderReadWait(nanos);
     }
 
     @Override

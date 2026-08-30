@@ -32,6 +32,7 @@ final class PageRunCatalog {
     private final Map<Path, PageRunSegmentDescriptor> byPath;
     private final long maxRecordLen;
     private final int maxRawPayloadLength;
+    private final long totalRecords;
     private final long totalEntries;
 
     private PageRunCatalog(List<PageRunSegmentDescriptor> descriptors) {
@@ -41,6 +42,7 @@ final class PageRunCatalog {
         Set<Path> normalizedIdentities = new LinkedHashSet<>();
         long maximum = -1;
         int maximumRaw = 0;
+        long records = 0;
         long entries = 0;
         for (PageRunSegmentDescriptor descriptor : descriptors) {
             Path identity = normalizedIdentity(descriptor.path());
@@ -53,12 +55,14 @@ final class PageRunCatalog {
             if (descriptor.hasDecodedPageMaximum()) {
                 maximumRaw = Math.max(maximumRaw, descriptor.maxRawPayloadLength());
             }
+            records = Math.addExact(records, descriptor.trailer().totalRecords());
             entries = Math.addExact(entries, descriptor.trailer().totalEntries());
         }
         this.paths = List.copyOf(orderedPaths);
         this.byPath = Map.copyOf(indexed);
         this.maxRecordLen = maximum;
         this.maxRawPayloadLength = maximumRaw;
+        this.totalRecords = records;
         this.totalEntries = entries;
     }
 
@@ -197,6 +201,10 @@ final class PageRunCatalog {
     /** Exact maximum decoded payload bytes for one original input page. */
     int maxRawPayloadLength() {
         return maxRawPayloadLength;
+    }
+
+    long totalRecords() {
+        return totalRecords;
     }
 
     /** Exact source-row authority summed from every independently validated original trailer. */

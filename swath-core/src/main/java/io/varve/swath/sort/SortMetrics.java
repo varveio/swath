@@ -127,12 +127,20 @@ public interface SortMetrics {
     default void recordPipelineRouterWait(long nanos) {
     }
 
-    /** Record time the router spent waiting for a reader slot's next decoded page. */
-    default void recordPipelineReaderWait(long nanos) {
+    /** Record one header cursor's positional metadata-read service time. */
+    default void recordPipelineHeaderScan(long nanos) {
     }
 
-    /** Record a full encoder queue's blocking duration. */
-    default void recordPipelineEncoderQueueFull(long nanos) {
+    /** Record time the router spent waiting for a full plan lane. */
+    default void recordPipelinePlanQueueWait(long nanos) {
+    }
+
+    /** Count positional page reads performed by encoders. */
+    default void recordPipelineEncoderPageReads(long pages) {
+    }
+
+    /** Record encoder positional read and CRC service time. */
+    default void recordPipelineEncoderReadWait(long nanos) {
     }
 
     /** Bind the pipeline's owning counter directly to the live open-part gauge. */

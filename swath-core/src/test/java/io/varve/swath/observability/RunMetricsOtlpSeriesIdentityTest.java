@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 158;
+    static final int EXPECTED_OTLP_METER_COUNT = 160;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -147,6 +147,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "COUNTER|swath.sort.merge.range.index.bytes|{}",
             "COUNTER|swath.sort.pipeline.cluster_pages|{}",
             "COUNTER|swath.sort.pipeline.cluster_rows|{}",
+            "COUNTER|swath.sort.pipeline.encoder_page_reads|{}",
             "COUNTER|swath.sort.pipeline.pages_forwarded|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
@@ -246,8 +247,9 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.sort.merge.latency|{}",
             "TIMER|swath.sort.merge.proof_spool.latency|{}",
             "TIMER|swath.sort.merge.range.latency|{}",
-            "TIMER|swath.sort.pipeline.encoder_queue_full|{}",
-            "TIMER|swath.sort.pipeline.reader_wait|{}",
+            "TIMER|swath.sort.pipeline.encoder_read_wait|{}",
+            "TIMER|swath.sort.pipeline.header_scan|{}",
+            "TIMER|swath.sort.pipeline.plan_queue_wait|{}",
             "TIMER|swath.sort.pipeline.router_wait|{}",
             "TIMER|swath.sort.publication.latency|{}");
 

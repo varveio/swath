@@ -11,6 +11,7 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -148,6 +149,73 @@ final class PageBlockCodec {
                   int rawPayloadLength, int payloadOffset, int payloadLength) {
     }
 
+    /** Routing fields available without reading the stored page payload. */
+    record RoutingHeader(byte[] minKey, byte[] maxKey, int count, int rawPayloadLength) {
+    }
+
+    @FunctionalInterface
+    interface RoutingInput {
+        ByteBuffer read(int position, int bytes) throws IOException;
+    }
+
+    /**
+     * Parse only metadata needed by reference routing. Dictionary values and the stored payload are
+     * skipped by validated length, so the header pass does not materialize or CRC-read page bodies.
+     */
+    static RoutingHeader parseRoutingHeader(int recordLength, RoutingInput input)
+            throws IOException {
+        RoutingCursor cursor = new RoutingCursor(recordLength, input);
+        byte[] minKey = cursor.readKey("minKey");
+        byte[] maxKey = cursor.readKey("maxKey");
+        int count = cursor.readInt("count");
+        if (count <= 0) {
+            throw malformed("count must be positive, got " + count);
+        }
+        int ordered = cursor.readByte("ordered flag") & 0xFF;
+        if (ordered > 1) {
+            throw malformed("ordered flag must be 0 or 1, got " + ordered);
+        }
+        for (int dictionary = 0; dictionary < DICT_COLUMN_COUNT; dictionary++) {
+            int values = cursor.readUnsignedShort("dictionary count");
+            if (values > PageBlock.DICT_CAP) {
+                throw malformed("dictionary " + dictionary + " count " + values + " exceeds "
+                        + PageBlock.DICT_CAP);
+            }
+            for (int value = 0; value < values; value++) {
+                int length = cursor.readUnsignedShort("dictionary value length");
+                cursor.skip(length, "dictionary value");
+            }
+        }
+        int packedUseDict = cursor.readByte("useDict") & 0xFF;
+        int validUseDictBits = (1 << DICT_COLUMN_COUNT) - 1;
+        if ((packedUseDict & ~validUseDictBits) != 0) {
+            throw malformed("useDict contains unknown bits: 0x"
+                    + Integer.toHexString(packedUseDict));
+        }
+        PageCodec codec;
+        int codecCode = cursor.readByte("codec") & 0xFF;
+        try {
+            codec = PageCodec.fromCode((byte) codecCode);
+        } catch (IllegalStateException e) {
+            throw malformed("unsupported codec " + codecCode, e);
+        }
+        int rawPayloadLength = cursor.readInt("raw payload length");
+        int storedPayloadLength = cursor.readInt("stored payload length");
+        if (rawPayloadLength <= 0 || rawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
+            throw malformed("raw payload length " + rawPayloadLength + " is outside 1.."
+                    + PageBlock.MAX_RAW_PAYLOAD_BYTES);
+        }
+        if (storedPayloadLength <= 0 || storedPayloadLength != cursor.remaining()) {
+            throw malformed("stored payload length " + storedPayloadLength
+                    + " does not equal remaining body bytes " + cursor.remaining());
+        }
+        if (codec == PageCodec.NONE && storedPayloadLength != rawPayloadLength) {
+            throw malformed("NONE payload lengths differ: raw=" + rawPayloadLength
+                    + " stored=" + storedPayloadLength);
+        }
+        return new RoutingHeader(minKey, maxKey, count, rawPayloadLength);
+    }
+
     /** Validate every header length, count, and mode and return a zero-copy payload slice. */
     static Header parseHeader(byte[] record) {
         ByteBuffer buffer = ByteBuffer.wrap(record);
@@ -216,6 +284,92 @@ final class PageBlockCodec {
         }
         return new Header(minKey, maxKey, count, orderedByte == 1, dictionaries, useDict,
                 codec, rawPayloadLength, buffer.position(), storedPayloadLength);
+    }
+
+    /** Small cached positional cursor used only for metadata reads during the header pass. */
+    private static final class RoutingCursor {
+        private static final int READ_AHEAD_BYTES = 8 << 10;
+
+        private final int length;
+        private final RoutingInput input;
+        private ByteBuffer cache = ByteBuffer.allocate(0);
+        private int cacheStart;
+        private int position;
+
+        RoutingCursor(int length, RoutingInput input) {
+            if (length <= 0) {
+                throw malformed("record body must be non-empty");
+            }
+            this.length = length;
+            this.input = input;
+        }
+
+        byte[] readKey(String field) throws IOException {
+            int keyLength = readUnsignedShort(field + " length");
+            if (keyLength > ByteMidpoint.MAX_KEY_LEN) {
+                throw malformed(field + " exceeds the S3 key limit of "
+                        + ByteMidpoint.MAX_KEY_LEN + " bytes");
+            }
+            return readBytes(keyLength, field);
+        }
+
+        int readUnsignedShort(String field) throws IOException {
+            ensure(Short.BYTES, field);
+            int relative = position - cacheStart;
+            int value = cache.getShort(relative) & 0xFFFF;
+            position += Short.BYTES;
+            return value;
+        }
+
+        int readInt(String field) throws IOException {
+            ensure(Integer.BYTES, field);
+            int relative = position - cacheStart;
+            int value = cache.getInt(relative);
+            position += Integer.BYTES;
+            return value;
+        }
+
+        byte readByte(String field) throws IOException {
+            ensure(1, field);
+            return cache.get(position++ - cacheStart);
+        }
+
+        byte[] readBytes(int bytes, String field) throws IOException {
+            ensure(bytes, field);
+            byte[] result = new byte[bytes];
+            ByteBuffer view = cache.duplicate();
+            view.position(position - cacheStart).limit(position - cacheStart + bytes);
+            view.get(result);
+            position += bytes;
+            return result;
+        }
+
+        void skip(int bytes, String field) {
+            if (bytes < 0 || position > length - bytes) {
+                throw malformed(field + " exceeds record body");
+            }
+            position += bytes;
+        }
+
+        int remaining() {
+            return length - position;
+        }
+
+        private void ensure(int bytes, String field) throws IOException {
+            if (bytes < 0 || position > length - bytes) {
+                throw malformed(field + " exceeds record body");
+            }
+            int cacheEnd = cacheStart + cache.limit();
+            if (position >= cacheStart && position + bytes <= cacheEnd) {
+                return;
+            }
+            int read = Math.min(length - position, Math.max(bytes, READ_AHEAD_BYTES));
+            cache = input.read(position, read);
+            cacheStart = position;
+            if (cache.remaining() != read) {
+                throw malformed("short metadata read");
+            }
+        }
     }
 
     static IllegalArgumentException malformed(String message) {

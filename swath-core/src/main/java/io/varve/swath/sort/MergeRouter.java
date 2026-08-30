@@ -6,198 +6,150 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.KeyBytes;
-import io.varve.swath.model.ListEntry;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
+import java.util.List;
 import java.util.PriorityQueue;
+import java.util.function.Consumer;
 
 /**
- * Single ordering and part-boundary owner over decoded reader slots. Its frontier contains at most
- * one page per segment. Strictly disjoint pages move whole to encoders; overlaps enter an incremental
- * row heap that admits a frontier page before emitting any key it could precede. Only this thread
- * assigns part ordinals, so striped encoders never race on global order or equal-key boundaries.
+ * Single ordering and part-boundary owner over page references. It performs only page-range work:
+ * disjoint references remain individual items, while a transitive overlap component becomes one
+ * cluster item for an encoder to decode and merge. Every consumed ref moves into exactly one plan.
  */
 final class MergeRouter {
-    static final int BATCH_ROWS = 4_096;
-
-    record Result(long rows, long pagesForwarded, int parts, long peakDecodedBytes) {
+    record Result(long rows, long pagesForwarded, long refs, int parts) {
     }
 
-    private final SegmentReaderSlots readers;
-    private final PartEncoders encoders;
+    private final SegmentHeaderCursors cursors;
+    private final Consumer<PartPlan> plans;
     private final PipelinePartSizer sizer;
-    private final Comparator<ListEntry> comparator;
     private final SortMetrics metrics;
     private final PipelineFailure failure;
-    private final DecodedPageBudget decodedBudget;
-    private final PriorityQueue<Head> frontier = new PriorityQueue<>((left, right) -> {
-        int order = Arrays.compareUnsigned(left.page.firstKeyUnsafe(), right.page.firstKeyUnsafe());
-        return order != 0 ? order : Integer.compare(left.segment, right.segment);
+    private final PriorityQueue<PageRef> frontier = new PriorityQueue<>((left, right) -> {
+        int order = Arrays.compareUnsigned(left.minKey(), right.minKey());
+        return order != 0 ? order : Integer.compare(left.segmentId(), right.segmentId());
     });
-    private final PartBatcher batcher;
+    private final PartPlanner partPlanner = new PartPlanner();
     private long rows;
+    private long refs;
     private long pagesForwarded;
 
-    MergeRouter(SegmentReaderSlots readers, PartEncoders encoders, PipelinePartSizer sizer,
-            Comparator<ListEntry> comparator, long mergeBudgetBytes, SortMetrics metrics,
-            PipelineFailure failure) {
-        this.readers = readers;
-        this.encoders = encoders;
+    MergeRouter(SegmentHeaderCursors cursors, Consumer<PartPlan> plans,
+            PipelinePartSizer sizer, SortMetrics metrics, PipelineFailure failure) {
+        this.cursors = cursors;
+        this.plans = plans;
         this.sizer = sizer;
-        this.comparator = comparator;
         this.metrics = metrics;
         this.failure = failure;
-        this.decodedBudget = new DecodedPageBudget(mergeBudgetBytes, metrics);
-        this.batcher = new PartBatcher();
     }
 
-    /** Drain every segment in global order and finish exactly one final part, even for empty input. */
-    Result route(int segments) throws IOException {
+    /** Drain all header cursors and close the final complete plan, including the empty-input plan. */
+    Result route(int segments) {
         for (int segment = 0; segment < segments; segment++) {
-            PageBlock page = readers.next(segment);
-            if (page != null) {
-                frontier.add(new Head(segment, page));
+            PageRef ref = cursors.next(segment);
+            if (ref != null) {
+                frontier.add(ref);
             }
         }
         while (!frontier.isEmpty()) {
             failure.check();
-            Head head = frontier.poll();
-            // Advance before testing disjointness so the runner-up includes this segment's successor;
-            // otherwise a same-segment overlap could be forwarded out of order.
-            advance(head.segment);
+            PageRef first = frontier.poll();
+            advance(first.segmentId());
+            PartPlan.Item item;
             if (frontier.isEmpty()
-                    || Arrays.compareUnsigned(head.page.lastKeyUnsafe(),
-                            frontier.peek().page.firstKeyUnsafe()) < 0) {
-                batcher.offer(new PipelineBatch.WholePage(head.page));
-                rows = Math.addExact(rows, head.page.count());
+                    || Arrays.compareUnsigned(first.maxKey(), frontier.peek().minKey()) < 0) {
+                item = new PartPlan.Page(first);
                 pagesForwarded++;
                 metrics.recordPipelinePagesForwarded(1);
             } else {
-                mergeCluster(head);
+                item = collectCluster(first);
             }
+            partPlanner.offer(item);
         }
-        int parts = batcher.finish();
-        return new Result(rows, pagesForwarded, parts, decodedBudget.peakResidentBytes());
+        int parts = partPlanner.finish();
+        return new Result(rows, pagesForwarded, refs, parts);
     }
 
-    /**
-     * Merge one transitive overlap component while releasing each page reservation at cursor
-     * exhaustion. Admission follows the next emitted key, avoiding retention of the component tail.
-     */
-    private void mergeCluster(Head first) throws IOException {
+    /** Close one transitive page-range component without loading or comparing any row. */
+    private PartPlan.Cluster collectCluster(PageRef first) {
         metrics.recordStealReason("SORT", "pipeline_cluster_merge");
-        PageRowMerger cluster = new PageRowMerger(comparator);
-        long reserved = decodedBudget.reserve(first.page);
-        long clusterPages = 0;
-        long clusterRows = 0;
-        try {
-            cluster.add(first.segment, first.page, reserved);
-            reserved = 0;
-            clusterPages++;
-            clusterRows = first.page.count();
-
-            ArrayList<ListEntry> batch = new ArrayList<>(BATCH_ROWS);
-            long logicalBytes = 0;
-            while (cluster.hasNext()) {
-                while (!frontier.isEmpty()
-                        && Arrays.compareUnsigned(frontier.peek().page.firstKeyUnsafe(),
-                                cluster.nextKey()) <= 0) {
-                    Head overlapping = frontier.poll();
-                    long pageBytes = decodedBudget.reserve(overlapping.page);
-                    try {
-                        advance(overlapping.segment);
-                        cluster.add(overlapping.segment, overlapping.page, pageBytes);
-                        pageBytes = 0;
-                        clusterPages++;
-                        clusterRows = Math.addExact(clusterRows, overlapping.page.count());
-                    } finally {
-                        decodedBudget.release(pageBytes);
-                    }
-                }
-                failure.check();
-                ListEntry entry = cluster.next();
-                decodedBudget.release(cluster.releasedBytes());
-                batch.add(entry);
-                logicalBytes = Math.addExact(logicalBytes, cluster.lastLogicalBytes());
-                if (batch.size() == BATCH_ROWS) {
-                    batcher.offer(new PipelineBatch.Rows(batch, logicalBytes));
-                    batch = new ArrayList<>(BATCH_ROWS);
-                    logicalBytes = 0;
-                }
+        ArrayList<PageRef> cluster = new ArrayList<>();
+        cluster.add(first);
+        byte[] high = first.maxKey();
+        long clusterRows = first.count();
+        while (!frontier.isEmpty()
+                && Arrays.compareUnsigned(frontier.peek().minKey(), high) <= 0) {
+            PageRef overlapping = frontier.poll();
+            cluster.add(overlapping);
+            clusterRows = Math.addExact(clusterRows, overlapping.count());
+            if (Arrays.compareUnsigned(overlapping.maxKey(), high) > 0) {
+                high = overlapping.maxKey();
             }
-            if (!batch.isEmpty()) {
-                batcher.offer(new PipelineBatch.Rows(batch, logicalBytes));
-            }
-        } finally {
-            decodedBudget.release(reserved);
-            decodedBudget.release(cluster.releaseAllBytes());
+            advance(overlapping.segmentId());
         }
-        rows = Math.addExact(rows, clusterRows);
-        metrics.recordPipelineCluster(clusterPages, clusterRows);
+        metrics.recordPipelineCluster(cluster.size(), clusterRows);
+        return new PartPlan.Cluster(cluster);
     }
 
-    /** Replace one consumed frontier head with that segment's next page, if any. */
     private void advance(int segment) {
-        PageBlock next = readers.next(segment);
+        PageRef next = cursors.next(segment);
         if (next != null) {
-            frontier.add(new Head(segment, next));
+            frontier.add(next);
         }
     }
 
-    private record Head(int segment, PageBlock page) {
-    }
-
-    /**
-     * Retains one payload because the soft target alone cannot close a part: the next payload's first
-     * raw key is needed to prove the pending payload's last equal-key group will remain indivisible.
-     */
-    private final class PartBatcher {
-        private PipelineBatch.Payload pending;
-        private long partLogicalBytes;
+    /** Accumulate complete plans and preserve raw-key-atomic boundaries between adjacent items. */
+    private final class PartPlanner {
+        private final ArrayList<PartPlan.Item> items = new ArrayList<>();
+        private long logicalBytes;
         private long partRows;
-        private long sequence;
         private int ordinal;
-        private int batchesInPart;
 
-        /** Hold one look-ahead payload so a strict next-key boundary can be proven before close. */
-        void offer(PipelineBatch.Payload next) {
+        void offer(PartPlan.Item item) {
             MergeCancellation.check();
-            if (pending != null) {
-                boolean close = sizer.shouldClose(partLogicalBytes, partRows)
-                        && KeyBytes.compareUnsigned(pending.lastKey(), next.firstKey()) != 0;
-                dispatch(pending, close, false);
-                if (close) {
-                    ordinal++;
-                    batchesInPart = 0;
-                    partLogicalBytes = 0;
-                    partRows = 0;
-                }
+            if (!items.isEmpty() && sizer.shouldClose(logicalBytes, partRows)
+                    && KeyBytes.compareUnsigned(lastKey(items.getLast()), firstKey(item)) != 0) {
+                dispatch(false);
             }
-            pending = next;
-            partLogicalBytes = Math.addExact(partLogicalBytes, next.logicalBytes());
-            partRows = Math.addExact(partRows, next.rowCount());
+            items.add(item);
+            for (PageRef ref : item.refs()) {
+                logicalBytes = Math.addExact(logicalBytes, ref.rawPayloadLength());
+                partRows = Math.addExact(partRows, ref.count());
+                rows = Math.addExact(rows, ref.count());
+                refs++;
+            }
         }
 
-        /** Normalize empty input to one durable final file and return the dense part count. */
         int finish() {
             MergeCancellation.check();
-            if (pending == null) {
-                // A managed dataset always has one durable final file, including an empty listing.
-                pending = PipelineBatch.Empty.INSTANCE;
-            }
-            dispatch(pending, true, true);
-            pending = null;
-            return ordinal + 1;
+            dispatch(true);
+            return ordinal;
         }
 
-        /** Stamp one batch with its global sequence and part position before striped submission. */
-        private void dispatch(PipelineBatch.Payload payload, boolean last, boolean mergeEnd) {
-            PipelineBatch batch = new PipelineBatch(sequence++, ordinal, batchesInPart == 0,
-                    last, mergeEnd, payload);
-            encoders.submit(batch);
-            batchesInPart++;
+        private void dispatch(boolean mergeEnd) {
+            PartPlan plan = new PartPlan(ordinal, items, true, true, mergeEnd,
+                    logicalBytes, partRows);
+            plans.accept(plan);
+            ordinal++;
+            items.clear();
+            logicalBytes = 0;
+            partRows = 0;
         }
+    }
+
+    private static byte[] firstKey(PartPlan.Item item) {
+        return item.refs().getFirst().minKey();
+    }
+
+    private static byte[] lastKey(PartPlan.Item item) {
+        List<PageRef> itemRefs = item.refs();
+        byte[] high = itemRefs.getFirst().maxKey();
+        for (int i = 1; i < itemRefs.size(); i++) {
+            if (Arrays.compareUnsigned(itemRefs.get(i).maxKey(), high) > 0) {
+                high = itemRefs.get(i).maxKey();
+            }
+        }
+        return high;
     }
 }

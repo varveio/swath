@@ -811,20 +811,21 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("pipeline_cluster_rows",
                 (long) counterCount("swath.sort.pipeline.cluster_rows"));
         long pipelineRouterWaitMs = timerTotalMs("swath.sort.pipeline.router_wait");
-        long pipelineReaderWaitMs = timerTotalMs("swath.sort.pipeline.reader_wait");
-        long pipelineEncoderQueueFullMs =
-                timerTotalMs("swath.sort.pipeline.encoder_queue_full");
-        // Router wait is the total blocked span; the following two timers classify its reader and
-        // encoder-queue components without requiring summary consumers to reconstruct the total.
+        long pipelineHeaderScanMs = timerTotalMs("swath.sort.pipeline.header_scan");
+        long pipelinePlanQueueWaitMs = timerTotalMs("swath.sort.pipeline.plan_queue_wait");
+        long pipelineEncoderReadWaitMs = timerTotalMs("swath.sort.pipeline.encoder_read_wait");
         sortNode.put("pipeline_router_wait_ms", pipelineRouterWaitMs);
-        sortNode.put("pipeline_reader_wait_ms", pipelineReaderWaitMs);
+        sortNode.put("pipeline_header_scan_ms", pipelineHeaderScanMs);
         sortNode.put("pipeline_router_wait_share", mergeMs <= 0
                 ? 0.0 : (double) pipelineRouterWaitMs / mergeMs);
-        sortNode.put("pipeline_reader_wait_share", mergeMs <= 0
-                ? 0.0 : (double) pipelineReaderWaitMs / mergeMs);
-        sortNode.put("pipeline_encoder_queue_full_ms", pipelineEncoderQueueFullMs);
-        sortNode.put("pipeline_encoder_queue_full_share", mergeMs <= 0
-                ? 0.0 : (double) pipelineEncoderQueueFullMs / mergeMs);
+        sortNode.put("pipeline_plan_queue_wait_ms", pipelinePlanQueueWaitMs);
+        sortNode.put("pipeline_plan_queue_wait_share", mergeMs <= 0
+                ? 0.0 : (double) pipelinePlanQueueWaitMs / mergeMs);
+        sortNode.put("pipeline_encoder_page_reads",
+                (long) counterCount("swath.sort.pipeline.encoder_page_reads"));
+        sortNode.put("pipeline_encoder_read_wait_ms", pipelineEncoderReadWaitMs);
+        sortNode.put("pipeline_encoder_read_wait_share", mergeMs <= 0
+                ? 0.0 : (double) pipelineEncoderReadWaitMs / mergeMs);
         sortNode.put("pipeline_parts_open",
                 (long) gaugeValue("swath.sort.pipeline.parts_open"));
         sortNode.put("merge_range_framed_bytes",
