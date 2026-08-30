@@ -186,7 +186,7 @@ final class FinalizationPipelineTest {
             PipelineFailure failure = new PipelineFailure();
             try (SegmentHeaderCursors cursors = new SegmentHeaderCursors(
                     channels, settings, SortMetrics.NO_OP, failure)) {
-                assertThat(cursors.next(segmentCount - 1)).isNotNull();
+                assertThat(cursors.next(1)).isNotNull();
             }
         });
         for (PageRunSegmentIo channel : channels) {
