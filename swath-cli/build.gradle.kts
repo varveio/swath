@@ -1,5 +1,6 @@
 import java.util.jar.JarFile
 import java.util.zip.ZipFile
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 
 // The `swath` binary: cli/* (App, ListCommand, ResumeCommand, ...),
 // wiring S3PageFetcher/S3ClientFactory from swath-s3 into picocli commands.
@@ -180,8 +181,18 @@ val verifyLegalArtifactContents by tasks.registering {
 
         // Assert actual text, not merely an arbitrary META-INF/NOTICE survivor. These
         // components exercise the Avro/Hadoop/AWS notice variants present in the CLI graph.
+        // Named by module, resolved to the shipped version: spelling the version here made a
+        // dependency bump fail this check for a reason that had nothing to do with legal text.
         val licenseReportDir = layout.buildDirectory.dir("reports/licenses").get().asFile
-        listOf("avro-1.9.2.jar", "hadoop-common-3.4.1.jar", "annotations-2.31.78.jar").forEach { artifact ->
+        val shippedVersions = configurations.runtimeClasspath.get().incoming.artifacts.artifacts
+            .mapNotNull { it.id.componentIdentifier as? ModuleComponentIdentifier }
+            .associate { it.module to it.version }
+        val noticeBearingModules = listOf("avro", "hadoop-common", "annotations")
+        noticeBearingModules.map { module ->
+            val version = shippedVersions[module]
+                ?: error("$module is no longer on the CLI runtime classpath; pick another notice sample")
+            "$module-$version.jar"
+        }.forEach { artifact ->
             val notice = licenseReportDir.resolve("$artifact/META-INF/NOTICE")
             val noticeTxt = licenseReportDir.resolve("$artifact/META-INF/NOTICE.txt")
             val source = listOf(notice, noticeTxt).firstOrNull { it.isFile }

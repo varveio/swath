@@ -1,7 +1,10 @@
 name: Nightly deep verification
 
-# The deep + perf tiers, run on a schedule rather than per-commit. These are the tests
-# demoted off the per-commit fast gate:
+# What the per-commit gate cannot see, checked on a schedule: the tiers too slow or too
+# timing-sensitive to run per commit, and the supply-chain scan, which goes red because time
+# passed rather than because the commit changed.
+#
+# The deep + perf tiers are the tests demoted off the per-commit fast gate:
 #   - `deep`: schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle
 #             timing tests (also run on every main-merge via ci.yml's deep-tests job).
 #   - `perf`: the heavy scale/throughput tier (100k–1M-key mock-driven PERF-1/PERF-2/SORT-PERF),
@@ -92,3 +95,64 @@ jobs:
           name: test-reports-nightly
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+
+  # Supply-chain scan of the artifacts a user actually receives: the resolved jar closure of
+  # each application distribution, and the runtime image whose JRE base carries OS packages no
+  # Gradle constraint can reach. Nightly rather than per-commit because it is time, not the
+  # commit, that turns a green closure red — an advisory published against a dependency that
+  # has not moved. That is also why it belongs beside the deep tier: both are backstops
+  # against drift the per-commit gate cannot see.
+  #
+  # config/osv/osv-scanner.toml carries the argued exceptions, each with an expiry; anything
+  # else fails the job. See scripts/ci/osv-scan.sh.
+  osv-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165  # v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+
+      # installDist, not the shadow jar: the install `lib/` directory is the resolved closure
+      # with each module still a separately identifiable artifact, which is what the scanner
+      # reads. Shading flattens that into one jar and loses the coordinates.
+      - name: Assemble the shipped distributions
+        run: ./gradlew :swath-cli:installDist :swath-replay:installDist --no-daemon --stacktrace
+
+      - name: Scan the shipped jar closures
+        run: |
+          ./scripts/ci/osv-scan.sh \
+            swath-cli/build/install/swath/lib \
+            swath-replay/build/install/swath-replay/lib
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      # Builder-native arch only, and no push: this scans the base layer's OS packages, which
+      # are the same image for both arches' JRE bases in every way this scan looks at.
+      - name: Build the runtime images (builder-native arch)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          load: true
+          tags: swath:osv
+          cache-from: type=gha,scope=swath
+
+      - name: Build the replay runtime image (builder-native arch)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: Dockerfile.replay
+          load: true
+          tags: swath-replay:osv
+          cache-from: type=gha,scope=swath-replay
+
+      - name: Scan the runtime images
+        run: ./scripts/ci/osv-scan.sh image:swath:osv image:swath-replay:osv

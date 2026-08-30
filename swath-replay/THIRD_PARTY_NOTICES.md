@@ -17,58 +17,46 @@ resources.
 
 ## Runtime dependency inventory
 
-- `ch.qos.logback:logback-classic:1.5.18` — Eclipse Public License 1.0; GNU LESSER GENERAL PUBLIC LICENSE, Version 2.1
-- `ch.qos.logback:logback-core:1.5.18` — Eclipse Public License 1.0; GNU LESSER GENERAL PUBLIC LICENSE, Version 2.1
+- `ch.qos.logback:logback-classic:1.5.38` — Eclipse Public License - v 2.0; GNU LESSER GENERAL PUBLIC LICENSE, Version 2.1
+- `ch.qos.logback:logback-core:1.5.38` — Eclipse Public License - v 2.0; GNU LESSER GENERAL PUBLIC LICENSE, Version 2.1
 - `com.bucket4j:bucket4j-core:8.10.1` — Apache License, Version 2.0
-- `com.fasterxml.jackson.core:jackson-annotations:2.12.7` — Apache License, Version 2.0
 - `com.fasterxml.jackson.core:jackson-annotations:2.22` — Apache License, Version 2.0
-- `com.fasterxml.jackson.core:jackson-core:2.12.7` — Apache License, Version 2.0
-- `com.fasterxml.jackson.core:jackson-core:2.22.0` — Apache License, Version 2.0
-- `com.fasterxml.jackson.core:jackson-databind:2.12.7.1` — Apache License, Version 2.0
-- `com.fasterxml.jackson.core:jackson-databind:2.22.0` — Apache License, Version 2.0
+- `com.fasterxml.jackson.core:jackson-core:2.22.2` — Apache License, Version 2.0
+- `com.fasterxml.jackson.core:jackson-databind:2.22.2` — Apache License, Version 2.0
 - `com.fasterxml.woodstox:woodstox-core:5.4.0` — Apache License, Version 2.0
 - `com.github.luben:zstd-jni:1.5.6-9` — The 2-Clause BSD License
 - `com.google.code.findbugs:jsr305:3.0.2` — Apache License, Version 2.0
 - `com.google.code.gson:gson:2.9.0` — Apache License, Version 2.0
-- `com.google.guava:failureaccess:1.0` — Apache License, Version 2.0
-- `com.google.guava:guava:27.0-jre` — Apache License, Version 2.0
+- `com.google.guava:failureaccess:1.0.3` — Apache License, Version 2.0
+- `com.google.guava:guava:33.7.1-jre` — Apache License, Version 2.0
 - `com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava` — Apache License, Version 2.0
-- `com.google.j2objc:j2objc-annotations:1.1` — Apache License, Version 2.0
+- `com.google.j2objc:j2objc-annotations:3.1` — Apache License, Version 2.0
 - `com.google.protobuf:protobuf-java:4.34.0` — The 3-Clause BSD License
 - `com.google.re2j:re2j:1.1` — The Go license
-- `commons-beanutils:commons-beanutils:1.9.4` — Apache License, Version 2.0
+- `commons-beanutils:commons-beanutils:1.11.0` — Apache License, Version 2.0
 - `commons-cli:commons-cli:1.5.0` — Apache License, Version 2.0
-- `commons-codec:commons-codec:1.16.1` — Apache License, Version 2.0
+- `commons-codec:commons-codec:1.19.0` — Apache License, Version 2.0
 - `commons-collections:commons-collections:3.2.2` — Apache License, Version 2.0
-- `commons-io:commons-io:2.16.1` — Apache License, Version 2.0
-- `commons-logging:commons-logging:1.3.0` — Apache License, Version 2.0
+- `commons-io:commons-io:2.22.0` — Apache License, Version 2.0
+- `commons-logging:commons-logging:1.3.6` — Apache License, Version 2.0
 - `commons-net:commons-net:3.9.0` — Apache License, Version 2.0
 - `commons-pool:commons-pool:1.6` — Apache License, Version 2.0
 - `dnsjava:dnsjava:3.6.1` — The 3-Clause BSD License
 - `info.picocli:picocli:4.7.6` — Apache License, Version 2.0
-- `io.airlift:aircompressor:2.0.2` — Apache License, Version 2.0
+- `io.airlift:aircompressor:2.0.3` — Apache License, Version 2.0
 - `io.dropwizard.metrics:metrics-core:3.2.4` — Apache License, Version 2.0
 - `io.micrometer:micrometer-commons:1.17.0` — Apache License, Version 2.0
 - `io.micrometer:micrometer-core:1.17.0` — Apache License, Version 2.0
 - `io.micrometer:micrometer-observation:1.17.0` — Apache License, Version 2.0
 - `io.micrometer:micrometer-registry-otlp:1.17.0` — Apache License, Version 2.0
-- `io.netty:netty-buffer:4.1.100.Final` — Apache License, Version 2.0
-- `io.netty:netty-codec:4.1.100.Final` — Apache License, Version 2.0
-- `io.netty:netty-common:4.1.100.Final` — Apache License, Version 2.0
-- `io.netty:netty-handler:4.1.100.Final` — Apache License, Version 2.0
-- `io.netty:netty-resolver:4.1.100.Final` — Apache License, Version 2.0
-- `io.netty:netty-transport:4.1.100.Final` — Apache License, Version 2.0
-- `io.netty:netty-transport-classes-epoll:4.1.100.Final` — Apache License, Version 2.0
-- `io.netty:netty-transport-native-epoll:4.1.100.Final` — Apache License, Version 2.0
-- `io.netty:netty-transport-native-unix-common:4.1.100.Final` — Apache License, Version 2.0
 - `io.opentelemetry.proto:opentelemetry-proto:1.10.0-alpha` — Apache License, Version 2.0
 - `jakarta.activation:jakarta.activation-api:1.2.1` — Eclipse Public License - v 2.0; GNU GENERAL PUBLIC LICENSE, Version 2; GNU GENERAL PUBLIC LICENSE, Version 2 + Classpath Exception; The 3-Clause BSD License
 - `javax.annotation:javax.annotation-api:1.3.2` — CDDL + GPLv2 with classpath exception; Common Development and Distribution License 1.0
-- `org.apache.avro:avro:1.9.2` — Apache License, Version 2.0
-- `org.apache.commons:commons-compress:1.26.1` — Apache License, Version 2.0
-- `org.apache.commons:commons-configuration2:2.10.1` — Apache License, Version 2.0
-- `org.apache.commons:commons-lang3:3.14.0` — Apache License, Version 2.0
-- `org.apache.commons:commons-text:1.11.0` — Apache License, Version 2.0
+- `org.apache.avro:avro:1.11.5` — Apache License, Version 2.0
+- `org.apache.commons:commons-compress:1.28.0` — Apache License, Version 2.0
+- `org.apache.commons:commons-configuration2:2.15.1` — Apache License, Version 2.0
+- `org.apache.commons:commons-lang3:3.20.0` — Apache License, Version 2.0
+- `org.apache.commons:commons-text:1.15.0` — Apache License, Version 2.0
 - `org.apache.hadoop.thirdparty:hadoop-shaded-guava:1.3.0` — Apache License, Version 2.0
 - `org.apache.hadoop.thirdparty:hadoop-shaded-protobuf_3_25:1.3.0` — Apache License, Version 2.0
 - `org.apache.hadoop:hadoop-annotations:3.4.1` — Apache License, Version 2.0
@@ -82,9 +70,7 @@ resources.
 - `org.apache.parquet:parquet-format-structures:1.15.1` — Apache License, Version 2.0
 - `org.apache.parquet:parquet-hadoop:1.15.1` — Apache License, Version 2.0
 - `org.apache.parquet:parquet-jackson:1.15.1` — Apache License, Version 2.0
-- `org.checkerframework:checker-qual:2.5.2` — MIT License
 - `org.codehaus.jettison:jettison:1.5.4` — Apache License, Version 2.0
-- `org.codehaus.mojo:animal-sniffer-annotations:1.17` — Apache License, Version 2.0; MIT License
 - `org.codehaus.woodstox:stax2-api:4.2.1` — Apache License, Version 2.0; The 2-Clause BSD License
 - `org.duckdb:duckdb_jdbc:1.5.4.0` — No license declared in resolved metadata; MIT License
 - `org.eclipse.jetty:jetty-http:12.1.10` — Apache License, Version 2.0; Eclipse Public License - v 2.0
@@ -92,7 +78,7 @@ resources.
 - `org.eclipse.jetty:jetty-server:12.1.10` — Apache License, Version 2.0; Eclipse Public License - v 2.0
 - `org.eclipse.jetty:jetty-util:12.1.10` — Apache License, Version 2.0; Eclipse Public License - v 2.0
 - `org.hdrhistogram:HdrHistogram:2.2.2` — Creative Commons Legal Code; PUBLIC DOMAIN; The 2-Clause BSD License
-- `org.jspecify:jspecify:1.0.0` — Apache License, Version 2.0
+- `org.jspecify:jspecify:1.0.1` — Apache License, Version 2.0
 - `org.slf4j:slf4j-api:2.0.17` — No license declared in resolved metadata; MIT License
 - `org.xerial.snappy:snappy-java:1.1.10.7` — Apache License, Version 2.0
 - `org.xerial:sqlite-jdbc:3.47.1.0` — Apache License, Version 2.0
@@ -167,26 +153,27 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
 
 ## Embedded upstream notice resources
 
-### avro-1.9.2.jar
+### avro-1.11.5.jar
 
 #### META-INF/NOTICE
 
 
     Apache Avro
-    Copyright 2009-2020 The Apache Software Foundation
+    Copyright 2009-2025 The Apache Software Foundation
+
 
     This product includes software developed at
     The Apache Software Foundation (http://www.apache.org/).
 
-### commons-beanutils-1.9.4.jar
+### commons-beanutils-1.11.0.jar
 
 #### META-INF/NOTICE.txt
 
     Apache Commons BeanUtils
-    Copyright 2000-2019 The Apache Software Foundation
+    Copyright 2000-2025 The Apache Software Foundation
 
     This product includes software developed at
-    The Apache Software Foundation (http://www.apache.org/).
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-cli-1.5.0.jar
 
@@ -198,12 +185,12 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
     This product includes software developed at
     The Apache Software Foundation (https://www.apache.org/).
 
-### commons-codec-1.16.1.jar
+### commons-codec-1.19.0.jar
 
 #### META-INF/NOTICE.txt
 
     Apache Commons Codec
-    Copyright 2002-2024 The Apache Software Foundation
+    Copyright 2002-2025 The Apache Software Foundation
 
     This product includes software developed at
     The Apache Software Foundation (https://www.apache.org/).
@@ -218,52 +205,52 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
     This product includes software developed by
     The Apache Software Foundation (http://www.apache.org/).
 
-### commons-compress-1.26.1.jar
+### commons-compress-1.28.0.jar
 
 #### META-INF/NOTICE.txt
 
     Apache Commons Compress
-    Copyright 2002-2024 The Apache Software Foundation
+    Copyright 2002-2025 The Apache Software Foundation
 
     This product includes software developed at
     The Apache Software Foundation (https://www.apache.org/).
 
-### commons-configuration2-2.10.1.jar
+### commons-configuration2-2.15.1.jar
 
 #### META-INF/NOTICE.txt
 
     Apache Commons Configuration
-    Copyright 2001-2024 The Apache Software Foundation
+    Copyright 2001-2026 The Apache Software Foundation
 
     This product includes software developed at
     The Apache Software Foundation (https://www.apache.org/).
 
-### commons-io-2.16.1.jar
+### commons-io-2.22.0.jar
 
 #### META-INF/NOTICE.txt
 
     Apache Commons IO
-    Copyright 2002-2024 The Apache Software Foundation
+    Copyright 2002-2026 The Apache Software Foundation
 
     This product includes software developed at
     The Apache Software Foundation (https://www.apache.org/).
 
-### commons-lang3-3.14.0.jar
+### commons-lang3-3.20.0.jar
 
 #### META-INF/NOTICE.txt
 
     Apache Commons Lang
-    Copyright 2001-2023 The Apache Software Foundation
+    Copyright 2001-2025 The Apache Software Foundation
 
     This product includes software developed at
     The Apache Software Foundation (https://www.apache.org/).
 
-### commons-logging-1.3.0.jar
+### commons-logging-1.3.6.jar
 
 #### META-INF/NOTICE.txt
 
     Apache Commons Logging
-    Copyright 2001-2023 The Apache Software Foundation
+    Copyright 2001-2026 The Apache Software Foundation
 
     This product includes software developed at
     The Apache Software Foundation (https://www.apache.org/).
@@ -288,12 +275,12 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
     This product includes software developed by
     The Apache Software Foundation (http://www.apache.org/).
 
-### commons-text-1.11.0.jar
+### commons-text-1.15.0.jar
 
 #### META-INF/NOTICE.txt
 
     Apache Commons Text
-    Copyright 2014-2023 The Apache Software Foundation
+    Copyright 2014-2025 The Apache Software Foundation
 
     This product includes software developed at
     The Apache Software Foundation (https://www.apache.org/).
@@ -483,29 +470,7 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
     in some artifacts (usually source distributions); but is always available
     from the source code management (SCM) system project uses.
 
-### jackson-core-2.12.7.jar
-
-#### META-INF/NOTICE
-
-    # Jackson JSON processor
-
-    Jackson is a high-performance, Free/Open Source JSON processing library.
-    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
-    been in development since 2007.
-    It is currently developed by a community of developers.
-
-    ## Licensing
-
-    Jackson 2.x core and extension components are licensed under Apache License 2.0
-    To find the details that apply to this artifact see the accompanying LICENSE file.
-
-    ## Credits
-
-    A list of contributors may be found from CREDITS(-2.x) file, which is included
-    in some artifacts (usually source distributions); but is always available
-    from the source code management (SCM) system project uses.
-
-### jackson-core-2.22.0.jar
+### jackson-core-2.22.2.jar
 
 #### META-INF/NOTICE
 
@@ -552,29 +517,7 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
 
     See Schubfach-LICENSE.
 
-### jackson-databind-2.12.7.1.jar
-
-#### META-INF/NOTICE
-
-    # Jackson JSON processor
-
-    Jackson is a high-performance, Free/Open Source JSON processing library.
-    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
-    been in development since 2007.
-    It is currently developed by a community of developers.
-
-    ## Licensing
-
-    Jackson 2.x core and extension components are licensed under Apache License 2.0
-    To find the details that apply to this artifact see the accompanying LICENSE file.
-
-    ## Credits
-
-    A list of contributors may be found from CREDITS(-2.x) file, which is included
-    in some artifacts (usually source distributions); but is always available
-    from the source code management (SCM) system project uses.
-
-### jackson-databind-2.22.0.jar
+### jackson-databind-2.22.2.jar
 
 #### META-INF/NOTICE
 
