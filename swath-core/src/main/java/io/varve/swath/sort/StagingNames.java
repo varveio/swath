@@ -14,6 +14,7 @@ final class StagingNames {
 
     static final String FINAL_TMP_GLOB = "part-*.parquet.tmp";
     static final String RANGE_TMP_GLOB = "prange-*.parquet.tmp";
+    static final String PIPELINE_TMP_GLOB = "pipeline-*.parquet.tmp";
     static final String OWN_FINAL_GLOB = "part-*.parquet";
     static final String ALL_PARQUET_GLOB = "*.parquet";
     static final String CASCADE_PAGE_RUN_GLOB = "merge-*.pageseg";
@@ -40,6 +41,10 @@ final class StagingNames {
 
     static String rangeProofTmp() {
         return "prange-proof" + TMP_SUFFIX;
+    }
+
+    static String pipelineTmp(int ordinal) {
+        return String.format("pipeline-%05d.parquet.tmp", ordinal);
     }
 
     static String cascadeIntermediate(String prefix, int sequence) {

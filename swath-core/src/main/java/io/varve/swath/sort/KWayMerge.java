@@ -164,6 +164,13 @@ final class KWayMerge<S> {
      * {@link RolledPartWriter#drain}) to report as they are actually written.
      */
     SortedCursor merge(List<S> segments, LongConsumer progressCallback) throws IOException {
+        List<S> current = reduceToFanIn(segments, progressCallback);
+        recordFinalPass();
+        return openMerger(current, this::recordDisjoint);
+    }
+
+    /** Run only the unchanged cascade passes, leaving at most {@code fanIn} survivors for another finalizer. */
+    List<S> reduceToFanIn(List<S> segments, LongConsumer progressCallback) throws IOException {
         List<S> current = new ArrayList<>(segments);
         boolean currentAreOriginals = true;
         while (current.size() > fanIn) {
@@ -171,13 +178,12 @@ final class KWayMerge<S> {
             current = onePass(current, currentAreOriginals, progressCallback);
             currentAreOriginals = false;   // every subsequent pass's input is our OWN intermediate
         }
-        mergePasses++;   // the final streaming pass
-        // The final pass selects its merger via the SAME openMerger factory every cascade
-        // pass uses (below) — one place decides PageAware-vs-Streaming. If every survivor is a page-run
-        // segment it runs the page-aware merger (decode-free frontier + page-whole fast path + both
-        // overlap guards); a generic non-frontier store keeps the entry-typed StreamingMerger. The
-        // two produce byte-identical output.
-        return openMerger(current, this::recordDisjoint);
+        return List.copyOf(current);
+    }
+
+    /** Account for the final pass supplied either by this merger or by the pipeline finalizer. */
+    void recordFinalPass() {
+        mergePasses++;
     }
 
     /**

@@ -254,6 +254,13 @@ public final class RunMetrics {
     private final Counter sortMergeProofSpoolMappedOperations;
     private final Counter sortMergeProofSpoolMappedBytes;
     private final Timer sortMergeProofSpoolLatency;
+    private final Counter sortPipelinePagesForwarded;
+    private final Counter sortPipelineClusterPages;
+    private final Counter sortPipelineClusterRows;
+    private final Timer sortPipelineRouterWait;
+    private final Timer sortPipelineReaderWait;
+    private final Timer sortPipelineEncoderQueueFull;
+    private final AtomicLong sortPipelinePartsOpen = new AtomicLong();
     private final Timer sortFinalizeCloseLatency;
     private final Timer sortFinalizeLatency;
     private final Timer sortPublicationLatency;
@@ -616,6 +623,20 @@ public final class RunMetrics {
                         .baseUnit("bytes").register(registry);
         sortMergeProofSpoolLatency =
                 runScopedTimer("swath.sort.merge.proof_spool.latency").register(registry);
+        sortPipelinePagesForwarded =
+                Counter.builder("swath.sort.pipeline.pages_forwarded").register(registry);
+        sortPipelineClusterPages =
+                Counter.builder("swath.sort.pipeline.cluster_pages").register(registry);
+        sortPipelineClusterRows =
+                Counter.builder("swath.sort.pipeline.cluster_rows").register(registry);
+        sortPipelineRouterWait =
+                runScopedTimer("swath.sort.pipeline.router_wait").register(registry);
+        sortPipelineReaderWait =
+                runScopedTimer("swath.sort.pipeline.reader_wait").register(registry);
+        sortPipelineEncoderQueueFull =
+                runScopedTimer("swath.sort.pipeline.encoder_queue_full").register(registry);
+        Gauge.builder("swath.sort.pipeline.parts_open", sortPipelinePartsOpen, AtomicLong::get)
+                .register(registry);
         sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
         sortPublicationLatency = runScopedTimer("swath.sort.publication.latency").register(registry);
         sortManifestMd5Bytes = Counter.builder("swath.sort.manifest.md5.bytes")
@@ -1203,6 +1224,31 @@ public final class RunMetrics {
         sortMergeProofSpoolMappedOperations.increment(Math.max(0L, mappedOperations));
         sortMergeProofSpoolMappedBytes.increment(Math.max(0L, mappedBytes));
         sortMergeProofSpoolLatency.record(Math.max(0L, serviceNanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelinePagesForwarded(long pages) {
+        sortPipelinePagesForwarded.increment(Math.max(0L, pages));
+    }
+
+    public void recordSortPipelineCluster(long pages, long rows) {
+        sortPipelineClusterPages.increment(Math.max(0L, pages));
+        sortPipelineClusterRows.increment(Math.max(0L, rows));
+    }
+
+    public void recordSortPipelineRouterWait(long nanos) {
+        sortPipelineRouterWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelineReaderWait(long nanos) {
+        sortPipelineReaderWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelineEncoderQueueFull(long nanos) {
+        sortPipelineEncoderQueueFull.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelinePartsOpen(int parts) {
+        sortPipelinePartsOpen.set(Math.max(0, parts));
     }
 
     /** One final part's footer-write + fsync durability span. */

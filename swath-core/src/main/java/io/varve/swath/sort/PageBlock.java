@@ -278,6 +278,13 @@ final class PageBlock {
         }
     }
 
+    /** Materialize the compressed payload without decoding rows; repeated calls reuse the same bytes. */
+    void prepareDecoded() {
+        if (codec != PageCodec.NONE) {
+            decodedPayload();
+        }
+    }
+
     byte[] serialize() {
         return PageBlockCodec.serialize(this);
     }

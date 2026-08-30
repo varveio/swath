@@ -7,6 +7,7 @@ package io.varve.swath.cli;
 
 import io.varve.swath.sort.MergeBoundaryPolicy;
 import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortFinalization;
 import io.varve.swath.sort.StagingRetention;
 
 /** The globally-sorted-output flags (contract §6): {@code --sort} and its disk-guard override. */
@@ -25,6 +26,8 @@ final class SortOptions {
 
     MergeBoundaryPolicy mergeBoundaryPolicy;
 
+    SortFinalization finalization;
+
     SortConfig resolveConfig() {
         SortConfig config = SortConfig.fromSystemProperties();
         if (mergeParallelism != null) {
@@ -33,7 +36,9 @@ final class SortOptions {
         if (stagingRetention != null) {
             config = config.withStagingRetention(stagingRetention);
         }
-        return mergeBoundaryPolicy == null
-                ? config : config.withMergeBoundaryPolicy(mergeBoundaryPolicy);
+        if (mergeBoundaryPolicy != null) {
+            config = config.withMergeBoundaryPolicy(mergeBoundaryPolicy);
+        }
+        return finalization == null ? config : config.withFinalization(finalization);
     }
 }

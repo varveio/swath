@@ -61,4 +61,34 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
         metrics.recordSortMergeProofSpool(logicalExtentBytes, preallocationOperations,
                 preallocationAttemptedBytes, mappedOperations, mappedBytes, serviceNanos);
     }
+
+    @Override
+    public void recordPipelinePagesForwarded(long pages) {
+        metrics.recordSortPipelinePagesForwarded(pages);
+    }
+
+    @Override
+    public void recordPipelineCluster(long pages, long rows) {
+        metrics.recordSortPipelineCluster(pages, rows);
+    }
+
+    @Override
+    public void recordPipelineRouterWait(long nanos) {
+        metrics.recordSortPipelineRouterWait(nanos);
+    }
+
+    @Override
+    public void recordPipelineReaderWait(long nanos) {
+        metrics.recordSortPipelineReaderWait(nanos);
+    }
+
+    @Override
+    public void recordPipelineEncoderQueueFull(long nanos) {
+        metrics.recordSortPipelineEncoderQueueFull(nanos);
+    }
+
+    @Override
+    public void recordPipelinePartsOpen(int parts) {
+        metrics.recordSortPipelinePartsOpen(parts);
+    }
 }

@@ -57,6 +57,30 @@ public interface SortMetrics {
                                      long mappedBytes,
                                      long serviceNanos) {
         }
+
+        @Override
+        public void recordPipelinePagesForwarded(long pages) {
+        }
+
+        @Override
+        public void recordPipelineCluster(long pages, long rows) {
+        }
+
+        @Override
+        public void recordPipelineRouterWait(long nanos) {
+        }
+
+        @Override
+        public void recordPipelineReaderWait(long nanos) {
+        }
+
+        @Override
+        public void recordPipelineEncoderQueueFull(long nanos) {
+        }
+
+        @Override
+        public void recordPipelinePartsOpen(int parts) {
+        }
     };
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
@@ -111,4 +135,28 @@ public interface SortMetrics {
                           long mappedOperations,
                           long mappedBytes,
                           long serviceNanos);
+
+    /** Count pages routed to an encoder without materializing rows on the router thread. */
+    default void recordPipelinePagesForwarded(long pages) {
+    }
+
+    /** Count pages and rows processed by the router's shared overlap-cluster row heap. */
+    default void recordPipelineCluster(long pages, long rows) {
+    }
+
+    /** Record time the router spent blocked by encoder back-pressure. */
+    default void recordPipelineRouterWait(long nanos) {
+    }
+
+    /** Record time the router spent waiting for a reader slot's next decoded page. */
+    default void recordPipelineReaderWait(long nanos) {
+    }
+
+    /** Record a full encoder queue's blocking duration. */
+    default void recordPipelineEncoderQueueFull(long nanos) {
+    }
+
+    /** Set the current number of pipeline output parts with an open writer. */
+    default void recordPipelinePartsOpen(int parts) {
+    }
 }

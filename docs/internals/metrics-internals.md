@@ -524,6 +524,11 @@ taxonomy so the signal set stays comparable:
   (`cursor_passed_pivot ≫ split_committed` = the cursor-passed-pivot race; `OWNER_SPLIT.self_published` dominating
   = the owner-side split carrying the tail).
 
+Sort finalization follows the same rule. The pipeline records whether it was selected, whether its
+overlap heap engaged, whole-page/cluster work, reader and router waits, encoder back-pressure, and
+open writers. The summary exposes reader/router wait shares of merge wall so a completed benchmark
+can distinguish input starvation from encoder saturation without reconstructing the run.
+
   **Pivot-mechanism attribution.** A winning `CHILD_CREATED` split also records which of the seven
   pivot mechanisms produced it, via a second `recordStealReason("PIVOT", <mechanism>)` at the same
   hand-off:
@@ -1041,6 +1046,8 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `merge_disjoint_copyable` | one merge-pass input segment was emitted as a single uninterrupted run — range-disjoint from every other input that pass assuming distinct keys across segments (exact for unique S3 object keys; a segment sharing a boundary key with another can be counted copyable under the §0.5 fixture duplicate-data path only), so byte-copy (not decode) would have sufficed — a prerequisite measurement for a future copy-based merge fast path | |
 | `SORT` | `merge_interleaved_segment` | the complement of `merge_disjoint_copyable`: one merge-pass input segment shared its run with at least one other input (more than one run in the merged output) | |
 | `SORT` | `merge_overlap_cluster` | page-aware merge entered one decoded overlap cluster. The exact live meters are `swath.sort.merge.overlap.clusters`, `swath.sort.merge.overlap.pages.peak`, and `swath.sort.merge.overlap.rows.peak`; the exact `summary.json.sort` fields are `merge_overlap_clusters`, `merge_overlap_pages_peak`, and `merge_overlap_rows_peak`. Source-run counters above remain independent of page overlap | |
+| `SORT` | `finalization_pipeline` | the default-off finalization pipeline was selected for this merge. Fires once before cascade/pipeline work, including an empty merge; absent on the default range/serial arm. Pipeline work meters are `swath.sort.pipeline.pages_forwarded`, `.cluster_pages`, `.cluster_rows`, `.router_wait`, `.reader_wait`, `.encoder_queue_full`, and `.parts_open` | |
+| `SORT` | `pipeline_cluster_merge` | the pipeline router found a transitively overlapping page cluster and engaged the shared page-aware row heap. Fires once per cluster, not per page or row; read with `pipeline_cluster_pages` and `pipeline_cluster_rows` to classify overlap shape | |
 | `SORT` | `merge_cascade_predicted` | at merge kickoff, `segments > effectiveFanIn` was already known to force a cascade — engagement counter for the up-front `sort_merge_cascade_predicted` warn log | |
 | `SORT` | `equal_key_rejected` | the final drain rejected the second row of an adjacent equal raw-key pair under `EqualKeyPolicy.REJECT`. Fires once per failing final drain, before the offending row is written. Live `OBJECTS` uses `REJECT`; the dormant `VERSIONS` mode uses `ALLOW` because one raw key may own several ordered versions | |
 | `SORT` | `sort_output_cardinality_mismatch` | source-trailer, merge-drain, and closed-final-writer row totals disagreed before publication. Fires once per failing transform; the checked failure is fatal/classified as `error_class=sort_output_cardinality_mismatch`, and no stale-final sweep or publication follows | |

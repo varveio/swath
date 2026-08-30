@@ -9,6 +9,7 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.Manifest;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.MemoryType;
@@ -22,6 +23,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -84,6 +86,29 @@ class ParallelMergeBenchmark {
      * half-hour run, instead of saying up front what the operator got wrong.
      */
     private static final List<Integer> RANGES = parseRanges();
+    private static final SortFinalization FINALIZATION = parseFinalization();
+    private static final List<Integer> ENCODERS = parseEncoders();
+
+    private static SortFinalization parseFinalization() {
+        return SortFinalization.fromConfigValue("swath.bench.finalization",
+                System.getProperty("swath.bench.finalization", "ranges"));
+    }
+
+    private static List<Integer> parseEncoders() {
+        String configured = System.getProperty("swath.bench.encoders", "1,4,8,16");
+        try {
+            List<Integer> values = Arrays.stream(configured.split(",", -1))
+                    .map(String::trim).map(Integer::parseInt).toList();
+            if (values.isEmpty() || values.stream().anyMatch(value -> value < 1 || value > 16)
+                    || new HashSet<>(values).size() != values.size()) {
+                throw new IllegalArgumentException();
+            }
+            return values;
+        } catch (RuntimeException invalid) {
+            throw new IllegalArgumentException("invalid swath.bench.encoders='" + configured
+                    + "': expected distinct comma-separated integers in 1..16", invalid);
+        }
+    }
 
     private static List<Integer> parseRanges() {
         String configured = System.getProperty("swath.bench.ranges", "1,2,4,8");
@@ -238,6 +263,15 @@ class ParallelMergeBenchmark {
             SortBenchCorpus.deleteTree(closing.armRoot);
 
             reportMeasurements(context, samples);
+            if (FINALIZATION == SortFinalization.PIPELINE) {
+                for (int encoders : ENCODERS) {
+                    ArmResult sample = runCheckedArm(root, corpus, encoders,
+                            "pipeline-n" + encoders, writerProvider, baseline, context,
+                            SortFinalization.PIPELINE);
+                    System.out.println(sample.toLine(context));
+                    SortBenchCorpus.deleteTree(sample.armRoot);
+                }
+            }
             SortBenchCorpus.deleteTree(baseline.armRoot);
         } catch (IOException | RuntimeException | Error e) {
             failure = e;
@@ -300,9 +334,16 @@ class ParallelMergeBenchmark {
 
     static ArmResult runArm(Path root, CorpusCatalog corpus, int mergeParallelism, String label,
                             WriterFactoryProvider writerProvider) throws IOException {
+        return runArm(root, corpus, mergeParallelism, label, writerProvider,
+                SortFinalization.RANGES);
+    }
+
+    private static ArmResult runArm(Path root, CorpusCatalog corpus, int mergeParallelism,
+            String label, WriterFactoryProvider writerProvider, SortFinalization finalization)
+            throws IOException {
         Throwable failure = null;
         try {
-            return runArmBody(root, corpus, mergeParallelism, label, writerProvider);
+            return runArmBody(root, corpus, mergeParallelism, label, writerProvider, finalization);
         } catch (IOException | RuntimeException | Error e) {
             failure = e;
             throw e;
@@ -322,7 +363,15 @@ class ParallelMergeBenchmark {
     private static ArmResult runCheckedArm(Path root, CorpusCatalog corpus, int mergeParallelism,
             String label, WriterFactoryProvider writerProvider, ArmResult baseline,
             BenchContext context) throws IOException {
-        ArmResult sample = runArm(root, corpus, mergeParallelism, label, writerProvider);
+        return runCheckedArm(root, corpus, mergeParallelism, label, writerProvider, baseline,
+                context, SortFinalization.RANGES);
+    }
+
+    private static ArmResult runCheckedArm(Path root, CorpusCatalog corpus, int mergeParallelism,
+            String label, WriterFactoryProvider writerProvider, ArmResult baseline,
+            BenchContext context, SortFinalization finalization) throws IOException {
+        ArmResult sample = runArm(root, corpus, mergeParallelism, label, writerProvider,
+                finalization);
         boolean exact = fullRowsEqual(baseline.finalFiles, sample.finalFiles)
                 && baseline.logicalOutputFingerprint.equals(sample.logicalOutputFingerprint)
                 && baseline.multisetDigest.equals(sample.multisetDigest);
@@ -441,7 +490,8 @@ class ParallelMergeBenchmark {
     }
 
     private static ArmResult runArmBody(Path root, CorpusCatalog corpus, int mergeParallelism,
-                                        String label, WriterFactoryProvider writerProvider) throws IOException {
+            String label, WriterFactoryProvider writerProvider, SortFinalization finalization)
+            throws IOException {
         Path armRoot = Files.createDirectory(root.resolve("arm-" + label));
         Path output = Files.createDirectory(armRoot.resolve("data"));
         Path staging = Files.createDirectory(armRoot.resolve("_staging"));
@@ -453,6 +503,8 @@ class ParallelMergeBenchmark {
         SortConfig config = SortConfig.fromProperties(
                 key -> "swath.sort.merge-parallelism".equals(key)
                         ? String.valueOf(mergeParallelism)
+                        : SortConfig.FINALIZATION_PROPERTY.equals(key)
+                                ? finalization.configValue()
                         : System.getProperty(key));
         ThreadSafeMetrics metrics = new ThreadSafeMetrics();
         BenchRangeTimer timer = new BenchRangeTimer();
@@ -498,6 +550,7 @@ class ParallelMergeBenchmark {
 
         ArmResult ar = new ArmResult();
         ar.requestedRanges = mergeParallelism;
+        ar.finalization = finalization;
         ar.label = label;
         ar.armRoot = armRoot;
         ar.elapsedNanos = wallEndNanos - wallStartNanos;
@@ -511,6 +564,25 @@ class ParallelMergeBenchmark {
         ar.fastPathEmissions = result.fastPathEmissions();
         ar.totalRows = result.totalRows();
         ar.finalFiles = result.finalFiles();
+        ar.finalizationParallelism = result.finalizationParallelism();
+        ar.partBytes = result.finalFiles().stream().map(path -> {
+            try {
+                return Files.size(path);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }).toList();
+        ar.partRows = new ArrayList<>();
+        for (Path file : result.finalFiles()) {
+            long partRows = 0;
+            try (SegmentReader reader = new SegmentReader(file)) {
+                while (reader.hasNext()) {
+                    reader.next();
+                    partRows++;
+                }
+            }
+            ar.partRows.add(partRows);
+        }
         BenchmarkRowOracle.OutputValidation outputValidation =
                 BenchmarkRowOracle.validateOutput(result.finalFiles(), corpus.oracle(), CMP);
         ar.logicalOutputFingerprint = outputValidation.orderedFingerprint();
@@ -528,6 +600,8 @@ class ParallelMergeBenchmark {
         ar.rangeUnsplittableCount = metrics.count("SORT.merge_range_unsplittable");
         ar.pageSkipEngagedCount = metrics.count("SORT.merge_range_page_skipped");
         ar.sampleCappedSegments = metrics.count("SORT.merge_range_sample_capped");
+        ar.pipelineRouterWaitNanos = metrics.pipelineRouterWaitNanos.sum();
+        ar.pipelineReaderWaitNanos = metrics.pipelineReaderWaitNanos.sum();
         ar.pageWholeEmissions = metrics.count("SORT.page_whole_emitted");
         ar.pageOverlapKeyMerges = metrics.count("SORT.page_overlap_keymerge");
         ar.proofSpoolLogicalExtentBytes = metrics.proofSpoolLogicalExtentBytes.sum();
@@ -1033,6 +1107,8 @@ class ParallelMergeBenchmark {
     static final class ArmResult {
         int requestedRanges;
         long actualRanges;
+        SortFinalization finalization;
+        int finalizationParallelism;
         String label;
         Path armRoot;
         long elapsedNanos;
@@ -1045,6 +1121,8 @@ class ParallelMergeBenchmark {
         long fastPathEmissions;
         long totalRows;
         List<Path> finalFiles;
+        List<Long> partBytes;
+        List<Long> partRows;
         String logicalOutputFingerprint;
         String multisetDigest;
         long samplerCleanupNanos;
@@ -1065,6 +1143,8 @@ class ParallelMergeBenchmark {
         long proofSpoolMappedBytes;
         long proofSpoolServiceNanos;
         long boundaryNanos;
+        long pipelineRouterWaitNanos;
+        long pipelineReaderWaitNanos;
         List<Long> rangeLatenciesNanos;
         boolean fullRowExact = true;   // R=1 baseline is trivially exact against itself
 
@@ -1076,8 +1156,13 @@ class ParallelMergeBenchmark {
                     : String.valueOf(rangeMergeSumNanos / 1_000_000);
             List<Long> rangeLatenciesMs =
                     rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).toList();
+            double routerWaitShare = elapsedNanos <= 0 ? 0.0
+                    : (double) pipelineRouterWaitNanos / elapsedNanos;
+            double readerWaitShare = elapsedNanos <= 0 ? 0.0
+                    : (double) pipelineReaderWaitNanos / elapsedNanos;
             return String.format(
-                    "BENCH_ROW %s label=%s staging_format=page-run requested_r=%d actual_ranges=%d "
+                    "BENCH_ROW %s label=%s staging_format=page-run finalization=%s "
+                            + "requested_r=%d actual_ranges=%d finalization_parallelism=%d "
                             + "merge_elapsed_ms=%d boundary_ms=%s range_merge_sum_ms=%s "
                             + "avg_cores_busy=%.2f peak_heap_mb=%.1f peak_rss_mb=%.1f "
                             + "rows=%d input_segments=%d output_files=%d merge_passes=%d "
@@ -1092,10 +1177,13 @@ class ParallelMergeBenchmark {
                             + "proof_spool_preallocation_attempted_bytes=%d "
                             + "proof_spool_mapped_operations=%d proof_spool_mapped_bytes=%d "
                             + "proof_spool_ms=%d page_reads=unavailable "
+                            + "pipeline_router_wait_share=%.4f pipeline_reader_wait_share=%.4f "
+                            + "part_bytes=%s part_rows=%s "
                             + "read_amplification=unavailable identity_check=full-row "
                             + "full_row_exact=%s multiset_digest=%s sampler_cleanup_ms=%d "
                             + "range_latencies_ms=%s",
-                    context.tags(logicalOutputFingerprint), label, requestedRanges, actualRanges,
+                    context.tags(logicalOutputFingerprint), label, finalization.configValue(),
+                    requestedRanges, actualRanges, finalizationParallelism,
                     elapsedNanos / 1_000_000, boundaryMs,
                     rangeMergeSumMs, avgCoresBusy, peakHeapBytes / (1024.0 * 1024.0),
                     peakRssBytes / (1024.0 * 1024.0), totalRows, inputSegments, finalFiles.size(),
@@ -1106,7 +1194,8 @@ class ParallelMergeBenchmark {
                     pageOverlapKeyMerges, proofSpoolLogicalExtentBytes,
                     proofSpoolPreallocationOperations, proofSpoolPreallocationAttemptedBytes,
                     proofSpoolMappedOperations, proofSpoolMappedBytes,
-                    proofSpoolServiceNanos / 1_000_000L, fullRowExact, multisetDigest,
+                    proofSpoolServiceNanos / 1_000_000L, routerWaitShare, readerWaitShare,
+                    partBytes, partRows, fullRowExact, multisetDigest,
                     samplerCleanupNanos / 1_000_000, rangeLatenciesMs);
         }
     }
@@ -1136,6 +1225,8 @@ class ParallelMergeBenchmark {
         private final LongAdder proofSpoolMappedOperations = new LongAdder();
         private final LongAdder proofSpoolMappedBytes = new LongAdder();
         private final LongAdder proofSpoolServiceNanos = new LongAdder();
+        private final LongAdder pipelineRouterWaitNanos = new LongAdder();
+        private final LongAdder pipelineReaderWaitNanos = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -1179,6 +1270,16 @@ class ParallelMergeBenchmark {
             proofSpoolMappedOperations.add(mappedOperations);
             proofSpoolMappedBytes.add(mappedBytes);
             proofSpoolServiceNanos.add(serviceNanos);
+        }
+
+        @Override
+        public void recordPipelineRouterWait(long nanos) {
+            pipelineRouterWaitNanos.add(nanos);
+        }
+
+        @Override
+        public void recordPipelineReaderWait(long nanos) {
+            pipelineReaderWaitNanos.add(nanos);
         }
 
         long count(String key) {

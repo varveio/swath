@@ -169,7 +169,8 @@ public final class SortTransform {
         stagingSegments = ownedInputs.ownedPaths();
         StagingReconciliation retainedOriginals =
                 datasetPublisher.retainedOriginals(ownedInputs);
-        boolean parallelKickoff = config.mergeParallelism() > 1
+        boolean pipelineKickoff = config.finalization() == SortFinalization.PIPELINE;
+        boolean parallelKickoff = !pipelineKickoff && config.mergeParallelism() > 1
                 && inputProfile.parallelRangesAllowed();
         MergePlanner.BoundaryCandidates boundaryCandidates =
                 new MergePlanner.BoundaryCandidates();
@@ -205,6 +206,12 @@ public final class SortTransform {
         // clamp down to the serial path while leaving every checkpoint-owned original untouched.
         MergePlanner.EffectiveRanges rangePlan =
                 mergePlanner.admitDisk(resourcePlan, catalog, stagingDir, outputDir);
+
+        if (pipelineKickoff) {
+            return new PipelineFinalization(run, mergePlanner, datasetPublisher).run(
+                    catalog, outputDir, stagingDir, publishListener, progressCallback,
+                    onFinalPassStarting, ownedInputs, retainedOriginals, outputAuthority);
+        }
 
         // When the configured/default swath.sort.merge-parallelism survives the staged-size,
         // memory, and fd gates, split the keyspace into

@@ -804,6 +804,24 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) gaugeValue("swath.sort.merge.overlap.pages.peak"));
         sortNode.put("merge_overlap_rows_peak",
                 (long) gaugeValue("swath.sort.merge.overlap.rows.peak"));
+        sortNode.put("pipeline_pages_forwarded",
+                (long) counterCount("swath.sort.pipeline.pages_forwarded"));
+        sortNode.put("pipeline_cluster_pages",
+                (long) counterCount("swath.sort.pipeline.cluster_pages"));
+        sortNode.put("pipeline_cluster_rows",
+                (long) counterCount("swath.sort.pipeline.cluster_rows"));
+        long pipelineRouterWaitMs = timerTotalMs("swath.sort.pipeline.router_wait");
+        long pipelineReaderWaitMs = timerTotalMs("swath.sort.pipeline.reader_wait");
+        sortNode.put("pipeline_router_wait_ms", pipelineRouterWaitMs);
+        sortNode.put("pipeline_reader_wait_ms", pipelineReaderWaitMs);
+        sortNode.put("pipeline_router_wait_share", mergeMs <= 0
+                ? 0.0 : (double) pipelineRouterWaitMs / mergeMs);
+        sortNode.put("pipeline_reader_wait_share", mergeMs <= 0
+                ? 0.0 : (double) pipelineReaderWaitMs / mergeMs);
+        sortNode.put("pipeline_encoder_queue_full_ms",
+                timerTotalMs("swath.sort.pipeline.encoder_queue_full"));
+        sortNode.put("pipeline_parts_open",
+                (long) gaugeValue("swath.sort.pipeline.parts_open"));
         sortNode.put("merge_range_framed_bytes",
                 (long) counterCount("swath.sort.merge.range.framed.bytes"));
         sortNode.put("merge_range_index_bytes",

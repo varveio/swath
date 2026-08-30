@@ -104,14 +104,16 @@ final class SortPublicationCrashMatrixTest {
     @Test
     void nthCloseFailureLeavesPriorFinalsAndOriginalsReachableThenRepairsSerialAndParallel(
             @TempDir Path root) throws Exception {
-        for (MergeShape shape : List.of(MergeShape.SERIAL_ROLLED, MergeShape.PARALLEL)) {
+        for (MergeShape shape : List.of(
+                MergeShape.SERIAL_ROLLED, MergeShape.PARALLEL, MergeShape.PIPELINE)) {
             Path scenario = root.resolve(shape.name().toLowerCase());
             Path output = Files.createDirectories(scenario.resolve("data"));
             Path staging = Files.createDirectories(scenario.resolve("_staging"));
             List<Path> originals = stage(staging, shape.segmentRows());
             Files.writeString(output.resolve("part-00000.parquet"), "prior-zero");
             Files.writeString(output.resolve("part-99999.parquet"), "prior-extra");
-            CloseTrackingFactory writers = new CloseTrackingFactory(SortedFileWriterFactory.DEFAULT, 1);
+            CloseTrackingFactory writers = new CloseTrackingFactory(
+                    SortedFileWriterFactory.DEFAULT, shape == MergeShape.PIPELINE ? 0 : 1);
             List<PublicationStep> steps = new ArrayList<>();
 
             assertThatThrownBy(() -> transform(shape.config(false), writers,
@@ -253,7 +255,8 @@ final class SortPublicationCrashMatrixTest {
     }
 
     private static Stream<Arguments> publicationMatrix() {
-        return Stream.of(MergeShape.SERIAL, MergeShape.PARALLEL, MergeShape.EMPTY_PARALLEL_REQUEST)
+        return Stream.of(MergeShape.SERIAL, MergeShape.PARALLEL, MergeShape.PIPELINE,
+                        MergeShape.EMPTY_PARALLEL_REQUEST)
                 .flatMap(shape -> Stream.of(false, true)
                         .flatMap(prior -> Stream.of(false, true)
                                 .map(retain -> Arguments.of(shape, prior, retain))));
@@ -356,6 +359,9 @@ final class SortPublicationCrashMatrixTest {
         PARALLEL(3, Long.MAX_VALUE,
                 List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
                 3),
+        PIPELINE(3, Long.MAX_VALUE,
+                List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
+                1),
         EMPTY_PARALLEL_REQUEST(3, Long.MAX_VALUE, List.of(), 1);
 
         private final int parallelism;
@@ -376,6 +382,8 @@ final class SortPublicationCrashMatrixTest {
                     .withMergeParallelism(parallelism)
                     .withMergeBudgetBytes(64L << 20)
                     .withFinalFileBytes(rollBytes)
+                    .withFinalization(this == PIPELINE
+                            ? SortFinalization.PIPELINE : SortFinalization.RANGES)
                     .withStagingRetention(retain
                             ? StagingRetention.RETAIN_ORIGINALS
                             : StagingRetention.DELETE_AFTER_PUBLISH);

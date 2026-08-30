@@ -155,6 +155,11 @@ final class SortTestSupport {
         }
 
         @Override
+        public void discard() throws IOException {
+            delegate.discard();
+        }
+
+        @Override
         public void close() throws IOException {
             delegate.close();
         }
@@ -306,6 +311,8 @@ final class SortTestSupport {
         final LongAdder proofSpoolMappedBytes = new LongAdder();
         final LongAdder proofSpoolServiceNanos = new LongAdder();
         final LongAdder proofSpoolMetricUpdates = new LongAdder();
+        final LongAdder pipelinePagesForwarded = new LongAdder();
+        final LongAdder pipelineClusterPages = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -353,6 +360,16 @@ final class SortTestSupport {
             proofSpoolMappedOperations.add(mappedOperations);
             proofSpoolMappedBytes.add(mappedBytes);
             proofSpoolServiceNanos.add(serviceNanos);
+        }
+
+        @Override
+        public void recordPipelinePagesForwarded(long pages) {
+            pipelinePagesForwarded.add(pages);
+        }
+
+        @Override
+        public void recordPipelineCluster(long pages, long rows) {
+            pipelineClusterPages.add(pages);
         }
 
         int count(String key) {

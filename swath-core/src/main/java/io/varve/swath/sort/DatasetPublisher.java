@@ -65,6 +65,7 @@ final class DatasetPublisher {
         ownedInputs.sweepDisposables(StagingNames.CASCADE_PAGE_RUN_GLOB);
         ownedInputs.sweepDisposables(StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
         ownedInputs.sweepDisposables(StagingNames.RANGE_TMP_GLOB);
+        ownedInputs.sweepDisposables(StagingNames.PIPELINE_TMP_GLOB);
         ownedInputs.sweepDisposables(StagingNames.RANGE_PROOF_TMP_GLOB);
         publicationStep(PublicationStep.AFTER_WORKING_SWEEP);
         // The hook is the deterministic stand-in for a directory replacement between phases.
