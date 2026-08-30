@@ -26,10 +26,11 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * so the dump excludes corpus generation/staging-copy noise), to attribute merge-phase CPU across
  * Parquet decode (read), the k-way heap merge/compare, Parquet encode (write), and allocation/GC.
  *
- * <p>Corpus generation uses {@link SortBenchCorpus}'s streamed, uniquely-keyed, block-interleaved
- * generator. Same corpus shape (22M rows / 16 segments) as a
- * prior benchmark run, chosen so the JFR profiling window is known to run comfortably past the ~20s
- * stability floor.
+ * <p>With {@code swath.bench.staging-dir}, the harness uses {@link ParallelMergeBenchmark}'s
+ * checkpoint-authorized immutable snapshot of retained PageRun staging. Otherwise corpus generation
+ * uses {@link SortBenchCorpus}'s streamed, uniquely-keyed, block-interleaved generator. The generated
+ * shape is the same 22M-row / 16-segment shape as a prior benchmark run, chosen so the JFR profiling
+ * window is known to run comfortably past the ~20s stability floor.
  *
  * <p>Gated {@code -Dswath.profile=on} (never runs under {@code ./gradlew build} or the default
  * suite). {@code swath.profile.jfr} overrides the JFR output path (default: a fixed file directly
@@ -38,7 +39,8 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * <p>Run: {@code JAVA_TOOL_OPTIONS="-Dswath.profile=on -Dswath.profile.jfr=<path>" ./gradlew
  * :swath-core:test --tests 'io.varve.swath.sort.MergeCpuProfileHarness' -Pperf} — {@code -D} on the
  * {@code ./gradlew} command line does not reach the forked test-worker JVM;
- * {@code JAVA_TOOL_OPTIONS} does. Persisted-page copy allocation has its separate exact,
+ * {@code JAVA_TOOL_OPTIONS} does. Add {@code -Dswath.bench.staging-dir=<out>/_staging} there for a
+ * retained corpus. Persisted-page copy allocation has its separate exact,
  * no-TLAB characterization in {@link PageBlockAllocationCharacterizationTest}; this CPU harness
  * deliberately retains ordinary profile settings.
  */
@@ -59,23 +61,43 @@ class MergeCpuProfileHarness {
     void profileSerialMerge() throws Exception {
         Path jfrOut = Path.of(System.getProperty("swath.profile.jfr",
                 System.getProperty("java.io.tmpdir") + "/swath-merge-profile.jfr"));
-        Path root = Files.createTempDirectory("swath-merge-cpu-profile-");
-        System.out.println("PROFILE_ROOT " + root);
-        System.out.println("PROFILE_JFR_OUT " + jfrOut);
-        System.out.printf("PROFILE_HEAP max_memory_mb=%.1f available_processors=%d%n",
-                Runtime.getRuntime().maxMemory() / (1024.0 * 1024.0), Runtime.getRuntime().availableProcessors());
+        ParallelMergeBenchmark.CorpusCatalog retained = ParallelMergeBenchmark.externalStaging();
+        Path root;
+        if (retained == null) {
+            root = Files.createTempDirectory("swath-merge-cpu-profile-");
+        } else {
+            Path output = retained.stagingDir().getParent();
+            Path tempParent = output == null ? null : output.getParent();
+            if (tempParent == null) {
+                throw new IllegalArgumentException("external profile output has no sibling temp parent: "
+                        + output);
+            }
+            root = Files.createTempDirectory(tempParent, "swath-merge-cpu-profile-");
+        }
+        Throwable failure = null;
         try {
-            Path master = Files.createDirectory(root.resolve("master"));
-            long t0 = System.nanoTime();
-            SortBenchCorpus.Stats corpus = buildCorpus(master);
-            long buildMs = (System.nanoTime() - t0) / 1_000_000;
-            System.out.printf("PROFILE_CORPUS segments=%d rows=%d bytes=%d build_ms=%d%n",
-                    corpus.segments(), corpus.rows(), corpus.bytes(), buildMs);
-
+            System.out.println("PROFILE_ROOT " + root);
+            System.out.println("PROFILE_JFR_OUT " + jfrOut);
+            System.out.printf("PROFILE_HEAP max_memory_mb=%.1f available_processors=%d%n",
+                    Runtime.getRuntime().maxMemory() / (1024.0 * 1024.0),
+                    Runtime.getRuntime().availableProcessors());
             Path output = Files.createDirectory(root.resolve("data"));
             Path staging = Files.createDirectory(root.resolve("_staging"));
-            List<Path> stagingSegments = SortBenchCorpus.hardLinkCorpus(
-                    SortBenchCorpus.pageRunSegments(master), staging);
+            List<Path> stagingSegments;
+            if (retained == null) {
+                Path master = Files.createDirectory(root.resolve("master"));
+                long t0 = System.nanoTime();
+                SortBenchCorpus.Stats corpus = buildCorpus(master);
+                long buildMs = (System.nanoTime() - t0) / 1_000_000;
+                System.out.printf("PROFILE_CORPUS source=generated segments=%d rows=%d bytes=%d build_ms=%d%n",
+                        corpus.segments(), corpus.rows(), corpus.bytes(), buildMs);
+                stagingSegments = SortBenchCorpus.hardLinkCorpus(
+                        SortBenchCorpus.pageRunSegments(master), staging);
+            } else {
+                stagingSegments = retained.materialize(staging);
+                System.out.printf("PROFILE_CORPUS source=checkpoint corpus_id=%s segments=%d rows=%d%n",
+                        retained.identity(), stagingSegments.size(), retained.oracle().rows());
+            }
 
             // Force R=1 (serial merge) regardless of ambient swath.sort.merge-parallelism.
             SortConfig config = SortConfig.fromProperties(
@@ -112,12 +134,40 @@ class MergeCpuProfileHarness {
             double avgCoresBusy = (cpuStartNanos < 0 || cpuEndNanos < 0)
                     ? -1
                     : (cpuEndNanos - cpuStartNanos) / 1e9 / ((wallEndNanos - wallStartNanos) / 1e9);
+            BenchmarkRowOracle.OutputValidation validation = retained == null
+                    ? null
+                    : BenchmarkRowOracle.validateOutput(result.finalFiles(), retained.oracle(), CMP);
+            long outputBytes = 0L;
+            for (Path finalFile : result.finalFiles()) {
+                outputBytes += Files.size(finalFile);
+            }
             System.out.printf("PROFILE_RESULT merge_ms=%d avg_cores_busy=%.2f merge_passes=%d "
-                            + "cascaded_passes=%d fastpath=%d total_rows=%d files=%d%n",
+                            + "cascaded_passes=%d fastpath=%d total_rows=%d files=%d output_bytes=%d "
+                            + "logical_output_fingerprint=%s multiset_digest=%s%n",
                     mergeMs, avgCoresBusy, result.mergePasses(), result.cascadedPasses(),
-                    result.fastPathEmissions(), result.totalRows(), result.finalFiles().size());
+                    result.fastPathEmissions(), result.totalRows(), result.finalFiles().size(), outputBytes,
+                    validation == null ? "not_measured" : validation.orderedFingerprint(),
+                    validation == null ? "not_measured" : validation.multisetDigest());
+        } catch (Exception | Error e) {
+            failure = e;
+            throw e;
         } finally {
+            IOException finalizationFailure = null;
+            if (retained != null) {
+                try {
+                    retained.verifyMasterUnchanged();
+                } catch (IOException e) {
+                    finalizationFailure = e;
+                }
+            }
             SortBenchCorpus.deleteTree(root);
+            if (finalizationFailure != null) {
+                if (failure != null) {
+                    failure.addSuppressed(finalizationFailure);
+                } else {
+                    throw finalizationFailure;
+                }
+            }
         }
     }
 

@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.stream.LongStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -110,5 +111,70 @@ class LastModifiedTest {
                     assertThat(parseFailure.key()).isEqualTo(entry.key());
                     assertThat(parseFailure.lastModifiedText()).isEqualTo("not-a-timestamp");
                 });
+    }
+
+    @Test
+    void objectEntryRetainsRecordValueSemanticsAcrossTimestampConstructors() {
+        long epochMicros = 1_700_000_000_123_456L;
+        String text = LastModified.textFromEpochMicros(epochMicros);
+        ObjectEntry fromText = objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "etag", "STANDARD",
+                "version", true, "owner", "display", "SHA256", "FULL_OBJECT");
+        ObjectEntry fromTyped = new ObjectEntry(KeyBytes.ofUtf8("key"), 7L, epochMicros, "etag", "STANDARD",
+                "version", true, "owner", "display", "SHA256", "FULL_OBJECT");
+
+        assertThat(fromText).isEqualTo(fromTyped).hasSameHashCodeAs(fromTyped);
+        assertThat(fromText.toString()).isEqualTo("ObjectEntry[key=key, size=7, lastModifiedText=" + text
+                + ", etag=etag, storageClass=STANDARD, versionId=version, isLatest=true, ownerId=owner"
+                + ", ownerDisplayName=display, checksumAlgorithm=SHA256, checksumType=FULL_OBJECT]");
+
+        assertThat(List.of(
+                objectEntry(KeyBytes.ofUtf8("other"), 7L, text, "etag", "STANDARD",
+                        "version", true, "owner", "display", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 8L, text, "etag", "STANDARD",
+                        "version", true, "owner", "display", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, "2023-11-14T22:13:21Z", "etag", "STANDARD",
+                        "version", true, "owner", "display", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "other", "STANDARD",
+                        "version", true, "owner", "display", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "etag", "GLACIER",
+                        "version", true, "owner", "display", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "etag", "STANDARD",
+                        "other", true, "owner", "display", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "etag", "STANDARD",
+                        "version", false, "owner", "display", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "etag", "STANDARD",
+                        "version", true, "other", "display", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "etag", "STANDARD",
+                        "version", true, "owner", "other", "SHA256", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "etag", "STANDARD",
+                        "version", true, "owner", "display", "CRC32", "FULL_OBJECT"),
+                objectEntry(KeyBytes.ofUtf8("key"), 7L, text, "etag", "STANDARD",
+                        "version", true, "owner", "display", "SHA256", "COMPOSITE")))
+                .doesNotContain(fromText);
+    }
+
+    @Test
+    void typedObjectEntryCachesTheFullEpochMicrosDomainWithoutASentinelCollision() {
+        ObjectEntry entry = new ObjectEntry(KeyBytes.ofUtf8("minimum-time"), 1L, Long.MIN_VALUE,
+                "etag", "STANDARD", null, true, null, null, null, null);
+
+        assertThat(entry.lastModifiedEpochMicros()).isEqualTo(Long.MIN_VALUE);
+    }
+
+    private static ObjectEntry objectEntry(
+            KeyBytes key,
+            long size,
+            String lastModifiedText,
+            String etag,
+            String storageClass,
+            String versionId,
+            boolean isLatest,
+            String ownerId,
+            String ownerDisplayName,
+            String checksumAlgorithm,
+            String checksumType
+    ) {
+        return new ObjectEntry(key, size, lastModifiedText, etag, storageClass, versionId,
+                isLatest, ownerId, ownerDisplayName, checksumAlgorithm, checksumType);
     }
 }

@@ -44,10 +44,12 @@ import java.util.Set;
  *
  * <h2>What a cold page costs</h2>
  * A bounded read decodes at least one whole <b>page</b> per column, because the page index prunes
- * pages and a page's encodings decode strictly forward. Three things follow, all load-bearing: the
+ * pages and a page's encodings decode strictly forward. Four things follow, all load-bearing: the
  * read is bounded to the rows the answer can need ({@link SortedRangeReader#range}, since a listing
  * page states no upper key bound); the fixture is written with pages a listing page wide ({@code
- * SortConfig#DEFAULT_FINAL_PAGE_ROWS}); and it is written with small dictionaries ({@code
+ * SortConfig#DEFAULT_FINAL_PAGE_ROWS}); its column-index bounds retain the full maximum-size S3 key
+ * ({@code ListEntryParquetWriters#SERVED_COLUMN_INDEX_TRUNCATE_BYTES}) so a long shared prefix does
+ * not defeat page pruning; and it is written with small dictionaries ({@code
  * ListEntryParquetWriters#SERVED_DICTIONARY_BYTES}), a dictionary being decoded in full before its
  * column yields a value. Together they make a page's cost scale with the answer rather than being
  * flat in it. An older fixture still serves correct answers — the geometry is a Parquet-internal

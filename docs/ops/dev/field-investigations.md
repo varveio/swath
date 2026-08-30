@@ -380,3 +380,85 @@ retain per-repetition wall times.
 - Zero LIST requests characterize merge-only replay, not live listing throughput. The Gradle
   report path is generated output and may be absent until the command is run; retain it with the
   fixture and commit when publishing a refreshed observation.
+
+## 2026-08-30 — cached timestamps and served column indexes
+
+This investigation checks the two cheap sorted-finalization changes against the retained SOREL
+PageRun corpus. It is a warm, local R=1 observation, not a portable throughput claim.
+
+### Evidence and provenance
+
+- **Baseline production code:** `771fecb85db0225e8ba185f4bb1a801a52e234ad`. The profile-only retained-corpus
+  harness change was applied to a detached baseline worktree too, so both arms used identical
+  corpus materialization, validation, fingerprinting, and output-size reporting.
+- **Candidate:** branch `perf/cheap-finalization-wins`, based on that revision, with typed-entry
+  timestamp caches, lazy caching for source-text entries, and 1,024-byte served-file column-index
+  bounds.
+- **Host:** GCP x86_64 VM, 4 physical / 8 logical Intel Xeon Platinum 8581C CPUs, 15 GiB RAM, no
+  swap, and a 193 GiB ext4 root disk.
+- **Runtime:** OpenJDK 25.0.4+7-LTS test worker, `-Xmx2g`, JFR `profile` settings.
+- **Fixture:** checkpoint-authorized retained SOREL staging, 9,919,142 rows in 23 PageRun segments;
+  corpus ID `f77e226ed3da9ed8ee4c375f61275d23257091ca9a772da8d7988ed5b75a6728`.
+- **Clock:** the R=1 `SortTransform.transform` window only. Corpus validation and hard-link setup run
+  before JFR starts; output validation runs after it stops. Reading the immutable corpus to validate
+  it primes the filesystem cache, so these are warm-cache results.
+
+The retained-corpus profile used the opt-in harness:
+
+```bash
+JAVA_TOOL_OPTIONS="-Dswath.profile=on \
+  -Dswath.profile.jfr=<arm>.jfr \
+  -Dswath.bench.staging-dir=<retained-output>/_staging" \
+  ./gradlew :swath-core:test \
+  --tests 'io.varve.swath.sort.MergeCpuProfileHarness' -Pperf
+```
+
+### Timestamp result
+
+JFR execution samples were classified as timestamp parsing when their stack contained
+`LastModified.epochMicrosFromText`, `canonicalEpochMicros`, or `parseWireInstant`.
+
+| Arm | R=1 wall | execution samples | timestamp-parse samples | parse share |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 17,533 ms | 913 | 26 | 2.85% |
+| combined candidate | 17,230 ms | 889 | 0 | 0.00% |
+
+Both arms produced logical fingerprint
+`5c2e617ee4f4b3f782a77d894fb012254a373182e2d9f2b32b7f625424bdab53` and multiset digest
+`4a59f16404b8660c89b2460831b634095f0c0ac0f39ac57feb314d7273f3d9244c6d017bea94e211cf54c8ca793bba74284f64f17f877116abdc3135db1a32ab`.
+The candidate arm includes both timestamp caching and the column-index change, so its wall time does
+not isolate either change. Both refreshed arms also fall below the generated harness's approximate
+20-second stability floor. The wall values are diagnostic only; the zero parse samples and identical
+fingerprints are the timestamp acceptance evidence, not a portable speedup claim. Warm candidate
+observations elsewhere in this investigation span 17,230–18,648 ms, so the paired 303 ms wall
+difference is not directionally resolved against the observed run-to-run spread.
+
+The classifier is intentionally parse-only. PageRun decode still constructs canonical
+`lastModifiedText` through `LastModified.textFromEpochMicros`, so 0.00% parse share does not mean that
+all timestamp work disappeared. Avoiding that format half would require lazily materializing model
+text or changing the sorted representation and is outside this change.
+
+### Served column-index result
+
+The 1,024-byte truncation length is the maximum general-purpose S3 key length, so a supported key's
+page bound remains complete even when many pages share a long prefix. The regression test checks
+exact one-page pruning both above Parquet's 64-byte default and at the exact 1,024-byte key limit.
+
+On the retained corpus, the baseline final was 540,516,272 bytes and the candidate final was
+540,923,714 bytes: 407,442 bytes (0.0754%) larger. Timestamp caching does not alter encoded output, so
+this is the observed physical-size cost of the larger column-index bound on that corpus. Read-side
+memory depends on actual key lengths and concurrently cached reader/block indexes; this single
+merge-only run does not measure that serving footprint.
+
+### Key and etag dictionary probe
+
+One uncommitted diagnostic arm disabled Parquet dictionary encoding for only `key` and `etag`; the
+branch keeps the current policy. Two consecutive dictionary-on/off pairs observed 17,466/17,220 ms
+and 18,648/17,511 ms. The second pair, which also recorded output size, wrote 540,923,714 bytes with
+the current policy and 540,857,441 bytes with those two dictionaries disabled (66,273 bytes, or
+0.012%, smaller). Broad Parquet dictionary/fallback stack samples moved from 160/961 (16.65%) to
+70/896 (7.81%) in the first pair, but that classifier includes the low-cardinality columns whose
+dictionaries remain useful.
+
+The probe points toward a separate repeated experiment, but two same-order pairs on one warm corpus
+are not enough to change the writer policy. No dictionary default changes in this work.

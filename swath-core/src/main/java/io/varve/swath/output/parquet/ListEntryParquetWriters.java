@@ -28,15 +28,19 @@ public final class ListEntryParquetWriters {
     public static final int PAGE_BYTES = 1024 * 1024;
     public static final int ZSTD_LEVEL = 3;
     public static final int SERVED_DICTIONARY_BYTES = 8 * 1024;
+    /** Keep complete page bounds for every supported general-purpose S3 key (maximum 1,024 bytes). */
+    public static final int SERVED_COLUMN_INDEX_TRUNCATE_BYTES = 1024;
     public static final int DEFAULT_PAGE_ROWS = ParquetProperties.DEFAULT_PAGE_ROW_COUNT_LIMIT;
 
-    public record PageLayout(int pageRows, int dictionaryBytes) {
+    public record PageLayout(int pageRows, int dictionaryBytes, int columnIndexTruncateBytes) {
         public static PageLayout direct() {
-            return new PageLayout(DEFAULT_PAGE_ROWS, ParquetProperties.DEFAULT_DICTIONARY_PAGE_SIZE);
+            return new PageLayout(DEFAULT_PAGE_ROWS, ParquetProperties.DEFAULT_DICTIONARY_PAGE_SIZE,
+                    ParquetProperties.DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH);
         }
 
         public static PageLayout served(int pageRows) {
-            return new PageLayout(pageRows, SERVED_DICTIONARY_BYTES);
+            return new PageLayout(pageRows, SERVED_DICTIONARY_BYTES,
+                    SERVED_COLUMN_INDEX_TRUNCATE_BYTES);
         }
     }
 
@@ -83,6 +87,7 @@ public final class ListEntryParquetWriters {
                 .withPageRowCountLimit(layout.pageRows())
                 .withDictionaryEncoding(true)
                 .withDictionaryPageSize(layout.dictionaryBytes())
+                .withColumnIndexTruncateLength(layout.columnIndexTruncateBytes())
                 .withWriterVersion(ParquetProperties.WriterVersion.PARQUET_2_0)
                 .withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
                 .build();

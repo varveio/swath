@@ -70,31 +70,32 @@ public final class KeyBytes implements Comparable<KeyBytes> {
 public sealed interface ListEntry permits ObjectEntry, CommonPrefixEntry, DeleteMarkerEntry {
     KeyBytes key();
 }
-public record ObjectEntry(KeyBytes key, long size, String lastModifiedText,
-                          String etag, String storageClass, String versionId /*nullable*/,
-                          boolean isLatest, String ownerId /*nullable*/,
-                          String ownerDisplayName /*nullable*/,
-                          String checksumAlgorithm /*nullable*/,
-                          String checksumType /*nullable*/) implements ListEntry {}
+public final class ObjectEntry implements ListEntry {
+    // Accessors: key, size, lastModifiedText, lastModifiedEpochMicros, etag,
+    // storageClass, versionId, isLatest, ownerId, ownerDisplayName,
+    // checksumAlgorithm, checksumType
+}
 public record CommonPrefixEntry(KeyBytes key) implements ListEntry {}   // key = the prefix
 public record DeleteMarkerEntry(KeyBytes key, String versionId, boolean isLatest,
                                 String lastModifiedText, String ownerId) implements ListEntry {}
 ```
 
 `lastModifiedText` preserves the object store's XML text as the primary representation. Direct,
-unsorted text sinks write that value without parsing or canonicalizing it. Typed consumers call
-`lastModifiedEpochMicros()` explicitly: the mtime filter, the current Parquet timestamp writer,
-and sorted spill encoding. The current sorted spill format therefore canonicalizes timestamp text;
+unsorted text sinks write that value without parsing or canonicalizing it. For entries constructed
+from source text, `ObjectEntry` parses the value on the first typed access and caches the
+epoch-microsecond result; an invalid value remains attributed to its entry and fails on that access.
+Typed consumers are the mtime filter, the current Parquet timestamp writer, and sorted spill
+encoding. The current sorted spill format therefore canonicalizes timestamp text;
 the canonical UTC form emitted by S3 and reconstructed by sorted spill uses a byte-exact arithmetic
 parse/format path, while every alternate or unusual accepted form retains the general formatter
 fallback. This is an implementation optimization, not a grammar or representation change.
 Preserving it through sorted output requires a separately versioned spill change. Entries supplied
 by typed stores/fixtures retain the compatibility
-constructor that starts from epoch microseconds. Thus an ordinary unsorted TSV/JSONL listing does
-not pay a timestamp parse-and-format round trip, while the shipped Parquet schema below remains
-unchanged until the separately benchmarked string-schema decision is made. If a typed consumer
-cannot parse the source text, the run fails through its listing/output error path; an affected
-dataset part or sorted segment is not published.
+constructor that starts from epoch microseconds and seeds the cache directly. Thus an ordinary
+unsorted TSV/JSONL listing avoids the timestamp parse-and-format round trip, while the shipped Parquet
+schema below remains unchanged until the separately benchmarked string-schema decision is made. If
+a typed consumer cannot parse the source text, the run fails through its listing/output error path;
+an affected dataset part or sorted segment is not published.
 
 Emission rules:
 - **Objects** are always emitted.
