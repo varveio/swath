@@ -822,30 +822,48 @@ which owns the at-most-once-text durability questions it would reopen):
 
   Resource planning uses only resources this arm owns and is run against the post-cascade catalog.
   File descriptors are bounded by `K + N` plus fixed process headroom. Let `D = 2`, `R = 200` bytes
-  be the conservative ordinary-reference planning price, `P` the largest admitted decoded-page
-  ceiling, `W = 8 MiB` the writer estimate, `L` the initial logical part target, and
-  `A = min(totalPages, ceil(L / P))`. Current segments supply their validated raw-payload maximum;
-  any legacy segment without that field raises `P` to the configured compatibility ceiling rather
-  than substituting an encoded-record estimate. For candidate `N`, reference planning charges
+  be the conservative ordinary-reference planning price, `M = 16,384` the hard refs-per-plan cap,
+  `E` the largest persisted record body, `P = 4 * max(E, admittedRawMaximum)` the conservative
+  retained-page price, `W = 8 MiB` the writer estimate, `L` the initial logical part target, and
+  `V = max(1, stagedBytes / totalRecords)` the floor-rounded average staged bytes per source row.
+  Then `A = min(totalRecords, M, ceil(L / V))`. A row is a conservative proxy because every page ref
+  represents at least one; using it rather than the maximum page avoids underpricing skewed catalogs
+  dominated by small pages. Current segments supply their validated
+  raw-payload maximum; a legacy segment uses the compatibility raw ceiling
+  `min(256 MiB, mergeBudget / 8)` before the same retained-page factor is applied. For candidate
+  `N`, reference planning charges
   `(K * (D + 1) + A * (1 + D * N)) * R`: cursor/frontier refs, the router's current plan, and every
   slot in the shared plan queue. This depends on bounded in-flight part geometry, not the catalog's
   total page count once the catalog exceeds one wave.
 
-  The heap clamp first charges those references plus `N * W`, then requires at least `N * P` for
-  decoded pages. Each admitted encoder receives an equal share `C` of the remaining merge budget,
-  with `C >= P`; the same guard covers a disjoint whole page and an incremental overlap cluster.
-  A positional read materializes one header-bounded page before the guard accounts its exact retained
-  bytes, and a claim above the planned segment maximum is rejected before decode. Plan queues retain
-  no bodies. The aggregate planned shape is therefore reference storage plus `N * (C + W)`, not
-  `N * part bytes`. Pipeline clamp reasons remain separate from range proof/staged-size admission.
+  The heap clamp first charges those references plus `N * (W + E)`, then requires at least `N * P`
+  for decoded pages. Each admitted encoder receives an equal retained-byte share `C` of the remaining
+  merge budget, with `C >= P`; the same exact retained-byte guard covers a disjoint whole page and an
+  incremental overlap cluster. `E` is charged separately because a positional read materializes one
+  header-bounded body before the guard reserves its exact retained bytes, potentially while the lane
+  already holds earlier cluster pages. A raw claim above the planned segment maximum is rejected
+  before decode. Plan queues retain no bodies. The aggregate planned shape is therefore reference
+  storage plus `N * (W + E + C)`, not `N * part bytes`. Pipeline clamp reasons remain separate from
+  range proof/staged-size admission, and the one-encoder floor is refused resumably if this shape
+  cannot fit rather than returning an over-budget plan.
+
+  The router closes a plan before adding a ref that would take it above `M`, recording
+  `SORT.pipeline_plan_ref_capped`. Consequently even `final-file-bytes=Long.MAX_VALUE` retains at
+  most 16,384 refs in one successful plan and may produce several strictly adjacent final parts; this
+  is an acceptable soft-geometry split. A transitive overlap component is an indivisible merge-order
+  unit: if that single component itself exceeds `M`, splitting it could interleave rows across parts,
+  so the same cap engagement is recorded and the merge refuses resumably instead of violating either
+  ordering or I11.
 
   Pipeline logical bytes always mean uncompressed raw page-payload bytes. Every plan sums its refs'
   header `rawPayloadLength`, available without decoding. The router
   compares pending logical bytes with a target calibrated from completed parts' actual encoded/logical
   ratio. The first target assumes encoded bytes equal logical bytes, deliberately tending toward a
   small part on compressible input. After closing that first plan, the router waits for its durable
-  completion before routing a second plan; later targets use the cumulative measured ratio. This is
-  soft geometry only: a boundary may occur only when adjacent raw keys differ, so an
+  completion before routing a second plan; later targets use the cumulative measured ratio. Actual
+  bytes include fixed Parquet footer overhead, so calibration at small targets is noisy and the
+  geometry test uses a ±35% interior-part band; cumulative observations damp that fixed cost. This
+  is soft geometry only: a boundary may occur only when adjacent raw keys differ, so an
   equal-key group can exceed the target but never cross files. A package-private fixed-rows policy
   exists only for the benchmark comparison. Completed parts retain the same dense `file_index`,
   last-part-only `file_final`, raw-byte cross-part adjacency check, cardinality check, crash-safe
@@ -1304,7 +1322,7 @@ bytes; it is zero on serial merges.
 | `swath.sort.final-row-group-bytes` | ≈4–8 MB | the served file's seek granularity (row-group size) |
 | `swath.sort.final-page-rows` | 1024 | the served file's seek granularity WITHIN a row group: the cap on a data page's rows. A page is Parquet's smallest addressable unit — the page index prunes pages, never rows, and every encoding decodes strictly forward — so this is the floor on what a bounded key-range read decodes per column, however few rows it wanted. Parquet's own default caps a page at 20,000 rows and 1 MB, and the byte cap only binds on columns wide enough to reach it, so every narrow column sat at 20,000. Governs FINAL Parquet only; custom page-run staging has no Parquet pages or row groups. Not to be confused with the 1 MB data-page BYTE cap, which two independent gates (2026-07-04 P1/P4) measured dead in both directions |
 | `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | runtime page-run residency budget. For a candidate parallel range count, exact proof backing (`ranges × original segments × 6,212`) is charged first and the remainder prices normal streams. Before cursor construction/decompression, the page-aware merger reserves the current retained body, its conservative 128-byte dictionary-coordinate heap, the complete possible lazy dictionary cache, and any separate raw payload after the already-budgeted successor frontier/body coordinates were loaded; legal overlap clusters cannot grow beyond the serial budget or one range's post-proof share. The static config helper still exposes a two-stream floor, but runtime admission refuses resumably if the truthful minimum width cannot fit. Arbitrary non-page-frontier capture merges retain their existing entry-stream policy. |
-| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | configured maximum range count for `sort.finalization=ranges`, or encoder count for `pipeline`; `1` is the explicit serial/single-encoder choice. Both the CLI tune and core configuration enforce `1..16`. The tune is resume-free because final parts remain disposable staging files until the complete manifest barrier. The ranges arm retains its proof/staged-size/fan-in/FD admission unchanged. The pipeline arm reserves `K` shared input channels and one writer descriptor per encoder, prices two-deep reference/plan storage, one decoded page and an 8 MiB writer per encoder, and divides its cluster budget across admitted lanes. Pipeline clamps record `SORT.pipeline_encoders_fd_clamped` or `SORT.pipeline_encoders_heap_clamped`; range clamp reasons never describe pipeline admission. |
+| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | configured maximum range count for `sort.finalization=ranges`, or encoder count for `pipeline`; `1` is the explicit serial/single-encoder choice. Both the CLI tune and core configuration enforce `1..16`. The tune is resume-free because final parts remain disposable staging files until the complete manifest barrier. The ranges arm retains its proof/staged-size/fan-in/FD admission unchanged. The pipeline arm reserves `K` shared input channels and one writer descriptor per encoder, prices two-deep capped reference/plan storage, one transient body read, one retained page, and an 8 MiB writer per encoder, and divides its retained-byte cluster budget across admitted lanes. Pipeline clamps record `SORT.pipeline_encoders_fd_clamped` or `SORT.pipeline_encoders_heap_clamped`; range clamp reasons never describe pipeline admission. |
 | `swath.sort.merge-boundary-policy` | `distinct` | resume-free/default-off range-split policy. `distinct` is the shipped bounded distinct-key selection. `rows` is an experimental explicit arm using validated type-2 or type-3 cumulative-entry mass; it changes only parallel part split points, never row order/content, and falls back whole-run to `distinct` for extensionless/type-1/invalid/mixed inputs. Prefer the typed `--tune sort.merge-boundary-policy=distinct\|rows`, which wins over this JVM property. No result in this change promotes `rows` to the default |
 | `swath.sort.min-parallel-staged-bytes` | 256 MiB | staged-input eligibility floor for the default parallel merge. A run below it stays serial and records `SORT.merge_range_below_staged_floor`; this size decision is not an unsplittable keyspace or a resource-clamp result |
 | `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`), alongside the actual page-run header version and trailer-extension type; a resume refuses another format or explicit unknown page-run metadata while preserving pre-column `NULL` metadata (§6) — informational, not user-tunable |

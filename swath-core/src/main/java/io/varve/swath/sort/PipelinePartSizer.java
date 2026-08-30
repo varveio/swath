@@ -15,6 +15,7 @@ package io.varve.swath.sort;
 final class PipelinePartSizer {
     static final double INITIAL_ENCODED_TO_LOGICAL_RATIO = 1.0;
 
+    /** Production byte calibration and a benchmark-only row-count control. */
     enum Policy {
         CALIBRATED_BYTES,
         FIXED_ROWS
@@ -46,6 +47,10 @@ final class PipelinePartSizer {
     private long encodedBytes;
     private long logicalBytes;
 
+    /**
+     * Freeze one sizing policy for the merge. Policy is not mutable because changing it after plans
+     * are queued would make adjacent parts obey incomparable boundary rules.
+     */
     PipelinePartSizer(Target target, long finalFileBytes) {
         if (finalFileBytes <= 0) {
             throw new IllegalArgumentException("pipeline byte target must be positive");
@@ -55,11 +60,19 @@ final class PipelinePartSizer {
         this.fixedRows = target.fixedRows();
     }
 
+    /**
+     * Add one footer-closed observation. Actual bytes intentionally include Parquet footer overhead;
+     * that makes very small targets noisy, while cumulative calibration damps the fixed cost.
+     */
     synchronized void completed(long actualBytes, long partLogicalBytes) {
         encodedBytes = Math.addExact(encodedBytes, actualBytes);
         logicalBytes = Math.addExact(logicalBytes, partLogicalBytes);
     }
 
+    /**
+     * Decide whether the next distinct-key item belongs in another part. This is a soft threshold;
+     * the router, not this estimator, owns equal-key atomicity and the hard reference cap.
+     */
     synchronized boolean shouldClose(long currentLogicalBytes, long currentRows) {
         if (policy == Policy.FIXED_ROWS) {
             return currentRows >= fixedRows;
@@ -70,10 +83,15 @@ final class PipelinePartSizer {
         return currentLogicalBytes >= calibratedLogicalTarget();
     }
 
+    /** Require one durable sample only when byte calibration has a finite target. */
     boolean needsCalibrationWarmup() {
         return policy == Policy.CALIBRATED_BYTES && finalFileBytes != Long.MAX_VALUE;
     }
 
+    /**
+     * Choose the deliberately undershooting no-compression first target. A small warm-up costs one
+     * footer; an oversized warm-up can starve every encoder behind a single plan.
+     */
     static long initialLogicalTarget(long finalFileBytes) {
         if (finalFileBytes == Long.MAX_VALUE) {
             return Long.MAX_VALUE;
@@ -82,6 +100,7 @@ final class PipelinePartSizer {
         return Math.max(1L, (long) Math.ceil(target));
     }
 
+    /** Convert the encoded-byte target through the cumulative observed compression ratio. */
     synchronized long calibratedLogicalTarget() {
         double ratio = encodedBytes > 0 && logicalBytes > 0
                 ? (double) encodedBytes / logicalBytes
@@ -90,6 +109,7 @@ final class PipelinePartSizer {
         return target >= Long.MAX_VALUE ? Long.MAX_VALUE : Math.max(1L, (long) Math.ceil(target));
     }
 
+    /** Expose the same ratio used by boundary decisions for focused convergence tests. */
     synchronized double encodedToLogicalRatio() {
         return encodedBytes > 0 && logicalBytes > 0
                 ? (double) encodedBytes / logicalBytes

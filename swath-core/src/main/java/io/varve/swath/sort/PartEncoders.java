@@ -34,6 +34,10 @@ final class PartEncoders implements AutoCloseable {
     static final long WRITER_HEAP_ESTIMATE_BYTES = 8L << 20;
     private static final long FAILURE_CHECK_MILLIS = 100;
 
+    /**
+     * A footer-closed temporary and its close-gated metadata owner. The writer remains attached so
+     * publication can verify raw bounds without reopening or becoming a second footer owner.
+     */
     record CompletedPart(int ordinal, Path path, SortedFileWriter writer) {
     }
 
@@ -49,6 +53,11 @@ final class PartEncoders implements AutoCloseable {
     private final LongConsumer progressCallback;
     private final CountDownLatch firstCompletion = new CountDownLatch(1);
 
+    /**
+     * Start exactly {@code count} consumers over one shared bounded queue. Each lane receives an
+     * independent output-sequence factory because Parquet writer state is not shareable; segment
+     * channels are shared because all encoder reads are positional and therefore commute.
+     */
     PartEncoders(int count, List<PageRunSegmentIo> segments, long clusterBudgetBytes,
             Path stagingDir, SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
             DuplicateHook hook, EqualKeyPolicy equalKeyPolicy, SortMetrics metrics,
@@ -71,7 +80,11 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
-    /** Submit one complete plan, recording the router's only encoder-side blocking span. */
+    /**
+     * Submit one complete plan or surface a peer failure while back-pressured. Timed offers are
+     * required: a blocking {@code put} could strand the router forever after all consumers fail.
+     * The queue is shared so plan availability, rather than an ordinal-to-lane stripe, assigns work.
+     */
     void submit(PartPlan plan) {
         Item.Plan item = new Item.Plan(plan);
         if (queue.offer(item)) {
@@ -92,7 +105,11 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
-    /** Stop after all submitted plans, then return the dense merge-order completion sequence. */
+    /**
+     * Stop after all submitted plans, then return the dense merge-order completion sequence.
+     * Completion order is intentionally ignored because a later, smaller plan may close first;
+     * ordinals are the only publication-order authority.
+     */
     List<CompletedPart> finish(int expectedParts) {
         for (int lane = 0; lane < lanes.size(); lane++) {
             putStop();
@@ -113,7 +130,11 @@ final class PartEncoders implements AutoCloseable {
         return result;
     }
 
-    /** Wait for the first durable part so calibrated routing cannot run a whole queue-depth ahead. */
+    /**
+     * Wait for the first durable part so calibrated routing cannot run a whole queue-depth ahead.
+     * The wait observes the failure relay at a fixed cadence, preventing a failed warm-up encoder
+     * from leaving the single router asleep on a latch that can no longer count down.
+     */
     void awaitFirstCompletion() {
         try {
             while (!firstCompletion.await(FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {
@@ -125,6 +146,10 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
+    /**
+     * Enqueue one terminal token per consumer after all plans. Tokens share normal queue ordering,
+     * which guarantees no lane exits ahead of accepted work; timed admission still detects failure.
+     */
     private void putStop() {
         try {
             while (!queue.offer(Item.Stop.INSTANCE, FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {
@@ -136,6 +161,10 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
+    /**
+     * Abort every lane and wait for writer discard. This is an abort operation, not graceful finish:
+     * callers that want publication must use {@link #finish(int)} before dropping this owner.
+     */
     @Override
     public void close() {
         if (aborting.compareAndSet(false, true)) {
@@ -146,6 +175,11 @@ final class PartEncoders implements AutoCloseable {
         joinAll();
     }
 
+    /**
+     * Join uninterruptibly enough to reclaim every writer, then restore interruption. Losing the
+     * interrupt would violate caller cancellation; returning with a live lane would let cleanup race
+     * an open file descriptor and temporary writer.
+     */
     private void joinAll() {
         boolean interrupted = false;
         for (Thread thread : threads) {
@@ -177,7 +211,13 @@ final class PartEncoders implements AutoCloseable {
         private final DecodedPageBudget decodedBudget;
         private SortedFileWriter writer;
         private Path path;
+        /** This lane's sub-rung remainder; single-thread ownership avoids shared progress state. */
+        private long progressRows;
 
+        /**
+         * Give one worker its own guard, decoded budget, and output factory. None of those objects is
+         * shared between virtual threads, so their hot row path needs no synchronization.
+         */
         Lane(List<PageRunSegmentIo> segments, long clusterBudgetBytes, Path stagingDir,
                 SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
                 DuplicateHook hook, EqualKeyPolicy equalKeyPolicy) {
@@ -190,6 +230,11 @@ final class PartEncoders implements AutoCloseable {
                     comparator, hook, equalKeyPolicy, metrics, "pipeline");
         }
 
+        /**
+         * Consume until a terminal token or first failure, always discarding a partially open part.
+         * Expected asynchronous-close noise during coordinated abort is suppressed; without that
+         * distinction it could replace the original typed failure in the shared relay.
+         */
         void run() {
             try {
                 while (true) {
@@ -215,6 +260,10 @@ final class PartEncoders implements AutoCloseable {
             }
         }
 
+        /**
+         * Wait for work while polling peer health. A plain queue take has no wakeup when another lane
+         * fails before the producer can enqueue stop tokens, which creates a shutdown deadlock.
+         */
         private Item nextItem() throws InterruptedException {
             Item item;
             while ((item = queue.poll(FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) == null) {
@@ -223,7 +272,11 @@ final class PartEncoders implements AutoCloseable {
             return item;
         }
 
-        /** Open, execute, and durably close one complete plan without retaining decoded pages. */
+        /**
+         * Open, execute, and durably close one complete plan without retaining decoded pages between
+         * plans. The file index comes from the router ordinal, not lane identity, so arbitrary work
+         * sharing cannot perturb footer stamps or final lexical order.
+         */
         private void execute(PartPlan plan) throws IOException {
             failure.check();
             if (writer != null) {
@@ -257,6 +310,10 @@ final class PartEncoders implements AutoCloseable {
             flushProgress();
         }
 
+        /**
+         * Positionally read and CRC-verify exactly the frame named by {@code ref}. Shared channels
+         * avoid K descriptors per encoder; positional reads avoid a shared mutable file position.
+         */
         private PageBlock read(PageRef ref) throws IOException {
             long started = System.nanoTime();
             try {
@@ -268,6 +325,10 @@ final class PartEncoders implements AutoCloseable {
             }
         }
 
+        /**
+         * Reserve a whole page in retained-byte units before cursor construction can decompress it.
+         * Release in {@code finally} so a row decode or writer fault cannot leak the lane's budget.
+         */
         private void writePage(PageBlock page) throws IOException {
             long reserved = decodedBudget.reserve(page);
             try {
@@ -280,7 +341,11 @@ final class PartEncoders implements AutoCloseable {
             }
         }
 
-        /** Incrementally admit a cluster so a long transitive chain need not be resident at once. */
+        /**
+         * Incrementally admit a cluster so a long transitive chain need not be resident at once.
+         * A future page enters only when its minimum can compete with the next active row; admitting
+         * the full component eagerly would make valid overlap consume O(component pages) heap.
+         */
         private void writeCluster(List<PageRef> refs) throws IOException {
             PageRowMerger merger = new PageRowMerger(comparator);
             int next = 0;
@@ -321,17 +386,21 @@ final class PartEncoders implements AutoCloseable {
             }
         }
 
+        /**
+         * Enforce local adjacency before writing and report progress at the shared merge rung. The
+         * greater-than-or-equal check remains correct if a future bulk path increments by more than
+         * one row, instead of silently skipping the heartbeat forever.
+         */
         private void write(ListEntry entry) throws IOException {
             entryGuard.accept(entry);
             writer.write(entry);
-            if (++progressRows == KWayMerge.PROGRESS_BATCH_ROWS) {
+            if (++progressRows >= KWayMerge.PROGRESS_BATCH_ROWS) {
                 progressCallback.accept(progressRows);
                 progressRows = 0;
             }
         }
 
-        private long progressRows;
-
+        /** Report the final sub-rung remainder only after its part is durably closed. */
         private void flushProgress() {
             if (progressRows > 0) {
                 progressCallback.accept(progressRows);
@@ -339,6 +408,10 @@ final class PartEncoders implements AutoCloseable {
             }
         }
 
+        /**
+         * Reclaim a partially written file without publishing close-gated metadata. Discard failure
+         * joins the relay as a secondary fault; it must not make the lane appear successfully closed.
+         */
         private void discardOpen() {
             if (writer == null) {
                 return;
@@ -355,6 +428,7 @@ final class PartEncoders implements AutoCloseable {
         }
     }
 
+    /** Queue protocol kept disjoint from data so a valid empty plan cannot be confused with stop. */
     private sealed interface Item {
         record Plan(PartPlan value) implements Item {
         }

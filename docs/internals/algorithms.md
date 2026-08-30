@@ -1692,6 +1692,11 @@ use the same per-encoder decoded-page guard; clusters admit refs incrementally i
 The router pauses after its first calibrated-byte plan until that part completes, preventing stale
 initial geometry from filling the queue, then exposes later parts without retaining decoded part
 bodies. Encoder admission runs against the post-cascade catalog and prices shared channels,
-target-bounded reference plans, cluster shares, and open writers. Current trailers supply an exact
-raw-page maximum; a legacy trailer raises the page price to the configured decode ceiling. The arm
-does not inherit range proof, seek, staged-size, or per-range stream costs.
+average-staged-bytes-per-row reference plans capped at 16,384 refs, transient positional-read bodies,
+retained-page shares, and open writers. The retained-page unit is four times the larger of the
+persisted-body and admitted raw-payload maxima, matching the unit guarded at runtime instead of
+treating raw bytes as retained heap. A cap hit closes the current plan and may split nominal
+single-file output; an indivisible transitive overlap component above the cap refuses rather than
+splitting interleaved rows. Current trailers supply an exact raw-page maximum; a legacy trailer uses
+the reduced compatibility decode ceiling. The arm does not inherit range proof, seek, staged-size,
+or per-range stream costs.

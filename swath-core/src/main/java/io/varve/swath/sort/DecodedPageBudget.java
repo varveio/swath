@@ -10,6 +10,12 @@ package io.varve.swath.sort;
  * compressed page allocates its decompression target lazily; release follows cursor exhaustion.
  */
 final class DecodedPageBudget {
+    /**
+     * Covers the record owner, decompression target, dictionary materialization, and their shallow
+     * owners from the larger of the persisted-body and raw-payload ceilings.
+     */
+    static final long RETAINED_PAGE_FACTOR = 4L;
+
     private final long limitBytes;
     private final SortMetrics metrics;
     private long residentBytes;
@@ -56,9 +62,32 @@ final class DecodedPageBudget {
                 ? bytes : saturatedAdd(bytes, page.rawPayloadLength());
     }
 
+    /**
+     * Bound the unit consumed by {@link #reserve(PageBlock)} using trailer/header metadata alone.
+     * Pricing the larger physical or raw ceiling by a conservative factor avoids pretending the
+     * payload alone covers dictionary and decompression retention. It deliberately treats NONE as
+     * compressed because the planning pass does not retain each page's codec in {@link PageRef}.
+     */
+    static long retainedPageUpperBound(long rawPayloadBytes, long recordBytes) {
+        if (rawPayloadBytes < 1 || recordBytes < 1) {
+            throw new IllegalArgumentException("page bounds must be positive");
+        }
+        return saturatedMultiply(RETAINED_PAGE_FACTOR,
+                Math.max(rawPayloadBytes, recordBytes));
+    }
+
     private static long saturatedAdd(long left, long right) {
         try {
             return Math.addExact(left, right);
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    /** Saturation makes corrupt or adversarial metadata fail admission instead of wrapping small. */
+    private static long saturatedMultiply(long left, long right) {
+        try {
+            return Math.multiplyExact(left, right);
         } catch (ArithmeticException overflow) {
             return Long.MAX_VALUE;
         }

@@ -69,6 +69,20 @@ final class FinalizationPipelineTest {
     }
 
     @Test
+    void retainedPagePlanningUnitCoversTheRuntimeGuard() {
+        PageBlock packed = PageBlock.pack(List.of(
+                SortTestSupport.object("repeated-prefix/alpha"),
+                SortTestSupport.object("repeated-prefix/bravo")), comparator, PageCodec.LZ4);
+        byte[] record = packed.serialize();
+        PageBlock persisted = PageBlock.deserialize(record);
+
+        long retainedUpper = DecodedPageBudget.retainedPageUpperBound(
+                persisted.rawPayloadLength(), record.length);
+
+        assertThat(DecodedPageBudget.retainedBytes(persisted)).isLessThanOrEqualTo(retainedUpper);
+    }
+
+    @Test
     void preparedCompressedPageReleasesItsEncodedOwner() {
         PageBlock packed = PageBlock.pack(List.of(
                 SortTestSupport.object("repeated-prefix/alpha"),
@@ -325,11 +339,14 @@ final class FinalizationPipelineTest {
                         MergePlanner.PipelinePlan::reason)
                 .containsExactly(2, MergePlanner.PipelineClampReason.FD_CLAMPED);
 
-        int pageBytes = catalog.maxRawPayloadLength();
+        long readPageBytes = catalog.maxRecordLen();
+        long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
+                catalog.maxRawPayloadLength(), catalog.maxRecordLen());
         long routerRefs = 3L + catalog.totalRecords()
                 * (1L + 2L * PartEncoders.QUEUE_DEPTH);
         long routerBytes = routerRefs * MergePlanner.PIPELINE_REF_BYTES;
-        long perEncoder = pageBytes + PartEncoders.WRITER_HEAP_ESTIMATE_BYTES;
+        long perEncoder = readPageBytes + retainedPageBytes
+                + PartEncoders.WRITER_HEAP_ESTIMATE_BYTES;
         MergePlanner heapPlanner = new MergePlanner(
                 base.withMergeBudgetBytes(routerBytes + 2 * perEncoder),
                 SortMetrics.NO_OP, () -> -1);
@@ -337,6 +354,14 @@ final class FinalizationPipelineTest {
                 .extracting(MergePlanner.PipelinePlan::encoders,
                         MergePlanner.PipelinePlan::reason)
                 .containsExactly(2, MergePlanner.PipelineClampReason.HEAP_CLAMPED);
+
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        MergePlanner refusingPlanner = new MergePlanner(
+                base.withMergeBudgetBytes(1), metrics, () -> -1);
+        assertThatThrownBy(() -> refusingPlanner.pipelineParallelism(1, catalog))
+                .isInstanceOf(MergeMemoryExhaustedException.class)
+                .hasMessageContaining("minimum pipeline lane does not fit");
+        assertThat(metrics.count("SORT.merge_decoded_page_budget_exhausted")).isEqualTo(1);
     }
 
     @Test
@@ -360,10 +385,31 @@ final class FinalizationPipelineTest {
                 .withFinalFileBytes(64L << 20)
                 .withMergeBudgetBytes(256L << 20);
 
-        MergePlanner.PipelinePlan plan = new MergePlanner(config, SortMetrics.NO_OP, () -> -1)
-                .pipelineParallelism(4, large);
+        MergePlanner planner = new MergePlanner(config, SortMetrics.NO_OP, () -> -1);
+        MergePlanner.PipelinePlan plan = planner.pipelineParallelism(4, large);
 
+        assertThat(planner.pipelinePlanRefs(large))
+                .isEqualTo(MergePlanner.MAX_PIPELINE_PLAN_REFS);
         assertThat(plan.encoders()).isEqualTo(4);
+    }
+
+    @Test
+    void unboundedByteTargetClosesPlansAtTheReferenceCap(@TempDir Path root)
+            throws IOException {
+        int pages = MergePlanner.MAX_PIPELINE_PLAN_REFS + 1;
+        List<List<ListEntry>> segment = new ArrayList<>(pages);
+        for (int page = 0; page < pages; page++) {
+            segment.add(List.of(SortTestSupport.object(String.format("key-%05d", page))));
+        }
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        SortTransformResult result = runPages(root, List.of(segment), Long.MAX_VALUE,
+                metrics, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
+                0, PageCodec.NONE, 1);
+
+        assertThat(result.finalFiles()).hasSize(2);
+        assertThat(metrics.count("SORT.pipeline_plan_ref_capped")).isEqualTo(1);
+        assertThat(keys(result.finalFiles())).hasSize(pages);
     }
 
     @Test
@@ -386,7 +432,7 @@ final class FinalizationPipelineTest {
         MergePlanner.PipelinePlan plan = planner.pipelineParallelism(4, catalog);
 
         assertThat(catalog.maxRawPayloadLength()).isPositive().isLessThan(mergeBudgetBytes);
-        assertThat(plan.pageBytes()).isEqualTo(plan.legacyDecodedLimit());
+        assertThat(plan.retainedPageBytes()).isGreaterThan(plan.legacyDecodedLimit());
         assertThat(plan.encoders()).isEqualTo(1);
         assertThat(plan.cursorDepth()).isEqualTo(SegmentHeaderCursors.QUEUE_DEPTH);
         assertThat(plan.refBytes()).isEqualTo(MergePlanner.PIPELINE_REF_BYTES);
@@ -452,7 +498,7 @@ final class FinalizationPipelineTest {
     }
 
     @Test
-    void equalKeyGroupCrossingRouterBatchBoundaryStaysInOnePart(@TempDir Path root)
+    void equalKeyGroupCrossingPageBoundaryStaysInOnePart(@TempDir Path root)
             throws IOException {
         int equalKeyRows = 4_097;
         List<ListEntry> firstPage = new ArrayList<>(equalKeyRows);

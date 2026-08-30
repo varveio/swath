@@ -22,6 +22,7 @@ import java.util.function.Consumer;
  * plans; this bounds calibration lag to the intentionally conservative warm-up part.
  */
 final class MergeRouter {
+    /** Independent counts used to reconcile header refs, source rows, and completed parts. */
     record Result(long rows, long pagesForwarded, long refs, int parts) {
     }
 
@@ -40,6 +41,10 @@ final class MergeRouter {
     private long refs;
     private long pagesForwarded;
 
+    /**
+     * Bind the sole frontier and boundary owner to a bounded plan consumer. Encoder completion is
+     * consulted only for first-part calibration; it never influences merge ordering.
+     */
     MergeRouter(SegmentHeaderCursors cursors, Consumer<PartPlan> plans,
             PipelinePartSizer sizer, SortMetrics metrics, PipelineFailure failure,
             Runnable awaitFirstCompletion) {
@@ -51,8 +56,12 @@ final class MergeRouter {
         this.awaitFirstCompletion = awaitFirstCompletion;
     }
 
-    /** Drain all header cursors and close the final complete plan, including the empty-input plan. */
-    Result route(int segments) {
+    /**
+     * Drain all header cursors and close the final complete plan, including the empty-input plan.
+     * Every frontier removal advances that same segment exactly once, which makes ref conservation
+     * independent of whether the ref becomes a whole page or joins an overlap cluster.
+     */
+    Result route(int segments) throws MergeMemoryExhaustedException {
         for (int segment = 0; segment < segments; segment++) {
             PageRef ref = cursors.next(segment);
             if (ref != null) {
@@ -78,8 +87,13 @@ final class MergeRouter {
         return new Result(rows, pagesForwarded, refs, parts);
     }
 
-    /** Close one transitive page-range component without loading or comparing any row. */
-    private PartPlan.Cluster collectCluster(PageRef first) {
+    /**
+     * Close one transitive page-range component without loading or comparing any row. Transitivity
+     * matters: stopping at the first pairwise overlap could separate a later page whose rows still
+     * interleave with the growing component and create overlapping output parts.
+     */
+    private PartPlan.Cluster collectCluster(PageRef first)
+            throws MergeMemoryExhaustedException {
         metrics.recordStealReason("SORT", "pipeline_cluster_merge");
         ArrayList<PageRef> cluster = new ArrayList<>();
         cluster.add(first);
@@ -87,6 +101,12 @@ final class MergeRouter {
         long clusterRows = first.count();
         while (!frontier.isEmpty()
                 && Arrays.compareUnsigned(frontier.peek().minKey(), high) <= 0) {
+            if (cluster.size() == MergePlanner.MAX_PIPELINE_PLAN_REFS) {
+                metrics.recordStealReason("SORT", "pipeline_plan_ref_capped");
+                throw new MergeMemoryExhaustedException(
+                        "transitive overlap cluster exceeds pipeline plan ref cap: cap="
+                                + MergePlanner.MAX_PIPELINE_PLAN_REFS);
+            }
             PageRef overlapping = frontier.poll();
             cluster.add(overlapping);
             clusterRows = Math.addExact(clusterRows, overlapping.count());
@@ -99,6 +119,7 @@ final class MergeRouter {
         return new PartPlan.Cluster(cluster);
     }
 
+    /** Replace one consumed frontier head, retaining at most one heap entry per live segment. */
     private void advance(int segment) {
         PageRef next = cursors.next(segment);
         if (next != null) {
@@ -111,17 +132,33 @@ final class MergeRouter {
         private final ArrayList<PartPlan.Item> items = new ArrayList<>();
         private long logicalBytes;
         private long partRows;
+        private int partRefs;
         private int ordinal;
 
+        /**
+         * Close before adding an item when either soft geometry or the hard reference cap engages.
+         * The cap is independent of {@code final-file-bytes}, so a nominal single-file merge may
+         * still produce several strictly adjacent files rather than retaining O(total pages) refs.
+         */
         void offer(PartPlan.Item item) {
             MergeCancellation.check();
-            if (!items.isEmpty() && sizer.shouldClose(logicalBytes, partRows)
+            int itemRefs = item.refs().size();
+            if (itemRefs > MergePlanner.MAX_PIPELINE_PLAN_REFS) {
+                throw new IllegalStateException("overlap cluster exceeds pipeline plan ref cap: refs="
+                        + itemRefs + " cap=" + MergePlanner.MAX_PIPELINE_PLAN_REFS);
+            }
+            boolean refCapped = partRefs > MergePlanner.MAX_PIPELINE_PLAN_REFS - itemRefs;
+            if (!items.isEmpty() && (sizer.shouldClose(logicalBytes, partRows) || refCapped)
                     // Items are already disjoint, but equal raw keys must remain atomic even if a
                     // future routing item shape weakens that construction-time guarantee.
                     && KeyBytes.compareUnsigned(lastKey(items.getLast()), firstKey(item)) != 0) {
+                if (refCapped) {
+                    metrics.recordStealReason("SORT", "pipeline_plan_ref_capped");
+                }
                 dispatch(false);
             }
             items.add(item);
+            partRefs = Math.addExact(partRefs, itemRefs);
             for (PageRef ref : item.refs()) {
                 logicalBytes = Math.addExact(logicalBytes, ref.rawPayloadLength());
                 partRows = Math.addExact(partRows, ref.count());
@@ -130,12 +167,18 @@ final class MergeRouter {
             }
         }
 
+        /** Dispatch the terminal plan even when the input is empty so the final footer stamp exists. */
         int finish() {
             MergeCancellation.check();
             dispatch(true);
             return ordinal;
         }
 
+        /**
+         * Transfer an immutable plan, reset all per-part counters, and perform the one warm-up wait.
+         * Clearing after {@link PartPlan}'s defensive copy prevents later routing from mutating work
+         * already visible to an encoder.
+         */
         private void dispatch(boolean mergeEnd) {
             PartPlan plan = new PartPlan(ordinal, items, mergeEnd,
                     logicalBytes, partRows);
@@ -144,6 +187,7 @@ final class MergeRouter {
             items.clear();
             logicalBytes = 0;
             partRows = 0;
+            partRefs = 0;
             if (ordinal == 1 && !mergeEnd && sizer.needsCalibrationWarmup()) {
                 awaitFirstCompletion.run();
                 failure.check();
@@ -151,10 +195,15 @@ final class MergeRouter {
         }
     }
 
+    /** Return the routing minimum without cloning; plan refs are immutable internal coordinates. */
     private static byte[] firstKey(PartPlan.Item item) {
         return item.refs().getFirst().minKey();
     }
 
+    /**
+     * Compute an item's true high bound instead of trusting list order inside an overlap cluster.
+     * Cluster refs are ordered by minima, which does not imply their maxima are monotone.
+     */
     private static byte[] lastKey(PartPlan.Item item) {
         List<PageRef> itemRefs = item.refs();
         byte[] high = itemRefs.getFirst().maxKey();

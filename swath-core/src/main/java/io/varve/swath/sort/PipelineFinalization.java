@@ -21,6 +21,16 @@ import org.slf4j.LoggerFactory;
  * failure relay and hand only durable, globally ordered parts to the publisher. Any failure
  * quiesces every stage before owned pipeline temporaries are swept; source segments and prior
  * published parts remain recoverable.
+ *
+ * <p>The calling thread is the assembler. It never publishes a part as an encoder completes:
+ * completion order is nondeterministic, and exposing that order would break strict cross-part raw
+ * bounds. Instead it waits for dense ordinals, closes the shared channels, then delegates adjacency,
+ * cardinality, renaming, manifest, and success-marker ownership to {@link DatasetPublisher}. This
+ * also keeps the publication commit point identical to the range arm.
+ *
+ * <p>Cascade intermediates belong to the ordinary merge reconciliation. Pipeline temporaries use a
+ * separate owned glob and remain disposable until the whole ordered set passes verification. Thus a
+ * failed encoder can never make a footer-closed but unverified file resumable or consumer-visible.
  */
 final class PipelineFinalization {
     private static final Logger log = LoggerFactory.getLogger(PipelineFinalization.class);
@@ -29,13 +39,21 @@ final class PipelineFinalization {
     private final MergePlanner planner;
     private final DatasetPublisher publisher;
 
+    /**
+     * Bind the run's policy, resource planner, and sole publication owner. Keeping publication here
+     * prevents encoder threads from racing manifest order or cleanup authority.
+     */
     PipelineFinalization(SortRun run, MergePlanner planner, DatasetPublisher publisher) {
         this.run = run;
         this.planner = planner;
         this.publisher = publisher;
     }
 
-    /** Execute cascade, routing, encoding, verification, and publication as one failure domain. */
+    /**
+     * Execute cascade, routing, encoding, verification, and publication as one failure domain.
+     * Encoder admission follows cascade because survivor count and maxima can differ from the source
+     * catalog. Every asynchronous stage is quiesced before channel close and temporary-file sweep.
+     */
     SortTransformResult run(PageRunCatalog sourceCatalog, Request request, int encoderCount)
             throws IOException {
         SortConfig config = run.config();
@@ -145,7 +163,11 @@ final class PipelineFinalization {
         }
     }
 
-    /** Open exactly one shared positional-read channel per surviving segment. */
+    /**
+     * Open exactly one shared positional-read channel per surviving segment. Current segments use
+     * their persisted raw maximum; legacy inputs use the planner's reduced compatibility ceiling so
+     * a body larger than the retained-byte plan is rejected before decompression.
+     */
     private static List<PageRunSegmentIo> openChannels(PageRunCatalog catalog,
             MergePlanner.PipelinePlan plan, SortMetrics metrics) throws IOException {
         List<PageRunSegmentIo> channels = new java.util.ArrayList<>(catalog.descriptors().size());
@@ -175,6 +197,10 @@ final class PipelineFinalization {
         }
     }
 
+    /**
+     * Attempt every close and preserve all close failures. Stopping at the first failure would leak
+     * later descriptors and could prevent a resumable retry from replacing intermediates on Windows.
+     */
     private static void closeChannels(List<PageRunSegmentIo> channels) throws IOException {
         IOException failure = null;
         for (PageRunSegmentIo channel : channels) {
@@ -193,13 +219,20 @@ final class PipelineFinalization {
         }
     }
 
-    /** Unwrap the relay exception without changing the original checked/unchecked failure type. */
+    /**
+     * Unwrap the relay exception without changing the original checked/unchecked failure type. The
+     * typed merge-memory and cancellation dispositions are decided above this class, so wrapping
+     * everything as a generic I/O failure would change operator-visible retry semantics.
+     */
     private static Throwable failureCause(Throwable failure) {
         return failure instanceof PipelineFailure.Failed && failure.getCause() != null
                 ? failure.getCause() : failure;
     }
 
-    /** Record the single binding encoder resource without duplicating the no-clamp guard. */
+    /**
+     * Record the single binding encoder resource without duplicating the no-clamp guard. FD and heap
+     * reasons stay distinct because their remediation differs; range-arm reasons never apply here.
+     */
     private void recordEncoderClamp(int requested, MergePlanner.PipelinePlan plan,
             PageRunCatalog catalog) {
         switch (plan.reason()) {
@@ -212,14 +245,19 @@ final class PipelineFinalization {
                     run.metrics().recordStealReason("SORT", "pipeline_encoders_heap_clamped");
         }
         log.warn("sort_pipeline_encoders_clamped requested={} effective={} segments={} reason={} "
-                        + "merge_budget_bytes={} cursor_depth={} ref_bytes={} page_bytes={} "
+                        + "merge_budget_bytes={} cursor_depth={} ref_bytes={} read_page_bytes={} "
+                        + "retained_page_bytes={} "
                         + "cluster_budget_bytes={}",
                 requested, plan.encoders(), catalog.descriptors().size(), plan.reason().logValue(),
-                run.config().mergeBudgetBytes(), plan.cursorDepth(), plan.refBytes(), plan.pageBytes(),
-                plan.clusterBudgetBytes());
+                run.config().mergeBudgetBytes(), plan.cursorDepth(), plan.refBytes(),
+                plan.readPageBytes(), plan.retainedPageBytes(), plan.clusterBudgetBytes());
     }
 
-    /** Immutable invocation state keeps the lifecycle entry point independent of argument order. */
+    /**
+     * Immutable invocation state keeps lifecycle authority explicit: output publication, staging
+     * ownership, retained originals, progress, and the final-pass latch travel as one value rather
+     * than as interchangeable path/callback arguments.
+     */
     record Request(Path outputDir, Path stagingDir, PublishListener publishListener,
                    LongConsumer progressCallback, FinalPassListener onFinalPassStarting,
                    StagingReconciliation ownedInputs, StagingReconciliation retainedOriginals,

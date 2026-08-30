@@ -29,6 +29,11 @@ final class SegmentHeaderCursors implements AutoCloseable {
     private final SortMetrics metrics;
     private final AtomicBoolean closing = new AtomicBoolean();
 
+    /**
+     * Start one sequential cursor per segment while sharing a bounded metadata-read semaphore. One
+     * cursor per file preserves frame order; the semaphore prevents thousands of open segments from
+     * issuing simultaneous small reads against the filesystem.
+     */
     SegmentHeaderCursors(List<PageRunSegmentIo> segments, Settings settings, SortMetrics metrics,
             PipelineFailure failure) {
         this.failure = failure;
@@ -46,13 +51,20 @@ final class SegmentHeaderCursors implements AutoCloseable {
         }
     }
 
+    /**
+     * Keep header-read concurrency no wider than both the catalog and available processors. Virtual
+     * threads make blocked cursors cheap, but do not make unbounded physical I/O contention cheap.
+     */
     static Settings planned(int segments) {
         int parallelism = Math.max(1, Math.min(segments,
                 Runtime.getRuntime().availableProcessors()));
         return new Settings(QUEUE_DEPTH, parallelism);
     }
 
-    /** Take one reference while continuing to surface failures from any cursor or encoder lane. */
+    /**
+     * Take one reference while continuing to surface failures from any cursor or encoder lane. A
+     * timed poll is required because a failed peer cannot necessarily enqueue this segment's End.
+     */
     PageRef next(int segment) {
         ArrayBlockingQueue<Item> queue = slots.get(segment);
         Item item = queue.poll();
@@ -76,6 +88,11 @@ final class SegmentHeaderCursors implements AutoCloseable {
         };
     }
 
+    /**
+     * Produce a complete ordered reference stream and an End only after the segment proves exact
+     * header-to-trailer tiling and totals. The scan permit is released before queue handoff so a full
+     * slot cannot monopolize the only permit and deadlock an unstarted segment's frontier head.
+     */
     private void scan(int segment, PageRunSegmentIo io, Semaphore scanPermits) {
         try {
             while (true) {
@@ -111,6 +128,10 @@ final class SegmentHeaderCursors implements AutoCloseable {
         }
     }
 
+    /**
+     * Back-pressure one segment without hiding global failure. The router needs one head from every
+     * live segment, so allowing a hot cursor to append to an unbounded collection is not equivalent.
+     */
     private void put(int segment, Item item) throws InterruptedException {
         ArrayBlockingQueue<Item> queue = slots.get(segment);
         while (!queue.offer(item, FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {
@@ -118,6 +139,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
         }
     }
 
+    /** Immutable bounds shared with admission tests and reference-memory planning. */
     record Settings(int queueDepth, int scanParallelism) {
         Settings {
             if (queueDepth < 1 || scanParallelism < 1) {
@@ -126,6 +148,10 @@ final class SegmentHeaderCursors implements AutoCloseable {
         }
     }
 
+    /**
+     * Interrupt and join every cursor before shared channels are closed. Joining matters because a
+     * positional metadata read racing channel close can otherwise overwrite the initiating failure.
+     */
     @Override
     public void close() {
         closing.set(true);
@@ -147,6 +173,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
         }
     }
 
+    /** A distinct End token lets an empty segment terminate without inventing a nullable PageRef. */
     private sealed interface Item {
         record Ref(PageRef value) implements Item {
         }
