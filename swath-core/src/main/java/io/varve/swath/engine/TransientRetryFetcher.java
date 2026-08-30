@@ -15,6 +15,11 @@ import io.varve.swath.store.ListPage;
 import io.varve.swath.store.PageFetcher;
 import io.varve.swath.store.PageRequest;
 import io.varve.swath.store.StoreCapabilities;
+import java.net.ConnectException;
+import java.net.UnknownHostException;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -106,6 +111,8 @@ public final class TransientRetryFetcher implements PageFetcher {
     private final Sleeper sleeper;
     /** Cap-exhaustion disposition when a {@link CancellationToken} is wired — see the class doc for {@link RetryPolicy}'s two dispositions. */
     private final RetryPolicy policy;
+    /** True only for the fresh-run seed decorator created by {@link #forSeed}. */
+    private final boolean failFastUnreachableEndpoint;
 
     /**
      * Defaults to {@link RetryPolicy#BOUNDED}: {@link RetryPolicy#RIDE_OUT} is only safe when a real
@@ -138,11 +145,29 @@ public final class TransientRetryFetcher implements PageFetcher {
      */
     public TransientRetryFetcher(PageFetcher delegate, CancellationToken cancellation, RunMetrics metrics,
                                  Sleeper sleeper, RetryPolicy policy) {
+        this(delegate, cancellation, metrics, sleeper, policy, false);
+    }
+
+    /**
+     * Build the fresh-run seed decorator whose endpoint identity is known from wiring rather than
+     * inferred from request fields also used by mid-run structure probes.
+     */
+    public static TransientRetryFetcher forSeed(PageFetcher delegate,
+            CancellationToken cancellation, RunMetrics metrics, Sleeper sleeper,
+            RetryPolicy policy) {
+        return new TransientRetryFetcher(
+                delegate, cancellation, metrics, sleeper, policy, true);
+    }
+
+    private TransientRetryFetcher(PageFetcher delegate, CancellationToken cancellation,
+            RunMetrics metrics, Sleeper sleeper, RetryPolicy policy,
+            boolean failFastUnreachableEndpoint) {
         this.delegate = delegate;
         this.cancellation = cancellation;
         this.metrics = metrics;
         this.sleeper = sleeper;
         this.policy = policy;
+        this.failFastUnreachableEndpoint = failFastUnreachableEndpoint;
     }
 
     @Override
@@ -177,6 +202,13 @@ public final class TransientRetryFetcher implements PageFetcher {
                 }
                 return page;
             } catch (ThrottleException te) {
+                if (failFastUnreachableEndpoint && isUnreachableEndpoint(te)) {
+                    if (metrics != null) {
+                        metrics.recordStealReason("FATAL", "seed_endpoint_unreachable");
+                    }
+                    throw new ListingException(
+                            "seed probe failed because the object-store endpoint is unreachable", te);
+                }
                 transientRetries++;
                 if (te.kind() == ThrottleException.Kind.ATTEMPT_TIMEOUT) {
                     consecutiveAttemptTimeouts++;
@@ -227,6 +259,19 @@ public final class TransientRetryFetcher implements PageFetcher {
                 backoff(++attempt, transientRetries);
             }
         }
+    }
+
+    /** DNS failure and connection refusal are permanent for this invocation's seed configuration. */
+    private static boolean isUnreachableEndpoint(Throwable failure) {
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        Throwable current = failure;
+        while (current != null && seen.add(current)) {
+            if (current instanceof ConnectException || current instanceof UnknownHostException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void throwIfRunCancelled() throws InterruptedException {

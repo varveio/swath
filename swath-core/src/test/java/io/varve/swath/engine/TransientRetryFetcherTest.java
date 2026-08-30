@@ -21,6 +21,9 @@ import io.varve.swath.store.ListPage;
 import io.varve.swath.store.PageRequest;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.SeedSteps;
+import java.io.IOException;
+import java.net.ConnectException;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,6 +31,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * The bounded, cancellation-aware transient-retry decorator that shields the non-gauge fetch paths
@@ -56,6 +61,79 @@ final class TransientRetryFetcherTest {
         Counter c = m.registry().find("swath.steal_reason").tag("outcome", outcome).tag("reason", reason)
                 .counter();
         return c == null ? 0.0 : c.count();
+    }
+
+    static List<IOException> unreachableSeedEndpointFaults() {
+        return List.of(new ConnectException("connection refused"),
+                new UnknownHostException("does-not-resolve.invalid"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("unreachableSeedEndpointFaults")
+    void unreachableSeedEndpointFailsOnFirstAttempt(IOException cause) {
+        AtomicInteger calls = new AtomicInteger();
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        MockPageFetcher delegate = MockPageFetcher.builder()
+                .keys(List.of(b("data/a")))
+                .interceptor((req, idx, page) -> {
+                    calls.incrementAndGet();
+                    throw ThrottleException.networkExhaustion("unreachable", cause);
+                })
+                .build();
+        TransientRetryFetcher fetcher = TransientRetryFetcher.forSeed(
+                delegate, new CancellationToken(), metrics, NO_SLEEP, RetryPolicy.RIDE_OUT);
+        PageRequest seedProbe = PageRequest.objectsDelimited(
+                new byte[0], new byte[] {'/'}, null, 1000);
+
+        assertThatThrownBy(() -> fetcher.fetchPage(seedProbe))
+                .isInstanceOf(ListingException.class)
+                .isNotInstanceOf(ThrottleException.class)
+                .hasMessageContaining("endpoint is unreachable")
+                .hasRootCauseInstanceOf(cause.getClass());
+        assertThat(calls).hasValue(1);
+        assertThat(steal(metrics, "FATAL", "seed_endpoint_unreachable")).isEqualTo(1.0);
+    }
+
+    @Test
+    void connectionFailureOnOrdinaryPageRemainsRetryable() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        MockPageFetcher delegate = MockPageFetcher.builder()
+                .keys(List.of(b("data/a")))
+                .interceptor((req, idx, page) -> {
+                    if (calls.getAndIncrement() == 0) {
+                        throw ThrottleException.networkExhaustion(
+                                "transient reset", new ConnectException("connection reset"));
+                    }
+                    return page;
+                })
+                .build();
+        TransientRetryFetcher fetcher = new TransientRetryFetcher(
+                delegate, new CancellationToken(), null, NO_SLEEP, RetryPolicy.RIDE_OUT);
+
+        assertThat(fetcher.fetchPage(PageRequest.objects(new byte[0], null, 1000)))
+                .isNotNull();
+        assertThat(calls).hasValue(2);
+    }
+
+    @Test
+    void delimitedNonSeedProbeConnectionFailureRemainsRetryable() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        MockPageFetcher delegate = MockPageFetcher.builder()
+                .keys(List.of(b("data/a")))
+                .interceptor((req, idx, page) -> {
+                    if (calls.getAndIncrement() == 0) {
+                        throw ThrottleException.networkExhaustion(
+                                "transient reset", new ConnectException("connection reset"));
+                    }
+                    return page;
+                })
+                .build();
+        TransientRetryFetcher fetcher = new TransientRetryFetcher(
+                delegate, new CancellationToken(), null, NO_SLEEP, RetryPolicy.RIDE_OUT);
+
+        assertThat(fetcher.fetchPage(PageRequest.objectsDelimited(
+                new byte[0], new byte[] {'/'}, null, 1000))).isNotNull();
+        assertThat(calls).hasValue(2);
     }
 
     /** A transient page fetch that throws {@code failures} transient throttles, then succeeds, must NOT fail. */

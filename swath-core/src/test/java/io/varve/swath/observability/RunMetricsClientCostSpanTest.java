@@ -44,7 +44,7 @@ class RunMetricsClientCostSpanTest {
         metrics.recordCheckpointCommitWait(1_000_000L);
         metrics.recordCheckpointCommitWait(3_000_000L);
         metrics.recordCheckpointQueueWait(2_000_000L);
-        metrics.recordCheckpointCommit(metrics.startCheckpointCommitTimer(), 8);
+        metrics.recordCheckpointCommit(1L, 8);
         metrics.recordEmit(4_000_000L);
         metrics.recordQueueWait(metrics.startQueueWaitTimer());
         metrics.recordParquetWrite(5_000_000L);
@@ -86,7 +86,7 @@ class RunMetricsClientCostSpanTest {
 
         metrics.recordCheckpointCommitWait(Duration.ofMillis(40).toNanos());
         metrics.recordCheckpointQueueWait(Duration.ofMillis(40).toNanos());
-        metrics.recordCheckpointCommit(metrics.startCheckpointCommitTimer(), 1);
+        metrics.recordCheckpointCommit(1L, 1);
         metrics.recordEmit(Duration.ofMillis(40).toNanos());
         metrics.recordQueueWait(metrics.startQueueWaitTimer());
         metrics.recordParquetWrite(Duration.ofMillis(40).toNanos());
@@ -114,7 +114,7 @@ class RunMetricsClientCostSpanTest {
             metrics.recordCheckpointQueueWait(1_000_000L);
         }
         for (int i = 0; i < 3; i++) {
-            metrics.recordCheckpointCommit(metrics.startCheckpointCommitTimer(), 1);
+            metrics.recordCheckpointCommit(1L, 1);
         }
         for (int i = 0; i < 4; i++) {
             metrics.recordEmit(1_000_000L);

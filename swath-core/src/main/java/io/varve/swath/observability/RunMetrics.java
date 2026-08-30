@@ -1644,13 +1644,9 @@ public final class RunMetrics {
 
     // ---- Checkpoint/resume (SqliteCheckpointStore) -----------------
 
-    public Timer.Sample startCheckpointCommitTimer() {
-        return Timer.start(registry);
-    }
-
-    /** The writer-thread batch's op-execution + {@code conn.commit()} (the I1 WAL-fsync critical path). */
-    public void recordCheckpointCommit(Timer.Sample sample, int batchSize) {
-        sample.stop(checkpointCommitLatency);
+    /** The writer batch's pre-captured op-execution + commit span, excluding caller continuations. */
+    public void recordCheckpointCommit(long elapsedNanos, int batchSize) {
+        checkpointCommitLatency.record(Math.max(0L, elapsedNanos), TimeUnit.NANOSECONDS);
         checkpointCommitBatchSize.record(batchSize);
     }
 

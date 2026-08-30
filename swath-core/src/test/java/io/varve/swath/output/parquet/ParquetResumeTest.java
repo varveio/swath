@@ -6,6 +6,7 @@
 package io.varve.swath.output.parquet;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
@@ -75,5 +76,80 @@ final class ParquetResumeTest {
     @Test
     void missingDirectoryIsANoOp(@TempDir Path dir) throws Exception {
         ParquetResume.discardNonFinalized(dir.resolve("nope"), Set.of());   // does not throw
+    }
+
+    @Test
+    void missingCheckpointFinalizedPartRefusesBeforeDeletingAnything(@TempDir Path dir)
+            throws Exception {
+        Path data = DatasetLayout.of(dir).dataDir();
+        Files.createDirectories(data);
+        Path stale = data.resolve("part-w0-00001.parquet");
+        writePart(stale, false, "tail");
+
+        assertThatThrownBy(() -> ParquetResume.discardNonFinalized(
+                dir, Set.of("data/part-w0-00000.parquet")))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("checkpoint-finalized Parquet part is missing");
+
+        assertThat(stale).as("validation precedes the destructive stale-part sweep").exists();
+    }
+
+    @Test
+    void checkpointFinalizedPartPathCannotEscapeTheDataset(@TempDir Path dir) throws Exception {
+        Files.createDirectories(DatasetLayout.of(dir).dataDir());
+
+        assertThatThrownBy(() -> ParquetResume.discardNonFinalized(
+                dir, Set.of("data/../outside.parquet")))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("unsafe checkpoint-finalized Parquet part path");
+    }
+
+    @Test
+    void symlinkedDataDirectoryIsRefusedBeforeDeletingOutsideParts(@TempDir Path dir)
+            throws Exception {
+        Path outside = Files.createDirectory(dir.resolve("outside"));
+        Path outsidePart = Files.writeString(outside.resolve("part-w0-00001.parquet"), "outside");
+        Files.createSymbolicLink(DatasetLayout.of(dir).dataDir(), outside);
+
+        assertThatThrownBy(() -> ParquetResume.discardNonFinalized(dir, Set.of()))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("data path is not an ordinary directory");
+
+        assertThat(outsidePart).exists();
+    }
+
+    @Test
+    void missingCheckpointFinalizedSortSegmentRefusesResume(@TempDir Path dir) throws Exception {
+        Path staging = Files.createDirectory(dir.resolve("_staging"));
+        assertThatThrownBy(() -> ParquetResume.discardNonFinalizedSegments(
+                staging, Set.of("seg-1.pageseg")))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("sort staging segment is missing");
+    }
+
+    @Test
+    void checkpointFinalizedSortSegmentMustBeABarePageRunName(@TempDir Path dir) throws Exception {
+        Path staging = Files.createDirectory(dir.resolve("_staging"));
+
+        assertThatThrownBy(() -> ParquetResume.discardNonFinalizedSegments(
+                staging, Set.of("../escape.pageseg")))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("unsafe retained sort staging segment name");
+    }
+
+    @Test
+    void sortSweepDeletesOnlyOwnedStagingExtensions(@TempDir Path dir) throws Exception {
+        Path staging = Files.createDirectory(dir.resolve("_staging"));
+        Path retained = Files.writeString(staging.resolve("seg-keep.pageseg"), "keep");
+        Path stalePageRun = Files.writeString(staging.resolve("seg-stale.pageseg"), "stale");
+        Path staleLegacy = Files.writeString(staging.resolve("merge-stale.parquet"), "stale");
+        Path unrelated = Files.writeString(staging.resolve("operator-note.txt"), "leave me");
+
+        ParquetResume.discardNonFinalizedSegments(staging, Set.of("seg-keep.pageseg"));
+
+        assertThat(retained).exists();
+        assertThat(stalePageRun).doesNotExist();
+        assertThat(staleLegacy).doesNotExist();
+        assertThat(unrelated).exists();
     }
 }

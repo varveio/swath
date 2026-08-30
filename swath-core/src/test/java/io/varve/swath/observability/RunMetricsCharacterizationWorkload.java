@@ -174,7 +174,7 @@ final class RunMetricsCharacterizationWorkload {
         m.recordIdleBackoffPark(m.startIdleBackoffParkTimer());
 
         // Checkpoint/resume.
-        m.recordCheckpointCommit(m.startCheckpointCommitTimer(), 64);
+        m.recordCheckpointCommit(1L, 64);
         m.recordCheckpointQueueWait(1_000L);
         m.recordCheckpointCommitWait(3_000L);
 

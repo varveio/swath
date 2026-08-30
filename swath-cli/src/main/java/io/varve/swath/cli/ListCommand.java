@@ -45,6 +45,7 @@ import io.varve.swath.observability.SafeInput;
 import io.varve.swath.observability.StopReason;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.DurableFiles;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
@@ -1348,7 +1349,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // backoff-sleeper override into the seed's transient-retry loop, mirroring the engine seam. The
         // RetryConfig resolves a null override to the production Thread::sleep default.
         RetryConfig retry = retryConfig();
-        PageFetcher seedFetcher = new TransientRetryFetcher(
+        PageFetcher seedFetcher = TransientRetryFetcher.forSeed(
                 fetcher, ctx.cancellation(), metrics, retry.sleeper(), retry.policy());
         SeedStep seedStep = new SeedStep(
                 seedFetcher, s3uri.prefix(), connection.maxParallelListings, metrics, engine.toggles);
@@ -1367,6 +1368,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                      TraceSink traceSink,
                                      ListRunner.ParquetSpec parquetSpec) throws Exception {
         Path dir = output.openParquetDir();
+        probeDirectoryFsync(dir);
         // Sample free space on the volume that actually takes the write load (Parquet parts).
         ctx.metrics().registerDiskFreeGauge(dir);
         if (!run.resumed()) {
@@ -1379,7 +1381,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         Set<String> finalizedNames = finalized.stream()
                 .map(PartRef::path).collect(Collectors.toSet());
         if (run.resumed()) {
-            ParquetResume.discardNonFinalized(dir, finalizedNames);
+            reconcileResumedParquet(dir, finalizedNames);
             // Those carried-over parts are rows this dataset holds, listed by a previous attempt that
             // this fresh RunMetrics never saw: without the backfill the summary's objects (and the
             // ratios derived from it) describe only the relisted tail, while output_files/
@@ -1389,6 +1391,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // session/recovered split is what keeps live rates measuring THIS process's work.
             ctx.metrics().recordRecoveredObjects(finalized.stream().mapToLong(PartRef::rows).sum());
         }
+        Path dataDir = DatasetLayout.of(dir).dataDir();
+        Files.createDirectories(dataDir);
+        probeDirectoryFsync(dataDir);
         // The consumer manifest needs an MD5 per part. The checkpoint doesn't persist it, so a
         // resumed run recomputes the MD5 of each carried-over finalized part ONCE here (finalized
         // parts are never rewritten, so the checksum is stable) — the pool then caches it and never
@@ -1421,9 +1426,11 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     + "non-resumable in this release; start a fresh run with --checkpoint none");
         }
         Path directory = output.openDatasetDir();
+        probeDirectoryFsync(directory);
         ctx.metrics().registerDiskFreeGauge(directory);
         DatasetDirGuard.prepareDatasetForFreshRun(
                 directory, argsHash, run.id(), freshDatasetDirectoryState);
+        probeDirectoryFsync(DatasetLayout.of(directory).dataDir());
         ListRunner.Spec listing = listSpec(
                 s3uri, format, channelCapacity, pageMax, filterChain, argsHash, config);
         listRunner().runToTextDatasetWorkStealing(
@@ -1545,6 +1552,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                      ListRunner.ParquetSpec parquetSpec,
                                      SortConfig sortConfig) throws Exception {
         Path outputDir = output.openParquetDir();
+        probeDirectoryFsync(outputDir);
         // Sample free space on the volume that takes the write load — sort-staging segments +
         // Parquet parts both live under outputDir (a prior incident crashed on sort-segment disk exhaustion).
         ctx.metrics().registerDiskFreeGauge(outputDir);
@@ -1557,6 +1565,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // this is deliberately fresh-only, so resume retains checkpoint-finalized segments.
             clearSortStagingContents(outputDir, stagingDir);
         }
+        Path dataDir = DatasetLayout.of(outputDir).dataDir();
+        Files.createDirectories(dataDir);
+        probeDirectoryFsync(dataDir);
         SortMode sortMode = run.mode() == ListingMode.VERSIONS
                 ? SortMode.VERSIONS : SortMode.OBJECTS;
 
@@ -1616,6 +1627,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // this run writes its own, so a foreign manifest's finals never survive into this run's
             // published output.
             Files.createDirectories(stagingDir);
+            probeDirectoryFsync(stagingDir);
             listRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
                     sortConfig, sortMode, parquetSpec, sorting.forceSort);
             return ExitCodes.SUCCESS;
@@ -1625,6 +1637,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // brand-new giant bucket's true disk trajectory trips this well before the merge, not after
         // it. See SortDiskGuard's class javadoc for why it halts directly rather than throwing.
         Files.createDirectories(stagingDir);
+        probeDirectoryFsync(stagingDir);
         try (SortDiskGuard diskGuard = SortDiskGuard.arm(
                 outputDir, ctx.metrics()::sortSegmentBytesWritten, sorting.forceSort)) {
             listRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
@@ -1632,6 +1645,24 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     traceSink, run.resumed(), retryConfig(), sorting.forceSort);
         }
         return ExitCodes.SUCCESS;
+    }
+
+    static void reconcileResumedParquet(Path directory, Set<String> finalizedNames)
+            throws OutputException {
+        try {
+            ParquetResume.discardNonFinalized(directory, finalizedNames);
+        } catch (IOException e) {
+            throw new OutputException(
+                    "Parquet resume failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static void probeDirectoryFsync(Path directory) throws OutputException {
+        try {
+            DurableFiles.probeDirectoryFsync(directory);
+        } catch (IOException e) {
+            throw new OutputException("directory fsync startup probe failed for " + directory, e);
+        }
     }
 
     /**

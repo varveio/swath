@@ -5,7 +5,6 @@
  */
 package io.varve.swath.checkpoint;
 
-import io.micrometer.core.instrument.Timer;
 import io.varve.swath.error.CheckpointException;
 import io.varve.swath.observability.RunMetrics;
 import java.sql.Connection;
@@ -16,6 +15,8 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The checkpoint <b>writer engine</b>: the single-writer task queue, the batching writer thread,
@@ -35,6 +36,8 @@ import java.util.concurrent.ExecutionException;
  * whose future resolves after that same durable commit.
  */
 final class CheckpointWriteQueue {
+
+    private static final Logger log = LoggerFactory.getLogger(CheckpointWriteQueue.class);
 
     /** Consecutive queued tasks coalesce into one transaction, capped at this many. */
     static final int MAX_BATCH = 256;
@@ -132,6 +135,8 @@ final class CheckpointWriteQueue {
                     return;
                 }
             }
+        } catch (Throwable e) {
+            failStore(e, batch);
         } finally {
             try {
                 conn.close();
@@ -146,22 +151,12 @@ final class CheckpointWriteQueue {
         // critical path) for the whole batch; queue wait is measured per-task from enqueue to
         // here (batch drain), both timed only on the successful path (a rollback's failure is
         // the writer-thread's terminal state, not a representative commit-latency sample).
-        Timer.Sample commitSample = metrics == null ? null : metrics.startCheckpointCommitTimer();
+        long batchStartedNanos = metrics == null ? 0L : System.nanoTime();
         try {
             for (Task t : batch) {
                 t.result = t.op.run(conn);
             }
             conn.commit();
-            if (metrics != null) {
-                metrics.recordCheckpointCommit(commitSample, batch.size());
-                long now = System.nanoTime();
-                for (Task t : batch) {
-                    metrics.recordCheckpointQueueWait(now - t.enqueuedAtNanos);
-                }
-            }
-            for (Task t : batch) {
-                t.future.complete(t.result);
-            }
         } catch (Throwable e) {
             try {
                 conn.rollback();
@@ -169,6 +164,42 @@ final class CheckpointWriteQueue {
                 // rollback best-effort; the original failure is what we surface
             }
             failStore(e, batch);
+            return;
+        }
+
+        long committedAtNanos = metrics == null ? 0L : System.nanoTime();
+        // Once commit succeeds, report success before doing any fallible post-commit work. A
+        // metrics failure cannot roll the transaction back and must not make already-durable work
+        // appear failed to callers.
+        try {
+            for (Task t : batch) {
+                t.future.complete(t.result);
+            }
+        } catch (Throwable completionFailure) {
+            // CompletableFuture normally absorbs dependent failures, but never let an abnormal
+            // completion implementation terminate the only writer without latching the store.
+            for (Task t : batch) {
+                try {
+                    t.future.complete(t.result);
+                } catch (Throwable retryFailure) {
+                    if (retryFailure != completionFailure) {
+                        completionFailure.addSuppressed(retryFailure);
+                    }
+                }
+            }
+            failStore(completionFailure, List.of());
+            return;
+        }
+        if (metrics != null) {
+            try {
+                metrics.recordCheckpointCommit(
+                        committedAtNanos - batchStartedNanos, batch.size());
+                for (Task t : batch) {
+                    metrics.recordCheckpointQueueWait(batchStartedNanos - t.enqueuedAtNanos);
+                }
+            } catch (Throwable e) {
+                log.warn("checkpoint metrics recording failed after a successful commit", e);
+            }
         }
     }
 
