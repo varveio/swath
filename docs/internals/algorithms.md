@@ -1725,6 +1725,15 @@ each reference into exactly one plan. Plans carry dense merge-order ordinals and
 queue of at most `2 * N` complete plans; any free encoder may take the next plan. The ordinal, not
 encoder identity or completion order, determines final part order.
 
+Admission also prices the transient ownership between those structures: each scanner may hold one
+reference while its queue is full, and each encoder may own one executing plan in addition to the
+`2 * N` queued plans. A reference's price includes both key arrays at the post-cascade catalog's
+largest actual segment-bound key length. The retained-page price adds the format-derived maximum
+dictionary-cache object overhead to its encoded/decoded payload multiplier, so a planner-admitted
+page cannot fail the lane guard solely because all five dictionaries reached their 64-value cap.
+If the surviving segment channels consume the entire usable descriptor budget, pipeline admission
+refuses before opening them instead of inventing a one-writer floor.
+
 A page whose key range is strictly below the next page minimum is a whole-page item. The encoder can
 decode and write that page directly. Transitively overlapping page ranges form one cluster item
 because their rows may interleave. Its encoder positionally reads and CRC-checks the referenced

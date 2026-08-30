@@ -32,6 +32,7 @@ final class PageRunCatalog {
     private final Map<Path, PageRunSegmentDescriptor> byPath;
     private final long maxRecordLen;
     private final int maxRawPayloadLength;
+    private final int maxKeyLength;
     private final long totalRecords;
     private final long totalEntries;
 
@@ -42,6 +43,7 @@ final class PageRunCatalog {
         Set<Path> normalizedIdentities = new LinkedHashSet<>();
         long maximum = -1;
         int maximumRaw = 0;
+        int maximumKey = 0;
         long records = 0;
         long entries = 0;
         for (PageRunSegmentDescriptor descriptor : descriptors) {
@@ -55,6 +57,9 @@ final class PageRunCatalog {
             if (descriptor.hasDecodedPageMaximum()) {
                 maximumRaw = Math.max(maximumRaw, descriptor.maxRawPayloadLength());
             }
+            maximumKey = Math.max(maximumKey, Math.max(
+                    descriptor.trailer().segMinKey().length,
+                    descriptor.trailer().segMaxKey().length));
             records = Math.addExact(records, descriptor.trailer().totalRecords());
             entries = Math.addExact(entries, descriptor.trailer().totalEntries());
         }
@@ -62,6 +67,7 @@ final class PageRunCatalog {
         this.byPath = Map.copyOf(indexed);
         this.maxRecordLen = maximum;
         this.maxRawPayloadLength = maximumRaw;
+        this.maxKeyLength = maximumKey;
         this.totalRecords = records;
         this.totalEntries = entries;
     }
@@ -201,6 +207,11 @@ final class PageRunCatalog {
     /** Exact maximum decoded payload bytes for one original input page. */
     int maxRawPayloadLength() {
         return maxRawPayloadLength;
+    }
+
+    /** Largest actual segment-bound key retained by the validated post-cascade catalog. */
+    int maxKeyLength() {
+        return maxKeyLength;
     }
 
     long totalRecords() {

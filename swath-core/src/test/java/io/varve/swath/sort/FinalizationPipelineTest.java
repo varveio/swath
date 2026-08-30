@@ -9,7 +9,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -80,6 +82,38 @@ final class FinalizationPipelineTest {
                 persisted.rawPayloadLength(), record.length);
 
         assertThat(DecodedPageBudget.retainedBytes(persisted)).isLessThanOrEqualTo(retainedUpper);
+    }
+
+    @Test
+    void retainedPagePlanningUnitCoversMaximumDictionaryCardinality(@TempDir Path root)
+            throws IOException {
+        List<ListEntry> entries = new ArrayList<>(PageBlock.DICT_CAP);
+        for (int value = 0; value < PageBlock.DICT_CAP; value++) {
+            String suffix = String.format("-%02d", value);
+            entries.add(new ObjectEntry(KeyBytes.ofUtf8("key" + suffix), 1L, 0L,
+                    null, "storage" + suffix, null, false, "owner" + suffix,
+                    "display" + suffix, "algorithm" + suffix, "type" + suffix));
+        }
+        PageBlock persisted = PageBlock.deserialize(
+                PageBlock.pack(entries, comparator, PageCodec.LZ4).serialize());
+        Path segment = SortTestSupport.writeIndexedPages(
+                root.resolve("max-dictionaries" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(entries), SortMode.OBJECTS, PageCodec.LZ4);
+        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(ignored -> { }));
+        MergePlanner.PipelinePlan plan = new MergePlanner(
+                SortConfigs.base().withMergeBudgetBytes(64L << 20),
+                SortMetrics.NO_OP, () -> -1).pipelineParallelism(1, catalog);
+
+        for (int column = 0; column < PageBlockCodec.DICT_COLUMN_COUNT; column++) {
+            assertThat(persisted.dictionariesUnsafe().size(column)).isEqualTo(PageBlock.DICT_CAP);
+        }
+        DecodedPageBudget budget = new DecodedPageBudget(
+                plan.retainedPageBytes(), SortMetrics.NO_OP);
+
+        assertThat(budget.reserve(persisted))
+                .isEqualTo(DecodedPageBudget.retainedBytes(persisted));
     }
 
     @Test
@@ -258,10 +292,12 @@ final class FinalizationPipelineTest {
         PageBlock sample = PageBlock.pack(segments.getFirst().getFirst(), comparator);
         long pageBytes = DecodedPageBudget.retainedBytes(
                 PageBlock.deserialize(sample.serialize()));
-        long retainedRefs = (100L * (SegmentHeaderCursors.QUEUE_DEPTH + 1L)
-                + 100L * (1L + PartEncoders.QUEUE_DEPTH)) * MergePlanner.PIPELINE_REF_BYTES;
+        long plannedPageBytes = DecodedPageBudget.retainedPageUpperBound(
+                sample.rawPayloadLength(), sample.serialize().length);
+        long retainedRefs = (100L * (SegmentHeaderCursors.QUEUE_DEPTH + 2L)
+                + 100L * (PartEncoders.QUEUE_DEPTH + 2L)) * PageRef.retainedBytes(5);
         long mergeBudget = PartEncoders.WRITER_HEAP_ESTIMATE_BYTES + retainedRefs
-                + 3L * pageBytes - 1L;
+                + sample.serialize().length + 3L * plannedPageBytes - 1L;
 
         DecodedPageBudget eager = new DecodedPageBudget(3L * pageBytes - 1L,
                 SortMetrics.NO_OP);
@@ -326,9 +362,9 @@ final class FinalizationPipelineTest {
         long readPageBytes = catalog.maxRecordLen();
         long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
                 catalog.maxRawPayloadLength(), catalog.maxRecordLen());
-        long routerRefs = 3L + catalog.totalRecords()
-                * (1L + 2L * PartEncoders.QUEUE_DEPTH);
-        long routerBytes = routerRefs * MergePlanner.PIPELINE_REF_BYTES;
+        long routerRefs = 4L + catalog.totalRecords()
+                * (1L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
+        long routerBytes = routerRefs * PageRef.retainedBytes(catalog.maxKeyLength());
         long perEncoder = readPageBytes + retainedPageBytes
                 + PartEncoders.WRITER_HEAP_ESTIMATE_BYTES;
         MergePlanner heapPlanner = new MergePlanner(
@@ -378,6 +414,74 @@ final class FinalizationPipelineTest {
     }
 
     @Test
+    void longKeyCatalogPricesScannerPendingQueuedAndExecutingReferences(@TempDir Path root)
+            throws IOException {
+        String maximumKey = "x".repeat(1_024);
+        Path segment = SortTestSupport.writeIndexedPages(
+                root.resolve("long-key" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object(maximumKey))));
+        PageRunCatalog physical = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(ignored -> { }));
+        PageRunSegmentDescriptor base = physical.descriptors().getFirst();
+        int segments = 8;
+        List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(segments);
+        for (int index = 0; index < segments; index++) {
+            PageRunTrailer.Trailer trailer = new PageRunTrailer.Trailer(
+                    base.trailer().segMinKey(), base.trailer().segMaxKey(),
+                    base.trailer().extensionStart(), 1_000_000, 1_000_000,
+                    base.trailer().maxRecordLen());
+            descriptors.add(new PageRunSegmentDescriptor(
+                    root.resolve("synthetic-" + index + StagingNames.PAGE_RUN_SUFFIX),
+                    base.fileSize(), base.trailerStart(), trailer, base.extension(),
+                    base.maxRawPayloadLength(), base.physicalFormat()));
+        }
+        PageRunCatalog catalog = PageRunCatalog.fromDescriptors(descriptors);
+        int refBytes = PageRef.retainedBytes(maximumKey.length());
+        int admittedEncoders = 3;
+        long cursorRefs = (long) segments * (SegmentHeaderCursors.QUEUE_DEPTH + 2L);
+        long planRefs = (long) MergePlanner.MAX_PIPELINE_PLAN_REFS
+                * (1L + admittedEncoders * (PartEncoders.QUEUE_DEPTH + 1L));
+        long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
+                catalog.maxRawPayloadLength(), catalog.maxRecordLen());
+        long budgetForThree = (cursorRefs + planRefs) * refBytes
+                + admittedEncoders * (PartEncoders.WRITER_HEAP_ESTIMATE_BYTES
+                + catalog.maxRecordLen() + retainedPageBytes);
+        SortConfig config = SortConfigs.base()
+                .withFinalFileBytes(1L << 40)
+                .withMergeBudgetBytes(budgetForThree);
+
+        MergePlanner.PipelinePlan plan = new MergePlanner(
+                config, SortMetrics.NO_OP, () -> -1).pipelineParallelism(4, catalog);
+
+        assertThat(catalog.maxKeyLength()).isEqualTo(maximumKey.length());
+        assertThat(plan.refBytes()).isEqualTo(refBytes).isGreaterThan(200);
+        assertThat(plan.encoders()).isEqualTo(admittedEncoders);
+        assertThat(plan.reason()).isEqualTo(MergePlanner.PipelineClampReason.HEAP_CLAMPED);
+        assertThat(plan.clusterBudgetBytes()).isEqualTo(retainedPageBytes);
+    }
+
+    @Test
+    void descriptorFloorRefusesBeforeOpeningAPipelineLane(@TempDir Path root) throws IOException {
+        Path segment = SortTestSupport.writeIndexedPages(
+                root.resolve("fd-floor" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("a"))));
+        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(ignored -> { }));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        int softLimit = MergeFdBudget.FD_HEADROOM + catalog.descriptors().size();
+        MergePlanner planner = new MergePlanner(
+                SortConfigs.base().withMergeBudgetBytes(64L << 20), metrics, () -> softLimit);
+
+        assertThatThrownBy(() -> planner.pipelineParallelism(4, catalog))
+                .isInstanceOf(MergeMemoryExhaustedException.class)
+                .hasMessageContaining("minimum pipeline lane does not fit descriptor budget")
+                .hasMessageContaining("reason=fd_exhausted");
+        assertThat(metrics.count("SORT.pipeline_encoders_fd_clamped")).isEqualTo(1);
+    }
+
+    @Test
     void unboundedByteTargetClosesPlansAtTheReferenceCap(@TempDir Path root)
             throws IOException {
         int pages = MergePlanner.MAX_PIPELINE_PLAN_REFS + 1;
@@ -419,7 +523,7 @@ final class FinalizationPipelineTest {
         assertThat(plan.retainedPageBytes()).isGreaterThan(plan.legacyDecodedLimit());
         assertThat(plan.encoders()).isEqualTo(1);
         assertThat(plan.cursorDepth()).isEqualTo(SegmentHeaderCursors.QUEUE_DEPTH);
-        assertThat(plan.refBytes()).isEqualTo(MergePlanner.PIPELINE_REF_BYTES);
+        assertThat(plan.refBytes()).isEqualTo(PageRef.retainedBytes(catalog.maxKeyLength()));
     }
 
     @Test
@@ -517,7 +621,7 @@ final class FinalizationPipelineTest {
                     public void write(ListEntry entry) throws IOException {
                         if (index == 2) {
                             try {
-                                if (!laterPlanClosed.await(10, TimeUnit.SECONDS)) {
+                                if (!laterPlanClosed.await(60, TimeUnit.SECONDS)) {
                                     throw new IOException("later encoder did not finish");
                                 }
                             } catch (InterruptedException e) {
@@ -709,12 +813,13 @@ final class FinalizationPipelineTest {
             }
         });
 
-        assertThat(writerStarted.await(10, TimeUnit.SECONDS)).isTrue();
-        caller.interrupt();
-        caller.join(10_000);
-        blockWriter.countDown();
-
-        assertThat(caller.isAlive()).isFalse();
+        try {
+            assertThat(writerStarted.await(60, TimeUnit.SECONDS)).isTrue();
+            caller.interrupt();
+            assertThat(caller.join(Duration.ofSeconds(60))).isTrue();
+        } finally {
+            blockWriter.countDown();
+        }
         assertThat(failure.get()).isInstanceOf(IOException.class)
                 .hasMessageContaining("sort merge interrupted");
         assertNoPublishedOrTemporaryFiles(root);

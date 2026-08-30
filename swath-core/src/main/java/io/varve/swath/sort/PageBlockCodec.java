@@ -52,6 +52,17 @@ final class PageBlockCodec {
     /** Conservative heap reservation including both array headers and the coordinate owner. */
     static final int PERSISTED_DICTIONARY_COORDINATE_BYTES =
             PERSISTED_DICTIONARY_COORDINATE_DATA_BYTES + 88;
+    /**
+     * Maximum fixed heap added when every persisted dictionary slot materializes. The variable
+     * UTF-16 character storage is covered by two times the encoded dictionary bytes in the record;
+     * this term covers cache arrays, String/backing-array headers, and dictionary coordinates.
+     */
+    static final long MAX_PERSISTED_DICTIONARY_OVERHEAD_BYTES =
+            16L + (long) DICT_COLUMN_COUNT * Long.BYTES
+                    + (long) DICT_COLUMN_COUNT
+                    * (16L + (long) PageBlock.DICT_CAP * Long.BYTES)
+                    + (long) DICT_COLUMN_COUNT * PageBlock.DICT_CAP * 64L
+                    + PERSISTED_DICTIONARY_COORDINATE_BYTES;
     private static final byte[] EMPTY_KEY = new byte[0];
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 

@@ -64,16 +64,19 @@ final class DecodedPageBudget {
 
     /**
      * Bound the unit consumed by {@link #reserve(PageBlock)} using trailer/header metadata alone.
-     * Pricing the larger physical or raw ceiling by a conservative factor avoids pretending the
-     * payload alone covers dictionary and decompression retention. It deliberately treats NONE as
-     * compressed because the planning pass does not retain each page's codec in {@link PageRef}.
+     * Four times the larger physical or raw ceiling covers the record, decompression target, and
+     * variable dictionary character storage. The additive format-derived term covers the maximum
+     * 5-by-64 dictionary cache object graph even when its strings are tiny. Planning deliberately
+     * treats NONE as compressed because {@link PageRef} does not retain each page's codec.
      */
     static long retainedPageUpperBound(long rawPayloadBytes, long recordBytes) {
         if (rawPayloadBytes < 1 || recordBytes < 1) {
             throw new IllegalArgumentException("page bounds must be positive");
         }
-        return saturatedMultiply(RETAINED_PAGE_FACTOR,
-                Math.max(rawPayloadBytes, recordBytes));
+        return saturatedAdd(
+                saturatedMultiply(RETAINED_PAGE_FACTOR,
+                        Math.max(rawPayloadBytes, recordBytes)),
+                PageBlockCodec.MAX_PERSISTED_DICTIONARY_OVERHEAD_BYTES);
     }
 
     private static long saturatedAdd(long left, long right) {

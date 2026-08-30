@@ -120,6 +120,9 @@ final class SegmentHeaderCursors implements AutoCloseable {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            // closing is set only after the router drained this cursor to End or after another
+            // failure was recorded. Suppressing this shutdown interrupt therefore cannot hide the
+            // sole failure or strand a router that still needs a reference from this segment.
             if (!closing.get()) {
                 failure.record(new MergeCancellation.Cancelled());
             }

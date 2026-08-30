@@ -32,8 +32,6 @@ final class MergePlanner {
     static final int MAX_BOUNDARY_CANDIDATES = 16_384;
     /** One shared temporary proof spool descriptor, independent of the range count. */
     static final int PROOF_SPOOL_FDS = 1;
-    /** Conservative shallow size for one immutable page reference and its two key arrays. */
-    static final int PIPELINE_REF_BYTES = 200;
     /**
      * A complete plan may retain no more coordinates than this. The cap keeps the unbounded-output
      * case independent of catalog size; reaching it may create another correctly ordered part.
@@ -149,19 +147,26 @@ final class MergePlanner {
         int legacyDecodedLimit = decodedPageLimit(config.mergeBudgetBytes());
         long readPageBytes = pipelineReadPageBytes(catalog);
         long retainedPageBytes = pipelineRetainedPageBytes(catalog, legacyDecodedLimit);
+        int refBytes = PageRef.retainedBytes(catalog.maxKeyLength());
         long cursorRefs = saturatedMultiply(segments,
-                SegmentHeaderCursors.QUEUE_DEPTH + 1L);
+                SegmentHeaderCursors.QUEUE_DEPTH + 2L);
         long usableFds = usableFdBudget();
         long byFd = usableFds == Long.MAX_VALUE
                 ? Long.MAX_VALUE : Math.max(0L, usableFds - segments);
+        if (byFd == 0) {
+            metrics.recordStealReason("SORT", "pipeline_encoders_fd_clamped");
+            throw new MergeMemoryExhaustedException(
+                    "minimum pipeline lane does not fit descriptor budget: usable_fds="
+                            + usableFds + ", segments=" + segments + ", reason=fd_exhausted");
+        }
         int fdAdmitted = (int) Math.max(1L, Math.min(requested, byFd));
         int admitted = fdAdmitted;
         while (admitted > 1 && !pipelineHeapFits(
-                admitted, catalog, cursorRefs, readPageBytes, retainedPageBytes)) {
+                admitted, catalog, cursorRefs, refBytes, readPageBytes, retainedPageBytes)) {
             admitted--;
         }
         if (!pipelineHeapFits(admitted, catalog, cursorRefs,
-                readPageBytes, retainedPageBytes)) {
+                refBytes, readPageBytes, retainedPageBytes)) {
             metrics.recordStealReason("SORT", "pipeline_encoder_heap_floor_exhausted");
             throw new MergeMemoryExhaustedException(
                     "minimum pipeline lane does not fit retained-page residency: "
@@ -174,12 +179,13 @@ final class MergePlanner {
             reason = fdAdmitted < requested && admitted == fdAdmitted
                     ? PipelineClampReason.FD_CLAMPED : PipelineClampReason.HEAP_CLAMPED;
         }
-        long fixedBytes = pipelineFixedBytes(admitted, catalog, cursorRefs, readPageBytes);
+        long fixedBytes = pipelineFixedBytes(
+                admitted, catalog, cursorRefs, refBytes, readPageBytes);
         long clusterPool = fixedBytes >= config.mergeBudgetBytes()
                 ? 0L : config.mergeBudgetBytes() - fixedBytes;
         long clusterBudget = clusterPool / admitted;
         return new PipelinePlan(admitted, reason, SegmentHeaderCursors.QUEUE_DEPTH,
-                PIPELINE_REF_BYTES, readPageBytes, retainedPageBytes,
+                refBytes, readPageBytes, retainedPageBytes,
                 clusterBudget, legacyDecodedLimit);
     }
 
@@ -189,8 +195,9 @@ final class MergePlanner {
      * until after output writers and shared channels had been opened.
      */
     private boolean pipelineHeapFits(int encoders, PageRunCatalog catalog,
-            long cursorRefs, long readPageBytes, long retainedPageBytes) {
-        long fixedBytes = pipelineFixedBytes(encoders, catalog, cursorRefs, readPageBytes);
+            long cursorRefs, int refBytes, long readPageBytes, long retainedPageBytes) {
+        long fixedBytes = pipelineFixedBytes(
+                encoders, catalog, cursorRefs, refBytes, readPageBytes);
         long clusterBytes = saturatedMultiply(encoders, retainedPageBytes);
         return saturatedAdd(fixedBytes, clusterBytes) <= config.mergeBudgetBytes();
     }
@@ -201,12 +208,13 @@ final class MergePlanner {
      * those bytes become the lane budgets returned in the plan.
      */
     private long pipelineFixedBytes(int encoders, PageRunCatalog catalog,
-            long cursorRefs, long readPageBytes) {
+            long cursorRefs, int refBytes, long readPageBytes) {
         long targetPages = pipelinePlanRefs(catalog);
         long retainedPlanRefs = saturatedMultiply(targetPages,
-                saturatedAdd(1L, saturatedMultiply(PartEncoders.QUEUE_DEPTH, encoders)));
+                saturatedAdd(1L, saturatedMultiply(
+                        PartEncoders.QUEUE_DEPTH + 1L, encoders)));
         long routerBytes = saturatedMultiply(
-                saturatedAdd(cursorRefs, retainedPlanRefs), PIPELINE_REF_BYTES);
+                saturatedAdd(cursorRefs, retainedPlanRefs), refBytes);
         long writers = saturatedMultiply(encoders,
                 PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
         long reads = saturatedMultiply(encoders, readPageBytes);

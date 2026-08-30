@@ -130,11 +130,11 @@ final class PipelineFinalization {
             return result;
         } catch (Throwable thrown) {
             failure.record(thrown);
-            if (cursors != null) {
-                cursors.close();
-            }
             if (encoders != null) {
                 encoders.close();
+            }
+            if (cursors != null) {
+                cursors.close();
             }
             try {
                 closeChannels(channels);
