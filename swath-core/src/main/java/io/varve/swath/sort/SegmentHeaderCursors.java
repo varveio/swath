@@ -23,7 +23,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
     static final int QUEUE_DEPTH = 2;
     private static final long FAILURE_CHECK_MILLIS = 100;
 
-    private final List<ArrayBlockingQueue<Item>> slots;
+    private final List<ArrayBlockingQueue<Item>> queues;
     private final List<Thread> cursors = new ArrayList<>();
     private final PipelineFailure failure;
     private final SortMetrics metrics;
@@ -39,9 +39,9 @@ final class SegmentHeaderCursors implements AutoCloseable {
         this.failure = failure;
         this.metrics = metrics;
         Semaphore scanPermits = new Semaphore(settings.scanParallelism());
-        slots = new ArrayList<>(segments.size());
+        queues = new ArrayList<>(segments.size());
         for (int i = 0; i < segments.size(); i++) {
-            slots.add(new ArrayBlockingQueue<>(settings.queueDepth()));
+            queues.add(new ArrayBlockingQueue<>(settings.queueDepth()));
         }
         for (int i = 0; i < segments.size(); i++) {
             int segment = i;
@@ -66,7 +66,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
      * timed poll is required because a failed peer cannot necessarily enqueue this segment's End.
      */
     PageRef next(int segment) {
-        ArrayBlockingQueue<Item> queue = slots.get(segment);
+        ArrayBlockingQueue<Item> queue = queues.get(segment);
         Item item = queue.poll();
         if (item == null) {
             long started = System.nanoTime();
@@ -133,7 +133,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
      * live segment, so allowing a hot cursor to append to an unbounded collection is not equivalent.
      */
     private void put(int segment, Item item) throws InterruptedException {
-        ArrayBlockingQueue<Item> queue = slots.get(segment);
+        ArrayBlockingQueue<Item> queue = queues.get(segment);
         while (!queue.offer(item, FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {
             failure.check();
         }

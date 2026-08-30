@@ -173,6 +173,11 @@ With `-Dswath.bench.finalization=pipeline`, every requested encoder count runs b
 part-sizing controls in the same sweep: calibrated bytes and fixed rows. Set the fixed-row target
 with `-Dswath.bench.pipeline-fixed-rows=N`; each `BENCH_ROW` identifies the control and reports total
 router wait, plan-queue wait, header-scan service, encoder page reads, and encoder-read service.
+These pipeline arms run once after the serial brackets and reverse-order range sweep, so they are an
+in-JVM hook/oracle smoke, not publishable performance evidence. The fresh-JVM
+`scripts/perf/finalization-ab.sh` protocol on the benchmark integration branch is the measurement
+instrument: it isolates every sample in a new JVM, alternates arm order, and applies the variance
+gate.
 The row reports proof-spool logical extent, preallocation operations/attempted bytes, mapped
 operations/bytes, and summed service time with the same scope as the live log and run summary.
 `PageRunZoneProofAdversarialTest` pins fixed extent/preallocation while requiring mapped work to grow

@@ -154,6 +154,21 @@ The same existing final-writer close timer is also exposed as `finalize_close_co
 `finalize_close_max_ms`, and `finalize_close_p50_ms`/`_p90_ms`/`_p99_ms`; these are service-time
 observations, not a second timing surface.
 
+When the experimental reference pipeline runs, these additional `sort` fields describe its work:
+
+| Fields | Meaning |
+| --- | --- |
+| `pipeline_pages_forwarded` | Disjoint whole pages routed directly to an encoder. |
+| `pipeline_cluster_pages`, `pipeline_cluster_rows` | Pages and rows processed through overlap-cluster row merging. |
+| `pipeline_router_wait_ms` | Total time the single router waited for the next header reference or for space in the complete-plan queue. |
+| `pipeline_header_scan_ms` | Header-read service summed across segment cursors; concurrent service means this can exceed merge wall time. |
+| `pipeline_plan_queue_wait_ms` | The subset of router wait caused by a full complete-plan queue. |
+| `pipeline_encoder_page_reads` | Positional full-frame page reads performed by encoders. |
+| `pipeline_encoder_read_wait_ms` | Positional read and CRC service summed across encoders; concurrent service means this can exceed merge wall time. |
+| `pipeline_decoded_page_bytes_peak` | Highest exact retained decoded-page residency observed by any encoder cluster. |
+| `pipeline_parts_open` | Open pipeline output writers at the snapshot. |
+| `pipeline_router_wait_share`, `pipeline_plan_queue_wait_share`, `pipeline_encoder_read_wait_share` | The corresponding cumulative millisecond value divided by `merge_ms`; zero when `merge_ms` is zero. These are dimensionless service-to-wall ratios, so a summed concurrent encoder ratio can exceed `1.0`. |
+
 The report can contain the target URI, arguments, filter values, slow-range bounds, and
 key samples. Treat it as operational data and redact it before sharing.
 

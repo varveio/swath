@@ -873,6 +873,8 @@ I11 bound, while `C` is the enforced retained-byte accounting guard for pages.
 Pipeline descriptors are bounded by `K + N` after the same 128-descriptor process headroom. Encoder
 admission has no range proof, boundary sample, seek, per-range stream, or staged-size-floor term. A
 plan closes before its reference count would exceed 16,384, even with an unbounded file-size target.
+If even `N = 1` cannot satisfy the fixed-plus-retained-page heap formula, admission refuses before
+opening pipeline output and records `SORT.pipeline_encoder_heap_floor_exhausted`.
 One transitive overlap component above that cap refuses resumably because it cannot be split without
 risking cross-part interleaving.
 

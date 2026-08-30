@@ -448,11 +448,10 @@ final class PageBlockCodec {
 
     /** Packed Java dictionaries or byte-backed persisted dictionary-table coordinates. */
     static final class Dictionaries {
-        private String[][] packed;
-        private byte[] owner;
-        private int[] starts;
-        private int[] counts;
-        private long materializedBudgetBytes;
+        private final String[][] packed;
+        private final byte[] owner;
+        private final int[] starts;
+        private final int[] counts;
 
         private Dictionaries(String[][] packed, byte[] owner, int[] starts, int[] counts) {
             this.packed = packed;
@@ -491,7 +490,7 @@ final class PageBlockCodec {
         /** Conservative retained heap for lazily decoded persisted dictionary strings and caches. */
         long decodedCacheBudgetBytes() {
             if (owner == null) {
-                return materializedBudgetBytes;
+                return 0;
             }
             int totalValues = 0;
             for (int count : counts) {
@@ -510,29 +509,6 @@ final class PageBlockCodec {
                 }
             }
             return bytes;
-        }
-
-        /**
-         * Detach persisted dictionary values from the encoded record body before that body is
-         * released. The retained heap estimate remains available to decoded-page accounting.
-         */
-        void materialize() {
-            if (owner == null) {
-                return;
-            }
-            long budget = decodedCacheBudgetBytes();
-            String[][] values = new String[DICT_COLUMN_COUNT][];
-            for (int column = 0; column < DICT_COLUMN_COUNT; column++) {
-                values[column] = new String[size(column)];
-                for (int index = 0; index < values[column].length; index++) {
-                    values[column][index] = value(column, index);
-                }
-            }
-            packed = values;
-            owner = null;
-            starts = null;
-            counts = null;
-            materializedBudgetBytes = budget;
         }
 
         String value(int column, int index) {

@@ -1196,6 +1196,8 @@ class ParallelMergeBenchmark {
                     : (double) pipelineRouterWaitNanos / elapsedNanos;
             double planQueueWaitShare = elapsedNanos <= 0 ? 0.0
                     : (double) pipelinePlanQueueWaitNanos / elapsedNanos;
+            String pageReads = finalization == SortFinalization.PIPELINE
+                    ? String.valueOf(pipelineEncoderPageReads) : "unavailable";
             return String.format(
                     "BENCH_ROW %s label=%s staging_format=page-run finalization=%s "
                             + "pipeline_part_policy=%s "
@@ -1213,7 +1215,7 @@ class ParallelMergeBenchmark {
                             + "proof_spool_preallocation_operations=%d "
                             + "proof_spool_preallocation_attempted_bytes=%d "
                             + "proof_spool_mapped_operations=%d proof_spool_mapped_bytes=%d "
-                            + "proof_spool_ms=%d page_reads=%d "
+                            + "proof_spool_ms=%d page_reads=%s "
                             + "pipeline_router_wait_share=%.4f "
                             + "pipeline_plan_queue_wait_share=%.4f "
                             + "pipeline_header_scan_ms=%d pipeline_encoder_read_wait_ms=%d "
@@ -1234,7 +1236,7 @@ class ParallelMergeBenchmark {
                     pageOverlapKeyMerges, proofSpoolLogicalExtentBytes,
                     proofSpoolPreallocationOperations, proofSpoolPreallocationAttemptedBytes,
                     proofSpoolMappedOperations, proofSpoolMappedBytes,
-                    proofSpoolServiceNanos / 1_000_000L, pipelineEncoderPageReads,
+                    proofSpoolServiceNanos / 1_000_000L, pageReads,
                     routerWaitShare, planQueueWaitShare,
                     pipelineHeaderScanNanos / 1_000_000L,
                     pipelineEncoderReadWaitNanos / 1_000_000L,

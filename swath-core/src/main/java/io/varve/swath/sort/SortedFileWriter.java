@@ -63,7 +63,11 @@ public interface SortedFileWriter extends AutoCloseable {
         return Optional.empty();
     }
 
-    /** Release an aborted writer without promising a durable, publishable footer. */
+    /**
+     * Release an aborted writer. Implementations with a distinct non-publishing abort path must
+     * override this method; the compatibility default delegates to {@link #close()} and may write a
+     * durable, publishable footer.
+     */
     default void discard() throws IOException {
         close();
     }

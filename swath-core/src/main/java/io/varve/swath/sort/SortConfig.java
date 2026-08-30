@@ -126,7 +126,7 @@ public final class SortConfig {
     public static final String MERGE_BOUNDARY_POLICY_PROPERTY =
             "swath." + MERGE_BOUNDARY_POLICY_TUNE_KEY;
 
-    /** Resume-free selector for the range and reader-router-encoder finalization paths. */
+    /** Resume-free selector for the range and reference-router-encoder finalization paths. */
     public static final String FINALIZATION_TUNE_KEY = "sort.finalization";
 
     /** JVM-property form of {@link #FINALIZATION_TUNE_KEY}. */

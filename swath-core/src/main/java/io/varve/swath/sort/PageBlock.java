@@ -48,7 +48,7 @@ final class PageBlock {
     static final int MAX_RAW_PAYLOAD_BYTES = 256 * 1024 * 1024;
 
     /** Packed payload array, or the complete owned record body for a persisted block. */
-    private byte[] payloadOwner;
+    private final byte[] payloadOwner;
     private final int payloadOffset;
     private final int payloadLength;
     private final int rawPayloadLength;
@@ -281,18 +281,6 @@ final class PageBlock {
         }
     }
 
-    /**
-     * Materialize a compressed payload and dictionaries, then release the encoded record owner.
-     * Pipeline queues retain only the decoded representation they were admission-priced for.
-     */
-    void prepareDecoded() {
-        if (codec != PageCodec.NONE) {
-            decodedPayload();
-            dictionaries.materialize();
-            payloadOwner = null;
-        }
-    }
-
     byte[] serialize() {
         return PageBlockCodec.serialize(this);
     }
@@ -311,9 +299,6 @@ final class PageBlock {
     }
 
     byte[] payloadOwnerUnsafe() {
-        if (payloadOwner == null) {
-            throw new IllegalStateException("encoded page owner was released after decode");
-        }
         return payloadOwner;
     }
 
@@ -340,7 +325,7 @@ final class PageBlock {
 
     /** Bytes of the retained CRC-verified record body backing a persisted page. */
     int retainedRecordBytes() {
-        return payloadOwner == null ? 0 : payloadOwner.length;
+        return payloadOwner.length;
     }
 
     long dictionaryCacheBudgetBytes() {
@@ -366,9 +351,6 @@ final class PageBlock {
     private byte[] decodedPayload() {
         byte[] cached = decodedPayloadCache;
         if (cached == null) {
-            if (payloadOwner == null) {
-                throw new IllegalStateException("decoded page lost both encoded and decoded payloads");
-            }
             cached = codec.decompress(payloadOwner, payloadOffset, payloadLength,
                     rawPayloadLength);
             decodedPayloadCache = cached;

@@ -83,22 +83,6 @@ final class FinalizationPipelineTest {
     }
 
     @Test
-    void preparedCompressedPageReleasesItsEncodedOwner() {
-        PageBlock packed = PageBlock.pack(List.of(
-                SortTestSupport.object("repeated-prefix/alpha"),
-                SortTestSupport.object("repeated-prefix/bravo")), comparator, PageCodec.LZ4);
-        PageBlock persisted = PageBlock.deserialize(packed.serialize());
-        int encodedOwnerBytes = persisted.retainedRecordBytes();
-
-        persisted.prepareDecoded();
-
-        assertThat(encodedOwnerBytes).isPositive();
-        assertThat(persisted.retainedRecordBytes()).isZero();
-        assertThat(persisted.cursor().next().key().asString())
-                .isEqualTo("repeated-prefix/alpha");
-    }
-
-    @Test
     void clusteredRowsAttributeEveryRawPayloadByteExactlyOnce() {
         PageBlock page = null;
         for (int count = 2; count < 20; count++) {
@@ -361,7 +345,7 @@ final class FinalizationPipelineTest {
         assertThatThrownBy(() -> refusingPlanner.pipelineParallelism(1, catalog))
                 .isInstanceOf(MergeMemoryExhaustedException.class)
                 .hasMessageContaining("minimum pipeline lane does not fit");
-        assertThat(metrics.count("SORT.merge_decoded_page_budget_exhausted")).isEqualTo(1);
+        assertThat(metrics.count("SORT.pipeline_encoder_heap_floor_exhausted")).isEqualTo(1);
     }
 
     @Test
@@ -695,7 +679,7 @@ final class FinalizationPipelineTest {
     }
 
     @Test
-    void callerInterruptCancelsReadersRouterAndEncodersWithoutPublishing(@TempDir Path root)
+    void callerInterruptCancelsHeaderCursorsRouterAndEncodersWithoutPublishing(@TempDir Path root)
             throws Exception {
         CountDownLatch writerStarted = new CountDownLatch(1);
         CountDownLatch blockWriter = new CountDownLatch(1);

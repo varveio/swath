@@ -162,7 +162,7 @@ final class MergePlanner {
         }
         if (!pipelineHeapFits(admitted, catalog, cursorRefs,
                 readPageBytes, retainedPageBytes)) {
-            metrics.recordStealReason("SORT", "merge_decoded_page_budget_exhausted");
+            metrics.recordStealReason("SORT", "pipeline_encoder_heap_floor_exhausted");
             throw new MergeMemoryExhaustedException(
                     "minimum pipeline lane does not fit retained-page residency: "
                             + "read_page_bytes=" + readPageBytes
