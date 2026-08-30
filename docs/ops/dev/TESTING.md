@@ -172,7 +172,7 @@ Every `BENCH_*` line carries cache state, retained run identity (or generated se
 With `-Dswath.bench.finalization=pipeline`, every requested encoder count runs both immutable
 part-sizing controls in the same sweep: calibrated bytes and fixed rows. Set the fixed-row target
 with `-Dswath.bench.pipeline-fixed-rows=N`; each `BENCH_ROW` identifies the control and reports total
-router wait plus its reader and encoder-queue components.
+router wait, plan-queue wait, header-scan service, encoder page reads, and encoder-read service.
 The row reports proof-spool logical extent, preallocation operations/attempted bytes, mapped
 operations/bytes, and summed service time with the same scope as the live log and run summary.
 `PageRunZoneProofAdversarialTest` pins fixed extent/preallocation while requiring mapped work to grow

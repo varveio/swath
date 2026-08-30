@@ -1683,14 +1683,14 @@ exact `[lo, hi)` bounds. The final unbounded range drains every original segment
 the whole-input CRC/order/count proof even though all-new boundary selection reads no page bodies.
 
 The experimental `sort.finalization=pipeline` arm bypasses boundary selection entirely. After the
-usual cascade reduces the input to the admitted fan-in, bounded sequential segment readers publish
-decoded pages to one ordered router. The router forwards a page without row materialization when its
-maximum raw key is below the next page minimum; transitively overlapping pages enter the shared
-page-aware row heap lazily as their minimum reaches the heap's next row. Exhausted cursors release
-their exact decoded-page reservation before later overlap pages are admitted, so long transitive
-clusters are bounded by bytes rather than a page-count cutoff. Rows leave in batches of at most
-4,096. The router owns calibrated part geometry and raw-key-atomic boundaries, while bounded striped
-encoders only execute its stamped batch stream. Encoder admission reserves the surviving readers
-once, then prices each four-page queue and open writer; it does not inherit the range arm's proof,
-seek, staged-size, or per-range stream costs. This preserves a single global merge order without `R`
-duplicate range frontiers.
+usual cascade reduces the input to the admitted fan-in, bounded sequential header cursors read frame
+metadata and skip stored payloads. One ordered router groups page references into disjoint page items
+or transitive overlap clusters, chooses calibrated raw-key-atomic part boundaries, and queues complete
+part plans. Striped encoders then positionally read and CRC-check their refs through one shared open
+channel per segment. Whole pages drain directly; overlap clusters use an incrementally admitted
+`PageRowMerger` under a per-lane decoded-page budget. Two-deep plan queues let the router expose later
+parts without retaining decoded part bodies. Encoder admission prices the shared channels, reference
+plans, cluster shares, one extra page, and open writers; current trailers supply an exact raw-page
+maximum, while legacy trailers supply their validated maximum-record estimate and runtime header
+claims remain subject to the cluster guard. The arm does not inherit range proof, seek, staged-size,
+or per-range stream costs.

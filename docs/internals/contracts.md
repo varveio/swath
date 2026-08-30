@@ -794,39 +794,46 @@ which owns the at-most-once-text durability questions it would reopen):
   sealed segments straight into the final sorted output; parallel unsorted
   part files are not globally ordered.
 - **Finalization has two stateless arms above the same sealed segments.** `sort.finalization=ranges`
-  remains the default range-owned merge. The default-off `pipeline` spike starts one sequential
-  reader slot per retained segment and feeds one ordered page-minimum router. Let `B` be
-  `mergeBudgetBytes`, `K` the surviving segment count, and `P` the largest decoded raw payload any
-  reader admits. A segment with a persisted decoded-page maximum contributes that maximum; a legacy
-  segment contributes `min(PageBlock.MAX_RAW_PAYLOAD_BYTES, B)`, regardless of another segment's
-  smaller persisted maximum. Slot depth `D` is `clamp(1, B / (K * P), 4)`. A reader acquires slot
-  capacity before reading or decoding, so its queue cannot retain an additional blocked-producer
-  page. Compressed pages eagerly decode and release the encoded record owner before enqueue.
-  Reader-side page residency is therefore at most `K * (D + 1)` pages: `D` queued pages plus one
-  router frontier head per segment. Disjoint pages are forwarded whole; overlapping page ranges use
-  the pipeline's incremental row heap. It admits frontier pages against the next emitted raw key and
-  releases each exhausted page's exact decoded reservation, so a transitive chain does not retain
-  its full page count.
+  remains the default range-owned merge. The default-off `pipeline` spike opens exactly one shared
+  read channel for each of the `K` surviving segments. One sequential header cursor per segment reads
+  each frame prefix and PageBlock routing metadata, skips the stored payload, and verifies that frames
+  tile exactly from the segment header to `trailerStart`. It also checks page order plus declared
+  record and entry totals. At most `min(K, availableProcessors)` metadata reads run concurrently; each
+  cursor has a two-reference queue and never decodes a page.
 
-  Pipeline encoder admission prices only resources this arm owns. After the fixed FD headroom and
-  `K` reader descriptors, each admitted encoder reserves one output descriptor. Heap admission first
-  subtracts `K * (D + 1) * P` for reader queues/frontiers and one `P` router-pending payload, then
-  prices each encoder as `(QUEUE_DEPTH + 1) * P` for its four queued and one active payloads plus an
-  8 MiB open-writer estimate. It has no proof-spool charge and no staged-size floor. The router's
-  overlap-cluster decoded-page ledger is independently bounded by `B`. Thus the enforced payload
-  residency bound is `B + K * (D + 1) * P + (N * (QUEUE_DEPTH + 1) + 1) * P`; the `N` writer heap
-  estimates are admission prices rather than a byte ledger. Encoder admission retains a one-encoder
-  liveness floor when the fixed reader/pending cost already consumes `B`. The cascade reserves
-  descriptors for the admitted `N` outputs, not the requested count. The router alone chooses part
-  boundaries and assigns dense ordinals; bounded encoder lanes receive part `k` on lane `k mod N`,
-  and the calling thread orders durably preclosed parts before the shared verification and publication
-  sequence. The pipeline does not seek, construct range boundaries, or depend on type-2/type-3
-  indexes for correctness. If fan-in requires cascades, it first uses the normal page-run cascade and
-  then runs this pipeline over the survivors.
+  The single router orders `PageRef` values by raw minimum key. A strictly disjoint ref becomes a
+  whole-page plan item. Transitively overlapping page ranges become one cluster item without loading
+  rows. The router alone chooses raw-key-atomic part boundaries and emits a complete `PartPlan` with a
+  dense merge-order ordinal. Each of the `N` encoder lanes has a two-plan queue. Lane `ordinal mod N`
+  positionally reads every referenced frame through the already-open shared channel, verifies its CRC
+  and routing metadata, and decodes it. Whole pages drain through `PageBlockCursor`; cluster refs enter
+  `PageRowMerger` incrementally as their minimum reaches the next row, with exhausted pages released
+  before later refs are admitted. The calling thread reorders durably closed parts before the shared
+  cross-part adjacency, cardinality, and publication sequence.
 
-  Pipeline logical bytes always mean uncompressed raw page-payload bytes. A forwarded whole page uses
-  its header's `rawPayloadLength`, which is available without decoding. A clustered page computes the
-  constant `rawPayloadLength / count` once and attributes that value to every row it emits. The router
+  Completeness has four independent checks. Header cursors see each declared frame once and prove byte
+  tiling plus trailer totals. Monotone router consumption places each ref in exactly one plan. Encoders
+  read each planned ref once and verify the frame CRC before emitting rows. Finally, source trailer
+  entries, routed ref counts, encoder output rows, and closed-writer rows must agree. The pipeline does
+  not seek, construct range boundaries, or depend on type-2/type-3 indexes for correctness. A required
+  cascade still uses the normal page-run merge and then feeds its survivors to this pipeline.
+
+  Resource planning uses only resources this arm owns. File descriptors are bounded by `K + N` plus
+  fixed process headroom. Let `D = 2`, `T` be the catalog's total page count, `R = 200` bytes be the
+  conservative ordinary-reference planning price, `P` the largest persisted decoded raw-payload
+  maximum (or, for a legacy segment without one, its validated trailer maximum-record estimate), and
+  `W = 8 MiB` the writer estimate. The heap clamp charges
+  `((K * (D + 1)) + T) * R` for cursor/frontier and worst-case retained plan refs, then `P + W` per
+  encoder. The exact structural reference bound is the same ref count multiplied by each retained
+  ref's object and key-array size; `R` is an admission estimate, not a byte ledger. After admission,
+  each lane receives `C = max(P, B / N)` bytes of decoded-cluster budget and may transiently hold one
+  newly read page before reservation, so decoded-page residency is bounded by `N * (C + Q)`, where
+  `Q` is the largest actual retained decoded-page price. Plan queues add no page bodies. The total
+  runtime shape is therefore reference storage plus `N * (C + Q + writer)`, not `N * part bytes`.
+  Pipeline clamp reasons remain separate from range proof/staged-size admission.
+
+  Pipeline logical bytes always mean uncompressed raw page-payload bytes. Every plan sums its refs'
+  header `rawPayloadLength`, available without decoding. The router
   compares pending logical bytes with a target calibrated from completed parts' actual encoded/logical
   ratio. The first target uses a fixed conservative ratio; later targets use the cumulative measured
   ratio. This is soft geometry only: a boundary may occur only when adjacent raw keys differ, so an
@@ -1288,7 +1295,7 @@ bytes; it is zero on serial merges.
 | `swath.sort.final-row-group-bytes` | ≈4–8 MB | the served file's seek granularity (row-group size) |
 | `swath.sort.final-page-rows` | 1024 | the served file's seek granularity WITHIN a row group: the cap on a data page's rows. A page is Parquet's smallest addressable unit — the page index prunes pages, never rows, and every encoding decodes strictly forward — so this is the floor on what a bounded key-range read decodes per column, however few rows it wanted. Parquet's own default caps a page at 20,000 rows and 1 MB, and the byte cap only binds on columns wide enough to reach it, so every narrow column sat at 20,000. Governs FINAL Parquet only; custom page-run staging has no Parquet pages or row groups. Not to be confused with the 1 MB data-page BYTE cap, which two independent gates (2026-07-04 P1/P4) measured dead in both directions |
 | `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | runtime page-run residency budget. For a candidate parallel range count, exact proof backing (`ranges × original segments × 6,212`) is charged first and the remainder prices normal streams. Before cursor construction/decompression, the page-aware merger reserves the current retained body, its conservative 128-byte dictionary-coordinate heap, the complete possible lazy dictionary cache, and any separate raw payload after the already-budgeted successor frontier/body coordinates were loaded; legal overlap clusters cannot grow beyond the serial budget or one range's post-proof share. The static config helper still exposes a two-stream floor, but runtime admission refuses resumably if the truthful minimum width cannot fit. Arbitrary non-page-frontier capture merges retain their existing entry-stream policy. |
-| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | configured maximum range count for `sort.finalization=ranges`, or encoder count for `pipeline`; `1` is the explicit serial/single-encoder choice. Both the CLI tune and core configuration enforce `1..16`. The tune is resume-free because final parts remain disposable staging files until the complete manifest barrier. The ranges arm retains its proof/staged-size/fan-in/FD admission unchanged. The pipeline arm instead reserves `K` reader FDs and one FD per encoder, then admits encoders from the heap left after `K * slotDepth * page`, charging each bounded four-page queue plus an 8 MiB writer estimate. Pipeline clamps record `SORT.pipeline_encoders_fd_clamped` or `SORT.pipeline_encoders_heap_clamped`; range clamp reasons never describe pipeline admission. |
+| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | configured maximum range count for `sort.finalization=ranges`, or encoder count for `pipeline`; `1` is the explicit serial/single-encoder choice. Both the CLI tune and core configuration enforce `1..16`. The tune is resume-free because final parts remain disposable staging files until the complete manifest barrier. The ranges arm retains its proof/staged-size/fan-in/FD admission unchanged. The pipeline arm reserves `K` shared input channels and one writer descriptor per encoder, prices two-deep reference/plan storage, one decoded page and an 8 MiB writer per encoder, and divides its cluster budget across admitted lanes. Pipeline clamps record `SORT.pipeline_encoders_fd_clamped` or `SORT.pipeline_encoders_heap_clamped`; range clamp reasons never describe pipeline admission. |
 | `swath.sort.merge-boundary-policy` | `distinct` | resume-free/default-off range-split policy. `distinct` is the shipped bounded distinct-key selection. `rows` is an experimental explicit arm using validated type-2 or type-3 cumulative-entry mass; it changes only parallel part split points, never row order/content, and falls back whole-run to `distinct` for extensionless/type-1/invalid/mixed inputs. Prefer the typed `--tune sort.merge-boundary-policy=distinct\|rows`, which wins over this JVM property. No result in this change promotes `rows` to the default |
 | `swath.sort.min-parallel-staged-bytes` | 256 MiB | staged-input eligibility floor for the default parallel merge. A run below it stays serial and records `SORT.merge_range_below_staged_floor`; this size decision is not an unsplittable keyspace or a resource-clamp result |
 | `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`), alongside the actual page-run header version and trailer-extension type; a resume refuses another format or explicit unknown page-run metadata while preserving pre-column `NULL` metadata (§6) — informational, not user-tunable |
