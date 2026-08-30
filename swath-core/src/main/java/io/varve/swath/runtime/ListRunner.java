@@ -89,6 +89,7 @@ import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.sort.SortedParquetWriter;
 import io.varve.swath.sort.SortedParquetWriterFactory;
+import io.varve.swath.sort.StagingReconciliation;
 import io.varve.swath.sort.StaleFinalSweep;
 import io.varve.swath.store.ListPage;
 import io.varve.swath.store.PageFetcher;
@@ -1022,9 +1023,10 @@ public final class ListRunner {
         // rows those very segments hold (see RunMetrics#recordSortStaged).
         ctx.metrics().recordSortStaged(stagedParts.size(),
                 stagedParts.stream().mapToLong(PartRef::rows).sum());
-        List<Path> segments = stagedParts.stream().map(p -> stagingDir.resolve(p.path())).toList();
+        List<Path> segments = resolveCheckpointStagingPaths(stagingDir, stagedParts);
         Map<Path, PageRunFormat> expectedPageRunFormats = new LinkedHashMap<>();
-        for (PartRef part : stagedParts) {
+        for (int i = 0; i < stagedParts.size(); i++) {
+            PartRef part = stagedParts.get(i);
             if (part.formatVersion() == null && part.extensionType() == null) {
                 continue; // pre-metadata checkpoint row: physical format remains authoritative
             }
@@ -1032,7 +1034,7 @@ public final class ListRunner {
                 throw new OutputException("checkpoint has incomplete page-run format metadata for "
                         + part.path());
             }
-            expectedPageRunFormats.put(stagingDir.resolve(part.path()),
+            expectedPageRunFormats.put(segments.get(i),
                     new PageRunFormat(part.formatVersion(), part.extensionType()));
         }
         Comparator<ListEntry> comparator = new ListEntryComparator();
@@ -1160,6 +1162,17 @@ public final class ListRunner {
             ctx.metrics().recordFatalErrorClass(sortErrorClass(e));
             throw new OutputException("sort merge/publish failed", e);
         }
+    }
+
+    static List<Path> resolveCheckpointStagingPaths(Path stagingDir, List<PartRef> stagedParts)
+            throws OutputException {
+        List<String> names = stagedParts.stream().map(PartRef::path).toList();
+        try {
+            StagingReconciliation.fromNames(names);
+        } catch (IOException e) {
+            throw new OutputException("checkpoint contains an unsafe sort staging segment path", e);
+        }
+        return names.stream().map(stagingDir::resolve).toList();
     }
 
     /**

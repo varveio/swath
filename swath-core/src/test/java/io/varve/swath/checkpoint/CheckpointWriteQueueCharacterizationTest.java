@@ -12,7 +12,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.awaitility.Awaitility.await;
 
+import io.micrometer.core.instrument.Clock;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.cumulative.CumulativeTimer;
+import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
+import io.micrometer.core.instrument.distribution.pause.PauseDetector;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.error.CheckpointException;
+import io.varve.swath.observability.RunMetrics;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -54,9 +62,9 @@ import org.junit.jupiter.api.io.TempDir;
  * swath-cli, and {@link #abandonedStoreWithoutCloseReopensAtLastCommittedAdvance} is honestly
  * scoped to abandonment, not process death.
  *
- * <p><b>Two behaviours are NOT YET PINNED but ARE pinnable</b> — the commit-vs-future-resolution
- * ordering, and the close/submit overlap. A deterministic technique for each is written out on the
- * test that would carry it, as a follow-up for CK3's own test work. They are gaps, not limits.
+ * <p><b>One behaviour is NOT YET PINNED but IS pinnable</b> — the close/submit overlap. A
+ * deterministic technique is written out on the test that would carry it, as a follow-up for
+ * CK3's own test work. It is a gap, not a limit.
  *
  * <p>Complements, and deliberately does not duplicate, {@link SqliteCheckpointStoreTest} (DAO/CAS/
  * cursor semantics, single-task rollback, full-queue release) and
@@ -330,24 +338,10 @@ final class CheckpointWriteQueueCharacterizationTest {
      * handed back to a caller is caller-mutable — completing it externally resolves it with no
      * durability implication whatsoever.
      *
-     * <p><b>Exceptional resolution carries no durability guarantee in EITHER direction.</b> It does
-     * not imply rollback: {@code runBatch} commits at {@code CheckpointWriteQueue:151} and then
-     * runs the metrics calls inside the SAME {@code try}, so a Throwable thrown after the commit
-     * enters the catch, {@code conn.rollback()} cannot undo the already-committed transaction, and
-     * {@code failStore} completes those futures exceptionally over a fully durable batch. Caller
-     * {@code cancel}/{@code completeExceptionally} is a second counterexample.
-     *
-     * <p><b>Not yet pinned (deterministic technique known) — follow-up for CK3.</b> The commit at
-     * {@code CheckpointWriteQueue:151} strictly precedes the future-resolution loop at
-     * {@code :158-161}, so a write is
-     * genuinely visible while later futures in the same batch are unresolved. That ordering IS
-     * pinnable, by either of two seams: (i) a SYNCHRONOUS (non-async) dependent can park the sole
-     * completing writer inside the loop, provided no thread is waiting on the source future — note
-     * {@code CompletableFuture.timedGet} runs {@code postComplete} on the WAITING thread and
-     * OpenJDK lets threads compete to pop dependents, which is what made the earlier attempt racy;
-     * or (ii) {@code RunMetrics} takes an injected {@code MeterRegistry}, so a custom Micrometer
-     * {@code Clock} can block inside {@code Timer.Sample.stop()}, which {@code runBatch} calls
-     * after the commit and before completing futures. Neither is implemented here.
+     * <p><b>Exceptional resolution carries no durability guarantee.</b> A caller can still cancel
+     * or externally complete the mutable future exceptionally. Store-driven post-commit failures,
+     * however, must not turn a durable batch into exceptional futures; that crash window is pinned
+     * by {@link #postCommitMetricsFailureCannotReportDurableWorkAsFailed}.
      */
     @Test
     void resolvedBatchFutureImpliesTheWholeBatchIsAlreadyDurable(@TempDir Path dir) throws Exception {
@@ -386,6 +380,57 @@ final class CheckpointWriteQueueCharacterizationTest {
                 gate.release();
             }
             store.close();
+        }
+    }
+
+    /**
+     * A metrics failure immediately after {@code conn.commit()} models the old
+     * commit-before-complete crash window. The transaction is already durable, so every future
+     * must resolve successfully and the writer must remain usable; observability is not allowed to
+     * route the committed batch through rollback and permanently fail the store.
+     */
+    @Test
+    void postCommitMetricsFailureCannotReportDurableWorkAsFailed(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("ckpt.sqlite");
+        AtomicBoolean failNextRecord = new AtomicBoolean();
+        SimpleMeterRegistry faultRegistry = new SimpleMeterRegistry() {
+            @Override
+            protected Timer newTimer(Meter.Id id, DistributionStatisticConfig config,
+                    PauseDetector pauseDetector) {
+                return new CumulativeTimer(
+                        id, Clock.SYSTEM, config, pauseDetector, TimeUnit.NANOSECONDS) {
+                    @Override
+                    protected void recordNonNegative(long amount, TimeUnit unit) {
+                        if (failNextRecord.compareAndSet(true, false)) {
+                            throw new AssertionError("post-commit metrics fault");
+                        }
+                        super.recordNonNegative(amount, unit);
+                    }
+                };
+            }
+        };
+        RunMetrics metrics = new RunMetrics(faultRegistry);
+
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db, metrics);
+             Connection rd = reader(db)) {
+            createProbeTable(store);
+
+            CompletableFuture<Object> committed = store.enqueueForTesting(c -> {
+                insertProbe(c, 1);
+                failNextRecord.set(true);
+                return "committed";
+            });
+
+            assertThat(committed.get(30, TimeUnit.SECONDS)).isEqualTo("committed");
+            assertThat(probeRowsInInsertOrder(rd)).containsExactly(1);
+
+            store.enqueueForTesting(c -> {
+                insertProbe(c, 2);
+                return null;
+            }).get(30, TimeUnit.SECONDS);
+            assertThat(probeRowsInInsertOrder(rd))
+                    .as("the post-commit metrics fault did not permanently fail the writer")
+                    .containsExactly(1, 2);
         }
     }
 

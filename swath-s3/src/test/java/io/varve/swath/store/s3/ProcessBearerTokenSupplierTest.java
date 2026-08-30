@@ -9,8 +9,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.observability.SafeInput;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * {@link ProcessBearerTokenSupplier} runs an arbitrary shell command and treats its trimmed stdout
@@ -80,6 +83,33 @@ class ProcessBearerTokenSupplierTest {
         assertThat(supplier.token()).isEqualTo("tok");
     }
 
+    @Test
+    void stdoutBeyondTheCaptureLimitIsDrainedButRejected() {
+        var supplier = new ProcessBearerTokenSupplier(
+                "yes x | head -c " + (ProcessBearerTokenSupplier.MAX_CAPTURE_BYTES + 1),
+                Duration.ofMinutes(45));
+
+        assertThatThrownBy(supplier::token)
+                .isInstanceOf(BearerTokenCommandException.class)
+                .hasMessageContaining("stdout exceeded")
+                .hasMessageContaining(Integer.toString(ProcessBearerTokenSupplier.MAX_CAPTURE_BYTES));
+    }
+
+    @Test
+    void oversizedFailureStderrIsTruncatedToTheCaptureLimit() {
+        var supplier = new ProcessBearerTokenSupplier(
+                "yes e | head -c " + (ProcessBearerTokenSupplier.MAX_CAPTURE_BYTES + 100_000)
+                        + " >&2; exit 9",
+                Duration.ofMinutes(45));
+
+        assertThatThrownBy(supplier::token)
+                .isInstanceOf(BearerTokenCommandException.class)
+                .hasMessageContaining("exited 9")
+                .hasMessageContaining("stderr truncated")
+                .satisfies(error -> assertThat(error.getMessage().length())
+                        .isLessThan(ProcessBearerTokenSupplier.MAX_DIAGNOSTIC_CHARS + 100));
+    }
+
     /**
      * Regression guard (CodeRabbit review, PR #23): a process that stays alive without closing its
      * pipes must be killed and reported at {@code commandTimeout}, not hang {@link
@@ -96,6 +126,53 @@ class ProcessBearerTokenSupplierTest {
         assertThatThrownBy(supplier::token)
                 .isInstanceOf(BearerTokenCommandException.class)
                 .hasMessageContaining("did not exit within");
+    }
+
+    @Test
+    void timeoutKillsAStubbornDescendantAndBoundsCleanup(@TempDir Path dir) throws Exception {
+        Path pidFile = dir.resolve("descendant.pid");
+        var supplier = new ProcessBearerTokenSupplier(
+                "(trap '' TERM; while :; do sleep 1; done) & echo $! > '" + pidFile + "'; wait",
+                Duration.ofMinutes(45), Duration.ofMillis(300));
+
+        long started = System.nanoTime();
+        assertThatThrownBy(supplier::token)
+                .isInstanceOf(BearerTokenCommandException.class)
+                .hasMessageContaining("did not exit within");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+
+        long descendantPid = Long.parseLong(Files.readString(pidFile).strip());
+        assertThat(ProcessHandle.of(descendantPid).map(ProcessHandle::isAlive).orElse(false))
+                .as("the timed-out helper's stubborn descendant was reaped")
+                .isFalse();
+    }
+
+    @Test
+    void detachedDescendantHoldingStdoutCannotMakeCleanupBlockForever(@TempDir Path dir)
+            throws Exception {
+        Path pidFile = dir.resolve("detached.pid");
+        var supplier = new ProcessBearerTokenSupplier(
+                "(sleep 300 & echo $! > '" + pidFile + "') & "
+                        + "i=0; while [ ! -s '" + pidFile + "' ] && [ $i -lt 1000 ]; "
+                        + "do i=$((i + 1)); done; echo token",
+                Duration.ofMinutes(45), Duration.ofSeconds(5));
+
+        long started = System.nanoTime();
+        try {
+            assertThatThrownBy(supplier::token)
+                    .isInstanceOf(BearerTokenCommandException.class)
+                    .hasMessageContaining("output streams did not close within");
+            assertThat(Duration.ofNanos(System.nanoTime() - started))
+                    .isLessThan(Duration.ofSeconds(5));
+        } finally {
+            for (int i = 0; i < 40 && !Files.exists(pidFile); i++) {
+                Thread.sleep(25);
+            }
+            if (Files.exists(pidFile)) {
+                long pid = Long.parseLong(Files.readString(pidFile).strip());
+                ProcessHandle.of(pid).ifPresent(ProcessHandle::destroyForcibly);
+            }
+        }
     }
 
     /**
