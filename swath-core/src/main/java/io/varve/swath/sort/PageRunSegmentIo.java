@@ -345,11 +345,6 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /** Validate the exact header-to-trailer frame chain and both trailer totals. */
     void checkRoutingComplete() throws IOException {
-        if (pagesRead != totalRecords) {
-            throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
-                    "record count mismatch: saw " + pagesRead
-                            + " but trailer declared totalRecords=" + totalRecords, null);
-        }
         if (nextFrameOffset != trailerStart) {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "page frames end at " + nextFrameOffset

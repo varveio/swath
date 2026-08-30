@@ -15,10 +15,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Finalization lifecycle owner for the pipeline arm. It admits one immutable resource plan, uses
- * that plan for cascade output descriptors and the final readers/encoders, then hands only durable,
- * globally ordered parts to the shared publisher. Any failure quiesces every stage before owned
- * pipeline temporaries are swept; source segments and prior published parts remain recoverable.
+ * Finalization lifecycle owner for the pipeline arm. Cascade width conservatively reserves the
+ * requested output descriptors, but encoder admission occurs only after cascade because survivor
+ * count and page maxima are the resources the final pass actually owns. The final stages share one
+ * failure relay and hand only durable, globally ordered parts to the publisher. Any failure
+ * quiesces every stage before owned pipeline temporaries are swept; source segments and prior
+ * published parts remain recoverable.
  */
 final class PipelineFinalization {
     private static final Logger log = LoggerFactory.getLogger(PipelineFinalization.class);
@@ -40,17 +42,13 @@ final class PipelineFinalization {
         SortMetrics metrics = run.metrics();
         metrics.recordStealReason("SORT", "finalization_pipeline");
 
-        MergePlanner.PipelinePlan cascadePlan =
-                planner.pipelineParallelism(encoderCount, sourceCatalog);
-        recordEncoderClamp(encoderCount, cascadePlan, sourceCatalog);
-
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(
                 run.comparator(), run.hook(), metrics, config.segmentCodec(), run.orderingMode());
         PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, request.stagingDir(),
                 request.ownedInputs(),
                 "merge-", null, sourceCatalog.byPath(), frontier -> { }, -1, null, null);
         KWayMerge<Path> cascade = new KWayMerge<>(run.comparator(),
-                planner.pipelineFanIn(sourceCatalog, cascadePlan.encoders()),
+                planner.pipelineFanIn(sourceCatalog, encoderCount),
                 io, run.hook(), metrics);
         List<Path> survivors = cascade.reduceToFanIn(
                 sourceCatalog.paths(), request.progressCallback());
@@ -61,12 +59,8 @@ final class PipelineFinalization {
                         path -> PageRunSegmentIo.open(path, metrics),
                         Optional.of(ignored -> { }),
                         Map.of(), metrics);
-        MergePlanner.PipelinePlan plan = survivors.equals(sourceCatalog.paths())
-                ? cascadePlan
-                : planner.pipelineParallelism(cascadePlan.encoders(), pipelineCatalog);
-        if (plan.encoders() < cascadePlan.encoders()) {
-            recordEncoderClamp(cascadePlan.encoders(), plan, pipelineCatalog);
-        }
+        MergePlanner.PipelinePlan plan = planner.pipelineParallelism(encoderCount, pipelineCatalog);
+        recordEncoderClamp(encoderCount, plan, pipelineCatalog);
         int effectiveEncoders = plan.encoders();
         PipelineFailure failure = new PipelineFailure();
         PipelinePartSizer sizer = new PipelinePartSizer(
@@ -85,7 +79,8 @@ final class PipelineFinalization {
                     request.progressCallback());
             request.onFinalPassStarting().onFinalPassStarting(true);
             MergeRouter.Result routed = new MergeRouter(
-                    cursors, encoders::submit, sizer, metrics, failure)
+                    cursors, encoders::submit, sizer, metrics, failure,
+                    encoders::awaitFirstCompletion)
                     .route(pipelineCatalog.descriptors().size());
             if (routed.refs() != pipelineCatalog.totalRecords()) {
                 throw new IllegalStateException("pipeline reference count mismatch: planned="

@@ -826,6 +826,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("pipeline_encoder_read_wait_ms", pipelineEncoderReadWaitMs);
         sortNode.put("pipeline_encoder_read_wait_share", mergeMs <= 0
                 ? 0.0 : (double) pipelineEncoderReadWaitMs / mergeMs);
+        sortNode.put("pipeline_decoded_page_bytes_peak",
+                (long) gaugeValue("swath.sort.pipeline.decoded_page_bytes.peak"));
         sortNode.put("pipeline_parts_open",
                 (long) gaugeValue("swath.sort.pipeline.parts_open"));
         sortNode.put("merge_range_framed_bytes",

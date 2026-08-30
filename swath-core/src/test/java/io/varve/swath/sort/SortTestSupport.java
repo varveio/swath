@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 /** Shared fixtures for the {@code io.varve.swath.sort} unit tests (all in-package, so package-private types are reachable). */
@@ -319,6 +320,7 @@ final class SortTestSupport {
         final LongAdder proofSpoolMetricUpdates = new LongAdder();
         final LongAdder pipelinePagesForwarded = new LongAdder();
         final LongAdder pipelineClusterPages = new LongAdder();
+        final AtomicLong pipelineDecodedPageBytesPeak = new AtomicLong();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -376,6 +378,11 @@ final class SortTestSupport {
         @Override
         public void recordPipelineCluster(long pages, long rows) {
             pipelineClusterPages.add(pages);
+        }
+
+        @Override
+        public void recordPipelineDecodedPagePeak(long bytes) {
+            pipelineDecodedPageBytesPeak.getAndAccumulate(bytes, Math::max);
         }
 
         int count(String key) {

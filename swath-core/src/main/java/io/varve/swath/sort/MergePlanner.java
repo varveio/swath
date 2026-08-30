@@ -136,40 +136,59 @@ final class MergePlanner {
         int pageBytes = pipelinePageBytes(catalog, legacyDecodedLimit);
         long cursorRefs = saturatedMultiply(segments,
                 SegmentHeaderCursors.QUEUE_DEPTH + 1L);
-        long retainedRefs = saturatedAdd(cursorRefs, catalog.totalRecords());
-        long routerBytes = saturatedMultiply(retainedRefs, PIPELINE_REF_BYTES);
-        long perEncoderBytes = saturatedAdd(pageBytes,
-                PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
-        long remaining = routerBytes >= config.mergeBudgetBytes()
-                ? 0L : config.mergeBudgetBytes() - routerBytes;
-        long byHeap = perEncoderBytes == 0 ? Long.MAX_VALUE : remaining / perEncoderBytes;
         long usableFds = usableFdBudget();
         long byFd = usableFds == Long.MAX_VALUE
                 ? Long.MAX_VALUE : Math.max(0L, usableFds - segments);
-        int admitted = (int) Math.max(1L, Math.min(requested, Math.min(byHeap, byFd)));
+        int fdAdmitted = (int) Math.max(1L, Math.min(requested, byFd));
+        int admitted = fdAdmitted;
+        while (admitted > 1 && !pipelineHeapFits(admitted, catalog, cursorRefs, pageBytes)) {
+            admitted--;
+        }
         PipelineClampReason reason = PipelineClampReason.NONE;
         if (admitted < requested) {
-            reason = byFd <= byHeap
+            reason = fdAdmitted < requested && admitted == fdAdmitted
                     ? PipelineClampReason.FD_CLAMPED : PipelineClampReason.HEAP_CLAMPED;
         }
-        long clusterBudget = Math.max(pageBytes, config.mergeBudgetBytes() / admitted);
+        long fixedBytes = pipelineFixedBytes(admitted, catalog, cursorRefs, pageBytes);
+        long clusterPool = fixedBytes >= config.mergeBudgetBytes()
+                ? 0L : config.mergeBudgetBytes() - fixedBytes;
+        long clusterBudget = Math.max(pageBytes, clusterPool / admitted);
         return new PipelinePlan(admitted, reason, SegmentHeaderCursors.QUEUE_DEPTH,
                 PIPELINE_REF_BYTES, pageBytes, clusterBudget, legacyDecodedLimit);
     }
 
+    private boolean pipelineHeapFits(int encoders, PageRunCatalog catalog,
+            long cursorRefs, int pageBytes) {
+        long fixedBytes = pipelineFixedBytes(encoders, catalog, cursorRefs, pageBytes);
+        long clusterBytes = saturatedMultiply(encoders, pageBytes);
+        return saturatedAdd(fixedBytes, clusterBytes) <= config.mergeBudgetBytes();
+    }
+
+    private long pipelineFixedBytes(int encoders, PageRunCatalog catalog,
+            long cursorRefs, int pageBytes) {
+        long targetPages = ceilDiv(
+                PipelinePartSizer.initialLogicalTarget(config.finalFileBytes()), pageBytes);
+        targetPages = Math.min(catalog.totalRecords(), targetPages);
+        long retainedPlanRefs = saturatedMultiply(targetPages,
+                saturatedAdd(1L, saturatedMultiply(PartEncoders.QUEUE_DEPTH, encoders)));
+        long routerBytes = saturatedMultiply(
+                saturatedAdd(cursorRefs, retainedPlanRefs), PIPELINE_REF_BYTES);
+        long writers = saturatedMultiply(encoders,
+                PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
+        return saturatedAdd(routerBytes, writers);
+    }
+
     /**
      * Estimate one encoder's transient page from validated trailer metadata. Current inputs persist
-     * the exact maximum raw payload. Legacy inputs expose only their maximum encoded record, so use
-     * that available signal here and leave actual header claims to the runtime cluster guard.
-     * Charging the legacy compatibility ceiling would consume the entire merge budget per encoder.
+     * the exact maximum raw payload. Legacy inputs do not, so their reader's compatibility ceiling is
+     * the only truthful whole-page price; this intentionally clamps legacy catalogs aggressively.
      */
     private int pipelinePageBytes(PageRunCatalog catalog, int legacyDecodedLimit) {
         int maximum = 0;
         for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
             int admitted = descriptor.hasDecodedPageMaximum()
                     ? descriptor.maxRawPayloadLength()
-                    : (int) Math.min(legacyDecodedLimit,
-                            Math.max(1L, descriptor.trailer().maxRecordLen()));
+                    : legacyDecodedLimit;
             maximum = Math.max(maximum, admitted);
         }
         return Math.max(1, maximum);
@@ -194,6 +213,13 @@ final class MergePlanner {
         } catch (ArithmeticException overflow) {
             return Long.MAX_VALUE;
         }
+    }
+
+    private static long ceilDiv(long dividend, long divisor) {
+        if (dividend == Long.MAX_VALUE) {
+            return Long.MAX_VALUE;
+        }
+        return 1L + (dividend - 1L) / divisor;
     }
 
     private int runtimeFanIn(PageRunCatalog catalog, int outputWriters)

@@ -5,9 +5,15 @@
  */
 package io.varve.swath.sort;
 
-/** Router-owned part geometry with an internal fixed-row benchmark control. */
+/**
+ * Thread-safe encoded-part estimator shared by the router and encoders. The router is the sole
+ * boundary owner; encoders contribute only completed-part observations. The first byte-sized part
+ * deliberately assumes no compression, then routing pauses for that result before using measured
+ * geometry. A small first part costs one footer, while an oversized first wave can leave most
+ * encoders idle.
+ */
 final class PipelinePartSizer {
-    static final double INITIAL_ENCODED_TO_LOGICAL_RATIO = 0.25;
+    static final double INITIAL_ENCODED_TO_LOGICAL_RATIO = 1.0;
 
     enum Policy {
         CALIBRATED_BYTES,
@@ -62,6 +68,18 @@ final class PipelinePartSizer {
             return false;
         }
         return currentLogicalBytes >= calibratedLogicalTarget();
+    }
+
+    boolean needsCalibrationWarmup() {
+        return policy == Policy.CALIBRATED_BYTES && finalFileBytes != Long.MAX_VALUE;
+    }
+
+    static long initialLogicalTarget(long finalFileBytes) {
+        if (finalFileBytes == Long.MAX_VALUE) {
+            return Long.MAX_VALUE;
+        }
+        double target = finalFileBytes / INITIAL_ENCODED_TO_LOGICAL_RATIO;
+        return Math.max(1L, (long) Math.ceil(target));
     }
 
     synchronized long calibratedLogicalTarget() {

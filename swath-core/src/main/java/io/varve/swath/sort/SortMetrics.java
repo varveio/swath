@@ -143,6 +143,10 @@ public interface SortMetrics {
     default void recordPipelineEncoderReadWait(long nanos) {
     }
 
+    /** Observe one encoder cluster's exact retained decoded-page high-water mark. */
+    default void recordPipelineDecodedPagePeak(long bytes) {
+    }
+
     /** Bind the pipeline's owning counter directly to the live open-part gauge. */
     default void bindPipelinePartsOpen(AtomicInteger partsOpen) {
     }

@@ -7,12 +7,11 @@ package io.varve.swath.sort;
 
 import java.util.List;
 
-/** One complete, contiguous final part assigned by the router to a single encoder lane. */
-record PartPlan(int ordinal, List<Item> items, boolean partFirst, boolean partLast,
-                boolean mergeEnd, long logicalBytes, long rows) {
+/** One complete, contiguous final part assigned by the router to one encoder. */
+record PartPlan(int ordinal, List<Item> items, boolean mergeEnd, long logicalBytes, long rows) {
     PartPlan {
         items = List.copyOf(items);
-        if (ordinal < 0 || logicalBytes < 0 || rows < 0 || !partFirst || !partLast) {
+        if (ordinal < 0 || logicalBytes < 0 || rows < 0) {
             throw new IllegalArgumentException("invalid complete part plan");
         }
         if (items.isEmpty() != (rows == 0) || (rows == 0 && ordinal != 0)) {

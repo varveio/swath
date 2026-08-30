@@ -29,6 +29,7 @@ final class FinalizationPipelineScalingTest {
                 master, 8, ROWS, 4_000, 1_000);
         List<Path> sources = SortBenchCorpus.pageRunSegments(master);
 
+        runArm(root.resolve("warmup"), sources, 1);
         TimedArm serial = runArm(root.resolve("n1"), sources, 1);
         TimedArm parallel = runArm(root.resolve("n4"), sources, 4);
 

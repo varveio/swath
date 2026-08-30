@@ -99,6 +99,11 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     }
 
     @Override
+    public void recordPipelineDecodedPagePeak(long bytes) {
+        metrics.recordSortPipelineDecodedPagePeak(bytes);
+    }
+
+    @Override
     public void bindPipelinePartsOpen(AtomicInteger partsOpen) {
         metrics.bindSortPipelinePartsOpen(partsOpen);
     }

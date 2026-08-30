@@ -247,6 +247,7 @@ public final class RunMetrics {
     private final Counter sortMergeOverlapClusters;
     private final AtomicLong sortMergeOverlapPagesPeak = new AtomicLong();
     private final AtomicLong sortMergeOverlapRowsPeak = new AtomicLong();
+    private final AtomicLong sortPipelineDecodedPageBytesPeak = new AtomicLong();
     private final Counter sortMergeRangeFramedBytes;
     private final Counter sortMergeRangeIndexBytes;
     private final Counter sortMergeProofSpoolLogicalExtentBytes;
@@ -643,6 +644,9 @@ public final class RunMetrics {
                 Counter.builder("swath.sort.pipeline.encoder_page_reads").register(registry);
         sortPipelineEncoderReadWait =
                 runScopedTimer("swath.sort.pipeline.encoder_read_wait").register(registry);
+        Gauge.builder("swath.sort.pipeline.decoded_page_bytes.peak",
+                        sortPipelineDecodedPageBytesPeak, AtomicLong::get)
+                .baseUnit("bytes").register(registry);
         Gauge.builder("swath.sort.pipeline.parts_open", sortPipelinePartsOpen,
                         current -> current.get().get())
                 .register(registry);
@@ -1206,6 +1210,11 @@ public final class RunMetrics {
     public void recordSortMergeOverlapState(long activePages, long retainedRows) {
         sortMergeOverlapPagesPeak.getAndAccumulate(activePages, Math::max);
         sortMergeOverlapRowsPeak.getAndAccumulate(retainedRows, Math::max);
+    }
+
+    /** Fold one encoder cluster's exact decoded-page residency peak into the run high-water mark. */
+    public void recordSortPipelineDecodedPagePeak(long bytes) {
+        sortPipelineDecodedPageBytesPeak.getAndAccumulate(bytes, Math::max);
     }
 
     /** Cumulative logical page-frame bytes read by parallel range workers, including cascades. */

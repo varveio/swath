@@ -16,6 +16,10 @@ import java.util.function.Consumer;
  * Single ordering and part-boundary owner over page references. It performs only page-range work:
  * disjoint references remain individual items, while a transitive overlap component becomes one
  * cluster item for an encoder to decode and merge. Every consumed ref moves into exactly one plan.
+ * Plans contain coordinates rather than bodies so the router can expose independent parts to a
+ * shared encoder pool without retaining decoded part-sized buffers. For calibrated byte sizing it
+ * exposes exactly one initial plan, waits for its durable size, and only then routes the remaining
+ * plans; this bounds calibration lag to the intentionally conservative warm-up part.
  */
 final class MergeRouter {
     record Result(long rows, long pagesForwarded, long refs, int parts) {
@@ -26,6 +30,7 @@ final class MergeRouter {
     private final PipelinePartSizer sizer;
     private final SortMetrics metrics;
     private final PipelineFailure failure;
+    private final Runnable awaitFirstCompletion;
     private final PriorityQueue<PageRef> frontier = new PriorityQueue<>((left, right) -> {
         int order = Arrays.compareUnsigned(left.minKey(), right.minKey());
         return order != 0 ? order : Integer.compare(left.segmentId(), right.segmentId());
@@ -36,12 +41,14 @@ final class MergeRouter {
     private long pagesForwarded;
 
     MergeRouter(SegmentHeaderCursors cursors, Consumer<PartPlan> plans,
-            PipelinePartSizer sizer, SortMetrics metrics, PipelineFailure failure) {
+            PipelinePartSizer sizer, SortMetrics metrics, PipelineFailure failure,
+            Runnable awaitFirstCompletion) {
         this.cursors = cursors;
         this.plans = plans;
         this.sizer = sizer;
         this.metrics = metrics;
         this.failure = failure;
+        this.awaitFirstCompletion = awaitFirstCompletion;
     }
 
     /** Drain all header cursors and close the final complete plan, including the empty-input plan. */
@@ -109,6 +116,8 @@ final class MergeRouter {
         void offer(PartPlan.Item item) {
             MergeCancellation.check();
             if (!items.isEmpty() && sizer.shouldClose(logicalBytes, partRows)
+                    // Items are already disjoint, but equal raw keys must remain atomic even if a
+                    // future routing item shape weakens that construction-time guarantee.
                     && KeyBytes.compareUnsigned(lastKey(items.getLast()), firstKey(item)) != 0) {
                 dispatch(false);
             }
@@ -128,13 +137,17 @@ final class MergeRouter {
         }
 
         private void dispatch(boolean mergeEnd) {
-            PartPlan plan = new PartPlan(ordinal, items, true, true, mergeEnd,
+            PartPlan plan = new PartPlan(ordinal, items, mergeEnd,
                     logicalBytes, partRows);
             plans.accept(plan);
             ordinal++;
             items.clear();
             logicalBytes = 0;
             partRows = 0;
+            if (ordinal == 1 && !mergeEnd && sizer.needsCalibrationWarmup()) {
+                awaitFirstCompletion.run();
+                failure.check();
+            }
         }
     }
 

@@ -15,7 +15,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * One sequential header cursor per open segment. A shared permit bounds concurrent metadata reads;
  * it is released before the bounded per-segment queue handoff, so a full slot cannot prevent an
- * unstarted cursor from exposing its first reference to the router.
+ * unstarted cursor from exposing its first reference to the router. Per-segment queues, rather than
+ * one shared cursor queue, preserve the router's ability to hold exactly one ordered frontier head
+ * from every run without decoding bodies or allowing a hot segment to hide an unstarted one.
  */
 final class SegmentHeaderCursors implements AutoCloseable {
     static final int QUEUE_DEPTH = 2;
@@ -39,7 +41,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
         for (int i = 0; i < segments.size(); i++) {
             int segment = i;
             Thread cursor = Thread.ofVirtual().name("sort-pipeline-header-" + i).start(
-                    () -> scan(segment, segments.get(segment), scanPermits, settings.hook()));
+                    () -> scan(segment, segments.get(segment), scanPermits));
             cursors.add(cursor);
         }
     }
@@ -47,7 +49,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
     static Settings planned(int segments) {
         int parallelism = Math.max(1, Math.min(segments,
                 Runtime.getRuntime().availableProcessors()));
-        return new Settings(QUEUE_DEPTH, parallelism, Hook.NO_OP);
+        return new Settings(QUEUE_DEPTH, parallelism);
     }
 
     /** Take one reference while continuing to surface failures from any cursor or encoder lane. */
@@ -74,10 +76,9 @@ final class SegmentHeaderCursors implements AutoCloseable {
         };
     }
 
-    private void scan(int segment, PageRunSegmentIo io, Semaphore scanPermits, Hook hook) {
+    private void scan(int segment, PageRunSegmentIo io, Semaphore scanPermits) {
         try {
             while (true) {
-                hook.beforeScan(segment);
                 scanPermits.acquire();
                 PageRunSegmentIo.RoutingPage page;
                 long started = System.nanoTime();
@@ -98,7 +99,6 @@ final class SegmentHeaderCursors implements AutoCloseable {
                 PageRef ref = new PageRef(segment, page.ordinal(), page.offset(), page.framedLen(),
                         header.minKey(), header.maxKey(), header.count(),
                         header.rawPayloadLength());
-                hook.beforeEnqueue(ref);
                 put(segment, new Item.Ref(ref));
             }
         } catch (InterruptedException e) {
@@ -118,21 +118,11 @@ final class SegmentHeaderCursors implements AutoCloseable {
         }
     }
 
-    record Settings(int queueDepth, int scanParallelism, Hook hook) {
+    record Settings(int queueDepth, int scanParallelism) {
         Settings {
             if (queueDepth < 1 || scanParallelism < 1) {
                 throw new IllegalArgumentException("header cursor settings must be positive");
             }
-        }
-    }
-
-    interface Hook {
-        Hook NO_OP = new Hook() { };
-
-        default void beforeScan(int segment) throws InterruptedException {
-        }
-
-        default void beforeEnqueue(PageRef ref) throws InterruptedException {
         }
     }
 
