@@ -804,12 +804,14 @@ which owns the at-most-once-text durability questions it would reopen):
   The single router orders `PageRef` values by raw minimum key. A strictly disjoint ref becomes a
   whole-page plan item. Transitively overlapping page ranges become one cluster item without loading
   rows. The router alone chooses raw-key-atomic part boundaries and emits a complete `PartPlan` with a
-  dense merge-order ordinal. Each of the `N` encoder lanes has a two-plan queue. Lane `ordinal mod N`
-  positionally reads every referenced frame through the already-open shared channel, verifies its CRC
-  and routing metadata, and decodes it. Whole pages drain through `PageBlockCursor`; cluster refs enter
-  `PageRowMerger` incrementally as their minimum reaches the next row, with exhausted pages released
-  before later refs are admitted. The calling thread reorders durably closed parts before the shared
-  cross-part adjacency, cardinality, and publication sequence.
+  dense merge-order ordinal. The `N` encoders share one bounded queue of `D * N` complete plans; any
+  free encoder may take the next plan, while the ordinal—not lane identity—restores publication order.
+  An encoder positionally reads every referenced frame through the already-open shared channel,
+  verifies its CRC and routing metadata, and decodes it. Whole pages and cluster pages both pass
+  through the lane's decoded-page guard. Cluster refs enter `PageRowMerger` incrementally as their
+  minimum reaches the next row, with exhausted pages released before later refs are admitted. The
+  calling thread reorders durably closed parts before the shared cross-part adjacency, cardinality,
+  and publication sequence.
 
   Completeness has four independent checks. Header cursors see each declared frame once and prove byte
   tiling plus trailer totals. Monotone router consumption places each ref in exactly one plan. Encoders
@@ -818,25 +820,32 @@ which owns the at-most-once-text durability questions it would reopen):
   not seek, construct range boundaries, or depend on type-2/type-3 indexes for correctness. A required
   cascade still uses the normal page-run merge and then feeds its survivors to this pipeline.
 
-  Resource planning uses only resources this arm owns. File descriptors are bounded by `K + N` plus
-  fixed process headroom. Let `D = 2`, `T` be the catalog's total page count, `R = 200` bytes be the
-  conservative ordinary-reference planning price, `P` the largest persisted decoded raw-payload
-  maximum (or, for a legacy segment without one, its validated trailer maximum-record estimate), and
-  `W = 8 MiB` the writer estimate. The heap clamp charges
-  `((K * (D + 1)) + T) * R` for cursor/frontier and worst-case retained plan refs, then `P + W` per
-  encoder. The exact structural reference bound is the same ref count multiplied by each retained
-  ref's object and key-array size; `R` is an admission estimate, not a byte ledger. After admission,
-  each lane receives `C = max(P, B / N)` bytes of decoded-cluster budget and may transiently hold one
-  newly read page before reservation, so decoded-page residency is bounded by `N * (C + Q)`, where
-  `Q` is the largest actual retained decoded-page price. Plan queues add no page bodies. The total
-  runtime shape is therefore reference storage plus `N * (C + Q + writer)`, not `N * part bytes`.
-  Pipeline clamp reasons remain separate from range proof/staged-size admission.
+  Resource planning uses only resources this arm owns and is run against the post-cascade catalog.
+  File descriptors are bounded by `K + N` plus fixed process headroom. Let `D = 2`, `R = 200` bytes
+  be the conservative ordinary-reference planning price, `P` the largest admitted decoded-page
+  ceiling, `W = 8 MiB` the writer estimate, `L` the initial logical part target, and
+  `A = min(totalPages, ceil(L / P))`. Current segments supply their validated raw-payload maximum;
+  any legacy segment without that field raises `P` to the configured compatibility ceiling rather
+  than substituting an encoded-record estimate. For candidate `N`, reference planning charges
+  `(K * (D + 1) + A * (1 + D * N)) * R`: cursor/frontier refs, the router's current plan, and every
+  slot in the shared plan queue. This depends on bounded in-flight part geometry, not the catalog's
+  total page count once the catalog exceeds one wave.
+
+  The heap clamp first charges those references plus `N * W`, then requires at least `N * P` for
+  decoded pages. Each admitted encoder receives an equal share `C` of the remaining merge budget,
+  with `C >= P`; the same guard covers a disjoint whole page and an incremental overlap cluster.
+  A positional read materializes one header-bounded page before the guard accounts its exact retained
+  bytes, and a claim above the planned segment maximum is rejected before decode. Plan queues retain
+  no bodies. The aggregate planned shape is therefore reference storage plus `N * (C + W)`, not
+  `N * part bytes`. Pipeline clamp reasons remain separate from range proof/staged-size admission.
 
   Pipeline logical bytes always mean uncompressed raw page-payload bytes. Every plan sums its refs'
   header `rawPayloadLength`, available without decoding. The router
   compares pending logical bytes with a target calibrated from completed parts' actual encoded/logical
-  ratio. The first target uses a fixed conservative ratio; later targets use the cumulative measured
-  ratio. This is soft geometry only: a boundary may occur only when adjacent raw keys differ, so an
+  ratio. The first target assumes encoded bytes equal logical bytes, deliberately tending toward a
+  small part on compressible input. After closing that first plan, the router waits for its durable
+  completion before routing a second plan; later targets use the cumulative measured ratio. This is
+  soft geometry only: a boundary may occur only when adjacent raw keys differ, so an
   equal-key group can exceed the target but never cross files. A package-private fixed-rows policy
   exists only for the benchmark comparison. Completed parts retain the same dense `file_index`,
   last-part-only `file_final`, raw-byte cross-part adjacency check, cardinality check, crash-safe

@@ -1686,11 +1686,12 @@ The experimental `sort.finalization=pipeline` arm bypasses boundary selection en
 usual cascade reduces the input to the admitted fan-in, bounded sequential header cursors read frame
 metadata and skip stored payloads. One ordered router groups page references into disjoint page items
 or transitive overlap clusters, chooses calibrated raw-key-atomic part boundaries, and queues complete
-part plans. Striped encoders then positionally read and CRC-check their refs through one shared open
-channel per segment. Whole pages drain directly; overlap clusters use an incrementally admitted
-`PageRowMerger` under a per-lane decoded-page budget. Two-deep plan queues let the router expose later
-parts without retaining decoded part bodies. Encoder admission prices the shared channels, reference
-plans, cluster shares, one extra page, and open writers; current trailers supply an exact raw-page
-maximum, while legacy trailers supply their validated maximum-record estimate and runtime header
-claims remain subject to the cluster guard. The arm does not inherit range proof, seek, staged-size,
-or per-range stream costs.
+part plans. Encoders take work from one shared `2 * N` plan queue, then positionally read and
+CRC-check their refs through one shared open channel per segment. Whole pages and overlap clusters
+use the same per-encoder decoded-page guard; clusters admit refs incrementally into `PageRowMerger`.
+The router pauses after its first calibrated-byte plan until that part completes, preventing stale
+initial geometry from filling the queue, then exposes later parts without retaining decoded part
+bodies. Encoder admission runs against the post-cascade catalog and prices shared channels,
+target-bounded reference plans, cluster shares, and open writers. Current trailers supply an exact
+raw-page maximum; a legacy trailer raises the page price to the configured decode ceiling. The arm
+does not inherit range proof, seek, staged-size, or per-range stream costs.
