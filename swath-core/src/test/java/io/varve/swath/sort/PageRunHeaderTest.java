@@ -13,6 +13,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,6 +49,73 @@ class PageRunHeaderTest {
                                     .isEqualTo(SegmentCorruptionException.PAGE_RUN_HEADER_CORRUPTION));
         }
         assertThat(metrics.count("SORT.page_run_header_corruption")).isEqualTo(1);
+    }
+
+    @Test
+    void truncatedHeaderIsMeteredBeforeExistingEofFailure(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("truncated.bin");
+        Files.write(path, new byte[PageRunHeader.PREFIX_BYTES]);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            assertThatThrownBy(() -> PageRunHeader.read(channel, path, Files.size(path), metrics))
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_header_corruption")
+                    .hasMessageContaining("truncated page-run header");
+        }
+        assertThat(metrics.count("SORT.page_run_header_corruption")).isEqualTo(1);
+    }
+
+    @Test
+    void badMagicAndFormatHardCutUseTheirDistinctClassifications(@TempDir Path dir)
+            throws Exception {
+        byte[] badMagic = headerWithUnknownField(SortMode.OBJECTS);
+        badMagic[0] ^= 1;
+        assertTypedHeaderRejectionIsClassified(dir.resolve("bad-magic.bin"), badMagic,
+                "bad page-run magic", "page_run_header_corruption");
+
+        byte[] oldFormat = headerWithUnknownField(SortMode.OBJECTS);
+        ByteBuffer.wrap(oldFormat).putShort(Integer.BYTES, (short) 1);
+        Path oldFormatPath = dir.resolve("old-format.bin");
+        Files.write(oldFormatPath, oldFormat);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        try (FileChannel channel = FileChannel.open(oldFormatPath, StandardOpenOption.READ)) {
+            assertThatThrownBy(() -> PageRunHeader.read(
+                    channel, oldFormatPath, oldFormat.length, metrics))
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_format_mismatch")
+                    .hasMessageContaining("unsupported page-run format version 1");
+        }
+        assertThat(metrics.count("SORT.page_run_format_mismatch")).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentHeaderTruncationIsMetered(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("concurrent-truncation.bin");
+        byte[] header = headerWithUnknownField(SortMode.OBJECTS);
+        Files.write(path, Arrays.copyOf(header, PageRunHeader.PREFIX_BYTES));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            assertThatThrownBy(() -> PageRunHeader.read(channel, path, header.length, metrics))
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_header_corruption")
+                    .hasMessageContaining("unexpected EOF");
+        }
+        assertThat(metrics.count("SORT.page_run_header_corruption")).isEqualTo(1);
+    }
+
+    private static void assertTypedHeaderRejectionIsClassified(
+            Path path, byte[] header, String message, String reason) throws Exception {
+        Files.write(path, header);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            assertThatThrownBy(() -> PageRunHeader.read(channel, path, header.length, metrics))
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=" + reason)
+                    .hasMessageContaining(message);
+        }
+        assertThat(metrics.count("SORT." + reason)).isEqualTo(1);
     }
 
     private static byte[] headerWithUnknownField(SortMode mode) {

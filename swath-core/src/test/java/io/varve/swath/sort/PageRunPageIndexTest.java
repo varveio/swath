@@ -117,14 +117,17 @@ class PageRunPageIndexTest {
             throws IOException {
         Path segment = writePages(dir.resolve("format.pageseg"), 3);
         PageRunFormat physical = PageRunFormat.currentListing();
+        SortTestSupport.CountingMetrics extensionMetrics =
+                new SortTestSupport.CountingMetrics();
 
         assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty(),
+                path -> PageRunSegmentIo.open(path, extensionMetrics), Optional.empty(),
                 java.util.Map.of(segment, new PageRunFormat(
                         PageRunFormat.CURRENT_FORMAT_VERSION,
-                        PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION))))
+                        PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION)), extensionMetrics))
                 .isInstanceOf(SegmentCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_format_mismatch");
+        assertThat(extensionMetrics.count("SORT.page_run_format_mismatch")).isEqualTo(1);
 
         PageRunCatalog legacyUnrecorded = PageRunCatalog.preflight(List.of(segment),
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
@@ -149,12 +152,14 @@ class PageRunPageIndexTest {
         byte[] bytes = Files.readAllBytes(segment);
         ByteBuffer.wrap(bytes).putShort(Integer.BYTES, (short) 1);
         Files.write(segment, bytes);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty(),
-                java.util.Map.of(segment, physical)))
+                path -> PageRunSegmentIo.open(path, metrics), Optional.empty(),
+                java.util.Map.of(segment, physical), metrics))
                 .isInstanceOf(SegmentCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_format_mismatch")
-                .hasMessageContaining("physical_format_version=1");
+                .hasMessageContaining("unsupported page-run format version 1");
+        assertThat(metrics.count("SORT.page_run_format_mismatch")).isEqualTo(1);
     }
 
     @Test

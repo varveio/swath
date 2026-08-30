@@ -148,6 +148,20 @@ class PageRunSegmentTest {
     }
 
     @Test
+    void undersizedSegmentRecordsHeaderRejectionAtTheLiveOpenBoundary(@TempDir Path dir)
+            throws IOException {
+        Path path = dir.resolve("undersized.pgr");
+        Files.write(path, new byte[PageRunHeader.PREFIX_BYTES]);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> reader(path, metrics))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_header_corruption")
+                .hasMessageContaining("file too small");
+        assertThat(metrics.count("SORT.page_run_header_corruption")).isEqualTo(1);
+    }
+
+    @Test
     void rawKeyRegressionIsRejectedBeforeTheSegmentSinkCanAdvanceACheckpoint(@TempDir Path dir)
             throws Exception {
         Path staging = Files.createDirectories(dir.resolve("_staging"));

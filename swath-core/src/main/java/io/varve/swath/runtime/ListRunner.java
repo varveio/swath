@@ -17,6 +17,7 @@ import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.RetryConfig;
 import io.varve.swath.engine.TransientRetryFetcher;
 import io.varve.swath.engine.WorkStealingScan;
+import io.varve.swath.error.CancelledException;
 import io.varve.swath.error.CheckpointException;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.MergePendingException;
@@ -1090,7 +1091,8 @@ public final class ListRunner {
             SortTransformResult result = transform.transform(
                     segments, expectedPageRunFormats, dataDir, stagingDir,
                     (finalParts, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
-                            finalParts, ctx.metrics(), finalizeClock),
+                            finalParts, ctx.metrics(), finalizeClock,
+                            manifestBoundsCancellation(ctx.cancellation())),
                     ctx.metrics()::recordProgress,
                     // WRITING becomes reachable here — the cascade passes above stay MERGING;
                     // once only the output-writing work + publish remain, the swath.phase gauge
@@ -1101,6 +1103,8 @@ public final class ListRunner {
             ctx.metrics().recordSortMergePasses(result.mergePasses());
             ctx.metrics().recordSortFinalizeParallelism(result.finalizationParallelism());
             return result;
+        } catch (ManifestBoundsScanCancelled e) {
+            throw unwrapManifestBoundsCancellation(e);
         } catch (CommittedPublicationCleanupException e) {
             // The listener returned, so _SUCCESS already commits the dataset. Preserve that fact in
             // the checkpoint when possible and route through the existing non-fatal publication
@@ -1229,13 +1233,22 @@ public final class ListRunner {
      */
     static void writeSortedManifest(Path outputDir, String bucket, String argsHash, long runId,
             List<FinalPart> finalParts, RunMetrics metrics) throws IOException {
+        writeSortedManifest(outputDir, bucket, argsHash, runId, finalParts, metrics, () -> { });
+    }
+
+    /** Test/library seam that keeps metadata-less compatibility scans cooperatively cancellable. */
+    static void writeSortedManifest(Path outputDir, String bucket, String argsHash, long runId,
+            List<FinalPart> finalParts, RunMetrics metrics, Runnable cancellationCheck)
+            throws IOException {
         FinalizeWallClock finalizeClock = new FinalizeWallClock();
         finalizeClock.start();
-        writeSortedManifest(outputDir, bucket, argsHash, runId, finalParts, metrics, finalizeClock);
+        writeSortedManifest(outputDir, bucket, argsHash, runId, finalParts, metrics, finalizeClock,
+                cancellationCheck);
     }
 
     private static void writeSortedManifest(Path outputDir, String bucket, String argsHash, long runId,
-            List<FinalPart> finalParts, RunMetrics metrics, FinalizeWallClock finalizeClock) throws IOException {
+            List<FinalPart> finalParts, RunMetrics metrics, FinalizeWallClock finalizeClock,
+            Runnable cancellationCheck) throws IOException {
         finalizeClock.start();
         try {
             List<PartInfo> parts = new ArrayList<>(finalParts.size());
@@ -1253,10 +1266,11 @@ public final class ListRunner {
                     metrics.recordStealReason("SORT", "manifest_metadata_fallback_scan");
                     long bytes = Files.size(f);
                     long md5Start = System.nanoTime();
-                    String md5 = md5HexWithLivenessProgress(f, metrics);
+                    String md5 = md5HexWithLivenessProgress(
+                            f, metrics, FINALIZE_PROGRESS_BYTE_STRIDE, cancellationCheck);
                     metrics.recordSortManifestMd5(bytes, System.nanoTime() - md5Start);
                     long boundsStart = System.nanoTime();
-                    SortedFileIndex.Bounds bounds = SortedFileIndex.bounds(f);
+                    SortedFileIndex.Bounds bounds = SortedFileIndex.bounds(f, cancellationCheck);
                     metrics.recordSortManifestBounds(bounds.rowCount(), bytes,
                             System.nanoTime() - boundsStart);
                     metadata = new FinalPartMetadata(bounds.rowCount(), bytes, md5,
@@ -1284,6 +1298,32 @@ public final class ListRunner {
         }
     }
 
+    /** Carry typed run cancellation through the IOException-only sort publication callback. */
+    static Runnable manifestBoundsCancellation(CancellationToken cancellation) {
+        return () -> {
+            try {
+                cancellation.throwIfCancelled();
+            } catch (CancelledException e) {
+                throw new ManifestBoundsScanCancelled(e);
+            }
+        };
+    }
+
+    /** Shared production/test unwrap so the original typed cancellation and exit mapping survive. */
+    static CancelledException unwrapManifestBoundsCancellation(ManifestBoundsScanCancelled carried) {
+        return carried.cancellation;
+    }
+
+    /** Unwrapped at {@link #sortMergeAndPublish}; never escapes the runtime boundary. */
+    static final class ManifestBoundsScanCancelled extends RuntimeException {
+        private final CancelledException cancellation;
+
+        private ManifestBoundsScanCancelled(CancelledException cancellation) {
+            super(cancellation);
+            this.cancellation = cancellation;
+        }
+    }
+
     /** Every this-many bytes hashed/finalized, emit one liveness tick keyed to real work done. */
     private static final long FINALIZE_PROGRESS_BYTE_STRIDE = 64L * 1024 * 1024;   // 64 MiB
     private static final int FINALIZE_READ_BUFFER_BYTES = 1024 * 1024;             // 1 MiB read chunks
@@ -1296,21 +1336,22 @@ public final class ListRunner {
      * genuinely stops moving bytes emits no tick and still trips. Each tick also bumps the {@code
      * SORT/finalize_progress_tick} engagement counter so post-hoc analysis can tell from the metrics
      * alone that the finalize path emitted progress and how often.
-     */
-    private static String md5HexWithLivenessProgress(Path f, RunMetrics metrics) throws IOException {
-        return md5HexWithLivenessProgress(f, metrics, FINALIZE_PROGRESS_BYTE_STRIDE);
-    }
-
-    /**
-     * Package-private seam (byte stride injectable) so a mechanism test can prove the byte-keyed tick
-     * fires over a tiny file with a tiny stride, without writing a multi-GB fixture. Production callers
-     * use the {@link #FINALIZE_PROGRESS_BYTE_STRIDE} overload above.
+     *
+     * <p>The byte-stride parameter is package-private so a tiny-file mechanism test can exercise the
+     * production cadence without a multi-GB fixture.
      */
     static String md5HexWithLivenessProgress(Path f, RunMetrics metrics, long byteStride)
             throws IOException {
+        return md5HexWithLivenessProgress(f, metrics, byteStride, () -> { });
+    }
+
+    /** Digest with the same byte-keyed liveness cadence and cooperative publication cancellation. */
+    static String md5HexWithLivenessProgress(Path f, RunMetrics metrics, long byteStride,
+            Runnable cancellationCheck) throws IOException {
         MessageDigest md = DigestUtils.getMd5Digest();
         byte[] buf = new byte[FINALIZE_READ_BUFFER_BYTES];
         long sinceTick = 0;
+        cancellationCheck.run();
         try (var in = Files.newInputStream(f)) {
             int n;
             while ((n = in.read(buf)) != -1) {
@@ -1318,6 +1359,7 @@ public final class ListRunner {
                 sinceTick += n;
                 if (sinceTick >= byteStride) {
                     sinceTick = 0;
+                    cancellationCheck.run();
                     metrics.markProgress();
                     metrics.recordStealReason("SORT", "finalize_progress_tick");
                 }

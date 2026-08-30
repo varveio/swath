@@ -5,7 +5,6 @@
  */
 package io.varve.swath.sort;
 
-import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -56,20 +55,22 @@ final class PageRunHeader {
     static Header read(FileChannel channel, Path path, long fileSize, SortMetrics metrics)
             throws IOException {
         if (fileSize < PREFIX_BYTES + CRC_BYTES) {
-            throw new EOFException("page-run segment " + path + " has a truncated header");
+            throw headerCorruption(path, metrics, "truncated page-run header");
         }
-        ByteBuffer prefix = readAt(channel, path, 0, PREFIX_BYTES);
+        ByteBuffer prefix = readAt(channel, path, 0, PREFIX_BYTES, metrics);
         int magic = prefix.getInt();
         short formatVersion = prefix.getShort();
         short headerVersion = prefix.getShort();
         int metadataLength = prefix.getInt();
         if (magic != PageRunSegmentWriter.MAGIC) {
-            throw new IOException("page-run segment " + path + ": bad page-run magic 0x"
-                    + Integer.toHexString(magic));
+            throw headerCorruption(path, metrics,
+                    "bad page-run magic 0x" + Integer.toHexString(magic));
         }
         if (formatVersion != PageRunSegmentWriter.FORMAT_VERSION) {
-            throw new IOException("page-run segment " + path
-                    + ": unsupported page-run format version " + formatVersion);
+            metrics.recordStealReason("SORT", "page_run_format_mismatch");
+            throw new SegmentCorruptionException(path,
+                    SegmentCorruptionException.PAGE_RUN_FORMAT_MISMATCH,
+                    "unsupported page-run format version " + formatVersion);
         }
         if (headerVersion != HEADER_VERSION) {
             throw headerCorruption(path, metrics,
@@ -82,7 +83,7 @@ final class PageRunHeader {
         }
 
         int encodedBytes = Math.addExact(PREFIX_BYTES, Math.addExact(metadataLength, CRC_BYTES));
-        byte[] encoded = readAt(channel, path, 0, encodedBytes).array();
+        byte[] encoded = readAt(channel, path, 0, encodedBytes, metrics).array();
         int expectedCrc = ByteBuffer.wrap(encoded).getInt(encodedBytes - CRC_BYTES);
         CRC32C crc = new CRC32C();
         crc.update(encoded, 0, encodedBytes - CRC_BYTES);
@@ -126,19 +127,23 @@ final class PageRunHeader {
 
     private static SegmentCorruptionException headerCorruption(
             Path path, SortMetrics metrics, String message) {
-        metrics.recordStealReason("SORT", "page_run_header_corruption");
+        recordHeaderRejection(metrics);
         return new SegmentCorruptionException(path,
                 SegmentCorruptionException.PAGE_RUN_HEADER_CORRUPTION, message);
     }
 
-    private static ByteBuffer readAt(FileChannel channel, Path path, long position, int bytes)
-            throws IOException {
+    private static void recordHeaderRejection(SortMetrics metrics) {
+        metrics.recordStealReason("SORT", "page_run_header_corruption");
+    }
+
+    private static ByteBuffer readAt(FileChannel channel, Path path, long position, int bytes,
+            SortMetrics metrics) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(bytes);
         long offset = position;
         while (buffer.hasRemaining()) {
             int read = channel.read(buffer, offset);
             if (read < 0) {
-                throw new EOFException("unexpected EOF reading page-run segment " + path);
+                throw headerCorruption(path, metrics, "unexpected EOF reading page-run header");
             }
             offset += read;
         }

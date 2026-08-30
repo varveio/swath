@@ -52,8 +52,6 @@ public final class SortedFileIndex {
     private static final String ROW_TYPE_FIELD = "row_type";
     private static final ColumnPath ROW_TYPE_PATH = ColumnPath.get(ROW_TYPE_FIELD);
     private static final byte[] OBJECT_ROW_TYPE_BYTES = "OBJECT".getBytes(StandardCharsets.UTF_8);
-    private static final Runnable NO_CANCELLATION_CHECK = () -> { };
-
     private SortedFileIndex() {
     }
 
@@ -241,13 +239,8 @@ public final class SortedFileIndex {
         }
     }
 
-    /** See {@link Bounds}. */
-    public static Bounds bounds(Path file) throws IOException {
-        return bounds(file, NO_CANCELLATION_CHECK);
-    }
-
     /** Exact bounds scan with a cooperative check for merge/publication callers. */
-    static Bounds bounds(Path file, Runnable cancellationCheck) throws IOException {
+    public static Bounds bounds(Path file, Runnable cancellationCheck) throws IOException {
         Objects.requireNonNull(cancellationCheck, "cancellationCheck");
         try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
             MessageType full = reader.getFooter().getFileMetaData().getSchema();

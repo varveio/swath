@@ -144,7 +144,10 @@ final class PageRunSegmentIo implements AutoCloseable {
             long minSize = PageRunHeader.PREFIX_BYTES + PageRunHeader.CRC_BYTES
                     + PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
             if (size < minSize) {
-                throw failFor(path, "file too small to be a page-run segment (" + size + " bytes)");
+                metrics.recordStealReason("SORT", "page_run_header_corruption");
+                throw new SegmentCorruptionException(path,
+                        SegmentCorruptionException.PAGE_RUN_HEADER_CORRUPTION,
+                        "file too small to be a page-run segment (" + size + " bytes)");
             }
 
             PageRunHeader.Header header = PageRunHeader.read(channel, path, size, metrics);

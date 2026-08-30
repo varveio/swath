@@ -737,13 +737,15 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                             }
                             if (inRange.isEmpty()) {
                                 sendSortCompletionIfNeeded(
-                                        ctx, channel, claim.nodeId(), pageSeq, completed);
+                                        ctx, channel, claim.nodeId(), pageSeq, completed,
+                                        "completion_marker_empty_page");
                                 return;
                             }
                             List<ListEntry> kept = filters.apply(inRange);
                             if (kept.isEmpty()) {
                                 sendSortCompletionIfNeeded(
-                                        ctx, channel, claim.nodeId(), pageSeq, completed);
+                                        ctx, channel, claim.nodeId(), pageSeq, completed,
+                                        "completion_marker_filtered_page");
                                 return;
                             }
                             if (hiAtCommit == null) {
@@ -832,10 +834,12 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
 
     /** Deliver node completion to the sort assertion tripwire when no retained rows carry it. */
     private void sendSortCompletionIfNeeded(RunContext ctx, Channel<PageBatch> channel,
-            long nodeId, AtomicLong pageSeq, boolean completed) throws InterruptedException {
+            long nodeId, AtomicLong pageSeq, boolean completed, String engagementReason)
+            throws InterruptedException {
         if (!completed || pagePacker == null) {
             return;
         }
+        metrics.recordStealReason("SORT", engagementReason);
         if (!channel.send(new Item<>(PageBatch.completion(nodeId, pageSeq.getAndIncrement())))) {
             stopForReceiverGone(ctx);
         }

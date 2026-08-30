@@ -10,8 +10,7 @@ import java.nio.file.Path;
 
 /**
  * A staged-segment corruption failure that carries a greppable {@code error_class} fingerprint into the
- * JSON run summary. Plain physical-integrity failures (bad magic/version, a CRC
- * mismatch, a truncated file) still throw an unclassified {@link IOException} — this subtype exists for
+ * JSON run summary. This subtype exists for
  * the corruption classes an operator must be able to triage post-hoc from {@code summary.json} alone,
  * without grepping stderr.
  *

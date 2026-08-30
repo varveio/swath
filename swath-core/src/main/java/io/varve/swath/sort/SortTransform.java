@@ -87,7 +87,7 @@ public final class SortTransform {
     SortTransform(SortRun run, PublicationStepHook publicationStepHook,
             PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
         this(run, publicationStepHook, proofReaderFactory, System::nanoTime,
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
+                path -> PageRunSegmentIo.open(path, run.metrics()));
     }
 
     SortTransform(SortRun run, PublicationStepHook publicationStepHook,
@@ -184,7 +184,7 @@ public final class SortTransform {
         // they do not engage sparse boundary parsing and rely on runtime decoded-page admission.
         long boundaryPreflightStarted = parallelKickoff ? boundaryNanoClock.getAsLong() : 0;
         PageRunCatalog catalog = PageRunCatalog.preflight(
-                stagingSegments, catalogOpener, boundaryKeySink, expectedFormats);
+                stagingSegments, catalogOpener, boundaryKeySink, expectedFormats, metrics);
         long boundaryPreflightNanos = parallelKickoff
                 ? elapsed(boundaryPreflightStarted, boundaryNanoClock.getAsLong()) : 0;
         // Disposable working files are cleared before work; prior finals remain until their complete

@@ -11,15 +11,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.varve.swath.error.CancelledException;
+import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -27,6 +35,9 @@ import org.junit.jupiter.api.io.TempDir;
 class SortedManifestMetadataHandoffTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final class StopManifestBoundsScan extends RuntimeException {
+    }
 
     @Test
     void trustedFreshMetadataPublishesWithoutOpeningTheFinalPart(@TempDir Path root) throws Exception {
@@ -71,6 +82,45 @@ class SortedManifestMetadataHandoffTest {
         assertThat(Files.exists(layout.success())).isFalse();
         assertThat(registry.counter("swath.steal_reason", "outcome", "SORT", "reason",
                 "manifest_metadata_fallback_scan").count()).isEqualTo(1);
+    }
+
+    @Test
+    void metadataLessBoundsScanObservesActiveCancellation(@TempDir Path root) throws Exception {
+        DatasetLayout layout = DatasetLayout.of(root);
+        Files.createDirectories(layout.dataDir());
+        Path part = layout.dataDir().resolve("part-00000.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(
+                part, SortConfigs.base(), SortMode.OBJECTS, 1)) {
+            writer.write(ObjectEntry.withoutOwnerDisplayNameAndChecksumType(
+                    KeyBytes.ofUtf8("a"), 1, 0, null, null, null, true, null, null));
+        }
+        AtomicInteger checks = new AtomicInteger();
+
+        assertThatThrownBy(() -> ListRunner.writeSortedManifest(root, "bucket", "args", 7,
+                List.of(new FinalPart(part, Optional.empty())),
+                new RunMetrics(new SimpleMeterRegistry()), () -> {
+                    if (checks.incrementAndGet() == 2) {
+                        throw new StopManifestBoundsScan();
+                    }
+                })).isInstanceOf(StopManifestBoundsScan.class);
+
+        assertThat(checks).hasValue(2);
+        assertThat(Files.exists(layout.success())).isFalse();
+    }
+
+    @Test
+    void activeRunCancellationIsUnwrappedToTheOriginalTypedFailure() {
+        CancellationToken cancellation = new CancellationToken();
+        cancellation.cancel();
+
+        assertThatThrownBy(() -> {
+            try {
+                ListRunner.manifestBoundsCancellation(cancellation).run();
+            } catch (ListRunner.ManifestBoundsScanCancelled carried) {
+                throw ListRunner.unwrapManifestBoundsCancellation(carried);
+            }
+        }).isInstanceOf(CancelledException.class)
+                .hasMessage("operation cancelled");
     }
 
     @Test
