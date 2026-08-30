@@ -49,15 +49,27 @@ jobs:
       - name: Deep tier (serial)
         run: ./gradlew test -Pdeep -PtestMaxParallelForks=1 --no-daemon --stacktrace
 
+      # What this job is FOR is re-executing the tier, so the count is the result that
+      # matters: a tag filter that matches nothing, or a reused task result, would otherwise
+      # report green in 2 minutes. See the script header.
+      - name: Deep tier executed tests
+        run: ./scripts/ci/report-test-counts.sh "deep tier"
+
       # The real `kill -9` -> `--resume` exactly-once path -- see ci.yml's
       # deep-tests job for the same step (this one is the schedule-driven backstop, matching
       # the deep tier's own "runs on every main-merge (ci.yml) + nightly" pattern above).
       - name: Real kill -9 -> --resume exactly-once
         run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeProcessIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
 
+      - name: Kill -9 IT executed tests
+        run: ./scripts/ci/report-test-counts.sh "kill -9 exactly-once IT" swath-cli
+
       # Parametric external-kill matrix (schedule-driven backstop, mirrors ci.yml's deep-tests).
       - name: Real kill -9 matrix -> --resume identical-to-clean
         run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeMatrixIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
+
+      - name: Kill -9 matrix executed tests
+        run: ./scripts/ci/report-test-counts.sh "kill -9 matrix IT" swath-cli
 
       # Perf tier ONLY (-PonlyPerf runs just the @Tag("perf") classes — not the whole fast+
       # integration suite — and the convention plugin bumps the test-worker heap to 2g for the
@@ -65,6 +77,9 @@ jobs:
       # mock-driven (the DuckDB-backed INT-6 is an integration test, not perf).
       - name: Perf tier
         run: ./gradlew test -PonlyPerf --no-daemon --stacktrace
+
+      - name: Perf tier executed tests
+        run: ./scripts/ci/report-test-counts.sh "perf tier"
 
       # TODO: add a gated real-AWS public-bucket differential
       # (`aws s3api --no-sign-request` vs swath) once the public-bucket harness lands — the

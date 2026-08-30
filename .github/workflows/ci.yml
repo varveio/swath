@@ -22,10 +22,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Fast gate: unit / property / concurrency tiers only (no Docker). Gates every
-  # PR. Integration (Testcontainers/LocalStack) tiers are excluded here via
-  # -PnoIntegration so the gate stays ~1 min; they run in the separate
-  # integration-tests job below (main pushes only), which never blocks a PR.
+  # Fast gate: unit / property / concurrency tiers only (no Docker). First to report on
+  # every PR. Integration (Testcontainers/LocalStack) tiers are excluded here via
+  # -PnoIntegration so this job stays ~1 min and says something useful early; they run
+  # in the separate integration-tests job below, which gates the PR alongside this one.
   fast-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -100,15 +100,14 @@ jobs:
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
 
-  # Slow tier: Docker/LocalStack integration tests. Runs on `main` (merges) and
-  # manual dispatch -- NOT on PRs -- so a slow/flaky IT never blocks a PR while
-  # still giving automated real-store coverage on every merge. It also gates the
-  # image publish (docker-publish `needs` it), so it must run on every event that
-  # can publish; otherwise a skipped `needs` would silently skip the publish.
-  # Gate on `github.ref == main` (not just event_name == push) so it stays correct
-  # even if on.push.branches is ever widened. Docker is on the ubuntu-latest runner.
+  # Slow tier: Docker/LocalStack integration tests. Runs on every event, PRs included:
+  # real-store coverage that only runs after merge cannot block the bad merge, and at
+  # ~170 s this tier is affordable on the PR gate (`ci-gate` needs it). Revisit once the
+  # HAR-driven replay corridor lets these 13 LocalStack ITs retire (WP6.8). It also gates
+  # the image publish (docker-publish `needs` it), so it must run on every event that can
+  # publish; otherwise a skipped `needs` would silently skip the publish. Docker is on the
+  # ubuntu-latest runner.
   integration-tests:
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -175,6 +174,12 @@ jobs:
       - name: Deep tier (schedule-sensitive + latency tests, serial)
         run: ./gradlew test -Pdeep -PtestMaxParallelForks=1 --no-daemon --stacktrace
 
+      # A tag-filtered tier that matches nothing runs zero tests and reports green. Assert the
+      # count instead of trusting it (see the script header for how the nightly job hid an
+      # empty deep run for weeks).
+      - name: Deep tier executed tests
+        run: ./scripts/ci/report-test-counts.sh "deep tier"
+
       # The real `kill -9` -> `--resume` exactly-once path is env-gated
       # (`-Dswath.it.sigkill=true`, @EnabledIfSystemProperty) and SKIPPED everywhere else. A
       # separate, untagged invocation (not `-Pdeep`/`-PonlyIntegration`, which would tag-filter
@@ -185,12 +190,20 @@ jobs:
       - name: Real kill -9 -> --resume exactly-once
         run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeProcessIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
 
+      # This IT is `@EnabledIfSystemProperty`-gated, so a break in the daemon-to-test-JVM
+      # property forwarding turns it into a silent skip rather than a failure.
+      - name: Kill -9 IT executed tests
+        run: ./scripts/ci/report-test-counts.sh "kill -9 exactly-once IT" swath-cli
+
       # Parametric external-kill matrix (many lifecycle points x {no-sort, --sort}) ->
       # --resume -> identical-to-clean oracle. Same `-Dswath.it.sigkill=true` gate/tag as the
       # single-point IT above; separate untagged invocation for the same reason (a `-Pdeep`/
       # `-PonlyIntegration` run would tag-filter it out). Honest KILLED-vs-DEGRADED tally in output.
       - name: Real kill -9 matrix -> --resume identical-to-clean
         run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeMatrixIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
+
+      - name: Kill -9 matrix executed tests
+        run: ./scripts/ci/report-test-counts.sh "kill -9 matrix IT" swath-cli
 
       - name: Upload test reports
         if: always()
@@ -258,6 +271,56 @@ jobs:
 
       - name: Smoke — image runs and entrypoint passes arguments
         run: docker run --rm "${{ matrix.image }}" --help
+
+  # The single required status check on `main`, and the only job here that exists for the
+  # branch rule rather than for what it runs.
+  #
+  # GitHub can only require a check by NAME, and a matrix job expands into one context per leg
+  # (`docker-check (Dockerfile, swath:ci, swath)`, ...): a rule naming `docker-check` matches
+  # nothing, and naming the legs individually goes stale the moment a leg is added or renamed.
+  # One aggregate job has a single stable name, and `needs` already collapses every leg of a
+  # matrix into one result — so adding a leg extends the gate for free. Requiring the tiers
+  # individually has a second failure mode this avoids: a single-module `check` once reported a
+  # cross-module change green (08-19), and a rule listing job names cannot notice that.
+  #
+  # `if: always()` is not optional. Without it a failed dependency SKIPS this job, a skipped
+  # required check never reports a conclusion, and the pull request waits forever instead of
+  # going red.
+  ci-gate:
+    needs: [fast-tests, integration-tests, docker-check]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # A skipped dependency passes the gate only OFF pull_request, where jobs are legitimately
+      # event-gated (docker-check is PR-only, so it skips on every main merge). On a pull request
+      # all three dependencies run, so there `skipped` is not a pass: that is what stops a future
+      # `if:` from quietly removing a tier from the gate while the check stays green.
+      - name: Every gating job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          ALLOW_SKIPPED: ${{ github.event_name != 'pull_request' }}
+        run: |
+          set -euo pipefail
+          if [ "$ALLOW_SKIPPED" = true ]; then
+            allowed='["success","skipped"]'
+          else
+            allowed='["success"]'
+          fi
+          {
+            echo "### CI gate"
+            echo
+            echo "| job | result |"
+            echo "| --- | --- |"
+            jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"' <<<"$NEEDS"
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=$(jq -r --argjson allowed "$allowed" \
+            'to_entries[] | select(.value.result as $r | $allowed | index($r) | not) | .key' <<<"$NEEDS")
+          if [ -n "$failed" ]; then
+            echo "::error::CI gate failed — not passing: $(echo "$failed" | paste -sd', ' -)"
+            exit 1
+          fi
+          echo "CI gate passed."
 
   # Dev-image GHCR publish + deep runtime smoke. Runs on every `main` merge and on
   # manual dispatch from any branch. Tagged releases publish through release.yml

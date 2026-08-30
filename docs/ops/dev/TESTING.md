@@ -75,7 +75,10 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
   and/or flaky under CI contention. Runs on every **main merge** (ci.yml `deep-tests`,
   serial via `-PtestMaxParallelForks=1`) and **nightly** (`nightly.yml`). The *invariants*
   these guard are pinned per-commit by fast deterministic smokes (see the Tag convention
-  below).
+  below). This tier and `perf` always re-execute — they are opted out of Gradle's
+  up-to-date and build-cache reuse, because their result depends on the machine and the
+  schedule, not on the sources. Locally that means a repeated `-Pdeep` run costs full
+  wall-clock; that is the point.
 - **`-PnoIntegration`** `./gradlew test -PnoIntegration` — Docker-free quick inner
   loop (skips the Testcontainers ITs).
 - **`-PonlyIntegration`** `./gradlew test -PonlyIntegration` — runs **only** the

@@ -183,6 +183,18 @@ tasks.withType<Test>().configureEach {
         project.name == "swath-core" -> maxOf(1, minOf(4, Runtime.getRuntime().availableProcessors() / 2))
         else -> 1
     }
+    // Re-execution backstops: the timing-sensitive tiers above plus the `kill -9` ITs, whose
+    // outcome depends on the machine and the schedule rather than on the sources alone, so a
+    // green result recorded on an earlier run says nothing about this one. Gradle cannot know
+    // that — the inputs are unchanged, so it is entitled to reuse the result — and the nightly
+    // job restores a build cache (gradle/actions/setup-gradle), which served `:swath-core:test`
+    // FROM-CACHE and let a nightly deep run "pass" in 2.4 min without executing a single deep
+    // test. Opting these invocations out of both caching and up-to-date checks is what makes the
+    // backstop a backstop; the fast tier keeps both, since that is where they pay.
+    if (timingSensitiveTier || System.getProperty("swath.it.sigkill") != null) {
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+    }
     // The default Gradle test-worker heap (512 MB) is well under the §5/§7.2 GB-scale memory
     // corridors the perf tier measures against (SORT-PERF, PERF-2): without headroom, a
     // multi-million-entry perf test hits a harness OOM before the pipeline itself gets anywhere
