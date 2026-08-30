@@ -11,16 +11,62 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import org.apache.parquet.filter2.compat.FilterCompat;
+import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.hadoop.metadata.ColumnPath;
+import org.apache.parquet.internal.filter2.columnindex.ColumnIndexFilter;
+import org.apache.parquet.internal.filter2.columnindex.RowRanges;
+import org.apache.parquet.io.LocalInputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class SortedRangeReaderTest {
+
+    @Test
+    void servedColumnIndexPrunesLongPrefixesThroughTheS3KeyLimit(@TempDir Path dir) throws Exception {
+        assertServedColumnIndexPrunes(dir.resolve("hundred-byte-prefix.parquet"), 100);
+        assertServedColumnIndexPrunes(dir.resolve("maximum-s3-key.parquet"), 1_018);
+    }
+
+    private static void assertServedColumnIndexPrunes(Path file, int prefixBytes) throws Exception {
+        String shared = "p".repeat(prefixBytes);
+        int rows = 1_000;
+        try (SortedFileWriter writer = new SortedParquetWriter(
+                file, SortConfigs.pagesOf(100), SortMode.OBJECTS, 1)) {
+            for (int i = 0; i < rows; i++) {
+                writer.write(object(shared + String.format("%06d", i)));
+            }
+        }
+
+        byte[] from = KeyBytes.ofUtf8(shared + "000550").raw();
+        byte[] toExclusive = KeyBytes.ofUtf8(shared + "000551").raw();
+        try (ParquetFileReader parquet = ParquetFileReader.open(new LocalInputFile(file))) {
+            parquet.setRequestedSchema(parquet.getFooter().getFileMetaData().getSchema());
+            RowRanges selected = ColumnIndexFilter.calculateRowRanges(
+                    FilterCompat.get(SortedRangeReader.predicate(from, true, toExclusive)),
+                    parquet.getColumnIndexStore(0),
+                    Set.of(ColumnPath.get("key")),
+                    parquet.getFooter().getBlocks().getFirst().getRowCount());
+
+            assertThat(selected.rowCount())
+                    .as("a narrow range should retain exactly its 100-row page for a %s-byte prefix",
+                            prefixBytes)
+                    .isEqualTo(100);
+        }
+
+        try (SortedRangeReader reader = new SortedRangeReader(file, 1)) {
+            assertThat(reader.range(0, from, true, toExclusive, 10, false))
+                    .singleElement()
+                    .satisfies(row -> assertThat(row.key()).isEqualTo(from));
+        }
+    }
 
     @Test
     void pooledReaderCanSwitchFromNoOwnerToOwnerProjection(@TempDir Path dir) throws Exception {
