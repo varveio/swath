@@ -92,7 +92,7 @@ final class PageBlock {
 
     /** Persisted-page constructor: retains the one owned record body and its parsed payload slice. */
     PageBlock(PageBlockCodec.Header header, byte[] recordBody,
-              ListEntry firstEntry, ListEntry lastEntry, long estimatedBytes, Path sourcePath) {
+              ListEntry firstEntry, ListEntry lastEntry, Path sourcePath) {
         this.payloadOwner = recordBody;
         this.payloadOffset = header.payloadOffset();
         this.payloadLength = header.payloadLength();
@@ -105,7 +105,7 @@ final class PageBlock {
         this.lastKeyBytes = header.maxKey();
         this.firstEntry = firstEntry;
         this.lastEntry = lastEntry;
-        this.estimatedBytes = estimatedBytes;
+        this.estimatedBytes = header.rawPayloadLength();
         this.orderedUnderFullComparator = header.ordered();
         this.sourcePath = sourcePath;
         this.parsedHeader = header;
@@ -248,6 +248,11 @@ final class PageBlock {
     /** Logical bytes used by the pre-encode staging gate. */
     long estimatedBytes() {
         return estimatedBytes;
+    }
+
+    /** Uncompressed payload bytes used by pipeline part calibration. */
+    long logicalBytes() {
+        return rawPayloadLength;
     }
 
     /** The shared logical-byte estimate used by every staging-segment gate. */

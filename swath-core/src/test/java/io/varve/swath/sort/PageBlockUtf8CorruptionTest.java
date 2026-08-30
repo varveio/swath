@@ -116,15 +116,12 @@ class PageBlockUtf8CorruptionTest {
         CountingFrontier secondFrontier = new CountingFrontier(
                 new PageFrontierReader(second, SortMetrics.NO_OP), advances, decodes);
 
-        try (PageAwareMerger merger = new PageAwareMerger(
-                List.of(firstFrontier, secondFrontier), CMP,
+        assertThatThrownBy(() -> new PageAwareMerger(List.of(firstFrontier, secondFrontier), CMP,
                 MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP, MergeRunSink.NO_OP,
-                oneDecodedPage)) {
-            assertThatThrownBy(merger::next)
-                    .isInstanceOfSatisfying(UncheckedIOException.class, failure ->
-                            assertThat(failure.getCause())
-                                    .isInstanceOf(MergeMemoryExhaustedException.class));
-        }
+                oneDecodedPage))
+                .isInstanceOfSatisfying(UncheckedIOException.class, failure ->
+                        assertThat(failure.getCause())
+                                .isInstanceOf(MergeMemoryExhaustedException.class));
         assertThat(advances).hasValue(1);
         assertThat(decodes).hasValue(2);
     }

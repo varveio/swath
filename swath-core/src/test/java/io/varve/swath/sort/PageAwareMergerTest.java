@@ -97,7 +97,7 @@ class PageAwareMergerTest {
         assertThat(metrics.get("SORT.merge_overlap_cluster")).isEqualTo(1);
         assertThat(metrics.overlapClusters).isEqualTo(1);
         assertThat(metrics.overlapPagesPeak).isEqualTo(2);
-        assertThat(metrics.overlapRowsPeak).isEqualTo(7);
+        assertThat(metrics.overlapRowsPeak).isEqualTo(8);
         assertThat(classification).containsExactly(0L, 2L);
     }
 
@@ -325,8 +325,8 @@ class PageAwareMergerTest {
 
         assertThat(merged).containsExactly("a", "b", "c", "d", "e", "z");
         assertThat(metrics.overlapClusters).isEqualTo(1);
-        assertThat(metrics.overlapPagesPeak).isEqualTo(2);
-        assertThat(metrics.overlapRowsPeak).isEqualTo(3);
+        assertThat(metrics.overlapPagesPeak).isEqualTo(3);
+        assertThat(metrics.overlapRowsPeak).isEqualTo(6);
     }
 
     @Test

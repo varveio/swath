@@ -133,7 +133,7 @@ final class PageBlockCodec {
 
     /** Build a persisted block from the already-parsed header and its owning record body. */
     static PageBlock deserialize(byte[] record, Header header, Path sourcePath) {
-        return new PageBlock(header, record, null, null, header.payloadLength(), sourcePath);
+        return new PageBlock(header, record, null, null, sourcePath);
     }
 
     /**

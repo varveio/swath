@@ -8,7 +8,6 @@ package io.varve.swath.sort;
 /** Router-owned part geometry with an internal fixed-row benchmark control. */
 final class PipelinePartSizer {
     static final double INITIAL_ENCODED_TO_LOGICAL_RATIO = 0.25;
-    static final long DEFAULT_FIXED_ROWS = 1_000_000L;
 
     enum Policy {
         CALIBRATED_BYTES,
@@ -18,13 +17,16 @@ final class PipelinePartSizer {
     /** Immutable benchmark-selected policy; production always supplies {@link #calibrated()}. */
     record Target(Policy policy, long fixedRows) {
         Target {
-            if (fixedRows <= 0) {
+            if (policy == Policy.FIXED_ROWS && fixedRows <= 0) {
                 throw new IllegalArgumentException("pipeline fixed-row target must be positive");
+            }
+            if (policy == Policy.CALIBRATED_BYTES && fixedRows != 0) {
+                throw new IllegalArgumentException("calibrated target does not take a row count");
             }
         }
 
         static Target calibrated() {
-            return new Target(Policy.CALIBRATED_BYTES, DEFAULT_FIXED_ROWS);
+            return new Target(Policy.CALIBRATED_BYTES, 0);
         }
 
         static Target fixedRows(long rows) {
@@ -37,14 +39,6 @@ final class PipelinePartSizer {
     private final long fixedRows;
     private long encodedBytes;
     private long logicalBytes;
-
-    PipelinePartSizer(long finalFileBytes) {
-        this(Target.calibrated(), finalFileBytes);
-    }
-
-    PipelinePartSizer(Policy policy, long finalFileBytes, long fixedRows) {
-        this(new Target(policy, fixedRows), finalFileBytes);
-    }
 
     PipelinePartSizer(Target target, long finalFileBytes) {
         if (finalFileBytes <= 0) {

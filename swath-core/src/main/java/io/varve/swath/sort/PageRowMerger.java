@@ -18,6 +18,7 @@ final class PageRowMerger {
     private final PriorityQueue<PageCursor> pages;
     private long rows;
     private int lastSource;
+    private long lastLogicalBytes;
     private long releasedBytes;
 
     PageRowMerger(Comparator<ListEntry> comparator) {
@@ -25,7 +26,8 @@ final class PageRowMerger {
     }
 
     void add(int source, PageBlock page, long retainedBytes) {
-        pages.add(new PageCursor(source, page.cursor(), page.count(), retainedBytes));
+        pages.add(new PageCursor(source, page.cursor(), page.count(), retainedBytes,
+                page.logicalBytes() / page.count()));
         rows += page.count();
     }
 
@@ -43,6 +45,7 @@ final class PageRowMerger {
         PageCursor page = pages.poll();
         ListEntry result = page.head;
         lastSource = page.source;
+        lastLogicalBytes = page.logicalBytesPerRow;
         page.advance();
         rows--;
         if (page.head == null) {
@@ -57,6 +60,10 @@ final class PageRowMerger {
 
     int lastSource() {
         return lastSource;
+    }
+
+    long lastLogicalBytes() {
+        return lastLogicalBytes;
     }
 
     long releasedBytes() {
@@ -99,12 +106,15 @@ final class PageRowMerger {
     private static final class PageCursor {
         private final int source;
         private final PageBlockCursor cursor;
+        private final long logicalBytesPerRow;
         private long retainedBytes;
         private ListEntry head;
 
-        PageCursor(int source, PageBlockCursor cursor, int count, long retainedBytes) {
+        PageCursor(int source, PageBlockCursor cursor, int count, long retainedBytes,
+                long logicalBytesPerRow) {
             this.source = source;
             this.cursor = cursor;
+            this.logicalBytesPerRow = logicalBytesPerRow;
             this.retainedBytes = retainedBytes;
             this.head = cursor.hasNext() ? cursor.next() : null;
             if (count < 1 || head == null) {

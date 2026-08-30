@@ -13,6 +13,7 @@ final class DecodedPageBudget {
     private final long limitBytes;
     private final SortMetrics metrics;
     private long residentBytes;
+    private long peakResidentBytes;
 
     DecodedPageBudget(long limitBytes, SortMetrics metrics) {
         if (limitBytes <= 0) {
@@ -33,6 +34,7 @@ final class DecodedPageBudget {
                             + ", budget_bytes=" + limitBytes);
         }
         residentBytes = next;
+        peakResidentBytes = Math.max(peakResidentBytes, residentBytes);
         return pageBytes;
     }
 
@@ -43,7 +45,11 @@ final class DecodedPageBudget {
         }
     }
 
-    private static long retainedBytes(PageBlock page) {
+    long peakResidentBytes() {
+        return peakResidentBytes;
+    }
+
+    static long retainedBytes(PageBlock page) {
         long bytes = saturatedAdd(page.retainedRecordBytes(), page.dictionaryCoordinateBytes());
         bytes = saturatedAdd(bytes, page.dictionaryCacheBudgetBytes());
         return page.codec() == PageCodec.NONE

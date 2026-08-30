@@ -73,49 +73,26 @@ public final class SortTransform {
     private final MergePlanner mergePlanner;
     private final LongSupplier boundaryNanoClock;
     private final PageRunCatalog.Opener catalogOpener;
-    private final PipelinePartSizer.Target pipelinePartTarget;
 
     /** Build one transform from the complete immutable run policy. */
     public SortTransform(SortRun run) {
-        this(run, PublicationStepHook.NO_OP, PageRunProofSpool.Reader::new,
-                PipelinePartSizer.Target.calibrated());
-    }
-
-    /** Benchmark-only construction with an immutable pipeline part-sizing control. */
-    SortTransform(SortRun run, PipelinePartSizer.Target pipelinePartTarget) {
-        this(run, PublicationStepHook.NO_OP, PageRunProofSpool.Reader::new, pipelinePartTarget);
+        this(run, PublicationStepHook.NO_OP, PageRunProofSpool.Reader::new);
     }
 
     /** Build a transform with the internal deterministic publication crash-test seam. */
     public SortTransform(SortRun run, PublicationStepHook publicationStepHook) {
-        this(run, publicationStepHook, PageRunProofSpool.Reader::new,
-                PipelinePartSizer.Target.calibrated());
+        this(run, publicationStepHook, PageRunProofSpool.Reader::new);
     }
 
     SortTransform(SortRun run, PublicationStepHook publicationStepHook,
             PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
-        this(run, publicationStepHook, proofReaderFactory,
-                PipelinePartSizer.Target.calibrated());
-    }
-
-    private SortTransform(SortRun run, PublicationStepHook publicationStepHook,
-            PageRunZoneVerifier.ProofReaderFactory proofReaderFactory,
-            PipelinePartSizer.Target pipelinePartTarget) {
         this(run, publicationStepHook, proofReaderFactory, System::nanoTime,
-                path -> PageRunSegmentIo.open(path, run.metrics()), pipelinePartTarget);
+                path -> PageRunSegmentIo.open(path, run.metrics()));
     }
 
     SortTransform(SortRun run, PublicationStepHook publicationStepHook,
             PageRunZoneVerifier.ProofReaderFactory proofReaderFactory,
             LongSupplier boundaryNanoClock, PageRunCatalog.Opener catalogOpener) {
-        this(run, publicationStepHook, proofReaderFactory, boundaryNanoClock, catalogOpener,
-                PipelinePartSizer.Target.calibrated());
-    }
-
-    private SortTransform(SortRun run, PublicationStepHook publicationStepHook,
-            PageRunZoneVerifier.ProofReaderFactory proofReaderFactory,
-            LongSupplier boundaryNanoClock, PageRunCatalog.Opener catalogOpener,
-            PipelinePartSizer.Target pipelinePartTarget) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -129,7 +106,6 @@ public final class SortTransform {
         this.proofReaderFactory = Objects.requireNonNull(proofReaderFactory, "proofReaderFactory");
         this.boundaryNanoClock = Objects.requireNonNull(boundaryNanoClock, "boundaryNanoClock");
         this.catalogOpener = Objects.requireNonNull(catalogOpener, "catalogOpener");
-        this.pipelinePartTarget = Objects.requireNonNull(pipelinePartTarget, "pipelinePartTarget");
         this.datasetPublisher = new DatasetPublisher(run, checkedPublicationHook, log);
         this.mergePlanner = new MergePlanner(run);
     }
@@ -220,13 +196,11 @@ public final class SortTransform {
         // originals and prior finals are not part of this narrowly-owned disposable sweep.
         datasetPublisher.sweepWorking(
                 outputDir, stagingDir, ownedInputs, outputAuthority);
-        MergePlanner.EffectiveRanges resourcePlan = parallelKickoff || pipelineKickoff
+        MergePlanner.EffectiveRanges resourcePlan = parallelKickoff
                 ? mergePlanner.effectiveRanges(config.mergeParallelism(), catalog)
                 : new MergePlanner.EffectiveRanges(1, MergePlanner.ClampReason.NONE);
         if (parallelKickoff) {
             recordResourceRangeClamp(config.mergeParallelism(), resourcePlan, catalog);
-        } else if (pipelineKickoff) {
-            recordPipelineEncoderClamp(config.mergeParallelism(), resourcePlan, catalog);
         }
         // First allocation gate: a refusal creates no proof/output state. A parallel candidate may
         // clamp down to the serial path while leaving every checkpoint-owned original untouched.
@@ -240,8 +214,8 @@ public final class SortTransform {
                     outputDir, stagingDir, publishListener, progressCallback, onFinalPassStarting,
                     ownedInputs, retainedOriginals, outputAuthority);
             return new PipelineFinalization(
-                    run, mergePlanner, datasetPublisher, pipelinePartTarget)
-                    .run(catalog, request, resourcePlan.ranges());
+                    run, mergePlanner, datasetPublisher)
+                    .run(catalog, request, config.mergeParallelism());
         }
 
         // When the configured/default swath.sort.merge-parallelism survives the staged-size,
@@ -462,34 +436,6 @@ public final class SortTransform {
                     metrics.recordStealReason("SORT", "merge_range_proof_budget_limited");
             case WOULD_CASCADE ->
                     metrics.recordStealReason("SORT", "merge_range_would_cascade");
-            case DISK_LIMITED, NONE -> throw new AssertionError("unreachable resource clamp");
-        }
-    }
-
-    /** Record the shared heap/FD clamp with pipeline-specific engagement reasons. */
-    private void recordPipelineEncoderClamp(int requested,
-            MergePlanner.EffectiveRanges plan, PageRunCatalog catalog) {
-        if (plan.reason() == MergePlanner.ClampReason.NONE) {
-            return;
-        }
-        if (plan.reason() == MergePlanner.ClampReason.DISK_LIMITED) {
-            throw new AssertionError("disk reason cannot originate in resource planning");
-        }
-        log.warn("sort_pipeline_encoders_clamped requested={} effective={} segments={} reason={} "
-                        + "merge_budget_bytes={}",
-                requested, plan.ranges(), catalog.descriptors().size(), plan.reason().logValue(),
-                config.mergeBudgetBytes());
-        switch (plan.reason()) {
-            case BELOW_STAGED_FLOOR ->
-                    metrics.recordStealReason("SORT", "pipeline_encoder_below_staged_floor");
-            case FD_EXHAUSTED ->
-                    metrics.recordStealReason("SORT", "pipeline_encoder_fd_exhausted");
-            case FD_LIMITED ->
-                    metrics.recordStealReason("SORT", "pipeline_encoder_fd_limited");
-            case PROOF_BUDGET_LIMITED ->
-                    metrics.recordStealReason("SORT", "pipeline_encoder_budget_limited");
-            case WOULD_CASCADE ->
-                    metrics.recordStealReason("SORT", "pipeline_encoder_would_cascade");
             case DISK_LIMITED, NONE -> throw new AssertionError("unreachable resource clamp");
         }
     }

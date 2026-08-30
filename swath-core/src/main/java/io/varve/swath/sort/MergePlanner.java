@@ -124,6 +124,76 @@ final class MergePlanner {
         return runtimeFanIn(catalog, encoderCount);
     }
 
+    /**
+     * Admit pipeline encoders against the resources the pipeline actually opens: one reader per
+     * surviving segment and one writer plus one bounded queue per encoder. Range proof, seek, and
+     * staged-size costs deliberately do not participate.
+     */
+    PipelinePlan pipelineParallelism(int requested, PageRunCatalog catalog) {
+        if (requested < 1) {
+            throw new IllegalArgumentException("pipeline encoder count must be positive");
+        }
+        int segments = catalog.descriptors().size();
+        int pageBytes = pipelinePageBytes(catalog);
+        int slotDepth = pipelineSlotDepth(segments, config.mergeBudgetBytes(), pageBytes);
+        long readerBytes = saturatedMultiply((long) segments * slotDepth, pageBytes);
+        long queueBytes = saturatedMultiply(PartEncoders.QUEUE_DEPTH, pageBytes);
+        long perEncoderBytes = saturatedAdd(
+                queueBytes, PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
+        long remaining = Math.max(0L, config.mergeBudgetBytes() - readerBytes);
+        long byHeap = perEncoderBytes == 0 ? Long.MAX_VALUE : remaining / perEncoderBytes;
+        long usableFds = usableFdBudget();
+        long byFd = usableFds == Long.MAX_VALUE
+                ? Long.MAX_VALUE : Math.max(0L, usableFds - segments);
+        int admitted = (int) Math.max(1L, Math.min(requested, Math.min(byHeap, byFd)));
+        PipelineClampReason reason = PipelineClampReason.NONE;
+        if (admitted < requested) {
+            reason = byFd <= byHeap
+                    ? PipelineClampReason.FD_CLAMPED : PipelineClampReason.HEAP_CLAMPED;
+        }
+        return new PipelinePlan(admitted, reason, slotDepth, pageBytes,
+                decodedPageLimit(config.mergeBudgetBytes()));
+    }
+
+    private int pipelinePageBytes(PageRunCatalog catalog) {
+        long observed = catalog.maxRawPayloadLength() > 0
+                ? catalog.maxRawPayloadLength() : catalog.maxRecordLen();
+        if (observed <= 0) {
+            observed = config.mergePerStreamBytes();
+        }
+        return (int) Math.max(1L, Math.min(PageBlock.MAX_RAW_PAYLOAD_BYTES, observed));
+    }
+
+    static int pipelineSlotDepth(int segments, long mergeBudgetBytes, int pageBytes) {
+        if (segments <= 0 || mergeBudgetBytes <= 0 || pageBytes <= 0) {
+            return 1;
+        }
+        long denominator = saturatedMultiply(segments, pageBytes);
+        long affordable = denominator == 0 ? 1 : mergeBudgetBytes / denominator;
+        return (int) Math.max(1L, Math.min(4L, affordable));
+    }
+
+    private static int decodedPageLimit(long mergeBudgetBytes) {
+        long bounded = Math.min(PageBlock.MAX_RAW_PAYLOAD_BYTES, mergeBudgetBytes);
+        return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, bounded));
+    }
+
+    private static long saturatedMultiply(long left, long right) {
+        try {
+            return Math.multiplyExact(left, right);
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        try {
+            return Math.addExact(left, right);
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
     private int runtimeFanIn(PageRunCatalog catalog, int outputWriters)
             throws MergeMemoryExhaustedException {
         requireDecodedPageFits(catalog);
@@ -480,6 +550,31 @@ final class MergePlanner {
         EffectiveRanges {
             if (ranges < 1) {
                 throw new IllegalArgumentException("ranges must be >= 1");
+            }
+        }
+    }
+
+    enum PipelineClampReason {
+        NONE("none"),
+        FD_CLAMPED("fd_clamped"),
+        HEAP_CLAMPED("heap_clamped");
+
+        private final String logValue;
+
+        PipelineClampReason(String logValue) {
+            this.logValue = logValue;
+        }
+
+        String logValue() {
+            return logValue;
+        }
+    }
+
+    record PipelinePlan(int encoders, PipelineClampReason reason, int slotDepth,
+                        int pageBytes, int legacyDecodedLimit) {
+        PipelinePlan {
+            if (encoders < 1 || slotDepth < 1 || pageBytes < 1 || legacyDecodedLimit < 1) {
+                throw new IllegalArgumentException("pipeline resource plan must be positive");
             }
         }
     }

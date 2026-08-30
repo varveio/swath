@@ -11,20 +11,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.LongConsumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Coordinates cascade reduction, bounded pipeline execution, ordered assembly, and publication. */
 final class PipelineFinalization {
+    private static final Logger log = LoggerFactory.getLogger(PipelineFinalization.class);
+
     private final SortRun run;
     private final MergePlanner planner;
     private final DatasetPublisher publisher;
-    private final PipelinePartSizer.Target partTarget;
 
-    PipelineFinalization(SortRun run, MergePlanner planner, DatasetPublisher publisher,
-            PipelinePartSizer.Target partTarget) {
+    PipelineFinalization(SortRun run, MergePlanner planner, DatasetPublisher publisher) {
         this.run = run;
         this.planner = planner;
         this.publisher = publisher;
-        this.partTarget = partTarget;
     }
 
     SortTransformResult run(PageRunCatalog sourceCatalog, Request request, int encoderCount)
@@ -51,12 +52,17 @@ final class PipelineFinalization {
                         Map.of(), metrics);
 
         PipelineFailure failure = new PipelineFailure();
-        PipelinePartSizer sizer = new PipelinePartSizer(partTarget, config.finalFileBytes());
+        MergePlanner.PipelinePlan plan = planner.pipelineParallelism(encoderCount, pipelineCatalog);
+        recordEncoderClamp(encoderCount, plan, pipelineCatalog);
+        encoderCount = plan.encoders();
+        PipelinePartSizer sizer = new PipelinePartSizer(
+                run.pipelinePartTarget(), config.finalFileBytes());
         SegmentReaderSlots readers = null;
         PartEncoders encoders = null;
         try {
             readers = new SegmentReaderSlots(
-                    pipelineCatalog, config.mergeBudgetBytes(), metrics, failure);
+                    pipelineCatalog, SegmentReaderSlots.planned(
+                            plan, pipelineCatalog.descriptors().size()), metrics, failure);
             encoders = new PartEncoders(encoderCount, request.stagingDir(), run.finalWriterFactory(),
                     run.comparator(), run.hook(), run.equalKeyPolicy(), metrics, failure, sizer,
                     request.progressCallback());
@@ -100,26 +106,44 @@ final class PipelineFinalization {
             } catch (IOException cleanupFailure) {
                 thrown.addSuppressed(cleanupFailure);
             }
-            throw asRuntimeFailure(thrown);
+            throw checkedFailure(thrown);
         }
     }
 
-    private static RuntimeException asRuntimeFailure(Throwable failure) throws IOException {
+    private static IOException checkedFailure(Throwable failure) {
         Throwable cause = failure instanceof PipelineFailure.Failed && failure.getCause() != null
                 ? failure.getCause() : failure;
         if (cause instanceof MergeCancellation.Cancelled cancelled) {
-            return cancelled;
+            throw cancelled;
         }
         if (cause instanceof IOException io) {
-            throw io;
+            return io;
         }
         if (cause instanceof RuntimeException runtime) {
-            return runtime;
+            throw runtime;
         }
         if (cause instanceof Error error) {
             throw error;
         }
-        throw new IOException("sort finalization pipeline failed", cause);
+        return new IOException("sort finalization pipeline failed", cause);
+    }
+
+    private void recordEncoderClamp(int requested, MergePlanner.PipelinePlan plan,
+            PageRunCatalog catalog) {
+        if (plan.reason() == MergePlanner.PipelineClampReason.NONE) {
+            return;
+        }
+        log.warn("sort_pipeline_encoders_clamped requested={} effective={} segments={} reason={} "
+                        + "merge_budget_bytes={} slot_depth={} page_bytes={}",
+                requested, plan.encoders(), catalog.descriptors().size(), plan.reason().logValue(),
+                run.config().mergeBudgetBytes(), plan.slotDepth(), plan.pageBytes());
+        switch (plan.reason()) {
+            case FD_CLAMPED ->
+                    run.metrics().recordStealReason("SORT", "pipeline_encoders_fd_clamped");
+            case HEAP_CLAMPED ->
+                    run.metrics().recordStealReason("SORT", "pipeline_encoders_heap_clamped");
+            case NONE -> throw new AssertionError("unreachable pipeline clamp");
+        }
     }
 
     /** Immutable invocation state keeps the lifecycle entry point independent of argument order. */

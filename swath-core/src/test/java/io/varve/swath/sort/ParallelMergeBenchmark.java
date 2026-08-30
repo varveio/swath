@@ -94,7 +94,7 @@ class ParallelMergeBenchmark {
     private static long parsePipelineFixedRows() {
         String configured = System.getProperty(
                 "swath.bench.pipeline-fixed-rows",
-                String.valueOf(PipelinePartSizer.DEFAULT_FIXED_ROWS));
+                "1000000");
         try {
             long rows = Long.parseLong(configured);
             if (rows <= 0) {
@@ -538,8 +538,8 @@ class ParallelMergeBenchmark {
                 new SortRun(config, CMP, DuplicateHook.NO_OP,
                         EqualKeyPolicy.ALLOW, metrics, writerFactory,
                         MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, timer,
-                        SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY),
-                spec.partTarget());
+                        SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY)
+                        .withPipelinePartTarget(spec.partTarget()));
 
         RssSampler sampler = new RssSampler();
         Thread samplerThread = new Thread(sampler, "bench-rss-sampler-" + spec.label());

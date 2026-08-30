@@ -20,7 +20,7 @@ import java.util.PriorityQueue;
 final class MergeRouter {
     static final int BATCH_ROWS = 4_096;
 
-    record Result(long rows, long pagesForwarded, int parts) {
+    record Result(long rows, long pagesForwarded, int parts, long peakDecodedBytes) {
     }
 
     private final SegmentReaderSlots readers;
@@ -76,7 +76,7 @@ final class MergeRouter {
             }
         }
         int parts = batcher.finish();
-        return new Result(rows, pagesForwarded, parts);
+        return new Result(rows, pagesForwarded, parts, decodedBudget.peakResidentBytes());
     }
 
     private void mergeCluster(Head first) throws IOException {
@@ -113,7 +113,7 @@ final class MergeRouter {
                 ListEntry entry = cluster.next();
                 decodedBudget.release(cluster.releasedBytes());
                 batch.add(entry);
-                logicalBytes = Math.addExact(logicalBytes, PageBlock.estimatedBytes(entry));
+                logicalBytes = Math.addExact(logicalBytes, cluster.lastLogicalBytes());
                 if (batch.size() == BATCH_ROWS) {
                     batcher.offer(new PipelineBatch.Rows(batch, logicalBytes));
                     batch = new ArrayList<>(BATCH_ROWS);

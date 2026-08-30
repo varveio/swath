@@ -15,6 +15,7 @@ final class PipelineFailure {
         first.compareAndSet(null, failure);
     }
 
+    /** Surface the first peer failure and carry cooperative interrupt cancellation for every lane. */
     void check() {
         Throwable failure = first.get();
         if (failure != null) {

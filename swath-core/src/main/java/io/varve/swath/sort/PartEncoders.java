@@ -25,6 +25,8 @@ import java.util.function.LongConsumer;
  */
 final class PartEncoders implements AutoCloseable {
     static final int QUEUE_DEPTH = 4;
+    /** Planning estimate for one open parquet writer's buffered heap. */
+    static final long WRITER_HEAP_ESTIMATE_BYTES = 8L << 20;
     private static final long FAILURE_CHECK_MILLIS = 100;
 
     /** One durably closed part, retaining only the state the ordered assembler consumes. */

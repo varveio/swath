@@ -108,6 +108,21 @@ class PageBlockTest {
     }
 
     @Test
+    void compressedPersistedPageReportsRawPayloadLogicalBytes() {
+        List<ListEntry> entries = new ArrayList<>();
+        for (int i = 0; i < 1_000; i++) {
+            entries.add(object(String.format("repeated-prefix/object-%04d", i)));
+        }
+        PageBlock packed = PageBlock.pack(entries, CMP, PageCodec.LZ4);
+        PageBlock persisted = PageBlock.deserialize(packed.serialize());
+
+        assertThat(persisted.codec()).isEqualTo(PageCodec.LZ4);
+        assertThat(persisted.packedBytes()).isLessThan(persisted.rawPayloadLength());
+        assertThat(persisted.logicalBytes()).isEqualTo(persisted.rawPayloadLength());
+        assertThat(persisted.estimatedBytes()).isEqualTo(persisted.rawPayloadLength());
+    }
+
+    @Test
     void emptyPageIsRejected() {
         assertThatThrownBy(() -> PageBlock.pack(List.of(), CMP))
                 .isInstanceOf(IllegalArgumentException.class);

@@ -18,7 +18,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * wait for bounded slot capacity.
  */
 final class SegmentReaderSlots implements AutoCloseable {
-    private static final int MAX_DEPTH = 4;
     private static final long FAILURE_CHECK_MILLIS = 100;
 
     private final List<ArrayBlockingQueue<Item>> slots;
@@ -28,43 +27,30 @@ final class SegmentReaderSlots implements AutoCloseable {
     private final AtomicBoolean closing = new AtomicBoolean();
     private final int legacyDecodedLimit;
 
-    SegmentReaderSlots(PageRunCatalog catalog, long mergeBudgetBytes, SortMetrics metrics,
+    SegmentReaderSlots(PageRunCatalog catalog, Settings settings, SortMetrics metrics,
             PipelineFailure failure) {
         int segmentCount = catalog.descriptors().size();
-        this.legacyDecodedLimit = decodedPageLimit(mergeBudgetBytes);
-        int maxRawPayload = catalog.maxRawPayloadLength() > 0
-                ? catalog.maxRawPayloadLength() : legacyDecodedLimit;
-        int depth = slotDepth(segmentCount, mergeBudgetBytes, maxRawPayload);
-        int decoders = Math.max(1, Math.min(segmentCount,
-                Runtime.getRuntime().availableProcessors()));
-        Semaphore decodePermits = new Semaphore(decoders);
+        this.legacyDecodedLimit = settings.legacyDecodedLimit();
+        Semaphore decodePermits = new Semaphore(settings.decoderParallelism());
         this.failure = failure;
         this.metrics = metrics;
         this.slots = new ArrayList<>(segmentCount);
         for (int i = 0; i < segmentCount; i++) {
-            slots.add(new ArrayBlockingQueue<>(depth));
+            slots.add(new ArrayBlockingQueue<>(settings.slotDepth()));
         }
         for (int i = 0; i < segmentCount; i++) {
             int slot = i;
             PageRunSegmentDescriptor descriptor = catalog.descriptors().get(i);
             Thread reader = Thread.ofVirtual().name("sort-pipeline-reader-" + i).start(
-                    () -> read(slot, descriptor, decodePermits));
+                    () -> read(slot, descriptor, decodePermits, settings.hook()));
             readers.add(reader);
         }
     }
 
-    static int slotDepth(int segments, long mergeBudgetBytes, int maxRawPayload) {
-        if (segments <= 0 || mergeBudgetBytes <= 0 || maxRawPayload <= 0) {
-            return 1;
-        }
-        long denominator;
-        try {
-            denominator = Math.multiplyExact((long) segments, maxRawPayload);
-        } catch (ArithmeticException overflow) {
-            denominator = Long.MAX_VALUE;
-        }
-        long affordable = denominator == 0 ? 1 : mergeBudgetBytes / denominator;
-        return (int) Math.max(1L, Math.min(MAX_DEPTH, affordable));
+    static Settings planned(MergePlanner.PipelinePlan plan, int segments) {
+        int decoders = Math.max(1, Math.min(segments,
+                Runtime.getRuntime().availableProcessors()));
+        return new Settings(plan.slotDepth(), decoders, plan.legacyDecodedLimit(), Hook.NO_OP);
     }
 
     PageBlock next(int slot) {
@@ -92,7 +78,8 @@ final class SegmentReaderSlots implements AutoCloseable {
         };
     }
 
-    private void read(int slot, PageRunSegmentDescriptor descriptor, Semaphore decodePermits) {
+    private void read(int slot, PageRunSegmentDescriptor descriptor, Semaphore decodePermits,
+            Hook hook) {
         long seenEntries = 0;
         int decodedLimit = descriptor.hasDecodedPageMaximum()
                 ? descriptor.maxRawPayloadLength() : legacyDecodedLimit;
@@ -103,6 +90,7 @@ final class SegmentReaderSlots implements AutoCloseable {
                     throw new InterruptedException();
                 }
                 PageRunSegmentIo.Page encoded = io.nextPage();
+                hook.beforeDecode(slot, page);
                 decodePermits.acquire();
                 PageBlock block;
                 try {
@@ -114,6 +102,7 @@ final class SegmentReaderSlots implements AutoCloseable {
                 // Slot back-pressure must not retain a scarce decode permit: with K > decoders and
                 // depth one, permit holders can otherwise fill their slots while the requested
                 // segment waits forever to begin decoding.
+                hook.beforeEnqueue(slot, page);
                 slots.get(slot).put(new Item.Page(block));
                 seenEntries = Math.addExact(seenEntries, block.count());
             }
@@ -129,9 +118,22 @@ final class SegmentReaderSlots implements AutoCloseable {
         }
     }
 
-    private static int decodedPageLimit(long mergeBudgetBytes) {
-        long bounded = Math.min(PageBlock.MAX_RAW_PAYLOAD_BYTES, mergeBudgetBytes);
-        return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, bounded));
+    record Settings(int slotDepth, int decoderParallelism, int legacyDecodedLimit, Hook hook) {
+        Settings {
+            if (slotDepth < 1 || decoderParallelism < 1 || legacyDecodedLimit < 1) {
+                throw new IllegalArgumentException("reader slot settings must be positive");
+            }
+        }
+    }
+
+    interface Hook {
+        Hook NO_OP = new Hook() { };
+
+        default void beforeDecode(int slot, long page) throws InterruptedException {
+        }
+
+        default void beforeEnqueue(int slot, long page) throws InterruptedException {
+        }
     }
 
     @Override

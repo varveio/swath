@@ -27,6 +27,7 @@ import java.util.function.IntSupplier;
  * @param softFdLimitSupplier process soft open-file limit source, or a deterministic test value
  * @param staleFinalSweep ownership scope for replacement-publish cleanup
  * @param mergeDiskPolicy merge-start filesystem admission and explicit CLI bypass policy
+ * @param pipelinePartTarget internal pipeline part geometry selected by production or benchmark
  */
 public record SortRun(
         SortConfig config,
@@ -39,10 +40,14 @@ public record SortRun(
         RangeMergeTimer rangeMergeTimer,
         IntSupplier softFdLimitSupplier,
         StaleFinalSweep staleFinalSweep,
-        MergeDiskPolicy mergeDiskPolicy) {
+        MergeDiskPolicy mergeDiskPolicy,
+        PipelinePartSizer.Target pipelinePartTarget) {
 
     public SortRun {
         PageRunFormat.requireCanonicalComparator(comparator);
+        if (pipelinePartTarget == null) {
+            throw new NullPointerException("pipelinePartTarget");
+        }
     }
 
     /** Ordering mode persisted into every cascade segment produced by this run. */
@@ -57,7 +62,26 @@ public record SortRun(
             RangeMergeTimer rangeMergeTimer, IntSupplier softFdLimitSupplier,
             StaleFinalSweep staleFinalSweep) {
         this(config, comparator, hook, equalKeyPolicy, metrics, finalWriterFactory, inputProfile,
-                rangeMergeTimer, softFdLimitSupplier, staleFinalSweep, MergeDiskPolicy.enforced());
+                rangeMergeTimer, softFdLimitSupplier, staleFinalSweep, MergeDiskPolicy.enforced(),
+                PipelinePartSizer.Target.calibrated());
+    }
+
+    /** Compatibility constructor with explicit disk admission and production part geometry. */
+    public SortRun(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
+            EqualKeyPolicy equalKeyPolicy, SortMetrics metrics,
+            SortedFileWriterFactory finalWriterFactory, MergeInputProfile inputProfile,
+            RangeMergeTimer rangeMergeTimer, IntSupplier softFdLimitSupplier,
+            StaleFinalSweep staleFinalSweep, MergeDiskPolicy mergeDiskPolicy) {
+        this(config, comparator, hook, equalKeyPolicy, metrics, finalWriterFactory, inputProfile,
+                rangeMergeTimer, softFdLimitSupplier, staleFinalSweep, mergeDiskPolicy,
+                PipelinePartSizer.Target.calibrated());
+    }
+
+    /** Benchmark-only copy with a different immutable pipeline part target. */
+    SortRun withPipelinePartTarget(PipelinePartSizer.Target target) {
+        return new SortRun(config, comparator, hook, equalKeyPolicy, metrics, finalWriterFactory,
+                inputProfile, rangeMergeTimer, softFdLimitSupplier, staleFinalSweep,
+                mergeDiskPolicy, target);
     }
 
     /** Production soft-fd-limit source; tests pass a fixed supplier when they exercise clamps. */
