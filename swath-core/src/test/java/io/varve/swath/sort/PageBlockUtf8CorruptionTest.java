@@ -100,9 +100,9 @@ class PageBlockUtf8CorruptionTest {
     void twoStreamSuccessorAdvanceRefusesBeforeDictionaryCacheAllocation(@TempDir Path dir)
             throws IOException {
         Path first = writePages(dir.resolve("first.pageseg"),
-                dictionaryHeavyRows("a", "z"), dictionaryHeavyRows("c", "x"));
+                dictionaryHeavyRows("a", "c"), dictionaryHeavyRows("e", "z"));
         Path second = writePages(dir.resolve("second.pageseg"),
-                dictionaryHeavyRows("b", "y"), dictionaryHeavyRows("d", "w"));
+                dictionaryHeavyRows("b", "d"), dictionaryHeavyRows("f", "y"));
         long oneDecodedPage;
         try (PageFrontierReader reader = new PageFrontierReader(first, SortMetrics.NO_OP)) {
             PageBlock page = reader.decodeCurrentPage();

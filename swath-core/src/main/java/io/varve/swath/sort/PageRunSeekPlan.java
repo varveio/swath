@@ -62,7 +62,7 @@ final class PageRunSeekPlan {
             this.cumulativeEntries = new long[ranges];
             this.cumulativeFramedBytes = new long[ranges];
             java.util.Arrays.fill(payloadOffsets, NO_INDEX_ENTRY);
-            java.util.Arrays.fill(frameOffsets, PageRunSegmentWriter.HEADER_BYTES);
+            java.util.Arrays.fill(frameOffsets, descriptor.headerBytes());
         }
 
         Path path() {
@@ -93,7 +93,7 @@ final class PageRunSeekPlan {
                     : new SeekSeam(NO_INDEX_ENTRY, descriptor.extension().entryCount(),
                             descriptor.trailer().totalRecords(), descriptor.trailerStart(),
                             descriptor.trailer().totalEntries(), descriptor.trailerStart()
-                                    - PageRunSegmentWriter.HEADER_BYTES);
+                                    - descriptor.headerBytes());
             int sampleCount = start.indexed()
                     ? Math.max(0, end.sampleIndex() - start.sampleIndex())
                     : 0;

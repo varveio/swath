@@ -24,7 +24,12 @@ import java.util.List;
  * </ul>
  * The unused form is {@code null}; {@link #isPacked()} distinguishes them.
  */
-public record PageBatch(long nodeId, long pageSeq, List<ListEntry> entries, PackedPage packed) {
+public record PageBatch(
+        long nodeId,
+        long pageSeq,
+        List<ListEntry> entries,
+        PackedPage packed,
+        boolean nodeCompleted) {
 
     public PageBatch {
         if ((entries == null) == (packed == null)) {
@@ -33,14 +38,35 @@ public record PageBatch(long nodeId, long pageSeq, List<ListEntry> entries, Pack
         }
     }
 
+    /** Compatibility constructor for an ordinary, non-terminal batch. */
+    public PageBatch(long nodeId, long pageSeq, List<ListEntry> entries, PackedPage packed) {
+        this(nodeId, pageSeq, entries, packed, false);
+    }
+
     /** Raw-entries form (non-{@code --sort} pipelines): {@code packed} is {@code null}. */
     public PageBatch(long nodeId, long pageSeq, List<ListEntry> entries) {
-        this(nodeId, pageSeq, entries, null);
+        this(nodeId, pageSeq, entries, null, false);
+    }
+
+    /** Raw-entries form carrying the producing node's completion signal. */
+    public PageBatch(long nodeId, long pageSeq, List<ListEntry> entries, boolean nodeCompleted) {
+        this(nodeId, pageSeq, entries, null, nodeCompleted);
     }
 
     /** Packed form ({@code --sort} mode): {@code entries} is {@code null}. */
     public static PageBatch ofPacked(long nodeId, long pageSeq, PackedPage packed) {
-        return new PageBatch(nodeId, pageSeq, null, packed);
+        return ofPacked(nodeId, pageSeq, packed, false);
+    }
+
+    /** Packed form carrying the producing node's completion signal. */
+    public static PageBatch ofPacked(
+            long nodeId, long pageSeq, PackedPage packed, boolean nodeCompleted) {
+        return new PageBatch(nodeId, pageSeq, null, packed, nodeCompleted);
+    }
+
+    /** Zero-row control batch used when a completed node's terminal page retained no rows. */
+    public static PageBatch completion(long nodeId, long pageSeq) {
+        return new PageBatch(nodeId, pageSeq, List.of(), null, true);
     }
 
     /** True iff this batch carries a pre-{@link #packed} page (sort mode) rather than raw {@link #entries}. */
@@ -51,5 +77,15 @@ public record PageBatch(long nodeId, long pageSeq, List<ListEntry> entries, Pack
     /** Weight of this batch for the {@code --object-listing-queue-size} entry budget (I11). */
     public long entryCount() {
         return packed != null ? packed.entryCount() : entries.size();
+    }
+
+    /** A completion marker is control state but still consumes one bounded channel-weight unit. */
+    public long channelWeight() {
+        return completionOnly() ? 1L : entryCount();
+    }
+
+    /** True for a node-completion control batch with no output rows. */
+    public boolean completionOnly() {
+        return nodeCompleted && entryCount() == 0;
     }
 }

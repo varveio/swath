@@ -190,8 +190,8 @@ class PageRunDecodedResidencyTest {
     void overlapClusterAggregateIsReservedBeforeEachDecompression(@TempDir Path dir)
             throws IOException {
         Path segment = writeCompressed(dir.resolve("overlap.pageseg"), List.of(
-                List.of(object("a"), object("z" + "x".repeat(900))),
-                List.of(object("b"), object("y" + "x".repeat(900)))));
+                List.of(object("equal-" + "x".repeat(900))),
+                List.of(object("equal-" + "x".repeat(900)))), SortMode.VERSIONS);
         PageRunSegmentDescriptor descriptor = catalog(segment).descriptors().getFirst();
         long onePageOnly = descriptor.trailer().maxRecordLen()
                 + descriptor.maxRawPayloadLength();
@@ -211,8 +211,8 @@ class PageRunDecodedResidencyTest {
         Path output = Files.createDirectories(root.resolve("data"));
         Path staging = Files.createDirectories(root.resolve("_staging"));
         Path segment = writeCompressed(staging.resolve("overlap.pageseg"), List.of(
-                List.of(object("a"), object("z" + "x".repeat(900))),
-                List.of(object("b"), object("y" + "x".repeat(900)))));
+                List.of(object("equal-" + "x".repeat(900))),
+                List.of(object("equal-" + "x".repeat(900)))), SortMode.VERSIONS);
         PageRunCatalog catalog = catalog(segment);
         long oneStreamPrice = 2 * catalog.maxRecordLen() + catalog.maxRawPayloadLength()
                 + 2L * PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES;
@@ -244,13 +244,20 @@ class PageRunDecodedResidencyTest {
 
     private static Path writeCompressed(Path path, List<List<io.varve.swath.model.ListEntry>> pages)
             throws IOException {
+        return writeCompressed(path, pages, SortMode.OBJECTS);
+    }
+
+    private static Path writeCompressed(Path path,
+            List<List<io.varve.swath.model.ListEntry>> pages, SortMode orderingMode)
+            throws IOException {
         SortBuffer buffer = new SortBuffer(
                 SortConfigs.base().withSegmentCodec(PageCodec.LZ4), CMP);
         long node = 0;
         for (List<io.varve.swath.model.ListEntry> page : pages) {
             buffer.admit(node++, page);
         }
-        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.LZ4)
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.LZ4,
+                orderingMode)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
         return path;
     }

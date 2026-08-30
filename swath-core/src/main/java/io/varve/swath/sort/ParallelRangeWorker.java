@@ -60,7 +60,8 @@ final class ParallelRangeWorker {
                     }
                 };
                 PageRunSegmentWriter pageRunWriter =
-                        new PageRunSegmentWriter(comparator, rangeHook, metrics, config.segmentCodec());
+                        new PageRunSegmentWriter(comparator, rangeHook, metrics,
+                                config.segmentCodec(), run.orderingMode());
                 PageRunMergeIo io = new PageRunMergeIo(
                         run, pageRunWriter, stagingDir, stagingAuthority,
                         "merge-r" + range + "-", new KeyRange(lo, hi), descriptorsByPath,

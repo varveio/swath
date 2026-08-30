@@ -34,4 +34,10 @@ public interface PackedPage {
 
     /** Sum of {@link ObjectEntry#size()} across the packed objects (the estimated-bytes tally). */
     long totalObjectSize();
+
+    /** First raw key in source-page order; returned defensively for invariant checks. */
+    byte[] firstKey();
+
+    /** Last raw key in source-page order; returned defensively for invariant checks. */
+    byte[] lastKey();
 }

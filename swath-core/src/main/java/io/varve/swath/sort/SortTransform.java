@@ -87,7 +87,7 @@ public final class SortTransform {
     SortTransform(SortRun run, PublicationStepHook publicationStepHook,
             PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
         this(run, publicationStepHook, proofReaderFactory, System::nanoTime,
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
+                path -> PageRunSegmentIo.open(path, run.metrics()));
     }
 
     SortTransform(SortRun run, PublicationStepHook publicationStepHook,
@@ -184,7 +184,7 @@ public final class SortTransform {
         // they do not engage sparse boundary parsing and rely on runtime decoded-page admission.
         long boundaryPreflightStarted = parallelKickoff ? boundaryNanoClock.getAsLong() : 0;
         PageRunCatalog catalog = PageRunCatalog.preflight(
-                stagingSegments, catalogOpener, boundaryKeySink, expectedFormats);
+                stagingSegments, catalogOpener, boundaryKeySink, expectedFormats, metrics);
         long boundaryPreflightNanos = parallelKickoff
                 ? elapsed(boundaryPreflightStarted, boundaryNanoClock.getAsLong()) : 0;
         // Disposable working files are cleared before work; prior finals remain until their complete
@@ -229,7 +229,8 @@ public final class SortTransform {
 
         DatasetPublisher.PendingParts pending = datasetPublisher.serialParts(
                 outputDir, stagingDir, ownedInputs, outputAuthority);
-        PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
+        PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(
+                comparator, hook, metrics, config.segmentCodec(), run.orderingMode());
         PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir, ownedInputs,
                 "merge-", null, catalog.byPath(), frontier -> { }, -1, null, null);
         // Fan-in: see the class javadoc for the runtime-clamp policy. serialFanIn() computes it and,

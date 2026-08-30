@@ -463,7 +463,7 @@ final class PageRunZoneVerifier {
         long pages = 0;
         long entries = 0;
         long framedBytes = 0;
-        long expectedOffset = PageRunSegmentWriter.HEADER_BYTES;
+        long expectedOffset = plan.descriptor().headerBytes();
         int verifiedSamples = 0;
         byte[] firstMin = null;
         byte[] previousLastMin = null;
@@ -494,19 +494,14 @@ final class PageRunZoneVerifier {
                         + " does not tile its planned physical zone", metrics);
             }
             if (zonePages > 0) {
-                if (globalMax != null
-                        && Arrays.compareUnsigned(summary.firstMin(), globalMax) <= 0) {
-                    pageRangeOverlap = true;
+                if (globalMax != null) {
+                    int comparison = checkPhysicalZoneSeam(plan.path(),
+                            plan.descriptor().orderingMode(), previousLastMin, globalMax,
+                            summary.firstMin(), range, metrics);
+                    pageRangeOverlap |= comparison == 0;
                 }
                 if (firstMin == null) {
                     firstMin = summary.firstMin();
-                }
-                if (previousLastMin != null
-                        && Arrays.compareUnsigned(summary.firstMin(), previousLastMin) < 0) {
-                    metrics.recordStealReason("SORT", "page_run_min_regression");
-                    throw new SegmentCorruptionException(plan.path(),
-                            SegmentCorruptionException.PAGE_RUN_MIN_REGRESSION,
-                            "page minKey regressed across physical zone seam before range " + range);
                 }
                 if (zone.sampleCount() > 0
                         && !Arrays.equals(max(globalMax, summary.firstSamplePageMax()),
@@ -524,7 +519,7 @@ final class PageRunZoneVerifier {
             verifiedSamples += summary.verifiedSamples();
         }
         long expectedFramedBytes = plan.descriptor().trailerStart()
-                - PageRunSegmentWriter.HEADER_BYTES;
+                - plan.descriptor().headerBytes();
         if (pages != trailer.totalRecords() || entries != trailer.totalEntries()
                 || framedBytes != expectedFramedBytes
                 || expectedOffset != plan.descriptor().trailerStart()
@@ -540,6 +535,27 @@ final class PageRunZoneVerifier {
                     + " of " + plan.descriptor().extension().entryCount() + " index samples", metrics);
         }
         return pageRangeOverlap;
+    }
+
+    /** Classify a zone seam in the same min-regression-before-overlap order as the serial reader. */
+    static int checkPhysicalZoneSeam(Path path, SortMode orderingMode, byte[] previousLastMin,
+            byte[] globalMax, byte[] firstMin, int range, SortMetrics metrics)
+            throws SegmentCorruptionException {
+        if (previousLastMin != null
+                && Arrays.compareUnsigned(firstMin, previousLastMin) < 0) {
+            metrics.recordStealReason("SORT", "page_run_min_regression");
+            throw new SegmentCorruptionException(path,
+                    SegmentCorruptionException.PAGE_RUN_MIN_REGRESSION,
+                    "page minKey regressed across physical zone seam before range " + range);
+        }
+        int comparison = Arrays.compareUnsigned(globalMax, firstMin);
+        if (comparison > 0 || (comparison == 0 && orderingMode == SortMode.OBJECTS)) {
+            metrics.recordStealReason("SORT", "page_run_page_overlap");
+            throw new SegmentCorruptionException(path,
+                    SegmentCorruptionException.PAGE_RUN_PAGE_OVERLAP,
+                    "adjacent page ranges overlap across physical range seam before range " + range);
+        }
+        return comparison;
     }
 
     private static byte[] max(byte[] first, byte[] second) {

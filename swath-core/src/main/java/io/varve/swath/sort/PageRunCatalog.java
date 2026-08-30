@@ -94,21 +94,25 @@ final class PageRunCatalog {
     static PageRunCatalog preflight(List<Path> paths, Opener opener,
             Optional<Consumer<byte[]>> boundaryKeySink,
             Map<Path, PageRunFormat> expectedFormats) throws IOException {
+        return preflight(paths, opener, boundaryKeySink, expectedFormats, SortMetrics.NO_OP);
+    }
+
+    /** Preflight with the run's format-rejection telemetry sink. */
+    static PageRunCatalog preflight(List<Path> paths, Opener opener,
+            Optional<Consumer<byte[]>> boundaryKeySink,
+            Map<Path, PageRunFormat> expectedFormats, SortMetrics metrics) throws IOException {
         List<Path> normalizedPaths = requireUniqueNormalizedPaths(paths);
         Map<Path, PageRunFormat> normalizedExpected = normalizeExpectedFormats(expectedFormats);
         List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(normalizedPaths.size());
         for (Path path : normalizedPaths) {
             PageRunFormat expected = normalizedExpected.get(path);
-            if (expected != null) {
-                PageRunFormat.requirePhysicalHeader(path, expected);
-            }
             try (PageRunSegmentIo io = opener.open(path)) {
                 PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
                 PageRunPageIndex.Probe probe = PageRunPageIndex.probe(io, trailer);
                 PageRunFormat physicalFormat = new PageRunFormat(
                         Short.toUnsignedInt(io.formatVersion()),
                         Short.toUnsignedInt(probe.extensionType()));
-                requireExpectedFormat(path, expected, physicalFormat, probe);
+                requireExpectedFormat(path, expected, physicalFormat, probe, metrics);
                 PageRunPageIndex.ReadResult extension = boundaryKeySink.isPresent()
                         ? PageRunPageIndex.read(io, trailer, boundaryKeySink.orElseThrow(), probe)
                         : PageRunPageIndex.skipped(trailer.totalRecords(), probe);
@@ -116,7 +120,8 @@ final class PageRunCatalog {
                         ? extension.maxRawPayloadLength()
                         : -1;
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
-                        trailer, extension, maxRawPayloadLength, physicalFormat));
+                        trailer, extension, maxRawPayloadLength, physicalFormat,
+                        io.headerBytes, io.orderingMode()));
             }
         }
         return new PageRunCatalog(descriptors);
@@ -135,11 +140,13 @@ final class PageRunCatalog {
     }
 
     private static void requireExpectedFormat(Path path, PageRunFormat expected,
-            PageRunFormat physical, PageRunPageIndex.Probe probe) throws IOException {
+            PageRunFormat physical, PageRunPageIndex.Probe probe, SortMetrics metrics)
+            throws IOException {
         if (expected == null) {
             return;
         }
         if (!probe.supportedPhysicalType() || !expected.equals(physical)) {
+            metrics.recordStealReason("SORT", "page_run_format_mismatch");
             throw new SegmentCorruptionException(path,
                     SegmentCorruptionException.PAGE_RUN_FORMAT_MISMATCH,
                     "checkpoint format metadata disagrees with physical segment: recorded="

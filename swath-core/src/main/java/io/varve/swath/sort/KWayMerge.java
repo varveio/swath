@@ -184,16 +184,16 @@ final class KWayMerge<S> {
      * The single merger-selection path shared by the final merge pass ({@link #merge}) AND every
      * intermediate cascade pass ({@link #onePass}). If every segment in
      * {@code group} exposes a {@link PageFrontierStream}, open a {@link PageAwareMerger} — so the
-     * page-whole fast path AND both of its overlap guards (cross-segment disjointness and
-     * intra-segment monotonicity) apply, and even a cascade intermediate is written from a
+     * page-whole fast path, cross-segment overlap handling, and intra-segment ordering guards apply,
+     * and even a cascade intermediate is written from a
      * correctly-guarded cursor. Otherwise a generic segment store falls back to the entry-typed
      * {@link StreamingMerger}. Routing every pass —
      * not only the final one — through this factory keeps an all-page-run cascade group on the
      * page-whole fast path (and {@link PageAwareMerger}'s cross-segment guard) rather than decoding
      * every page through the entry heap; it is not an ordering requirement. A page-run input handed
      * to the trusting {@link StreamingMerger} is opened as a {@link PageRunSegmentReader} — itself a
-     * single-segment {@link PageAwareMerger} that key-merges any intra-segment overlapping pages into
-     * a genuinely sorted run before the heap sees it — so a cascade intermediate is never mis-ordered,
+     * single-segment {@link PageAwareMerger} that rejects corrupt overlap and comparator-merges a legal
+     * VERSIONS equality seam before the heap sees it — so a cascade intermediate is never mis-ordered,
      * whichever merger the group selects.
      */
     private SortedCursor openMerger(List<S> group, MergeRunSink disjointSink)

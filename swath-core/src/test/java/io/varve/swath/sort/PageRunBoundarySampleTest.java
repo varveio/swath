@@ -274,6 +274,7 @@ class PageRunBoundarySampleTest {
             byte[] bytes = Files.readAllBytes(path);
             int fixedTailStart = bytes.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
             ByteBuffer.wrap(bytes).putLong(fixedTailStart, beforeHeader ? 0L : bytes.length);
+            rewriteFixedTrailerCrc(bytes, fixedTailStart);
             Files.write(path, bytes);
 
             assertThatThrownBy(() -> boundaries(
@@ -500,7 +501,8 @@ class PageRunBoundarySampleTest {
             buffer.admit(i, List.of(new ObjectEntry(KeyBytes.of(key), 1L, 0L, null, null, null,
                     false, null, null, null, null)));
         }
-        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE,
+                SortMode.VERSIONS)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
         return path;
     }
@@ -689,6 +691,14 @@ class PageRunBoundarySampleTest {
         CRC32C crc = new CRC32C();
         crc.update(bytes, extension, crcPosition - extension);
         ByteBuffer.wrap(bytes).putInt(crcPosition, (int) crc.getValue());
+    }
+
+    private static void rewriteFixedTrailerCrc(byte[] bytes, int fixedTailStart) {
+        CRC32C crc = new CRC32C();
+        crc.update(bytes, fixedTailStart, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
+        ByteBuffer.wrap(bytes).putInt(
+                fixedTailStart + PageRunSegmentWriter.TRAILER_FIELDS_BYTES,
+                (int) crc.getValue());
     }
 
     private static Layout layout(byte[] bytes) {

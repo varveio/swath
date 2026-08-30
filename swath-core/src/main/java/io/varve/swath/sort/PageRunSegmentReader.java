@@ -18,13 +18,10 @@ import java.util.List;
  * this seam remains useful to embedded and direct callers. It never materializes a whole segment:
  * only the current page group is in heap.
  *
- * <p><b>Why a page-run segment isn't sorted by plain concatenation.</b> Pages are stored in
- * non-decreasing {@code minKey} order ({@link PageRunSegmentWriter#flush()} sorts each buffer's
- * pages on their first key), but adjacent pages may legally OVERLAP in range: two interleaved node
- * runs flush to pages {@code [a..m]} then {@code [c..z]} — mins ascend, ranges overlap — so
- * file-order concatenation yields {@code a, m, c, z}, which is NOT a sorted run. Page-range overlap
- * is legal, contract-normal output; the <em>reader</em> is what has to resolve it, so the trusting
- * {@link StreamingMerger} never sees it.
+ * <p>Page-run v2 pages carry a persisted ordering mode and must be range-disjoint. OBJECTS requires
+ * a strict seam ({@code previous.maxKey < next.minKey}); VERSIONS permits equality so all rows for
+ * one raw key need not fit in one page. The writer checks this before completion, and the reader
+ * independently rejects a corrupt overlap before emitting its page.
  *
  * <p><b>Resolution: the same machinery {@link PageAwareMerger} already uses for a whole merge.</b>
  * This reader is a {@link PageAwareMerger} over a SINGLE {@link PageFrontierReader} for this
@@ -35,22 +32,20 @@ import java.util.List;
  *       page is decoded once and streamed whole in file order ({@code
  *       SORT.page_run_entry_whole_page}). There is no merge heap; the persisted-page cursor still
  *       compares adjacent rows to prove that the body is internally ordered.</li>
- *   <li><b>Overlapping pages — key-merged.</b> Otherwise the overlapping pages are decoded and
- *       merged at the key level under the full comparator (the merger's existing overlap
- *       fallback), so the emitted stream is sorted by construction ({@code
- *       SORT.page_run_entry_overlap_keymerge}; 0 on a segment whose pages are range-disjoint).</li>
+ *   <li><b>Equal VERSIONS boundary — key-merged.</b> When adjacent pages touch at one raw key, they
+ *       are decoded and merged under the full comparator ({@code
+ *       SORT.page_run_entry_overlap_keymerge}). True range overlap is corruption.</li>
  * </ul>
  * The inner merger is scoped as {@link MergeScope#INTRA_SEGMENT}, so it emits the two route-specific
  * counters directly. The outer merge owns duplicate reporting; doing it inside this reader as well
  * would double-count adjacent equals.
  *
- * <p><b>Intra-segment min-monotonicity guard.</b> Every page advance goes through
+ * <p><b>Intra-segment ordering guards.</b> Every page advance goes through
  * {@link PageRunSegmentIo#nextPage()}, the single page-advance primitive shared with
  * {@link PageFrontierReader}, which rejects a page whose {@code minKey} REGRESSES below the
  * previous page's (unsigned) as segment corruption ({@link SegmentCorruptionException},
  * {@code error_class=page_run_min_regression}) after bumping {@code SORT.page_run_min_regression}.
- * Overlapping-but-ascending pages and equal mins stay legal — they are resolved by the key-merge
- * above, not rejected.
+ * It then enforces the mode-aware range seam and reports {@code page_run_page_overlap} on failure.
  *
  * <p><b>Fail-fast, no per-record counter.</b> A bad magic/version, a per-record CRC32C mismatch, a
  * short read, or a missing/torn trailer throws {@link IOException} — never a silent skip (the
@@ -65,8 +60,8 @@ import java.util.List;
  * <p><b>Memory.</b> On the fast path this holds the frontier's retained successor page body plus
  * the page being streamed — whose cursor pins the whole {@link PageBlock} and therefore its one
  * record-body owner plus any lazily-decoded compressed payload; there is no second stored-payload
- * array. An overlap event additionally holds the
- * decoded pages it is key-merging, exactly as {@link PageAwareMerger} does on the all-page-run
+ * array. A legal VERSIONS equality event additionally holds the decoded pages it is key-merging,
+ * exactly as {@link PageAwareMerger} does on the all-page-run
  * route. {@link SortConfig#mergePerStreamBytes()} is an advisory
  * per-stream ESTIMATE (the merge fan-in denominator), not a bound this footprint is clamped to:
  * page size plus decompression expansion can exceed it.
@@ -81,8 +76,8 @@ final class PageRunSegmentReader implements EntryStream {
      * then owns (closing this closes it). The seam lets
      * {@link ParallelRangeMerge}'s page skip: a {@link RangeScopedPageFrontier} steps over the pages
      * that cannot reach the range without decoding them, and everything below this constructor —
-     * the {@link PageAwareMerger}, the disjoint-page fast path, the overlap key-merge, the
-     * min-monotonicity guard — is unchanged and cannot tell the difference, because a filtered
+     * the {@link PageAwareMerger}, the disjoint-page fast path, the VERSIONS equality merge, and the
+     * ordering guards — is unchanged and cannot tell the difference, because a filtered
      * frontier is still a frontier presenting pages in non-decreasing {@code minKey} order.
      */
     PageRunSegmentReader(PageFrontierStream frontier, Comparator<ListEntry> comparator,

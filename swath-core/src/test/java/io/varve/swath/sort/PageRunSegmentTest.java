@@ -86,32 +86,21 @@ class PageRunSegmentTest {
     }
 
     @Test
-    void nestedOverlappingPagesPersistExactBoundsAndEngageTheOverlapMerge(@TempDir Path dir)
-            throws IOException {
+    void nestedOverlappingPagesAreRejectedAtSealBeforeCompletion(@TempDir Path dir) {
         SortBuffer buffer = new SortBuffer(config, CMP);
         buffer.admit(1L, List.of(object("a"), object("z")));
         buffer.admit(2L, List.of(object("b"), object("c")));
         Path path = dir.resolve("nested.pageseg");
-        writer().flush(buffer.seal(SealTrigger.DRAIN), path);
-
-        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
-        assertThat(trailer.segMinKey()).containsExactly(bytes("a"));
-        assertThat(trailer.segMaxKey()).containsExactly(bytes("z"));
-
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        List<ListEntry> out = new ArrayList<>();
-        try (PageRunSegmentReader reader = reader(path, metrics)) {
-            while (reader.hasNext()) {
-                out.add(reader.next());
-            }
-        }
-        assertThat(out).containsExactly(object("a"), object("b"), object("c"), object("z"));
-        assertThat(metrics.count("SORT.page_run_entry_overlap_keymerge")).isGreaterThan(0);
 
-        PageRunTrailer.Trailer inspected =
-                PageRunSegmentInspector.inspect(path).trailer();
-        assertThat(inspected.segMinKey()).containsExactly(bytes("a"));
-        assertThat(inspected.segMaxKey()).containsExactly(bytes("z"));
+        assertThatThrownBy(() -> new PageRunSegmentWriter(
+                CMP, DuplicateHook.NO_OP, metrics, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), path))
+                .isInstanceOfSatisfying(SegmentCorruptionException.class, failure ->
+                        assertThat(failure.errorClass())
+                                .isEqualTo(SegmentCorruptionException.PAGE_RUN_PAGE_OVERLAP));
+        assertThat(metrics.count("SORT.buffer_page_overlap")).isEqualTo(1);
+        assertThat(metrics.count("SORT.segment_flushed")).isZero();
     }
 
     @Test
@@ -156,6 +145,20 @@ class PageRunSegmentTest {
         Files.write(path, Arrays.copyOf(raw, raw.length / 2));
 
         assertThatThrownBy(() -> reader(path, SortMetrics.NO_OP)).isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void undersizedSegmentRecordsHeaderRejectionAtTheLiveOpenBoundary(@TempDir Path dir)
+            throws IOException {
+        Path path = dir.resolve("undersized.pgr");
+        Files.write(path, new byte[PageRunHeader.PREFIX_BYTES]);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> reader(path, metrics))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_header_corruption")
+                .hasMessageContaining("file too small");
+        assertThat(metrics.count("SORT.page_run_header_corruption")).isEqualTo(1);
     }
 
     @Test
@@ -260,18 +263,21 @@ class PageRunSegmentTest {
     }
 
     @Test
-    void listingFlushStillReportsComparatorEqualPageBoundaryOnce(@TempDir Path dir)
-            throws IOException {
+    void listingFlushReportsThenRejectsAnEqualPageBoundary(@TempDir Path dir) {
         AtomicInteger duplicates = new AtomicInteger();
         SortBuffer buffer = new SortBuffer(config, CMP);
         buffer.admit(1L, List.of(object("a"), object("b")));
         buffer.admit(2L, List.of(object("b"), object("c")));
 
-        new PageRunSegmentWriter(CMP, (previous, current) -> duplicates.incrementAndGet(),
-                SortMetrics.NO_OP, PageCodec.NONE)
-                .flush(buffer.seal(SealTrigger.DRAIN), dir.resolve("boundary-duplicate.pageseg"));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        assertThatThrownBy(() -> new PageRunSegmentWriter(
+                CMP, (previous, current) -> duplicates.incrementAndGet(), metrics, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), dir.resolve("boundary-duplicate.pageseg")))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_page_overlap");
 
         assertThat(duplicates).hasValue(1);
+        assertThat(metrics.count("SORT.buffer_page_overlap")).isEqualTo(1);
     }
 
     @Test
@@ -581,17 +587,18 @@ class PageRunSegmentTest {
     }
 
     @Test
-    void corruptedTotalEntriesDownwardFailsTheEndOfStreamCrossCheck(@TempDir Path dir) throws IOException {
+    void crcValidLowerTotalEntriesFailsTheEndOfStreamCrossCheck(@TempDir Path dir)
+            throws IOException {
         Path path = dir.resolve("seg.pgr");
         writeSimpleSegment(path, 200);
 
-        // Fixed trailer tail (28 bytes from EOF): [trailerStart u64][totalRecords u32]
-        // [totalEntries u64][maxRecordLen u32][magic u32] — totalEntries sits at [size-16, size-8).
-        // Lowering it by one must NOT let the stream silently end one entry short; it must throw.
+        // Keep the fixed trailer CRC valid so this reaches the logical body/trailer cross-check,
+        // rather than stopping at the outer corruption gate.
         byte[] raw = Files.readAllBytes(path);
-        int totalEntriesOffset = raw.length - 16;
+        int totalEntriesOffset = raw.length - 20;
         long declared = ByteBuffer.wrap(raw, totalEntriesOffset, 8).getLong();
         ByteBuffer.wrap(raw, totalEntriesOffset, 8).putLong(declared - 1);
+        rewriteFixedTrailerCrc(raw);
         Files.write(path, raw);
 
         assertThatThrownBy(() -> readBack(path))
@@ -616,11 +623,11 @@ class PageRunSegmentTest {
         assertThat(before.totalRecords()).isEqualTo(1);   // precondition: exactly one page / one record
         assertThat(before.totalEntries()).isEqualTo(2);
 
-        // Fixed trailer tail (28 bytes from EOF): [trailerStart u64][totalRecords u32][totalEntries u64]
-        // [maxRecordLen u32][magic u32] — totalRecords is the u32 at [size-20, size-16), just before
-        // totalEntries at [size-16, size-8). Zeroing it leaves totalEntries=2 and the trailing magic valid.
+        // totalRecords is the u32 at [size-24, size-20). Repair the fixed-trailer CRC so the
+        // independent empty/count consistency check is exercised.
         byte[] raw = Files.readAllBytes(path);
-        ByteBuffer.wrap(raw, raw.length - 20, 4).putInt(0);
+        ByteBuffer.wrap(raw, raw.length - 24, 4).putInt(0);
+        rewriteFixedTrailerCrc(raw);
         Files.write(path, raw);
 
         // The decode-free frontier reader must throw here, never silently report empty (which would
@@ -701,6 +708,15 @@ class PageRunSegmentTest {
         crc.update(file, bodyOffset, bodyLength);
         ByteBuffer.wrap(file, frameOffset + 4, 4).putInt((int) crc.getValue());
         Files.write(path, file);
+    }
+
+    private static void rewriteFixedTrailerCrc(byte[] file) {
+        int fixedTailStart = file.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        CRC32C crc = new CRC32C();
+        crc.update(file, fixedTailStart, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
+        ByteBuffer.wrap(file).putInt(
+                fixedTailStart + PageRunSegmentWriter.TRAILER_FIELDS_BYTES,
+                (int) crc.getValue());
     }
 
     private record BodyMutation(String name, Consumer<ByteBuffer> mutator) {

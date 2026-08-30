@@ -59,6 +59,11 @@ public final class PageRunRawFixtures {
      */
     static void writeRawPageRun(Path path, List<List<ListEntry>> pages, Comparator<ListEntry> comparator)
             throws IOException {
+        writeRawPageRun(path, pages, comparator, SortMode.OBJECTS);
+    }
+
+    static void writeRawPageRun(Path path, List<List<ListEntry>> pages,
+            Comparator<ListEntry> comparator, SortMode orderingMode) throws IOException {
         List<PageBlock> blocks = new ArrayList<>(pages.size());
         for (List<ListEntry> page : pages) {
             blocks.add(PageBlock.pack(page, comparator, PageCodec.NONE));
@@ -68,10 +73,7 @@ public final class PageRunRawFixtures {
         int maxRecordLen = 0;
         try (FileChannel ch = FileChannel.open(path, StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            ByteBuffer header = ByteBuffer.allocate(PageRunSegmentWriter.HEADER_BYTES);
-            header.putInt(PageRunSegmentWriter.MAGIC);
-            header.putShort(PageRunSegmentWriter.FORMAT_VERSION);
-            SortTestSupport.writeFully(ch, header.flip());
+            PageRunHeader.write(ch, orderingMode);
 
             for (PageBlock block : blocks) {
                 byte[] body = block.serialize();
@@ -101,16 +103,11 @@ public final class PageRunRawFixtures {
                 haveBounds = true;
             }
             long trailerStart = ch.position();
-            ByteBuffer trailer = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length
-                    + PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES);
+            ByteBuffer trailer = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length);
             trailer.putShort((short) segMin.length).put(segMin);
             trailer.putShort((short) segMax.length).put(segMax);
-            trailer.putLong(trailerStart);
-            trailer.putInt(blocks.size());
-            trailer.putLong(totalEntries);
-            trailer.putInt(maxRecordLen);
-            trailer.putInt(PageRunSegmentWriter.MAGIC);
             SortTestSupport.writeFully(ch, trailer.flip());
+            writeFixedTrailerTail(ch, trailerStart, blocks.size(), totalEntries, maxRecordLen);
             ch.force(true);
         }
     }
@@ -254,10 +251,7 @@ public final class PageRunRawFixtures {
         // as the reader, so corruption fixtures must bypass it rather than relying on asymmetry.
         try (FileChannel ch = FileChannel.open(path, StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            ByteBuffer header = ByteBuffer.allocate(PageRunSegmentWriter.HEADER_BYTES)
-                    .putInt(PageRunSegmentWriter.MAGIC)
-                    .putShort(PageRunSegmentWriter.FORMAT_VERSION);
-            SortTestSupport.writeFully(ch, header.flip());
+            PageRunHeader.write(ch, SortMode.OBJECTS);
             CRC32C crc = new CRC32C();
             crc.update(malformedBody, 0, malformedBody.length);
             ByteBuffer frame = ByteBuffer.allocate(2 * Integer.BYTES + malformedBody.length)
@@ -268,13 +262,11 @@ public final class PageRunRawFixtures {
             long trailerStart = ch.position();
             byte[] segMin = block.firstKey();
             byte[] segMax = block.lastKey();
-            ByteBuffer trailer = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length
-                            + PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES)
+            ByteBuffer trailer = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length)
                     .putShort((short) segMin.length).put(segMin)
-                    .putShort((short) segMax.length).put(segMax)
-                    .putLong(trailerStart).putInt(1).putLong(block.count())
-                    .putInt(malformedBody.length).putInt(PageRunSegmentWriter.MAGIC);
+                    .putShort((short) segMax.length).put(segMax);
             SortTestSupport.writeFully(ch, trailer.flip());
+            writeFixedTrailerTail(ch, trailerStart, 1, block.count(), malformedBody.length);
             ch.force(true);
         }
         return path;
@@ -320,6 +312,19 @@ public final class PageRunRawFixtures {
         CRC32C crc = new CRC32C();
         crc.update(bytes, bodyStart, bodyLength);
         ByteBuffer.wrap(bytes).putInt(frameStart + Integer.BYTES, (int) crc.getValue());
+    }
+
+    private static void writeFixedTrailerTail(FileChannel channel, long trailerStart,
+            int totalRecords, long totalEntries, int maxRecordLen) throws IOException {
+        ByteBuffer tail = ByteBuffer.allocate(PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES)
+                .putLong(trailerStart)
+                .putInt(totalRecords)
+                .putLong(totalEntries)
+                .putInt(maxRecordLen);
+        CRC32C crc = new CRC32C();
+        crc.update(tail.array(), 0, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
+        tail.putInt((int) crc.getValue()).putInt(PageRunSegmentWriter.MAGIC);
+        SortTestSupport.writeFully(channel, tail.flip());
     }
 
     private static void replaceSameLength(byte[] bytes, int position, int originalLength,

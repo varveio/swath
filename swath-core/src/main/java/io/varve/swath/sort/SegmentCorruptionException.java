@@ -10,8 +10,7 @@ import java.nio.file.Path;
 
 /**
  * A staged-segment corruption failure that carries a greppable {@code error_class} fingerprint into the
- * JSON run summary. Plain physical-integrity failures (bad magic/version, a CRC
- * mismatch, a truncated file) still throw an unclassified {@link IOException} — this subtype exists for
+ * JSON run summary. This subtype exists for
  * the corruption classes an operator must be able to triage post-hoc from {@code summary.json} alone,
  * without grepping stderr.
  *
@@ -33,6 +32,15 @@ public final class SegmentCorruptionException extends IOException {
 
     /** An admitted page's raw keys regressed, making its checkpoint durable cursor unsafe. */
     static final String PAGE_RUN_RAW_KEY_REGRESSION = "page_run_raw_key_regression";
+
+    /** Adjacent pages in one segment violate the persisted disjointness contract. */
+    static final String PAGE_RUN_PAGE_OVERLAP = "page_run_page_overlap";
+
+    /** The CRC-protected page-run header envelope is malformed or corrupt. */
+    static final String PAGE_RUN_HEADER_CORRUPTION = "page_run_header_corruption";
+
+    /** The CRC-protected fixed trailer is malformed or corrupt. */
+    static final String PAGE_RUN_TRAILER_CORRUPTION = "page_run_trailer_corruption";
 
     /** A CRC-valid page body failed structural or decoded-row validation. */
     static final String PAGE_RUN_BODY_CORRUPTION = "page_run_body_corruption";

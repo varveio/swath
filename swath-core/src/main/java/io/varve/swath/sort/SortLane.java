@@ -117,11 +117,19 @@ public final class SortLane implements AutoCloseable {
     public SortLane(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
                     SortMetrics metrics, SortLaneMeters laneMeters, Path stagingDir,
                     String segmentPrefix, SegmentSink sink) {
+        this(config, comparator, hook, metrics, laneMeters, stagingDir, segmentPrefix, sink,
+                SortMode.OBJECTS);
+    }
+
+    public SortLane(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
+                    SortMetrics metrics, SortLaneMeters laneMeters, Path stagingDir,
+                    String segmentPrefix, SegmentSink sink, SortMode orderingMode) {
         this.comparator = comparator;
         this.hook = hook;
         this.metrics = metrics;
         this.laneMeters = laneMeters;
-        this.segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
+        this.segmentWriter = new PageRunSegmentWriter(
+                comparator, hook, metrics, config.segmentCodec(), orderingMode);
         this.sink = sink;
         this.stagingDir = stagingDir;
         this.segmentPrefix = segmentPrefix;

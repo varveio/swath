@@ -6,6 +6,7 @@
 package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
@@ -20,6 +21,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.column.ParquetProperties;
 import org.apache.parquet.hadoop.ParquetFileReader;
@@ -41,6 +43,9 @@ import org.junit.jupiter.api.io.TempDir;
  * whose truncated footer stats provably diverge from the true first row.
  */
 class SortedFileIndexTest {
+
+    private static final class StopBoundsScan extends RuntimeException {
+    }
 
     private static SortConfig config(Map<String, String> overrides) {
         return SortConfig.fromProperties(key -> overrides.get(key.substring("swath.sort.".length())));
@@ -75,6 +80,25 @@ class SortedFileIndexTest {
         }
         assertThat(totalRows).isEqualTo(keys.size());
         assertThat(offset).isEqualTo(keys.size());
+    }
+
+    @Test
+    void exactBoundsScanChecksCancellationWhileReadingRows(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("part.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(
+                path, SortConfigs.base(), SortMode.OBJECTS, 0)) {
+            for (int i = 0; i < 10; i++) {
+                writer.write(object(String.format("%04d", i)));
+            }
+        }
+        AtomicInteger checks = new AtomicInteger();
+
+        assertThatThrownBy(() -> SortedFileIndex.bounds(path, () -> {
+            if (checks.incrementAndGet() == 2) {
+                throw new StopBoundsScan();
+            }
+        })).isInstanceOf(StopBoundsScan.class);
+        assertThat(checks).hasValue(2);
     }
 
     @Test

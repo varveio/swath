@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.slf4j.Logger;
 
@@ -95,6 +96,7 @@ final class DatasetPublisher {
             }
             RolledPartWriter.closeInOrder(open);
             open.clear();
+            requireDisjointParts(tmpFiles, writers);
         } catch (IOException | RuntimeException e) {
             try {
                 RolledPartWriter.closeQuietly(open);
@@ -119,6 +121,46 @@ final class DatasetPublisher {
         }
         allTmpPartsDurable();
         return pending;
+    }
+
+    /** Enforce strict raw-byte adjacency after durable close and before any publication mutation. */
+    private void requireDisjointParts(List<Path> tmpFiles, List<SortedFileWriter> writers)
+            throws IOException {
+        List<FinalPartMetadata> metadata = new ArrayList<>(writers.size());
+        for (int i = 0; i < writers.size(); i++) {
+            var captured = writers.get(i).finalMetadata();
+            if (captured.isPresent()) {
+                metadata.add(captured.orElseThrow());
+                continue;
+            }
+            metrics.recordStealReason("SORT", "cross_part_bounds_fallback_scan");
+            SortedFileIndex.Bounds bounds = SortedFileIndex.bounds(
+                    tmpFiles.get(i), MergeCancellation::check);
+            metadata.add(new FinalPartMetadata(bounds.rowCount(), Files.size(tmpFiles.get(i)), "",
+                    bounds.firstKey() == null ? null : "raw-bound",
+                    bounds.lastKey() == null ? null : "raw-bound",
+                    0, 0, 0, bounds.firstKey(), bounds.lastKey()));
+        }
+        requireDisjointParts(metadata, metrics);
+    }
+
+    static void requireDisjointParts(List<FinalPartMetadata> parts, SortMetrics metrics) {
+        byte[] previousMax = null;
+        int previousPart = -1;
+        for (int i = 0; i < parts.size(); i++) {
+            FinalPartMetadata part = parts.get(i);
+            byte[] currentMin = part.rawMinKey();
+            if (currentMin == null) {
+                continue;
+            }
+            if (previousMax != null && Arrays.compareUnsigned(previousMax, currentMin) >= 0) {
+                metrics.recordStealReason("SORT", "cross_part_overlap_rejected");
+                throw new SortOrderException("sorted output parts overlap at adjacency "
+                        + previousPart + " -> " + i + " under raw unsigned key order");
+            }
+            previousMax = part.rawMaxKey();
+            previousPart = i;
+        }
     }
 
     /** Serial drain closes its writers itself; this records the same post-close boundary. */

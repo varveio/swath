@@ -143,7 +143,8 @@ class PageRunNoLostKeysContractTest {
             i += len;
         }
         Path path = dir.resolve(name);
-        new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+        new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE,
+                SortMode.VERSIONS)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
         return path;
     }

@@ -6,11 +6,6 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.Comparator;
 
 /**
@@ -29,7 +24,7 @@ public record PageRunFormat(int formatVersion, int extensionType) {
     public static final String NAME = "page-run";
 
     /** Current page-run header format version. */
-    public static final int CURRENT_FORMAT_VERSION = 1;
+    public static final int CURRENT_FORMAT_VERSION = 2;
 
     /** A readable page run with no extension before the fixed EOF tail. */
     public static final int ABSENT_EXTENSION = 0;
@@ -58,45 +53,14 @@ public record PageRunFormat(int formatVersion, int extensionType) {
     }
 
     /**
-     * PageRun v1 persists the canonical swath ordering without a comparator identifier. Reject an
+     * PageRun v2 persists the canonical swath ordering without a comparator identifier. Reject an
      * alternate comparator before it can write or merge bytes under an unstated format contract.
      */
     static void requireCanonicalComparator(Comparator<ListEntry> comparator) {
         if (!(comparator instanceof ListEntryComparator)) {
             throw new IllegalArgumentException(
-                    "page-run format v1 requires ListEntryComparator");
+                    "page-run format v2 requires ListEntryComparator");
         }
-    }
-
-    /** Checkpoint-only O(1) header check before the ordinary reader rejects an unknown version. */
-    static void requirePhysicalHeader(Path path, PageRunFormat expected) throws IOException {
-        ByteBuffer header = ByteBuffer.allocate(PageRunSegmentWriter.HEADER_BYTES);
-        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
-            while (header.hasRemaining()) {
-                if (channel.read(header) < 0) {
-                    break;
-                }
-            }
-        }
-        if (header.hasRemaining()) {
-            throw mismatch(path, expected, "truncated physical header");
-        }
-        header.flip();
-        int magic = header.getInt();
-        int version = Short.toUnsignedInt(header.getShort());
-        if (magic != PageRunSegmentWriter.MAGIC || version != expected.formatVersion()) {
-            throw mismatch(path, expected,
-                    "physical_magic=0x" + Integer.toHexString(magic)
-                            + ", physical_format_version=" + version);
-        }
-    }
-
-    private static SegmentCorruptionException mismatch(
-            Path path, PageRunFormat expected, String physical) {
-        return new SegmentCorruptionException(path,
-                SegmentCorruptionException.PAGE_RUN_FORMAT_MISMATCH,
-                "checkpoint format metadata disagrees with physical segment: recorded="
-                        + expected + ", " + physical);
     }
 
     /** Classify nullable checkpoint metadata without treating a pre-column row as version zero. */

@@ -16,7 +16,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -33,11 +32,9 @@ import org.junit.jupiter.api.io.TempDir;
  * constructed entry is DISTINCT under the comparator (unique {@code (key, version, row_type)}), the
  * sorted order is unique, so the oracle is exact and the merger output must equal it entry-for-entry.
  *
- * <p>Where each segment is itself a valid sorted stream (no intra-segment overlap) the entry-typed
- * {@link StreamingMerger} is ALSO run as a second oracle. For intra-segment-overlap cases the
- * {@link PageRunSegmentReader}+{@link StreamingMerger} path is deliberately NOT used as an oracle: a
- * physically-misordered segment makes that reader a non-sorted stream, so only the resort oracle is
- * sound there.
+ * <p>Every segment is itself a valid sorted stream, so the entry-typed {@link StreamingMerger} can
+ * also serve as a second oracle where useful. Range overlap is constructed across segments; the v2
+ * page-run contract rejects it within one segment.
  *
  * <p>This class does not touch product code. A failing assertion here means a real defect in the
  * merger, not in the test.
@@ -77,51 +74,41 @@ class PageAwareMergerContractTest {
         assertThat(metrics.count("SORT.page_overlap_keymerge")).isZero();
     }
 
-    // ------------------------------------------------------------- case 2: intra-segment overlap
+    // ------------------------------------------------------------- case 2: cross-segment overlap
 
     @Test
-    void intraSegmentAdjacentPageOverlapIsCaughtNotMisordered(@TempDir Path dir) throws IOException {
-        // ONE segment, two node runs whose ranges INTERLEAVE. flush() orders pages by firstKey, so the
-        // file holds two adjacent pages [a..m] then [c..z]: minKeys monotone (a<c) but ranges overlap
-        // (maxKey(page0)="m" >= minKey(page1)="c"). A plain sequential reader would emit a,m,c,z —
-        // misordered. The intra-segment guard MUST fall back to a key-merge.
+    void adjacentSegmentPagesOverlapAndMergeWithoutMisordering(@TempDir Path dir) throws IOException {
         List<ListEntry> pageLow = List.of(obj("a"), obj("m"));
         List<ListEntry> pageHigh = List.of(obj("c"), obj("z"));
-        Path file = writeSegment(dir, "overlap.pageseg", List.of(pageLow, pageHigh));
-
-        assertThat(hasOverlappingAdjacentPages(file))
-                .as("constructed segment must physically contain overlapping adjacent pages")
-                .isTrue();
+        List<Path> files = List.of(
+                writeSegment(dir, "overlap-low.pageseg", List.of(pageLow)),
+                writeSegment(dir, "overlap-high.pageseg", List.of(pageHigh)));
 
         CountingMetrics metrics = new CountingMetrics();
-        List<ListEntry> out = drainPageAware(List.of(file), metrics);
+        List<ListEntry> out = drainPageAware(files, metrics);
 
-        assertThat(out).isEqualTo(sortedOracle(List.of(file)));   // a,c,m,z — NOT the file order a,m,c,z
+        assertThat(out).isEqualTo(sortedOracle(files));
+        assertThat(out).isEqualTo(streamingMerge(files));
         assertGloballySorted(out);
         assertThat(metrics.count("SORT.page_overlap_keymerge"))
-                .as("intra-segment overlap must trigger the key-merge guard")
+                .as("cross-segment overlap must trigger the key-merge path")
                 .isGreaterThan(0);
     }
 
     @Test
-    void intraSegmentOverlapChainAcrossManyPages(@TempDir Path dir) throws IOException {
-        // A long intra-segment overlap chain: every page spans nearly the whole keyspace, so each
-        // adjacent pair overlaps and the fallback must chain-pull the segment's own successors.
-        List<List<ListEntry>> pages = new ArrayList<>();
+    void crossSegmentOverlapChainAcrossManyPages(@TempDir Path dir) throws IOException {
+        List<Path> files = new ArrayList<>();
         for (int p = 0; p < 8; p++) {
             List<ListEntry> page = new ArrayList<>();
-            // firstKey grows with p (keeps minKeys monotone) but maxKey reaches "z" every time.
             page.add(obj(String.format("b%02d", p)));   // distinct low anchor per page
             page.add(obj("z" + (char) ('a' + p)));       // high anchor, distinct
-            pages.add(page);
+            files.add(writeSegment(dir, "chain-" + p + ".pageseg", List.of(page)));
         }
-        Path file = writeSegment(dir, "chain.pageseg", pages);
-        assertThat(hasOverlappingAdjacentPages(file)).isTrue();
 
         CountingMetrics metrics = new CountingMetrics();
-        List<ListEntry> out = drainPageAware(List.of(file), metrics);
+        List<ListEntry> out = drainPageAware(files, metrics);
 
-        assertThat(out).isEqualTo(sortedOracle(List.of(file)));
+        assertThat(out).isEqualTo(sortedOracle(files));
         assertGloballySorted(out);
         assertThat(metrics.count("SORT.page_overlap_keymerge")).isGreaterThan(0);
     }
@@ -135,7 +122,7 @@ class PageAwareMergerContractTest {
         // must fail, so the equal-key entries merge in version order (x before y), never a whole emit.
         List<ListEntry> page0 = List.of(obj("a"), obj("m", "x"));
         List<ListEntry> page1 = List.of(obj("m", "y"), obj("z"));
-        Path file = writeSegment(dir, "edge.pageseg", List.of(page0, page1));
+        Path file = writeSegment(dir, "edge.pageseg", List.of(page0, page1), SortMode.VERSIONS);
 
         CountingMetrics metrics = new CountingMetrics();
         List<ListEntry> out = drainPageAware(List.of(file), metrics);
@@ -173,7 +160,7 @@ class PageAwareMergerContractTest {
         //   then present versions "a" < "b" in byte order (obj/del interleave by version then rank).
         List<ListEntry> segAPage0 = List.of(obj("f"), objNull("m"), prefix("m"));
         List<ListEntry> segAPage1 = List.of(del("m", null), obj("m", "a"));
-        Path a = writeSegment(dir, "a.pageseg", List.of(segAPage0, segAPage1));
+        Path a = writeSegment(dir, "a.pageseg", List.of(segAPage0, segAPage1), SortMode.VERSIONS);
 
         List<ListEntry> segBPage0 = List.of(del("m", "a"), obj("m", "b"), del("m", "b"), obj("s"));
         Path b = writeSegment(dir, "b.pageseg", List.of(segBPage0));
@@ -318,7 +305,8 @@ class PageAwareMergerContractTest {
                     pages.add(new ArrayList<>(entries.subList(idx, Math.min(entries.size(), idx + len))));
                     idx += len;
                 }
-                files.add(writeSegment(caseDir, "seg-" + s + ".pageseg", pages));
+                files.add(writeSegment(caseDir, "seg-" + s + ".pageseg", pages,
+                        SortMode.VERSIONS));
             }
 
             CountingMetrics metrics = new CountingMetrics();
@@ -375,6 +363,11 @@ class PageAwareMergerContractTest {
 
     /** Write a page-run segment where each inner list is exactly ONE page (one framed record). */
     private Path writeSegment(Path dir, String name, List<List<ListEntry>> pages) throws IOException {
+        return writeSegment(dir, name, pages, SortMode.OBJECTS);
+    }
+
+    private Path writeSegment(Path dir, String name, List<List<ListEntry>> pages,
+                              SortMode orderingMode) throws IOException {
         SortBuffer buffer = new SortBuffer(config, cmp);
         long node = 0;
         for (List<ListEntry> page : pages) {
@@ -383,7 +376,8 @@ class PageAwareMergerContractTest {
             }
         }
         Path path = dir.resolve(name);
-        new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+        new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE,
+                orderingMode)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
         return path;
     }
@@ -448,22 +442,6 @@ class PageAwareMergerContractTest {
                     .as("output must be globally non-decreasing at index %d", i)
                     .isLessThanOrEqualTo(0);
         }
-    }
-
-    /** True iff the physical segment holds two adjacent pages whose ranges overlap (minKeys still
-     *  monotone, but maxKey(page[i]) >= minKey(page[i+1])) — proves the overlap hazard is actually present. */
-    private boolean hasOverlappingAdjacentPages(Path file) throws IOException {
-        try (PageFrontierReader reader = new PageFrontierReader(file, SortMetrics.NO_OP)) {
-            byte[] prevMax = null;
-            while (reader.hasPage()) {
-                if (prevMax != null && Arrays.compareUnsigned(reader.minKey(), prevMax) <= 0) {
-                    return true;
-                }
-                prevMax = reader.maxKey().clone();
-                reader.advance();
-            }
-        }
-        return false;
     }
 
     private static final class CountingMetrics implements SortMetrics {

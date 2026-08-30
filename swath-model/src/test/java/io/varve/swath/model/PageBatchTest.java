@@ -31,6 +31,8 @@ final class PageBatchTest {
         assertThat(batch.entryCount()).isEqualTo(2);
         assertThat(batch.nodeId()).isEqualTo(7L);
         assertThat(batch.pageSeq()).isEqualTo(3L);
+        assertThat(batch.nodeCompleted()).isFalse();
+        assertThat(batch.channelWeight()).isEqualTo(2);
     }
 
     @Test
@@ -46,6 +48,16 @@ final class PageBatchTest {
     }
 
     @Test
+    void completionMarkerHasNoRowsButConsumesBoundedChannelWeight() {
+        PageBatch completion = PageBatch.completion(4L, 11L);
+
+        assertThat(completion.nodeCompleted()).isTrue();
+        assertThat(completion.completionOnly()).isTrue();
+        assertThat(completion.entryCount()).isZero();
+        assertThat(completion.channelWeight()).isEqualTo(1);
+    }
+
+    @Test
     void rejectsBothOrNeitherForm() {
         assertThatThrownBy(() -> new PageBatch(0L, 0L, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -58,5 +70,7 @@ final class PageBatchTest {
         @Override public long commonPrefixCount() { return 0; }
         @Override public long deleteMarkerCount() { return 0; }
         @Override public long totalObjectSize() { return 0; }
+        @Override public byte[] firstKey() { return new byte[0]; }
+        @Override public byte[] lastKey() { return new byte[0]; }
     }
 }
