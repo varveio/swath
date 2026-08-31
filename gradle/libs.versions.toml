@@ -84,6 +84,7 @@ commons-codec = { module = "commons-codec:commons-codec", version.ref = "commons
 # plugin) is what lets Dependabot raise the floors.
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 avro = { module = "org.apache.avro:avro", version.ref = "avro" }
+avro-tools = { module = "org.apache.avro:avro-tools", version.ref = "avro" }
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonscompress" }
 commons-beanutils = { module = "commons-beanutils:commons-beanutils", version.ref = "commonsbeanutils" }
 commons-configuration2 = { module = "org.apache.commons:commons-configuration2", version.ref = "commonsconfiguration2" }

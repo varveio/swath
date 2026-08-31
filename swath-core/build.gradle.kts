@@ -10,6 +10,8 @@ plugins {
     alias(libs.plugins.jmh)
 }
 
+val pr6bAvroTools by configurations.creating
+
 // Hadoop ships as a cluster runtime, so it drags its whole service stack: an embedded Jetty web
 // server and Jersey REST layer for the NameNode/DataNode UIs, Guice servlet wiring, JSch for the
 // SFTP FileSystem, Kerby for Kerberos, and netty-all for HDFS transport. swath uses exactly one
@@ -110,6 +112,13 @@ dependencies {
     testImplementation(libs.logback.classic)
     testImplementation(libs.jqwik)
     testImplementation(libs.awaitility)
+    // PR 6b measurement spike: test-only OCF candidate; never enters the production closure.
+    testImplementation(libs.avro)
+    add(pr6bAvroTools.name, "org.apache.avro:avro-tools:${libs.versions.avro.get()}") {
+        // avro-tools 1.11.5 publishes stale test-classifier Trevni edges; getmeta needs neither.
+        exclude(group = "org.apache.avro", module = "trevni-avro")
+        exclude(group = "org.apache.avro", module = "trevni-core")
+    }
     // The export-path test needs the real OTLP wire types to read the exported counter value.
     testImplementation(libs.opentelemetry.proto)
     testRuntimeOnly(libs.junit.platform.launcher)
@@ -124,4 +133,34 @@ jmh {
     fork = 1
     failOnError = true
     // Benchmarks do NOT run during `./gradlew build` — invoke explicitly: ./gradlew :swath-core:jmh
+}
+
+// PR 6b is a disposable, test-source-set-only container measurement spike.
+tasks.register<JavaExec>("pr6bSpike") {
+    group = "verification"
+    description = "Runs the PR 6b Avro OCF versus PageRun container spike"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "io.varve.swath.sort.PageRunContainerSpike"
+    maxHeapSize = "4g"
+    argumentProviders.add(CommandLineArgumentProvider {
+        providers.gradleProperty("spikeArgs").orElse("measure build/pr6b-spike 1000000")
+            .get().split(Regex("\\s+"))
+    })
+}
+
+tasks.register<JavaExec>("pr6bAvroTools") {
+    group = "verification"
+    description = "Runs official avro-tools against the PR 6b sample OCF"
+    classpath = pr6bAvroTools
+    mainClass = "org.apache.avro.tool.Main"
+    // Hadoop's path adapter in avro-tools 1.11.5 still calls Subject.getSubject, removed in JDK 25.
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    argumentProviders.add(CommandLineArgumentProvider {
+        providers.gradleProperty("avroToolArgs")
+            .orElse("getmeta build/pr6b-spike/avro-00.avro")
+            .get().split(Regex("\\s+"))
+    })
 }
