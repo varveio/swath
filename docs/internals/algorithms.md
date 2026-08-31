@@ -1740,12 +1740,13 @@ open writers all have dedicated pipeline meters.
 
 Encoder completion order has no publication meaning. The calling thread waits for every encoder,
 sorts completed parts by plan ordinal, requires the ordinals to be dense, and passes only the whole
-pre-closed sequence to `DatasetPublisher`. Part `i` is stamped
+pre-closed sequence through `PreparedSortedParts`. Part `i` is stamped
 `swath.sort.file_index=i+1`; the terminal plan alone is stamped
-`swath.sort.file_final=true`. Before any final-name mutation, publication verifies strict raw-key
+`swath.sort.file_final=true`. Before `SortFinalizer.prepare` returns, it verifies strict raw-key
 adjacency between parts and reconciles source-tail rows, routed rows, and closed-writer rows.
+`SortedDatasetPublisher` assigns consumer-visible names only after receiving that complete proof.
 
 `FinalizationFailure` relays the first cursor, router, encoder, or cancellation failure across all
-stages. `Finalization` quiesces cursors and encoders before closing shared channels and sweeping
+stages. `SortFinalizer` quiesces cursors and encoders before closing shared channels and sweeping
 owned temporaries. Checkpoint-owned source segments and any previously published generation remain
 recoverable.

@@ -313,7 +313,7 @@ PageRun corpus. It is a warm, local R=1 observation, not a portable throughput c
 - **Runtime:** OpenJDK 25.0.4+7-LTS test worker, `-Xmx2g`, JFR `profile` settings.
 - **Fixture:** checkpoint-authorized retained SOREL staging, 9,919,142 rows in 23 PageRun segments;
   corpus ID `f77e226ed3da9ed8ee4c375f61275d23257091ca9a772da8d7988ed5b75a6728`.
-- **Clock:** the R=1 `SortTransform.transform` window only. Corpus validation and hard-link setup run
+- **Clock:** the R=1 `SortedDatasetCoordinator.transform` window only. Corpus validation and hard-link setup run
   before JFR starts; output validation runs after it stops. Reading the immutable corpus to validate
   it primes the filesystem cache, so these are warm-cache results.
 

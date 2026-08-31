@@ -385,7 +385,7 @@ confirms only that the invocation finalized retained staging without listing; it
 corpus a general object-store replay or reproduce remote timing.
 
 For a controlled local sweep, the opt-in `ParallelMergeBenchmark` runs the production
-`SortTransform`, brackets candidate encoder counts with three one-encoder samples, reverses
+`SortedDatasetCoordinator`, brackets candidate encoder counts with three one-encoder samples, reverses
 candidate order, applies a variance gate, and verifies every result against an independent source
 oracle:
 

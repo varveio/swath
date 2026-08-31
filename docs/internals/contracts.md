@@ -768,7 +768,8 @@ sequential or routing reader enforces it again.
 
 ### Finalization contract
 
-`Finalization` converts the complete sealed catalog into one globally sorted Parquet dataset:
+`SortFinalizer` converts the complete sealed catalog into one globally sorted unpublished Parquet
+part set:
 
 1. `KWayMerge` reduces an over-wide catalog through bounded page-run cascade passes.
    `CascadePageMerger` streams a page whole when its stored maximum is below every successor
@@ -779,8 +780,8 @@ sequential or routing reader enforces it again.
    `PartPlan` values with dense zero-based ordinals.
 4. `PartEncoders` positionally read and CRC-check each planned frame. Any admitted encoder may
    execute any plan; the plan ordinal, not worker identity or completion order, owns final order.
-5. The assembler requires a dense completion sequence, and `DatasetPublisher` verifies adjacency
-   and cardinality before publication.
+5. The assembler requires a dense completion sequence and verifies adjacency and cardinality before
+   `prepare` can return.
 
 The resulting parts satisfy all of these guarantees:
 
@@ -806,8 +807,9 @@ close a plan before the byte target.
 
 Encoders close and fsync temporary Parquet parts independently. The assembler exposes none of them
 to publication until every encoder has quiesced and the ordered set has passed its checks.
-`DatasetPublisher` then removes stale owned finals, renames parts in ordinal order, fsyncs the
-output directory, and invokes the runtime publication listener. The listener writes
+Only then does `SortedDatasetPublisher` assign dense final names, remove stale owned finals, rename
+parts in ordinal order, fsync the output directory, and invoke the runtime dataset committer. The
+committer writes
 `manifest.json`, `.swath-state.json`, and `symlink.txt`; `_SUCCESS` is written last and is
 the publication commit marker. It certifies complete publication, not point-in-time bucket
 semantics.
@@ -845,14 +847,22 @@ These bounds make active header queues, page bodies, plan references, and writer
 `K`, admitted `N`, and configured budgets rather than object count. Finalized-part metadata
 remains `O(parts)`; original staging metadata remains `O(segments)`.
 
+The durable file length is authoritative at the finalization boundary. Every
+`SortedFileWriterFactory` implementation that returns `FinalPartMetadata` must report its `bytes`
+as the exact on-disk length after close and fsync, never an estimate or buffered-byte count.
+`SortFinalizer` cross-checks that value against `Files.size`; writers without inline metadata use
+the durable-file readback path. A mismatch refuses publication.
+
 ### Failure, cancellation, and resume
 
 `FinalizationFailure` is the first-failure relay shared by header cursors, the router, and encoder
 lanes. Bounded queue operations poll it at fixed intervals so a failed peer cannot leave another
-stage blocked forever. On failure or cancellation, `Finalization` interrupts and joins every owned
-thread, discards any open writer, closes every shared segment channel, and sweeps owned finalization
-temporaries. The initiating checked, runtime, error, or cancellation type remains primary; cleanup
-failures are suppressed.
+stage blocked forever. On failure or cancellation, `SortFinalizer` interrupts and joins every owned
+thread, discards any open writer, and closes every shared segment channel before rethrowing. It does
+not mutate staging during failure handling. `SortedDatasetCoordinator` exclusively sweeps disposable
+finalization temporaries after the failure escapes; any direct caller of `SortFinalizer.prepare`
+owns that cleanup obligation. The initiating checked, runtime, error, or cancellation type remains
+primary; cleanup failures are suppressed by the coordinator.
 
 Before publication commits, checkpoint-owned original segments and the previously published
 generation remain untouched. Resume therefore reruns cascade and finalization from those original

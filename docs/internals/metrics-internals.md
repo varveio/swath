@@ -43,7 +43,7 @@ join. All are omitted (not null-valued) on the construction paths where they nev
 
 **`sort.merge_ms` times the complete finalization and publication invocation.** It comes from
 `swath.sort.merge.latency`, starts after the listing phase has crossed into merge setup, and stops
-when `SortTransform` returns. It includes cascade passes, header routing, final-part encoding,
+when `SortedDatasetCoordinator` returns. It includes cascade passes, header routing, final-part encoding,
 validation, and publication. It is approximately, not exactly,
 `duration_ms - listing_duration_ms`: setup around the phase transition and terminal summary work
 sit outside different ends of the timer. An ordinary failed merge does not record this success-path
