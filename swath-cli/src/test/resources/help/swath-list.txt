@@ -23,7 +23,7 @@ Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--tune=KEY=VALUE]... [<s3-uri>]
 List a bucket or prefix.
       [<s3-uri>]             Source URI, e.g. s3://bucket/prefix (required
-                               unless using --tune help)
+                               unless using --tune help or --tune KEY=?)
   -h, --help                 Show this help message and exit.
   -V, --version              Print version information and exit.
 
