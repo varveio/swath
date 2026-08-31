@@ -215,19 +215,34 @@ public final class DuckDbListingStore implements ListingStore {
         try (var st = connection.createStatement()) {
             st.execute("CREATE TEMP VIEW replay_parquet_source AS SELECT * FROM read_parquet(%s)".formatted(path));
             Set<String> columns = describeColumns(connection, "replay_parquet_source");
+            String key = "VARCHAR".equals(columnType(connection, "replay_parquet_source", "key"))
+                    ? "encode(key)"
+                    : "key";
             String ownerDisplayName = optionalColumn(columns, "owner_display_name", "NULL::VARCHAR");
             String checksumType = optionalColumn(columns, "checksum_type",
                     "CASE WHEN checksum_algorithm IS NOT NULL THEN 'FULL_OBJECT' ELSE NULL END");
             st.execute("""
                     CREATE TABLE listing_objects AS
-                    SELECT key, size, last_modified, etag, storage_class, owner_id,
+                    SELECT %s AS key, size, last_modified, etag, storage_class, owner_id,
                            %s AS owner_display_name,
                            checksum_algorithm,
                            %s AS checksum_type
                     FROM replay_parquet_source
                     WHERE row_type = 'OBJECT'
-                    """.formatted(ownerDisplayName, checksumType));
+                    """.formatted(key, ownerDisplayName, checksumType));
         }
+    }
+
+    private static String columnType(Connection connection, String relation, String column) throws SQLException {
+        try (var st = connection.createStatement();
+             ResultSet rs = st.executeQuery("DESCRIBE " + relation)) {
+            while (rs.next()) {
+                if (column.equals(rs.getString("column_name"))) {
+                    return rs.getString("column_type");
+                }
+            }
+        }
+        throw new SQLException("missing required replay column: " + column);
     }
 
     private static Set<String> describeColumns(Connection connection, String relation) throws SQLException {

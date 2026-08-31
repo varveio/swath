@@ -53,7 +53,7 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     }
 
     public void write(ListEntry e) throws IOException {
-        writer.write(e);
+        tracked.write(e);
         rows++;
     }
 

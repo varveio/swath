@@ -9,6 +9,7 @@ import static io.varve.swath.engine.StealMath.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.ByteMidpoint;
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.testkit.ScalarSafety;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -258,7 +259,7 @@ class StealMathTest {
         byte[] ceil = prefixCeil(utf8("data/"));   // "data0"
         byte[] m    = extrapolate(lo, c, ceil);
         assertThat(m).isNotNull();
-        assertThat(ByteMidpoint.isValidUtf8(m)).as("pivot must be valid UTF-8").isTrue();
+        assertThat(KeyBytes.isValidUtf8(m)).as("pivot must be valid UTF-8").isTrue();
         assertThat(Arrays.compareUnsigned(m, c)).isPositive();      // c < m
         assertThat(Arrays.compareUnsigned(m, ceil)).isNegative();   // m < ceil
     }
@@ -271,7 +272,7 @@ class StealMathTest {
         byte[] c  = utf8("flat/00000123");
         byte[] m  = extrapolate(lo, c, null);
         assertThat(m).isNotNull();
-        assertThat(ByteMidpoint.isValidUtf8(m)).isTrue();
+        assertThat(KeyBytes.isValidUtf8(m)).isTrue();
         assertThat(Arrays.compareUnsigned(m, c)).isPositive();
         // m shares the dense common prefix "flat/0000" rather than galloping out of it.
         assertThat(new String(m, StandardCharsets.UTF_8)).startsWith("flat/0000");
@@ -286,7 +287,7 @@ class StealMathTest {
         byte[] ceil = prefixCeil(utf8("data/"));
         byte[] m    = extrapolate(lo, c, ceil);
         assertThat(m).isNotNull();
-        assertThat(ByteMidpoint.isValidUtf8(m)).isTrue();
+        assertThat(KeyBytes.isValidUtf8(m)).isTrue();
         assertThat(Arrays.compareUnsigned(m, c)).isPositive();
         assertThat(Arrays.compareUnsigned(m, ceil)).isNegative();
     }
@@ -299,7 +300,7 @@ class StealMathTest {
         byte[] ceil = prefixCeil(utf8("flat/"));   // "flat0"
         byte[] m    = extrapolate(null, c, ceil);
         assertThat(m).isNotNull();
-        assertThat(ByteMidpoint.isValidUtf8(m)).isTrue();
+        assertThat(KeyBytes.isValidUtf8(m)).isTrue();
         assertThat(Arrays.compareUnsigned(m, c)).isPositive();
         assertThat(Arrays.compareUnsigned(m, ceil)).isNegative();
         assertThat(new String(m, StandardCharsets.UTF_8)).startsWith("flat/");
@@ -328,7 +329,7 @@ class StealMathTest {
         byte[] max = b(0xF4, 0x8F, 0xBF, 0xBF);
         byte[] m   = extrapolate(null, c, null);
         assertThat(m).isNotNull();
-        assertThat(ByteMidpoint.isValidUtf8(m)).isTrue();
+        assertThat(KeyBytes.isValidUtf8(m)).isTrue();
         assertThat(Arrays.compareUnsigned(m, c)).isPositive();               // c < m
         assertThat(Arrays.compareUnsigned(m, max)).isLessThanOrEqualTo(0);   // m <= U+10FFFF
     }
@@ -338,11 +339,11 @@ class StealMathTest {
         // A prefixCeil that bumped a continuation byte (0xCF 0xBF → 0xCF 0xC0) is NOT valid UTF-8.
         // extrapolate must NOT pass it to byteMidpoint; it falls back to the max-UTF-8 ceiling.
         byte[] badCeil = b(0xCF, 0xC0);
-        assertThat(ByteMidpoint.isValidUtf8(badCeil)).isFalse();
+        assertThat(KeyBytes.isValidUtf8(badCeil)).isFalse();
         byte[] c = utf8("A");
         byte[] m = extrapolate(null, c, badCeil);   // must not throw
         assertThat(m).isNotNull();
-        assertThat(ByteMidpoint.isValidUtf8(m)).isTrue();
+        assertThat(KeyBytes.isValidUtf8(m)).isTrue();
         assertThat(Arrays.compareUnsigned(m, c)).isPositive();
     }
 
@@ -361,7 +362,7 @@ class StealMathTest {
                 for (byte[] loArg : new byte[][]{null, lo}) {
                     byte[] m = extrapolate(loArg, c, ceil);
                     if (m != null) {
-                        assertThat(ByteMidpoint.isValidUtf8(m))
+                        assertThat(KeyBytes.isValidUtf8(m))
                                 .as("valid UTF-8 for cursor %s", p + s).isTrue();
                         assertThat(Arrays.compareUnsigned(m, c))
                                 .as("c < m for cursor %s", p + s).isPositive();
@@ -453,7 +454,7 @@ class StealMathTest {
         byte[] hi = interpolate(a, b, 0.75);
         for (byte[] m : new byte[][]{lo, mid, hi}) {
             assertThat(m).isNotNull();
-            assertThat(ByteMidpoint.isValidUtf8(m)).isTrue();
+            assertThat(KeyBytes.isValidUtf8(m)).isTrue();
             assertThat(Arrays.compareUnsigned(a, m)).isNegative();
             assertThat(Arrays.compareUnsigned(m, b)).isNegative();
         }
@@ -492,7 +493,7 @@ class StealMathTest {
         // valid-UTF-8 pivot below hi.
         byte[] m = interpolate(null, utf8("mmmm"), 0.75);
         assertThat(m).isNotNull();
-        assertThat(ByteMidpoint.isValidUtf8(m)).isTrue();
+        assertThat(KeyBytes.isValidUtf8(m)).isTrue();
         assertThat(Arrays.compareUnsigned(m, utf8("mmmm"))).isNegative();
     }
 

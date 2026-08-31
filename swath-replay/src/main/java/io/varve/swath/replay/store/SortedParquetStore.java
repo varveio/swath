@@ -62,12 +62,12 @@ import java.util.Set;
  * <p>Owner columns are decoded only when {@link Projection#owner()} — the whole point of the
  * projection, unlike the DuckDB store where they are behavior-cheap.
  *
- * <p>Unlike {@link DuckDbListingStore}, this store assumes the <b>canonical</b> current schema
- * unconditionally (no {@code owner_display_name}/{@code checksum_type} legacy-column backfill): every
- * sorted file is produced by the in-tree {@code SortedParquetWriter}, which always writes the full
- * canonical schema, so there is no legacy-schema
- * sorted file for this store to tolerate — unlike {@code DuckDbListingStore}, which must also serve
- * arbitrary pre-existing unsorted captures written by older schema versions.
+ * <p>Unlike {@link DuckDbListingStore}, this store assumes the <b>canonical</b> column set
+ * unconditionally (no {@code owner_display_name}/{@code checksum_type} legacy-column backfill). It
+ * derives projections from each file's own schema, so both the former unannotated BINARY {@code key}
+ * and the current STRING-annotated BINARY form remain readable. Other legacy schema variation is not
+ * supported here — unlike {@code DuckDbListingStore}, which must also serve arbitrary pre-existing
+ * unsorted captures written by older schema versions.
  *
  * <p>Row groups are addressed by the routing index and never scanned for, so a read touches no group
  * before the one it starts in. Readers are pooled because a Parquet reader carries mutable per-read

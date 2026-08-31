@@ -114,6 +114,15 @@ public final class ListEntryParquetWriters {
             return writer;
         }
 
+        /** Writes one row, restoring a checked output failure with the affected part's path. */
+        public void write(ListEntry entry) throws IOException {
+            try {
+                writer.write(entry);
+            } catch (UncheckedOutputException e) {
+                throw new IOException("failed to write Parquet part " + path, e.getCause());
+            }
+        }
+
         public boolean periodicSyncEnabled() {
             return periodicSync.enabled();
         }

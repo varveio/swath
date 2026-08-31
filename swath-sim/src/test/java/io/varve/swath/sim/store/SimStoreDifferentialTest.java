@@ -234,16 +234,17 @@ class SimStoreDifferentialTest {
         addUtf8(keys, "/", "a", "a/", "a//b", "a/b", "a/b/", "a/b/c", "ab");
         // §11.3 / §11.13 — prefix-of and NUL cases around a boundary: "a" < "a\0" < "a/" < "ab".
         keys.add(new byte[]{'a', 0x00});
-        // §11.1 / §11.2 — arbitrary key bytes in UNSIGNED order: '~' (0x7E) sorts BEFORE every
-        // 0x80+ byte, which UTF-16 order would get wrong.
+        // §11.1 / §11.2 — UTF-8 bytes in UNSIGNED order: '~' (0x7E) sorts BEFORE every
+        // multibyte scalar, including cases whose UTF-16 order differs.
         addUtf8(keys, "~tilde", "é-accent", "日本");
         keys.add(new byte[]{'k', 0x01});
-        keys.add(new byte[]{'k', (byte) 0x80});
-        keys.add(new byte[]{'k', (byte) 0xFF});
-        keys.add(new byte[]{'k', (byte) 0xFF, (byte) 0xFF});
-        // §11.13 — 0xFF runs, including the all-0xFF key whose successor is end-of-keyspace.
-        keys.add(new byte[]{(byte) 0xFF});
-        keys.add(new byte[]{(byte) 0xFF, (byte) 0xFF});
+        keys.add(utf8("k\u0080"));
+        keys.add(utf8("k\uDBFF\uDFFF"));
+        keys.add(utf8("k\uDBFF\uDFFF\uDBFF\uDFFF"));
+        // §11.13 — high scalar runs near the maximum valid UTF-8 boundary. Raw 0xFF successor
+        // saturation remains covered by ByteKeys tests because persisted Parquet keys are STRING.
+        keys.add(utf8("\uDBFF\uDFFF"));
+        keys.add(utf8("\uDBFF\uDFFF\uDBFF\uDFFF"));
         // §11.13 — very long keys at and just under the 1024-byte ceiling, one a prefix of the other.
         keys.add(longKey(KeyArena.MAX_KEY_BYTES - 1));
         keys.add(longKey(KeyArena.MAX_KEY_BYTES));
@@ -281,7 +282,7 @@ class SimStoreDifferentialTest {
         addProjections(scenarios, utf8("wide/"), utf8("/"), null, 2, 1000);
         addProjections(scenarios, null, utf8("0"), null, 3);
         // §11.3 — start-after is exclusive: at a key, between keys, and past the last key of all
-        // (0xFF 0xFF is a real key here, so only 0xFF 0xFF 0xFF is genuinely past the end).
+        // (0xFF is outside valid UTF-8, so this raw boundary is genuinely past every fixture key).
         addProjections(scenarios, null, null, utf8("a/b"), 1, 3);
         addProjections(scenarios, null, null, utf8("wide/074"), 2, 1000);
         addProjections(scenarios, null, null, new byte[]{(byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, 5);

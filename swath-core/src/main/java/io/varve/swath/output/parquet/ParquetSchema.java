@@ -24,7 +24,7 @@ public final class ParquetSchema {
 
     public static MessageType canonical() {
         return Types.buildMessage()
-                .required(PrimitiveTypeName.BINARY).named("key")                       // raw key bytes
+                .required(PrimitiveTypeName.BINARY).as(LogicalTypeAnnotation.stringType()).named("key")
                 .optional(PrimitiveTypeName.INT64).named("size")                        // null for prefixes/markers
                 .optional(PrimitiveTypeName.INT64)
                 .as(LogicalTypeAnnotation.timestampType(true, LogicalTypeAnnotation.TimeUnit.MICROS))

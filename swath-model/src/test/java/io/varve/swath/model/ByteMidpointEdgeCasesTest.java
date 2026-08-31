@@ -60,7 +60,7 @@ class ByteMidpointEdgeCasesTest {
     }
 
     private static void assertValidUtf8(byte[] bytes) {
-        assertThat(ByteMidpoint.isValidUtf8(bytes)).as("not valid UTF-8: %s", Arrays.toString(bytes)).isTrue();
+        assertThat(KeyBytes.isValidUtf8(bytes)).as("not valid UTF-8: %s", Arrays.toString(bytes)).isTrue();
     }
 
     private static void assertNoSurrogate(byte[] m) {

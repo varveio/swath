@@ -5,8 +5,11 @@
  */
 package io.varve.swath.output.parquet;
 
+import io.varve.swath.error.InvalidKeyEncodingException;
+import io.varve.swath.error.OutputException;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.model.RowType;
@@ -40,8 +43,12 @@ public final class ListEntryWriteSupport extends WriteSupport<ListEntry> {
 
     @Override
     public void write(ListEntry e) {
+        byte[] key = e.key().rawUnsafe();
+        if (!KeyBytes.isValidUtf8(key)) {
+            throw new UncheckedOutputException(InvalidKeyEncodingException.forKey(key));
+        }
         rc.startMessage();
-        binary("key", 0, e.key().rawUnsafe());
+        binary("key", 0, key);
         switch (e) {
             case ObjectEntry o -> {
                 longField("size", 1, o.size());
@@ -105,5 +112,18 @@ public final class ListEntryWriteSupport extends WriteSupport<ListEntry> {
         rc.startField(name, index);
         rc.addBoolean(value);
         rc.endField(name, index);
+    }
+}
+
+/** Checked-output-error bridge for parquet-mr's {@code WriteSupport.write} callback. */
+final class UncheckedOutputException extends RuntimeException {
+
+    UncheckedOutputException(OutputException cause) {
+        super(cause);
+    }
+
+    @Override
+    public synchronized OutputException getCause() {
+        return (OutputException) super.getCause();
     }
 }

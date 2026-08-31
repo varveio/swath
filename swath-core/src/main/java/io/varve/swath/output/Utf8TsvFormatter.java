@@ -98,7 +98,7 @@ public final class Utf8TsvFormatter {
 
     private void appendKey(KeyBytes key) {
         byte[] bytes = key.rawUnsafe();
-        if (isValidUtf8(bytes)) {
+        if (KeyBytes.isValidUtf8(bytes)) {
             appendEscapedBytes(bytes);
         } else {
             appendText(key.asString());
@@ -187,47 +187,4 @@ public final class Utf8TsvFormatter {
         }
     }
 
-    /** Strict UTF-8 validation; malformed bytes must retain the existing replacement semantics. */
-    private static boolean isValidUtf8(byte[] bytes) {
-        int i = 0;
-        while (i < bytes.length) {
-            int first = bytes[i++] & 0xff;
-            if (first < 0x80) {
-                continue;
-            }
-            if (first >= 0xc2 && first <= 0xdf) {
-                if (i >= bytes.length || !continuation(bytes[i++])) return false;
-                continue;
-            }
-            if (first >= 0xe0 && first <= 0xef) {
-                if (i + 1 >= bytes.length) return false;
-                int second = bytes[i++] & 0xff;
-                int third = bytes[i++] & 0xff;
-                if ((first == 0xe0 && second < 0xa0)
-                        || (first == 0xed && second >= 0xa0)
-                        || !continuation(second) || !continuation(third)) return false;
-                continue;
-            }
-            if (first >= 0xf0 && first <= 0xf4) {
-                if (i + 2 >= bytes.length) return false;
-                int second = bytes[i++] & 0xff;
-                int third = bytes[i++] & 0xff;
-                int fourth = bytes[i++] & 0xff;
-                if ((first == 0xf0 && second < 0x90)
-                        || (first == 0xf4 && second >= 0x90)
-                        || !continuation(second) || !continuation(third) || !continuation(fourth)) return false;
-                continue;
-            }
-            return false;
-        }
-        return true;
-    }
-
-    private static boolean continuation(byte value) {
-        return continuation(value & 0xff);
-    }
-
-    private static boolean continuation(int value) {
-        return (value & 0xc0) == 0x80;
-    }
 }

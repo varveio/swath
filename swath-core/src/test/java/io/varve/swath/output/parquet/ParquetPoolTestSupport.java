@@ -35,18 +35,26 @@ final class ParquetPoolTestSupport {
         return PageBatches.batch(nodeId, seq, from, to);
     }
 
-    /** One naturally row-group-sized batch with non-compressible binary keys. */
+    /** One naturally row-group-sized batch with high-entropy, well-formed UTF-8 keys. */
     static PageBatch incompressibleRowGroupBatch(long nodeId, long seq) {
         Random random = new Random(0x51A7B00BL);
-        List<ListEntry> entries = new ArrayList<>(36_000);
-        for (int row = 0; row < 36_000; row++) {
+        List<ListEntry> entries = new ArrayList<>(44_000);
+        for (int row = 0; row < 44_000; row++) {
             byte[] key = new byte[2048];
             random.nextBytes(key);
+            printableAscii(key);
             entries.add(new ObjectEntry(KeyBytes.of(key), row,
                     1_700_000_000_000_000L + row, "etag", "STANDARD",
                     null, true, null, null, null, null));
         }
         return new PageBatch(nodeId, seq, entries);
+    }
+
+    /** Maps random bytes one-for-one onto printable ASCII without reducing the row size. */
+    static void printableAscii(byte[] bytes) {
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) (0x20 + (bytes[i] & 0xFF) % 95);
+        }
     }
 
     /** Finalized data parts live under {@code <root>/data/}. */

@@ -57,8 +57,8 @@ import org.apache.parquet.schema.MessageType;
  *       {@code version_id} and equal-comparing cross-type entries; (iii) equal-comparing entries all
  *       survive the merge — none dropped — and keep stable input order within one segment.</li>
  *   <li><b>PROP-SORT-2</b> — canonical Parquet → {@link SegmentReader} round-trips every {@link
- *       ListEntry} subtype for arbitrary generated entries incl. {@code 0x00}/{@code 0xFF} bytes in
- *       keys, 1&nbsp;KB keys, unicode, null optional fields, the empty segment, and a single
+ *       ListEntry} subtype for arbitrary generated entries incl. NUL/U+10FFFF in keys,
+ *       1&nbsp;KB keys, unicode, null optional fields, the empty segment, and a single
  *       record.</li>
  *   <li><b>PROP-SORT-3</b> — {@link SortedFileIndex#firstKeysPerRowGroup} equals each row group's
  *       true first row for adversarial key shapes, and provably NOT the (truncated) footer stats:
@@ -196,16 +196,18 @@ class PropSortContractTest {
     }
 
     @Example
-    void nulAndFfAndKiloKeysRoundTrip() throws IOException {
+    void nulAndHighScalarAndKiloKeysRoundTrip() throws IOException {
         List<ListEntry> es = new ArrayList<>();
         es.add(new ObjectEntry(KeyBytes.of(new byte[]{0, 0, 0}), 1L, 0L, null, null, null, false,
                 null, null, null, null));
-        es.add(new ObjectEntry(KeyBytes.of(new byte[]{(byte) 0xFF, (byte) 0xFF}), 2L, 0L, null, null,
+        es.add(new ObjectEntry(KeyBytes.of("\uDBFF\uDFFF".getBytes(StandardCharsets.UTF_8)), 2L, 0L, null, null,
                 null, false, null, null, null, null));
         es.add(new ObjectEntry(KeyBytes.of(kiloKey(7)), 3L, 0L, "日本語etag", "STANDARD", null, false,
                 null, null, null, null));
         es.add(new CommonPrefixEntry(KeyBytes.of("café/😀/".getBytes(StandardCharsets.UTF_8))));
-        es.add(new DeleteMarkerEntry(KeyBytes.of(new byte[]{0, (byte) 0xFF}), "vDel", true, 99L, "o"));
+        es.add(new DeleteMarkerEntry(KeyBytes.of(new byte[]{0, (byte) 0xF4, (byte) 0x8F,
+                (byte) 0xBF, (byte) 0xBF}),
+                "vDel", true, 99L, "o"));
         assertRoundTrips(es);
     }
 
@@ -291,7 +293,7 @@ class PropSortContractTest {
             "b".getBytes(StandardCharsets.UTF_8),
             "m".getBytes(StandardCharsets.UTF_8),
             new byte[]{0},
-            new byte[]{(byte) 0xFF},
+            "\uDBFF\uDFFF".getBytes(StandardCharsets.UTF_8),
             "😀".getBytes(StandardCharsets.UTF_8));
 
     private Arbitrary<ListEntry> collidingEntry() {
@@ -330,17 +332,18 @@ class PropSortContractTest {
 
     private Arbitrary<byte[]> richKey() {
         Arbitrary<byte[]> pool = Arbitraries.of(KEY_POOL);
-        Arbitrary<byte[]> nulFf = Arbitraries.of(
-                new byte[]{0, 0, 0}, new byte[]{(byte) 0xFF, (byte) 0xFF},
-                new byte[]{0, (byte) 0xFF, 0, (byte) 0xFF});
+        Arbitrary<byte[]> nulAndHighScalar = Arbitraries.of(
+                new byte[]{0, 0, 0}, "\uDBFF\uDFFF".getBytes(StandardCharsets.UTF_8),
+                new byte[]{0, (byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF,
+                        0, (byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF});
         Arbitrary<byte[]> kilo = Arbitraries.integers().between(0, 1 << 20).map(PropSortContractTest::kiloKey);
         Arbitrary<byte[]> unicode = Arbitraries.of("café/1", "мир/2", "emoji/😀/x")
                 .map(s -> s.getBytes(StandardCharsets.UTF_8));
-        return Arbitraries.oneOf(pool, nulFf, kilo, unicode);
+        return Arbitraries.oneOf(pool, nulAndHighScalar, kilo, unicode);
     }
 
     enum KeyShape {
-        /** 1 KB keys embedding {@code 0x00} and {@code 0xFF}, ascending in a fixed tail. */
+        /** 1 KB valid UTF-8 keys embedding NUL and U+10FFFF, ascending in a fixed tail. */
         KILO_ADVERSARIAL,
         /** Short ascending ASCII keys (small files → often a single row group). */
         ASCII_SHORT,
@@ -413,15 +416,17 @@ class PropSortContractTest {
         return keys;
     }
 
-    /** {@code i}-th 1024-byte key: embeds {@code 0x00}/{@code 0xFF} at the head, ascending in the tail. */
+    /** {@code i}-th 1024-byte key: embeds NUL/U+10FFFF at the head, ascending in the tail. */
     private static byte[] kiloKey(int i) {
         byte[] key = new byte[1024];
         key[0] = 0x00;
-        key[1] = (byte) 0xFF;
-        key[1020] = (byte) ((i >>> 24) & 0xFF);
-        key[1021] = (byte) ((i >>> 16) & 0xFF);
-        key[1022] = (byte) ((i >>> 8) & 0xFF);
-        key[1023] = (byte) (i & 0xFF);
+        key[1] = (byte) 0xF4;
+        key[2] = (byte) 0x8F;
+        key[3] = (byte) 0xBF;
+        key[4] = (byte) 0xBF;
+        java.util.Arrays.fill(key, 5, key.length - 8, (byte) 'x');
+        byte[] suffix = String.format("%08x", i).getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(suffix, 0, key, key.length - suffix.length, suffix.length);
         return key;
     }
 

@@ -365,7 +365,7 @@ final class DirectoryLifecycleCharacterizationTest {
         Files.createDirectories(layout.dataDir());
         Files.writeString(layout.state(), "{\"args_hash\":\"" + hash + "\",\"run_id\":" + priorRunId + "}");
         Files.writeString(layout.success(), "");
-        Manifest.write(outputDir, BUCKET, "message swath { required binary key; }",
+        Manifest.write(outputDir, BUCKET, "message swath { required binary key (STRING); }",
                 List.of(), false, null);
         Path priorPart = layout.dataDir().resolve("part-w0-00000.parquet");
         Files.writeString(priorPart, "the completed prior run's real output");
@@ -493,7 +493,7 @@ final class DirectoryLifecycleCharacterizationTest {
         Files.createDirectories(layout.dataDir());
         Files.writeString(layout.state(), "{\"args_hash\":\"" + hash + "\",\"run_id\":" + priorRunId + "}");
         Files.writeString(layout.success(), "");
-        Manifest.write(outputDir, BUCKET, "message swath { required binary key; }",
+        Manifest.write(outputDir, BUCKET, "message swath { required binary key (STRING); }",
                 List.of(), false, null);
         Path ownedPart = layout.dataDir().resolve("part-w0-00000.parquet");
         Files.writeString(ownedPart, "swath-owned part from the run --restart is discarding");

@@ -8,6 +8,10 @@ package io.varve.swath.replay.store;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.ParquetSchema;
+import io.varve.swath.output.parquet.PartWriter;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.ListedObject;
@@ -19,14 +23,48 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.TimeZone;
+import org.apache.parquet.schema.MessageType;
+import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
+import org.apache.parquet.schema.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Isolated;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Isolated // The legacy-timestamp regression test changes java.util.TimeZone's JVM-global default.
 class DuckDbListingStoreTest {
+
+    @ParameterizedTest(name = "key STRING annotation present: {0}")
+    @ValueSource(booleans = {false, true})
+    void readsFormerAndCurrentKeyAnnotations(boolean stringAnnotation, @TempDir Path dir)
+            throws Exception {
+        Path parquet = dir.resolve(stringAnnotation ? "string-key.parquet" : "binary-key.parquet");
+        writeParquet(parquet, stringAnnotation, "a/1", "b/2");
+
+        try (DuckDbListingStore store = new DuckDbListingStore(parquet)) {
+            assertThat(keys(store.rows(null, true, null, 10, Projection.KEYS_ONLY)))
+                    .containsExactly("a/1", "b/2");
+        }
+    }
+
+    @ParameterizedTest(name = "legacy file sorts first in glob: {0}")
+    @ValueSource(booleans = {false, true})
+    void readsDatasetDirectoryMixingFormerAndCurrentKeyAnnotations(
+            boolean legacySortsFirst, @TempDir Path dir) throws Exception {
+        String legacyName = legacySortsFirst ? "a-legacy.parquet" : "z-legacy.parquet";
+        String currentName = legacySortsFirst ? "z-current.parquet" : "a-current.parquet";
+        writeParquet(dir.resolve(legacyName), false, "a/legacy");
+        writeParquet(dir.resolve(currentName), true, "b/current");
+
+        try (DuckDbListingStore store = new DuckDbListingStore(dir)) {
+            assertThat(keys(store.rows(null, true, null, 10, Projection.KEYS_ONLY)))
+                    .containsExactly("a/legacy", "b/current");
+        }
+    }
 
     @Test
     void returnsAllRowsInAscendingKeyOrderForAnOpenRange() throws Exception {
@@ -112,6 +150,23 @@ class DuckDbListingStoreTest {
 
     private static DuckDbListingStore store(Row... rows) throws Exception {
         return store(new ReplayMetrics(), rows);
+    }
+
+    private static void writeParquet(Path path, boolean stringAnnotation, String... keys)
+            throws Exception {
+        MessageType canonical = ParquetSchema.canonical();
+        MessageType schema = canonical;
+        if (!stringAnnotation) {
+            var fields = new ArrayList<>(canonical.getFields());
+            fields.set(0, Types.required(PrimitiveTypeName.BINARY).named("key"));
+            schema = new MessageType(canonical.getName(), fields);
+        }
+        try (PartWriter writer = new PartWriter(path, schema)) {
+            for (String key : keys) {
+                writer.write(ObjectEntry.withoutOwnerDisplayNameAndChecksumType(
+                        KeyBytes.ofUtf8(key), 1L, 0L, null, null, null, true, null, null));
+            }
+        }
     }
 
     private static DuckDbListingStore store(ReplayMetrics metrics, Row... rows) throws Exception {

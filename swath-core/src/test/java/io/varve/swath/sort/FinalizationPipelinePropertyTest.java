@@ -31,10 +31,11 @@ class FinalizationPipelinePropertyTest {
             new byte[]{},
             new byte[]{0},
             new byte[]{0, 0},
-            new byte[]{0, (byte) 0xFF},
-            new byte[]{(byte) 0xFF},
-            new byte[]{(byte) 0xFF, 0},
-            new byte[]{(byte) 0xFF, (byte) 0xFF},
+            new byte[]{0, (byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF},
+            new byte[]{(byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF},
+            new byte[]{(byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF, 0},
+            new byte[]{(byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF,
+                    (byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF},
     };
 
     private final ListEntryComparator comparator = new ListEntryComparator();

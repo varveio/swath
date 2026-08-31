@@ -332,6 +332,9 @@ class SortedParquetWriterTest {
         byte[] prefix = String.format("%08d-", row).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         byte[] suffix = new byte[key.length - prefix.length];
         random.nextBytes(suffix);
+        for (int i = 0; i < suffix.length; i++) {
+            suffix[i] = (byte) (0x20 + (suffix[i] & 0x3F));
+        }
         System.arraycopy(prefix, 0, key, 0, prefix.length);
         System.arraycopy(suffix, 0, key, prefix.length, suffix.length);
         return new ObjectEntry(KeyBytes.of(key), row, 1_700_000_000_000_000L + row,
