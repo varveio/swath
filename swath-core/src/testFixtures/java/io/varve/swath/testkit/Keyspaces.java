@@ -5,6 +5,7 @@
  */
 package io.varve.swath.testkit;
 
+import io.varve.swath.model.ByteMidpoint;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -137,17 +138,30 @@ public final class Keyspaces {
      * short numeric tail — exercises {@code byteMidpoint}'s long-key / cap-fallback path.
      */
     public static List<byte[]> longKeys1024(int n) {
-        int padLen = 1018;
-        byte[] pad = new byte[padLen];
-        Arrays.fill(pad, (byte) 'a');
         List<byte[]> keys = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
-            byte[] tail = String.format("/%05d", i).getBytes(StandardCharsets.UTF_8);
-            byte[] k = Arrays.copyOf(pad, padLen + tail.length);
-            System.arraycopy(tail, 0, k, padLen, tail.length);
-            keys.add(k);   // 1024 bytes total — long, multi-page-prefix, valid ASCII
+            keys.add(longKey1024(i));
         }
         return keys;
+    }
+
+    /** One fixture key at the requested index, exposed package-locally for cap-boundary tests. */
+    static byte[] longKey1024(int index) {
+        if (index < 0) {
+            throw new IllegalArgumentException("long-key fixture index must be non-negative");
+        }
+        // Ten decimal digits cover every non-negative int. Keeping that width fixed means the
+        // 100,000th key cannot silently grow to 1,025 bytes as it did with a five-digit tail.
+        int tailDigits = 10;
+        int padLen = ByteMidpoint.MAX_KEY_LEN - 1 - tailDigits;
+        byte[] key = new byte[ByteMidpoint.MAX_KEY_LEN];
+        Arrays.fill(key, 0, padLen, (byte) 'a');
+        key[padLen] = (byte) '/';
+        byte[] digits = Integer.toString(index).getBytes(StandardCharsets.US_ASCII);
+        int digitsStart = key.length - digits.length;
+        Arrays.fill(key, padLen + 1, digitsStart, (byte) '0');
+        System.arraycopy(digits, 0, key, digitsStart, digits.length);
+        return key;
     }
 
     /**

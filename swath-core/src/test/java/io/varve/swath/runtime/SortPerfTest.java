@@ -60,9 +60,9 @@ import org.junit.jupiter.api.io.TempDir;
  *   <li><b>1&nbsp;KB-key variant</b> (the key-size-independence proof, the worst-case key-size
  *       envelope): the byte gate, not entry count, must still cap the buffer under the SAME
  *       corridor, and {@code SORT.buffer_byte_gated} must have engaged.</li>
- *   <li><b>Merge-phase stress</b>: hundreds of tiny staging segments and a
- *       tiny {@code merge-budget-bytes} so {@code SortConfig#effectiveFanIn()} forces
- *       a genuine multi-pass cascade — measured peak heap over the WHOLE run must still sit under the
+ *   <li><b>Merge-phase stress</b>: hundreds of tiny staging segments, a small pinned fan-in, and a
+ *       merge budget only large enough for the pipeline's minimum encoder residency force a genuine
+ *       multi-pass cascade — measured peak heap over the WHOLE run must still sit under the
  *       SAME corridor (the budget bound, not segment count, caps merge memory, I11), the cascade must
  *       actually have engaged ({@code swath.sort.merge.passes > 1} / {@code SORT.merge_pass_cascaded}),
  *       and every entry must survive exactly once.</li>
@@ -123,16 +123,17 @@ final class SortPerfTest {
     private static final int VARIANT_PAGE_MAX_KEYS = 20_000;
     private static final long VARIANT_SEGMENT_BYTES = 16L << 20;  // smaller gate: forces many byte-gated flushes
 
-    // Merge-phase stress: a MODEST entry count but a tiny segment-entries
-    // cap forces hundreds of staging segments, and a tiny merge-budget-bytes forces a small
-    // effectiveFanIn() (SortConfig §7) so the cascade genuinely runs multiple passes, exercising the
-    // budget-bounded merge end to end through the production pipeline.
+    // Merge-phase stress: a MODEST entry count but a tiny segment-entries cap forces hundreds of
+    // staging segments. The small pinned fan-in makes the cascade genuinely run multiple passes,
+    // while the merge budget remains close to the pipeline's minimum encoder-residency floor.
     private static final int MERGE_STRESS_N = 60_000;
     // == segment-entries, so every admitted PAGE trips the entry cap on its own (SortLane.admit checks
     // the trigger once per page, not per key) — a deterministic MERGE_STRESS_N/PAGE_MAX_KEYS segments.
     private static final int MERGE_STRESS_PAGE_MAX_KEYS = 100;
     private static final long MERGE_STRESS_SEGMENT_ENTRIES = 100;         // ⇒ ~600 staging segments
-    private static final long MERGE_STRESS_MERGE_BUDGET_BYTES = 8L << 20;
+    // A pipeline writer alone is conservatively priced at 8 MiB; leave room for its reference wave,
+    // decoded-page residency, and body read instead of configuring an impossible 8 MiB total.
+    private static final long MERGE_STRESS_MERGE_BUDGET_BYTES = 16L << 20;
     private static final int MERGE_STRESS_FAN_IN = 8;                            // pin fan-in = 8 directly
 
     private static RunKey sortKey(String label) {
@@ -295,12 +296,12 @@ final class SortPerfTest {
                         result.peakHeapBytes() / (1024 * 1024))
                 .isLessThan(HEAP_CORRIDOR_BYTES);
 
-        // (b) the merge actually cascaded — the tiny budget, not luck, forced multiple passes.
+        // (b) the merge actually cascaded — the pinned fan-in, not luck, forced multiple passes.
         assertThat(counter(result.ctx(), "swath.sort.merge.passes"))
                 .as("swath.sort.merge.passes > 1 — a genuine multi-pass cascade, not a single pass")
                 .isGreaterThan(1.0);
         assertThat(counter(result.ctx(), "swath.steal_reason", "merge_pass_cascaded"))
-                .as("SORT.merge_pass_cascaded engaged — the merge budget forced the cascade")
+                .as("SORT.merge_pass_cascaded engaged — the pinned fan-in forced the cascade")
                 .isGreaterThan(0.0);
     }
 
