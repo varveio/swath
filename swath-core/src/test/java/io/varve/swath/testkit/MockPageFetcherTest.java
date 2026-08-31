@@ -31,6 +31,18 @@ class MockPageFetcherTest {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 
+    @Test
+    void longKeyFixtureKeepsItsTailWidthAndS3LimitAcrossTheDecimalBoundary() {
+        int[] indices = {0, 99_999, 100_000, Integer.MAX_VALUE};
+        String[] tails = {"/0000000000", "/0000099999", "/0000100000", "/2147483647"};
+
+        for (int i = 0; i < indices.length; i++) {
+            byte[] key = Keyspaces.longKey1024(indices[i]);
+            assertThat(key).hasSize(1024);
+            assertThat(new String(key, StandardCharsets.UTF_8)).endsWith(tails[i]);
+        }
+    }
+
     /** Drain a flat OBJECTS listing by paginating on the last emitted key. */
     private static List<String> drainFlat(MockPageFetcher f, byte[] prefix) throws Exception {
         List<String> keys = new ArrayList<>();
