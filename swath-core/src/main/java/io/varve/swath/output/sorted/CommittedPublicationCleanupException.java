@@ -41,6 +41,7 @@ public final class CommittedPublicationCleanupException extends IOException {
     }
 
     private final Stage stage;
+    private SortedDatasetCommit publishedCommit;
     private SortTransformResult publishedResult;
 
     CommittedPublicationCleanupException(Stage stage, Throwable cause) {
@@ -59,6 +60,21 @@ public final class CommittedPublicationCleanupException extends IOException {
         }
         publishedResult = result;
         return this;
+    }
+
+    CommittedPublicationCleanupException withPublishedCommit(SortedDatasetCommit commit) {
+        if (publishedCommit != null) {
+            throw new IllegalStateException("published dataset commit already attached");
+        }
+        publishedCommit = commit;
+        return this;
+    }
+
+    public SortedDatasetCommit publishedCommit() {
+        if (publishedCommit == null) {
+            throw new IllegalStateException("committed cleanup failure has no dataset commit");
+        }
+        return publishedCommit;
     }
 
     /** The post-commit operation that failed. */

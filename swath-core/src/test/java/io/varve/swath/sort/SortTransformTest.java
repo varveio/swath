@@ -13,7 +13,6 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
-import io.varve.swath.output.sorted.DatasetPublisher;
 import io.varve.swath.output.sorted.PublicationStepHook;
 import io.varve.swath.output.sorted.PublishListener;
 import io.varve.swath.output.sorted.StagingNames;
@@ -384,7 +383,7 @@ class SortTransformTest {
 
         assertThat(priorFinal).hasContent("prior");
         assertThat(segment).exists();
-        assertThatThrownBy(() -> DatasetPublisher.requireExactCardinality(3, 1, 1))
+        assertThatThrownBy(() -> SortFinalizer.requireExactCardinality(3, 1, 1))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("source_rows=3")
                 .hasMessageContaining("drained_rows=1");

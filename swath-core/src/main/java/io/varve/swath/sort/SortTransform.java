@@ -5,10 +5,13 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.sorted.CommittedPublicationCleanupException;
 import io.varve.swath.output.sorted.DatasetPublisher;
 import io.varve.swath.output.sorted.PublicationStepHook;
 import io.varve.swath.output.sorted.PublishListener;
-import io.varve.swath.output.sorted.StagingReconciliation;
+import io.varve.swath.output.sorted.SortedDatasetCommit;
+import io.varve.swath.output.sorted.SortedPublicationContext;
+import io.varve.swath.output.sorted.StagingNames;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
@@ -28,10 +31,8 @@ public final class SortTransform {
 
     private static final Logger log = LoggerFactory.getLogger(SortTransform.class);
 
-    private final SortRun run;
     private final DatasetPublisher datasetPublisher;
-    private final MergePlanner mergePlanner;
-    private final PageRunCatalog.Opener catalogOpener;
+    private final SortFinalizer sortFinalizer;
 
     /** Build one transform from the complete immutable run policy. */
     public SortTransform(SortRun run) {
@@ -45,10 +46,8 @@ public final class SortTransform {
 
     SortTransform(SortRun run, PublicationStepHook publicationStepHook,
             PageRunCatalog.Opener catalogOpener) {
-        this.run = run;
-        this.catalogOpener = catalogOpener;
         this.datasetPublisher = new DatasetPublisher(run, publicationStepHook, log);
-        this.mergePlanner = new MergePlanner(run);
+        this.sortFinalizer = new SortFinalizer(run, catalogOpener);
     }
 
     /** Merge and publish checkpoint-owned page-run segments. */
@@ -79,24 +78,34 @@ public final class SortTransform {
             Map<Path, PageRunFormat> expectedFormats, Path outputDir, Path stagingDir,
             PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
-        PageRunCatalog.requirePageRunNames(stagingSegments);
-        StagingReconciliation ownedInputs =
-                StagingReconciliation.fromPaths(stagingDir, stagingSegments);
-        StagingReconciliation.DirectoryAuthority outputAuthority =
-                StagingReconciliation.DirectoryAuthority.capture(
-                        outputDir, "sort output directory");
-        stagingSegments = ownedInputs.ownedPaths();
-        StagingReconciliation retainedOriginals =
-                datasetPublisher.retainedOriginals(ownedInputs);
+        sortFinalizer.requireSourceNames(stagingSegments);
+        SortedPublicationContext publicationContext = datasetPublisher.publicationContext(
+                stagingSegments, outputDir, stagingDir, publishListener);
+        SortFinalizer.Admission admission = sortFinalizer.admit(
+                publicationContext.ownedInputs().ownedPaths(), expectedFormats);
+        datasetPublisher.sweepWorking(publicationContext);
+        try {
+            PreparedSortedParts prepared = sortFinalizer.prepare(new SortFinalizer.Request(
+                    admission, stagingDir, progressCallback, onFinalPassStarting,
+                    publicationContext.ownedInputs()));
+            return result(datasetPublisher.publish(prepared, publicationContext));
+        } catch (CommittedPublicationCleanupException committedCleanup) {
+            throw committedCleanup.withPublishedResult(result(committedCleanup.publishedCommit()));
+        } catch (IOException | RuntimeException | Error failure) {
+            try {
+                publicationContext.ownedInputs().sweepDisposables(
+                        StagingNames.PIPELINE_TMP_GLOB);
+            } catch (IOException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+    }
 
-        PageRunCatalog catalog = PageRunCatalog.preflight(
-                stagingSegments, catalogOpener, expectedFormats, run.metrics());
-        datasetPublisher.sweepWorking(outputDir, stagingDir, ownedInputs, outputAuthority);
-
-        SortFinalizer.Request request = new SortFinalizer.Request(
-                outputDir, stagingDir, publishListener, progressCallback, onFinalPassStarting,
-                ownedInputs, retainedOriginals, outputAuthority);
-        return new SortFinalizer(run, mergePlanner, datasetPublisher)
-                .run(catalog, request, run.config().mergeParallelism());
+    private static SortTransformResult result(SortedDatasetCommit commit) {
+        PreparedSortedParts.MergeStatistics statistics = commit.mergeStatistics();
+        return new SortTransformResult(commit.finalFiles(), commit.outputBytes(), commit.totalRows(),
+                statistics.mergePasses(), statistics.cascadedPasses(), statistics.pagesForwarded(),
+                statistics.finalizationParallelism());
     }
 }

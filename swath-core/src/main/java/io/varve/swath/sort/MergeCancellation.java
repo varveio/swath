@@ -6,12 +6,12 @@
 package io.varve.swath.sort;
 
 /** Cooperative cancellation point shared by the merge and final-drain hot loops. */
-public final class MergeCancellation {
+final class MergeCancellation {
 
     private MergeCancellation() {
     }
 
-    public static void check() {
+    static void check() {
         if (Thread.currentThread().isInterrupted()) {
             throw new Cancelled();
         }
