@@ -134,8 +134,8 @@ The following table is machine-checked against the code registry.
 | `parquet.writers` | `integer 2..64 (heap-admitted above 4)` | `3` | stable | free | fresh list | Set the writer count for unsorted Parquet output. For counts above four, swath checks that the configured heap is large enough. Counts 2–4 are the tested range. Higher counts can use more memory and create more small parts; benchmark before adopting them. Unless `--output-type dir` overrides the default inference, a path ending in `.parquet` uses one writer. `--sort` does not use this writer pool, so the setting has no effect under `--sort`. |
 | `summary.interval` | `positive duration` | `--progress-interval`, otherwise `30s` | stable | free | fresh list | Set `_swath_summary.json` heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
 | `sort.merge-parallelism` | `integer 1..16` | core-derived, capped at `8` | stable | free | fresh list and resume | Set the maximum number of pipeline encoders in the final sorted merge. Runtime heap and file-descriptor gates may lower it. Encoder count does not determine part count. Benchmark merge wall, peak memory, and consumer-visible file count together. A pre-publication resume may choose a different value because partial finals are disposable and finalization reruns from durable page-run segments. |
-| `sort.finalization` | `pipeline` | `pipeline` | experimental | free | fresh list and resume | Select the final sorted merge mechanism. `pipeline` is the only valid value: bounded header cursors feed one page-reference router, which sends complete ordered part plans through a shared bounded queue to positional-read encoders. The key remains available for controlled configuration and rejects every other value. |
-| `sort.keep-staging` | `on or off` | `off` | diagnostic | free | fresh list and resume | Retain exactly the original checkpoint-tracked page-run staging segments and the co-located checkpoint after a successful sorted publish. Every other staging entry, including cascade intermediates and temporary/range files, remains disposable. This is diagnostic-only and increases retained disk; the tested zero-LIST merge-replay procedure is in [Performance](performance.md#diagnostic-zero-list-merge-replay). |
+| `sort.finalization` | `pipeline` | `pipeline` | experimental | free | fresh list and resume | Accept only `pipeline`: bounded header cursors feed one page-reference router, which sends complete ordered part plans through a shared bounded queue to positional-read encoders. Every other value is invalid. |
+| `sort.keep-staging` | `on or off` | `off` | diagnostic | free | fresh list and resume | Retain exactly the original checkpoint-tracked page-run staging segments and the co-located checkpoint after a successful sorted publish. Cascade intermediates and finalization temporaries remain disposable. This is diagnostic-only and increases retained disk; the tested zero-LIST merge-replay procedure is in [Performance](performance.md#diagnostic-zero-list-merge-replay). |
 | `sort.ignore-disk-check` | `on or off` | `off` | diagnostic | free | fresh list and resume | Bypass the startup/listing sorted-output free-space checks. The finalization pipeline has no merge-start free-space preflight. Size the staging volume independently first. |
 
 `seed.mode` contributes to the run identity and cannot change on resume.
@@ -196,19 +196,19 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.segment-codec` | `ZSTD1` | Staging payload codec: `NONE`, `LZ4`, or `ZSTD1`. |
 | `swath.sort.fan-in` | `10000` | Merge-stream ceiling, further limited by the planning budget and open files. |
 | `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Runtime capacity budget for pipeline page-reference planning, transient positional reads, and retained decoded-page residency. A truthful one-encoder floor that cannot fit is a resumable merge-pending refusal. |
-| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Configured per-stream floor used by cascade planning. Current page-run headers bound actual encoded and decoded page claims. |
+| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Configured per-stream floor used by cascade planning. The v3 fixed tail supplies the actual maximum record-body length; final encoder admission also uses its decoded-payload and key maxima. |
 | `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | Maximum pipeline encoder count in the final merge; `1` selects one encoder. Prefer `--tune sort.merge-parallelism=N` for an operator-selected value; the typed CLI value wins over this property. |
 | `swath.sort.finalization` | `pipeline` | Finalization architecture. `pipeline` is the only valid value. Prefer `--tune sort.finalization=pipeline`; the typed CLI value wins over this property. |
 | `swath.sort.keep-staging` | `off` | Diagnostic retention of exactly the original checkpoint-tracked page-run staging and the co-located checkpoint after successful sorted publication. `--tune sort.keep-staging=on` wins over this property. Every other immediate staging entry is deleted. |
-| `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts. Rolls occur only at page-reference or overlap-cluster boundaries: the pipeline never splits a staging page across parts, and an equal-key group is never split across files. Tiny-file fixtures therefore pin `segmentEntries(1)`. The pipeline may also roll earlier at its heap-admitted 256–16,384 refs-per-plan cap. |
+| `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts. Rolls occur only before a complete router item: one staging page or one transitive overlap component. A staging page and an equal-key group are never split across parts. The heap-admitted 256–16,384-reference plan cap may roll earlier. |
 | `swath.sort.final-row-group-bytes` | `8 MiB` | Final Parquet seek granularity. |
 | `swath.sort.final-page-rows` | `1024` | Maximum rows per final-file data page; the within-row-group seek granularity. |
 | `swath.git.sha` | unset | Optional commit value included in the run fingerprint. |
 
-The realized merge width is constrained by the staged segment count, heap budget, and
-file-descriptor budget. The report's `sort.effective_fan_in` and engagement reasons show
-what actually bound. See [the sorted merge](performance.md#the-sorted-merge) before
-changing these values.
+Cascade fan-in and encoder count are separate. `sort.effective_fan_in` reports the configured
+cascade width, while `sort.finalize_parallelism` reports the admitted encoder count. Heap and
+file-descriptor engagement reasons show which resource lowered either value. See
+[the sorted merge](performance.md#the-sorted-merge) before changing them.
 
 ## Sensitive diagnostics
 

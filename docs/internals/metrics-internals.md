@@ -41,97 +41,48 @@ its write/atomicity semantics, and the `stop_source`/`error_class` terminal fact
 aspect of a run's shape or trajectory from one artifact, without a separate metrics backend or a log
 join. All are omitted (not null-valued) on the construction paths where they never computed.
 
-**`sort.merge_ms` times the WHOLE post-listing tail, not the merge proper alone.** It comes from
-`swath.sort.merge.latency`, started once the listing→merge boundary has already been crossed and
-stopped once the k-way merge/publish work itself returns — so it covers boundary sampling (broken out
-below as `merge_boundaries_ms`), every merge pass, the final output writing/finalize, and publish, not
-just the k-way merge itself. It is **approximately**, not exactly, the same span the top-level run
-clocks measure as `duration_ms - listing_duration_ms` (§2/§3 of
-[`metrics-and-observability.md`](../metrics-and-observability.md)): the timer starts a little AFTER
-the listing→merge boundary (the staged-segment read and merge setup that run between them), and stops
-a little BEFORE `duration_ms` does (publish's phase-latch writes and the terminal summary assembly run
-after the timer stops, not before) — so `duration_ms - listing_duration_ms` is systematically a bit
-larger than `merge_ms`. On a FAILED merge `merge_ms` never records at all (the timer's stop call sits
-on the success path only), while `duration_ms - listing_duration_ms` still measures whatever wall time
-the failing attempt spent.
+**`sort.merge_ms` times the complete finalization and publication invocation.** It comes from
+`swath.sort.merge.latency`, starts after the listing phase has crossed into merge setup, and stops
+when `SortTransform` returns. It includes cascade passes, header routing, final-part encoding,
+validation, and publication. It is approximately, not exactly,
+`duration_ms - listing_duration_ms`: setup around the phase transition and terminal summary work
+sit outside different ends of the timer. An ordinary failed merge does not record this success-path
+timer, while a committed-publication cleanup failure records it because the dataset is already
+authoritative.
 
-The terminal `sort` block decomposes that inclusive clock further. `range_merge_ms` is the maximum
-overlapping `swath.sort.merge.range.latency` sample on the parallel path (or the serial remainder),
-`finalize_ms` is wall time from the first final-part close/fsync starting through metadata
-assembly/validation and local publication. Final writers close sequentially in publish order, after
-parallel ranges have done their concurrent encoding; `finalize_close_ms` sums that sequential
-per-part close/fsync service and is a component of `finalize_ms`, not overlapping close work that can
-exceed it. `local_publication_ms` exposes the publication component.
-`manifest_md5_bytes`/`manifest_md5_ms` describe
-incremental byte-exact digest work for fresh finals and full-file MD5 readback for metadata-less
-carried finals; nonzero fallback values therefore represent compatibility reread work, not
-write-stream digest time. `manifest_bounds_rows`/`bytes`/`ms` describe only a post-close
-validation scan and are deterministically zero for newly written close-gated metadata; they become
-nonzero only on the safe metadata-less carried-part fallback. `finalize_parallelism` is the effective
-number of ranges that encoded final output concurrently, not close concurrency; their writers still
-close sequentially. `phase_rows_per_sec` divides published rows by `merge_ms`,
-so a merge-only resume has a meaningful phase rate even though the compatibility whole-run
-`keys_per_sec` correctly remains `0.0` listing keys/s.
+The terminal `sort` block decomposes this inclusive clock with the finalization pipeline fields:
 
-**`sort.merge_boundaries_ms`** is the run-total duration read from
-`swath.sort.merge.boundaries.latency`. It sums two non-overlapping serial spans before any range
-thread starts: the structured parallel catalog/index preflight that reads and validates embedded
-samples, plus `MergePlanner.boundaries`' final distinct-key selection and the optional `rows`
-entry-region pass. It is a component of, not an addition to, `sort.merge_ms` above. Therefore
-`merge_ms - merge_boundaries_ms` isolates the range-execution/publish remainder for scaling analysis.
-Sampling fewer than two distinct keys still records the complete timer sample before the run falls
-back to serial; that result cannot be known without paying both relevant spans. A staged-size or
-resource decline records the preflight span it already paid with `boundary_policy_engaged=false` in
-the log and a zero policy span. Explicit `merge-parallelism=1` and arbitrary-run/fixture serial
-frontiers read no extension and record no sample. Because the JSON field stores whole milliseconds,
-a recorded sub-millisecond sample can still render as `0`.
-The parallel path is otherwise default-on with configured maximum
-`max(1, min(8, availableProcessors / 2))`, subject to the gates registered in §5 below.
-The sibling JSON fields `merge_boundary_embedded_entries`, `merge_boundary_embedded_bytes`,
-`merge_boundary_scan_bytes`, and `merge_range_framed_bytes` expose cumulative page-run sample,
-boundary, and parallel-worker logical frame I/O.
-`merge_boundary_embedded_bytes` counts extension bytes actually read (so an unknown header counts
-only its 16-byte header, while a later rejection can include bytes prefetched in the current 64 KiB
-chunk); `merge_boundary_scan_bytes` counts the exact
-framed-record region traversed by a page-run fallback (`trailerStart - HEADER_BYTES`, including each
-record's length/CRC header and body, excluding file header and trailer); a trailer offset outside
-`[HEADER_BYTES, fixedTailStart]` makes that volume unavailable and contributes zero. A fallback attempt and its ensuing scan
-are disjoint: attempted extension bytes land only in `embedded_bytes`, framed page bytes only in
-`scan_bytes`. `merge_boundary_bytes` is their sum. The source is
-classified once per boundary phase by `SORT.merge_boundary_source_{embedded,scan,mixed}`; each
-page-run fallback also emits its exact `SORT.merge_boundary_fallback_*` reason.
-`merge_range_framed_bytes` is the exact cumulative sum, in bytes, of page frames read by parallel
-range workers, including frames read from cascade intermediates. `merge_range_index_bytes` is separate type-2/type-3 metadata overhead after descriptor preflight: the full
-entry region streamed once during seek planning, each exact positional target/sample entry read by
-workers, and—only under `sort.merge-boundary-policy=rows`—one additional full entry-region stream
-used to build the bounded row-mass histogram.
-It excludes page bodies, header/trailer reads, proof-spool I/O, and the descriptor preflight bytes
-already in `merge_boundary_embedded_bytes`. Add it to `merge_boundary_bytes` when comparing total
-index/planning overhead against the per-range log's logical framed `bytes_read`; that log also carries
-its worker-local `index_bytes_read` (planning is coordinator-local and therefore not charged to a
-range).
-Proof-spool work is no longer an unmetered exclusion. The live meter prefix is
-`swath.sort.merge.proof_spool` and the JSON/log/benchmark fields use the matching
-`merge_proof_spool_` / `proof_spool_` prefix:
+- `pipeline_header_scan_ms` sums metadata-read service across `SegmentHeaderCursors`. Cursor
+  reads can overlap, so this is service time rather than a wall-clock phase.
+- `pipeline_router_wait_ms` is the router's total wait for a segment reference or complete-plan
+  queue capacity. `pipeline_plan_queue_wait_ms` is the queue-capacity subset.
+- `pipeline_encoder_read_wait_ms` sums positional frame-read, CRC, and page-parse service across
+  encoders. Concurrent service can exceed `merge_ms`.
+- `pipeline_pages_forwarded` counts single-page plan items.
+  `pipeline_cluster_pages` and `pipeline_cluster_rows` count work assigned to transitive overlap
+  components.
+- `pipeline_encoder_page_reads` counts complete positional frame reads.
+  `pipeline_decoded_page_bytes_peak` is the largest exact retained decoded-page population
+  reported by any encoder lane.
+- `pipeline_parts_open` is the current open-writer gauge. It normally reads zero in the terminal
+  artifact and is primarily useful in live export.
+- Each `*_wait_share` divides the corresponding cumulative millisecond value by `merge_ms`.
+  These are dimensionless service-to-wall ratios; a summed concurrent ratio may exceed `1.0`.
 
-- `logical_extent.bytes` is requested fixed-slot address space (`S*R*slotBytes`), not transferred
-  bytes, resident memory, or a memory-neutral claim.
-- `preallocation.operations` counts every physical write attempt plus the final force;
-  `preallocation.attempted.bytes` counts bytes submitted, including a failed attempt. Cancellation
-  is polled and progress marked at each at-most-64-KiB chunk. A channel interrupt during write/force
-  retains these attempted-work totals but is cooperative cancellation, not allocation failure.
-- `mapped.operations` / `mapped.bytes` count every fixed-field/key mapped update and read, including
-  RangeBuilder source-switch flush/reload. These correctly scale with pages/source switches, not
-  merely topology. The `S=2,R=4` characterization records 172 operations / 2,556 bytes at 8 pages
-  per segment and 3,148 / 35,292 at 256 pages, while extent and preallocation stay fixed.
-- `latency` / `merge_proof_spool_ms` sums service time across all the above work plus lifecycle
-  open/map/unmap/close/delete. Concurrent range-worker service times intentionally add; this is not
-  a wall-clock span and can exceed elapsed merge time.
+`finalize_ms` is wall time from the first final writer close through metadata validation and
+local publication. `finalize_close_ms` sums footer-write and fsync service for every part; encoder
+closes can overlap, so the sum can exceed `finalize_ms`. The accompanying
+`finalize_close_count`, `finalize_close_max_ms`, and percentile fields describe that same timer.
+`finalize_parallelism` is the admitted encoder count, including `1` for a one-encoder run.
+`local_publication_ms` measures manifest/state/symlink/`_SUCCESS` publication after all parts
+are durable.
 
-Counters are accumulated locally and published as deltas after worker quiescence/close, avoiding a
-Micrometer call per mapped access. Failed allocation publishes attempted work before unwinding and
-emits `SORT.proof_spool_allocation_failed`. The fleet log also reports `proof_spool_fds=1`, matching
-the descriptor reserved by the FD guard. All fields are zero on serial paths that create no spool.
+`manifest_md5_bytes` and `manifest_md5_ms` describe incremental byte-exact digest work for
+fresh final parts and full-file readback only for a metadata-less carried part.
+`manifest_bounds_rows`, `manifest_bounds_bytes`, and `manifest_bounds_ms` describe only the
+post-close compatibility scan; newly written close-gated metadata keeps them zero.
+`phase_rows_per_sec` divides published rows by `merge_ms`, so a merge-only resume has a useful
+finalization rate even though its listing `keys_per_sec` is correctly `0.0`.
 
 **`seed`** (optional): `SeedStep`'s already-computed shape for a fresh run that actually
 seeded (`mode` is `none`/`shallow`/`hints`; `probes`/`cut_points`/`synthesized_cuts`/`ranges` are
@@ -1040,7 +991,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `post_publish_cleanup_pending` | the authority listener returned (so this run's final parts plus manifest/state/symlink/last-written `_SUCCESS` are committed), but cleanup after that publication boundary failed: disposable-intermediate cleanup, staging completion, a final hook, or PUBLISHED re-entry cleanup. Fires exactly once per affected transform or failed cleanup-only retry and maps to a non-fatal `PublicationPendingException`; it never means the dataset rolled back. The accompanying `sort_post_publish_cleanup_pending` warning carries `publication_committed=true`, `cleanup_pending=true`, and `stage=after_publish_listener_hook\|disposable_intermediate_cleanup\|original_staging_completion\|after_staging_completion_hook\|published_reentry_cleanup`; the re-entry form additionally carries `source=published_reentry`. Managed resume stays PUBLISHED and issues zero LIST requests until cleanup succeeds | |
 | `SORT` | `post_publish_phase_latch_failed` | publication was already committed and `post_publish_cleanup_pending` fired, but persisting the checkpoint's PUBLISHED phase also failed. Identity plus last-written `_SUCCESS` remains the recovery authority; the latch failure is suppressed onto the cleanup failure and the warning carries `publication_committed=true cleanup_pending=true` | |
 | `SORT` | `buffer_byte_gated` | the byte gate (not the entry cap) forced the segment flush — the 1 KB-key signal | |
-| `SORT` | `merge_fastpath` | same-reader fast-path emissions in a merge/seal pass (how much the disjoint-range structure was exploited) | |
+| `SORT` | `merge_fastpath` | same-reader fast-path emissions in a merge/seal pass (how much uninterrupted input order was exploited) | |
 | `SORT` | `cascade_page_whole_merge` | a cascade merger proved one current page strictly below every successor frontier and streamed it without the overlap row heap. Fires once per page-whole decision | |
 | `SORT` | `cascade_page_overlap_merge` | a cascade merger found one transitively overlapping page-range component and routed it through the bounded decoded-page row heap. Fires once per component, not per row | |
 | `SORT` | `buffer_sort_fallback` | **REMOVED 2026-08-27** — retired with the unused seal-time row-merge path; production page-run staging writes packed pages and resolves ordering in the external merge | |
@@ -1050,14 +1001,14 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `merge_pass_cascaded` | a cascaded merge pass beyond the first (segments > fan-in) fired — the multi-pass visibility | |
 | `SORT` | `merge_disjoint_copyable` | one merge-pass input segment was emitted as a single uninterrupted run — range-disjoint from every other input that pass assuming distinct keys across segments (exact for unique S3 object keys; a segment sharing a boundary key with another can be counted copyable under the §0.5 fixture duplicate-data path only), so byte-copy (not decode) would have sufficed — a prerequisite measurement for a future copy-based merge fast path | |
 | `SORT` | `merge_interleaved_segment` | the complement of `merge_disjoint_copyable`: one merge-pass input segment shared its run with at least one other input (more than one run in the merged output) | |
-| `SORT` | `finalization_pipeline` | the experimental reference pipeline was selected for this merge. Fires once before cascade and routing, including an empty merge; absent on the default range/serial mechanism. Pipeline work meters are `swath.sort.pipeline.pages_forwarded`, `.cluster_pages`, `.cluster_rows`, `.header_scan`, `.router_wait`, `.plan_queue_wait`, `.encoder_page_reads`, `.encoder_read_wait`, `.decoded_page_bytes.peak`, and `.parts_open` | |
-| `SORT` | `pipeline_whole_page_merge` | the router found one page whose key range is disjoint from the next frontier and forwarded its reference without materializing rows. Fires once per forwarded page; read with `pipeline_pages_forwarded` to distinguish the whole-page branch from overlap clusters | |
-| `SORT` | `pipeline_cluster_merge` | the router found one transitively overlapping page-range component. Fires once per cluster, not per page or row; the assigned encoder later reads its refs and admits pages incrementally to the bounded row merger. Read with `pipeline_cluster_pages` and `pipeline_cluster_rows` to classify overlap shape | |
+| `SORT` | `finalization_pipeline` | finalization entered its header-scan, router, and encoder lifecycle. Fires once before cascade and routing, including an empty merge. Work meters are `swath.sort.pipeline.pages_forwarded`, `.cluster_pages`, `.cluster_rows`, `.header_scan`, `.router_wait`, `.plan_queue_wait`, `.encoder_page_reads`, `.encoder_read_wait`, `.decoded_page_bytes.peak`, and `.parts_open` | |
+| `SORT` | `pipeline_whole_page_merge` | the router found one page whose stored maximum was below the next minimum and forwarded its reference without materializing rows. Fires once per forwarded page; read with `pipeline_pages_forwarded` to distinguish the whole-page branch from overlap clusters | |
+| `SORT` | `pipeline_cluster_merge` | the router found one transitively overlapping page component. Fires once per cluster, not per page or row; the assigned encoder later reads its refs and admits pages incrementally to the bounded row merger. Read with `pipeline_cluster_pages` and `pipeline_cluster_rows` to classify overlap shape | |
 | `SORT` | `pipeline_plan_queue_saturated` | one plan submission found the shared encoder queue full and entered timed back-pressure polling. Fires once for that stalled submission, not once per timed retry; `pipeline_plan_queue_wait_ms` records the corresponding elapsed wait | |
-| `SORT` | `pipeline_encoders_fd_clamped` | pipeline-specific admission reduced the requested encoder count because, after fixed process headroom and one shared descriptor per surviving segment, fewer than `N` output-writer descriptors remained. A successful clamp's companion warning carries requested/effective counts, segment count, cursor depth, record-derived key-sized reference price, transient read-body price, retained-page price, and cluster share. It is independent of every `merge_range_*` reason | |
+| `SORT` | `pipeline_encoders_fd_clamped` | admission reduced the requested encoder count because, after fixed process headroom and one shared descriptor per surviving segment, fewer than `N` output-writer descriptors remained. A successful clamp's companion warning carries requested/effective counts, segment count, cursor depth, record-derived key-sized reference price, transient read-body price, retained-page price, and cluster share | |
 | `SORT` | `pipeline_encoders_fd_floor_exhausted` | after fixed process headroom and one shared descriptor per surviving segment, no output-writer descriptor remained. Pipeline admission refuses resumably before opening shared channels or output writers; unlike `pipeline_encoders_fd_clamped`, no positive encoder count was admitted | |
-| `SORT` | `pipeline_encoders_heap_clamped` | pipeline-specific admission reduced the requested encoder count after pricing bounded scanner/header/frontier refs, router/queued/executing plan refs, one transient positional-read body, one conservative retained page, and an open writer per encoder. The retained-byte cluster budget is divided across admitted encoders; no proof-spool or staged-size term participates. The companion warning carries the same resource fields as the FD clamp | |
-| `SORT` | `pipeline_encoder_heap_floor_exhausted` | the reference pipeline's fixed scanner/header/frontier/router/queued/executing-plan references, one transient positional-read body, one dictionary-safe retained page, and one writer did not fit `merge-budget-bytes` even at one encoder and the effective plan floor (`min(initial refs, 256)`). Admission refuses resumably before shared channels or output writers open; this is pipeline-specific and does not describe the range/serial minimum merge width | |
+| `SORT` | `pipeline_encoders_heap_clamped` | admission reduced the requested encoder count after pricing bounded scanner/header/frontier refs, router/queued/executing plan refs, one transient positional-read body, one conservative retained page, and an open writer per encoder. The retained-byte cluster budget is divided across admitted encoders. The companion warning carries the same resource fields as the FD clamp | |
+| `SORT` | `pipeline_encoder_heap_floor_exhausted` | the fixed scanner/header/frontier/router/queued/executing-plan references, one transient positional-read body, one dictionary-safe retained page, and one writer did not fit `merge-budget-bytes` even at one encoder and the effective plan floor (`min(initial refs, 256)`). Admission refuses resumably before shared channels or output writers open | |
 | `SORT` | `pipeline_plan_ref_capped` | the planner lowered the runtime plan cap below 16,384 so the reference wave fit `merge-budget-bytes`, or the router reached the effective cap. Admission fires once with requested/effective limits in the warning; routing fires once per cap-driven close or refusal. The cap can create a part before the calibrated `final-file-bytes` target. If one indivisible transitive overlap component crosses it, the merge refuses resumably because splitting that component could interleave rows across output parts | |
 | `SORT` | `merge_cascade_predicted` | at merge kickoff, `segments > effectiveFanIn` was already known to force a cascade — engagement counter for the up-front `sort_merge_cascade_predicted` warn log | |
 | `SORT` | `equal_key_rejected` | the final drain rejected the second row of an adjacent equal raw-key pair under `EqualKeyPolicy.REJECT`. Fires once per failing final drain, before the offending row is written. Live `OBJECTS` uses `REJECT`; the dormant `VERSIONS` mode uses `ALLOW` because one raw key may own several ordered versions | |
@@ -1069,8 +1020,8 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `resume_reattached` | `swath resume` re-attached a sorted run to existing durable staging segments | |
 | `RESUME` | `context_mismatch_` | a resumed run's re-passed CLI value overrode the connection/output context its checkpoint recorded; the reason is suffixed with the field (`no_sign_request`, `profile`, `region`, `fetch_owner`, `raw_output`, `output`, `output_type`, `request_payer`). The counter is how a post-hoc consumer holding only the run report learns that a resume silently changed context, and which field it changed — the overridden checkpoint VALUE stays in the `list_resume_context_mismatch` DEBUG line (a region/profile/path is unbounded text, never a tag), and the report already carries the effective value | |
 | `SORT` | `merge_redone` | a crash-interrupted merge was re-run from staging (listing complete, manifest absent) | |
-| `SORT` | `page_run_decoded_page_limit` | a physical page header's raw decoded payload exceeded the current type-3 segment maximum. The comparison runs before decompression allocation and fails typed as `error_class=page_run_decoded_page_limit`; a CRC-valid metadata underclaim cannot drive an unplanned allocation | |
-| `SORT` | `merge_decoded_residency_exhausted` | actual retained current-body/raw payload plus successor frontier bodies in a legal page-overlap cluster would exceed the serial budget or one range's post-proof share. Reservation fails before successor/decompression allocation and leaves the merge resumable | |
+| `SORT` | `page_run_decoded_page_limit` | a physical page header's raw decoded payload exceeded the maximum admitted for that segment from its CRC-protected fixed tail or cascade output limit. The comparison runs before decompression allocation and fails typed as `error_class=page_run_decoded_page_limit` | |
+| `SORT` | `merge_decoded_residency_exhausted` | actual retained page bodies, decoded payloads, and lazy dictionary state would exceed an encoder lane's or cascade merge's admitted budget. Reservation fails before decompression or successor admission and leaves the merge resumable | |
 | `SORT` | `finalize_progress_tick` | the finalize/publish tail emitted a liveness-progress tick at each final part's footer boundary (`ProgressMarkingSortedFileWriter` ticks pre-fsync in both `markFinal()` and `close()`). Newly produced finals compute MD5 incrementally on the write stream and need no post-close readback ticks; the once-per-64-MiB byte-keyed ticks remain on the compatibility path that validates a metadata-less carried final with `md5HexWithLivenessProgress`. A true stalled fallback read emits no tick | |
 | `OUTPUT` | `partitioned_text_dataset` | the TSV/JSONL directory-dataset route engaged its bounded parallel writer pool | |
 | `OUTPUT` | `discard` | the diagnostic discard consumer drained and tallied the normal listing pipeline without a formatter, writer queue, compressor, or filesystem output. Fires once per run; the summary reports zero output files/bytes and no `swath.output.*` materialization meter | |
@@ -1085,14 +1036,14 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `manifest_metadata_trusted` | manifest publication used close-gated metadata captured inline by a freshly written final part. Fires once per such part | |
 | `SORT` | `manifest_metadata_fallback_scan` | manifest publication received a metadata-less carried or third-party final part and used the compatibility full-file MD5 and exact-bounds validation reads. Fires once per such part, before validation begins | |
 | `SORT` | `page_run_min_regression` | the page-run read-time guard rejected a page whose `minKey` went backwards within one file. This more-specific check runs before the disjointness check and aborts with `error_class=page_run_min_regression` | |
-| `SORT` | `page_run_page_overlap` | the shared reader rejected adjacent page ranges: `previous.maxKey > next.minKey` in every mode, or equality under OBJECTS. It also covers the same violation across indexed physical-zone seams. Fires before output publication and carries `error_class=page_run_page_overlap` | |
+| `SORT` | `page_run_page_overlap` | the shared reader rejected adjacent page bounds: `previous.maxKey > next.minKey` in every mode, or equality under OBJECTS. Fires before output publication and carries `error_class=page_run_page_overlap` | |
 | `SORT` | `page_run_header_corruption` | page-run admission found a file too small for the minimum header plus fixed trailer, or the header was truncated/changed concurrently, had bad magic or an unsupported envelope version, had an invalid length/TLV, lacked a known ordering mode, or failed CRC32C. Every rejection carries the matching typed `error_class=page_run_header_corruption` | |
 | `SORT` | `page_run_format_mismatch` | page-run admission rejected a physical format version outside the current hard cut, or checkpoint-recorded format/extension metadata disagreed with the admitted bytes. The rejection carries the matching typed `error_class=page_run_format_mismatch`; legacy rows without recorded metadata still take the same typed physical-version path | |
-| `SORT` | `page_run_trailer_corruption` | the fixed page-run trailer fields failed CRC32C, the trailing magic was absent, or a variable trailer bound declared a key longer than the 1,024-byte S3 limit. The segment aborts with typed `page_run_trailer_corruption` before trusting the corrupt metadata | |
+| `SORT` | `page_run_trailer_corruption` | the fixed page-run tail failed CRC32C, its trailing magic was absent, or its totals/maxima were structurally impossible. The segment aborts with typed `page_run_trailer_corruption` before trusting the metadata | |
 | `SORT` | `backpressure_engaged` | instrumentation-only engagement counter (no new backpressure BEHAVIOR): fired whenever a seal found the off-thread semaphore already at 0 available permits the instant it reached the acquire (`SortLane#seal`, a cheap non-blocking `availablePermits()==0` snapshot) — i.e. the configured `buffers()-1` off-thread bound was already saturated. Distinct from (not a duplicate of) `swath.sort.backpressure.wait`'s latency timer: this is the discrete "did admission hit the bound" engagement signal, that is the continuous wait-time distribution. Read together with the `swath.sort.staging.bytes.peak`/`swath.sort.off_thread.buffers.peak` gauges (§1) for a future billion-scale repro's bounded-vs-unbounded verdict | |
 | `SORT` | `merge_fanin_clamped` | the runtime merge-entry clamp reduced fan-in below static `SortConfig#effectiveFanIn()` because the process fd limit and/or a trailer's largest encoded record tightened the configured per-stream estimate before readers opened. Fires once per affected merge. Paired with `merge_cascade_predicted`/`merge_pass_cascaded`: if the clamp pushed fan-in below the segment count the cascade engages | |
 | `SORT` | `merge_fanin_fd_clamped` | the fd sub-reason of `merge_fanin_clamped`: the process SOFT open-file limit minus the fd headroom (`MergeFdBudget`, reserving descriptors for checkpoint SQLite / output part writers / logs / JVM) was itself below the static `effectiveFanIn()` — i.e. the fd budget, not memory, is what forced the clamp. Fires alongside `merge_fanin_clamped` whenever the fd bound bound. A misconfigured/low `ulimit -n` is the loud signal here: it degrades a single-pass merge to a multi-pass cascade rather than crashing hours in with EMFILE | |
-| `SORT` | `merge_fanin_mem_clamped` | page-residency sub-reason of `merge_fanin_clamped`: `max(configured floor, 2 × maxRecordLen + type-3 maxRawPayloadLength)` admitted fewer stream slots than the static configuration. Fires alongside `merge_fanin_clamped`; legacy inputs without decoded metadata use the encoded/configured price and remain protected by the actual-header aggregate guard before allocation | |
+| `SORT` | `merge_fanin_mem_clamped` | cascade-width sub-reason of `merge_fanin_clamped`: `max(configured per-stream floor, largest persisted record body)` admitted fewer streams than the static configuration. Fires alongside `merge_fanin_clamped` | |
 | `SORT` | `pack_on_fetch` | the pack-on-fetch engagement counter: a page was packed into its compact `PageBlock` on the FETCH worker that built it (`WorkStealingScan`, right after `filters.apply`) instead of on the single sort drain thread (`SortBuffer.admit`). Fires once per non-empty page emitted while `--sort` pack-on-fetch is enabled (gated on `pagePacker != null`), so the run total equals the number of pages the sort listing shipped — the "did packing parallelize across fetch threads / did the channel carry a packed page instead of a `List<ListEntry>`" signal. **Absent (0) on every non-sort run** (text/parquet-direct pipelines carry raw entry lists, never pack on the fetch thread) and on any sort producer that still hands the lane a raw list | |
 <!-- ci:steal-reason-table:end -->
 

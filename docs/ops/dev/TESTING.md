@@ -119,81 +119,68 @@ or moves a seed cut count should assume the default build cannot see it.
 > ~2 GB JVM/native headroom), flagged in `ParquetPerf2Test` for a spec follow-up so the test
 > can assert against the pack instead of a derived bound.
 
-## Parallel range-merge harness
+## Finalization pipeline harness
 
-`ParallelMergeBenchmark` measures the production merge over page-run staging only; every result
-is labelled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never evidence for
-live `swath list --sort` listing throughput.
+`ParallelMergeBenchmark` measures the production finalization pipeline over page-run staging;
+every result is labelled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never
+evidence for live `swath list --sort` listing throughput.
 
-By default it generates and validates a non-empty corpus. Create external staging through the
-organic diagnostic lifecycle (never by editing SQLite):
+By default it generates and validates a non-empty corpus. To use external staging, create it through
+the diagnostic lifecycle rather than editing SQLite:
 
-```
+```bash
 swath list s3://<bucket>/<prefix> --format parquet -o /path/to/out --sort \
   --tune sort.keep-staging=on
 ```
 
-The resulting `<out>/_staging` is accepted only alongside its retained co-located checkpoint:
-the harness reads `<out>/.swath/checkpoint.sqlite` and
-the run identity through an immutable read-only SQLite connection, requiring matching
-`args_hash`/`run_id`, the current checkpoint schema, OBJECTS mode, completed/PUBLISHED state, and
-`_SUCCESS`, to snapshot exactly the checkpoint-tracked original listing segments. It rejects live
-SQLite journal/WAL companions, symlinked authority directories, and untracked `*.pageseg` files
-(including stale cascade or fixture debris), and hashes every regular file to verify the retained
-tree is byte-identical after every arm.
-
-```
-./gradlew :swath-core:test --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
-  -Dswath.bench=on -Pperf -Dswath.bench.staging-dir=/path/to/_staging
-```
-
-The harness snapshots and validates the catalog once, then materializes every arm with
-same-filesystem hard links; it refuses physical-copy fallback so a cold-storage result cannot
-measure copying instead of merging. Before timing, it fully reads and CRC-validates the source into
-a constant-memory row-count/multiset oracle, then opens every input for the per-stream heap probe.
-The source oracle hashes the canonical Parquet row representation: timestamps are epoch
-microseconds, and a versionless object's schema-omitted `is_latest` decodes as false. It still
-includes every representable field and exact multiplicity; this normalization prevents the live
-OBJECTS mapper's in-memory `isLatest=true` convenience value from being misreported as output loss.
-Every arm is therefore explicitly `cache_state=warm_primed`; this harness cannot produce a cold
-result. A true cold bracket needs a separate fresh-process protocol that prepares first, drops
-caches under external control, and launches exactly one measured arm without the oracle/heap probe
-in that process.
-
-The warm-cache sweep first runs one complete **untimed** R=1 transform to absorb class loading, JIT,
-Parquet initialization, and RSS-sampler first use. Measurements then run serial A, candidates in
-ascending order, serial B, candidates in descending order, and serial C. Speedups use the median of
-the three serial brackets and the two candidate samples. `swath.bench.max-variance-pct` defaults to
-`15.0`; a baseline or candidate spread above it produces `status=invalid_variance` and
-`speedup=unavailable`, never a publishable speedup. An inconsistent clamp/engagement disposition is
-likewise invalid. Every output must be physically sorted and match the independent source oracle.
-Every `BENCH_*` line carries cache state, retained run identity (or generated sentinels), `git_sha`,
-`corpus_id`, and the stable ordered logical-output fingerprint when output exists.
-With `-Dswath.bench.finalization=pipeline`, every requested encoder count runs both immutable
-part-sizing controls in the same sweep: calibrated bytes and fixed rows. Set the fixed-row target
-with `-Dswath.bench.pipeline-fixed-rows=N`; each `BENCH_ROW` identifies the control and reports total
-router wait, plan-queue wait, header-scan service, encoder page reads, and encoder-read service.
-Pipeline rows report `requested_encoders`/`actual_encoders` and mark
-`requested_r`/`actual_ranges` unavailable; range rows do the inverse.
-These pipeline arms run once after the serial brackets and reverse-order range sweep, so they are an
-in-JVM hook/oracle smoke, not publishable performance evidence. The fresh-JVM
-`scripts/perf/finalization-ab.sh` protocol on the benchmark integration branch is the measurement
-instrument: it isolates every sample in a new JVM, alternates arm order, and applies the variance
-gate.
-The row reports proof-spool logical extent, preallocation operations/attempted bytes, mapped
-operations/bytes, and summed service time with the same scope as the live log and run summary.
-`PageRunZoneProofAdversarialTest` pins fixed extent/preallocation while requiring mapped work to grow
-with pages/source switches. `PageRunProofSpoolLargeMapTest` performs an actual sparse >2-GiB FFM
-first/last touch, arena unmap, and delete. The opt-in `PageRunProofSpoolRssCharacterizationTest`
-touches a representative mapping, bounds its RSS rise with an explicit noise caveat, and checks
-post-arena-close RSS behavior:
+The resulting `<out>/_staging` is accepted only with its co-located checkpoint. The harness opens
+SQLite read-only and requires matching `args_hash` and `run_id`, the current checkpoint schema,
+OBJECTS mode, a PUBLISHED run, and `_SUCCESS`. It snapshots exactly the checkpoint-tracked
+original segments. It rejects live SQLite journal companions, symlinked authority directories,
+untracked `*.pageseg` files, and stale temporary files, then hashes every source to require that
+the retained tree remains byte-identical after each arm.
 
 ```bash
-./gradlew :swath-core:test -PonlyPerf \
-  --tests 'io.varve.swath.sort.PageRunProofSpoolRssCharacterizationTest'
+./gradlew :swath-core:test \
+  --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  -Dswath.bench=on -Pperf \
+  -Dswath.bench.encoders=1,4,8 \
+  -Dswath.bench.staging-dir=/path/to/_staging
 ```
 
-Its `PROOF_SPOOL_RSS_RESULT` line is characterization evidence, not a portable memory promise.
+The encoder list must contain distinct values in `1..16` and begin with `1`. The harness
+materializes each arm with same-filesystem hard links and refuses a physical-copy fallback. Before
+timing, it fully reads and CRC-validates the source into a constant-memory row-count and multiset
+oracle, then opens every input for the per-stream heap check. Results are therefore explicitly
+warm-cache measurements.
+
+One complete untimed one-encoder transform absorbs class loading, JIT compilation, Parquet
+initialization, and RSS-sampler startup. Measurements then run one-encoder A, candidates in
+ascending order, one-encoder B, candidates in descending order, and one-encoder C. Speedups use the
+median of the three baseline brackets and the two candidate samples.
+`swath.bench.max-variance-pct` defaults to `15.0`; a wider baseline or candidate spread emits
+`status=invalid_variance` and no publishable speedup. An inconsistent admission result is invalid
+as well.
+
+Every output must be physically sorted and match the independent source oracle in exact normalized
+rows, multiplicity, and logical fingerprint. Every `BENCH_*` line carries cache state, retained
+run identity or generated sentinels, Git SHA, corpus ID, and the output fingerprint when one exists.
+`BENCH_ROW` reports requested/admitted encoders, plan policy, elapsed time, output geometry,
+cascade counts, router wait, queue wait, header service, positional page reads, encoder-read service,
+and peak RSS.
+
+Correctness guards around this harness include:
+
+- `FinalizationPipelinePropertyTest`: randomized multi-page overlap shapes, exact ordered output,
+  dense part ordinals, footer stamps, strict part adjacency, and equality across one and several
+  encoders.
+- `FinalizationPipelineTest`: routing, calibration, plan caps, failure relay, cancellation,
+  cleanup, and publication behavior.
+- `FinalizationPipelineScalingTest`: shared-queue encoder scheduling and concurrency bounds.
+- `PageRunSegmentTest` and `PageRunSegmentInspectorTest`: v3 header/frame/fixed-tail
+  completeness, CRC, mode-aware page disjointness, and persisted-maximum checks.
+- `KWayMergeTest`: cascade whole-page and overlap-component behavior, including duplicate
+  multiplicity through intermediates.
 
 ## JMH micro-benchmarks
 

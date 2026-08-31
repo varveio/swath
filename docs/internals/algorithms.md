@@ -1667,100 +1667,84 @@ only to general-purpose buckets.
 ## 12. Sort finalization
 
 Finalization turns the checkpoint-owned sealed page-run segments into one globally sorted Parquet
-dataset. It does not change the listing result: both mechanisms consume the same durable rows, apply
-the same complete comparator and equal-key policy, verify the same source/output cardinality, and
-publish the same ordered part contract. They differ only in how they divide the final merge work.
-
-### `ranges`: key-space partitioning
-
-`ranges` is the default. It divides the raw-key space into contiguous intervals and assigns one
-worker to each admitted interval. Every worker reads the relevant portion of every segment, filters
-rows against its exact `[lo, hi)` bounds, and writes one or more temporary parts. Concatenating the
-workers' output in range order therefore gives the global order.
+dataset. The algorithm is a bounded sequence of cascade reduction, header scanning, reference
+routing, independent part encoding, and ordered publication:
 
 ```text
-sealed segments
-    -> validated page samples and sparse indexes
-    -> R contiguous raw-key ranges
-    -> R range workers (seek + exact row filtering)
-    -> physical-zone proof
-    -> globally ordered temporary parts
-```
-
-Each original listing-phase segment contributes its systematic page-minimum sample. Boundary
-selection deduplicates minima and retains a deterministic bottom-hash sample of at most 16,384 keys
-across the run. For `R` ranges, the default `distinct` policy sorts those candidates by unsigned
-bytes and chooses ranks `j * candidates / R` for `j = 1..R-1`; the experimental `rows` policy uses
-validated cumulative-entry metadata to approximate row quantiles. An absent or invalid index makes
-that segment use a full header scan for `distinct`, and makes the whole `rows` attempt fall back to
-`distinct`. Boundaries affect balance only because workers still enforce their exact key bounds.
-
-Validated type-2/type-3 indexes provide page seek points. While workers merge their intervals, they
-also fill an exact physical-zone proof covering every page from the segment header to its trailer.
-The coordinator accepts the output only after those zones tile every source segment with consistent
-offsets, counts, bounds, CRC-checked records, and no unproved gap or overlap. The last unbounded range
-drains each segment to EOF.
-
-### `pipeline`: reference routing and part encoding
-
-`pipeline` is experimental and selected with `--tune sort.finalization=pipeline`. Instead of dividing
-the key space, it makes a header-only pass, routes page coordinates into complete part plans, and lets
-`N` encoders build those independent parts. Page bodies are read only by the encoder that receives
-their plan.
-
-```text
-sealed segments
-    -> one sequential header cursor per segment
+sealed page-run segments
+    -> bounded cascade when the catalog exceeds fan-in
+    -> one sequential header cursor per surviving segment
     -> one global page-reference router
-    -> complete, ordered part plans
-    -> N shared-queue encoders (positional reads)
-    -> globally ordered temporary parts
+    -> calibrated, complete PartPlans with dense ordinals
+    -> N shared-queue encoders using positional reads
+    -> dense-ordinal assembly and publication
 ```
 
-Each cursor walks one segment from its header to `trailerStart`, skips stored payloads, and proves
-frame tiling, page order, and trailer totals. Metadata reads are limited to
-`min(segment count, available processors)` at once, and each cursor has a two-reference queue. The
-router keeps one frontier reference per segment, consumes references in raw-minimum order, and puts
-each reference into exactly one plan. Plans carry dense merge-order ordinals and enter one shared
-queue of at most `2 * N` complete plans; any free encoder may take the next plan. The ordinal, not
-encoder identity or completion order, determines final part order.
+### Cascade reduction
 
-Admission also prices the transient ownership between those structures: each scanner may hold one
-reference while its queue is full, and each encoder may own one executing plan in addition to the
-`2 * N` queued plans. A reference's price includes both key arrays at the largest per-segment
-persisted exact key-length maximum in the post-cascade catalog. This covers interior page keys
-without an admission-time page scan. The retained-page price uses the persisted exact decoded-page
-maximum and adds the format-derived maximum
-dictionary-cache object overhead to its encoded/decoded payload multiplier, so a planner-admitted
-page cannot fail the lane guard solely because all five dictionaries reached their 64-value cap.
-If the surviving segment channels consume the entire usable descriptor budget, pipeline admission
-refuses before opening them instead of inventing a one-writer floor.
+`MergePlanner` chooses a fan-in that fits the merge budget and file-descriptor headroom while
+reserving the requested output-writer descriptors. If the source catalog is wider, `KWayMerge`
+writes page-run intermediates until the surviving catalog fits one final pass. Intermediates are
+disposable; a retry starts from the checkpoint-owned sealed segments.
 
-A page whose key range is strictly below the next page minimum is a whole-page item. The encoder can
-decode and write that page directly. Transitively overlapping page ranges form one cluster item
-because their rows may interleave. Its encoder positionally reads and CRC-checks the referenced
-frames, then admits pages incrementally into a row merger as their minima can compete with the next
-active row. Exhausted pages release their retained-byte reservation before later pages enter. Thus a
-long overlap chain need not retain the whole cluster, while a cluster remains indivisible for part
-ordering.
+`CascadePageMerger` keeps this reduction page-granular. It streams a current page directly when
+that page's stored maximum is strictly below every successor minimum. When page bounds overlap, it
+collects the transitive component and delegates its rows to the bounded `PageRowMerger`. The
+`SORT.cascade_page_whole_merge` and `SORT.cascade_page_overlap_merge` reasons show which branch
+engaged. The survivor catalog is preflighted again because its descriptor count and persisted
+maxima are the inputs to final encoder admission.
 
-Part boundaries target `swath.sort.final-file-bytes` using uncompressed page-payload bytes as the
-logical unit. The first target assumes a 1:1 encoded/logical ratio. After dispatching that first plan,
-the router waits for its durable Parquet size; later targets use the cumulative observed ratio. This
-single-part warm-up prevents an uncalibrated queueful of plans. Footer cost makes very small targets
-noisy, and an equal-key group may exceed the soft target because a boundary is allowed only between
-distinct raw keys. Independently, a plan normally holds at most 16,384 references. If that reference
-wave does not fit, admission lowers the runtime cap to as few as 256 before reducing encoder count.
-Reaching either cap closes the current plan even before the calibrated byte target, including for
-nominal single-file output; one overlap cluster larger than the effective cap is refused because
-splitting it could interleave rows across parts.
+### Header scan and reference routing
 
-### Cascade fallback
+`SegmentHeaderCursors` starts one sequential cursor per surviving segment. A shared semaphore
+limits simultaneous metadata reads to the smaller of the segment count and available processors;
+each segment has a two-item queue. A cursor reads frame prefixes and the PageBlock fields needed for
+routing while skipping stored payload bytes. Before it emits its terminal marker, it verifies page
+order, mode-aware page disjointness, exact header-to-tail frame tiling, and the trailer's record and
+entry totals.
 
-Both mechanisms use the same bounded `KWayMerge` cascade when the surviving segment count exceeds
-the runtime fan-in. A cascade writes page-run intermediates until one final pass can open all
-survivors. `ranges` admits parallel workers only when each worker can open the required survivors;
-otherwise it falls back to the serial final merge, which cascades as needed. `pipeline` reserves the
-requested output descriptors while choosing cascade width, runs the cascade first, and then admits
-encoders from the survivor catalog's actual descriptor and page maxima. Cascade intermediates are
-disposable: resume restarts the cascade from the original sealed segments.
+The `MergeRouter` retains one head reference from every live cursor and orders those heads by
+unsigned minimum key. Removing a head advances that same segment exactly once, so every source
+reference enters exactly one `PartPlan`. If a page maximum is strictly below the next minimum, the
+page remains a single plan item. Otherwise the router closes the full transitive overlap component
+as one cluster item; splitting such a component could interleave rows between final parts.
+
+The router is the sole part-boundary owner. `PartSizer` targets
+`swath.sort.final-file-bytes` using uncompressed page-payload bytes. The first plan assumes a
+1:1 encoded-to-logical ratio, and routing waits for that part to close durably before using the
+cumulative observed Parquet ratio for later plans. A boundary is considered only between complete
+page or cluster items and never between equal raw keys. Footer overhead makes very small targets
+noisy.
+
+A plan normally carries at most 16,384 references. Heap admission may lower that cap to as few as
+256. Reaching the effective cap can close a plan before its byte target; a transitive cluster that
+alone exceeds the cap is refused resumably. Every plan receives a dense zero-based merge ordinal
+before it enters the encoder queue.
+
+### Part encoding and assembly
+
+`PartEncoders` runs the admitted encoder count over one shared queue holding at most twice that
+many complete plans. Any encoder can take the next plan. It reads each referenced frame
+positionally through one shared channel per segment, verifies the record CRC and the routed metadata,
+and then writes rows:
+
+- A single-page item is decoded and streamed directly.
+- A cluster admits pages incrementally to `PageRowMerger` as their minima can compete with its
+  next row. Exhausted pages release their retained-byte reservation immediately.
+
+Each encoder owns at most one writer and one executing plan. Its decoded-page guard uses the
+post-cascade catalog's persisted per-descriptor maxima and the lane's admitted share of
+`merge-budget-bytes`. Queue waits, header service, positional reads, retained decoded bytes, and
+open writers all have dedicated pipeline meters.
+
+Encoder completion order has no publication meaning. The calling thread waits for every encoder,
+sorts completed parts by plan ordinal, requires the ordinals to be dense, and passes only the whole
+pre-closed sequence to `DatasetPublisher`. Part `i` is stamped
+`swath.sort.file_index=i+1`; the terminal plan alone is stamped
+`swath.sort.file_final=true`. Before any final-name mutation, publication verifies strict raw-key
+adjacency between parts and reconciles source-tail rows, routed rows, and closed-writer rows.
+
+`FinalizationFailure` relays the first cursor, router, encoder, or cancellation failure across all
+stages. `Finalization` quiesces cursors and encoders before closing shared channels and sweeping
+owned temporaries. Checkpoint-owned source segments and any previously published generation remain
+recoverable.

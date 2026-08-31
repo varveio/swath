@@ -89,13 +89,12 @@ renames them, and prints row/file/byte/segment/merge counts. Output files are na
 `part-00000.parquet` onward. Versioned rows or duplicate keys are rejected in the current
 non-versioned format rather than silently collapsed. Duplicate raw keys are rejected in the shared
 final drain, after sorting and before publication; `SORT.equal_key_rejected` records the failed
-fixture once. Live `swath --sort` permits equal raw-key rows for version-compatible output.
+fixture once. Live current-object `swath --sort` applies the same uniqueness rule.
 
-Unlike live `swath --sort` staging, independently sorted fixture chunks can overlap across their
-entire key ranges. `sort-fixture` therefore uses the library's bounded serial entry-stream merge and
-does not engage the page-frontier parallel range optimization, even when merge parallelism is
-configured. This keeps active state bounded for arbitrary captures; `SORT.merge_range_frontier_disabled`
-reports that expected policy choice.
+Independently sorted fixture chunks may overlap broadly. The normal finalization router groups each
+transitive page-overlap component into one complete plan item, and the assigned encoder merges its
+rows under the same bounded decoded-page guard used by live sorted output. Configured merge
+parallelism is therefore the fixture encoder ceiling as well.
 
 ## Start the server
 

@@ -149,13 +149,13 @@ classified as free or restorable may be re-supplied as documented by the CLI.
 
 ## Sorted output
 
-`--sort` produces a globally key-sorted managed Parquet dataset. Final parts are
-range-disjoint and named in key order: every key in an earlier part is lower than every
-key in a later part.
+`--sort` produces a globally key-sorted managed Parquet dataset. Final parts are named in key
+order and are strictly disjoint in raw unsigned key order: every key in an earlier non-empty part
+is lower than every key in a later part.
 
-Without `--sort`, each S3 page remains ordered, but pages from independent workers can
-reach different parts in any order. Neither an individual part nor the complete dataset
-should be treated as globally sorted.
+Without `--sort`, each S3 page remains ordered, but pages from independent workers can reach
+different parts in any order. Neither an individual part nor the complete dataset should be
+treated as globally sorted.
 
 ```bash
 swath list s3://my-bucket/ \
@@ -166,24 +166,29 @@ swath list s3://my-bucket/ \
 Sorted output has three important constraints:
 
 1. It requires a managed Parquet directory and a durable checkpoint.
-2. It writes compressed page-run segments under `_staging/`, then merges them into final
-   Parquet parts.
-3. Staging and final output coexist during the merge, so disk usage scales with captured
-   data.
+2. It writes compressed page-run segments under `_staging/`, then finalizes them through a
+   header-scan, reference-router, and encoder pipeline.
+3. Staging and final output coexist during finalization, so disk usage scales with captured data.
 
-swath checks free space before and during a sorted run, and again at merge start. The merge
-check prices final-output, cascade, and safety reserves plus the exact parallel proof-file extent;
-it reduces merge ranges before falling back to serial, and refuses before allocation if serial
-also cannot fit. A refusal leaves the completed listing resumable for a zero-LIST merge retry.
-`--tune sort.ignore-disk-check=on` bypasses that protection and is intended only for a
-volume sized independently.
+At finalization, bounded header cursors scan the durable segments, one router assigns complete
+ordered part plans, and an admitted pool of encoders reads those plans positionally. The default
+maximum encoder count is derived from available processors and capped at eight. Heap and
+file-descriptor checks may lower it. `--tune sort.merge-parallelism=1` selects one encoder but
+uses the same routing and publication path.
 
-Large merges use several contiguous key ranges by default and reduce that parallelism
-when heap, staged-segment count, or file-descriptor limits cannot carry it. Small merges
-remain serial. See [Performance](performance.md#the-sorted-merge) and
+Part count is independent of encoder count. `final-file-bytes` is a soft target calibrated from
+completed Parquet parts; rolls happen only between complete staging pages or overlap components,
+and an equal-key group is never split. A bounded reference cap can create an earlier roll.
+
+swath checks free space before and during sorted listing. Finalization has no separate free-space
+preflight, so retain enough capacity for checkpoint-owned staging, cascade intermediates when fan-in
+is constrained, and temporary plus published Parquet parts. A pre-publication failure leaves the
+sealed listing resumable. `--tune sort.ignore-disk-check=on` bypasses the startup and listing
+checks and is intended only for a volume sized independently.
+
+See [Performance](performance.md#the-sorted-merge) and
 [Advanced configuration](configuration.md#sorted-output-jvm-properties).
 
-<a id="parallel-range-merge"></a>
 <a id="sizing-sorted-output"></a>
 
 ## Checkpoint and resume
