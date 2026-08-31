@@ -296,8 +296,8 @@ class SortConfigTest {
     // ------------------------------------------------------------------
 
     @Test
-    void segmentCodecDefaultsToLz4AndParsesCaseInsensitively() {
-        assertThat(fromProperties(Map.of()).segmentCodec()).isEqualTo(PageCodec.LZ4);
+    void segmentCodecDefaultsToZstd1AndParsesCaseInsensitively() {
+        assertThat(fromProperties(Map.of()).segmentCodec()).isEqualTo(PageCodec.ZSTD1);
         assertThat(fromProperties(Map.of("segment-codec", "none")).segmentCodec()).isEqualTo(PageCodec.NONE);
         assertThat(fromProperties(Map.of("segment-codec", "LZ4")).segmentCodec()).isEqualTo(PageCodec.LZ4);
         assertThat(fromProperties(Map.of("segment-codec", "zstd1")).segmentCodec()).isEqualTo(PageCodec.ZSTD1);

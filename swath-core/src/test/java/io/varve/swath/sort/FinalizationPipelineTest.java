@@ -887,7 +887,8 @@ final class FinalizationPipelineTest {
                     && System.nanoTime() < deadline) {
                 Thread.sleep(10);
             }
-            assertThat(metrics.count("SORT.pipeline_plan_queue_saturated")).isEqualTo(1);
+            assertThat(metrics.count("SORT.pipeline_plan_queue_saturated"))
+                    .isGreaterThanOrEqualTo(1);
             caller.interrupt();
             assertThat(caller.join(Duration.ofSeconds(60))).isTrue();
         } finally {

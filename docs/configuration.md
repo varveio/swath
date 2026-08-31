@@ -194,7 +194,7 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.segment-bytes` | `max(64 MiB, heap-fraction × -Xmx)` | Override the adaptive staging flush threshold. |
 | `swath.sort.segment-entries` | effectively unbounded | Secondary segment entry cap. |
 | `swath.sort.buffers` | `2`, minimum `2` | Fill buffer plus bounded off-thread encode buffers. |
-| `swath.sort.segment-codec` | `LZ4` | Staging payload codec: `NONE`, `LZ4`, or `ZSTD1`. |
+| `swath.sort.segment-codec` | `ZSTD1` | Staging payload codec: `NONE`, `LZ4`, or `ZSTD1`. |
 | `swath.sort.fan-in` | `10000` | Per-range merge-stream ceiling, further limited by the planning budget and open files. |
 | `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Runtime capacity budget for page-run merge residency. Planning charges two encoded bodies plus the type-3 decoded maximum per normal stream, then the page-aware merger charges every additional retained overlap body/raw payload before allocation. A truthful minimum width that cannot fit is a resumable merge-pending refusal. |
 | `swath.sort.merge-per-stream-bytes` | `64 KiB` | Configured per-stream floor. Current type-3 trailers can raise it through exact encoded/decoded maxima; legacy inputs remain readable and their actual header claims are bounded by the runtime aggregate guard. |
