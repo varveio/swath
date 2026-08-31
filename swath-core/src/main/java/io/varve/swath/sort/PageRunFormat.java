@@ -17,7 +17,7 @@ public record PageRunFormat(int formatVersion, int extensionType) {
     public static final String NAME = "page-run";
 
     /** Current page-run header format version. */
-    public static final int CURRENT_FORMAT_VERSION = 3;
+    public static final int CURRENT_FORMAT_VERSION = 4;
 
     /** A readable page run with no extension before the fixed EOF tail. */
     public static final int ABSENT_EXTENSION = 0;
@@ -37,13 +37,13 @@ public record PageRunFormat(int formatVersion, int extensionType) {
     }
 
     /**
-     * PageRun v3 persists the canonical swath ordering without a comparator identifier. Reject an
+     * PageRun v4 persists the canonical swath ordering without a comparator identifier. Reject an
      * alternate comparator before it can write or merge bytes under an unstated format contract.
      */
     static void requireCanonicalComparator(Comparator<ListEntry> comparator) {
         if (!(comparator instanceof ListEntryComparator)) {
             throw new IllegalArgumentException(
-                    "page-run format v3 requires ListEntryComparator");
+                    "page-run format v4 requires ListEntryComparator");
         }
     }
 

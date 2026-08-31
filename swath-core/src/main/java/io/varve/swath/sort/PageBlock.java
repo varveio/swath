@@ -5,16 +5,11 @@
  */
 package io.varve.swath.sort;
 
-import io.varve.swath.model.CommonPrefixEntry;
-import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.ObjectEntry;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Compact immutable per-page model. Entries are packed at admission into one front-coded payload;
@@ -54,7 +49,7 @@ final class PageBlock {
     private final int rawPayloadLength;
     private final PageCodec codec;
     private byte[] decodedPayloadCache;
-    private final PageBlockCodec.Dictionaries dictionaries;
+    private final PageBlockDictionaries dictionaries;
     private final boolean[] useDict;
     private final int count;
     private final byte[] firstKeyBytes;
@@ -77,7 +72,7 @@ final class PageBlock {
         this.payloadLength = storedPayload.length;
         this.rawPayloadLength = rawPayloadLength;
         this.codec = codec;
-        this.dictionaries = PageBlockCodec.Dictionaries.packed(dicts);
+        this.dictionaries = PageBlockDictionaries.packed(dicts);
         this.useDict = useDict;
         this.count = count;
         this.firstKeyBytes = firstKeyBytes;
@@ -128,61 +123,7 @@ final class PageBlock {
     /** Pack while refusing to grow the raw payload beyond a merge-planned page residency limit. */
     static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec,
                           int maxRawPayloadBytes) {
-        if (entries.isEmpty()) {
-            throw new IllegalArgumentException("cannot pack an empty page");
-        }
-        if (maxRawPayloadBytes <= 0 || maxRawPayloadBytes > MAX_RAW_PAYLOAD_BYTES) {
-            throw new IllegalArgumentException("raw page limit is outside the format bound: "
-                    + maxRawPayloadBytes);
-        }
-
-        boolean ordered = true;
-        ListEntry previous = null;
-        DictProbe[] probes = new DictProbe[PageBlockCodec.DICT_COLUMN_COUNT];
-        for (int i = 0; i < probes.length; i++) {
-            probes[i] = new DictProbe();
-        }
-        for (ListEntry entry : entries) {
-            if (previous != null && comparator.compare(previous, entry) > 0) {
-                ordered = false;
-            }
-            previous = entry;
-            switch (entry) {
-                case ObjectEntry object -> {
-                    probes[PageBlockCodec.DictColumn.STORAGE_CLASS.ordinal()]
-                            .offer(object.storageClass());
-                    probes[PageBlockCodec.DictColumn.CHECKSUM_ALGORITHM.ordinal()]
-                            .offer(object.checksumAlgorithm());
-                    probes[PageBlockCodec.DictColumn.CHECKSUM_TYPE.ordinal()]
-                            .offer(object.checksumType());
-                    probes[PageBlockCodec.DictColumn.OWNER_ID.ordinal()].offer(object.ownerId());
-                    probes[PageBlockCodec.DictColumn.OWNER_DISPLAY_NAME.ordinal()]
-                            .offer(object.ownerDisplayName());
-                }
-                case DeleteMarkerEntry marker ->
-                        probes[PageBlockCodec.DictColumn.OWNER_ID.ordinal()].offer(marker.ownerId());
-                case CommonPrefixEntry ignored -> { }
-            }
-        }
-        boolean[] useDict = new boolean[PageBlockCodec.DICT_COLUMN_COUNT];
-        for (int i = 0; i < probes.length; i++) {
-            useDict[i] = probes[i].useDict();
-        }
-
-        PageBlockCodec.Writer writer =
-                new PageBlockCodec.Writer(entries.size(), useDict, maxRawPayloadBytes);
-        long estimate = 0;
-        for (ListEntry entry : entries) {
-            estimate += estimatedBytes(entry);
-            writer.write(entry);
-        }
-        ListEntry first = entries.getFirst();
-        ListEntry last = entries.getLast();
-        byte[] raw = writer.toBytes();
-        byte[] stored = codec.compress(raw);
-        return new PageBlock(stored, raw.length, codec, writer.dictArrays(), useDict,
-                entries.size(), first.key().rawUnsafe(), last.key().rawUnsafe(), first, last,
-                estimate, ordered, null);
+        return PageBlockPacker.pack(entries, comparator, codec, maxRawPayloadBytes);
     }
 
     /** Internal control signal used to split a cascade batch before it exceeds planned residency. */
@@ -336,7 +277,7 @@ final class PageBlock {
         return dictionaries.coordinateBytes();
     }
 
-    PageBlockCodec.Dictionaries dictionariesUnsafe() {
+    PageBlockDictionaries dictionariesUnsafe() {
         return dictionaries;
     }
 
@@ -367,24 +308,4 @@ final class PageBlock {
                 "decoded page does not match its structural metadata", cause));
     }
 
-    /** Bounded distinct-value probe for one dictionary-eligible column. */
-    private static final class DictProbe {
-        private Set<String> seen = new HashSet<>();
-        private boolean capped;
-
-        void offer(String value) {
-            if (value == null || capped) {
-                return;
-            }
-            seen.add(value);
-            if (seen.size() > DICT_CAP) {
-                capped = true;
-                seen = null;
-            }
-        }
-
-        boolean useDict() {
-            return !capped;
-        }
-    }
 }

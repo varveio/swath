@@ -6,7 +6,6 @@
 package io.varve.swath.cli;
 
 import io.varve.swath.sort.SortConfig;
-import io.varve.swath.sort.SortFinalization;
 import io.varve.swath.sort.StagingRetention;
 
 /** The globally-sorted-output flags (contract §6): {@code --sort} and its disk-guard override. */
@@ -23,8 +22,6 @@ final class SortOptions {
 
     StagingRetention stagingRetention;
 
-    SortFinalization finalization;
-
     SortConfig resolveConfig() {
         SortConfig config = SortConfig.fromSystemProperties();
         if (mergeParallelism != null) {
@@ -33,6 +30,6 @@ final class SortOptions {
         if (stagingRetention != null) {
             config = config.withStagingRetention(stagingRetention);
         }
-        return finalization == null ? config : config.withFinalization(finalization);
+        return config;
     }
 }

@@ -27,15 +27,15 @@ final class SegmentGateTest {
     }
 
     @Test
-    void packedPageAndEntryStreamUseTheSameLogicalByteEstimate() {
+    void captureEntriesAndPackedPageUseTheSameLogicalByteEstimate() {
         List<ListEntry> entries = List.of(
                 SortTestSupport.object("a"),
                 SortTestSupport.object("longer-key"),
                 SortTestSupport.object("\u0000\u00ff"));
-        long entryStreamEstimate = entries.stream().mapToLong(PageBlock::estimatedBytes).sum();
+        long captureEntryEstimate = entries.stream().mapToLong(PageBlock::estimatedBytes).sum();
 
         PageBlock block = PageBlock.pack(entries, new ListEntryComparator(), PageCodec.NONE);
 
-        assertThat(block.stagingEstimatedBytes()).isEqualTo(entryStreamEstimate);
+        assertThat(block.stagingEstimatedBytes()).isEqualTo(captureEntryEstimate);
     }
 }

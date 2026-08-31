@@ -34,8 +34,7 @@ final class BenchmarkRowOracle {
     private BenchmarkRowOracle() {
     }
 
-    static InputOracle readInputs(List<SourceSegment> inputs,
-                                  Comparator<ListEntry> comparator) throws IOException {
+    static InputOracle readInputs(List<SourceSegment> inputs) throws IOException {
         CommutativeDigest multiset = new CommutativeDigest();
         long rows = 0;
         long trailerEntries = 0;
@@ -52,11 +51,15 @@ final class BenchmarkRowOracle {
                 throw new IOException("checkpoint rows disagree with page-run trailer: " + input.path());
             }
             long segmentRows = 0;
-            try (PageRunSegmentReader reader = new PageRunSegmentReader(
-                    PageRunSegmentIo.open(input.path(), SortMetrics.NO_OP), comparator)) {
-                while (reader.hasNext()) {
-                    multiset.add(reader.next());
-                    segmentRows++;
+            try (PageRunSegmentIo io = PageRunSegmentIo.open(input.path(), SortMetrics.NO_OP)) {
+                PageRunSegmentIo.Page page;
+                while ((page = io.nextPage()) != null) {
+                    PageBlockCursor cursor = page.decode(input.path()).cursor();
+                    while (cursor.hasNext()) {
+                        multiset.add(cursor.next());
+                        segmentRows++;
+                    }
+                    cursor.drainAndValidate();
                 }
             }
             if (segmentRows != trailer.totalEntries()) {

@@ -18,8 +18,8 @@ import java.util.zip.CRC32C;
 
 /**
  * Shared read-side IO/framing/validation for one {@link PageRunSegmentWriter} page-run segment.
- * Entry readers, the {@code dump-run} inspector, reference-routing header cursors, and positional
- * encoders share this framing owner.
+ * Cascade page consumers, test readers, the {@code dump-run} inspector, reference-routing header
+ * cursors, and positional encoders share this framing owner.
  *
  * <p><b>What is single-sourced here:</b> the header magic/version check, the fixed trailer-tail read
  * (recovering {@code trailerStart}/{@code totalRecords}/{@code totalEntries}/{@code maxRecordLen},
@@ -32,11 +32,11 @@ import java.util.zip.CRC32C;
  * guard</b> ({@link #nextPage()}), and
  * the positional/sequential read primitives.
  *
- * <p>The record-read variants share the same framing validation. The entry reader calls
- * {@link #nextPage()} (CRC-verified body plus the min-monotonicity check),
- * and the inspector calls {@link #nextRecord()} (returns the body plus a {@code crcOk} flag so a debug
- * dump can pinpoint a torn record without aborting the walk, and deliberately does NOT abort on a
- * regression it is being run to diagnose).
+ * <p>The record-read variants share framing validation but serve different costs and diagnostics.
+ * Cascade/test consumers call {@link #nextPage()} for a CRC-verified full body and logical guards;
+ * finalization calls {@link #nextRoutingPage()} for bounded positional metadata; the inspector calls
+ * {@link #nextRecord()} for a body plus a {@code crcOk} flag so a debug dump can identify a torn
+ * record without aborting the diagnostic walk.
  */
 final class PageRunSegmentIo implements AutoCloseable {
 
@@ -75,20 +75,8 @@ final class PageRunSegmentIo implements AutoCloseable {
     private long pagesRead;
     /** Entries read before the next page. */
     private long cumulativeEntries;
-    /** Framed page bytes physically read by this IO instance. */
-    private long framedBytesRead;
     /** Tracked sequential frame offset; avoids a native FileChannel.position() query per page. */
     private long nextFrameOffset;
-    private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
-                            short formatVersion, SortMode orderingMode, int headerBytes,
-                            long maxRecordLen, long totalRecords,
-                            long totalEntries, int persistedMaxRawPayloadLength,
-                            int persistedMaxKeyLength, long trailerStart, long fileSize) {
-        this(channel, path, metrics, magic, formatVersion, orderingMode, headerBytes,
-                maxRecordLen, totalRecords,
-                totalEntries, persistedMaxRawPayloadLength, persistedMaxKeyLength,
-                trailerStart, fileSize, PageBlock.MAX_RAW_PAYLOAD_BYTES);
-    }
 
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
                             short formatVersion, SortMode orderingMode, int headerBytes,
@@ -240,14 +228,11 @@ final class PageRunSegmentIo implements AutoCloseable {
     }
 
     /**
-     * <b>The single sequential page-advance primitive</b>: read the next framed
+     * Full-body sequential page advance: read the next framed
      * record, CRC-verify its body, parse its frontier fields, and enforce the intra-segment
-     * min-monotonicity and mode-aware disjointness invariants. Returning the parsed fields alongside the body costs the entry-typed
-     * reader nothing (the leading min/max/count parse is a few bytes of the body it already holds) and buys
-     * the guarantee that a third reader added later CANNOT skip the LOGICAL guard the way a bare
-     * {@code nextBody()} let {@link PageRunSegmentReader} skip it: {@code StreamingMerger} assumes each
-     * input run is sorted, so an unguarded page-run reader on that generic seam silently misorders output
-     * exactly as the frontier path would.
+     * min-monotonicity and mode-aware disjointness invariants. Returning the parsed fields beside
+     * the body keeps cascade merge and test row decoding on the same guarded frame loop; a new bare
+     * body reader cannot silently skip the logical ordering checks.
      */
     Page nextPage() throws IOException {
         if (pagesRead == totalRecords) {
@@ -278,7 +263,6 @@ final class PageRunSegmentIo implements AutoCloseable {
         checkDisjoint(header.minKey());
         previousMin = header.minKey();
         previousMax = header.maxKey();
-        framedBytesRead += Math.addExact(8, record.framedLen());
         cumulativeEntries = Math.addExact(cumulativeEntries, header.count());
         return new Page(body, header);
     }
@@ -320,7 +304,6 @@ final class PageRunSegmentIo implements AutoCloseable {
         previousMin = header.minKey();
         previousMax = header.maxKey();
         cumulativeEntries = Math.addExact(cumulativeEntries, header.count());
-        framedBytesRead = Math.addExact(framedBytesRead, framedLen);
         nextFrameOffset = frameEnd;
         return new RoutingPage(ordinal, frameOffset, framedLen, header);
     }
@@ -379,9 +362,8 @@ final class PageRunSegmentIo implements AutoCloseable {
      * Read-time verification that a segment's page {@code minKey}s never go backwards (unsigned).
      * This diagnostic runs before the stronger mode-aware disjointness check so a regression keeps
      * its established error class. Strictly {@code newMin < previousMin} is corruption — the
-     * page-aware merger's whole-page fast path would trust a frontier that is no longer a lower bound on
-     * the segment's remaining keys, and the entry-typed {@link StreamingMerger} would trust a run that is
-     * not sorted; either way the merged output could be silently misordered. Costs exactly one
+     * cascade page merger would trust a frontier that is no longer a lower bound on the segment's
+     * remaining keys, so output could be silently misordered. Costs exactly one
      * {@code compareUnsigned} per page advance and is a pure no-op on every well-formed segment
      * ({@link PageRunSegmentWriter#flush()} establishes the ascent by sorting pages on their first key).
      */
@@ -398,8 +380,8 @@ final class PageRunSegmentIo implements AutoCloseable {
                         + ": minKey 0x" + hex.formatHex(newMin) + " < previous page's minKey 0x"
                         + hex.formatHex(previousMin) + ") — page-run pages MUST be stored in non-decreasing"
                         + " minKey order (PageRunSegmentWriter#flush sorts them); every merge path relies on"
-                        + " that ascent (the page-aware merger's frontier is a valid lower bound only under"
-                        + " it, and the streaming merger assumes each input run is sorted), so a regression"
+                        + " that ascent (the page merger's frontier is a valid lower bound only under"
+                        + " it), so a regression"
                         + " would silently misorder the merged output");
     }
 
@@ -564,14 +546,6 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     Path path() {
         return path;
-    }
-
-    long framedBytesRead() {
-        return framedBytesRead;
-    }
-
-    long nextFrameOffset() {
-        return nextFrameOffset;
     }
 
     int magic() {

@@ -110,12 +110,6 @@ public final class SortConfig {
     /** JVM-property form of {@link #KEEP_STAGING_TUNE_KEY}. */
     public static final String KEEP_STAGING_PROPERTY = "swath." + KEEP_STAGING_TUNE_KEY;
 
-    /** Resume-free selector for the finalization implementation. */
-    public static final String FINALIZATION_TUNE_KEY = "sort.finalization";
-
-    /** JVM-property form of {@link #FINALIZATION_TUNE_KEY}. */
-    public static final String FINALIZATION_PROPERTY = "swath." + FINALIZATION_TUNE_KEY;
-
     /**
      * The maximum number of concurrent final-file encoders. Runtime planning may admit fewer to
      * remain within the merge residency budget.
@@ -138,7 +132,7 @@ public final class SortConfig {
                     DEFAULT_SEGMENT_CODEC),
             new Merge(
                     10000, adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION), DEFAULT_MERGE_PARALLELISM,
-                    DEFAULT_MERGE_PER_STREAM_BYTES, SortFinalization.PIPELINE),
+                    DEFAULT_MERGE_PER_STREAM_BYTES),
             new FinalOutput(1L << 30, 8L * 1024 * 1024, DEFAULT_FINAL_PAGE_ROWS),
             new Retention(StagingRetention.DELETE_AFTER_PUBLISH));
 
@@ -204,9 +198,6 @@ public final class SortConfig {
         if (stagingRetention() == null) {
             throw new IllegalArgumentException("staging-retention must not be null");
         }
-        if (finalization() == null) {
-            throw new IllegalArgumentException("finalization must not be null");
-        }
     }
 
     public SortConfig withSegmentBytes(long segmentBytes) {
@@ -226,8 +217,7 @@ public final class SortConfig {
     }
 
     public SortConfig withFanIn(int fanIn) {
-        return copy(new Merge(fanIn, mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                finalization()));
+        return copy(new Merge(fanIn, mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes()));
     }
 
     public SortConfig withFinalFileBytes(long finalFileBytes) {
@@ -243,18 +233,15 @@ public final class SortConfig {
     }
 
     public SortConfig withMergeBudgetBytes(long mergeBudgetBytes) {
-        return copy(new Merge(fanIn(), mergeBudgetBytes, mergeParallelism(), mergePerStreamBytes(),
-                finalization()));
+        return copy(new Merge(fanIn(), mergeBudgetBytes, mergeParallelism(), mergePerStreamBytes()));
     }
 
     public SortConfig withMergeParallelism(int mergeParallelism) {
-        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism, mergePerStreamBytes(),
-                finalization()));
+        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism, mergePerStreamBytes()));
     }
 
     public SortConfig withMergePerStreamBytes(long mergePerStreamBytes) {
-        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes,
-                finalization()));
+        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes));
     }
 
     public SortConfig withSegmentCodec(PageCodec segmentCodec) {
@@ -294,25 +281,15 @@ public final class SortConfig {
         StagingRetention stagingRetention = keepStagingProp == null
                 ? DEFAULT.stagingRetention()
                 : StagingRetention.fromProperty(KEEP_STAGING_PROPERTY, keepStagingProp);
-        String finalizationProp = lookup.apply(FINALIZATION_PROPERTY);
-        SortFinalization finalization = finalizationProp == null
-                ? DEFAULT.finalization()
-                : SortFinalization.fromConfigValue(FINALIZATION_PROPERTY, finalizationProp);
         return new SortConfig(
                 new StagingBuffering(segmentBytes, segmentEntries, heapFraction, buffers, segmentCodec),
-                new Merge(fanIn, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                        finalization),
+                new Merge(fanIn, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes),
                 new FinalOutput(finalFileBytes, finalRowGroupBytes, finalPageRows),
                 new Retention(stagingRetention));
     }
 
     public SortConfig withStagingRetention(StagingRetention stagingRetention) {
         return copy(new Retention(stagingRetention));
-    }
-
-    public SortConfig withFinalization(SortFinalization finalization) {
-        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                finalization));
     }
 
     private SortConfig copy(StagingBuffering updated) {
@@ -381,10 +358,6 @@ public final class SortConfig {
 
     public StagingRetention stagingRetention() {
         return retention.staging();
-    }
-
-    public SortFinalization finalization() {
-        return merge.finalization();
     }
 
     private static PageCodec parseSegmentCodec(String raw) {
@@ -471,8 +444,7 @@ public final class SortConfig {
         hash = 31 * hash + Integer.hashCode(mergeParallelism());
         hash = 31 * hash + Long.hashCode(mergePerStreamBytes());
         hash = 31 * hash + segmentCodec().hashCode();
-        hash = 31 * hash + stagingRetention().hashCode();
-        return 31 * hash + finalization().hashCode();
+        return 31 * hash + stagingRetention().hashCode();
     }
 
     @Override
@@ -489,15 +461,13 @@ public final class SortConfig {
                 + ", mergeParallelism=" + mergeParallelism()
                 + ", mergePerStreamBytes=" + mergePerStreamBytes()
                 + ", segmentCodec=" + segmentCodec()
-                + ", stagingRetention=" + stagingRetention()
-                + ", finalization=" + finalization() + ']';
+                + ", stagingRetention=" + stagingRetention() + ']';
     }
 
     private record StagingBuffering(long segmentBytes, long segmentEntries, double heapFraction,
                                     int buffers, PageCodec codec) { }
 
-    private record Merge(int fanIn, long budgetBytes, int parallelism, long perStreamBytes,
-                         SortFinalization finalization) { }
+    private record Merge(int fanIn, long budgetBytes, int parallelism, long perStreamBytes) { }
 
     private record FinalOutput(long fileBytes, long rowGroupBytes, int pageRows) { }
 

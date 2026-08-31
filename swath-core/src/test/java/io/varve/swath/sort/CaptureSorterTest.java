@@ -73,7 +73,7 @@ class CaptureSorterTest {
     }
 
     @Test
-    void arbitraryOverlappingChunksUseTheBoundedEntryMerge(@TempDir Path root) throws IOException {
+    void arbitraryOverlappingChunksUseTheBoundedPagePipeline(@TempDir Path root) throws IOException {
         Path captureDir = Files.createDirectories(root.resolve("capture"));
         Path outputDir = Files.createDirectories(root.resolve("out"));
         List<ListEntry> evensDescending = new ArrayList<>();

@@ -20,7 +20,7 @@ class PageRunFormatComparatorTest {
         assertThatThrownBy(() -> new PageRunSegmentWriter(
                 ALTERNATE, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("page-run format v3 requires ListEntryComparator");
+                .hasMessageContaining("page-run format v4 requires ListEntryComparator");
     }
 
     @Test
@@ -30,6 +30,6 @@ class PageRunFormatComparatorTest {
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("page-run format v3 requires ListEntryComparator");
+                .hasMessageContaining("page-run format v4 requires ListEntryComparator");
     }
 }

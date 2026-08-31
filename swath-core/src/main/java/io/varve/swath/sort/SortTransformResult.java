@@ -14,11 +14,10 @@ import java.util.List;
  * {@code part-00000.parquet}… when
  * {@code final-file-bytes} rolls the output; a single file otherwise.
  *
- * <p>{@code mergePasses}/{@code cascadedPasses}/{@code fastPathEmissions} surface the
- * {@link KWayMerge} engagement counts for the {@code sort} JSON run-summary block and the
- * {@code swath.sort.merge.passes} first-class meter.
+ * <p>{@code mergePasses}/{@code cascadedPasses} surface cascade engagement. {@code
+ * pagesForwarded} is the final router's page-whole count.
  */
 public record SortTransformResult(List<Path> finalFiles, long outputBytes, long totalRows,
-                                  long mergePasses, long cascadedPasses, long fastPathEmissions,
+                                  long mergePasses, long cascadedPasses, long pagesForwarded,
                                   int finalizationParallelism) {
 }

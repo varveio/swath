@@ -232,7 +232,7 @@ final class PageBlockCursor {
             return null;
         }
         if (block.useDictUnsafe()[column.ordinal()]) {
-            PageBlockCodec.Dictionaries dictionaries = block.dictionariesUnsafe();
+            PageBlockDictionaries dictionaries = block.dictionariesUnsafe();
             int index = encoded - 1;
             if (index >= dictionaries.size(column.ordinal())) {
                 throw PageBlockCodec.malformed(column + " dictionary index " + index
@@ -249,7 +249,7 @@ final class PageBlockCursor {
     }
 
     private String dictionaryValue(
-            PageBlockCodec.Dictionaries dictionaries, int column, int index) {
+            PageBlockDictionaries dictionaries, int column, int index) {
         if (!dictionaries.byteBacked()) {
             return dictionaries.value(column, index);
         }

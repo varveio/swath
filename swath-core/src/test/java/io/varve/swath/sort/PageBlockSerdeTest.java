@@ -408,6 +408,23 @@ class PageBlockSerdeTest {
     }
 
     @Test
+    void zstdContentChecksumRejectsPayloadCorruptionInsideThePageBody() {
+        byte[] body = PageBlock.pack(
+                List.of(object("aaa"), object("mmm"), object("zzz")), CMP, PageCodec.ZSTD1)
+                .serialize();
+        PageBlockCodec.Header header = PageBlockCodec.parseHeader(body);
+
+        // ZSTD appends its four-byte content checksum to the frame. Corrupt only that checksum;
+        // the PageBlock header remains structurally valid, proving decompression verifies it.
+        body[body.length - 1] ^= 1;
+
+        PageBlock corrupted = PageBlockCodec.deserialize(body, header, Path.of("checksum.pageseg"));
+        assertThatThrownBy(corrupted::cursor)
+                .isInstanceOf(java.io.UncheckedIOException.class)
+                .hasRootCauseMessage("Restored data doesn't match checksum");
+    }
+
+    @Test
     void segmentIoReadsMinMaxOfLz4CompressedPagesWithoutDecompressing(@TempDir Path dir) throws IOException {
         SortConfig config = configWithCodec(PageCodec.LZ4);
         SortBuffer buffer = new SortBuffer(config, CMP);

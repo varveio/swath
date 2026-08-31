@@ -37,8 +37,8 @@ import org.junit.jupiter.api.io.TempDir;
  * interpreted child JVM with {@code -XX:-UseTLAB}; every allocation is therefore an
  * {@code ObjectAllocationOutsideTLAB} event instead of relying on normal-TLAB sampling. The child
  * verifies the VM flag, requires a named payload-sized positive-control {@code byte[]} to appear,
- * then rejects payload-sized byte arrays whose stack contains the legacy
- * {@code parseSerializedFields} path or current PageBlock header/deserialize/cursor paths.
+ * then rejects payload-sized byte arrays whose stack contains current PageBlock
+ * header/deserialize/cursor paths.
  *
  * <p>Exact invocation:
  * <pre>
@@ -82,7 +82,6 @@ public class PageBlockAllocationCharacterizationTest {
         assertThat(child.exitValue()).as(output).isZero();
         assertThat(output).contains("use_tlab=false")
                 .contains("positive_control_arrays=")
-                .contains("legacy_parse_arrays=0")
                 .contains("current_codec_arrays=0")
                 .contains("page_block_decode_arrays=0");
     }
@@ -123,10 +122,10 @@ public class PageBlockAllocationCharacterizationTest {
 
         Evidence evidence = readEvidence(recordingPath);
         System.out.printf("COPY_REMOVAL_ALLOCATION_EVIDENCE use_tlab=%s floor_bytes=%d "
-                        + "positive_control_arrays=%d legacy_parse_arrays=%d "
-                        + "current_codec_arrays=%d page_block_decode_arrays=%d%n",
+                        + "positive_control_arrays=%d current_codec_arrays=%d "
+                        + "page_block_decode_arrays=%d%n",
                 useTlab, ALLOCATION_FLOOR_BYTES, evidence.positiveControl(),
-                evidence.legacyParse(), evidence.currentCodec(), evidence.pageBlockDecode());
+                evidence.currentCodec(), evidence.pageBlockDecode());
         if (evidence.positiveControl() < 1) {
             throw new AssertionError("allocation capture missed its named positive control");
         }
@@ -164,7 +163,6 @@ public class PageBlockAllocationCharacterizationTest {
 
     private static Evidence readEvidence(Path recording) throws IOException {
         long positive = 0;
-        long legacy = 0;
         long currentCodec = 0;
         long pageBlockDecode = 0;
         try (RecordingFile events = new RecordingFile(recording)) {
@@ -181,9 +179,6 @@ public class PageBlockAllocationCharacterizationTest {
                         "positiveControlAllocation")) {
                     positive++;
                 }
-                if (hasFrame(frames, PageBlockCodec.class, "parseSerializedFields")) {
-                    legacy++;
-                }
                 if (hasAnyFrame(frames, PageBlockCodec.class,
                         Set.of("parseHeader", "deserialize"))) {
                     currentCodec++;
@@ -194,7 +189,7 @@ public class PageBlockAllocationCharacterizationTest {
                 }
             }
         }
-        return new Evidence(positive, legacy, currentCodec, pageBlockDecode);
+        return new Evidence(positive, currentCodec, pageBlockDecode);
     }
 
     private static boolean hasAnyFrame(List<RecordedFrame> frames, Class<?> type,
@@ -241,10 +236,9 @@ public class PageBlockAllocationCharacterizationTest {
         }
     }
 
-    private record Evidence(long positiveControl, long legacyParse,
-                            long currentCodec, long pageBlockDecode) {
+    private record Evidence(long positiveControl, long currentCodec, long pageBlockDecode) {
         long targetTotal() {
-            return legacyParse + currentCodec + pageBlockDecode;
+            return currentCodec + pageBlockDecode;
         }
     }
 }

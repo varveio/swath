@@ -24,7 +24,8 @@ import java.util.function.IntSupplier;
  * @param finalWriterFactory builds the final sorted-Parquet writers the roll opens
  * @param softFdLimitSupplier process soft open-file limit source, or a deterministic test value
  * @param staleFinalSweep ownership scope for replacement-publish cleanup
- * @param partTarget internal pipeline part geometry selected by production or benchmark
+ * @param partTarget internal pipeline part geometry; production uses calibrated byte targets and
+ *     focused tests may provide deterministic row targets
  */
 public record SortRun(
         SortConfig config,
@@ -58,12 +59,6 @@ public record SortRun(
         this(config, comparator, hook, equalKeyPolicy, metrics, finalWriterFactory,
                 softFdLimitSupplier, staleFinalSweep,
                 PartSizer.Target.calibrated());
-    }
-
-    /** Benchmark-only copy with a different immutable pipeline part target. */
-    SortRun withPartTarget(PartSizer.Target target) {
-        return new SortRun(config, comparator, hook, equalKeyPolicy, metrics, finalWriterFactory,
-                softFdLimitSupplier, staleFinalSweep, target);
     }
 
     /** Production soft-fd-limit source; tests pass a fixed supplier when they exercise clamps. */

@@ -6,24 +6,14 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ByteMidpoint;
-import io.varve.swath.model.CommonPrefixEntry;
-import io.varve.swath.model.DeleteMarkerEntry;
-import io.varve.swath.model.KeyBytes;
-import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
- * Self-contained persisted page layout, one-pass structural header parser, and front-coded payload
- * writer. Parsed headers retain offsets into their immutable owning record body; they never copy
- * the stored payload.
+ * Self-contained persisted page layout and one-pass structural header parser. Parsed headers retain
+ * offsets into their immutable owning record body; they never copy the stored payload.
  */
 final class PageBlockCodec {
 
@@ -63,7 +53,6 @@ final class PageBlockCodec {
                     * (16L + (long) PageBlock.DICT_CAP * Long.BYTES)
                     + (long) DICT_COLUMN_COUNT * PageBlock.DICT_CAP * 64L
                     + PERSISTED_DICTIONARY_COORDINATE_BYTES;
-    private static final byte[] EMPTY_KEY = new byte[0];
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private PageBlockCodec() {
@@ -74,7 +63,7 @@ final class PageBlockCodec {
      * min/max keys, dictionary tables, mode bits, counts, and lengths remain plain.
      */
     static byte[] serialize(PageBlock block) {
-        Dictionaries dictionaries = block.dictionariesUnsafe();
+        PageBlockDictionaries dictionaries = block.dictionariesUnsafe();
         byte[][][] packedDictionaryBytes = dictionaries.byteBacked()
                 ? null : new byte[DICT_COLUMN_COUNT][][];
         int dictTablesSize = 0;
@@ -156,7 +145,7 @@ final class PageBlockCodec {
      * long as the caller retains the body passed to {@link #parseHeader(byte[])}.
      */
     record Header(byte[] minKey, byte[] maxKey, int count, boolean ordered,
-                  Dictionaries dictionaries, boolean[] useDict, PageCodec codec,
+                  PageBlockDictionaries dictionaries, boolean[] useDict, PageCodec codec,
                   int rawPayloadLength, int payloadOffset, int payloadLength) {
     }
 
@@ -175,56 +164,7 @@ final class PageBlockCodec {
      */
     static RoutingHeader parseRoutingHeader(int recordLength, RoutingInput input)
             throws IOException {
-        RoutingCursor cursor = new RoutingCursor(recordLength, input);
-        byte[] minKey = cursor.readKey("minKey");
-        byte[] maxKey = cursor.readKey("maxKey");
-        int count = cursor.readInt("count");
-        if (count <= 0) {
-            throw malformed("count must be positive, got " + count);
-        }
-        int ordered = cursor.readByte("ordered flag") & 0xFF;
-        if (ordered > 1) {
-            throw malformed("ordered flag must be 0 or 1, got " + ordered);
-        }
-        for (int dictionary = 0; dictionary < DICT_COLUMN_COUNT; dictionary++) {
-            int values = cursor.readUnsignedShort("dictionary count");
-            if (values > PageBlock.DICT_CAP) {
-                throw malformed("dictionary " + dictionary + " count " + values + " exceeds "
-                        + PageBlock.DICT_CAP);
-            }
-            for (int value = 0; value < values; value++) {
-                int length = cursor.readUnsignedShort("dictionary value length");
-                cursor.skip(length, "dictionary value");
-            }
-        }
-        int packedUseDict = cursor.readByte("useDict") & 0xFF;
-        int validUseDictBits = (1 << DICT_COLUMN_COUNT) - 1;
-        if ((packedUseDict & ~validUseDictBits) != 0) {
-            throw malformed("useDict contains unknown bits: 0x"
-                    + Integer.toHexString(packedUseDict));
-        }
-        PageCodec codec;
-        int codecCode = cursor.readByte("codec") & 0xFF;
-        try {
-            codec = PageCodec.fromCode((byte) codecCode);
-        } catch (IllegalStateException e) {
-            throw malformed("unsupported codec " + codecCode, e);
-        }
-        int rawPayloadLength = cursor.readInt("raw payload length");
-        int storedPayloadLength = cursor.readInt("stored payload length");
-        if (rawPayloadLength <= 0 || rawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
-            throw malformed("raw payload length " + rawPayloadLength + " is outside 1.."
-                    + PageBlock.MAX_RAW_PAYLOAD_BYTES);
-        }
-        if (storedPayloadLength <= 0 || storedPayloadLength != cursor.remaining()) {
-            throw malformed("stored payload length " + storedPayloadLength
-                    + " does not equal remaining body bytes " + cursor.remaining());
-        }
-        if (codec == PageCodec.NONE && storedPayloadLength != rawPayloadLength) {
-            throw malformed("NONE payload lengths differ: raw=" + rawPayloadLength
-                    + " stored=" + storedPayloadLength);
-        }
-        return new RoutingHeader(minKey, maxKey, count, rawPayloadLength);
+        return PageBlockRoutingParser.parse(recordLength, input);
     }
 
     /** Validate every header length, count, and mode and return a zero-copy payload slice. */
@@ -261,7 +201,7 @@ final class PageBlockCodec {
                 buffer.position(buffer.position() + length);
             }
         }
-        Dictionaries dictionaries = Dictionaries.persisted(
+        PageBlockDictionaries dictionaries = PageBlockDictionaries.persisted(
                 record, dictionaryStarts, dictionaryCounts);
 
         requireRemaining(buffer, 10, "page modes and payload lengths");
@@ -295,92 +235,6 @@ final class PageBlockCodec {
         }
         return new Header(minKey, maxKey, count, orderedByte == 1, dictionaries, useDict,
                 codec, rawPayloadLength, buffer.position(), storedPayloadLength);
-    }
-
-    /** Small cached positional cursor used only for metadata reads during the header pass. */
-    private static final class RoutingCursor {
-        private static final int READ_AHEAD_BYTES = 8 << 10;
-
-        private final int length;
-        private final RoutingInput input;
-        private ByteBuffer cache = ByteBuffer.allocate(0);
-        private int cacheStart;
-        private int position;
-
-        RoutingCursor(int length, RoutingInput input) {
-            if (length <= 0) {
-                throw malformed("record body must be non-empty");
-            }
-            this.length = length;
-            this.input = input;
-        }
-
-        byte[] readKey(String field) throws IOException {
-            int keyLength = readUnsignedShort(field + " length");
-            if (keyLength > ByteMidpoint.MAX_KEY_LEN) {
-                throw malformed(field + " exceeds the S3 key limit of "
-                        + ByteMidpoint.MAX_KEY_LEN + " bytes");
-            }
-            return readBytes(keyLength, field);
-        }
-
-        int readUnsignedShort(String field) throws IOException {
-            ensure(Short.BYTES, field);
-            int relative = position - cacheStart;
-            int value = cache.getShort(relative) & 0xFFFF;
-            position += Short.BYTES;
-            return value;
-        }
-
-        int readInt(String field) throws IOException {
-            ensure(Integer.BYTES, field);
-            int relative = position - cacheStart;
-            int value = cache.getInt(relative);
-            position += Integer.BYTES;
-            return value;
-        }
-
-        byte readByte(String field) throws IOException {
-            ensure(1, field);
-            return cache.get(position++ - cacheStart);
-        }
-
-        byte[] readBytes(int bytes, String field) throws IOException {
-            ensure(bytes, field);
-            byte[] result = new byte[bytes];
-            ByteBuffer view = cache.duplicate();
-            view.position(position - cacheStart).limit(position - cacheStart + bytes);
-            view.get(result);
-            position += bytes;
-            return result;
-        }
-
-        void skip(int bytes, String field) {
-            if (bytes < 0 || position > length - bytes) {
-                throw malformed(field + " exceeds record body");
-            }
-            position += bytes;
-        }
-
-        int remaining() {
-            return length - position;
-        }
-
-        private void ensure(int bytes, String field) throws IOException {
-            if (bytes < 0 || position > length - bytes) {
-                throw malformed(field + " exceeds record body");
-            }
-            int cacheEnd = cacheStart + cache.limit();
-            if (position >= cacheStart && position + bytes <= cacheEnd) {
-                return;
-            }
-            int read = Math.min(length - position, Math.max(bytes, READ_AHEAD_BYTES));
-            cache = input.read(position, read);
-            cacheStart = position;
-            if (cache.remaining() != read) {
-                throw malformed("short metadata read");
-            }
-        }
     }
 
     static IllegalArgumentException malformed(String message) {
@@ -457,116 +311,6 @@ final class PageBlockCodec {
         return malformed(field + " contains malformed UTF-8 at byte " + relativeOffset);
     }
 
-    /** Packed Java dictionaries or byte-backed persisted dictionary-table coordinates. */
-    static final class Dictionaries {
-        private final String[][] packed;
-        private final byte[] owner;
-        private final int[] starts;
-        private final int[] counts;
-
-        private Dictionaries(String[][] packed, byte[] owner, int[] starts, int[] counts) {
-            this.packed = packed;
-            this.owner = owner;
-            this.starts = starts;
-            this.counts = counts;
-        }
-
-        static Dictionaries packed(String[][] values) {
-            return new Dictionaries(values, null, null, null);
-        }
-
-        static Dictionaries persisted(byte[] owner, int[] starts, int[] counts) {
-            return new Dictionaries(null, owner, starts, counts);
-        }
-
-        int size(int column) {
-            return packed != null ? packed[column].length : counts[column];
-        }
-
-        boolean byteBacked() {
-            return owner != null;
-        }
-
-        String packedValue(int column, int index) {
-            if (packed == null) {
-                throw new IllegalStateException("persisted dictionary has no packed String value");
-            }
-            return packed[column][index];
-        }
-
-        int coordinateBytes() {
-            return owner == null ? 0 : PERSISTED_DICTIONARY_COORDINATE_BYTES;
-        }
-
-        /** Conservative retained heap for lazily decoded persisted dictionary strings and caches. */
-        long decodedCacheBudgetBytes() {
-            if (owner == null) {
-                return 0;
-            }
-            int totalValues = 0;
-            for (int count : counts) {
-                totalValues += count;
-            }
-            if (totalValues == 0) {
-                return 0;
-            }
-            long bytes = 16L + (long) DICT_COLUMN_COUNT * Long.BYTES;
-            for (int column = 0; column < DICT_COLUMN_COUNT; column++) {
-                bytes += 16L + (long) size(column) * Long.BYTES;
-                for (int index = 0; index < size(column); index++) {
-                    // UTF-16 needs at most two bytes per validated UTF-8 input byte. The 64-byte
-                    // allowance covers the String and backing-array headers/alignment.
-                    bytes += 2L * encodedLength(column, index) + 64L;
-                }
-            }
-            return bytes;
-        }
-
-        String value(int column, int index) {
-            if (index < 0 || index >= size(column)) {
-                throw new IndexOutOfBoundsException(index);
-            }
-            if (packed != null) {
-                return packed[column][index];
-            }
-            Slice slice = locate(column, index);
-            return decodeUtf8Strict(owner, slice.offset(), slice.length(),
-                    "dictionary " + column + " value " + index);
-        }
-
-        int encodedLength(int column, int index) {
-            return packed != null
-                    ? packed[column][index].getBytes(StandardCharsets.UTF_8).length
-                    : locate(column, index).length();
-        }
-
-        void writeEncoded(ByteBuffer target, int column, int index) {
-            if (packed != null) {
-                putLenBytes(target, packed[column][index].getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            Slice slice = locate(column, index);
-            target.putShort((short) slice.length());
-            target.put(owner, slice.offset(), slice.length());
-        }
-
-        private Slice locate(int column, int target) {
-            int position = starts[column];
-            for (int index = 0; index <= target; index++) {
-                int length = ((owner[position] & 0xFF) << 8) | (owner[position + 1] & 0xFF);
-                position += Short.BYTES;
-                if (index == target) {
-                    return new Slice(position, length);
-                }
-                position += length;
-            }
-            throw new AssertionError("dictionary target was bounds-checked");
-        }
-
-        private record Slice(int offset, int length) {
-        }
-    }
-
     private static void putLenBytes(ByteBuffer buffer, byte[] bytes) {
         if (bytes.length > 0xFFFF) {
             throw new IllegalArgumentException("value exceeds the persisted u16 length limit");
@@ -593,7 +337,7 @@ final class PageBlockCodec {
         return key;
     }
 
-    private static void requireWriterKey(byte[] key, String field) {
+    static void requireWriterKey(byte[] key, String field) {
         if (key.length > ByteMidpoint.MAX_KEY_LEN) {
             throw new IllegalArgumentException(field + " length " + key.length
                     + " exceeds the S3 key limit of " + ByteMidpoint.MAX_KEY_LEN + " bytes");
@@ -607,256 +351,8 @@ final class PageBlockCodec {
         }
     }
 
-    private static IllegalArgumentException malformed(String message, Throwable cause) {
+    static IllegalArgumentException malformed(String message, Throwable cause) {
         return new IllegalArgumentException("malformed PageBlock: " + message, cause);
     }
 
-    /** Front-coded row payload writer with stable first-seen dictionary ordering. */
-    static final class Writer {
-
-        private byte[] buffer = new byte[256];
-        private int length;
-        private final Dict[] dicts;
-        private final boolean[] useDict;
-        private final int maxRawPayloadBytes;
-        private byte[] previousKey = EMPTY_KEY;
-
-        Writer(int hint, boolean[] useDict) {
-            this(hint, useDict, PageBlock.MAX_RAW_PAYLOAD_BYTES);
-        }
-
-        Writer(int hint, boolean[] useDict, int maxRawPayloadBytes) {
-            if (hint > 8) {
-                buffer = new byte[(int) Math.min(
-                        Math.min((long) hint * 48, 1 << 20), maxRawPayloadBytes)];
-            }
-            this.useDict = useDict;
-            this.maxRawPayloadBytes = maxRawPayloadBytes;
-            this.dicts = new Dict[DICT_COLUMN_COUNT];
-            for (int i = 0; i < dicts.length; i++) {
-                dicts[i] = new Dict();
-            }
-        }
-
-        void write(ListEntry entry) {
-            switch (entry) {
-                case ObjectEntry object -> writeObject(object);
-                case CommonPrefixEntry prefix -> {
-                    tag(TAG_COMMON_PREFIX);
-                    key(prefix.key());
-                }
-                case DeleteMarkerEntry marker -> writeDeleteMarker(marker);
-            }
-        }
-
-        private void writeObject(ObjectEntry object) {
-            tag(TAG_OBJECT);
-            key(object.key());
-            fixedLong(object.size());
-            fixedLong(object.lastModifiedEpochMicros());
-            etag(object.etag());
-            dictOrRaw(DictColumn.STORAGE_CLASS, object.storageClass());
-            nullableString(object.versionId());
-            bool(object.isLatest());
-            dictOrRaw(DictColumn.OWNER_ID, object.ownerId());
-            dictOrRaw(DictColumn.OWNER_DISPLAY_NAME, object.ownerDisplayName());
-            dictOrRaw(DictColumn.CHECKSUM_ALGORITHM, object.checksumAlgorithm());
-            dictOrRaw(DictColumn.CHECKSUM_TYPE, object.checksumType());
-        }
-
-        private void writeDeleteMarker(DeleteMarkerEntry marker) {
-            tag(TAG_DELETE_MARKER);
-            key(marker.key());
-            nullableString(marker.versionId());
-            bool(marker.isLatest());
-            fixedLong(marker.lastModifiedEpochMicros());
-            dictOrRaw(DictColumn.OWNER_ID, marker.ownerId());
-        }
-
-        private void tag(byte tag) {
-            put(tag);
-        }
-
-        private void key(KeyBytes key) {
-            byte[] raw = key.rawUnsafe();
-            requireWriterKey(raw, "row key");
-            int shared = commonPrefixLength(previousKey, raw);
-            int suffixLength = raw.length - shared;
-            varint(shared);
-            varint(suffixLength);
-            write(raw, shared, suffixLength);
-            previousKey = raw;
-        }
-
-        private void fixedLong(long value) {
-            ensure(8);
-            buffer[length++] = (byte) (value >>> 56);
-            buffer[length++] = (byte) (value >>> 48);
-            buffer[length++] = (byte) (value >>> 40);
-            buffer[length++] = (byte) (value >>> 32);
-            buffer[length++] = (byte) (value >>> 24);
-            buffer[length++] = (byte) (value >>> 16);
-            buffer[length++] = (byte) (value >>> 8);
-            buffer[length++] = (byte) value;
-        }
-
-        private void bool(boolean value) {
-            put((byte) (value ? 1 : 0));
-        }
-
-        private void nullableString(String value) {
-            if (value == null) {
-                varint(0);
-                return;
-            }
-            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-            varint(bytes.length + 1);
-            write(bytes);
-        }
-
-        private void etag(String etag) {
-            if (etag == null) {
-                put(ETAG_NULL);
-                return;
-            }
-            byte[] packed = tryPackMd5(etag);
-            if (packed != null) {
-                put(ETAG_PACKED_MD5);
-                write(packed);
-            } else {
-                put(ETAG_RAW);
-                byte[] bytes = etag.getBytes(StandardCharsets.UTF_8);
-                varint(bytes.length);
-                write(bytes);
-            }
-        }
-
-        private void dictOrRaw(DictColumn column, String value) {
-            if (value == null) {
-                varint(0);
-                return;
-            }
-            if (useDict[column.ordinal()]) {
-                varint(dicts[column.ordinal()].indexOf(value) + 1);
-            } else {
-                byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-                varint(bytes.length + 1);
-                write(bytes);
-            }
-        }
-
-        String[][] dictArrays() {
-            String[][] result = new String[dicts.length][];
-            for (int i = 0; i < dicts.length; i++) {
-                result[i] = dicts[i].toArray();
-            }
-            return result;
-        }
-
-        byte[] toBytes() {
-            byte[] result = new byte[length];
-            System.arraycopy(buffer, 0, result, 0, length);
-            return result;
-        }
-
-        private void varint(int value) {
-            int remaining = value;
-            while ((remaining & ~0x7F) != 0) {
-                put((byte) ((remaining & 0x7F) | 0x80));
-                remaining >>>= 7;
-            }
-            put((byte) remaining);
-        }
-
-        private void put(byte value) {
-            ensure(1);
-            buffer[length++] = value;
-        }
-
-        private void write(byte[] bytes) {
-            write(bytes, 0, bytes.length);
-        }
-
-        private void write(byte[] bytes, int offset, int writeLength) {
-            ensure(writeLength);
-            System.arraycopy(bytes, offset, buffer, length, writeLength);
-            length += writeLength;
-        }
-
-        private void ensure(int extra) {
-            if (extra < 0 || extra > maxRawPayloadBytes - length) {
-                throw new PageBlock.RawPayloadLimitException(maxRawPayloadBytes);
-            }
-            int required = length + extra;
-            if (required <= buffer.length) {
-                return;
-            }
-            int capacity = buffer.length;
-            while (capacity < required) {
-                capacity = Math.min(maxRawPayloadBytes,
-                        Math.max(capacity + 1, capacity << 1));
-            }
-            byte[] grown = new byte[capacity];
-            System.arraycopy(buffer, 0, grown, 0, length);
-            buffer = grown;
-        }
-    }
-
-    private static int commonPrefixLength(byte[] first, byte[] second) {
-        int length = Math.min(first.length, second.length);
-        int index = 0;
-        while (index < length && first[index] == second[index]) {
-            index++;
-        }
-        return index;
-    }
-
-    private static byte[] tryPackMd5(String etag) {
-        if (etag.length() != 32) {
-            return null;
-        }
-        byte[] result = new byte[16];
-        for (int i = 0; i < 16; i++) {
-            int high = hexValue(etag.charAt(i * 2));
-            int low = hexValue(etag.charAt(i * 2 + 1));
-            if (high < 0 || low < 0) {
-                return null;
-            }
-            result[i] = (byte) ((high << 4) | low);
-        }
-        return result;
-    }
-
-    private static int hexValue(char value) {
-        if (value >= '0' && value <= '9') {
-            return value - '0';
-        }
-        if (value >= 'a' && value <= 'f') {
-            return value - 'a' + 10;
-        }
-        return -1;
-    }
-
-    private static final class Dict {
-        private final List<String> values = new ArrayList<>();
-        private final Map<String, Integer> index = new HashMap<>();
-
-        int indexOf(String value) {
-            Integer existing = index.get(value);
-            if (existing == null) {
-                if (value.getBytes(StandardCharsets.UTF_8).length > 0xFFFF) {
-                    throw new IllegalArgumentException(
-                            "dictionary value exceeds the persisted u16 length limit");
-                }
-                existing = values.size();
-                values.add(value);
-                index.put(value, existing);
-            }
-            return existing;
-        }
-
-        String[] toArray() {
-            return values.toArray(new String[0]);
-        }
-    }
 }

@@ -137,10 +137,10 @@ class MergeCpuProfileHarness {
                 outputBytes += Files.size(finalFile);
             }
             System.out.printf("PROFILE_RESULT merge_ms=%d avg_cores_busy=%.2f merge_passes=%d "
-                            + "cascaded_passes=%d fastpath=%d total_rows=%d files=%d output_bytes=%d "
+                            + "cascaded_passes=%d pages_forwarded=%d total_rows=%d files=%d output_bytes=%d "
                             + "logical_output_fingerprint=%s multiset_digest=%s%n",
                     mergeMs, avgCoresBusy, result.mergePasses(), result.cascadedPasses(),
-                    result.fastPathEmissions(), result.totalRows(), result.finalFiles().size(), outputBytes,
+                    result.pagesForwarded(), result.totalRows(), result.finalFiles().size(), outputBytes,
                     validation == null ? "not_measured" : validation.orderedFingerprint(),
                     validation == null ? "not_measured" : validation.multisetDigest());
         } catch (Exception | Error e) {

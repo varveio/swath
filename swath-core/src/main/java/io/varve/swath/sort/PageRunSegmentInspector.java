@@ -20,8 +20,8 @@ import java.util.List;
  * <p><b>Reuses the shared read contract.</b> The trailer is read via {@link PageRunTrailer} (O(1), no
  * record walk); the framing/len-bound/CRC read and
  * the decode-free structural/min/max/count/codec parse are the single-sourced {@link
- * PageRunSegmentIo} primitives the streaming readers use (no row materialization and one header
- * parse). Unlike the streaming readers this inspector does <b>not</b> throw on a
+ * PageRunSegmentIo} primitives the merge/test consumers use (no row materialization and one header
+ * parse). Unlike those consumers, this inspector does <b>not</b> throw on a
  * per-record CRC mismatch — it records {@code crcOk=false} and keeps walking (via
  * {@link PageRunSegmentIo#nextRecord()}), so a debug dump can show exactly which record is torn. It
  * never mutates the file.

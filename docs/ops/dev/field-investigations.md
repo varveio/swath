@@ -278,6 +278,23 @@ network capacity, or an exact production request distribution.
 
 ---
 
+## 2026-08-25 — canonical timestamp arithmetic fast path
+
+An R8 sorted-finalization CPU profile attributed 4,256 of 9,097 merge-thread samples
+(46.8%) to timestamp parsing or formatting. Page-run staging already stored epoch microseconds,
+but the then-current path rebuilt a text-backed entry and converted the canonical value again for
+typed Parquet output.
+
+A byte-exact arithmetic fast path for canonical UTC text retained the general parser for every
+alternate accepted spelling. Two matched merges moved from 21.5–21.6 seconds to 14.0 seconds;
+whole-run report time moved from 57.6–57.8 seconds to 44.2–44.9 seconds, and peak RSS from
+3.27–3.31 GiB to 3.21–3.22 GiB. Both candidate arms passed exact row, manifest, inventory, MD5,
+sorted-readback, and replay-error checks. The source text model, page-run encoding, and Parquet
+schema did not change. These are dated observations from the topology and corpus used for PR #140,
+not a portable speedup claim.
+
+---
+
 ## 2026-08-30 — cached timestamps and served column indexes
 
 This investigation checks the two cheap sorted-finalization changes against the retained SOREL
@@ -359,3 +376,20 @@ dictionaries remain useful.
 
 The probe points toward a separate repeated experiment, but two same-order pairs on one warm corpus
 are not enough to change the writer policy. No dictionary default changes in this work.
+
+---
+
+## 2026-08-31 — ZSTD page-content checksum cost
+
+Before enabling ZSTD's frame content checksum for page-run v4, a JDK 25 / zstd-jni microcheck used
+the raw 44,144-byte front-coded payload produced by packing 1,000 representative object rows. After
+3,000 warmups, 20,000 checksum-on and 20,000 checksum-off level-1 compressions were interleaved in
+alternating order with a fresh compression context per operation, matching `PageCodec` lifecycle.
+
+Checksum-off took 1.687868 seconds and checksum-on took 1.678835 seconds (0.9946×; a −0.45 µs/page
+difference, within noise). Stored output grew from 3,487 to 3,491 bytes per page: the expected four
+checksum bytes. A separate 5,000-page full pack with the checksum enabled took 250.4 µs/page on the
+same host, so the measured checksum delta was below 0.2% of pack time. This is a targeted adoption
+check, not a general ZSTD throughput claim. Page-run v4 therefore enables the checksum and pins its
+verification with a checksum-only corruption test; the outer CRC32C continues to cover the plain
+PageBlock header and the `NONE`/`LZ4` payload cases.
