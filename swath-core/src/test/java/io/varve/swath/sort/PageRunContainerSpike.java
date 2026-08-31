@@ -41,14 +41,18 @@ public final class PageRunContainerSpike {
 
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
-            throw new IllegalArgumentException("usage: measure <dir> [rows] | merge <arm> <dir> <rows> | inspect <file>");
+            throw new IllegalArgumentException("usage: measure <dir> [rows] | merge <arm> <dir> <rows> | inspect <file> | deep <dir> [rows] | writerheap <dir>");
         }
         switch (args[0]) {
             case "measure" -> measure(Path.of(args[1]),
                     args.length > 2 ? Integer.parseInt(args[2]) : 1_000_000);
-            case "merge" -> mergeChild(Arm.valueOf(args[1].toUpperCase(Locale.ROOT)),
-                    Path.of(args[2]), Integer.parseInt(args[3]));
+            case "merge" -> mergeChild(Arm.of(args[1]), Path.of(args[2]),
+                    Integer.parseInt(args[3]),
+                    args.length > 4 ? Integer.parseInt(args[4]) : 1);
             case "inspect" -> System.out.print(AvroPageRunContainer.inspect(Path.of(args[1])));
+            case "deep" -> deep(Path.of(args[1]),
+                    args.length > 2 ? Integer.parseInt(args[2]) : 1_000_000);
+            case "writerheap" -> writerHeap(Path.of(args[1]));
             default -> throw new IllegalArgumentException("unknown mode " + args[0]);
         }
     }
@@ -98,6 +102,135 @@ public final class PageRunContainerSpike {
         System.out.println("INSPECT_COMMAND ./gradlew :swath-core:pr6bSpike -PspikeArgs='inspect "
                 + inspect + "'");
         System.out.print(AvroPageRunContainer.inspect(inspect));
+    }
+
+    // ------------------------------------------------------------ deep dive
+
+    private static final List<Arm> DEEP_ARMS = List.of(
+            Arm.CUSTOM, Arm.AVRO, Arm.AVRO_REUSE, Arm.AVRO_RAW, Arm.AVRO_RAW2);
+
+    private static void deep(Path directory, int rows) throws Exception {
+        if (rows <= 0 || rows % (SEGMENTS * PAGE_ROWS) != 0) {
+            throw new IllegalArgumentException("rows must be divisible by "
+                    + (SEGMENTS * PAGE_ROWS));
+        }
+        Files.createDirectories(directory);
+        warmContainerClasses(directory);
+        prepareCorpus(directory, rows);
+        prepareReorderedCorpus(directory, rows);
+        System.out.printf(Locale.ROOT, "DEEP_PROTOCOL rows=%d segments=%d rowsPerPage=%d%n",
+                rows, SEGMENTS, PAGE_ROWS);
+        System.out.println("DEEP_DISK arm bytes");
+        for (Arm arm : DEEP_ARMS) {
+            System.out.printf(Locale.ROOT, "DEEP_DISK %s %d%n", arm.label,
+                    corpusBytes(directory, arm));
+        }
+
+        System.out.println("DEEP_MERGE order arm repeat wallMs headerMs bodyMs rssPeakKiB rows digest");
+        // Round-robin so no arm systematically owns the warm page cache; then a reversed pass.
+        for (int round = 1; round <= 3; round++) {
+            List<Arm> order = new ArrayList<>(DEEP_ARMS);
+            if (round % 2 == 0) {
+                java.util.Collections.reverse(order);
+            }
+            for (Arm arm : order) {
+                for (MergeMeasurement result : runMergeChild(arm, directory, rows, 3)) {
+                    System.out.printf(Locale.ROOT, "DEEP_MERGE %d %s %d %.3f %.3f %.3f %d %d %d%n",
+                            round, arm.label, result.repeat(), result.wallNanos() / 1e6,
+                            result.headerNanos() / 1e6, result.bodyNanos() / 1e6,
+                            result.rssPeakKiB(), result.rows(), result.digest());
+                }
+            }
+        }
+    }
+
+    private static void prepareReorderedCorpus(Path directory, int rows) throws IOException {
+        int perSegment = rows / SEGMENTS;
+        for (int segment = 0; segment < SEGMENTS; segment++) {
+            List<PageBlock> pages = new ArrayList<>(perSegment / PAGE_ROWS);
+            for (int offset = 0; offset < perSegment; offset += PAGE_ROWS) {
+                List<ListEntry> page = new ArrayList<>(PAGE_ROWS);
+                for (int row = 0; row < PAGE_ROWS; row++) {
+                    page.add(object(segment + (long) (offset + row) * SEGMENTS));
+                }
+                pages.add(PageBlock.pack(page, CMP, PageCodec.LZ4));
+            }
+            try (AvroPageRunVariants.Writer writer = new AvroPageRunVariants.Writer(
+                    segmentPath(directory, Arm.AVRO_RAW2, segment), PageCodec.LZ4, true, 64)) {
+                for (PageBlock page : pages) {
+                    writer.append(page);
+                }
+                writer.seal();
+            }
+        }
+    }
+
+    // -------------------------------------------------- writer heap deep dive
+
+    private static void writerHeap(Path directory) throws Exception {
+        Files.createDirectories(directory);
+        warmContainerClasses(directory);
+        List<PageBlock> pages = writerPages();
+        System.out.println("HEAP shape concurrency state heapBytesPerOpen");
+        for (int concurrency : List.of(8, 64)) {
+            for (boolean afterAppend : List.of(false, true)) {
+                System.out.printf(Locale.ROOT, "HEAP %s %d %s %d%n", "custom", concurrency,
+                        afterAppend ? "after-append" : "just-opened",
+                        openHeap(directory, concurrency, afterAppend, pages,
+                                (path) -> PageRunSegmentEncoder.open(
+                                        path, SortMetrics.NO_OP, null, SortMode.OBJECTS)));
+                System.out.printf(Locale.ROOT, "HEAP %s %d %s %d%n", "avro-default-sync",
+                        concurrency, afterAppend ? "after-append" : "just-opened",
+                        openHeap(directory, concurrency, afterAppend, pages,
+                                (path) -> AvroPageRunContainer.openWriter(path, PageCodec.LZ4)));
+                System.out.printf(Locale.ROOT, "HEAP %s %d %s %d%n", "avro-sync64", concurrency,
+                        afterAppend ? "after-append" : "just-opened",
+                        openHeap(directory, concurrency, afterAppend, pages,
+                                (path) -> new AvroPageRunVariants.Writer(
+                                        path, PageCodec.LZ4, false, 64)));
+            }
+        }
+    }
+
+    private interface WriterFactory {
+        AutoCloseable open(Path path) throws IOException;
+    }
+
+    private static long openHeap(Path directory, int count, boolean afterAppend,
+            List<PageBlock> pages, WriterFactory factory) throws Exception {
+        forceGc();
+        long baseline = usedHeap();
+        List<AutoCloseable> open = new ArrayList<>();
+        try {
+            for (int index = 0; index < count; index++) {
+                Path path = directory.resolve("heap-" + count + "-" + index + "-"
+                        + System.nanoTime());
+                AutoCloseable writer = factory.open(path);
+                open.add(writer);
+                if (afterAppend) {
+                    appendOne(writer, pages.getFirst());
+                }
+            }
+            forceGc();
+            return Math.max(0, usedHeap() - baseline) / count;
+        } finally {
+            for (AutoCloseable writer : open) {
+                try {
+                    writer.close();
+                } catch (Exception ignored) {
+                    // measurement teardown
+                }
+            }
+        }
+    }
+
+    private static void appendOne(AutoCloseable writer, PageBlock page) throws IOException {
+        switch (writer) {
+            case PageRunSegmentEncoder encoder -> encoder.append(page);
+            case AvroPageRunContainer.Writer avro -> avro.append(page);
+            case AvroPageRunVariants.Writer avro -> avro.append(page);
+            default -> throw new IllegalStateException("unknown writer " + writer);
+        }
     }
 
     private static void warmContainerClasses(Path directory) throws IOException {
@@ -177,7 +310,7 @@ public final class PageRunContainerSpike {
                 open.add(switch (arm) {
                     case CUSTOM -> PageRunSegmentEncoder.open(
                             path, SortMetrics.NO_OP, null, SortMode.OBJECTS);
-                    case AVRO -> AvroPageRunContainer.openWriter(path, PageCodec.LZ4);
+                    default -> AvroPageRunContainer.openWriter(path, PageCodec.LZ4);
                 });
             }
             forceGc();
@@ -204,7 +337,7 @@ public final class PageRunContainerSpike {
     private static void flush(Arm arm, Path path, List<PageBlock> source) throws IOException {
         List<PageBlock> pages = new ArrayList<>(source);
         switch (arm) {
-            case CUSTOM -> {
+            default -> {
                 long entries = pages.stream().mapToLong(PageBlock::count).sum();
                 long estimated = pages.stream().mapToLong(PageBlock::stagingEstimatedBytes).sum();
                 SealedBuffer sealed = new SealedBuffer(pages, 1,
@@ -213,7 +346,7 @@ public final class PageRunContainerSpike {
                 new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                         PageCodec.LZ4).flush(sealed, path);
             }
-            case AVRO -> {
+            case AVRO, AVRO_REUSE, AVRO_RAW, AVRO_RAW2 -> {
                 try (AvroPageRunContainer.Writer writer =
                         AvroPageRunContainer.openWriter(path, PageCodec.LZ4)) {
                     for (PageBlock page : pages) {
@@ -268,25 +401,41 @@ public final class PageRunContainerSpike {
         }
     }
 
-    private static void mergeChild(Arm arm, Path directory, int expectedRows) throws IOException {
+    private static void mergeChild(Arm arm, Path directory, int expectedRows, int repeats)
+            throws IOException {
+        for (int repeat = 1; repeat <= repeats; repeat++) {
+            mergeOnce(arm, directory, expectedRows, repeat);
+        }
+    }
+
+    private static void mergeOnce(Arm arm, Path directory, int expectedRows, int repeat)
+            throws IOException {
         forceGcUnchecked();
         long start = System.nanoTime();
         for (int segment = 0; segment < SEGMENTS; segment++) {
             Path path = segmentPath(directory, arm, segment);
-            if (arm == Arm.CUSTOM) {
-                scanCustomHeaders(path);
-            } else {
-                AvroPageRunContainer.scanHeaders(path);
+            switch (arm) {
+                case CUSTOM -> scanCustomHeaders(path);
+                case AVRO -> AvroPageRunContainer.scanHeaders(path);
+                case AVRO_REUSE -> scanReuseHeaders(path);
+                case AVRO_RAW -> scanRawHeaders(path, false);
+                case AVRO_RAW2 -> AvroPageRunVariants.scanHeadersSeeking(path);
             }
         }
+        long afterHeaders = System.nanoTime();
 
         List<EntryStream> streams = new ArrayList<>();
         try {
             for (int segment = 0; segment < SEGMENTS; segment++) {
                 Path path = segmentPath(directory, arm, segment);
-                streams.add(arm == Arm.CUSTOM
-                        ? new CustomStream(path) : new AvroStream(path));
+                streams.add(switch (arm) {
+                    case CUSTOM -> new CustomStream(path);
+                    case AVRO -> new AvroStream(path);
+                    case AVRO_REUSE -> new ReuseStream(path);
+                    case AVRO_RAW, AVRO_RAW2 -> new RawStream(path, arm.reordered());
+                });
             }
+            long afterOpen = System.nanoTime();
             long rows = 0;
             long digest = 0xcbf29ce484222325L;
             try (StreamingMerger merge = new StreamingMerger(streams, CMP, ignored -> { })) {
@@ -301,8 +450,9 @@ public final class PageRunContainerSpike {
                 throw new IOException("merged " + rows + " rows, expected " + expectedRows);
             }
             long wall = System.nanoTime() - start;
-            System.out.printf(Locale.ROOT, "CHILD_RESULT %s %d %d %d %d%n",
-                    arm.label, wall, readVmHwmKiB(), rows, digest);
+            System.out.printf(Locale.ROOT, "CHILD_RESULT %s %d %d %d %d %d %d %d%n",
+                    arm.label, wall, readVmHwmKiB(), rows, digest,
+                    afterHeaders - start, System.nanoTime() - afterOpen, repeat);
         } catch (IOException | RuntimeException failure) {
             for (EntryStream stream : streams) {
                 try {
@@ -312,6 +462,26 @@ public final class PageRunContainerSpike {
                 }
             }
             throw failure;
+        }
+    }
+
+    private static void scanReuseHeaders(Path path) throws IOException {
+        AvroPageRunVariants.Frame frame = new AvroPageRunVariants.Frame();
+        try (AvroPageRunVariants.ReuseReader reader =
+                new AvroPageRunVariants.ReuseReader(path, true)) {
+            while (reader.next(frame, false)) {
+                // projected header pass
+            }
+        }
+    }
+
+    private static void scanRawHeaders(Path path, boolean reordered) throws IOException {
+        AvroPageRunVariants.Frame frame = new AvroPageRunVariants.Frame();
+        try (AvroPageRunVariants.RawReader reader =
+                new AvroPageRunVariants.RawReader(path, reordered)) {
+            while (reader.next(frame, false)) {
+                // raw-block header pass
+            }
         }
     }
 
@@ -326,32 +496,39 @@ public final class PageRunContainerSpike {
 
     private static MergeMeasurement runMergeChild(Arm arm, Path directory, int rows)
             throws IOException, InterruptedException {
+        return runMergeChild(arm, directory, rows, 1).getFirst();
+    }
+
+    private static List<MergeMeasurement> runMergeChild(Arm arm, Path directory, int rows,
+            int repeats) throws IOException, InterruptedException {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         Process process = new ProcessBuilder(java, "-Xms128m", "-Xmx2g", "-cp",
                 System.getProperty("java.class.path"), PageRunContainerSpike.class.getName(),
-                "merge", arm.label, directory.toString(), Integer.toString(rows))
+                "merge", arm.label, directory.toString(), Integer.toString(rows),
+                Integer.toString(repeats))
                 .redirectErrorStream(true)
                 .start();
-        String result = null;
+        List<MergeMeasurement> results = new ArrayList<>();
         try (BufferedReader output = new BufferedReader(
                 new InputStreamReader(process.getInputStream()))) {
             String line;
             while ((line = output.readLine()) != null) {
                 if (line.startsWith("CHILD_RESULT ")) {
-                    result = line;
+                    String[] fields = line.split(" ");
+                    results.add(new MergeMeasurement(arm, Long.parseLong(fields[2]),
+                            Long.parseLong(fields[3]), Long.parseLong(fields[4]),
+                            Long.parseLong(fields[5]), Long.parseLong(fields[6]),
+                            Long.parseLong(fields[7]), Integer.parseInt(fields[8])));
                 } else {
                     System.out.println("CHILD " + line);
                 }
             }
         }
         int exit = process.waitFor();
-        if (exit != 0 || result == null) {
+        if (exit != 0 || results.size() != repeats) {
             throw new IOException("merge child failed for " + arm.label + " (exit " + exit + ")");
         }
-        String[] fields = result.split(" ");
-        return new MergeMeasurement(arm, Long.parseLong(fields[2]),
-                Long.parseLong(fields[3]), Long.parseLong(fields[4]),
-                Long.parseLong(fields[5]));
+        return results;
     }
 
     private static long corpusBytes(Path directory, Arm arm) throws IOException {
@@ -376,7 +553,12 @@ public final class PageRunContainerSpike {
     }
 
     private static Path segmentPath(Path directory, Arm arm, int segment) {
-        return directory.resolve(String.format(Locale.ROOT, "%s-%02d.%s", arm.label, segment,
+        String stem = switch (arm) {
+            case CUSTOM -> "custom";
+            case AVRO_RAW2 -> "avro2";
+            default -> "avro";
+        };
+        return directory.resolve(String.format(Locale.ROOT, "%s-%02d.%s", stem, segment,
                 arm == Arm.CUSTOM ? "pageseg" : "avro"));
     }
 
@@ -441,12 +623,31 @@ public final class PageRunContainerSpike {
 
     private enum Arm {
         CUSTOM("custom"),
-        AVRO("avro");
+        AVRO("avro"),
+        /** Spike shape, datum + ByteBuffer reuse, no defensive routing copies. */
+        AVRO_REUSE("avro-reuse"),
+        /** hasNext()/nextBlock() raw block iteration, one reused BinaryDecoder. */
+        AVRO_RAW("avro-raw"),
+        /** Raw blocks plus routing-first schema and a seek-over-payload header pass. */
+        AVRO_RAW2("avro-raw2");
 
         private final String label;
 
         Arm(String label) {
             this.label = label;
+        }
+
+        static Arm of(String label) {
+            for (Arm arm : values()) {
+                if (arm.label.equals(label)) {
+                    return arm;
+                }
+            }
+            throw new IllegalArgumentException("unknown arm " + label);
+        }
+
+        boolean reordered() {
+            return this == AVRO_RAW2;
         }
     }
 
@@ -460,7 +661,7 @@ public final class PageRunContainerSpike {
     }
 
     private record MergeMeasurement(Arm arm, long wallNanos, long rssPeakKiB, long rows,
-                                    long digest) {
+                                    long digest, long headerNanos, long bodyNanos, int repeat) {
     }
 
     private abstract static class BlockStream implements EntryStream {
@@ -535,6 +736,83 @@ public final class PageRunContainerSpike {
         public void close() throws IOException {
             io.close();
         }
+    }
+
+    private static final class ReuseStream extends BlockStream {
+
+        private final AvroPageRunVariants.ReuseReader reader;
+        private final AvroPageRunVariants.Frame frame = new AvroPageRunVariants.Frame();
+        private final Path path;
+
+        ReuseStream(Path path) throws IOException {
+            this.path = path;
+            this.reader = new AvroPageRunVariants.ReuseReader(path, false);
+            initialize();
+        }
+
+        @Override
+        PageBlock nextBlock() throws IOException {
+            if (!reader.next(frame, true)) {
+                return null;
+            }
+            return decodePage(frame, path);
+        }
+
+        @Override
+        public void close() throws IOException {
+            reader.close();
+        }
+    }
+
+    private static final class RawStream extends BlockStream {
+
+        private final AvroPageRunVariants.RawReader reader;
+        private final AvroPageRunVariants.Frame frame = new AvroPageRunVariants.Frame();
+        private final Path path;
+
+        RawStream(Path path, boolean reordered) throws IOException {
+            this.path = path;
+            this.reader = new AvroPageRunVariants.RawReader(path, reordered);
+            initialize();
+        }
+
+        @Override
+        PageBlock nextBlock() throws IOException {
+            if (!reader.next(frame, true)) {
+                return null;
+            }
+            return decodePage(frame, path);
+        }
+
+        @Override
+        public void close() throws IOException {
+            reader.close();
+        }
+    }
+
+    /**
+     * Shared body-pass work for the Avro variants: parse the PageBlock header, cross-check it
+     * against the duplicated OCF routing metadata, and decode. This is exactly the work the spike's
+     * {@code AvroPageRunContainer.Reader.nextPage} does, minus its per-field defensive copies.
+     */
+    private static PageBlock decodePage(AvroPageRunVariants.Frame frame, Path path)
+            throws IOException {
+        byte[] body = frame.page;
+        PageBlockCodec.Header header;
+        try {
+            header = PageRunSegmentIo.parsePageHeader(body);
+        } catch (IllegalArgumentException failure) {
+            throw new IOException("Avro page-run segment " + path + ": malformed PageBlock",
+                    failure);
+        }
+        if (!Arrays.equals(header.minKey(), frame.minKey)
+                || !Arrays.equals(header.maxKey(), frame.maxKey)
+                || header.count() != frame.count
+                || header.rawPayloadLength() != frame.rawPayloadLength) {
+            throw new IOException("Avro page-run segment " + path
+                    + ": PageBlock metadata disagrees with OCF record metadata");
+        }
+        return PageBlockCodec.deserialize(body, header, path);
     }
 
     private static final class AvroStream extends BlockStream {
