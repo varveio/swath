@@ -150,8 +150,20 @@ at most one version of each module (`verifyNoDuplicateModuleVersions`, part of
 conformance launcher into the same `lib/`, and before the floors were pinned it
 shipped two complete Jackson generations at once. And a nightly job scans both
 distributions and both runtime images against the OSV database
-(`scripts/ci/osv-scan.sh`); accepted findings live in
-`config/osv/osv-scanner.toml`, each with an argument and an expiry date.
+(`scripts/ci/osv-scan.sh`). The shipped Java closures are zero-tolerance except
+for the narrowly argued, expiring Java findings in
+`config/osv/osv-scanner.toml`.
+
+Image scans also cover the JRE base's Ubuntu packages. Their raw OSV JSON is
+retained as a workflow artifact and evaluated by
+`scripts/ci/osv-image-policy.py`: every non-Ubuntu finding outside the same
+expiring Java exceptions fails, as does Canonical priority high, critical,
+missing, or unknown. Canonical medium, low, and negligible priorities are
+reported with advisory-group and package-occurrence counts and whether the
+advisory lists a fixed version, but do not fail the nightly. A USN's
+classification comes from the worst Canonical
+priority among its member `UBUNTU-CVE` records, not its numeric CVSS maximum.
+Malformed or ambiguous scanner output fails closed.
 
 ## 5. Docker images
 
@@ -319,11 +331,12 @@ the `public-release` environment and requires the explicit
 `PUBLIC_RELEASE_ENABLED=true` repository variable, which acts as a publish
 kill-switch.
 
-The **CI image checks** have no scheduled run — they fire only on pull
-requests, pushes to `main`, and manual dispatch. (A separate `nightly` workflow
-runs the deep and perf test tiers on a daily schedule; it does not build or
-publish images.) Top-level workflow concurrency cancels superseded runs of the
-same PR; `main` and manual runs have unique top-level groups and are not
+The multi-arch **CI image build and smoke checks** have no scheduled run — they
+fire only on pull requests, pushes to `main`, and manual dispatch. A separate
+`nightly` workflow runs the deep and perf tiers and builds builder-native copies
+of both runtime images solely for OSV scanning; it never publishes those
+images. Top-level workflow concurrency cancels superseded runs of the same PR;
+`main` and manual runs have unique top-level groups and are not
 serialized there. The `docker-publish` job has its own global concurrency group,
 which queues publishes so shared tags cannot race. The `push` trigger is scoped
 to `main`, so

@@ -103,8 +103,10 @@ jobs:
   # has not moved. That is also why it belongs beside the deep tier: both are backstops
   # against drift the per-commit gate cannot see.
   #
-  # config/osv/osv-scanner.toml carries the argued exceptions, each with an expiry; anything
-  # else fails the job. See scripts/ci/osv-scan.sh.
+  # config/osv/osv-scanner.toml carries only the argued Java exceptions, each with an expiry.
+  # The checked-in image policy fails every unexpected non-Ubuntu advisory and Ubuntu
+  # high/critical/unknown priority while reporting lower Canonical priorities. See
+  # scripts/ci/osv-scan.sh and scripts/ci/osv-image-policy.py.
   osv-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -155,4 +157,14 @@ jobs:
           cache-from: type=gha,scope=swath-replay
 
       - name: Scan the runtime images
+        env:
+          OSV_REPORT_DIR: build/reports/osv
         run: ./scripts/ci/osv-scan.sh image:swath:osv image:swath-replay:osv
+
+      - name: Upload raw OSV image reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: osv-image-reports
+          path: build/reports/osv/*.json
+          if-no-files-found: ignore

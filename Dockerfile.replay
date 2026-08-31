@@ -4,7 +4,7 @@
 # replace the `build` stage with the promotion payload produced from the already-tested
 # installDist tree, preserving the same build-once/promote-exact-bytes contract as the
 # main swath image. The distribution is architecture-neutral; only the JRE base varies.
-FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk-noble@sha256:3eb81ed94d8c1a34422f19f8188548bdf02cae69c91d0328afdbb7abed90f617 AS build
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk-noble@sha256:534968c051301957beae735e7ba1db54d99ddecf08746d3b9d4f318cc132dbc3 AS build
 WORKDIR /src
 
 # The checked-in third-party notice is verified while Gradle assembles installDist.
@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon :swath-replay:
 
 # RUN-free runtime stage keeps foreign-architecture builds free of emulation. The Gradle
 # launcher uses `exec`, so the JVM becomes PID 1 and receives container signals directly.
-FROM eclipse-temurin:25-jre-noble@sha256:2f1da100788559b397bcf48c736169ea5b070bde84e55f203bbee8e83d87a175 AS runtime
+FROM eclipse-temurin:25-jre-noble@sha256:b4c93a50fc67612798db73d68ca3b0ee4ebdd51736e59cca370e689b9797037e AS runtime
 
 COPY --from=build --chown=10001:10001 /src/swath-replay/build/install/swath-replay /opt/swath-replay
 
