@@ -30,8 +30,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
@@ -77,7 +79,11 @@ final class SortPublicationCrashMatrixTest {
                     .isInstanceOf(IOException.class);
             if (crash.afterListener()) {
                 failure.isInstanceOf(CommittedPublicationCleanupException.class)
-                        .hasRootCauseMessage("injected publication crash at " + crash);
+                        .hasRootCauseMessage("injected publication crash at " + crash)
+                        .satisfies(thrown -> assertThat(
+                                ((CommittedPublicationCleanupException) thrown).publishedResult()
+                                        .totalRows())
+                                .isEqualTo(shape.expectedKeys().size()));
             } else {
                 failure.isNotInstanceOf(CommittedPublicationCleanupException.class)
                         .hasMessageContaining("injected publication crash");
@@ -91,10 +97,14 @@ final class SortPublicationCrashMatrixTest {
                 assertThat(Files.readString(output.resolve("part-99999.parquet"))).isEqualTo("prior-extra");
             }
 
-            // All failures before staging completion remain merge-reachable from the same durable
-            // originals. With retention enabled, even a synthetic throw after completion can replay;
-            // with retention off that step has already completed the direct transform in full.
-            if (crash.step() != PublicationStep.AFTER_STAGING_COMPLETION || retain) {
+            // Before the committer returns, re-entry is a full merge from the still-durable originals.
+            // After it returns, the checkpoint is PUBLISHED: re-entry performs cleanup only and must
+            // neither invoke the committer nor encode the already-authoritative dataset again.
+            if (crash.afterListener()) {
+                assertPublishedSet(output, shape.expectedKeys(), shape.expectedParts());
+                reenterPublishedCleanup(output, staging, retain, originalNames);
+                assertThat(listenerCalls).hasValue(1);
+            } else {
                 assertThat(originals).allMatch(Files::exists);
                 transform(shape.config(retain), SortedFileWriterFactory.DEFAULT,
                         PublicationStepHook.NO_OP).transform(originals, output, staging,
@@ -111,6 +121,47 @@ final class SortPublicationCrashMatrixTest {
                 assertThat(staging).doesNotExist();
             }
         }
+    }
+
+    @Test
+    void crashMatrixInjectsEveryPublicationStepAndEveryCascadeIntermediateOrdinal() {
+        Set<PublicationStep> covered = EnumSet.noneOf(PublicationStep.class);
+        for (MergeShape shape : MergeShape.values()) {
+            shape.crashPoints().stream().map(CrashPoint::step).forEach(covered::add);
+        }
+        assertThat(covered).containsExactlyInAnyOrder(PublicationStep.values());
+        assertThat(MergeShape.CASCADE.crashPoints()
+                .stream()
+                .filter(point -> point.step()
+                        == PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP)
+                .map(CrashPoint::ordinal))
+                .containsExactly(0, 1, 2, 3, 4);
+    }
+
+    @Test
+    void committerCleanupSignalWithoutAttachedDatasetCommitEscapesUnchanged(
+            @TempDir Path root) throws Exception {
+        Path output = Files.createDirectories(root.resolve("data"));
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        List<Path> originals = stage(
+                staging, MergeShape.ONE_ENCODER_SINGLE_PART.segmentRows());
+        CommittedPublicationCleanupException signal =
+                new CommittedPublicationCleanupException(
+                        CommittedPublicationCleanupException.Stage.AFTER_PUBLISH_LISTENER_HOOK,
+                        new IOException("committer-owned cleanup pending"));
+
+        assertThatThrownBy(() -> transform(
+                MergeShape.ONE_ENCODER_SINGLE_PART.config(false),
+                SortedFileWriterFactory.DEFAULT, PublicationStepHook.NO_OP)
+                .transform(originals, output, staging,
+                        (parts, rows) -> { throw signal; },
+                        ignored -> { }, FinalPassListener.NO_OP))
+                .isSameAs(signal);
+        assertThatThrownBy(signal::publishedResult)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no published sort result");
+        assertPublishedSet(output, MergeShape.ONE_ENCODER_SINGLE_PART.expectedKeys(), 1);
+        assertThat(originals).allMatch(Files::exists);
     }
 
     @Test
@@ -228,7 +279,7 @@ final class SortPublicationCrashMatrixTest {
 
     private static Stream<Arguments> publicationMatrix() {
         return Stream.of(MergeShape.ONE_ENCODER_SINGLE_PART, MergeShape.PIPELINE,
-                        MergeShape.EMPTY_PIPELINE_REQUEST)
+                        MergeShape.CASCADE, MergeShape.EMPTY_PIPELINE_REQUEST)
                 .flatMap(shape -> Stream.of(false, true)
                         .flatMap(prior -> Stream.of(false, true)
                                 .map(retain -> Arguments.of(shape, prior, retain))));
@@ -293,6 +344,18 @@ final class SortPublicationCrashMatrixTest {
         }
     }
 
+    private static void reenterPublishedCleanup(Path output, Path staging, boolean retain,
+            List<String> originalNames) throws IOException {
+        StagingReconciliation reconciliation = retain && Files.isDirectory(staging)
+                ? StagingReconciliation.fromNames(originalNames)
+                : StagingReconciliation.discardAll();
+        reconciliation.reconcile(staging);
+        if (!retain && Files.isDirectory(staging)) {
+            Files.delete(staging);
+        }
+        StagingReconciliation.sweepFinalTemporaries(output);
+    }
+
     private static List<String> immediateNames(Path dir) throws IOException {
         try (var entries = Files.list(dir)) {
             return entries.map(path -> path.getFileName().toString()).sorted().toList();
@@ -321,33 +384,42 @@ final class SortPublicationCrashMatrixTest {
     }
 
     private enum MergeShape {
-        ONE_ENCODER_SINGLE_PART(1, Long.MAX_VALUE,
+        ONE_ENCODER_SINGLE_PART(1, 512, Long.MAX_VALUE,
                 List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
-                1),
-        ONE_ENCODER_ROLLED(1, 1L,
+                1, 0),
+        ONE_ENCODER_ROLLED(1, 512, 1L,
                 List.of(objects("a", "b", "c"), objects("d", "e", "f"), objects("g", "h", "i")),
-                3),
-        PIPELINE(3, Long.MAX_VALUE,
+                3, 0),
+        PIPELINE(3, 512, Long.MAX_VALUE,
                 List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
-                1),
-        EMPTY_PIPELINE_REQUEST(3, Long.MAX_VALUE, List.of(), 1);
+                1, 0),
+        CASCADE(2, 2, Long.MAX_VALUE,
+                List.of(objects("a"), objects("b"), objects("c"), objects("d"), objects("e")),
+                1, 5),
+        EMPTY_PIPELINE_REQUEST(3, 512, Long.MAX_VALUE, List.of(), 1, 0);
 
         private final int parallelism;
+        private final int fanIn;
         private final long rollBytes;
         private final List<List<ListEntry>> segmentRows;
         private final int expectedParts;
+        private final int disposableIntermediates;
 
-        MergeShape(int parallelism, long rollBytes, List<List<ListEntry>> segmentRows,
-                int expectedParts) {
+        MergeShape(int parallelism, int fanIn, long rollBytes,
+                List<List<ListEntry>> segmentRows, int expectedParts,
+                int disposableIntermediates) {
             this.parallelism = parallelism;
+            this.fanIn = fanIn;
             this.rollBytes = rollBytes;
             this.segmentRows = segmentRows;
             this.expectedParts = expectedParts;
+            this.disposableIntermediates = disposableIntermediates;
         }
 
         SortConfig config(boolean retain) {
             return SortConfigs.base()
                     .withMergeParallelism(parallelism)
+                    .withFanIn(fanIn)
                     .withMergeBudgetBytes(64L << 20)
                     .withFinalFileBytes(rollBytes)
                     .withStagingRetention(retain
@@ -379,6 +451,10 @@ final class SortPublicationCrashMatrixTest {
             }
             points.add(CrashPoint.simple(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC));
             points.add(CrashPoint.simple(PublicationStep.AFTER_PUBLISH_LISTENER));
+            for (int ordinal = 0; ordinal < disposableIntermediates; ordinal++) {
+                points.add(new CrashPoint(
+                        PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP, ordinal));
+            }
             points.add(CrashPoint.simple(PublicationStep.AFTER_STAGING_COMPLETION));
             return List.copyOf(points);
         }
@@ -396,6 +472,7 @@ final class SortPublicationCrashMatrixTest {
 
         boolean afterListener() {
             return step == PublicationStep.AFTER_PUBLISH_LISTENER
+                    || step == PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP
                     || step == PublicationStep.AFTER_STAGING_COMPLETION;
         }
 

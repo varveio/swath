@@ -32,6 +32,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
 import org.junit.jupiter.api.Test;
@@ -137,7 +139,7 @@ class SortRollPublishStampCharacterizationTest {
 
         SortConfig config = SortConfigs.base()
                 .withFinalFileBytes(1L).withMergeParallelism(3).withMergeBudgetBytes(64L << 20);
-        List<Long> progress = new ArrayList<>();
+        Queue<Long> progress = new ConcurrentLinkedQueue<>();
         SortedDatasetResult result = stampedTransform(config)
                 .transform(staging, dirs.output, dirs.staging, SortedDatasetCommitter.NO_OP, progress::add,
                         FinalPassListener.NO_OP);
