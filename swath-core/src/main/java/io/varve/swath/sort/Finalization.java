@@ -82,7 +82,7 @@ final class Finalization {
         SegmentHeaderCursors cursors = null;
         PartEncoders encoders = null;
         try {
-            channels = openChannels(pipelineCatalog, plan, metrics);
+            channels = openChannels(pipelineCatalog, metrics);
             cursors = new SegmentHeaderCursors(channels,
                     SegmentHeaderCursors.planned(channels.size()), metrics, failure);
             encoders = new PartEncoders(effectiveEncoders, channels, plan.clusterBudgetBytes(),
@@ -164,7 +164,7 @@ final class Finalization {
      * same exact per-descriptor value.
      */
     private static List<PageRunSegmentIo> openChannels(PageRunCatalog catalog,
-            MergePlanner.PipelinePlan plan, SortMetrics metrics) throws IOException {
+            SortMetrics metrics) throws IOException {
         List<PageRunSegmentIo> channels = new java.util.ArrayList<>(catalog.descriptors().size());
         try {
             for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {

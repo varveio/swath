@@ -147,7 +147,7 @@ These `sort` fields describe finalization work:
 | `pipeline_plan_queue_wait_ms` | The subset of router wait caused by a full complete-plan queue. |
 | `pipeline_encoder_page_reads` | Positional full-frame page reads performed by encoders. |
 | `pipeline_encoder_read_wait_ms` | Positional read and CRC service summed across encoders; concurrent service means this can exceed merge wall time. |
-| `pipeline_decoded_page_bytes_peak` | Highest exact retained decoded-page residency observed by any encoder cluster. |
+| `pipeline_decoded_page_bytes_peak` | Highest exact retained decoded-page residency observed by any encoder lane or cascade page merger. |
 | `pipeline_parts_open` | Open pipeline output writers at the snapshot. |
 | `pipeline_router_wait_share`, `pipeline_plan_queue_wait_share`, `pipeline_encoder_read_wait_share` | The corresponding cumulative millisecond value divided by `merge_ms`; zero when `merge_ms` is zero. These are dimensionless service-to-wall ratios, so a summed concurrent encoder ratio can exceed `1.0`. |
 

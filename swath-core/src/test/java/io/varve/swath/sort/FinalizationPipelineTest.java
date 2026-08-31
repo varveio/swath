@@ -729,12 +729,16 @@ final class FinalizationPipelineTest {
         }
         SortTransformResult serial = runPages(root.resolve("serial"), pages, 4_096,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
-                PageCodec.NONE, 1);
+                PageCodec.NONE, 1, PartSizer.Target.fixedRows(160));
         SortTransformResult concurrent = runPages(root.resolve("concurrent"), pages, 4_096,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
-                PageCodec.NONE, 4);
+                PageCodec.NONE, 4, PartSizer.Target.fixedRows(160));
 
         assertThat(concurrent.finalFiles()).hasSameSizeAs(serial.finalFiles());
+        for (int part = 0; part < serial.finalFiles().size(); part++) {
+            assertThat(Files.mismatch(serial.finalFiles().get(part),
+                    concurrent.finalFiles().get(part))).isEqualTo(-1L);
+        }
         assertThat(keys(concurrent.finalFiles())).containsExactlyElementsOf(keys(serial.finalFiles()));
         assertThat(concurrent.totalRows()).isEqualTo(serial.totalRows());
     }
@@ -929,13 +933,32 @@ final class FinalizationPipelineTest {
             int fanIn, long mergeBudgetBytes, PageCodec codec,
             int encoderCount) throws IOException {
         return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
-                mergeBudgetBytes, codec, encoderCount, ignored -> { });
+                mergeBudgetBytes, codec, encoderCount, PartSizer.Target.calibrated(),
+                ignored -> { });
+    }
+
+    private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
+            long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
+            int fanIn, long mergeBudgetBytes, PageCodec codec,
+            int encoderCount, PartSizer.Target partTarget) throws IOException {
+        return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
+                mergeBudgetBytes, codec, encoderCount, partTarget, ignored -> { });
     }
 
     private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes, PageCodec codec,
             int encoderCount, LongConsumer progressCallback) throws IOException {
+        return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
+                mergeBudgetBytes, codec, encoderCount, PartSizer.Target.calibrated(),
+                progressCallback);
+    }
+
+    private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
+            long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
+            int fanIn, long mergeBudgetBytes, PageCodec codec,
+            int encoderCount, PartSizer.Target partTarget, LongConsumer progressCallback)
+            throws IOException {
         Path output = Files.createDirectories(root.resolve("data"));
         Path staging = Files.createDirectories(root.resolve("_staging"));
         List<Path> segments = new ArrayList<>();
@@ -952,7 +975,7 @@ final class FinalizationPipelineTest {
                 .withFinalFileBytes(finalFileBytes);
         SortRun run = new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 metrics, writerFactory,
-                () -> -1, StaleFinalSweep.OWN_PARTS_ONLY);
+                () -> -1, StaleFinalSweep.OWN_PARTS_ONLY, partTarget);
         return new SortTransform(run).transform(segments, output, staging, PublishListener.NO_OP,
                 progressCallback, FinalPassListener.NO_OP);
     }

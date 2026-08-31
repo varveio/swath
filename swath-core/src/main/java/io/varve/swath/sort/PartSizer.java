@@ -15,13 +15,13 @@ package io.varve.swath.sort;
 final class PartSizer {
     static final double INITIAL_ENCODED_TO_LOGICAL_RATIO = 1.0;
 
-    /** Production byte calibration and a benchmark-only row-count control. */
+    /** Production byte calibration and a test-selected row-count control. */
     enum Policy {
         CALIBRATED_BYTES,
         FIXED_ROWS
     }
 
-    /** Immutable benchmark-selected policy; production always supplies {@link #calibrated()}. */
+    /** Immutable production- or test-selected policy; production supplies {@link #calibrated()}. */
     record Target(Policy policy, long fixedRows) {
         Target {
             if (policy == Policy.FIXED_ROWS && fixedRows <= 0) {

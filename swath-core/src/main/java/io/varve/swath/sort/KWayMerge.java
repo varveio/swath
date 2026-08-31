@@ -112,7 +112,7 @@ final class KWayMerge<S> {
         default void initialize() throws IOException {
         }
 
-        /** Heap retained by this stream's encoded current-page frontier. */
+        /** Upper bound on heap the encoded current-page frontier can retain, computed before it exists. */
         default long frontierRetainedBytes() {
             return 0;
         }

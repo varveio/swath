@@ -328,7 +328,7 @@ Use the JSON `sort` block to identify the limiting stage:
 | high `pipeline_plan_queue_wait_ms` | encoders cannot drain complete plans as quickly as the router produces them |
 | high `pipeline_encoder_read_wait_ms` | positional frame reads and CRC/page parsing dominate encoder service |
 | high `pipeline_cluster_pages` / `pipeline_cluster_rows` | page bounds overlap enough to require row merging |
-| `pipeline_decoded_page_bytes_peak` near the admitted lane share | decoded-page residency is tight |
+| `pipeline_decoded_page_bytes_peak` near the admitted encoder lane share, or near the cascade decoded-page budget when `passes > 1` | decoded-page residency is tight in the corresponding path |
 | encoder clamp or floor engagement reasons | heap or descriptor admission bound concurrency |
 | cascade reasons and multiple `passes` | the source catalog did not fit one cascade pass |
 

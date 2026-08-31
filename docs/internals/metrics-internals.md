@@ -63,7 +63,7 @@ The terminal `sort` block decomposes this inclusive clock with the finalization 
   components.
 - `pipeline_encoder_page_reads` counts complete positional frame reads.
   `pipeline_decoded_page_bytes_peak` is the largest exact retained decoded-page population
-  reported by any encoder lane.
+  reported by any encoder lane or cascade page merger.
 - `pipeline_parts_open` is the current open-writer gauge. It normally reads zero in the terminal
   artifact and is primarily useful in live export.
 - Each `*_wait_share` divides the corresponding cumulative millisecond value by `merge_ms`.
