@@ -52,9 +52,12 @@ class SortedServingFullDifferentialTest {
         return SortConfigs.manySmallRowGroups();
     }
 
-    /** Tiny final-file-bytes AND tiny row groups: range-disjoint multi-file output with many groups. */
+    /** Tiny final-file-bytes and tiny row groups: ordered multi-file output with many groups. */
     private static SortConfig rolledSmallFiles() {
-        return SortConfigs.base().withFinalFileBytes(8192L).withFinalRowGroupBytes(1024L).withMergeBudgetBytes(64L << 20);
+        return SortConfigs.rolledPerEntry()
+                .withSegmentEntries(1)
+                .withFinalRowGroupBytes(1024L)
+                .withMergeBudgetBytes(64L << 20);
     }
 
     @Test
@@ -418,8 +421,8 @@ class SortedServingFullDifferentialTest {
         List<byte[]> shuffled = new ArrayList<>(keys);
         Collections.shuffle(shuffled, new Random(1234));
         try (var writer = ParquetFixtures.open(capture.resolve("part-0.parquet"))) {
-            for (byte[] k : shuffled) {
-                writer.write(object(k));
+            for (byte[] key : shuffled) {
+                writer.write(object(key));
             }
         }
         Path out = Files.createDirectories(dir.resolve("sorted-" + System.nanoTime()));

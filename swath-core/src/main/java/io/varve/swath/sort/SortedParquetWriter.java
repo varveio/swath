@@ -88,7 +88,7 @@ public final class SortedParquetWriter implements SortedFileWriter {
     private byte[] firstKey;
     private byte[] lastKey;
     private boolean finalFile;
-    private int fileIndex;
+    private final int fileIndex;
     private boolean closed;   // guarded by this (see close())
     private FinalPartMetadata finalMetadata;
 
@@ -120,13 +120,8 @@ public final class SortedParquetWriter implements SortedFileWriter {
                 ORDER_KEY, ORDER_VALUE,
                 MODE_KEY, mode.value(),
                 FORMAT_VERSION_KEY, FORMAT_VERSION_VALUE);
-        // finalFile AND fileIndex are both read lazily, not captured here: either may be set any time
-        // before close(), which is when the footer — and so the stamp — is actually written. The
-        // parallel range merge needs the index late: a range's parts only learn their position in the
-        // GLOBAL roll sequence once every earlier range has finished and its part count is known.
-        // this.fileIndex, NOT fileIndex: the constructor parameter shadows the field here, and capturing
-        // it would freeze the index at construction — silently defeating setFileIndex and reinstating
-        // the range-local stamp the parallel path exists to fix.
+        // finalFile is read lazily because it is known only immediately before close. The pipeline
+        // assigns the global file index when it opens the writer, so that value is immutable.
         WriteSupport<ListEntry> writeSupport = new StampedWriteSupport(
                 ParquetSchema.canonical(), stamp, () -> finalFile, () -> this.fileIndex);
         ListEntryParquetWriters.TrackedSpec trackedSpec = new ListEntryParquetWriters.TrackedSpec(
@@ -177,18 +172,6 @@ public final class SortedParquetWriter implements SortedFileWriter {
     @Override
     public void markFinal() {
         this.finalFile = true;
-    }
-
-    /**
-     * Set this file's 1-based position in the output's roll sequence, overriding the constructor's
-     * value. Like {@link #markFinal()} this is honoured any time before {@link #close()}. The
-     * parallel range merge is the caller that needs it: each range writes its parts before it can
-     * know how many parts the ranges below it produced, so the global index is assigned afterwards,
-     * once every range has drained.
-     */
-    @Override
-    public void setFileIndex(int fileIndex) {
-        this.fileIndex = fileIndex;
     }
 
     /**

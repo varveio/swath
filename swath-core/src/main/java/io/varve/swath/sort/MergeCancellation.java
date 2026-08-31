@@ -17,10 +17,10 @@ final class MergeCancellation {
         }
     }
 
-    /** Internal control-flow exception; the range coordinator translates the initiating failure. */
+    /** Internal control-flow exception; the finalization coordinator translates the initiating failure. */
     static final class Cancelled extends RuntimeException {
         Cancelled() {
-            super("parallel range merge cancelled");
+            super("sort finalization cancelled");
         }
     }
 }

@@ -292,43 +292,60 @@ justify an override.
 
 ## The sorted merge
 
-Sorted output stages packed runs, samples boundaries, then merges contiguous key ranges.
-For at least 256 MiB of staged input, the configured maximum defaults to:
+Sorted output finalizes durable page-run segments through one reference-routing pipeline. The
+configured `sort.merge-parallelism` value is the maximum encoder count:
 
 ```text
 max(1, min(8, availableProcessors / 2))
 ```
 
-The runtime may lower it for segment count, heap, fan-in, or file descriptors. Fewer than
-two effective ranges uses the serial path. Set
-`--tune sort.merge-parallelism=1` for an explicit serial comparison. The JVM property
-`-Dswath.sort.merge-parallelism=N` remains available for benchmark and development harnesses;
-an explicit `--tune` value wins. See
-[configuration](configuration.md#sorted-output-jvm-properties) and
-[using sorted output](usage.md#sorted-output).
+The runtime can lower that count when heap or file-descriptor admission cannot support it. One
+encoder is a useful baseline, but it still uses the same header cursors, router, calibrated part
+plans, positional reads, and publisher:
 
-Range split points continue to use the bounded distinct-key policy by default. The explicit
-`--tune sort.merge-boundary-policy=rows` arm uses validated type-2 cumulative entry mass to target
-row quantiles and can change the number of rows in each final part without changing global order or
-multiplicity. Treat it as an experimental A/B arm: compare max/median per-range rows and wall time,
-and expect a whole-run fallback to `distinct` for legacy, invalid, or mixed staging. The focused
-skew fixture establishes mechanism, not production evidence, so it does not justify a default
-change.
+```bash
+swath list s3://bucket/prefix --format parquet --sort -o out/ \
+  --tune sort.merge-parallelism=1
+```
 
-For merge-only measurements, `boundary_ms` includes both structured catalog/index preflight and
-the selected final boundary policy (`rows` therefore includes its additional full index pass).
-The proof-spool fields separately report logical extent, physical preallocation attempts, mapped
-field/key access, and summed service time with the same scope as the live run log and JSON report.
-Mapped operations intentionally expose page/source-switch scaling, and mapped pages are visible in
-process RSS while resident. Serial `R=1` records none of these proof-spool values.
+Encoder count and output-part count are independent. `final-file-bytes` is a soft target.
+The router first builds one conservative plan, waits for its completed Parquet size, and calibrates
+later plans from the cumulative encoded-to-logical ratio. It rolls only between complete pages or
+transitive overlap components and never divides an equal-key group. The admitted
+256–16,384-reference plan cap can create an earlier roll.
+
+When the segment catalog exceeds admitted cascade fan-in, `CascadePageMerger` writes bounded
+page-run intermediates first. A whole-page cascade decision avoids the row heap; overlapping page
+bounds use the shared bounded row merger. The post-cascade catalog is then admitted for final
+encoders using its exact persisted record, decoded-payload, and key maxima.
+
+Use the JSON `sort` block to identify the limiting stage:
+
+| Signal | Interpretation |
+| --- | --- |
+| high `pipeline_header_scan_ms` | metadata reads or many surviving segments dominate; compare with cascade passes |
+| high `pipeline_router_wait_ms`, low queue-wait subset | the router is waiting for segment cursor output |
+| high `pipeline_plan_queue_wait_ms` | encoders cannot drain complete plans as quickly as the router produces them |
+| high `pipeline_encoder_read_wait_ms` | positional frame reads and CRC/page parsing dominate encoder service |
+| high `pipeline_cluster_pages` / `pipeline_cluster_rows` | page bounds overlap enough to require row merging |
+| `pipeline_decoded_page_bytes_peak` near the admitted encoder lane share, or near the cascade decoded-page budget when `passes > 1` | decoded-page residency is tight in the corresponding path |
+| encoder clamp or floor engagement reasons | heap or descriptor admission bound concurrency |
+| cascade reasons and multiple `passes` | the source catalog did not fit one cascade pass |
+
+Service timers sum work across concurrent cursors or encoders and can exceed merge wall time. Use
+their corresponding shares as service-to-wall ratios, not percentages that must stay below one.
+
+Benchmark `1`, the core-derived default, and at most one higher candidate on the same retained
+corpus. Record merge wall, peak RSS, admitted encoders, plan-queue wait, encoder-read service,
+cascade passes, output part count, and exact output checks. More encoders can improve CPU and I/O
+overlap, consume more writer and reference memory, or add no value when the router or storage is
+already binding.
 
 ### Diagnostic zero-LIST merge replay
 
-This procedure isolates the sorted merge from listing by deliberately re-entering a completed
-diagnostic run. It is tested end to end with a fetcher that fails on any LIST request: the replay
-issues zero LIST calls, preserves the checkpoint's finalized metadata and exact original staging
-set, and republishes identical part bytes, manifest file rows/sizes, state identity, and symlink.
-It is not an ordinary recovery operation and must not be used against a production dataset.
+This procedure isolates finalization from listing by deliberately re-entering a completed
+diagnostic run. It is not an ordinary recovery operation and must not be used against a production
+dataset.
 
 Create the retained corpus once:
 
@@ -343,17 +360,17 @@ find "$RUN/_staging" -maxdepth 1 -type f -name '*.pageseg' -print0 \
   | sort -z | xargs -0 -r sha256sum > "$HASHES"
 ```
 
-For each sequential benchmark arm, remove only the last-written completion marker and resume with
-retention still enabled. Save the report before starting the next arm because publication replaces
-the prior finals and report:
+For each sequential benchmark arm, remove only the completion marker and resume with retention
+enabled. Save the report before the next arm because publication replaces the prior finals and
+report:
 
 ```bash
-ARM=serial
-RANGES=1
+ARM=n1
+ENCODERS=1
 rm -- "$RUN/_SUCCESS"
 swath resume "$RUN" \
   --tune sort.keep-staging=on \
-  --tune sort.merge-parallelism="$RANGES"
+  --tune sort.merge-parallelism="$ENCODERS"
 
 sha256sum -c "$HASHES"
 test "$(jq -r '.cost.api_calls' "$RUN/_swath_summary.json")" = 0
@@ -362,51 +379,28 @@ cp "$RUN/manifest.json" "$RUN/.swath-state.json" "$RUN/symlink.txt" \
   "$RUN/_swath_summary.json" "/tmp/swath-merge-$ARM/"
 ```
 
-The retained page runs are the immutable input corpus; hash them after every arm. Also compare the
-manifest file set, row/byte totals, output checksums, effective range count, merge wall, peak RSS,
-and the `SORT.staging_retained`/`SORT.merge_redone` engagement reasons. A zero API-call count proves
-only that this invocation re-ran the merge without listing; it does not turn the retained staging
-into a general S3 replay fixture or reproduce object-store timing.
+Hash the retained page runs after every arm. Compare manifest rows and sizes, final-part checksums,
+the ordered-row result, admitted encoder count, merge wall, and peak RSS. A zero API-call count
+confirms only that the invocation finalized retained staging without listing; it does not make the
+corpus a general object-store replay or reproduce remote timing.
 
-The final PR #99 campaign ran serial A → default → serial B at fixed `-Xmx12g` and
-`--concurrency 256`; serial values below are the bracket mean.
+For a controlled local sweep, the opt-in `ParallelMergeBenchmark` runs the production
+`SortTransform`, brackets candidate encoder counts with three one-encoder samples, reverses
+candidate order, applies a variance gate, and verifies every result against an independent source
+oracle:
 
-| Bucket | Objects | Segments | Serial merge | Default merge (`R=8`) | Merge speedup | Serial session | Default session |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `noaa-gefs-retrospective` | 9,915,173 | 2 | 15.1 s | 5.4 s | 2.81× | 26.0 s | 16.9 s |
-| `pds-css-archive` | 96,022,559 | 16 | 139.5 s | 38.4 s | 3.63× | 300.5 s | 194.9 s |
-| `noaa-mrms-pds` | 823.70–823.72 M | 128 | 1,123.6 s | 282.8 s | 3.97× | 1,564.6 s | 723.2 s |
+```bash
+./gradlew :swath-core:test \
+  --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  -Dswath.bench=on -Pperf \
+  -Dswath.bench.encoders=1,4,8 \
+  -Dswath.bench.staging-dir=/path/to/_staging
+```
 
-The tested SHA was `2bd24c2f33df35341a497a91e24e7633a224b941`. The focused
-`pds-css-archive` gate had zero bidirectional full-row `EXCEPT ALL` differences against
-serial A, zero descending physical-key transitions, eight effective ranges, and no clamp,
-cascade, or failure reason. Peak heap was 3.598 GiB of `-Xmx12g`.
-
-GEFS and MRMS corroborate scale only. MRMS mutated between runs and its physical order was
-not independently checked. Merge-object rate is not listing throughput; do not combine the
-campaign's phase rates with the unsorted sweep.
-
-A later fixed 56,311,145-row local replay on eight assigned CPUs compared the shipped
-core-derived ceiling (`R=4`) with `--tune sort.merge-parallelism=8`. The two R4 merges
-took 40.5 and 41.1 seconds; three R8 screens took 27.4–28.0 seconds, about 32% less merge
-wall. Whole-run wall improved 13–19% while peak RSS remained approximately 3.22–3.27 GiB.
-Every arm passed exact row, manifest, inventory, MD5, sorted-readback, and replay-error
-checks. The tradeoff was consumer-visible: four final files at R4 and eight at R8. This
-supports the typed override for measured topologies, not a universal default change.
-
-The R8 CPU profile attributed 4,256 of 9,097 range-thread samples (46.8%) to
-timestamp parsing or formatting. PageRun staging already stores epoch microseconds, but rebuilding
-the text-backed entry and then writing typed Parquet repeated the canonical conversion in both
-directions. A byte-exact arithmetic fast path for canonical UTC text, with the previous general
-fallback retained for every alternate accepted spelling, reduced two matched R8 range merges from
-21.5–21.6 seconds to 14.0 seconds. Whole-run report time fell from 57.6–57.8 seconds to
-44.2–44.9 seconds, and peak RSS fell from 3.27–3.31 GiB to 3.21–3.22 GiB. Both candidate arms
-passed the same exact output and replay-error gates. The source text model, PageRun encoding, and
-Parquet schema did not change.
-
-The remaining serial fractions are boundary sampling, small/resource-limited fallbacks,
-and final publication. A serial fraction becomes more visible as listing gets faster, so
-judge merge share against the machine and storage, not object count alone.
+The harness fully reads and CRC-validates its corpus before measurement, so its results are
+warm-cache measurements. Its `BENCH_ROW`, `BENCH_VARIANCE`, and `BENCH_SPEEDUP` lines carry
+the requested and admitted encoder counts, finalization meters, corpus identity, and output
+fingerprint.
 
 ## Resume cost
 
@@ -423,17 +417,16 @@ pages, or resume overhead.
 - Unsorted Parquet with very small part targets grows retained part metadata and makes the one
   terminal `O(parts)` manifest larger; per-part finalization/checkpoint/digest overhead can still
   dominate even though the manifest is no longer rewritten per part.
-- Sorted output depends on staging disk, heap, and descriptor headroom. Small or constrained
-  runs fall back to serial merge.
+- Sorted output depends on staging disk, heap, and descriptor headroom. Constrained runs reduce
+  cascade fan-in or encoder count, and refuse resumably when the one-encoder floor cannot fit.
 - Remote throttling reduces the adaptive concurrency target and may dominate a run even
   when the engine can supply work.
 
 ## Methodology and missing evidence
 
 Current observations are mostly n=1, from one ARM host and one cross-cloud vantage. Live
-buckets can mutate between comparison runs. Runs were serial and read from their JSON reports;
-the merge comparison bracketed the default configuration with two serial runs on the same
-idle filesystem.
+buckets can mutate between comparison runs. Runs were executed one at a time and read from their
+JSON reports.
 
 Raise this evidence to release-candidate quality with repeated runs and reported variance,
 an in-region client, an x86 comparison, a fixed-shape object-count sweep, and a documented
@@ -443,7 +436,6 @@ method, not as an advertised envelope.
 The separate [S3-listing comparison study](https://github.com/varveio/s3-listing-study)
 publishes a methodology and tool roster; it does not currently publish comparative results.
 
-A dated [local sort-policy investigation](ops/dev/field-investigations.md#2026-08-28--local-sort-policy-evidence)
-found exact, zero-LIST warm merge replays across the tested range counts without sustained staging
-backpressure. It does not change the default `distinct` policy or establish portable throughput;
-the field note owns the raw timings, provenance, and limitations.
+No publishable production scaling result exists yet for the current v3 finalization pipeline.
+Use the one-encoder brackets, variance gate, exact-output checks, and provenance fields above before
+drawing a local conclusion.

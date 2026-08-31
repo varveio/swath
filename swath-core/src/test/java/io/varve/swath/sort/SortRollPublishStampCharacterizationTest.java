@@ -22,43 +22,38 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Characterization pins for the two rolled-publish paths of {@code --sort} — the serial
- * {@link SortTransform} roll and the off-by-default parallel {@link ParallelRangeMerge} range roll,
- * both driven by the shared {@link RolledPartWriter#drain} loop — captured at the
- * {@link SortTransform} boundary so a change to the shared loop cannot silently alter either path's
- * observable output.
+ * Characterization pins for one- and multi-encoder pipeline publication, captured at the
+ * {@link SortTransform} boundary so a change to finalization cannot silently alter observable
+ * output.
  *
- * <p><b>The pinned invariant: both paths stamp identically.</b> Whichever merge produced the output,
+ * <p><b>The pinned invariant: both encoder shapes stamp identically.</b> Whichever shape produced the output,
  * the published set carries a GLOBAL {@code file_index} = {@code 1..N} in filename order with exactly
  * one {@code file_final}, on {@code N} — the self-describing completeness proof (contracts.md §5,
  * "served-file footer stamp"). That symmetry is what lets {@code merge-parallelism} be a performance
- * knob rather than a change to what the output means, and it is why the knob can be on by default.
- *
- * <p>The parallel case is the load-bearing one. Its ranges roll several parts EACH, so a per-range
- * index would read {@code 1,2,3,1,2,3,…} and no reader could tell a complete set from a truncated
- * one. The stamp is therefore assigned after every range has drained, when the global order is first
- * known — see {@link ParallelRangeMerge}'s class javadoc.
+ * knob rather than a change to what the output means.
  *
  * <p>Both loops also share one progress-feed cadence — batched at {@link KWayMerge#PROGRESS_BATCH_ROWS},
  * a full batch each time the counter reaches it and a remainder flush at the end — pinned here for the
- * serial path as an exact ordered sequence; the parallel path drains from several range threads at once,
- * so only its total (every row accounted for) is a deterministic observable (see that test).
+ * one-encoder path as an exact ordered sequence; the multi-encoder path drains concurrently, so
+ * only its total (every row accounted for) is a deterministic observable (see that test).
  */
 class SortRollPublishStampCharacterizationTest {
 
     private final ListEntryComparator cmp = new ListEntryComparator();
 
     /**
-     * Serial rolled publish: with a 1-byte roll gate every row lands in its own file, so the four rows
-     * produce {@code part-00000..part-00003}. The stamp's {@code file_index} remains the GLOBAL 1..N
-     * position in filename order and {@code file_final} is present on the LAST file only.
+     * One-encoder rolled publish: with a 1-byte roll gate every row lands in its own file, so the four
+     * rows produce {@code part-00000..part-00003}. The stamp's {@code file_index} remains the GLOBAL
+     * 1..N position in filename order and {@code file_final} is present on the LAST file only.
      */
     @Test
-    void serialRollStampsGlobalFileIndexOneToNAndFinalOnLastOnly(@TempDir Path root) throws IOException {
+    void oneEncoderStampsGlobalFileIndexOneToNAndFinalOnLastOnly(@TempDir Path root) throws IOException {
         Dirs dirs = dirs(root);
         List<Path> staging = List.of(
-                writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c"), 1L << 20),
-                writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d"), 1L << 20));
+                SortTestSupport.writePages(dirs.staging.resolve("seg-0.pageseg"),
+                        List.of(objects("a"), objects("c"))),
+                SortTestSupport.writePages(dirs.staging.resolve("seg-1.pageseg"),
+                        List.of(objects("b"), objects("d"))));
 
         SortConfig config = SortConfigs.base().withFinalFileBytes(1L);
         List<Long> progress = new ArrayList<>();
@@ -104,21 +99,24 @@ class SortRollPublishStampCharacterizationTest {
     }
 
     /**
-     * Parallel rolled publish: three balanced ranges, each rolling every row into its own part, so the
-     * nine rows produce {@code part-00000..part-00008} — a correct global sort by filename order.
+     * Multi-encoder publish: three disjoint inputs, each row in its own part, so the nine rows produce
+     * {@code part-00000..part-00008} — a correct global sort by filename order.
      * The filename ordinal is zero-based while the footer's compatibility-preserving {@code
      * file_index} is the global 1..N position.
      */
     @Test
-    void parallelRollStampsTheSameGlobalFileIndexAndFinalAsSerial(@TempDir Path root) throws IOException {
+    void multiEncoderStampsTheSameGlobalFileIndexAndFinalAsOneEncoder(@TempDir Path root)
+            throws IOException {
         Dirs dirs = dirs(root);
-        // Each segment holds a contiguous third of the keyspace, so its single sampled first-key (a, d, g)
-        // makes boundaries() split into three balanced ranges (a,b,c | d,e,f | g,h,i). A 1-byte final-file
-        // gate then rolls every row into its own part ⇒ three parts per range.
+        // Each segment holds a contiguous third of the keyspace. A 1-byte final-file gate rolls every
+        // row into its own part.
         List<Path> staging = List.of(
-                writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b", "c"), 1L << 20),
-                writeSegment(dirs.staging, "seg-1.parquet", objects("d", "e", "f"), 1L << 20),
-                writeSegment(dirs.staging, "seg-2.parquet", objects("g", "h", "i"), 1L << 20));
+                SortTestSupport.writePages(dirs.staging.resolve("seg-0.pageseg"),
+                        List.of(objects("a"), objects("b"), objects("c"))),
+                SortTestSupport.writePages(dirs.staging.resolve("seg-1.pageseg"),
+                        List.of(objects("d"), objects("e"), objects("f"))),
+                SortTestSupport.writePages(dirs.staging.resolve("seg-2.pageseg"),
+                        List.of(objects("g"), objects("h"), objects("i"))));
 
         SortConfig config = SortConfigs.base()
                 .withFinalFileBytes(1L).withMergeParallelism(3).withMergeBudgetBytes(64L << 20);
@@ -136,8 +134,7 @@ class SortRollPublishStampCharacterizationTest {
                 .containsExactly("a", "b", "c", "d", "e", "f", "g", "h", "i");
 
         // GLOBAL file_index 1..9 in filename order. This is the assertion that distinguishes a stamped
-        // parallel publish from the range-local one: each of the three ranges rolls three parts, so a
-        // per-range index would read 1,2,3,1,2,3,1,2,3 and a reader could not tell the set was whole.
+        // multi-encoder publish from an encoder-local stamp.
         List<Integer> indices = new ArrayList<>();
         for (Path f : result.finalFiles()) {
             indices.add(fileIndex(f));
@@ -154,7 +151,7 @@ class SortRollPublishStampCharacterizationTest {
                     .isEqualTo(last);
         }
 
-        // Every merged row still reaches the progress sink across the range threads.
+        // Every merged row still reaches the progress sink across encoder threads.
         assertThat(progress.stream().mapToLong(Long::longValue).sum()).isEqualTo(9);
     }
 
@@ -162,8 +159,8 @@ class SortRollPublishStampCharacterizationTest {
      * The serial progress feed is batched at {@link KWayMerge#PROGRESS_BATCH_ROWS} (1000): a full batch
      * each time the counter reaches it, then a remainder flush. A single-pass merge (fan-in ≫ segment
      * count, no cascade) of 2500 rows into one file therefore emits exactly {@code 1000, 1000, 500}. The
-     * parallel loop shares this cadence per range, but drains several range threads whose emissions
-     * interleave nondeterministically, so only its total is a stable observable (pinned above).
+     * multi-encoder loop shares this cadence, but concurrent emissions interleave nondeterministically,
+     * so only its total is a stable observable (pinned above).
      */
     @Test
     void serialProgressFeedIsFullBatchesThenRemainder(@TempDir Path root) throws IOException {
@@ -178,7 +175,7 @@ class SortRollPublishStampCharacterizationTest {
                 writeSegment(dirs.staging, "seg-1.parquet", odd, 1L << 20));
 
         // base(): fan-in 512 ≫ 2 segments and an unbounded budget ⇒ a single merge pass (no cascade),
-        // and a single output file ⇒ the whole 2500-row stream drains through one RolledPartWriter.drain loop.
+        // and a single output file ⇒ the whole 2500-row stream drains through one encoder.
         List<Long> batches = new ArrayList<>();
         SortTransformResult result = transform(SortConfigs.base())
                 .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, batches::add,
@@ -196,7 +193,6 @@ class SortRollPublishStampCharacterizationTest {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
@@ -204,7 +200,6 @@ class SortRollPublishStampCharacterizationTest {
         SortedFileWriterFactory stamped = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stamped,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 

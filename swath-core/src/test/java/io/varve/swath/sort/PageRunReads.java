@@ -29,7 +29,6 @@ public final class PageRunReads {
 
     static PageRunSegmentReader open(Path segment) throws IOException {
         return new PageRunSegmentReader(
-                new PageFrontierReader(segment, SortMetrics.NO_OP),
-                new ListEntryComparator(), SortMetrics.NO_OP);
+                PageRunSegmentIo.open(segment, SortMetrics.NO_OP), new ListEntryComparator());
     }
 }

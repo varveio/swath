@@ -15,7 +15,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.IntSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -23,9 +22,9 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * The runtime merge-entry fan-in clamp in {@link SortTransform}. The fd limit is injected (never
  * the real process {@code ulimit}) so the clamp — and the {@code SORT.merge_fanin_*} counters —
- * fire deterministically. Also covers the default-off multi-part rolling at the transform level
- * (small {@code final-file-bytes} ⇒ several range-disjoint {@code part-NNNNN.parquet} whose
- * concatenation is the global sort).
+ * fire deterministically. Also covers pipeline multi-part rolling at the transform level (small
+ * {@code final-file-bytes} ⇒ several ordered {@code part-NNNNN.parquet} whose concatenation is the
+ * global sort).
  */
 class SortTransformFanInClampTest {
 
@@ -85,12 +84,13 @@ class SortTransformFanInClampTest {
         // A tiny per-stream estimate (8 bytes) makes the STATIC budget bound huge ⇒ static effectiveFanIn
         // == raw fan-in 512; but the EXACT bound from the page trailers (mergeBudget / real packed-page
         // size) is far smaller, so the merge-entry memory clamp — not the fd clamp — reduces the fan-in.
-        long budget = 100_000L;
-        SortConfig cfg = SortConfigs.base().withMergeBudgetBytes(budget).withMergePerStreamBytes(8L);
-        assertThat(cfg.effectiveFanIn()).isEqualTo(512);   // static: fan-in binds, memory estimate does not
+        long budget = 9L << 20;
+        SortConfig cfg = SortConfigs.base().withFanIn(1_000_000)
+                .withMergeBudgetBytes(budget).withMergePerStreamBytes(8L);
+        assertThat(cfg.effectiveFanIn()).isEqualTo(1_000_000);
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        Result r = runPageRun(root, cfg, metrics, () -> HEALTHY_FD);
+        Result r = runPageRun(root, cfg, metrics, () -> -1);
 
         assertThat(metrics.count("SORT.merge_fanin_clamped")).isEqualTo(1);
         assertThat(metrics.count("SORT.merge_fanin_mem_clamped")).isEqualTo(1);
@@ -109,7 +109,7 @@ class SortTransformFanInClampTest {
         Files.write(segment, bytes);
 
         assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty()))
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP)))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("bad or missing page-run trailer");
     }
@@ -194,18 +194,15 @@ class SortTransformFanInClampTest {
     private SortTransform newTransform(SortConfig config, SortMetrics metrics, IntSupplier softFdLimit) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 softFdLimit, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private List<Path> stagePageRun(Path dir, List<List<ListEntry>> segs) throws IOException {
-        PageRunSegmentWriter writer = new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
         List<Path> out = new ArrayList<>();
         for (int i = 0; i < segs.size(); i++) {
             Path path = dir.resolve("seg-" + i + ".pageseg");
-            try (SortedCursor cursor = new InMemoryCursor(segs.get(i), cmp, DuplicateHook.NO_OP)) {
-                writer.writeIntermediate(cursor, path);
-            }
+            List<List<ListEntry>> pages = segs.get(i).stream().map(List::of).toList();
+            SortTestSupport.writePages(path, pages);
             out.add(path);
         }
         return out;

@@ -7,7 +7,6 @@ package io.varve.swath.cli;
 
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
-import io.varve.swath.sort.MergeBoundaryPolicy;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortFinalization;
 import io.varve.swath.sort.StagingRetention;
@@ -38,10 +37,7 @@ final class TuneOptions {
                             + SortOptions.MAX_MERGE_PARALLELISM,
                     Integer.toString(SortConfig.DEFAULT.mergeParallelism()), "stable", ResumeClass.FREE,
                     "fresh list and resume"),
-            new KeySpec(SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY, "enum", "distinct|rows",
-                    SortConfig.DEFAULT.mergeBoundaryPolicy().configValue(), "experimental",
-                    ResumeClass.FREE, "fresh list and resume"),
-            new KeySpec(SortConfig.FINALIZATION_TUNE_KEY, "enum", "ranges|pipeline",
+            new KeySpec(SortConfig.FINALIZATION_TUNE_KEY, "enum", "pipeline",
                     SortConfig.DEFAULT.finalization().configValue(), "experimental",
                     ResumeClass.FREE, "fresh list and resume"),
             new KeySpec(SortConfig.KEEP_STAGING_TUNE_KEY, "boolean", "on|off",
@@ -106,9 +102,6 @@ final class TuneOptions {
             } else if ("sort.merge-parallelism".equals(key)) {
                 sorting.mergeParallelism = parseMergeParallelism(key, setting.getValue());
                 effectiveValues.put(key, Integer.toString(sorting.mergeParallelism));
-            } else if (SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY.equals(key)) {
-                sorting.mergeBoundaryPolicy = parseMergeBoundaryPolicy(key, setting.getValue());
-                effectiveValues.put(key, sorting.mergeBoundaryPolicy.configValue());
             } else if (SortConfig.FINALIZATION_TUNE_KEY.equals(key)) {
                 sorting.finalization = parseFinalization(key, setting.getValue());
                 effectiveValues.put(key, sorting.finalization.configValue());
@@ -130,8 +123,6 @@ final class TuneOptions {
                                 ? resolvedSummaryInterval
                                 : "sort.merge-parallelism".equals(spec.key())
                                         ? Integer.toString(resolvedSortConfig.mergeParallelism())
-                                        : SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY.equals(spec.key())
-                                                ? resolvedSortConfig.mergeBoundaryPolicy().configValue()
                                         : SortConfig.FINALIZATION_TUNE_KEY.equals(spec.key())
                                                 ? resolvedSortConfig.finalization().configValue()
                                         : SortConfig.KEEP_STAGING_TUNE_KEY.equals(spec.key())
@@ -237,10 +228,6 @@ final class TuneOptions {
                     sorting.mergeParallelism = parseMergeParallelism(key, value);
                     effectiveValues.put(key, Integer.toString(sorting.mergeParallelism));
                 }
-                case SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY -> {
-                    sorting.mergeBoundaryPolicy = parseMergeBoundaryPolicy(key, value);
-                    effectiveValues.put(key, sorting.mergeBoundaryPolicy.configValue());
-                }
                 case SortConfig.FINALIZATION_TUNE_KEY -> {
                     sorting.finalization = parseFinalization(key, value);
                     effectiveValues.put(key, sorting.finalization.configValue());
@@ -265,15 +252,6 @@ final class TuneOptions {
             throw valueError(key, value);
         }
         return parallelism;
-    }
-
-    private static MergeBoundaryPolicy parseMergeBoundaryPolicy(String key, String value)
-            throws InvalidArgsException {
-        try {
-            return MergeBoundaryPolicy.fromConfigValue(key, value);
-        } catch (IllegalArgumentException e) {
-            throw valueError(key, value);
-        }
     }
 
     private static SortFinalization parseFinalization(String key, String value)

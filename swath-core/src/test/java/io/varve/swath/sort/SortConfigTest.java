@@ -43,16 +43,15 @@ class SortConfigTest {
         assertThat(config.mergePerStreamBytes()).isEqualTo(64L * 1024);
         // mergeBudgetBytes defaults to the SAME heap-adaptive shape as segmentBytes (floor 64 MB).
         assertThat(config.mergeBudgetBytes()).isEqualTo(config.segmentBytes());
-        assertThat(config.minParallelStagedBytes()).isEqualTo(256L * 1024 * 1024);
         assertThat(config.stagingRetention()).isEqualTo(StagingRetention.DELETE_AFTER_PUBLISH);
-        assertThat(config.mergeBoundaryPolicy()).isEqualTo(MergeBoundaryPolicy.DISTINCT);
+        assertThat(config.finalization()).isEqualTo(SortFinalization.PIPELINE);
     }
 
     @Test
     void mergeParallelismDefaultsToHalfTheCoresCappedAtEightAndIsReadable() {
         // On by default and core-derived: half the cores, capped at 8, floored at 1. The cap is where
         // parallel efficiency stops paying for the heap and read amplification (51 % at R=8 against
-        // 34 % at R=16); the halving is the ramp for smaller machines. ParallelRangeMerge clamps this
+        // 34 % at R=16); the halving is the ramp for smaller machines. Runtime planning clamps this
         // further per run, so it is a ceiling rather than a promise.
         int expected = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors() / 2));
         assertThat(SortConfig.DEFAULT.mergeParallelism()).isEqualTo(expected);
@@ -116,9 +115,7 @@ class SortConfigTest {
                 .withMergeParallelism(9)
                 .withMergePerStreamBytes(10)
                 .withSegmentCodec(PageCodec.NONE)
-                .withMinParallelStagedBytes(11)
                 .withStagingRetention(StagingRetention.RETAIN_ORIGINALS)
-                .withMergeBoundaryPolicy(MergeBoundaryPolicy.ROWS)
                 .withFinalization(SortFinalization.PIPELINE);
 
         SortConfig equivalent = config.withFanIn(config.fanIn());
@@ -126,8 +123,7 @@ class SortConfigTest {
         assertThat(config).hasToString("SortConfig[segmentBytes=1, segmentEntries=2, heapFraction=0.25, "
                 + "buffers=3, fanIn=4, finalFileBytes=5, finalRowGroupBytes=6, finalPageRows=7, "
                 + "mergeBudgetBytes=8, mergeParallelism=9, mergePerStreamBytes=10, segmentCodec=NONE, "
-                + "minParallelStagedBytes=11, stagingRetention=RETAIN_ORIGINALS, mergeBoundaryPolicy=ROWS, "
-                + "finalization=PIPELINE]");
+                + "stagingRetention=RETAIN_ORIGINALS, finalization=PIPELINE]");
     }
 
     @Test
@@ -143,20 +139,6 @@ class SortConfigTest {
     }
 
     @Test
-    void mergeBoundaryPolicyDefaultsDistinctAndParsesTheJvmProperty() {
-        assertThat(fromProperties(Map.of()).mergeBoundaryPolicy())
-                .isEqualTo(MergeBoundaryPolicy.DISTINCT);
-        assertThat(fromProperties(Map.of("merge-boundary-policy", "rows")).mergeBoundaryPolicy())
-                .isEqualTo(MergeBoundaryPolicy.ROWS);
-        assertThat(fromProperties(Map.of("merge-boundary-policy", "DISTINCT")).mergeBoundaryPolicy())
-                .isEqualTo(MergeBoundaryPolicy.DISTINCT);
-        assertThatThrownBy(() -> fromProperties(Map.of("merge-boundary-policy", "keys")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("swath.sort.merge-boundary-policy")
-                .hasMessageContaining("distinct or rows");
-    }
-
-    @Test
     void everyKnobIsReadable() {
         SortConfig config = fromProperties(Map.of(
                 "heap-fraction", "0.5",
@@ -166,9 +148,7 @@ class SortConfigTest {
                 "final-file-bytes", "999",
                 "final-row-group-bytes", "111",
                 "merge-budget-bytes", "333",
-                "merge-boundary-policy", "rows",
-                "merge-per-stream-bytes", "444",
-                "min-parallel-staged-bytes", "555"));
+                "merge-per-stream-bytes", "444"));
         assertThat(config.heapFraction()).isEqualTo(0.5);
         assertThat(config.segmentEntries()).isEqualTo(1000L);
         assertThat(config.buffers()).isEqualTo(4);
@@ -176,9 +156,7 @@ class SortConfigTest {
         assertThat(config.finalFileBytes()).isEqualTo(999L);
         assertThat(config.finalRowGroupBytes()).isEqualTo(111L);
         assertThat(config.mergeBudgetBytes()).isEqualTo(333L);
-        assertThat(config.mergeBoundaryPolicy()).isEqualTo(MergeBoundaryPolicy.ROWS);
         assertThat(config.mergePerStreamBytes()).isEqualTo(444L);
-        assertThat(config.minParallelStagedBytes()).isEqualTo(555L);
     }
 
     @Test
@@ -203,15 +181,9 @@ class SortConfigTest {
                 // merge-budget-bytes 0
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("merge-budget-bytes must be > 0, got 0");
-        assertThatThrownBy(() -> SortConfig.DEFAULT.withMinParallelStagedBytes(-1L))
+        assertThatThrownBy(() -> SortConfig.DEFAULT.withFinalization(null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("min-parallel-staged-bytes must be >= 0, got -1");
-        assertThatThrownBy(() -> fromProperties(Map.of("min-parallel-staged-bytes", "-1")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("min-parallel-staged-bytes");
-        assertThatThrownBy(() -> SortConfig.DEFAULT.withMergeBoundaryPolicy(null))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("merge-boundary-policy must not be null");
+                .hasMessage("finalization must not be null");
     }
 
     // ------------------------------------------------------------------

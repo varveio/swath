@@ -39,7 +39,8 @@ import org.junit.jupiter.api.io.TempDir;
  * their data. The reattach path selects staging by {@link ListRunner#SORT_SEGMENT_FORMAT}
  * ("page-run"), so an old-format row would be invisible to it and the finalized segment re-listed
  * (dup/loss). Refused exactly like the {@code --sort/--no-sort} mismatch (InvalidArgsException, exit
- * 2). A page-run→page-run resume is NOT refused for the format.
+ * 2). A page-run resume is accepted only when its recorded and physical format versions match the
+ * current version.
  */
 final class SortResumeStaleStagingFormatTest {
 
@@ -115,17 +116,15 @@ final class SortResumeStaleStagingFormatTest {
     }
 
     @Test
-    void preColumnPageRunStagingResume_isNotRefusedForFormat(@TempDir Path dir) throws Exception {
+    void preColumnPageRunStagingResumeIsRefusedWithRestartAdvice(@TempDir Path dir) throws Exception {
         Path db = dir.resolve("c.sqlite");
         long runId = seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT);
         rewritePageRunMetadata(db, runId, null, null);
-        // A matching page-run staging format must PASS the format guard. The resume may still fail
-        // later for unrelated reasons (no S3 / missing staging files), but never with THIS refusal.
-        Throwable t = catchThrowable(() -> resumeSortCommand(db).call());
-        if (t instanceof InvalidArgsException) {
-            assertThat(t).hasMessageNotContaining("sort staging format")
-                    .hasMessageNotContaining("page-run staging metadata");
-        }
+        assertThatThrownBy(() -> resumeSortCommand(db).call())
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("page-run staging metadata")
+                .hasMessageContaining("LEGACY_UNRECORDED")
+                .hasMessageContaining("--restart");
     }
 
     @Test
@@ -138,14 +137,16 @@ final class SortResumeStaleStagingFormatTest {
     }
 
     @Test
-    void legacyMinimaPageRunMetadataRemainsReadable(@TempDir Path dir) throws Exception {
+    void previousPageRunFormatIsRefusedBeforeMerge(@TempDir Path dir) throws Exception {
         Path db = dir.resolve("c.sqlite");
         long runId = seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT);
         rewritePageRunMetadata(db, runId,
-                PageRunFormat.CURRENT_FORMAT_VERSION, PageRunFormat.LEGACY_MINIMA_EXTENSION);
+                PageRunFormat.CURRENT_FORMAT_VERSION - 1, PageRunFormat.ABSENT_EXTENSION);
 
-        Throwable t = catchThrowable(() -> resumeSortCommand(db).call());
-        assertThat(t).isNotInstanceOf(InvalidArgsException.class);
+        assertThatThrownBy(() -> resumeSortCommand(db).call())
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("UNKNOWN_FORMAT_VERSION")
+                .hasMessageContaining("--restart");
     }
 
     @Test
@@ -154,7 +155,7 @@ final class SortResumeStaleStagingFormatTest {
         long runId = seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT);
         rewritePageRunMetadata(db, runId,
                 PageRunFormat.CURRENT_FORMAT_VERSION + 1,
-                PageRunFormat.PAGE_INDEX_EXTENSION);
+                PageRunFormat.ABSENT_EXTENSION);
 
         assertThatThrownBy(() -> resumeSortCommand(db).call())
                 .isInstanceOf(InvalidArgsException.class)
@@ -168,7 +169,7 @@ final class SortResumeStaleStagingFormatTest {
     @Test
     void unknownPageRunExtensionTypeIsRefusedBeforeMerge(@TempDir Path dir) throws Exception {
         Path db = dir.resolve("c.sqlite");
-        int unknownType = PageRunFormat.PAGE_INDEX_EXTENSION + 99;
+        int unknownType = PageRunFormat.ABSENT_EXTENSION + 99;
         long runId = seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT);
         rewritePageRunMetadata(db, runId,
                 PageRunFormat.CURRENT_FORMAT_VERSION, unknownType);
@@ -200,7 +201,7 @@ final class SortResumeStaleStagingFormatTest {
     @Test
     void negativeMetadataIsCheckpointCorruptionBeforeStagingMutation(@TempDir Path dir) throws Exception {
         assertCorruptIntegerRefusedBeforeStagingMutation(dir, -1L,
-                (long) PageRunFormat.PAGE_INDEX_EXTENSION, "format_version", "-1");
+                (long) PageRunFormat.ABSENT_EXTENSION, "format_version", "-1");
     }
 
     @Test

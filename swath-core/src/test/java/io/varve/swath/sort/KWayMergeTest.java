@@ -258,7 +258,7 @@ class KWayMergeTest {
     void progressCallbackAdvancesDuringIntermediateCascadePassesNotJustTheFinalPass() throws IOException {
         // merge() runs every cascade pass eagerly BEFORE returning the final cursor, and wires the
         // progress callback into every cascade pass's drain too, not just the FINAL streaming pass's
-        // (by the caller, e.g. RolledPartWriter#drain) — so a cascade that takes minutes advances
+        // by the caller while draining — so a cascade that takes minutes advances
         // swath.progress.units throughout. fanIn=2 with 5 segments
         // forces TWO cascade passes (5 -> 3 -> 2 intermediates) before the final streaming pass.
         SortTestSupport.InMemorySegments io = new SortTestSupport.InMemorySegments();

@@ -96,7 +96,7 @@ final class StreamingMerger implements SortedCursor, LogicalMergeCompletion {
         }
         // computeNext() can observe cooperative range cancellation before construction completes.
         // In that case close() would otherwise be unreachable and every already-open input stream
-        // would leak until GC, defeating ParallelRangeMerge's quiescent cleanup guarantee.
+        // would leak until GC, defeating finalization's quiescent cleanup guarantee.
         try {
             this.pending = computeNext();
         } catch (RuntimeException e) {

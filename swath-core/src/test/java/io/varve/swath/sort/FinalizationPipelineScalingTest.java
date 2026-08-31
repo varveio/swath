@@ -52,7 +52,6 @@ final class FinalizationPipelineScalingTest {
                 .withFinalFileBytes(8L << 20);
         SortRun run = new SortRun(config, new ListEntryComparator(), DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 () -> -1, StaleFinalSweep.OWN_PARTS_ONLY);
         long started = System.nanoTime();
         SortTransformResult result = new SortTransform(run).transform(

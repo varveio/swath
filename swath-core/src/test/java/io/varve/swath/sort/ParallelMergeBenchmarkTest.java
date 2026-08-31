@@ -386,25 +386,14 @@ class ParallelMergeBenchmarkTest {
     }
 
     @Test
-    void benchmarkParallelismLabelsMatchTheFinalizationMechanism() {
-        ParallelMergeBenchmark.ArmResult ranges = new ParallelMergeBenchmark.ArmResult();
-        ranges.finalization = SortFinalization.RANGES;
-        ranges.requestedRanges = 4;
-        ranges.actualRanges = 3;
-        ranges.finalizationParallelism = 3;
-
+    void benchmarkParallelismLabelsDescribePipelineEncoders() {
         ParallelMergeBenchmark.ArmResult pipeline = new ParallelMergeBenchmark.ArmResult();
-        pipeline.finalization = SortFinalization.PIPELINE;
         pipeline.requestedEncoders = 4;
         pipeline.actualEncoders = 2;
         pipeline.finalizationParallelism = 2;
 
-        assertThat(ranges.parallelismFields())
-                .isEqualTo("requested_r=4 actual_ranges=3 requested_encoders=unavailable "
-                        + "actual_encoders=unavailable finalization_parallelism=3");
         assertThat(pipeline.parallelismFields())
-                .isEqualTo("requested_r=unavailable actual_ranges=unavailable "
-                        + "requested_encoders=4 actual_encoders=2 finalization_parallelism=2");
+                .isEqualTo("requested_encoders=4 actual_encoders=2 finalization_parallelism=2");
     }
 
     @Test

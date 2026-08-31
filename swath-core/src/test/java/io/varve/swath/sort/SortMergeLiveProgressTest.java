@@ -79,31 +79,20 @@ class SortMergeLiveProgressTest {
                 .isGreaterThan(STAGED_ROWS);
     }
 
-    /**
-     * The parallel range merge is the other branch, and its cascade passes are still AHEAD of it when
-     * the final-pass hook fires: every range k-way-merges all the staged segments and folds its own
-     * intermediates. So it must answer as the serial cascade does — work, no percentage — rather than
-     * measure those rewrites against the staged rows and run past 100% before any output exists.
-     */
+    /** A cascading pipeline reports work without inventing a final-pass percentage. */
     @Test
-    void aParallelRequestThatWouldCascadeFallsBackToSerialAndStillReportsHonestly(@TempDir Path root)
+    void aParallelPipelineRequestThatCascadesStillReportsHonestly(@TempDir Path root)
             throws IOException {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
 
-        // Fan-in 2 against five staged segments: NO range count can merge these in one pass, so the
-        // clamp (MergePlanner#effectiveRanges) declines the parallel path outright rather than
-        // let every range cascade — a cascading range merge is slower than the serial one it would
-        // replace. What runs is therefore the SERIAL cascade, and the guard is that it still reports
-        // work without claiming a percentage it cannot honestly compute.
-        SortTransformResult result = mergeParallelWithProgress(root, metrics, samples,
+        // Fan-in 2 against five staged segments forces the pipeline to cascade before encoding.
+        SortTransformResult result = mergePipelineWithProgress(root, metrics, samples,
                 parallelConfig().withFanIn(2));
 
         assertThat(result.cascadedPasses()).as("the case under test is a genuine multi-pass merge")
                 .isGreaterThan(0);
-        assertThat(result.finalFiles())
-                .as("one part — the serial path published this, not R ranges")
-                .hasSize(1);
+        assertThat(result.finalFiles()).hasSize(1);
         assertThat(samples).isNotEmpty();
         assertThat(samples)
                 .filteredOn(event -> event.phase() == Phase.MERGING)
@@ -116,15 +105,15 @@ class SortMergeLiveProgressTest {
                 .isGreaterThan(STAGED_ROWS);
     }
 
-    /** The parallel branch keeps its percentage where it is honest: one pass per range, no cascade. */
+    /** A single-pass pipeline keeps its percentage because the staged-row denominator is exact. */
     @Test
-    void aSinglePassParallelRangeMergeStillEndsAtExactlyOneHundredPercent(@TempDir Path root)
+    void aSinglePassParallelPipelineStillEndsAtExactlyOneHundredPercent(@TempDir Path root)
             throws IOException {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
 
-        // Fan-in wider than the staged segment count: no range can cascade.
-        SortTransformResult result = mergeParallelWithProgress(root, metrics, samples,
+        // Fan-in wider than the staged segment count: the pipeline does not cascade.
+        SortTransformResult result = mergePipelineWithProgress(root, metrics, samples,
                 parallelConfig().withFanIn(SEGMENTS + 1));
 
         assertThat(result.cascadedPasses()).isZero();
@@ -135,15 +124,15 @@ class SortMergeLiveProgressTest {
     }
 
     /**
-     * Three ranges over a merge budget wide enough that only {@code fanIn} bounds the per-range pass
-     * width — so each test picks whether its ranges cascade by that one knob.
+     * Three encoders over a merge budget wide enough that only {@code fanIn} determines whether the
+     * pipeline cascades.
      */
     private SortConfig parallelConfig() {
         return SortConfigs.base().withMergeParallelism(3).withMergeBudgetBytes(1L << 30);
     }
 
     /** The production wiring again, over page-run staging. */
-    private SortTransformResult mergeParallelWithProgress(Path root, RunMetrics metrics,
+    private SortTransformResult mergePipelineWithProgress(Path root, RunMetrics metrics,
                                                           List<ProgressEvent> samples, SortConfig config)
             throws IOException {
         Path staging = Files.createDirectories(root.resolve("run/_staging"));
@@ -156,7 +145,6 @@ class SortMergeLiveProgressTest {
                 new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                         SortMetrics.NO_OP,
                         SortedFileWriterFactory.DEFAULT,
-                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                         SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, output, staging, PublishListener.NO_OP,
                 units -> {
@@ -179,7 +167,6 @@ class SortMergeLiveProgressTest {
                 new SortRun(SortConfigs.base().withFanIn(2), cmp, DuplicateHook.NO_OP,
                         EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                         SortedFileWriterFactory.DEFAULT,
-                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                         SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, output, staging, PublishListener.NO_OP,
                 units -> {

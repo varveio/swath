@@ -91,9 +91,7 @@ class DatasetPublisherInvariantTest {
                 SortConfigs.base().withMergeParallelism(1), new ListEntryComparator(),
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY,
-                MergeDiskPolicy.bypassed());
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
         assertThatThrownBy(() -> new SortTransform(run, replaceAfterClose).transform(
                 List.of(segment), output, staging,

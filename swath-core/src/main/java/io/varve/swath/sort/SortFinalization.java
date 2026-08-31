@@ -7,9 +7,8 @@ package io.varve.swath.sort;
 
 import java.util.Locale;
 
-/** Selects the final sorted-output implementation without changing durable staging or resume state. */
+/** The retained tune value for the sole finalization implementation. */
 public enum SortFinalization {
-    RANGES("ranges"),
     PIPELINE("pipeline");
 
     private final String configValue;
@@ -29,6 +28,6 @@ public enum SortFinalization {
                 return value;
             }
         }
-        throw new IllegalArgumentException(key + ": expected ranges or pipeline, got '" + raw + "'");
+        throw new IllegalArgumentException(key + ": expected pipeline, got '" + raw + "'");
     }
 }

@@ -14,7 +14,7 @@ import java.util.Arrays;
 /**
  * Compress-at-pack codec for a {@link PageBlock}'s front-coded PAYLOAD — the record HEADER
  * (min/max keys, dict tables, {@code useDict}, count, ordered-bit) is never
- * touched by this: it stays plain so {@link PageFrontierReader} parses it without decompressing.
+ * touched by this: it stays plain so header cursors parse it without decompressing.
  * Centralizes the on-disk codec byte mapping ({@link #code()} / {@link #fromCode(byte)}) and every
  * codec's compress/decompress implementation in one place.
  *

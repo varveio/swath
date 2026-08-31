@@ -13,8 +13,6 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.sort.SortMetrics;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Micrometer-backed counters/timers for the {@code io.varve.swath.replay.fixture} package: the
@@ -32,21 +30,7 @@ public final class FixtureMetrics implements SortMetrics {
     private final Timer indexLoadLatency;
     private final DistributionSummary indexEntries;
     private final Counter sortProgress;
-    private final Counter sortBoundaryEmbeddedEntries;
-    private final Counter sortBoundaryEmbeddedBytes;
-    private final Counter sortBoundaryScanBytes;
-    private final Counter sortRangeFramedBytes;
-    private final Counter sortRangeIndexBytes;
-    private final Counter sortProofSpoolLogicalExtentBytes;
-    private final Counter sortProofSpoolPreallocationOperations;
-    private final Counter sortProofSpoolPreallocationAttemptedBytes;
-    private final Counter sortProofSpoolMappedOperations;
-    private final Counter sortProofSpoolMappedBytes;
-    private final Timer sortProofSpoolLatency;
-    private final Counter sortOverlapClusters;
     private final ConcurrentMap<String, Counter> sortStealReasonCounters = new ConcurrentHashMap<>();
-    private final AtomicLong sortOverlapPagesPeak = new AtomicLong();
-    private final AtomicLong sortOverlapRowsPeak = new AtomicLong();
 
     public FixtureMetrics() {
         this(new SimpleMeterRegistry());
@@ -63,38 +47,6 @@ public final class FixtureMetrics implements SortMetrics {
                 .register(registry);
         indexEntries = DistributionSummary.builder("swath.replay.index.entries").register(registry);
         sortProgress = Counter.builder("swath.replay.sort.progress").register(registry);
-        sortBoundaryEmbeddedEntries = Counter.builder("swath.replay.sort.merge.boundaries.embedded.entries")
-                .register(registry);
-        sortBoundaryEmbeddedBytes = Counter.builder("swath.replay.sort.merge.boundaries.embedded.bytes")
-                .baseUnit("bytes").register(registry);
-        sortBoundaryScanBytes = Counter.builder("swath.replay.sort.merge.boundaries.scan.bytes")
-                .baseUnit("bytes").register(registry);
-        sortRangeFramedBytes = Counter.builder("swath.replay.sort.merge.range.framed.bytes")
-                .baseUnit("bytes").register(registry);
-        sortRangeIndexBytes = Counter.builder("swath.replay.sort.merge.range.index.bytes")
-                .baseUnit("bytes").register(registry);
-        sortProofSpoolLogicalExtentBytes =
-                Counter.builder("swath.replay.sort.merge.proof_spool.logical_extent.bytes")
-                .baseUnit("bytes").register(registry);
-        sortProofSpoolPreallocationOperations =
-                Counter.builder("swath.replay.sort.merge.proof_spool.preallocation.operations")
-                        .register(registry);
-        sortProofSpoolPreallocationAttemptedBytes =
-                Counter.builder("swath.replay.sort.merge.proof_spool.preallocation.attempted.bytes")
-                        .baseUnit("bytes").register(registry);
-        sortProofSpoolMappedOperations =
-                Counter.builder("swath.replay.sort.merge.proof_spool.mapped.operations")
-                        .register(registry);
-        sortProofSpoolMappedBytes =
-                Counter.builder("swath.replay.sort.merge.proof_spool.mapped.bytes")
-                        .baseUnit("bytes").register(registry);
-        sortProofSpoolLatency =
-                Timer.builder("swath.replay.sort.merge.proof_spool.latency").register(registry);
-        sortOverlapClusters = Counter.builder("swath.replay.sort.merge.overlap.clusters").register(registry);
-        registry.gauge("swath.replay.sort.merge.overlap.pages.peak", sortOverlapPagesPeak,
-                AtomicLong::get);
-        registry.gauge("swath.replay.sort.merge.overlap.rows.peak", sortOverlapRowsPeak,
-                AtomicLong::get);
     }
 
     public MeterRegistry registry() {
@@ -155,52 +107,6 @@ public final class FixtureMetrics implements SortMetrics {
         sortProgress.increment();
     }
 
-    /** Records fixture-sort boundary-selection metadata and fallback scan volume. */
-    @Override
-    public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
-        sortBoundaryEmbeddedEntries.increment(embeddedEntries);
-        sortBoundaryEmbeddedBytes.increment(embeddedBytes);
-        sortBoundaryScanBytes.increment(scanBytes);
-    }
-
-    @Override
-    public void recordPageAwareOverlapCluster() {
-        sortOverlapClusters.increment();
-    }
-
-    @Override
-    public void recordPageAwareOverlapState(long activePages, long retainedRows) {
-        sortOverlapPagesPeak.accumulateAndGet(activePages, Math::max);
-        sortOverlapRowsPeak.accumulateAndGet(retainedRows, Math::max);
-    }
-
-    @Override
-    public void recordRangeIndexBytes(long bytes) {
-        sortRangeIndexBytes.increment(bytes);
-    }
-
-    @Override
-    public void recordRangeFramedBytes(long bytes) {
-        sortRangeFramedBytes.increment(bytes);
-    }
-
-    @Override
-    public void recordProofSpool(long logicalExtentBytes,
-                                 long preallocationOperations,
-                                 long preallocationAttemptedBytes,
-                                 long mappedOperations,
-                                 long mappedBytes,
-                                 long serviceNanos) {
-        sortProofSpoolLogicalExtentBytes.increment(Math.max(0L, logicalExtentBytes));
-        sortProofSpoolPreallocationOperations.increment(Math.max(0L, preallocationOperations));
-        sortProofSpoolPreallocationAttemptedBytes.increment(
-                Math.max(0L, preallocationAttemptedBytes));
-        sortProofSpoolMappedOperations.increment(Math.max(0L, mappedOperations));
-        sortProofSpoolMappedBytes.increment(Math.max(0L, mappedBytes));
-        sortProofSpoolLatency.record(
-                Math.max(0L, serviceNanos), TimeUnit.NANOSECONDS);
-    }
-
     /**
      * How many {@code SORT.segment_flushed} engagements this instance has recorded — {@code
      * sort-fixture}'s summary line reads this back since {@code io.varve.swath.sort.SortTransformResult}
@@ -213,27 +119,4 @@ public final class FixtureMetrics implements SortMetrics {
         return counter == null ? 0 : (long) counter.count();
     }
 
-    public long proofSpoolLogicalExtentBytes() {
-        return (long) sortProofSpoolLogicalExtentBytes.count();
-    }
-
-    public long proofSpoolPreallocationOperations() {
-        return (long) sortProofSpoolPreallocationOperations.count();
-    }
-
-    public long proofSpoolPreallocationAttemptedBytes() {
-        return (long) sortProofSpoolPreallocationAttemptedBytes.count();
-    }
-
-    public long proofSpoolMappedOperations() {
-        return (long) sortProofSpoolMappedOperations.count();
-    }
-
-    public long proofSpoolMappedBytes() {
-        return (long) sortProofSpoolMappedBytes.count();
-    }
-
-    public long proofSpoolMillis() {
-        return (long) sortProofSpoolLatency.totalTime(TimeUnit.MILLISECONDS);
-    }
 }

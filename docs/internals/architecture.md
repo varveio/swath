@@ -45,7 +45,7 @@ SeedStep ──► SQLite worklist ──► WorkStealingScan workers
              text / Parquet                         sort staging
                   │                                       │
                   │                                finalization
-                  │                              (ranges | pipeline)
+                  │                         header scan → router → encoders
                   │                                       │
                   └──────────────► publish ◄───────────────┘
                                          │
@@ -117,8 +117,8 @@ boundary in `output.parquet`. That lower layer owns the pinned parquet-mr config
 caller-supplied geometry and `WriteSupport`, emitted-byte and digest accounting, optional
 data-only sync on the writer's existing channel, and the final file-plus-parent durability step.
 Above it, direct output retains sticky lanes, part rotation, checkpoint callbacks, and monotone
-manifest publication; sorted output retains staging, mechanism-specific finalization, late global
-footer stamps, ordered final-file rolling, and sorted publication. Sharing the byte transport must
+manifest publication; sorted output retains staging, reference-routed finalization, dense global
+footer stamps, page-granular final-part rolling, and sorted publication. Sharing the byte transport must
 not merge those state machines or let a physical sync advance either one's durable checkpoint
 boundary.
 
@@ -127,20 +127,23 @@ with its own strict seal-order durability protocol; any periodic writeback there
 the shared cadence policy, admitted only by measurement, not a reason to route page-run bytes
 through the Parquet writer abstraction.
 
-The sorted merge keeps one public façade, `SortTransform(SortRun)`. `SortFinalization` selects the
-default `ranges` path or the experimental `pipeline` path without changing durable staging or
-publication. Shared owners are `PageRunCatalog`, which validates names and preflights trailers and
-indexes; `MergePlanner`, which owns fan-in and mechanism-specific heap/FD admission; and
-`DatasetPublisher`, which owns temporary parts, cross-part verification, stale-final replacement,
-rename/fsync/listener ordering, and staging completion.
+The sorted merge keeps one public façade, `SortTransform(SortRun)`. `PageRunCatalog` validates
+segment names, headers, fixed tails, checkpoint format identity, and the exact maxima used by
+resource admission. `MergePlanner` owns cascade fan-in and encoder heap/descriptor admission.
+`Finalization` then owns cascade, routing, encoding, and assembly as one failure domain, with
+`FinalizationFailure` relaying the first asynchronous failure.
 
-On `ranges`, `ParallelRangeMerge` owns boundary and seek planning, executor lifecycle, global
-physical-zone proof, writer registration, and failure cleanup; each `ParallelRangeWorker` executes
-one key range. On `pipeline`, `PipelineFinalization` owns the common failure domain:
-`SegmentHeaderCursors` produces bounded header-only reference streams, `MergeRouter` is the single
-global order and part-boundary owner, and `PartEncoders` positionally reads complete plans from one
-shared bounded work queue. Encoder completion order is reconciled by dense plan ordinal before the
-shared publisher sees any part.
+When the catalog exceeds admitted fan-in, `CascadePageMerger` streams whole ordered pages and sends
+only transitive overlap components through `PageRowMerger`, producing a smaller survivor catalog.
+`SegmentHeaderCursors` then expose bounded header-only reference streams, `MergeRouter` owns global
+reference order and calibrated part boundaries, `PartSizer` converts the encoded-size target into
+logical page-payload targets, and `PartEncoders` positionally read complete plans from one shared
+bounded queue. Encoder identity and completion order are immaterial: dense plan ordinals determine
+footer stamps, final filenames, and the sequence handed to `DatasetPublisher`.
+
+`DatasetPublisher` owns temporary-part adjacency and cardinality checks, stale-final replacement,
+rename/fsync/listener ordering, and staging completion. It accepts only the complete set of
+footer-closed parts after every finalization stage has quiesced.
 
 `DatasetPublisher` deliberately stops at the listener seam—`ListRunner` remains the owner of
 consumer `manifest.json`, state, symlink, and last-written `_SUCCESS`. After that listener returns,

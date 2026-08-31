@@ -226,26 +226,22 @@ class PageBlockSerdeTest {
         PageBlock first;
         PageBlock second;
         byte[] firstOwner;
-        PageFrontierReader reader = new PageFrontierReader(path, SortMetrics.NO_OP);
-        try {
-            firstOwner = reader.currentBodyOwner();
-            PageBlockCodec.Header firstHeader = reader.currentHeader();
-            first = reader.decodeCurrentPage();
+        try (PageRunSegmentIo reader = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
+            PageRunSegmentIo.Page firstRecord = reader.nextPage();
+            firstOwner = firstRecord.body();
+            PageBlockCodec.Header firstHeader = firstRecord.header();
+            first = firstRecord.decode(path);
             assertThat(first.payloadOwnerUnsafe()).isSameAs(firstOwner);
             assertThat(first.parsedHeaderUnsafe()).isSameAs(firstHeader);
 
-            reader.advance();
-            assertThat(reader.currentBodyOwner())
+            PageRunSegmentIo.Page secondRecord = reader.nextPage();
+            assertThat(secondRecord.body())
                     .as("each frame owns a distinct immutable body")
                     .isNotSameAs(firstOwner);
-            second = reader.decodeCurrentPage();
-            assertThat(second.payloadOwnerUnsafe()).isSameAs(reader.currentBodyOwner());
-        } finally {
-            reader.close();
+            second = secondRecord.decode(path);
+            assertThat(second.payloadOwnerUnsafe()).isSameAs(secondRecord.body());
         }
 
-        assertThat(reader.currentBodyOwner()).isNull();
-        assertThat(reader.currentHeader()).isNull();
         assertThat(decodeAll(first)).containsExactly(object("alpha"), object("bravo"));
         assertThat(decodeAll(second)).containsExactly(object("charlie"), object("delta"));
     }
@@ -331,7 +327,7 @@ class PageBlockSerdeTest {
 
     // ------------------------------------------------------------------
     // Compress-at-pack: every adversarial shape above round-trips identically under
-    // EVERY codec, a corrupt/mismatched declared length fails fast, and PageFrontierReader keeps
+    // EVERY codec, a corrupt/mismatched declared length fails fast, and the page-run reader keeps
     // reading min/max/count WITHOUT decompressing over a page-run file of LZ4-compressed pages.
     // ------------------------------------------------------------------
 
@@ -412,7 +408,7 @@ class PageBlockSerdeTest {
     }
 
     @Test
-    void pageFrontierReaderReadsMinMaxOfLz4CompressedPagesWithoutDecompressing(@TempDir Path dir) throws IOException {
+    void segmentIoReadsMinMaxOfLz4CompressedPagesWithoutDecompressing(@TempDir Path dir) throws IOException {
         SortConfig config = configWithCodec(PageCodec.LZ4);
         SortBuffer buffer = new SortBuffer(config, CMP);
         buffer.admit(1L, List.of(object("alpha"), object("bravo")));
@@ -422,25 +418,21 @@ class PageBlockSerdeTest {
         Path path = dir.resolve("lz4.pgr");
         new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE).flush(sealed, path);
 
-        try (PageFrontierReader reader = new PageFrontierReader(path, SortMetrics.NO_OP)) {
-            // Header fields (min/max/count) are readable immediately after open()/advance() — before
-            // decodeCurrentPage() is ever called, i.e. before any row is decompressed.
-            assertThat(reader.hasPage()).isTrue();
-            assertThat(new String(reader.minKey(), StandardCharsets.UTF_8)).isEqualTo("alpha");
-            assertThat(new String(reader.maxKey(), StandardCharsets.UTF_8)).isEqualTo("bravo");
-            assertThat(reader.count()).isEqualTo(2);
+        try (PageRunSegmentIo reader = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
+            PageRunSegmentIo.Page first = reader.nextPage();
+            assertThat(new String(first.header().minKey(), StandardCharsets.UTF_8)).isEqualTo("alpha");
+            assertThat(new String(first.header().maxKey(), StandardCharsets.UTF_8)).isEqualTo("bravo");
+            assertThat(first.header().count()).isEqualTo(2);
 
-            reader.advance();
-            assertThat(reader.hasPage()).isTrue();
-            assertThat(new String(reader.minKey(), StandardCharsets.UTF_8)).isEqualTo("charlie");
-            assertThat(new String(reader.maxKey(), StandardCharsets.UTF_8)).isEqualTo("delta");
+            PageRunSegmentIo.Page second = reader.nextPage();
+            assertThat(new String(second.header().minKey(), StandardCharsets.UTF_8)).isEqualTo("charlie");
+            assertThat(new String(second.header().maxKey(), StandardCharsets.UTF_8)).isEqualTo("delta");
 
             // Only NOW does decoding (and therefore decompression) happen — and it must still be correct.
-            PageBlock page = reader.decodeCurrentPage();
+            PageBlock page = second.decode(path);
             assertThat(decodeAll(page)).containsExactly(object("charlie"), object("delta"));
 
-            reader.advance();
-            assertThat(reader.hasPage()).isFalse();
+            assertThat(reader.nextPage()).isNull();
         }
     }
 

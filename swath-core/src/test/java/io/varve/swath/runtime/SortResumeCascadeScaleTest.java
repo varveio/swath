@@ -111,7 +111,7 @@ final class SortResumeCascadeScaleTest {
                 .withSegmentBytes(Long.MAX_VALUE)
                 .withSegmentEntries(PAGE_SIZE)
                 .withFanIn(8)
-                .withMergeBudgetBytes(8L << 20);
+                .withMergeBudgetBytes(32L << 20);
     }
 
     @Test

@@ -13,16 +13,16 @@ final class StagingNames {
     static final String TMP_SUFFIX = ".tmp";
 
     static final String FINAL_TMP_GLOB = "part-*.parquet.tmp";
-    static final String RANGE_TMP_GLOB = "prange-*.parquet.tmp";
     static final String PIPELINE_TMP_GLOB = "pipeline-*.parquet.tmp";
     static final String OWN_FINAL_GLOB = "part-*.parquet";
     static final String ALL_PARQUET_GLOB = "*.parquet";
     static final String CASCADE_PAGE_RUN_GLOB = "merge-*.pageseg";
     /** Retained for resume tests and older attempts that planted Parquet cascade debris. */
     static final String LEGACY_CASCADE_PARQUET_GLOB = "merge-*.parquet";
-    static final String RANGE_CASCADE_PAGE_RUN_GLOB = "merge-r*-*.pageseg";
-    static final String RANGE_LEGACY_CASCADE_PARQUET_GLOB = "merge-r*-*.parquet";
-    static final String RANGE_PROOF_TMP_GLOB = "prange-proof*.tmp";
+    /** Retained only to sweep disposable files left by pre-pipeline finalization attempts. */
+    static final String LEGACY_RANGE_TMP_GLOB = "prange-*.parquet.tmp";
+    /** Retained only to sweep proof debris left by pre-pipeline finalization attempts. */
+    static final String LEGACY_RANGE_PROOF_TMP_GLOB = "prange-proof*.tmp";
 
     private StagingNames() {
     }
@@ -33,14 +33,6 @@ final class StagingNames {
 
     static String finalTmp(int index) {
         return finalPart(index) + TMP_SUFFIX;
-    }
-
-    static String rangeTmp(int range, int localIndex) {
-        return "prange-" + range + "-" + localIndex + PARQUET_SUFFIX + TMP_SUFFIX;
-    }
-
-    static String rangeProofTmp() {
-        return "prange-proof" + TMP_SUFFIX;
     }
 
     static String pipelineTmp(int ordinal) {

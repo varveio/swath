@@ -8,14 +8,12 @@ package io.varve.swath.sort;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Finalization lifecycle owner for the pipeline arm. Cascade width conservatively reserves the
+ * Finalization lifecycle owner. Cascade width conservatively reserves the
  * requested output descriptors, but encoder admission occurs only after cascade because survivor
  * count and page maxima are the resources the final pass actually owns. The final stages share one
  * failure relay and hand only durable, globally ordered parts to the publisher. Any failure
@@ -26,14 +24,14 @@ import org.slf4j.LoggerFactory;
  * completion order is nondeterministic, and exposing that order would break strict cross-part raw
  * bounds. Instead it waits for dense ordinals, closes the shared channels, then delegates adjacency,
  * cardinality, renaming, manifest, and success-marker ownership to {@link DatasetPublisher}. This
- * also keeps the publication commit point identical to the range arm.
+ * also keeps the publication commit point single-sourced.
  *
  * <p>Cascade intermediates belong to the ordinary merge reconciliation. Pipeline temporaries use a
  * separate owned glob and remain disposable until the whole ordered set passes verification. Thus a
  * failed encoder can never make a footer-closed but unverified file resumable or consumer-visible.
  */
-final class PipelineFinalization {
-    private static final Logger log = LoggerFactory.getLogger(PipelineFinalization.class);
+final class Finalization {
+    private static final Logger log = LoggerFactory.getLogger(Finalization.class);
 
     private final SortRun run;
     private final MergePlanner planner;
@@ -43,7 +41,7 @@ final class PipelineFinalization {
      * Bind the run's policy, resource planner, and sole publication owner. Keeping publication here
      * prevents encoder threads from racing manifest order or cleanup authority.
      */
-    PipelineFinalization(SortRun run, MergePlanner planner, DatasetPublisher publisher) {
+    Finalization(SortRun run, MergePlanner planner, DatasetPublisher publisher) {
         this.run = run;
         this.planner = planner;
         this.publisher = publisher;
@@ -63,8 +61,7 @@ final class PipelineFinalization {
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(
                 run.comparator(), run.hook(), metrics, config.segmentCodec(), run.orderingMode());
         PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, request.stagingDir(),
-                request.ownedInputs(),
-                "merge-", null, sourceCatalog.byPath(), frontier -> { }, -1, null, null);
+                request.ownedInputs(), "merge-");
         KWayMerge<Path> cascade = new KWayMerge<>(run.comparator(),
                 planner.pipelineFanIn(sourceCatalog, encoderCount),
                 io, run.hook(), metrics);
@@ -74,20 +71,18 @@ final class PipelineFinalization {
         PageRunCatalog pipelineCatalog = survivors.equals(sourceCatalog.paths())
                 ? sourceCatalog
                 : PageRunCatalog.preflight(survivors,
-                        path -> PageRunSegmentIo.open(path, metrics),
-                        Optional.of(ignored -> { }),
-                        Map.of(), metrics);
+                        path -> PageRunSegmentIo.open(path, metrics));
         MergePlanner.PipelinePlan plan = planner.pipelineParallelism(encoderCount, pipelineCatalog);
         recordEncoderClamp(encoderCount, plan, pipelineCatalog);
         int effectiveEncoders = plan.encoders();
-        PipelineFailure failure = new PipelineFailure();
-        PipelinePartSizer sizer = new PipelinePartSizer(
-                run.pipelinePartTarget(), config.finalFileBytes());
+        FinalizationFailure failure = new FinalizationFailure();
+        PartSizer sizer = new PartSizer(
+                run.partTarget(), config.finalFileBytes());
         List<PageRunSegmentIo> channels = List.of();
         SegmentHeaderCursors cursors = null;
         PartEncoders encoders = null;
         try {
-            channels = openChannels(pipelineCatalog, plan, metrics);
+            channels = openChannels(pipelineCatalog, metrics);
             cursors = new SegmentHeaderCursors(channels,
                     SegmentHeaderCursors.planned(channels.size()), metrics, failure);
             encoders = new PartEncoders(effectiveEncoders, channels, plan.clusterBudgetBytes(),
@@ -165,17 +160,16 @@ final class PipelineFinalization {
 
     /**
      * Open exactly one shared positional-read channel per surviving segment. Current segments use
-     * their persisted raw maximum; legacy inputs use the planner's reduced compatibility ceiling so
-     * a body larger than the retained-byte plan is rejected before decompression.
+     * its preflight-observed decoded-page maximum so admission and retained-byte pricing use the
+     * same exact per-descriptor value.
      */
     private static List<PageRunSegmentIo> openChannels(PageRunCatalog catalog,
-            MergePlanner.PipelinePlan plan, SortMetrics metrics) throws IOException {
+            SortMetrics metrics) throws IOException {
         List<PageRunSegmentIo> channels = new java.util.ArrayList<>(catalog.descriptors().size());
         try {
             for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
-                int decodedLimit = descriptor.hasDecodedPageMaximum()
-                        ? descriptor.maxRawPayloadLength() : plan.legacyDecodedLimit();
-                channels.add(PageRunSegmentIo.open(descriptor.path(), metrics, decodedLimit));
+                channels.add(PageRunSegmentIo.open(
+                        descriptor.path(), metrics, descriptor.maxRawPayloadLength()));
             }
             return List.copyOf(channels);
         } catch (Throwable failure) {
@@ -225,13 +219,13 @@ final class PipelineFinalization {
      * everything as a generic I/O failure would change operator-visible retry semantics.
      */
     private static Throwable failureCause(Throwable failure) {
-        return failure instanceof PipelineFailure.Failed && failure.getCause() != null
+        return failure instanceof FinalizationFailure.Failed && failure.getCause() != null
                 ? failure.getCause() : failure;
     }
 
     /**
      * Record the single binding encoder resource without duplicating the no-clamp guard. FD and heap
-     * reasons stay distinct because their remediation differs; range-arm reasons never apply here.
+     * reasons stay distinct because their remediation differs.
      */
     private void recordEncoderClamp(int requested, MergePlanner.PipelinePlan plan,
             PageRunCatalog catalog) {

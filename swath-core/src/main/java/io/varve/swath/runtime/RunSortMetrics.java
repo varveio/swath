@@ -28,42 +28,6 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     }
 
     @Override
-    public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
-        metrics.recordSortMergeBoundaryIo(embeddedEntries, embeddedBytes, scanBytes);
-    }
-
-    @Override
-    public void recordPageAwareOverlapCluster() {
-        metrics.recordSortMergeOverlapCluster();
-    }
-
-    @Override
-    public void recordPageAwareOverlapState(long activePages, long retainedRows) {
-        metrics.recordSortMergeOverlapState(activePages, retainedRows);
-    }
-
-    @Override
-    public void recordRangeIndexBytes(long bytes) {
-        metrics.recordSortMergeRangeIndexBytes(bytes);
-    }
-
-    @Override
-    public void recordRangeFramedBytes(long bytes) {
-        metrics.recordSortMergeRangeFramedBytes(bytes);
-    }
-
-    @Override
-    public void recordProofSpool(long logicalExtentBytes,
-                                 long preallocationOperations,
-                                 long preallocationAttemptedBytes,
-                                 long mappedOperations,
-                                 long mappedBytes,
-                                 long serviceNanos) {
-        metrics.recordSortMergeProofSpool(logicalExtentBytes, preallocationOperations,
-                preallocationAttemptedBytes, mappedOperations, mappedBytes, serviceNanos);
-    }
-
-    @Override
     public void recordPipelinePagesForwarded(long pages) {
         metrics.recordSortPipelinePagesForwarded(pages);
     }

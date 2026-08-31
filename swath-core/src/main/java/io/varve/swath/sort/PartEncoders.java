@@ -45,8 +45,8 @@ final class PartEncoders implements AutoCloseable {
     private final ArrayBlockingQueue<Item> queue;
     private final List<Thread> threads = new ArrayList<>();
     private final ConcurrentLinkedQueue<CompletedPart> completed = new ConcurrentLinkedQueue<>();
-    private final PipelineFailure failure;
-    private final PipelinePartSizer sizer;
+    private final FinalizationFailure failure;
+    private final PartSizer sizer;
     private final SortMetrics metrics;
     private final AtomicBoolean aborting = new AtomicBoolean();
     private final AtomicInteger partsOpen = new AtomicInteger();
@@ -61,7 +61,7 @@ final class PartEncoders implements AutoCloseable {
     PartEncoders(int count, List<PageRunSegmentIo> segments, long clusterBudgetBytes,
             Path stagingDir, SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
             DuplicateHook hook, EqualKeyPolicy equalKeyPolicy, SortMetrics metrics,
-            PipelineFailure failure, PipelinePartSizer sizer, LongConsumer progressCallback) {
+            FinalizationFailure failure, PartSizer sizer, LongConsumer progressCallback) {
         if (count < 1 || clusterBudgetBytes < 1) {
             throw new IllegalArgumentException("pipeline encoder settings must be positive");
         }

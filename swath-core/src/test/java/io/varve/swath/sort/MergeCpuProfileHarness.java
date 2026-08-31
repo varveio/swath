@@ -10,7 +10,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
@@ -103,13 +102,10 @@ class MergeCpuProfileHarness {
             SortConfig config = SortConfig.fromProperties(
                     key -> "swath.sort.merge-parallelism".equals(key) ? "1" : null);
             SortMetrics metrics = SortMetrics.NO_OP;
-            ConcurrentLinkedQueue<Long> rangeLatenciesNanos = new ConcurrentLinkedQueue<>();
-            RangeMergeTimer timer = rangeLatenciesNanos::add;
             SortedFileWriterFactory writerFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
             SortTransform transform =
                     new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
                             EqualKeyPolicy.ALLOW, metrics, writerFactory,
-                            MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, timer,
                             SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
             Configuration jfrConfig = Configuration.getConfiguration("profile");

@@ -39,25 +39,17 @@ import java.util.List;
  *
  * <p><b>On-disk format, big-endian:</b>
  * <pre>
- * [magic u32][format-version u16 = 2][header-version u16][metadata-length u32]
+ * [magic u32][format-version u16 = 3][header-version u16][metadata-length u32]
  * [metadata TLVs: ordering mode][header crc32c u32]
  * record* : [len u32][crc32c u32][ &lt;PageBlock.serialize() body&gt; ]   // crc32c over the body bytes
- * trailer : [segMinKey u16-len-prefixed][segMaxKey u16-len-prefixed]
- *           [optional trailer extension: type-1 minima, legacy type-2 index, or type-3 page index]
- *           [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32]
+ * trailer : [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32]
+ *           [maxRawPayloadLen u32][maxKeyLen u32]
  *           [trailer crc32c u32][magic u32]
  * </pre>
- * {@code segMinKey}/{@code segMaxKey} are the ACTUAL unsigned minimum of all page minima and
- * unsigned maximum of all page maxima — the drop-in for {@code SortedFileIndex.bounds} with no
- * truncated-stats hazard. {@code trailerStart} is the absolute file offset where the trailer begins
- * (where {@code segMinKey}'s length prefix starts) — read from the fixed EOF-relative tail, it lets a
- * reader seek straight to the bounds in O(1) instead of walking every record's length prefix.
+ * {@code trailerStart} is the absolute file offset where the fixed trailer begins.
  * {@code maxRecordLen} is the largest framed body length (the runtime merge fan-in planner uses it
  * to tighten its configured per-stream estimate, and the reader uses it to bound a claimed length before
- * allocating). A listing-phase segment's optional extension stores the exact capped systematic
- * sparse page-offset index plus the exact largest decoded page payload used by merge planning, while
- * preserving the shared v2 body format; post-boundary cascade intermediates
- * omit it. The trailer is written LAST: with
+ * allocating). The trailer is written LAST: with
  * the file-then-directory fsync below, a half-written page-run file has no valid trailer and is
  * discarded whole on resume (I6 — durable iff finalized; segment-granularity, not sub-file).
  */
@@ -75,13 +67,14 @@ final class PageRunSegmentWriter {
     /** Bytes in the header emitted by this build. Readers honor the envelope's dynamic metadata length. */
     static final int HEADER_BYTES = PageRunHeader.CURRENT_BYTES;
 
-    /** Fixed trailer tail after the two length-prefixed keys: trailerStart u64 + totalRecords u32 +
-     *  totalEntries u64 + maxRecordLen u32 + CRC32C u32 + magic u32 = 32 bytes. The reader reads exactly this
-     *  (positioned from EOF) to recover {@code trailerStart} (an O(1) seek straight to the key bounds,
-     *  no per-record walk), {@code totalRecords}/{@code totalEntries} (end-of-stream completeness
-     *  cross-check), {@code maxRecordLen} (the per-record length bound), and validate the trailing
+    /** Fixed trailer: trailerStart u64 + totalRecords u32 + totalEntries u64 + maxRecordLen u32 +
+     *  maxRawPayloadLen u32 + maxKeyLen u32 + CRC32C u32 + magic u32 = 40 bytes. The reader reads exactly this
+     *  (positioned from EOF) to recover {@code trailerStart},
+     *  {@code totalRecords}/{@code totalEntries} (end-of-stream completeness
+     *  cross-check), {@code maxRecordLen} (the per-record length bound), exact decoded-page/key
+     *  maxima used by kickoff admission, and validate the trailing
      *  magic (truncation check) — all without scanning records. */
-    static final int TRAILER_FIELDS_BYTES = 8 + 4 + 8 + 4;
+    static final int TRAILER_FIELDS_BYTES = 8 + 4 + 8 + 4 + 4 + 4;
     static final int TRAILER_FIXED_TAIL_BYTES = TRAILER_FIELDS_BYTES + 4 + 4;
 
     /** Rows per page when batching an already-sorted {@link SortedCursor} in {@link #writeIntermediate}
@@ -156,8 +149,8 @@ final class PageRunSegmentWriter {
         pages.sort((a, b) -> Arrays.compareUnsigned(a.firstKeyUnsafe(), b.firstKeyUnsafe()));
 
         long totalEntries;
-        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics,
-                PageRunPageIndex.exactBuilder(pages.size()), orderingMode)) {
+        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(
+                path, metrics, orderingMode)) {
             PageBlock previous = null;
             for (PageBlock page : pages) {
                 if (previous != null
@@ -203,7 +196,7 @@ final class PageRunSegmentWriter {
     private long writeSorted(SortedCursor sorted, Path path, SegmentKind kind,
                              int maxRawPayloadBytes) throws IOException {
         try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(
-                path, metrics, null, orderingMode)) {
+                path, metrics, orderingMode)) {
             List<ListEntry> batch = new ArrayList<>(INTERMEDIATE_PAGE_ENTRIES);
             while (sorted.hasNext()) {
                 batch.add(sorted.next());

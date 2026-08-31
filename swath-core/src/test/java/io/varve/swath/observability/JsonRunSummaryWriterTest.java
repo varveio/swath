@@ -444,16 +444,11 @@ final class JsonRunSummaryWriterTest {
     }
 
     @Test
-    void sortBlockSeparatesParallelCloseServiceFromFinalizeWallTime(@TempDir Path dir) throws Exception {
+    void sortBlockReportsPipelineFinalizeService(@TempDir Path dir) throws Exception {
         Path path = dir.resolve("summary.json");
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         RunMetrics metrics = new RunMetrics(registry);
         registry.get("swath.sort.merge.latency").timer().record(10, TimeUnit.SECONDS);
-        metrics.recordSortMergeRange(TimeUnit.SECONDS.toNanos(2));
-        metrics.recordSortMergeBoundaries(TimeUnit.SECONDS.toNanos(1));
-        metrics.recordSortMergeRangeFramedBytes(12_345);
-        metrics.recordSortMergeProofSpool(
-                49_696, 2, 49_696, 777, 8_888, TimeUnit.MILLISECONDS.toNanos(12));
         metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
         metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
         metrics.recordSortManifestMd5(1234, TimeUnit.MILLISECONDS.toNanos(250));
@@ -467,8 +462,6 @@ final class JsonRunSummaryWriterTest {
         metrics.recordSortStagingBytesLive(1234);
         metrics.recordSortHandoffQueueDepth(5);
         metrics.recordSortOffThreadBuffersLive(2);
-        metrics.recordSortMergeOverlapCluster();
-        metrics.recordSortMergeOverlapState(3, 12);
 
         RunSummary snapshot = summary();
         JsonRunSummaryWriter.RunConfig runConfig = runConfig().withSortEnabled(true);
@@ -483,7 +476,6 @@ final class JsonRunSummaryWriterTest {
         }
 
         JsonNode sort = MAPPER.readTree(path.toFile()).get("sort");
-        assertThat(sort.get("range_merge_ms").asLong()).isEqualTo(2_000);
         assertThat(sort.get("finalize_ms").asLong()).isEqualTo(4_000);
         assertThat(sort.get("finalize_close_ms").asLong()).isEqualTo(6_000);
         assertThat(sort.get("finalize_close_count").asLong()).isEqualTo(2L);
@@ -506,17 +498,6 @@ final class JsonRunSummaryWriterTest {
         assertThat(sort.get("local_publication_ms").asLong()).isEqualTo(4_000);
         assertThat(sort.get("finalize_parallelism").asLong()).isEqualTo(4);
         assertThat(sort.get("phase_rows_per_sec").asDouble()).isEqualTo(100.0);
-        assertThat(sort.get("merge_overlap_clusters").asLong()).isEqualTo(1);
-        assertThat(sort.get("merge_overlap_pages_peak").asLong()).isEqualTo(3);
-        assertThat(sort.get("merge_overlap_rows_peak").asLong()).isEqualTo(12);
-        assertThat(sort.get("merge_range_framed_bytes").asLong()).isEqualTo(12_345);
-        assertThat(sort.get("merge_proof_spool_logical_extent_bytes").asLong()).isEqualTo(49_696);
-        assertThat(sort.get("merge_proof_spool_preallocation_operations").asLong()).isEqualTo(2);
-        assertThat(sort.get("merge_proof_spool_preallocation_attempted_bytes").asLong())
-                .isEqualTo(49_696);
-        assertThat(sort.get("merge_proof_spool_mapped_operations").asLong()).isEqualTo(777);
-        assertThat(sort.get("merge_proof_spool_mapped_bytes").asLong()).isEqualTo(8_888);
-        assertThat(sort.get("merge_proof_spool_ms").asLong()).isEqualTo(12);
     }
 
     /** The pre-{@code effective_fan_in} {@code sortEnabled} constructor renders the field as JSON null. */
@@ -722,53 +703,6 @@ final class JsonRunSummaryWriterTest {
         } finally {
             writer.close();
         }
-    }
-
-    @Test
-    void rangeFramedBytesAreCumulativeInPeriodicAndFinalSortSnapshots(@TempDir Path dir)
-            throws Exception {
-        Path path = dir.resolve("summary.json");
-        SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        Counter rangeFramedBytes = Counter.builder("swath.sort.merge.range.framed.bytes")
-                .baseUnit("bytes").register(registry);
-        JsonRunSummaryWriter.RunConfig runConfig = runConfig().withSortEnabled(true);
-        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
-                new JsonRunSummaryWriter.Config(path, Duration.ofMillis(20), "abc123hash",
-                        runConfig, List.of()),
-                registry, Instant.now(), JsonRunSummaryWriterTest::summary);
-        try {
-            rangeFramedBytes.increment(1_024);
-            await().atMost(5, TimeUnit.SECONDS).until(() -> Files.exists(path)
-                    && MAPPER.readTree(path.toFile()).get("sort").get("merge_range_framed_bytes")
-                    .asLong() == 1_024L);
-
-            rangeFramedBytes.increment(2_048);
-            writer.complete(summary());
-            JsonNode sort = MAPPER.readTree(path.toFile()).get("sort");
-            assertThat(sort.get("merge_range_framed_bytes").asLong())
-                    .as("final snapshot keeps the cumulative byte counter, not the last delta")
-                    .isEqualTo(3_072L);
-        } finally {
-            writer.close();
-        }
-    }
-
-    @Test
-    void serialSortSummaryKeepsRangeFramedBytesAtZero(@TempDir Path dir) throws Exception {
-        Path path = dir.resolve("summary.json");
-        JsonRunSummaryWriter.RunConfig runConfig = runConfig().withSortEnabled(true);
-        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
-                new JsonRunSummaryWriter.Config(path, Duration.ofMinutes(10), "abc123hash",
-                        runConfig, List.of()),
-                new SimpleMeterRegistry(), Instant.now(), JsonRunSummaryWriterTest::summary);
-        try {
-            writer.complete(summary());
-        } finally {
-            writer.close();
-        }
-
-        assertThat(MAPPER.readTree(path.toFile()).get("sort").get("merge_range_framed_bytes")
-                .asLong()).isZero();
     }
 
     @Test

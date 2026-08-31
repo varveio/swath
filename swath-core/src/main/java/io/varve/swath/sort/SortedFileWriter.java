@@ -38,23 +38,6 @@ public interface SortedFileWriter extends AutoCloseable {
     }
 
     /**
-     * Sets this file's 1-based position in the output's roll sequence, overriding whatever the
-     * factory was given. Honoured any time before {@link #close()}, exactly like {@link #markFinal()}.
-     *
-     * <p>The parallel range merge is the caller that needs it: a range writes its parts before it can
-     * know how many parts the ranges BELOW it produced, so global indices are assigned once every
-     * range has drained and the full ordered part list is known.
-     *
-     * <p><b>Deliberately abstract, unlike {@link #markFinal()}.</b> A {@code default} no-op here is a
-     * trap: every DECORATOR of this interface then silently swallows the call, and the completeness
-     * stamp degrades to the range-local one with no compile error and no test failure — which is
-     * exactly what happened, in two separate decorators at once, while every direct-construction test
-     * passed. Forcing each implementation to say what it does is the only guard that scales to the
-     * next decorator someone adds.
-     */
-    void setFileIndex(int fileIndex);
-
-    /**
      * Immutable publish metadata, available only after a successful durable {@link #close()}.
      * Writers that cannot capture it inline return empty and leave the publisher's existing
      * validation/readback path in force.

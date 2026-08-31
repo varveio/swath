@@ -37,16 +37,11 @@ import java.util.function.UnaryOperator;
  *       is Parquet's smallest addressable unit, so this is the floor on what a bounded key-range read
  *       must decode; see the constant for why the default is a listing page rather than parquet's
  *       20,000.</li>
- *   <li>{@code mergePerStreamBytes} — the configured planning price for one OPEN merge stream,
- *       and the denominator of the serial page-run merge's {@link #effectiveFanIn()}. A
- *       {@link PageFrontierReader} retains packed page bodies per open stream, so the default uses
- *       64&nbsp;KiB as a capacity floor. The runtime merge-entry clamp ({@link SortTransform})
- *       raises that price to two maximum encoded bodies plus the type-3 decoded-page maximum.
- *       Legacy inputs retain the configured floor and are guarded against their actual header
- *       claims immediately before allocation.</li>
- *   <li>{@code mergeBudgetBytes} — the merge-phase residency budget: covers exact parallel
- *       proof-spool backing first, caps how many segment streams a single
- *       {@link KWayMerge} pass may hold open, and bounds page-aware decoded overlap state, via
+ *   <li>{@code mergePerStreamBytes} — the configured planning price for one open merge stream,
+ *       and the denominator of {@link #effectiveFanIn()}. The default uses 64&nbsp;KiB as a
+ *       capacity floor. Runtime planning additionally accounts for encoded and decoded pages.</li>
+ *   <li>{@code mergeBudgetBytes} — the merge-phase residency budget: caps how many segment streams
+ *       a single {@link KWayMerge} pass may hold open and bounds decoded page state, via
  *       {@link #effectiveFanIn()} = {@code min(fanIn, max(2, mergeBudgetBytes / mergePerStreamBytes))}
  *       — keeping planned open-stream capacity a function of the budget, never of segment count
  *       (I11), even when {@code fanIn} alone would allow more streams. Same heap-adaptive shape as
@@ -56,15 +51,11 @@ import java.util.function.UnaryOperator;
  *   <li>{@code segmentCodec} — the codec {@link PageBlock#pack} compresses a page's
  *       front-coded PAYLOAD at pack time ({@code NONE}, {@code LZ4}, or {@code ZSTD1}; default
  *       {@code ZSTD1}) — the record HEADER (min/max, dict
- *       tables, {@code useDict}, count, ordered-bit) is never compressed, so
- *       {@link PageFrontierReader} keeps parsing it without decompressing. Threaded to
+ *       tables, {@code useDict}, count, ordered-bit) is never compressed. Threaded to
  *       {@link PageBlock#pack} at the one seal call site ({@link SortBuffer#admit}).</li>
  *   <li>{@code stagingRetention} — whether a successful live sorted publish keeps its original
  *       checkpoint-tracked page-run inputs for diagnostics. Cascade intermediates and temporary
  *       files remain disposable in either mode.</li>
- *   <li>{@code mergeBoundaryPolicy} — how an admitted parallel final merge chooses raw-key range
- *       boundaries. The default {@link MergeBoundaryPolicy#DISTINCT} preserves the shipped output
- *       partitioning; {@link MergeBoundaryPolicy#ROWS} is an explicit measurement arm.</li>
  * </ul>
  *
  * <p>This is an internal CLI configuration snapshot, not a supported generic Java API before 1.0.
@@ -81,8 +72,8 @@ public final class SortConfig {
 
     /**
      * Default for {@code mergePerStreamBytes}: a conservative ~64&nbsp;KiB estimate of the heap a
-     * single open page-run merge stream holds (one packed page body, retained for CRC by
-     * {@link PageFrontierReader}). Documented as an estimate to be validated at the perf gate.
+     * single open page-run merge stream holds. Documented as an estimate to be validated at the
+     * perf gate.
      */
     public static final long DEFAULT_MERGE_PER_STREAM_BYTES = 64L * 1024;
 
@@ -119,54 +110,15 @@ public final class SortConfig {
     /** JVM-property form of {@link #KEEP_STAGING_TUNE_KEY}. */
     public static final String KEEP_STAGING_PROPERTY = "swath." + KEEP_STAGING_TUNE_KEY;
 
-    /** Resume-free typed tune key for parallel merge range-boundary selection. */
-    public static final String MERGE_BOUNDARY_POLICY_TUNE_KEY = "sort.merge-boundary-policy";
-
-    /** JVM-property form of {@link #MERGE_BOUNDARY_POLICY_TUNE_KEY}. */
-    public static final String MERGE_BOUNDARY_POLICY_PROPERTY =
-            "swath." + MERGE_BOUNDARY_POLICY_TUNE_KEY;
-
-    /** Resume-free selector for the range and reference-router-encoder finalization paths. */
+    /** Resume-free selector for the finalization implementation. */
     public static final String FINALIZATION_TUNE_KEY = "sort.finalization";
 
     /** JVM-property form of {@link #FINALIZATION_TUNE_KEY}. */
     public static final String FINALIZATION_PROPERTY = "swath." + FINALIZATION_TUNE_KEY;
 
     /**
-     * Default for {@code minParallelStagedBytes}: staged bytes below which the merge stays serial no
-     * matter what {@code merge-parallelism} says.
-     *
-     * <p>Splitting has a fixed price the speedup must earn back — the output gains at least one part
-     * per range, which is consumer-visible and permanent, and the path pays a boundary-sampling pass
-     * over every segment before any range starts. Measured serial merge throughput is ~20-25 MB of
-     * staging per second, so 256 MiB is roughly ten seconds of serial merge: below it a 3-4x speedup
-     * saves a few seconds and multiplies the file count, which is a bad trade for whoever reads the
-     * output. This is why an ordinary small sorted run still publishes the single file it always did.
-     */
-    public static final long DEFAULT_MIN_PARALLEL_STAGED_BYTES = 256L * 1024 * 1024;
-
-    /**
-     * The number of contiguous key ranges the final merge is split into, each merged on its own
-     * thread producing a separate ordered part file whose concatenation (in range order) is the
-     * global sort ({@link ParallelRangeMerge}).
-     *
-     * <p><b>Why this is on by default.</b> The listing phase parallelises across cores and a serial
-     * merge does not, so the merge's share of a sorted run's wall clock RISES with core count —
-     * measured at 72 % of an 823 M-object run on 32 cores. Amdahl then caps any further core increase
-     * at ~1.4×, which makes the serial merge the binding constraint on every large sorted run.
-     * Measured end-to-end across five public buckets from 9.9 M to 823 M objects: 3.19×–4.09× on the
-     * merge phase, 2.18× on total wall clock at the top end, peak heap within +2.4 %, output
-     * byte-identical to the serial merge and carrying the identical completeness stamp.
-     *
-     * <p><b>Why {@code cores/2}, capped at 8.</b> Parallel efficiency falls off well before core
-     * count: measured 68 % at R=4, 51 % at R=8, 34 % at R=16, while peak heap and read amplification
-     * keep climbing past the throughput. R=8 buys 74 % of R=16's speedup for 63 % of its heap, so 8
-     * is the ceiling and half the cores is the ramp for smaller machines. Defaulting to
-     * {@code availableProcessors()} would land on the worst point of the curve on a large box.
-     *
-     * <p>{@link MergePlanner#effectiveRanges} clamps this further per run — down to 1, meaning
-     * the untouched serial path — whenever the merge budget, the staged-segment count or the
-     * descriptor budget cannot carry it. So this value is a ceiling, never a promise.
+     * The maximum number of concurrent final-file encoders. Runtime planning may admit fewer to
+     * remain within the merge residency budget.
      */
     public static final int DEFAULT_MERGE_PARALLELISM =
             Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors() / 2));
@@ -186,8 +138,7 @@ public final class SortConfig {
                     DEFAULT_SEGMENT_CODEC),
             new Merge(
                     10000, adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION), DEFAULT_MERGE_PARALLELISM,
-                    DEFAULT_MERGE_PER_STREAM_BYTES, DEFAULT_MIN_PARALLEL_STAGED_BYTES,
-                    MergeBoundaryPolicy.DISTINCT, SortFinalization.RANGES),
+                    DEFAULT_MERGE_PER_STREAM_BYTES, SortFinalization.PIPELINE),
             new FinalOutput(1L << 30, 8L * 1024 * 1024, DEFAULT_FINAL_PAGE_ROWS),
             new Retention(StagingRetention.DELETE_AFTER_PUBLISH));
 
@@ -250,15 +201,8 @@ public final class SortConfig {
         if (segmentCodec() == null) {
             throw new IllegalArgumentException("segment-codec must not be null");
         }
-        if (minParallelStagedBytes() < 0) {
-            throw new IllegalArgumentException(
-                    "min-parallel-staged-bytes must be >= 0, got " + minParallelStagedBytes());
-        }
         if (stagingRetention() == null) {
             throw new IllegalArgumentException("staging-retention must not be null");
-        }
-        if (mergeBoundaryPolicy() == null) {
-            throw new IllegalArgumentException("merge-boundary-policy must not be null");
         }
         if (finalization() == null) {
             throw new IllegalArgumentException("finalization must not be null");
@@ -283,7 +227,7 @@ public final class SortConfig {
 
     public SortConfig withFanIn(int fanIn) {
         return copy(new Merge(fanIn, mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization()));
+                finalization()));
     }
 
     public SortConfig withFinalFileBytes(long finalFileBytes) {
@@ -300,17 +244,17 @@ public final class SortConfig {
 
     public SortConfig withMergeBudgetBytes(long mergeBudgetBytes) {
         return copy(new Merge(fanIn(), mergeBudgetBytes, mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization()));
+                finalization()));
     }
 
     public SortConfig withMergeParallelism(int mergeParallelism) {
         return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism, mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization()));
+                finalization()));
     }
 
     public SortConfig withMergePerStreamBytes(long mergePerStreamBytes) {
         return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes,
-                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization()));
+                finalization()));
     }
 
     public SortConfig withSegmentCodec(PageCodec segmentCodec) {
@@ -342,8 +286,6 @@ public final class SortConfig {
         long mergeBudgetBytes = longProp(lookup, "merge-budget-bytes", adaptiveSegmentBytes(heapFraction));
         int mergeParallelism = intProp(lookup, "merge-parallelism", DEFAULT.mergeParallelism());
         long mergePerStreamBytes = longProp(lookup, "merge-per-stream-bytes", DEFAULT.mergePerStreamBytes());
-        long minParallelStagedBytes =
-                longProp(lookup, "min-parallel-staged-bytes", DEFAULT.minParallelStagedBytes());
         String segmentCodecProp = lookup.apply(PREFIX + "segment-codec");
         PageCodec segmentCodec = segmentCodecProp == null
                 ? DEFAULT.segmentCodec()
@@ -352,11 +294,6 @@ public final class SortConfig {
         StagingRetention stagingRetention = keepStagingProp == null
                 ? DEFAULT.stagingRetention()
                 : StagingRetention.fromProperty(KEEP_STAGING_PROPERTY, keepStagingProp);
-        String boundaryPolicyProp = lookup.apply(MERGE_BOUNDARY_POLICY_PROPERTY);
-        MergeBoundaryPolicy mergeBoundaryPolicy = boundaryPolicyProp == null
-                ? DEFAULT.mergeBoundaryPolicy()
-                : MergeBoundaryPolicy.fromConfigValue(
-                        MERGE_BOUNDARY_POLICY_PROPERTY, boundaryPolicyProp);
         String finalizationProp = lookup.apply(FINALIZATION_PROPERTY);
         SortFinalization finalization = finalizationProp == null
                 ? DEFAULT.finalization()
@@ -364,28 +301,18 @@ public final class SortConfig {
         return new SortConfig(
                 new StagingBuffering(segmentBytes, segmentEntries, heapFraction, buffers, segmentCodec),
                 new Merge(fanIn, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                        minParallelStagedBytes, mergeBoundaryPolicy, finalization),
+                        finalization),
                 new FinalOutput(finalFileBytes, finalRowGroupBytes, finalPageRows),
                 new Retention(stagingRetention));
-    }
-
-    public SortConfig withMinParallelStagedBytes(long minParallelStagedBytes) {
-        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes, mergeBoundaryPolicy(), finalization()));
     }
 
     public SortConfig withStagingRetention(StagingRetention stagingRetention) {
         return copy(new Retention(stagingRetention));
     }
 
-    public SortConfig withMergeBoundaryPolicy(MergeBoundaryPolicy mergeBoundaryPolicy) {
-        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy, finalization()));
-    }
-
     public SortConfig withFinalization(SortFinalization finalization) {
         return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization));
+                finalization));
     }
 
     private SortConfig copy(StagingBuffering updated) {
@@ -452,16 +379,8 @@ public final class SortConfig {
         return stagingBuffering.codec();
     }
 
-    public long minParallelStagedBytes() {
-        return merge.minParallelStagedBytes();
-    }
-
     public StagingRetention stagingRetention() {
         return retention.staging();
-    }
-
-    public MergeBoundaryPolicy mergeBoundaryPolicy() {
-        return merge.boundaryPolicy();
     }
 
     public SortFinalization finalization() {
@@ -488,8 +407,8 @@ public final class SortConfig {
      * <p>The denominator is {@code mergePerStreamBytes} (a page-run packed-page estimate).
      * This is the <em>static</em> config-level bound; the actual merge additionally applies a
      * <em>runtime</em> clamp at merge entry ({@link SortTransform}) against the process fd limit and the
-     * largest per-segment encoded {@code maxRecordLen}, the type-3 decoded-page maximum, exact proof
-     * backing, and the runtime aggregate decoded-page guard.
+     * largest per-segment encoded {@code maxRecordLen}, the decoded-page maximum, and the runtime
+     * aggregate decoded-page guard.
      *
      * <p><b>The {@code max(2, …)} floor is documented, not rejected:</b> a merge pass needs at least
      * 2 streams to merge anything, so this never returns fewer than 2 regardless of how tiny
@@ -552,9 +471,7 @@ public final class SortConfig {
         hash = 31 * hash + Integer.hashCode(mergeParallelism());
         hash = 31 * hash + Long.hashCode(mergePerStreamBytes());
         hash = 31 * hash + segmentCodec().hashCode();
-        hash = 31 * hash + Long.hashCode(minParallelStagedBytes());
         hash = 31 * hash + stagingRetention().hashCode();
-        hash = 31 * hash + mergeBoundaryPolicy().hashCode();
         return 31 * hash + finalization().hashCode();
     }
 
@@ -572,9 +489,7 @@ public final class SortConfig {
                 + ", mergeParallelism=" + mergeParallelism()
                 + ", mergePerStreamBytes=" + mergePerStreamBytes()
                 + ", segmentCodec=" + segmentCodec()
-                + ", minParallelStagedBytes=" + minParallelStagedBytes()
                 + ", stagingRetention=" + stagingRetention()
-                + ", mergeBoundaryPolicy=" + mergeBoundaryPolicy()
                 + ", finalization=" + finalization() + ']';
     }
 
@@ -582,7 +497,6 @@ public final class SortConfig {
                                     int buffers, PageCodec codec) { }
 
     private record Merge(int fanIn, long budgetBytes, int parallelism, long perStreamBytes,
-                         long minParallelStagedBytes, MergeBoundaryPolicy boundaryPolicy,
                          SortFinalization finalization) { }
 
     private record FinalOutput(long fileBytes, long rowGroupBytes, int pageRows) { }

@@ -36,14 +36,9 @@ public final class PageRunSegmentInspector {
                              int framedLen, boolean crcOk) {
     }
 
-    /** Optional trailer-extension summary without retaining its sampled keys. */
-    public record PageIndexInfo(short type, String status, int entries, long firstOffset,
-                                long lastOffset) {
-    }
-
-    /** A whole segment's structural dump: header, records, trailer, and optional index summary. */
+    /** A whole segment's structural dump: header, records, and fixed trailer. */
     public record Dump(int magic, short formatVersion, List<RecordInfo> records,
-                       PageRunTrailer.Trailer trailer, PageIndexInfo pageIndex) {
+                       PageRunTrailer.Trailer trailer) {
     }
 
     /**
@@ -58,7 +53,6 @@ public final class PageRunSegmentInspector {
         List<RecordInfo> records = new ArrayList<>();
         try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
             PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
-            PageRunPageIndex.ReadResult index = PageRunPageIndex.read(io, trailer, ignored -> { });
 
             // open() positioned the channel at the first record; walk exactly totalRecords records.
             for (long i = 0; i < trailer.totalRecords(); i++) {
@@ -88,9 +82,7 @@ public final class PageRunSegmentInspector {
                 }
                 records.add(new RecordInfo(i, min, max, count, codec, rec.framedLen(), crcOk));
             }
-            PageIndexInfo indexInfo = new PageIndexInfo(index.extensionType(),
-                    index.status().name(), index.entryCount(), index.firstOffset(), index.lastOffset());
-            return new Dump(io.magic(), io.formatVersion(), records, trailer, indexInfo);
+            return new Dump(io.magic(), io.formatVersion(), records, trailer);
         }
     }
 }

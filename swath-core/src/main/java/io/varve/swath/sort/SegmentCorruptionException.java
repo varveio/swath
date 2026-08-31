@@ -48,6 +48,9 @@ public final class SegmentCorruptionException extends IOException {
     /** A page's decoded payload claim exceeds the residency admitted for its segment. */
     static final String PAGE_RUN_DECODED_PAGE_LIMIT = "page_run_decoded_page_limit";
 
+    /** A page-bound key exceeds the CRC-protected maximum declared by its segment trailer. */
+    static final String PAGE_RUN_KEY_LENGTH_LIMIT = "page_run_key_length_limit";
+
     /** A CRC-valid page-index claim disagreed with the physical page-run body. */
     static final String PAGE_RUN_INDEX_MISMATCH = "page_run_index_mismatch";
 

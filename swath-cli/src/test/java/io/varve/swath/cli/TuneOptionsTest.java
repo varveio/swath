@@ -7,7 +7,6 @@ package io.varve.swath.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.varve.swath.sort.MergeBoundaryPolicy;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortFinalization;
 import io.varve.swath.sort.StagingRetention;
@@ -34,7 +33,6 @@ class TuneOptionsTest {
                 "--tune", "summary.interval=2s",
                 "--tune", "sort.merge-parallelism=16",
                 "--tune", "sort.finalization=pipeline",
-                "--tune", "sort.merge-boundary-policy=rows",
                 "--tune", "sort.keep-staging=on",
                 "--tune", "sort.ignore-disk-check=on");
 
@@ -46,8 +44,6 @@ class TuneOptionsTest {
         assertThat(cmd.resolveSummaryJsonInterval()).isEqualTo(Duration.ofSeconds(2));
         assertThat(cmd.sorting.resolveConfig().mergeParallelism()).isEqualTo(16);
         assertThat(cmd.sorting.resolveConfig().finalization()).isEqualTo(SortFinalization.PIPELINE);
-        assertThat(cmd.sorting.resolveConfig().mergeBoundaryPolicy())
-                .isEqualTo(MergeBoundaryPolicy.ROWS);
         assertThat(cmd.sorting.resolveConfig().stagingRetention().retainsOriginals()).isTrue();
         assertThat(cmd.sorting.forceSort).isTrue();
     }
@@ -77,8 +73,7 @@ class TuneOptionsTest {
                 {"summary.interval=zero", "positive duration"},
                 {"sort.merge-parallelism=0", "integer 1..16"},
                 {"sort.merge-parallelism=17", "integer 1..16"},
-                {"sort.finalization=lanes", "ranges|pipeline"},
-                {"sort.merge-boundary-policy=keys", "distinct|rows"},
+                {"sort.finalization=lanes", "pipeline"},
                 {"sort.keep-staging=yes", "on|off"},
                 {"sort.ignore-disk-check=yes", "on|off"},
         };
@@ -151,8 +146,7 @@ class TuneOptionsTest {
                         "tune effective: engine.readahead=off, seed.mode=shallow, "
                         + "parquet.writers=4, summary.interval=PT30S, "
                         + "sort.merge-parallelism=" + SortConfig.DEFAULT.mergeParallelism() + ", "
-                        + "sort.merge-boundary-policy=distinct, "
-                        + "sort.finalization=ranges, "
+                        + "sort.finalization=pipeline, "
                         + "sort.keep-staging=off, "
                         + "sort.ignore-disk-check=off");
     }
@@ -194,40 +188,17 @@ class TuneOptionsTest {
 
     @Test
     @ResourceLock("SYSTEM_PROPERTIES")
-    void finalizationIsResumeSafeAndTypedTuneOverridesTheJvmProperty() throws Exception {
+    void finalizationIsResumeSafe() throws Exception {
         String property = SortConfig.FINALIZATION_PROPERTY;
         String previous = System.getProperty(property);
         try {
-            System.setProperty(property, "ranges");
+            System.setProperty(property, "pipeline");
             TuneOptions tune = new TuneOptions();
             tune.entries = List.of(SortConfig.FINALIZATION_TUNE_KEY + "=pipeline");
             SortOptions sorting = new SortOptions();
 
             assertThat(tune.applyForResume(sorting, new PrintWriter(new StringWriter()))).isFalse();
             assertThat(sorting.resolveConfig().finalization()).isEqualTo(SortFinalization.PIPELINE);
-        } finally {
-            if (previous == null) {
-                System.clearProperty(property);
-            } else {
-                System.setProperty(property, previous);
-            }
-        }
-    }
-
-    @Test
-    @ResourceLock("SYSTEM_PROPERTIES")
-    void mergeBoundaryPolicyIsResumeSafeAndTypedTuneOverridesTheJvmProperty() throws Exception {
-        String property = SortConfig.MERGE_BOUNDARY_POLICY_PROPERTY;
-        String previous = System.getProperty(property);
-        try {
-            System.setProperty(property, "rows");
-            TuneOptions tune = new TuneOptions();
-            tune.entries = List.of(SortConfig.MERGE_BOUNDARY_POLICY_TUNE_KEY + "=distinct");
-            SortOptions sorting = new SortOptions();
-
-            assertThat(tune.applyForResume(sorting, new PrintWriter(new StringWriter()))).isFalse();
-            assertThat(sorting.resolveConfig().mergeBoundaryPolicy())
-                    .isEqualTo(MergeBoundaryPolicy.DISTINCT);
         } finally {
             if (previous == null) {
                 System.clearProperty(property);

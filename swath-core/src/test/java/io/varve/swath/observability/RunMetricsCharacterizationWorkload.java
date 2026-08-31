@@ -126,8 +126,6 @@ final class RunMetricsCharacterizationWorkload {
         m.recordResumeNodesReopened(2);
         m.recordResumeDurableCursorLag(1);
         m.recordResumeArgsHashRefused();
-        m.recordSortMergeOverlapCluster();
-        m.recordSortMergeOverlapState(3, 12);
         m.recordPivotByteRegion("a5".getBytes(StandardCharsets.UTF_8), "a1".getBytes(StandardCharsets.UTF_8));
         m.recordPivotByteRegion("aZ".getBytes(StandardCharsets.UTF_8), "a1".getBytes(StandardCharsets.UTF_8));
         m.recordPivotByteRegion("ab".getBytes(StandardCharsets.UTF_8), "a1".getBytes(StandardCharsets.UTF_8));
@@ -208,8 +206,6 @@ final class RunMetricsCharacterizationWorkload {
         m.recordSortOffThreadBuffersLive(2);
         m.recordSortMergePasses(3L);
         m.recordSortMerge(m.startSortMergeTimer());
-        m.recordSortMergeRange(7_000L);
-        m.recordSortMergeProofSpool(6_212L, 2L, 6_212L, 13L, 992L, 7_000L);
 
         // S3 pool + connection churn.
         m.updateS3Pool(5, 3, 1, 32);

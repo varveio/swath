@@ -63,14 +63,9 @@ import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
-import io.varve.swath.sort.MergeDiskExhaustedException;
-import io.varve.swath.sort.MergeDiskPolicy;
-import io.varve.swath.sort.MergeInputProfile;
 import io.varve.swath.sort.MergeMemoryExhaustedException;
 import io.varve.swath.sort.PageRunFormat;
-import io.varve.swath.sort.ProofSpoolAllocationException;
 import io.varve.swath.sort.PublicationStepHook;
-import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortArm;
@@ -740,8 +735,7 @@ public final class ListRunner {
             SortConfig sortConfig, SortMode mode, EngineToggles toggles,
             TraceSink trace, boolean reattach) throws SwathException, InterruptedException {
         return runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, spec, store, runId,
-                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, RetryConfig.DEFAULT,
-                false);
+                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, RetryConfig.DEFAULT);
     }
 
     /**
@@ -755,18 +749,6 @@ public final class ListRunner {
             SortConfig sortConfig, SortMode mode, EngineToggles toggles,
             TraceSink trace, boolean reattach, RetryConfig retryConfig)
             throws SwathException, InterruptedException {
-        return runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, spec, store, runId,
-                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, retryConfig, false);
-    }
-
-    /** Full overload including the explicit CLI {@code sort.ignore-disk-check} core policy. */
-    public ListingStatistics runToSortedParquetWorkStealing(
-            RunContext ctx, PageFetcher fetcher, Path outputDir, Path stagingDir, ParquetSpec spec,
-            CheckpointStore store, long runId, int workerCount, List<Node> seeds,
-            SortConfig sortConfig, SortMode mode, EngineToggles toggles,
-            TraceSink trace, boolean reattach, RetryConfig retryConfig, boolean ignoreDiskCheck)
-            throws SwathException, InterruptedException {
-
         WorkStealingScan producer = new WorkStealingScan(
                 new EngineContext(runId, spec.prefix(), ListingMode.OBJECTS, ctx.metrics(), toggles, trace, retryConfig),
                 fetcher, store, workerCount, spec.maxKeys(), seeds, spec.filters());
@@ -864,7 +846,7 @@ public final class ListRunner {
                         merged[0] = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                                 sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
                                 spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                                StaleFinalSweep.OWN_PARTS_ONLY, ignoreDiskCheck);
+                                StaleFinalSweep.OWN_PARTS_ONLY);
                     } catch (PublicationPendingException e) {
                         merged[0] = committedSortResult(e);
                         throw e;
@@ -889,16 +871,6 @@ public final class ListRunner {
     public ListingStatistics runSortMergeOnly(RunContext ctx, Path outputDir, Path stagingDir,
             CheckpointStore store, long runId, SortConfig sortConfig, SortMode mode, ParquetSpec spec)
             throws SwathException, InterruptedException {
-        return runSortMergeOnly(ctx, outputDir, stagingDir, store, runId, sortConfig, mode, spec,
-                false);
-    }
-
-    /** Merge-only resume with the explicit CLI {@code sort.ignore-disk-check} core policy. */
-    public ListingStatistics runSortMergeOnly(RunContext ctx, Path outputDir, Path stagingDir,
-            CheckpointStore store, long runId, SortConfig sortConfig, SortMode mode, ParquetSpec spec,
-            boolean ignoreDiskCheck)
-            throws SwathException, InterruptedException {
-
         long startedNs = System.nanoTime();
         ctx.metrics().markRunStarted();
         ctx.metrics().setStrategy("WORK_STEALING");
@@ -941,7 +913,7 @@ public final class ListRunner {
                 result = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                         segRows, sortConfig, mode, spec.bucket(),
                         spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                        StaleFinalSweep.ALL_PARQUET, ignoreDiskCheck);
+                        StaleFinalSweep.ALL_PARQUET);
                 published[0] = result;
             } catch (PublicationPendingException e) {
                 result = committedSortResult(e);
@@ -1016,8 +988,7 @@ public final class ListRunner {
     private SortTransformResult sortMergeAndPublish(RunContext ctx, CheckpointStore store,
             Path outputDir, Path stagingDir,
             List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
-            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep,
-            boolean ignoreDiskCheck)
+            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep)
             throws SwathException {
         // The exact merge denominator, recorded HERE because this is the one point both merge
         // callers pass through with the staged parts in hand: rows merged is measured against the
@@ -1029,7 +1000,8 @@ public final class ListRunner {
         for (int i = 0; i < stagedParts.size(); i++) {
             PartRef part = stagedParts.get(i);
             if (part.formatVersion() == null && part.extensionType() == null) {
-                continue; // pre-metadata checkpoint row: physical format remains authoritative
+                throw new OutputException("checkpoint lacks page-run format metadata for "
+                        + part.path() + "; restart the run with --restart");
             }
             if (part.formatVersion() == null || part.extensionType() == null) {
                 throw new OutputException("checkpoint has incomplete page-run format metadata for "
@@ -1056,25 +1028,11 @@ public final class ListRunner {
         // staleFinalSweep javadoc above for which caller passes which value. Every other
         // SortTransform caller (e.g. CaptureSorter's sort-fixture path) has no such guard and must NOT
         // opt in.
-        // Not a method reference any more: the parallel path reports TWO wall times -- each range's own
-        // merge, and the serial boundary-planning prologue that runs once before all of them.
-        RangeMergeTimer rangeTimer = new RangeMergeTimer() {
-            @Override
-            public void recordRangeMerge(long nanos) {
-                ctx.metrics().recordSortMergeRange(nanos);
-            }
-
-            @Override
-            public void recordBoundarySampling(long nanos) {
-                ctx.metrics().recordSortMergeBoundaries(nanos);
-            }
-        };
         SortTransform transform = new SortTransform(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, equalKeyPolicy(mode),
-                        sortMetrics, writerFactory, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
-                        rangeTimer, SortRun.PROCESS_SOFT_FD_LIMIT,
-                        staleFinalSweep, ignoreDiskCheck
-                                ? MergeDiskPolicy.bypassed() : MergeDiskPolicy.enforced()),
+                        sortMetrics, writerFactory,
+                        SortRun.PROCESS_SOFT_FD_LIMIT,
+                        staleFinalSweep),
                 publicationStepHook);
         Path dataDir = DatasetLayout.of(outputDir).dataDir();
         // Mark a phase-boundary progress tick so the merge/finalize tail starts with a fresh stall
@@ -1130,10 +1088,6 @@ public final class ListRunner {
             }
             throw new PublicationPendingException(
                     "sorted dataset publication committed; cleanup pending", e);
-        } catch (MergeDiskExhaustedException e) {
-            ctx.metrics().recordFatalErrorClass(e.errorClass());
-            throw new MergePendingException("sort merge deferred for insufficient disk; "
-                    + "free space and resume, or use sort.ignore-disk-check=on", e);
         } catch (MergeMemoryExhaustedException e) {
             ctx.metrics().recordFatalErrorClass(e.errorClass());
             throw new MergePendingException("sort merge deferred because decoded pages do not fit "
@@ -1157,7 +1111,7 @@ public final class ListRunner {
             // error_class seam the classified seed-failure path uses.
             //
             // UncheckedIOException is caught HERE, not just IOException: BOTH mergers wrap a read failure
-            // in one (StreamingMerger#computeNext, PageAwareMerger#computeNext) because SortedCursor#next
+            // in one merge step because SortedCursor#next
             // cannot throw a checked exception — and a corruption detected mid-drain (the common case: the
             // FIRST page can never regress) therefore arrives as an UncheckedIOException, not an
             // IOException. With only the checked catch this whole classification was INERT on the very
@@ -1182,7 +1136,7 @@ public final class ListRunner {
     /**
      * The classified {@code error_class} fingerprint of a sort merge/publish failure — walks the
      * cause chain (mirroring {@code ListCommand#seedErrorClass} / {@code ExitCodes#forThrowable}) for the
-     * first {@link SegmentCorruptionException} or {@link ProofSpoolAllocationException}. {@code null}
+     * first typed sort failure. {@code null}
      * for a generic merge failure (Parquet or an unclassified {@link IOException}), which keeps its
      * {@code error_class:null} shape.
      */
@@ -1190,12 +1144,6 @@ public final class ListRunner {
         for (Throwable c = t; c != null; c = c.getCause()) {
             if (c instanceof SegmentCorruptionException sce) {
                 return sce.errorClass();
-            }
-            if (c instanceof ProofSpoolAllocationException allocation) {
-                return allocation.errorClass();
-            }
-            if (c instanceof MergeDiskExhaustedException exhausted) {
-                return exhausted.errorClass();
             }
             if (c instanceof MergeMemoryExhaustedException exhausted) {
                 return exhausted.errorClass();
@@ -1457,14 +1405,6 @@ public final class ListRunner {
             metrics.markProgress();
             metrics.recordStealReason("SORT", "finalize_progress_tick");
             delegate.markFinal();
-        }
-
-        @Override
-        public void setFileIndex(int fileIndex) {
-            // Pure forward: this decorator adds liveness ticks, never stamp semantics. Not ticking
-            // here is deliberate — assignment is an in-memory field write, not the blocking syscall
-            // markFinal/close are marking.
-            delegate.setFileIndex(fileIndex);
         }
 
         @Override

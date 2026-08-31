@@ -24,13 +24,10 @@ import org.slf4j.LoggerFactory;
  * output being written (<b>fd bound ≤ F + 1</b>, I2) — then returns a streaming
  * {@link SortedCursor} over the surviving &le;{@code fanIn} segments.
  *
- * <p>Every pass — each cascade pass ({@link #onePass}) and the final pass — selects its merger through
- * the one {@link #openMerger} factory: a {@link PageAwareMerger} when every segment in the group exposes
- * a {@link PageFrontierStream} (decode-free frontier + page-whole fast path + both overlap guards), else
- * the entry-typed {@link StreamingMerger} (heap merge + same-reader fast path), then wraps either
- * output in {@link DuplicateReporting}. This keeps the intra-segment/cross-segment overlap guards in
- * force and reports adjacent equals exactly once on EVERY pass, so a cascade intermediate is never
- * written from a mis-ordered cursor.
+ * <p>Page-run cascade groups use {@link CascadePageMerger}, which forwards a globally disjoint
+ * page without a row heap and uses {@link PageRowMerger} only for overlapping page clusters.
+ * Other segment kinds use the entry-typed {@link StreamingMerger}. Both are wrapped in
+ * {@link DuplicateReporting}, so adjacent equals are reported exactly once.
  *
  * <p><b>Merge-phase memory + fd bound (I11).</b> {@code fanIn} here is expected to already be the
  * RUNTIME-clamped fan-in {@link SortTransform} computes — the MIN of the static
@@ -73,7 +70,7 @@ final class KWayMerge<S> {
     /**
      * §3.2: rows drained out of an intermediate cascade pass are reported to a merge's
      * progress callback in batches of this size (never per-row — hot-path overhead on a
-     * billion-row cascade), the same batching {@link RolledPartWriter#drain} uses for the final
+     * billion-row cascade), the same batching finalization uses for the final
      * streaming pass. Shared here (rather than duplicated in {@link SortTransform}) so both passes
      * advance {@code swath.progress.units} at the same granularity.
      */
@@ -93,32 +90,45 @@ final class KWayMerge<S> {
          */
         void delete(S segment) throws IOException;
 
-        /**
-         * Page-run capability: whether {@code segment} can be opened as a decode-free page
-         * frontier ({@link #openFrontier}) so the FINAL merge pass can take {@link PageAwareMerger}'s
-         * page-whole fast path. Default {@code false} — a non-page-run store keeps the entry-typed
-         * {@link StreamingMerger}. The final pass uses {@link PageAwareMerger} only when EVERY survivor
-         * reports {@code true}; generic non-page-frontier stores stay on {@link StreamingMerger}.
-         */
-        default boolean supportsPageFrontier(S segment) {
+        /** Whether this segment can expose page bounds and bodies to the cascade page merger. */
+        default boolean supportsPageMerge(S segment) {
             return false;
         }
 
-        /**
-         * Open a decode-free page frontier over a page-run {@code segment}. Only valid when
-         * {@link #supportsPageFrontier(Object)} is {@code true} for it.
-         */
-        default PageFrontierStream openFrontier(S segment) throws IOException {
-            throw new UnsupportedOperationException("segment does not support a page frontier: " + segment);
+        /** Open one page stream. Called only when {@link #supportsPageMerge} returned true. */
+        default PageStream openPages(S segment) throws IOException {
+            throw new UnsupportedOperationException("page merge is not supported");
         }
 
-        /**
-         * Aggregate decoded-page residency available to one merger instance. Called before any
-         * frontier body is opened so a page-run implementation can preflight intermediate trailers.
-         */
-        default long decodedPageBudgetBytes(List<S> segments) throws IOException {
+        /** Decoded-page residency available after the opened streams' frontiers are priced. */
+        default long decodedPageBudgetBytes(List<PageStream> streams) throws IOException {
             return Long.MAX_VALUE;
         }
+    }
+
+    /** Minimal page frontier used only by cascade passes; no range/seek machinery survives here. */
+    interface PageStream extends AutoCloseable {
+        /** Complete any deferred first-page read after the group has passed frontier admission. */
+        default void initialize() throws IOException {
+        }
+
+        /** Upper bound on heap the encoded current-page frontier can retain, computed before it exists. */
+        default long frontierRetainedBytes() {
+            return 0;
+        }
+
+        boolean hasPage();
+
+        byte[] minKey();
+
+        byte[] maxKey();
+
+        PageBlock decodeCurrentPage();
+
+        void advance() throws IOException;
+
+        @Override
+        void close() throws IOException;
     }
 
     private final Comparator<ListEntry> comparator;
@@ -161,7 +171,7 @@ final class KWayMerge<S> {
      * into a fresh segment — so a cascade that outlives the OTLP push interval still advances
      * {@code swath.progress.units} (the blind spot this counter exists to close). The final
      * streaming pass returned here is NOT wrapped — its rows are the caller's (e.g.
-     * {@link RolledPartWriter#drain}) to report as they are actually written.
+     * finalization drain) to report as they are actually written.
      */
     SortedCursor merge(List<S> segments, LongConsumer progressCallback) throws IOException {
         List<S> current = reduceToFanIn(segments, progressCallback);
@@ -187,65 +197,64 @@ final class KWayMerge<S> {
     }
 
     /**
-     * The single merger-selection path shared by the final merge pass ({@link #merge}) AND every
-     * intermediate cascade pass ({@link #onePass}). If every segment in
-     * {@code group} exposes a {@link PageFrontierStream}, open a {@link PageAwareMerger} — so the
-     * page-whole fast path, cross-segment overlap handling, and intra-segment ordering guards apply,
-     * and even a cascade intermediate is written from a
-     * correctly-guarded cursor. Otherwise a generic segment store falls back to the entry-typed
-     * {@link StreamingMerger}. Routing every pass —
-     * not only the final one — through this factory keeps an all-page-run cascade group on the
-     * page-whole fast path (and {@link PageAwareMerger}'s cross-segment guard) rather than decoding
-     * every page through the entry heap; it is not an ordering requirement. A page-run input handed
-     * to the trusting {@link StreamingMerger} is opened as a {@link PageRunSegmentReader} — itself a
-     * single-segment {@link PageAwareMerger} that rejects corrupt overlap and comparator-merges a legal
-     * VERSIONS equality seam before the heap sees it — so a cascade intermediate is never mis-ordered,
-     * whichever merger the group selects.
+     * The merger factory shared by the final merge pass and every intermediate cascade pass.
      */
     private SortedCursor openMerger(List<S> group, MergeRunSink disjointSink)
             throws IOException {
-        SortedCursor merger;
-        if (allSupportPageFrontier(group)) {
-            long decodedBudget = io.decodedPageBudgetBytes(group);
-            List<PageFrontierStream> frontiers = openFrontiers(group);
-            merger = new PageAwareMerger(frontiers, comparator, MergeScope.CROSS_SEGMENT, metrics,
-                    disjointSink, decodedBudget);
-        } else {
-            List<EntryStream> streams = open(group);
-            merger = new StreamingMerger(streams, comparator, this::recordFastPath, disjointSink);
+        if (allSupportPageMerge(group)) {
+            List<PageStream> pages = openPages(group);
+            try {
+                long decodedBudget = io.decodedPageBudgetBytes(pages);
+                for (PageStream page : pages) {
+                    page.initialize();
+                }
+                return new DuplicateReporting(new CascadePageMerger(
+                        pages, comparator, metrics, disjointSink,
+                        decodedBudget), comparator, hook);
+            } catch (IOException | RuntimeException failure) {
+                closePagesAfterFailedOpen(pages, failure);
+                throw failure;
+            }
         }
+        List<EntryStream> streams = open(group);
+        SortedCursor merger = new StreamingMerger(
+                streams, comparator, this::recordFastPath, disjointSink);
         return new DuplicateReporting(merger, comparator, hook);
     }
 
-    private boolean allSupportPageFrontier(List<S> segments) {
-        if (segments.isEmpty()) {
-            return false;   // empty listing: the StreamingMerger path publishes the empty file
+    private boolean allSupportPageMerge(List<S> group) {
+        if (group.isEmpty()) {
+            return false;
         }
-        for (S s : segments) {
-            if (!io.supportsPageFrontier(s)) {
+        for (S segment : group) {
+            if (!io.supportsPageMerge(segment)) {
                 return false;
             }
         }
         return true;
     }
 
-    private List<PageFrontierStream> openFrontiers(List<S> segments) throws IOException {
-        List<PageFrontierStream> streams = new ArrayList<>(segments.size());
+    private List<PageStream> openPages(List<S> group) throws IOException {
+        List<PageStream> streams = new ArrayList<>(group.size());
         try {
-            for (S s : segments) {
-                streams.add(io.openFrontier(s));
+            for (S segment : group) {
+                streams.add(io.openPages(segment));
             }
-        } catch (IOException | RuntimeException e) {
-            for (PageFrontierStream s : streams) {
-                try {
-                    s.close();
-                } catch (IOException ignored) {
-                    // best effort on the error path
-                }
-            }
-            throw e;
+            return List.copyOf(streams);
+        } catch (IOException | RuntimeException failure) {
+            closePagesAfterFailedOpen(streams, failure);
+            throw failure;
         }
-        return streams;
+    }
+
+    private static void closePagesAfterFailedOpen(List<PageStream> streams, Throwable failure) {
+        for (PageStream stream : streams) {
+            try {
+                stream.close();
+            } catch (IOException | RuntimeException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+        }
     }
 
     long mergePasses() {
@@ -277,10 +286,7 @@ final class KWayMerge<S> {
             MergeCancellation.check();
             List<S> group = segments.subList(i, Math.min(i + fanIn, segments.size()));
             S dest;
-            // Select the group's merger through the SAME openMerger factory the final
-            // pass uses — so a cascade group of page-run segments is merged (and its intermediate
-            // written) through the guarded PageAwareMerger, not the trusting StreamingMerger. Both
-            // raw merger branches report source-run classification through the same sink.
+            // Use the same merger factory as the final pass and report source-run classification.
             try (SortedCursor m = openMerger(group,
                     (copyable, interleaved) -> {
                         passCopyable[0] += copyable;
@@ -365,7 +371,7 @@ final class KWayMerge<S> {
     /**
      * Wraps a {@link SortedCursor} so rows drained through it advance {@code progressCallback}
      * in batches of {@link #PROGRESS_BATCH_ROWS}, flushing any remainder once the delegate is fully
-     * drained — {@link RolledPartWriter#drain}'s batching, applied to an intermediate cascade
+     * drained — finalization's batching, applied to an intermediate cascade
      * pass instead of the final streaming pass. {@link #close()} is deliberately a no-op: the call
      * site ({@link #onePass}) owns the delegate's lifecycle via its own try-with-resources on the
      * underlying {@link StreamingMerger}, so this wrapper must never double-close it.

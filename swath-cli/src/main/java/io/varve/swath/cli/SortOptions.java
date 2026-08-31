@@ -5,7 +5,6 @@
  */
 package io.varve.swath.cli;
 
-import io.varve.swath.sort.MergeBoundaryPolicy;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortFinalization;
 import io.varve.swath.sort.StagingRetention;
@@ -24,8 +23,6 @@ final class SortOptions {
 
     StagingRetention stagingRetention;
 
-    MergeBoundaryPolicy mergeBoundaryPolicy;
-
     SortFinalization finalization;
 
     SortConfig resolveConfig() {
@@ -35,9 +32,6 @@ final class SortOptions {
         }
         if (stagingRetention != null) {
             config = config.withStagingRetention(stagingRetention);
-        }
-        if (mergeBoundaryPolicy != null) {
-            config = config.withMergeBoundaryPolicy(mergeBoundaryPolicy);
         }
         return finalization == null ? config : config.withFinalization(finalization);
     }

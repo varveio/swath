@@ -161,29 +161,6 @@ class StagingReconciliationTest {
     }
 
     @Test
-    void proofCleanupRefusesAReplacedStagingAuthority(@TempDir Path root) throws IOException {
-        Path staging = Files.createDirectories(root.resolve("_staging"));
-        Path outside = Files.createDirectories(root.resolve("outside"));
-        Path segment = Files.writeString(staging.resolve("seg-0.pageseg"), "original");
-        StagingReconciliation owned = StagingReconciliation.fromPaths(
-                staging, List.of(segment));
-        PageRunProofSpool.Stats stats = new PageRunProofSpool.Stats(SortMetrics.NO_OP, owned);
-
-        Files.move(staging, root.resolve("old-staging"));
-        Files.createSymbolicLink(staging, outside);
-        Path outsideProof = Files.writeString(
-                outside.resolve(StagingNames.rangeProofTmp()), "outside proof");
-
-        assertThatThrownBy(() -> PageRunProofSpool.delete(
-                staging.resolve(StagingNames.rangeProofTmp()), stats))
-                .isInstanceOf(IOException.class)
-                .hasMessageContaining("sort staging directory identity changed");
-
-        assertThat(outsideProof).hasContent("outside proof");
-        assertThat(root.resolve("old-staging/seg-0.pageseg")).hasContent("original");
-    }
-
-    @Test
     void cascadeNamespaceInputsAreRejectedBeforeKickoffCleanup(@TempDir Path root)
             throws IOException {
         Path staging = Files.createDirectories(root.resolve("_staging"));
@@ -230,7 +207,6 @@ class StagingReconciliationTest {
         SortRun run = new SortRun(
                 SortConfigs.base(), new ListEntryComparator(), DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
         return new DatasetPublisher(
                 run, hook, LoggerFactory.getLogger(StagingReconciliationTest.class));

@@ -82,7 +82,7 @@ final class SqliteCheckpointStoreTest {
                 .hasMessageContaining("complete supported format metadata")
                 .hasMessageContaining("LEGACY_UNRECORDED");
         assertThatThrownBy(() -> new PartFinalize(1, 0, "seg-0.pageseg", PageRunFormat.NAME,
-                PageRunFormat.CURRENT_FORMAT_VERSION, PageRunFormat.PAGE_INDEX_EXTENSION + 1,
+                PageRunFormat.CURRENT_FORMAT_VERSION, PageRunFormat.ABSENT_EXTENSION + 1,
                 1, 1, List.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("complete supported format metadata")
@@ -93,21 +93,14 @@ final class SqliteCheckpointStoreTest {
     void pageRunCompatibilityClassifiesSupportedIncompleteAndFutureMetadata() {
         assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
                 PageRunFormat.ABSENT_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
-        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
-                PageRunFormat.LEGACY_MINIMA_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
-        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
-                PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION))
-                .isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
-        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
-                PageRunFormat.PAGE_INDEX_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
         assertThat(PageRunFormat.compatibility(null, null))
                 .isEqualTo(PageRunFormat.Compatibility.LEGACY_UNRECORDED);
         assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION, null))
                 .isEqualTo(PageRunFormat.Compatibility.INCOMPLETE);
-        assertThat(PageRunFormat.compatibility(null, PageRunFormat.PAGE_INDEX_EXTENSION))
+        assertThat(PageRunFormat.compatibility(null, PageRunFormat.ABSENT_EXTENSION))
                 .isEqualTo(PageRunFormat.Compatibility.INCOMPLETE);
         assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION + 1,
-                PageRunFormat.PAGE_INDEX_EXTENSION))
+                PageRunFormat.ABSENT_EXTENSION))
                 .isEqualTo(PageRunFormat.Compatibility.UNKNOWN_FORMAT_VERSION);
     }
 
