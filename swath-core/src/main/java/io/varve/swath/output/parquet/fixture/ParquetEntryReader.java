@@ -33,7 +33,7 @@ import org.apache.parquet.schema.MessageType;
  * <p>The next record is pre-loaded so {@link #hasNext()} stays non-throwing; {@link #next()} performs
  * the read that advances to the following record and may fail.
  */
-public final class SegmentReader implements AutoCloseable {
+public final class ParquetEntryReader implements AutoCloseable {
 
     private final ParquetFileReader reader;
     private final MessageColumnIO columnIo;
@@ -43,7 +43,7 @@ public final class SegmentReader implements AutoCloseable {
     private long rowsLeftInGroup;
     private ListEntry head;
 
-    public SegmentReader(Path path) throws IOException {
+    public ParquetEntryReader(Path path) throws IOException {
         this.reader = ParquetFileReader.open(new LocalInputFile(path));
         this.schema = reader.getFooter().getFileMetaData().getSchema();
         this.columnIo = new ColumnIOFactory().getColumnIO(schema);

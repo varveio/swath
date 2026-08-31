@@ -14,7 +14,7 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ListEntryWriteSupport;
 import io.varve.swath.output.parquet.ParquetSchema;
-import io.varve.swath.output.parquet.sorted.SortedFileIndex.RowGroupKey;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex.RowGroupKey;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
@@ -41,12 +41,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@link SortedFileIndex#firstKeysPerRowGroup} — the index-derive API (§9.1): derived first keys
+ * {@link SortedParquetIndex#firstKeysPerRowGroup} — the index-derive API (§9.1): derived first keys
  * must exactly match the true first row of each row group (never Parquet footer stats), including
  * for adversarial key shapes (1&nbsp;KB, embedded NUL/U+10FFFF) and for a file
  * whose truncated footer stats provably diverge from the true first row.
  */
-class SortedFileIndexTest {
+class SortedParquetIndexTest {
 
     private static final class StopBoundsScan extends RuntimeException {
     }
@@ -71,7 +71,7 @@ class SortedFileIndexTest {
             }
         }
 
-        List<RowGroupKey> derived = SortedFileIndex.firstKeysPerRowGroup(path);
+        List<RowGroupKey> derived = SortedParquetIndex.firstKeysPerRowGroup(path);
         assertThat(derived.size()).isGreaterThan(1);   // the row-group knob actually took effect
 
         // The row-group's own reported row count (structural fact, not a stats/min-max quantity)
@@ -99,7 +99,7 @@ class SortedFileIndexTest {
         }
         AtomicInteger checks = new AtomicInteger();
 
-        assertThatThrownBy(() -> SortedFileIndex.bounds(path, () -> {
+        assertThatThrownBy(() -> SortedParquetIndex.bounds(path, () -> {
             if (checks.incrementAndGet() == 2) {
                 throw new StopBoundsScan();
             }
@@ -121,7 +121,7 @@ class SortedFileIndexTest {
             }
         }
 
-        List<RowGroupKey> derived = SortedFileIndex.firstKeysPerRowGroup(path);
+        List<RowGroupKey> derived = SortedParquetIndex.firstKeysPerRowGroup(path);
         assertThat(derived.size()).isGreaterThan(1);
 
         int offset = 0;
@@ -145,7 +145,7 @@ class SortedFileIndexTest {
         Path path = dir.resolve("truncated.parquet");
         writeWithTruncatedStatistics(path, keys, 4096, 16);
 
-        List<RowGroupKey> derived = SortedFileIndex.firstKeysPerRowGroup(path);
+        List<RowGroupKey> derived = SortedParquetIndex.firstKeysPerRowGroup(path);
         assertThat(derived).isNotEmpty();
         assertThat(derived.get(0).rowCount()).isGreaterThan(0);
         // The derived first key is the true, full-length first row — always correct by construction.
@@ -184,7 +184,7 @@ class SortedFileIndexTest {
                 writer.write(object(k));
             }
         }
-        List<RowGroupKey> pureDerived = SortedFileIndex.firstKeysPerRowGroup(pureFile);
+        List<RowGroupKey> pureDerived = SortedParquetIndex.firstKeysPerRowGroup(pureFile);
         assertThat(pureDerived.size()).isGreaterThan(1);
         assertThat(pureDerived).allMatch(RowGroupKey::pureObjectRowType);
 
@@ -197,7 +197,7 @@ class SortedFileIndexTest {
                 writer.write(object(keys.get(i)));
             }
         }
-        List<RowGroupKey> mixedDerived = SortedFileIndex.firstKeysPerRowGroup(mixedFile);
+        List<RowGroupKey> mixedDerived = SortedParquetIndex.firstKeysPerRowGroup(mixedFile);
         assertThat(mixedDerived.size()).isGreaterThan(1);
         assertThat(mixedDerived).anyMatch(rg -> !rg.pureObjectRowType());
         assertThat(mixedDerived).anyMatch(RowGroupKey::pureObjectRowType);
@@ -228,13 +228,13 @@ class SortedFileIndexTest {
             // no writes
         }
 
-        assertThat(SortedFileIndex.firstKeysPerRowGroup(path)).isEmpty();
+        assertThat(SortedParquetIndex.firstKeysPerRowGroup(path)).isEmpty();
     }
 
     /**
-     * Row-group skip: {@link SortedFileIndex#rowGroupSpans} carries each non-empty group's
+     * Row-group skip: {@link SortedParquetIndex#rowGroupSpans} carries each non-empty group's
      * PHYSICAL block index (the ordinal usable with {@code ParquetFileReader.readRowGroup(int)}) and
-     * derives the same true first keys as {@link SortedFileIndex#firstKeysPerRowGroup}. For an
+     * derives the same true first keys as {@link SortedParquetIndex#firstKeysPerRowGroup}. For an
      * all-non-empty file the block indices are the dense sequence 0,1,2,… — the load-bearing property
      * a range-skip caller relies on.
      */
@@ -252,13 +252,13 @@ class SortedFileIndexTest {
             }
         }
 
-        List<RowGroupKey> byKey = SortedFileIndex.firstKeysPerRowGroup(path);
-        List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(path);
+        List<RowGroupKey> byKey = SortedParquetIndex.firstKeysPerRowGroup(path);
+        List<SortedParquetIndex.RowGroupSpan> spans = SortedParquetIndex.rowGroupSpans(path);
         assertThat(spans).hasSameSizeAs(byKey);
         assertThat(spans.size()).isGreaterThan(1);
 
         for (int i = 0; i < spans.size(); i++) {
-            SortedFileIndex.RowGroupSpan span = spans.get(i);
+            SortedParquetIndex.RowGroupSpan span = spans.get(i);
             assertThat(span.blockIndex()).isEqualTo(i);   // dense: no empty groups in this file
             assertThat(span.firstKey()).isEqualTo(byKey.get(i).firstKey());
             assertThat(span.rowCount()).isEqualTo(byKey.get(i).rowCount());

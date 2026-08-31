@@ -16,8 +16,8 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ParquetSchema;
 import io.varve.swath.output.parquet.PartWriter;
 import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
-import io.varve.swath.output.parquet.sorted.SortedRowGroupReader;
 import io.varve.swath.replay.fixture.FixtureMetrics;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
@@ -651,7 +651,7 @@ class SortedParquetStoreTest {
         var held = pool.borrow();
         CountDownLatch enteredBorrow = new CountDownLatch(1);
         CountDownLatch returned = new CountDownLatch(1);
-        AtomicReference<SortedRowGroupReader> received = new AtomicReference<>();
+        AtomicReference<SortedParquetRowGroupReader> received = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread waiter = Thread.ofVirtual().start(() -> {
             enteredBorrow.countDown();
@@ -773,7 +773,7 @@ class SortedParquetStoreTest {
      * skip-scan that walks them, not answer hops from positions that mean nothing. Eligibility cannot
      * see this — it proves the ascent of row-group FIRST keys only, and a single-group file passes
      * that vacuously — so the check lives where the rows are actually stepped over
-     * ({@code SortedRowGroupReader.KeyCursor}), and this is the caller's path arriving at it.
+     * ({@code SortedParquetRowGroupReader.KeyCursor}), and this is the caller's path arriving at it.
      *
      * <p>The fixture is written straight through {@link SortedParquetWriter},
      * bypassing {@link CaptureSorter}, because the sorter cannot produce the shape being guarded

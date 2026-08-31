@@ -20,7 +20,7 @@ import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.parquet.DatasetLayout;
-import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
@@ -109,7 +109,7 @@ final class SortCascadeContractTest {
             assertThat(outKeys).usingElementComparator(Arrays::compareUnsigned)
                     .containsExactlyInAnyOrderElementsOf(keyspace);
 
-            assertThat(SortStamp.read(finalFile)).hasValueSatisfying(s ->
+            assertThat(SortedParquetStamp.read(finalFile)).hasValueSatisfying(s ->
                     assertThat(s.mode()).isEqualTo(SortMode.OBJECTS));
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);
             assertThat(store.loadResumable(run.id(), true)).as("output-complete").isEmpty();

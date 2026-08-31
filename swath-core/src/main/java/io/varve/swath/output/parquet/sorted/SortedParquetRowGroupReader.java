@@ -6,7 +6,7 @@
 package io.varve.swath.output.parquet.sorted;
 
 import io.varve.swath.model.KeyBytes;
-import io.varve.swath.output.parquet.fixture.SegmentReader;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
@@ -71,23 +71,23 @@ import org.apache.parquet.schema.Type;
  * group drained a step at a time through {@link KeyCursor}. <b>Both figures were taken before the
  * cursor's ascent check existed</b>, so the cursor's is now an over-statement by one unsigned compare
  * per row; the gap the two numbers are quoted for is only wider, and neither has been re-measured
- * since. The two tiers never disagree on what they read, which {@code SortedRowGroupReaderTest} pins
+ * since. The two tiers never disagree on what they read, which {@code SortedParquetRowGroupReaderTest} pins
  * directly rather than leaving to inspection.
  *
  * <p>Every method here traffics only in {@code byte[]}/{@code long}/{@code String}/collections. That
  * is the whole point of putting this class in {@code swath-core}: {@code io.varve.swath.replay}'s
  * sorted-serving store drives it without an {@code org.apache.parquet}/{@code org.apache.hadoop} type
  * ever reaching that module's compile classpath (enforced there by
- * {@code verifyNoParquetOrHadoopOnCompileClasspath}), the same seam {@link SortedFileIndex} already
+ * {@code verifyNoParquetOrHadoopOnCompileClasspath}), the same seam {@link SortedParquetIndex} already
  * keeps for the routing-index derive.
  *
  * <p>Column projection is set on the shared {@link ParquetFileReader} immediately before each read
  * (never once at construction), so {@link #openKeyCursor}, {@link #objectRange}, and {@link #rows}
  * can freely interleave against the same open file handle, each paying for only its own columns. Not
  * thread-safe — a caller serving concurrent requests must not share one instance across threads
- * (mirrors {@link SegmentReader}).
+ * (mirrors {@link ParquetEntryReader}).
  */
-public final class SortedRowGroupReader implements AutoCloseable {
+public final class SortedParquetRowGroupReader implements AutoCloseable {
 
     private static final String KEY_FIELD = "key";
     private static final String[] OBJECT_FIELDS_WITH_OWNER = {
@@ -149,7 +149,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
     private final MessageType objectRangeSchemaWithoutOwner;
     private final MessageColumnIO objectRangeColumnIoWithoutOwner;
 
-    public SortedRowGroupReader(Path file) throws IOException {
+    public SortedParquetRowGroupReader(Path file) throws IOException {
         this.file = file;
         this.reader = ParquetFileReader.open(new LocalInputFile(file));
         this.createdBy = reader.getFooter().getFileMetaData().getCreatedBy();
@@ -224,7 +224,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * that cursor narrowed the reader to its key column. Borrowing a separate range reader rebuilt the
      * same column/offset indexes once per pooled slot before the first bare-object batch could be
      * returned. Reusing this reader leaves concurrency bounded by the delimiter-reader lease and
-     * retains the exact same page-bounded read as {@link SortedRangeReader}.
+     * retains the exact same page-bounded read as {@link SortedParquetRangeReader}.
      */
     public List<ObjectRow> objectRange(int blockIndex, byte[] from, boolean fromInclusive,
                                        byte[] toExclusive, int limit, boolean includeOwner) throws IOException {
@@ -237,12 +237,12 @@ public final class SortedRowGroupReader implements AutoCloseable {
         ColumnIndexStore indexStore = columnIndexStore(blockIndex, schema);
         requirePagesAscend(indexStore, file, blockIndex);
         RowRanges ranges = ColumnIndexFilter.calculateRowRanges(
-                FilterCompat.get(SortedRangeReader.predicate(from, fromInclusive, toExclusive)),
+                FilterCompat.get(SortedParquetRangeReader.predicate(from, fromInclusive, toExclusive)),
                 indexStore, KEY_COLUMN, blocks.get(blockIndex).getRowCount());
         if (ranges.rowCount() == 0) {
             return List.of();
         }
-        RowRanges wanted = SortedRangeReader.firstRowsOf(ranges, indexStore, limit);
+        RowRanges wanted = SortedParquetRangeReader.firstRowsOf(ranges, indexStore, limit);
         List<ObjectRow> out = new ArrayList<>(Math.min(limit, 1024));
         readObjectsInto(out, blockIndex, wanted, from, fromInclusive, toExclusive,
                 limit, schema, columnIo, includeOwner);
@@ -278,11 +278,11 @@ public final class SortedRowGroupReader implements AutoCloseable {
             throws IOException {
         try (PageReadStore pages = reader.readFilteredRowGroup(blockIndex, ranges)) {
             RecordReader<ObjectRow> rowReader = columnIo.getRecordReader(
-                    pages, new SortedRangeReader.ObjectRowMaterializer(schema, includeOwner));
+                    pages, new SortedParquetRangeReader.ObjectRowMaterializer(schema, includeOwner));
             long rowCount = pages.getRowCount();
             for (long i = 0; i < rowCount && out.size() < limit; i++) {
                 ObjectRow row = rowReader.read();
-                if (row != null && SortedRangeReader.inRange(
+                if (row != null && SortedParquetRangeReader.inRange(
                         row.keyUnsafe(), from, fromInclusive, toExclusive)) {
                     out.add(row);
                 }
@@ -402,7 +402,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * skip-scan hop trusts this cursor's position to stand for "the first key at/after the target",
      * and a row group whose rows are not in ascending order makes that reading silently false — the
      * hop then emits a common prefix it has already passed, or skips a subtree it never reached. The
-     * sortedness a fixture was admitted on ({@code SortedFileIndex}/the replay server's index derive)
+     * sortedness a fixture was admitted on ({@code SortedParquetIndex}/the replay server's index derive)
      * proves the ascent of row-group <em>first</em> keys only, so a group's own rows are proved here,
      * where they are decoded anyway, and nowhere else. The comparison is the same one
      * {@link #advanceTo} already makes per stepped row, so it costs a compare and no I/O. The failure
@@ -420,7 +420,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
          */
         static final long WINDOW_ROWS = 8192;
 
-        private final SortedRowGroupReader owner;
+        private final SortedParquetRowGroupReader owner;
         private final Path file;
         private final int blockIndex;
         private final RowRanges eligible;
@@ -433,7 +433,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
         private long position;
         private byte[] currentKey;
 
-        private KeyCursor(SortedRowGroupReader owner, Path file, int blockIndex, RowRanges eligible,
+        private KeyCursor(SortedParquetRowGroupReader owner, Path file, int blockIndex, RowRanges eligible,
                           OffsetIndex offsets, long groupRowCount) throws IOException {
             this.owner = owner;
             this.file = file;
@@ -638,7 +638,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
 
     /**
      * The listing projection over {@code full}, with or without the owner columns — shared with
-     * {@link SortedRangeReader} so the two readers cannot drift on which columns a served row has.
+     * {@link SortedParquetRangeReader} so the two readers cannot drift on which columns a served row has.
      */
     static MessageType objectProjection(MessageType full, boolean includeOwner) {
         return objectProjection(full, includeOwner, false);
@@ -647,7 +647,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
     /**
      * As {@link #objectProjection(MessageType, boolean)}, optionally carrying {@code row_type}.
      *
-     * <p>{@link SortedRangeReader} needs it: sorted-serving eligibility is supposed to guarantee
+     * <p>{@link SortedParquetRangeReader} needs it: sorted-serving eligibility is supposed to guarantee
      * every row group is pure {@code OBJECT}, but a reader that trusts that guarantee absolutely
      * would serve a rolled-up common prefix as though it were an object on any fixture where the
      * guarantee slipped. Decoding one more column is the cost of not doing that.
@@ -668,7 +668,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
     static final String ROW_TYPE_FIELD = "row_type";
 
     /**
-     * Maps one decoded record to an {@link ObjectRow}. Shared with {@link SortedRangeReader} for the
+     * Maps one decoded record to an {@link ObjectRow}. Shared with {@link SortedParquetRangeReader} for the
      * same reason as {@link #objectProjection}: two readers feeding the same serving path must agree
      * on every field, including which ones an owner-less projection nulls out.
      */

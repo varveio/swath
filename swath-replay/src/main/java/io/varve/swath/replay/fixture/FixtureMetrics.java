@@ -72,7 +72,7 @@ public final class FixtureMetrics implements SortMetrics {
     /**
      * {@code swath.replay.serving.fallback\{reason\}}: auto-serving-mode declined sorted
      * serving. Reasons in play: {@code no_stamp} (no recognized {@link
-     * io.varve.swath.output.parquet.sorted.SortStamp}), {@code unsupported_mode} (a stamped
+     * io.varve.swath.output.parquet.sorted.SortedParquetStamp}), {@code unsupported_mode} (a stamped
      * {@code versions} file, §0.6), {@code unknown_format_version} (a
      * resolved file's stamp carries a {@code format_version} this reader doesn't recognize),
      * {@code incomplete_multifile} (the resolved file set's {@code file_index}/{@code file_final}

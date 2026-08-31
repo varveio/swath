@@ -80,7 +80,7 @@ final class SortTestSupport {
         return path;
     }
 
-    /** Write canonical Parquet input for tests of CaptureSorter/SegmentReader, not internal staging. */
+    /** Write canonical Parquet input for tests of CaptureSorter/ParquetEntryReader, not internal staging. */
     static Path writeCanonicalParquet(Path path, List<ListEntry> entries) throws IOException {
         try (SortedFileWriter writer =
                      new SortedParquetWriter(path, SortConfigs.base(), SortMode.VERSIONS, 1)) {

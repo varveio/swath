@@ -6,8 +6,8 @@
 package io.varve.swath.replay.store;
 
 import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
-import io.varve.swath.output.parquet.sorted.SortedRangeReader;
-import io.varve.swath.output.parquet.sorted.SortedRowGroupReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetRangeReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ByteKeys;
@@ -30,7 +30,7 @@ import java.util.Set;
  * A {@link ListingStore} over a stamped, globally sorted swath Parquet fixture, answered by
  * <b>Parquet's own page index</b> rather than by a query engine. It never materialises a temp
  * database and never builds an index: the in-memory row-group routing index ({@link IndexEntry},
- * derived once at startup) says which row group a range starts in, and {@link SortedRangeReader}
+ * derived once at startup) says which row group a range starts in, and {@link SortedParquetRangeReader}
  * reads it there.
  *
  * <h2>Why not a query engine</h2>
@@ -45,7 +45,7 @@ import java.util.Set;
  * <h2>What a cold page costs</h2>
  * A bounded read decodes at least one whole <b>page</b> per column, because the page index prunes
  * pages and a page's encodings decode strictly forward. Four things follow, all load-bearing: the
- * read is bounded to the rows the answer can need ({@link SortedRangeReader#range}, since a listing
+ * read is bounded to the rows the answer can need ({@link SortedParquetRangeReader#range}, since a listing
  * page states no upper key bound); the fixture is written with pages a listing page wide ({@code
  * SortConfig#DEFAULT_FINAL_PAGE_ROWS}); its column-index bounds retain the full maximum-size S3 key
  * ({@code ListEntryParquetWriters#SERVED_COLUMN_INDEX_TRUNCATE_BYTES}) so a long shared prefix does
@@ -77,7 +77,7 @@ import java.util.Set;
  *
  * <h2>The {@code delimiter=/} skip-scan</h2>
  * {@link #delimitedRollup} answers a rollup as a series of index hops against the row-group routing
- * index, each hop random-accessing exactly the one row group ({@link SortedRowGroupReader}, in
+ * index, each hop random-accessing exactly the one row group ({@link SortedParquetRowGroupReader}, in
  * {@code swath-core}) a scan cursor currently lands in — O(entries emitted), never O(subtree). See
  * its own javadoc for the algorithm.
  */
@@ -85,7 +85,7 @@ public final class SortedParquetStore implements ListingStore {
 
     private final List<IndexEntry> index;
     private final ReplayMetrics metrics;
-    private final Map<Path, SortedRangeReader> rangeReaders;
+    private final Map<Path, SortedParquetRangeReader> rangeReaders;
     private final Map<Path, LazyGroupReaderPool> groupReaders;
 
     public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
@@ -109,7 +109,7 @@ public final class SortedParquetStore implements ListingStore {
         if (connectionCount < 1) {
             throw new IllegalArgumentException("reader count must be at least 1, got " + connectionCount);
         }
-        Map<Path, SortedRangeReader> openedRangeReaders = openRangeReaders(files, connectionCount,
+        Map<Path, SortedParquetRangeReader> openedRangeReaders = openRangeReaders(files, connectionCount,
                 metrics::parquetReaderAcquired, elapsedNanos -> {
                     try {
                         metrics.recordPageRead(elapsedNanos);
@@ -177,7 +177,7 @@ public final class SortedParquetStore implements ListingStore {
                 // The routing index already knows which physical row group the range starts in, so
                 // the reader is told rather than left to look; later files start at their own first.
                 int startBlock = lower == null ? 0 : index.get(rg).rowGroup();
-                for (SortedRowGroupReader.ObjectRow row :
+                for (SortedParquetRowGroupReader.ObjectRow row :
                         rangeReader(file).range(startBlock, lower, inclusive, upper,
                                 limit - out.size(), projection.owner())) {
                     out.add(toListedObject(row));
@@ -196,12 +196,12 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     /**
-     * One pool of {@link SortedRowGroupReader}s per file, for the delimiter skip-scan.
+     * One pool of {@link SortedParquetRowGroupReader}s per file, for the delimiter skip-scan.
      *
      * <p>The skip-scan used to construct a reader per request, which re-parsed the footer — the same
      * per-request footer parse the range path was pooled to avoid, and a cost that <em>rises</em> with
      * the small pages a served fixture is written with, because the offset and column indexes it
-     * carries grow with the page count. A {@code SortedRowGroupReader} holds mutable per-read state
+     * carries grow with the page count. A {@code SortedParquetRowGroupReader} holds mutable per-read state
      * (its requested schema, its open page store), so it is pooled rather than shared, exactly as the
      * range readers are.
      */
@@ -220,8 +220,8 @@ public final class SortedParquetStore implements ListingStore {
      * files relatively pass validation and then miss the map, which is a {@code NullPointerException}
      * at read time rather than the clear rejection the validation exists to give.
      */
-    private SortedRangeReader rangeReader(Path file) {
-        SortedRangeReader reader = rangeReaders.get(file.toAbsolutePath());
+    private SortedParquetRangeReader rangeReader(Path file) {
+        SortedParquetRangeReader reader = rangeReaders.get(file.toAbsolutePath());
         if (reader == null) {
             throw new IllegalStateException("no sorted Parquet reader for fixture file " + file);
         }
@@ -236,20 +236,20 @@ public final class SortedParquetStore implements ListingStore {
         return readers;
     }
 
-    private SortedRowGroupReader borrowGroupReader(Path file) {
+    private SortedParquetRowGroupReader borrowGroupReader(Path file) {
         return pool(file).borrow();
     }
 
-    private static Map<Path, SortedRangeReader> openRangeReaders(
+    private static Map<Path, SortedParquetRangeReader> openRangeReaders(
             List<Path> files, int poolSize, Runnable readerAcquired,
             java.util.function.LongConsumer readerReleased) {
-        Map<Path, SortedRangeReader> readers = new LinkedHashMap<>();
+        Map<Path, SortedParquetRangeReader> readers = new LinkedHashMap<>();
         try {
             for (Path file : files) {
                 // Same width as the DuckDB pool it replaces: one reader per concurrent request the
                 // store is sized for, since a Parquet reader carries per-read state.
                 readers.put(file.toAbsolutePath(),
-                        new SortedRangeReader(file, poolSize, readerAcquired, readerReleased));
+                        new SortedParquetRangeReader(file, poolSize, readerAcquired, readerReleased));
             }
         } catch (IOException | RuntimeException e) {
             readers.values().forEach(SortedParquetStore::closeQuietly);
@@ -305,7 +305,7 @@ public final class SortedParquetStore implements ListingStore {
         for (LazyGroupReaderPool pool : groupReaders.values()) {
             pool.close();
         }
-        for (SortedRangeReader reader : rangeReaders.values()) {
+        for (SortedParquetRangeReader reader : rangeReaders.values()) {
             closeQuietly(reader);
         }
     }
@@ -330,7 +330,7 @@ public final class SortedParquetStore implements ListingStore {
         private final Path file;
         private final int size;
         private final ReplayMetrics metrics;
-        private ArrayDeque<SortedRowGroupReader> available;
+        private ArrayDeque<SortedParquetRowGroupReader> available;
         private boolean closed;
 
         LazyGroupReaderPool(Path file, int size, ReplayMetrics metrics) {
@@ -339,7 +339,7 @@ public final class SortedParquetStore implements ListingStore {
             this.metrics = metrics;
         }
 
-        synchronized SortedRowGroupReader borrow() {
+        synchronized SortedParquetRowGroupReader borrow() {
             initialize();
             while (available.isEmpty() && !closed) {
                 try {
@@ -356,7 +356,7 @@ public final class SortedParquetStore implements ListingStore {
             return available.removeFirst();
         }
 
-        synchronized void release(SortedRowGroupReader reader) {
+        synchronized void release(SortedParquetRowGroupReader reader) {
             if (closed) {
                 closeQuietly(reader);
             } else {
@@ -372,11 +372,11 @@ public final class SortedParquetStore implements ListingStore {
             if (available != null) {
                 return;
             }
-            ArrayDeque<SortedRowGroupReader> creating = new ArrayDeque<>(size);
+            ArrayDeque<SortedParquetRowGroupReader> creating = new ArrayDeque<>(size);
             var sample = metrics.startTimer();
             try {
                 for (int i = 0; i < size; i++) {
-                    creating.addLast(new SortedRowGroupReader(file));
+                    creating.addLast(new SortedParquetRowGroupReader(file));
                 }
             } catch (IOException | RuntimeException e) {
                 creating.forEach(SortedParquetStore::closeQuietly);
@@ -405,7 +405,7 @@ public final class SortedParquetStore implements ListingStore {
      * time, exactly as S3's own {@code CommonPrefixes} algorithm does — never a scan of every key
      * under the prefix. At each hop, the row-group index ({@link SortedRouting#startRowGroup}, the
      * same binary search {@link #rows} uses) locates the one row group the cursor currently lands in,
-     * and a {@link SortedRowGroupReader.KeyCursor} — opened once per group and kept across every
+     * and a {@link SortedParquetRowGroupReader.KeyCursor} — opened once per group and kept across every
      * further hop that lands in the same one — steps forward to the cursor's position. The key cursor
      * is <em>resumable</em>, not a bulk decode: a row group here can be far larger than the directory a
      * single hop is chasing, so it decodes only the rows strictly between the previous hop's position
@@ -448,10 +448,10 @@ public final class SortedParquetStore implements ListingStore {
         byte[] cursor = fromBytes;
         boolean inclusive = fromInclusive;
         Path openFile = null;
-        SortedRowGroupReader reader = null;
+        SortedParquetRowGroupReader reader = null;
         int cachedBlockIndex = -1;
-        SortedRowGroupReader.KeyCursor keyCursor = null;
-        Deque<SortedRowGroupReader.ObjectRow> lookahead = new ArrayDeque<>();
+        SortedParquetRowGroupReader.KeyCursor keyCursor = null;
+        Deque<SortedParquetRowGroupReader.ObjectRow> lookahead = new ArrayDeque<>();
         try {
             hop:
             while (out.size() < limit + 1) {
@@ -503,7 +503,7 @@ public final class SortedParquetStore implements ListingStore {
                         // worse: with a contended pool the add succeeds and one reader is in the pool
                         // twice, so two requests borrow the same non-thread-safe instance and race on
                         // its requested schema and its open page store.
-                        SortedRowGroupReader done = reader;
+                        SortedParquetRowGroupReader done = reader;
                         Path doneFile = openFile;
                         reader = null;
                         openFile = null;
@@ -577,7 +577,7 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     /** Returns one delimiter reader without letting diagnostics strand the pooled resource. */
-    private void returnGroupReader(Path file, SortedRowGroupReader reader) {
+    private void returnGroupReader(Path file, SortedParquetRowGroupReader reader) {
         try {
             metrics.parquetReaderReleased();
         } finally {
@@ -598,8 +598,8 @@ public final class SortedParquetStore implements ListingStore {
      * successor at any hop, and a row buffered before the jump must not be served after it. A miss
      * refills, so the buffer is a saving and never a source of truth.
      */
-    private SortedRowGroupReader.ObjectRow objectAt(Deque<SortedRowGroupReader.ObjectRow> lookahead,
-                                                    SortedRowGroupReader reader, IndexEntry entry,
+    private SortedParquetRowGroupReader.ObjectRow objectAt(Deque<SortedParquetRowGroupReader.ObjectRow> lookahead,
+                                                    SortedParquetRowGroupReader reader, IndexEntry entry,
                                                     byte[] key, byte[] upper, int want,
                                                     boolean includeOwner) throws IOException {
         if (lookahead.isEmpty() || !Arrays.equals(lookahead.peek().keyUnsafe(), key)) {
@@ -612,7 +612,7 @@ public final class SortedParquetStore implements ListingStore {
                 metrics.recordPageRead(sample);
             }
         }
-        SortedRowGroupReader.ObjectRow row = lookahead.poll();
+        SortedParquetRowGroupReader.ObjectRow row = lookahead.poll();
         if (row != null && Arrays.equals(row.keyUnsafe(), key)) {
             return row;
         }
@@ -639,7 +639,7 @@ public final class SortedParquetStore implements ListingStore {
         return null;
     }
 
-    private static ListedObject toListedObject(SortedRowGroupReader.ObjectRow row) {
+    private static ListedObject toListedObject(SortedParquetRowGroupReader.ObjectRow row) {
         return new ListedObject(row.keyUnsafe(), row.size(), row.lastModifiedEpochMicros(),
                 row.etag(), row.storageClass(), row.ownerId(), row.ownerDisplayName(),
                 row.checksumAlgorithm(), row.checksumType());

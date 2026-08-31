@@ -12,6 +12,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortedFileWriter;
 import java.io.IOException;
@@ -28,14 +29,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@link SortedRowGroupReader} — the replay server's delimiter skip-scan reads a sorted fixture
+ * {@link SortedParquetRowGroupReader} — the replay server's delimiter skip-scan reads a sorted fixture
  * through exactly this class, so its per-row-group decode must be exact at a row-group boundary
  * (never bleed a neighboring group's rows in or drop the group's own), for all four of its tiers
- * ({@link SortedRowGroupReader.KeyCursor} key-only resumable, {@link SortedRowGroupReader#forEachKey}
- * key-only bulk, {@link SortedRowGroupReader#objectRange} bounded full row, and {@link
- * SortedRowGroupReader#rows} whole-group full row).
+ * ({@link SortedParquetRowGroupReader.KeyCursor} key-only resumable, {@link SortedParquetRowGroupReader#forEachKey}
+ * key-only bulk, {@link SortedParquetRowGroupReader#objectRange} bounded full row, and {@link
+ * SortedParquetRowGroupReader#rows} whole-group full row).
  */
-class SortedRowGroupReaderTest {
+class SortedParquetRowGroupReaderTest {
 
     private static SortConfig config(Map<String, String> overrides) {
         SortConfig config = SortConfigs.base();
@@ -61,22 +62,22 @@ class SortedRowGroupReaderTest {
             }
         }
 
-        List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(path);
+        List<SortedParquetIndex.RowGroupSpan> spans = SortedParquetIndex.rowGroupSpans(path);
         assertThat(spans.size()).isGreaterThan(1);   // the multi-group path is actually exercised
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
             int offset = 0;
-            for (SortedFileIndex.RowGroupSpan span : spans) {
+            for (SortedParquetIndex.RowGroupSpan span : spans) {
                 List<byte[]> decodedKeys = drain(reader.openKeyCursor(span.blockIndex()));
                 assertThat(decodedKeys).hasSize((int) span.rowCount());
                 for (int i = 0; i < decodedKeys.size(); i++) {
                     assertThat(new String(decodedKeys.get(i), StandardCharsets.UTF_8)).isEqualTo(keys.get(offset + i));
                 }
 
-                List<SortedRowGroupReader.ObjectRow> rows = reader.rows(span.blockIndex(), false);
+                List<SortedParquetRowGroupReader.ObjectRow> rows = reader.rows(span.blockIndex(), false);
                 assertThat(rows).hasSize((int) span.rowCount());
                 for (int i = 0; i < rows.size(); i++) {
-                    SortedRowGroupReader.ObjectRow row = rows.get(i);
+                    SortedParquetRowGroupReader.ObjectRow row = rows.get(i);
                     String key = keys.get(offset + i);
                     assertThat(new String(row.key(), StandardCharsets.UTF_8)).isEqualTo(key);
                     assertThat(row.size()).isEqualTo(11L);
@@ -102,27 +103,27 @@ class SortedRowGroupReaderTest {
             writer.write(object("b"));
         }
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
-            List<SortedRowGroupReader.ObjectRow> withOwner = reader.rows(0, true);
-            assertThat(withOwner).extracting(SortedRowGroupReader.ObjectRow::ownerId)
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
+            List<SortedParquetRowGroupReader.ObjectRow> withOwner = reader.rows(0, true);
+            assertThat(withOwner).extracting(SortedParquetRowGroupReader.ObjectRow::ownerId)
                     .containsExactly("owner-id", "owner-id");
-            assertThat(withOwner).extracting(SortedRowGroupReader.ObjectRow::ownerDisplayName)
+            assertThat(withOwner).extracting(SortedParquetRowGroupReader.ObjectRow::ownerDisplayName)
                     .containsExactly("owner-display", "owner-display");
 
-            List<SortedRowGroupReader.ObjectRow> withoutOwner = reader.rows(0, false);
-            assertThat(withoutOwner).extracting(SortedRowGroupReader.ObjectRow::ownerId)
+            List<SortedParquetRowGroupReader.ObjectRow> withoutOwner = reader.rows(0, false);
+            assertThat(withoutOwner).extracting(SortedParquetRowGroupReader.ObjectRow::ownerId)
                     .containsOnlyNulls();
-            assertThat(withoutOwner).extracting(SortedRowGroupReader.ObjectRow::ownerDisplayName)
+            assertThat(withoutOwner).extracting(SortedParquetRowGroupReader.ObjectRow::ownerDisplayName)
                     .containsOnlyNulls();
             // Non-owner columns are unaffected by the projection.
-            assertThat(withoutOwner).extracting(SortedRowGroupReader.ObjectRow::etag)
+            assertThat(withoutOwner).extracting(SortedParquetRowGroupReader.ObjectRow::etag)
                     .containsExactly("etag-a", "etag-b");
         }
     }
 
     /**
      * A key cursor is forward-only and stops as soon as it reaches the target — {@link
-     * SortedRowGroupReader.KeyCursor#advanceTo} must land exactly on the first row at/after the target
+     * SortedParquetRowGroupReader.KeyCursor#advanceTo} must land exactly on the first row at/after the target
      * (inclusive) or strictly after it (exclusive), never one row short or one row past, and repeated
      * calls with an advancing target must keep landing correctly (the same reuse the skip-scan's own
      * hop loop relies on: several hops into the same group, each resuming from the last position).
@@ -139,10 +140,10 @@ class SortedRowGroupReaderTest {
                 writer.write(object(k));
             }
         }
-        assertThat(SortedFileIndex.rowGroupSpans(path)).hasSize(1);   // single group: exercises pure cursor logic
+        assertThat(SortedParquetIndex.rowGroupSpans(path)).hasSize(1);   // single group: exercises pure cursor logic
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
-            SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
+            SortedParquetRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
 
             // No lower bound: starts at row 0.
             cursor.advanceTo(null, true);
@@ -175,8 +176,8 @@ class SortedRowGroupReaderTest {
     /**
      * The bulk key tier and the cursor tier are two decoders over the same column, so a caller
      * choosing between them on speed must not be choosing between two answers: {@link
-     * SortedRowGroupReader#forEachKey} must visit exactly the keys {@link
-     * SortedRowGroupReader.KeyCursor} steps through, in the same order, group for group — including
+     * SortedParquetRowGroupReader#forEachKey} must visit exactly the keys {@link
+     * SortedParquetRowGroupReader.KeyCursor} steps through, in the same order, group for group — including
      * across a row-group boundary, where a column-API reader that mis-scoped its page store would
      * bleed a neighbour's rows in.
      */
@@ -194,12 +195,12 @@ class SortedRowGroupReaderTest {
             }
         }
 
-        List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(path);
+        List<SortedParquetIndex.RowGroupSpan> spans = SortedParquetIndex.rowGroupSpans(path);
         assertThat(spans.size()).isGreaterThan(1);
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
             int offset = 0;
-            for (SortedFileIndex.RowGroupSpan span : spans) {
+            for (SortedParquetIndex.RowGroupSpan span : spans) {
                 List<byte[]> stepped = drain(reader.openKeyCursor(span.blockIndex()));
                 List<byte[]> bulk = new ArrayList<>();
                 long visited = reader.forEachKey(span.blockIndex(), bulk::add);
@@ -230,13 +231,13 @@ class SortedRowGroupReaderTest {
             }
         }
 
-        List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(path);
+        List<SortedParquetIndex.RowGroupSpan> spans = SortedParquetIndex.rowGroupSpans(path);
         assertThat(spans.size()).isGreaterThan(2);
 
         // A key cursor opened on one group, a full-row decode of a DIFFERENT group, then re-opening the
         // first group's key cursor again — re-access to an already-visited group on the same open reader
         // must still return the exact same content (no leaked/mutated projection state).
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
             List<byte[]> firstGroupKeys = drain(reader.openKeyCursor(spans.get(0).blockIndex()));
             reader.rows(spans.get(2).blockIndex(), true);
             List<byte[]> firstGroupKeysAgain = drain(reader.openKeyCursor(spans.get(0).blockIndex()));
@@ -270,7 +271,7 @@ class SortedRowGroupReaderTest {
             }
         }
 
-        List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(path);
+        List<SortedParquetIndex.RowGroupSpan> spans = SortedParquetIndex.rowGroupSpans(path);
         assertThat(spans.size()).isGreaterThan(1);
         assertThat(spans.get(1).rowCount()).isGreaterThan(600);
         int targetBlock = spans.get(1).blockIndex();
@@ -281,22 +282,22 @@ class SortedRowGroupReaderTest {
                     .isGreaterThan(1);
         }
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
             // Loading group 0 leaves the mutable Parquet reader on its key-only projection. Before
             // maximal-projection priming, opening group 1 then poisoned that group's permanent index
             // cache with key-only paths before a multi-hop delimiter scan discovered a bare object.
-            try (SortedRowGroupReader.KeyCursor ignored = reader.openKeyCursor(spans.get(0).blockIndex())) {
+            try (SortedParquetRowGroupReader.KeyCursor ignored = reader.openKeyCursor(spans.get(0).blockIndex())) {
                 // Opening the cursor is enough to select and decode the key projection.
             }
             int groupOneStart = Math.toIntExact(spans.get(0).rowCount());
             String from = keys.get(groupOneStart + 500);
             String to = keys.get(groupOneStart + 502);
-            try (SortedRowGroupReader.KeyCursor ignored = reader.openKeyCursor(targetBlock)) {
-                List<SortedRowGroupReader.ObjectRow> rows = reader.objectRange(
+            try (SortedParquetRowGroupReader.KeyCursor ignored = reader.openKeyCursor(targetBlock)) {
+                List<SortedParquetRowGroupReader.ObjectRow> rows = reader.objectRange(
                         targetBlock, bytes(from), true, bytes(to), 2, true);
                 assertThat(rows).extracting(row -> utf8(row.key()))
                         .containsExactly(from, keys.get(groupOneStart + 501));
-                assertThat(rows).extracting(SortedRowGroupReader.ObjectRow::ownerId)
+                assertThat(rows).extracting(SortedParquetRowGroupReader.ObjectRow::ownerId)
                         .containsExactly("owner-id", "owner-id");
             }
         }
@@ -321,10 +322,10 @@ class SortedRowGroupReaderTest {
             writer.write(object("bbb"));   // below its predecessor: row 2 of row group 0
             writer.write(object("ddd"));
         }
-        assertThat(SortedFileIndex.rowGroupSpans(path)).hasSize(1);
+        assertThat(SortedParquetIndex.rowGroupSpans(path)).hasSize(1);
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
-            SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
+            SortedParquetRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
 
             assertThatThrownBy(() -> cursor.advanceTo(bytes("zzz"), true))
                     .isInstanceOfSatisfying(RowGroupOrderException.class, e -> {
@@ -355,8 +356,8 @@ class SortedRowGroupReaderTest {
             writer.write(object("aaa"));
         }
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
-            SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
+            SortedParquetRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
             RowGroupOrderException thrown = catchThrowableOfType(RowGroupOrderException.class,
                     () -> cursor.advanceTo(bytes("zzz"), true));
 
@@ -382,8 +383,8 @@ class SortedRowGroupReaderTest {
             writer.write(object("aaa"));
         }
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
-            SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
+            SortedParquetRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
 
             assertThatThrownBy(() -> cursor.advanceTo(bytes("zzz"), true))
                     .isInstanceOfSatisfying(RowGroupOrderException.class,
@@ -428,9 +429,9 @@ class SortedRowGroupReaderTest {
                 }
             }
         }
-        assertThat(SortedFileIndex.rowGroupSpans(path)).hasSize(1);
+        assertThat(SortedParquetIndex.rowGroupSpans(path)).hasSize(1);
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
             assertThatThrownBy(() -> reader.openKeyCursor(0, bytes("d00000000"), true, null))
                     .isInstanceOfSatisfying(RowGroupOrderException.class, e -> {
                         assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER);
@@ -465,15 +466,15 @@ class SortedRowGroupReaderTest {
                 writer.write(object(k));
             }
         }
-        assertThat(SortedFileIndex.rowGroupSpans(path)).hasSize(1);
+        assertThat(SortedParquetIndex.rowGroupSpans(path)).hasSize(1);
 
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
             List<byte[]> bulk = new ArrayList<>();
             reader.forEachKey(0, bulk::add);
             assertThat(bulk).hasSize(keys.size());
 
             // A full drain from the start must cross every window and agree with the bulk tier.
-            try (SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0)) {
+            try (SortedParquetRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0)) {
                 List<byte[]> stepped = drain(cursor);
                 assertThat(stepped).hasSize(keys.size());
                 for (int i = 0; i < keys.size(); i++) {
@@ -484,7 +485,7 @@ class SortedRowGroupReaderTest {
             // And a seek to either side of a window boundary must land on the right row, with
             // position() still meaning "row index within the row group".
             for (int at : new int[] {0, 1, 1023, 1024, 8191, 8192, 8193, 9000, 20_000, 29_999}) {
-                try (SortedRowGroupReader.KeyCursor cursor =
+                try (SortedParquetRowGroupReader.KeyCursor cursor =
                              reader.openKeyCursor(0, bytes(keys.get(at)), true, null)) {
                     // The cursor opens at the first row of the PAGE that can hold the target, never at
                     // the target itself — the page filter prunes pages, never rows — so it must still
@@ -506,7 +507,7 @@ class SortedRowGroupReaderTest {
         }
     }
 
-    private static List<byte[]> drain(SortedRowGroupReader.KeyCursor cursor) {
+    private static List<byte[]> drain(SortedParquetRowGroupReader.KeyCursor cursor) {
         List<byte[]> out = new ArrayList<>();
         while (cursor.hasCurrent()) {
             out.add(cursor.currentKey());

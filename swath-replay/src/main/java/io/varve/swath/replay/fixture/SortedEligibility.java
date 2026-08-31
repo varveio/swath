@@ -5,7 +5,7 @@
  */
 package io.varve.swath.replay.fixture;
 
-import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexLoadResult;
 import io.varve.swath.sort.SortMode;
@@ -59,9 +59,9 @@ public final class SortedEligibility {
         if (files.isEmpty()) {
             return new Result.Ineligible(SortedFixtures.NO_STAMP);
         }
-        List<SortStamp> stamps = new ArrayList<>(files.size());
+        List<SortedParquetStamp> stamps = new ArrayList<>(files.size());
         for (Path file : files) {
-            Optional<SortStamp> stamp = detect(file);
+            Optional<SortedParquetStamp> stamp = detect(file);
             if (stamp.isEmpty()) {
                 log.info("sorted_eligibility: {} carries no recognized sortedness stamp", file);
                 return new Result.Ineligible(SortedFixtures.NO_STAMP);
@@ -102,13 +102,13 @@ public final class SortedEligibility {
      * reusing an index, or a file whose index exceeds the observed count, fails the contiguity check
      * instead. Returns {@code null} when the set is complete; otherwise a detail string for logs.
      */
-    static String multiFileCompletenessViolation(List<Path> files, List<SortStamp> stamps) {
+    static String multiFileCompletenessViolation(List<Path> files, List<SortedParquetStamp> stamps) {
         int n = files.size();
         boolean[] seen = new boolean[n + 1];   // 1-based; seen[0] unused
         int finalCount = 0;
         int finalIndex = -1;
         for (int i = 0; i < n; i++) {
-            SortStamp stamp = stamps.get(i);
+            SortedParquetStamp stamp = stamps.get(i);
             int index = stamp.fileIndex();
             if (index < 1 || index > n || seen[index]) {
                 return "file " + files.get(i) + " reports file_index=" + index
@@ -132,7 +132,7 @@ public final class SortedEligibility {
         return null;
     }
 
-    private static Optional<SortStamp> detect(Path file) {
+    private static Optional<SortedParquetStamp> detect(Path file) {
         try {
             return SortedFixtures.detect(file);
         } catch (IOException e) {

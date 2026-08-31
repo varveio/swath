@@ -11,7 +11,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
-import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexLoadResult;
 import io.varve.swath.replay.testkit.ObjectEntries;
@@ -204,7 +204,7 @@ class SortedFixturesTest {
     private static Path sortToOneFile(Path capture, Path outputDir, SortConfig config) throws IOException {
         SortTransformResult result = new CaptureSorter(config).sort(capture, outputDir);
         assertThat(result.finalFiles()).hasSize(1);
-        assertThat(SortStamp.read(result.finalFiles().get(0)).map(SortStamp::mode)).contains(SortMode.OBJECTS);
+        assertThat(SortedParquetStamp.read(result.finalFiles().get(0)).map(SortedParquetStamp::mode)).contains(SortMode.OBJECTS);
         return result.finalFiles().get(0);
     }
 

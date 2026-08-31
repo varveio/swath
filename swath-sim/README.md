@@ -122,14 +122,14 @@ which on a 300 MB fixture would cost as much as the run:
 | Tier | Unsorted input |
 |---|---|
 | `STREAMING` | **Hard fail** on the first violation in any row group a run faults in, naming file, row group and the offending key's position within that group — the message spells it `key N`, the position the block counted (`KeyBlock` on the way in, file and row group added by the tier). |
-| `WINDOWED` | Hard fail along the `delimiter=/` skip-scan, which proves every row it steps over (`SortedRowGroupReader.KeyCursor`). Its plain range reads are **not** guarded, and what they do is worse than a short page — see below. |
+| `WINDOWED` | Hard fail along the `delimiter=/` skip-scan, which proves every row it steps over (`SortedParquetRowGroupReader.KeyCursor`). Its plain range reads are **not** guarded, and what they do is worse than a short page — see below. |
 | `ARENA` | Loaded through the Parquet store, whose reads are `ORDER BY key`: disorder is normalised on the way in and only a **duplicate** key trips the arena's check. |
 | `PARQUET` | Not checked, by design — that store exists to serve arbitrary unsorted captures and re-sorts at query time. |
 
 So a corpus fixture large enough for a real sweep — which `AUTO` puts on `STREAMING` — is guarded,
 and one small enough to fit the arena is served in key order whatever its file holds. A sweep runner
 treats the hard failure as "exclude this bucket and record why", not as a reason to stop — and it can
-read the *why* mechanically: the failure is an `io.varve.swath.sort.RowGroupOrderException` carrying
+read the *why* mechanically: the failure is an `io.varve.swath.output.parquet.sorted.RowGroupOrderException` carrying
 `reason() == "row_group_disorder"`, and the decode bumps
 `swath.sim.store.streaming.segment.refused{reason}` **before** it rethrows, so the exclusion survives
 into the metrics of a run that ended in an exception. Nothing downstream has to match a message. (The

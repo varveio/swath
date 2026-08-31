@@ -49,7 +49,7 @@ class SortedManifestMetadataHandoffTest {
                         "alpha", "omega", 23, 17, 10);
 
         // The path deliberately does not exist. Publication can succeed only if the new-part path
-        // performs neither Files.size/MD5 nor SortedFileIndex.bounds after durable close.
+        // performs neither Files.size/MD5 nor SortedParquetIndex.bounds after durable close.
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ListRunner.writeSortedManifest(root, "bucket", "args", 7,
                 List.of(new FinalPart(absent, Optional.of(metadata))),

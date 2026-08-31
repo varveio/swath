@@ -6,7 +6,7 @@
 package io.varve.swath.output.parquet.sorted;
 
 import io.varve.swath.model.KeyBytes;
-import io.varve.swath.output.parquet.sorted.SortedRowGroupReader.ObjectRow;
+import io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader.ObjectRow;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -80,11 +80,11 @@ import org.apache.parquet.schema.MessageType;
  * {@link ParquetFileReader} carries mutable per-read state (the requested schema) and cannot be
  * shared across concurrent requests.
  *
- * <p>Lives in {@code swath-core} for the same reason {@link SortedRowGroupReader} does: it traffics
+ * <p>Lives in {@code swath-core} for the same reason {@link SortedParquetRowGroupReader} does: it traffics
  * only in {@code byte[]}/{@code long}/{@code int}/collections, so the replay server drives it
  * without an {@code org.apache.parquet} type reaching that module's compile classpath.
  */
-public final class SortedRangeReader implements AutoCloseable {
+public final class SortedParquetRangeReader implements AutoCloseable {
 
     private static final String KEY_FIELD = "key";
     private static final Set<ColumnPath> FILTERED_COLUMNS = Set.of(ColumnPath.get(KEY_FIELD));
@@ -100,16 +100,16 @@ public final class SortedRangeReader implements AutoCloseable {
     private final LongConsumer readerReleased;
     private final LongSupplier nanoClock;
 
-    public SortedRangeReader(Path file, int poolSize) throws IOException {
+    public SortedParquetRangeReader(Path file, int poolSize) throws IOException {
         this(file, poolSize, () -> { }, ignored -> { });
     }
 
-    public SortedRangeReader(
+    public SortedParquetRangeReader(
             Path file, int poolSize, Runnable readerAcquired, LongConsumer readerReleased) throws IOException {
         this(file, poolSize, readerAcquired, readerReleased, System::nanoTime);
     }
 
-    SortedRangeReader(Path file, int poolSize, Runnable readerAcquired, LongConsumer readerReleased,
+    SortedParquetRangeReader(Path file, int poolSize, Runnable readerAcquired, LongConsumer readerReleased,
                       LongSupplier nanoClock) throws IOException {
         int size = Math.max(1, poolSize);
         this.readerAcquired = Objects.requireNonNull(readerAcquired, "readerAcquired");
@@ -131,8 +131,8 @@ public final class SortedRangeReader implements AutoCloseable {
         MessageType fileSchema = first.getFooter().getFileMetaData().getSchema();
         this.blocks = List.copyOf(first.getFooter().getBlocks());
         ColumnIOFactory factory = new ColumnIOFactory();
-        this.schemaWithOwner = SortedRowGroupReader.objectProjection(fileSchema, true, true);
-        this.schemaWithoutOwner = SortedRowGroupReader.objectProjection(fileSchema, false, true);
+        this.schemaWithOwner = SortedParquetRowGroupReader.objectProjection(fileSchema, true, true);
+        this.schemaWithoutOwner = SortedParquetRowGroupReader.objectProjection(fileSchema, false, true);
         this.columnIoWithOwner = factory.getColumnIO(schemaWithOwner, fileSchema);
         this.columnIoWithoutOwner = factory.getColumnIO(schemaWithoutOwner, fileSchema);
     }
@@ -401,7 +401,7 @@ public final class SortedRangeReader implements AutoCloseable {
 
         @Override
         public void end() {
-            current = SortedRowGroupReader.OBJECT_ROW_TYPE.equals(rowType)
+            current = SortedParquetRowGroupReader.OBJECT_ROW_TYPE.equals(rowType)
                     ? new ObjectRow(key, size, lastModified, etag, storageClass,
                             includeOwner ? ownerId : null, includeOwner ? ownerDisplayName : null,
                             checksumAlgorithm, checksumType)
@@ -421,7 +421,7 @@ public final class SortedRangeReader implements AutoCloseable {
                 case "owner_display_name" -> string(value -> ownerDisplayName = value);
                 case "checksum_algorithm" -> string(value -> checksumAlgorithm = value);
                 case "checksum_type" -> string(value -> checksumType = value);
-                case SortedRowGroupReader.ROW_TYPE_FIELD -> string(value -> rowType = value);
+                case SortedParquetRowGroupReader.ROW_TYPE_FIELD -> string(value -> rowType = value);
                 default -> throw new IllegalArgumentException("unsupported object projection field: " + name);
             };
         }

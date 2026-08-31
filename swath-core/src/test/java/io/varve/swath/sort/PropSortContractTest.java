@@ -14,9 +14,9 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ListEntryWriteSupport;
 import io.varve.swath.output.parquet.ParquetSchema;
-import io.varve.swath.output.parquet.fixture.SegmentReader;
-import io.varve.swath.output.parquet.sorted.SortedFileIndex;
-import io.varve.swath.output.parquet.sorted.SortedFileIndex.RowGroupKey;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex.RowGroupKey;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.sort.SortTestSupport.InMemorySegments;
 import java.io.IOException;
@@ -59,18 +59,18 @@ import org.apache.parquet.schema.MessageType;
  *       transitivity, equivalence-transitivity, totality) across mixed subtypes incl. null
  *       {@code version_id} and equal-comparing cross-type entries; (iii) equal-comparing entries all
  *       survive the merge — none dropped — and keep stable input order within one segment.</li>
- *   <li><b>PROP-SORT-2</b> — canonical Parquet → {@link SegmentReader} round-trips every {@link
+ *   <li><b>PROP-SORT-2</b> — canonical Parquet → {@link ParquetEntryReader} round-trips every {@link
  *       ListEntry} subtype for arbitrary generated entries incl. NUL/U+10FFFF in keys,
  *       1&nbsp;KB keys, unicode, null optional fields, the empty segment, and a single
  *       record.</li>
- *   <li><b>PROP-SORT-3</b> — {@link SortedFileIndex#firstKeysPerRowGroup} equals each row group's
+ *   <li><b>PROP-SORT-3</b> — {@link SortedParquetIndex#firstKeysPerRowGroup} equals each row group's
  *       true first row for adversarial key shapes, and provably NOT the (truncated) footer stats:
  *       at least one generated 1&nbsp;KB-key case where the truncated column min differs from the
  *       true first row, which derive must still return correctly.</li>
  * </ul>
  *
  * <p>In-package so the package-private merge/segment seams ({@link KWayMerge},
- * {@link SegmentReader}, {@link InMemorySegments}) are reachable. Try budgets are kept modest on the
+ * {@link ParquetEntryReader}, {@link InMemorySegments}) are reachable. Try budgets are kept modest on the
  * Parquet-writing properties so the default suite stays fast.
  */
 class PropSortContractTest {
@@ -233,7 +233,7 @@ class PropSortContractTest {
                 }
             }
 
-            List<RowGroupKey> derived = SortedFileIndex.firstKeysPerRowGroup(file);
+            List<RowGroupKey> derived = SortedParquetIndex.firstKeysPerRowGroup(file);
             // Walk the row groups by their own reported row counts — locates each group's expected
             // true first key in the known ascending write order without predicting parquet-mr's flush
             // boundaries.
@@ -260,7 +260,7 @@ class PropSortContractTest {
         try {
             writeWithTruncatedStatistics(file, keys, 4096, 16);
 
-            List<RowGroupKey> derived = SortedFileIndex.firstKeysPerRowGroup(file);
+            List<RowGroupKey> derived = SortedParquetIndex.firstKeysPerRowGroup(file);
             assertThat(derived).isNotEmpty();
             assertThat(derived.get(0).firstKey())
                     .as("derive returns the true full-length first row").isEqualTo(keys.get(0));
@@ -363,7 +363,7 @@ class PropSortContractTest {
         try {
             SortTestSupport.writeCanonicalParquet(seg, entries);
             List<ListEntry> back = new ArrayList<>();
-            try (SegmentReader reader = new SegmentReader(seg)) {
+            try (ParquetEntryReader reader = new ParquetEntryReader(seg)) {
                 while (reader.hasNext()) {
                     back.add(reader.next());
                 }
@@ -380,7 +380,7 @@ class PropSortContractTest {
     }
 
     /**
-     * The exact write→read contract of {@code ListEntryWriteSupport}/{@link SegmentReader}: an
+     * The exact write→read contract of {@code ListEntryWriteSupport}/{@link ParquetEntryReader}: an
      * {@code ObjectEntry}'s {@code is_latest} is only persisted when it carries a {@code version_id}
      * (the writer omits it otherwise), so a versionless object reads back {@code is_latest=false}.
      * Every other field round-trips verbatim ({@code last_modified==0} is the "absent" sentinel that

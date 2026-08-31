@@ -28,7 +28,7 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
-import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.EqualKeyPolicy;
@@ -160,7 +160,7 @@ final class SortMergeReentryContractTest {
 
         Path finalFile = outputDir.resolve("part-00000.parquet");
         assertThat(ParquetReads.keys(finalFile)).containsExactlyElementsOf(sortedStrings(keyspace));
-        assertThat(SortStamp.read(finalFile)).isPresent();
+        assertThat(SortedParquetStamp.read(finalFile)).isPresent();
         assertThat(result.totalRows()).isEqualTo(keyspace.size());
         try (var tmpFiles = Files.newDirectoryStream(outputDir, "*.tmp")) {
             assertThat(tmpFiles.iterator().hasNext()).as("no stale *.tmp survives the idempotent re-run").isFalse();
@@ -217,7 +217,7 @@ final class SortMergeReentryContractTest {
             assertThat(ParquetReads.keys(finalFile))
                     .as("orphaned final file overwritten with the correct merge output")
                     .containsExactlyElementsOf(sortedStrings(keyspace));
-            assertThat(SortStamp.read(finalFile)).isPresent();
+            assertThat(SortedParquetStamp.read(finalFile)).isPresent();
             DatasetLayout layout = DatasetLayout.of(outputDir);
             JsonNode manifest = MAPPER.readTree(layout.manifest().toFile());
             assertThat(manifest.path("files")).hasSize(1);

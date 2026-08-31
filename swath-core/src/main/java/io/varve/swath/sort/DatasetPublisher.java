@@ -5,7 +5,7 @@
  */
 package io.varve.swath.sort;
 
-import io.varve.swath.output.parquet.sorted.SortedFileIndex;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;
@@ -120,7 +120,7 @@ final class DatasetPublisher {
                 continue;
             }
             metrics.recordStealReason("SORT", "cross_part_bounds_fallback_scan");
-            SortedFileIndex.Bounds bounds = SortedFileIndex.bounds(
+            SortedParquetIndex.Bounds bounds = SortedParquetIndex.bounds(
                     tmpFiles.get(i), MergeCancellation::check);
             metadata.add(new FinalPartMetadata(bounds.rowCount(), Files.size(tmpFiles.get(i)), "",
                     bounds.firstKey() == null ? null : "raw-bound",

@@ -30,7 +30,7 @@ import io.varve.swath.observability.Phase;
 import io.varve.swath.observability.ProgressEvent;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.parquet.DatasetLayout;
-import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.sort.PageRunReads;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
@@ -238,7 +238,7 @@ final class SortResumeListingContractTest {
         assertThat(outKeys).as("no duplicate rows").doesNotHaveDuplicates();
         assertThat(outKeys).as("complete + globally sorted, byte-exact vs ground truth (no gap/no overlap)")
                 .containsExactlyElementsOf(expected);
-        assertThat(SortStamp.read(finalFile)).isPresent();
+        assertThat(SortedParquetStamp.read(finalFile)).isPresent();
     }
 
     @Test
@@ -327,7 +327,7 @@ final class SortResumeListingContractTest {
         assertThat(outKeys).as("no duplicate rows").doesNotHaveDuplicates();
         assertThat(outKeys).as("complete + globally sorted, byte-exact vs ground truth (no gap/no overlap)")
                 .containsExactlyElementsOf(expected);
-        assertThat(SortStamp.read(finalFile)).isPresent();
+        assertThat(SortedParquetStamp.read(finalFile)).isPresent();
 
         // ---- fetch-count proof: only the non-durable tail was re-listed ----
         // The resume-emitted keys are EXACTLY the tail: preCrashDurableKeys ⊆ final output, the output

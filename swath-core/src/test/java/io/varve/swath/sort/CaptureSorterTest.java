@@ -13,8 +13,8 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
-import io.varve.swath.output.parquet.fixture.SegmentReader;
-import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -55,7 +55,7 @@ class CaptureSorterTest {
         Path output = result.finalFiles().get(0);
         assertThat(keysOf(output)).containsExactly("a", "b", "c", "d", "e", "f");
 
-        Optional<SortStamp> stamp = SortStamp.read(output);
+        Optional<SortedParquetStamp> stamp = SortedParquetStamp.read(output);
         assertThat(stamp).isPresent();
         assertThat(stamp.get().mode()).isEqualTo(SortMode.OBJECTS);
 
@@ -359,7 +359,7 @@ class CaptureSorterTest {
 
         assertThat(result.totalRows()).isEqualTo(0);
         assertThat(result.finalFiles()).hasSize(1);
-        assertThat(SortStamp.read(result.finalFiles().get(0))).isPresent();
+        assertThat(SortedParquetStamp.read(result.finalFiles().get(0))).isPresent();
     }
 
     @Test
@@ -418,7 +418,7 @@ class CaptureSorterTest {
 
     private static List<String> keysOf(Path file) throws IOException {
         List<String> out = new ArrayList<>();
-        try (SegmentReader r = new SegmentReader(file)) {
+        try (ParquetEntryReader r = new ParquetEntryReader(file)) {
             while (r.hasNext()) {
                 out.add(r.next().key().asString());
             }

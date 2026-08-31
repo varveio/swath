@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.model.ObjectEntry;
-import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
@@ -54,7 +54,7 @@ class SortFixtureCommandTest {
         assertThat(exit).isEqualTo(0);
         Path output = outputDir.resolve("part-00000.parquet");
         assertThat(Files.exists(output)).isTrue();
-        assertThat(SortStamp.read(output)).isPresent();
+        assertThat(SortedParquetStamp.read(output)).isPresent();
 
         assertThat(registry.find("swath.replay.sortfixture.build.latency").timer().count()).isEqualTo(1);
         assertThat(registry.find("swath.replay.sortfixture.output.bytes").summary().totalAmount())
@@ -134,7 +134,7 @@ class SortFixtureCommandTest {
         assertThat(exit).isEqualTo(0);
         assertThat(Files.exists(staleTmp)).isFalse();
         assertThat(Files.exists(outputDir.resolve(CaptureSorter.STAGING_DIR_NAME))).isFalse();
-        assertThat(SortStamp.read(outputDir.resolve("part-00000.parquet"))).isPresent();
+        assertThat(SortedParquetStamp.read(outputDir.resolve("part-00000.parquet"))).isPresent();
     }
 
     // --- helpers ---

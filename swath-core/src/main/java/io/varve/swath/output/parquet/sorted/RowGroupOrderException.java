@@ -18,7 +18,7 @@ import java.nio.file.Path;
  *
  * <p>The failure is raised in two shapes, because the two structures that see it know different
  * amounts. {@link #at} is for a reader that knows which file and row group it is decoding
- * ({@code SortedRowGroupReader.KeyCursor}); {@link #atRow} is for a key structure built out of one
+ * ({@code SortedParquetRowGroupReader.KeyCursor}); {@link #atRow} is for a key structure built out of one
  * row group's rows, which knows its own row ordinal and nothing more, and whose caller adds the rest
  * with {@link #locatedIn}.
  *

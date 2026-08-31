@@ -53,7 +53,7 @@ import io.varve.swath.output.parquet.ParquetWriterPool;
 import io.varve.swath.output.parquet.ParquetWriterPoolConfig;
 import io.varve.swath.output.parquet.PartInfo;
 import io.varve.swath.output.parquet.PartListener;
-import io.varve.swath.output.parquet.sorted.SortedFileIndex;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import io.varve.swath.output.text.TextWriterPool;
@@ -1231,7 +1231,7 @@ public final class ListRunner {
                             f, metrics, FINALIZE_PROGRESS_BYTE_STRIDE, cancellationCheck);
                     metrics.recordSortManifestMd5(bytes, System.nanoTime() - md5Start);
                     long boundsStart = System.nanoTime();
-                    SortedFileIndex.Bounds bounds = SortedFileIndex.bounds(f, cancellationCheck);
+                    SortedParquetIndex.Bounds bounds = SortedParquetIndex.bounds(f, cancellationCheck);
                     metrics.recordSortManifestBounds(bounds.rowCount(), bytes,
                             System.nanoTime() - boundsStart);
                     metadata = new FinalPartMetadata(bounds.rowCount(), bytes, md5,

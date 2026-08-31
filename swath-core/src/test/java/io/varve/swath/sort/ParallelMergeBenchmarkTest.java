@@ -22,7 +22,7 @@ import io.varve.swath.model.ListingMode;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.Manifest;
-import io.varve.swath.output.parquet.fixture.SegmentReader;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
@@ -214,7 +214,7 @@ class ParallelMergeBenchmarkTest {
 
             assertThat(result.totalRows).isEqualTo(1);
             assertThat(result.multisetDigest).isEqualTo(catalog.oracle().multisetDigest());
-            try (SegmentReader reader = new SegmentReader(result.finalFiles.getFirst())) {
+            try (ParquetEntryReader reader = new ParquetEntryReader(result.finalFiles.getFirst())) {
                 assertThat(reader.next()).isEqualTo(new ObjectEntry(
                         liveObject.key(), liveObject.size(), liveObject.lastModifiedEpochMicros(),
                         liveObject.etag(), liveObject.storageClass(), null, false,
@@ -265,7 +265,7 @@ class ParallelMergeBenchmarkTest {
         Path canonicalFile = writeParquet(root.resolve("canonical.parquet"), List.of(source));
         assertThat(BenchmarkRowOracle.validateOutput(List.of(canonicalFile), oracle, CMP).rows())
                 .isEqualTo(1);
-        try (SegmentReader reader = new SegmentReader(canonicalFile)) {
+        try (ParquetEntryReader reader = new ParquetEntryReader(canonicalFile)) {
             assertThat(reader.next()).isEqualTo(canonical);
             assertThat(reader.hasNext()).isFalse();
         }
@@ -295,7 +295,7 @@ class ParallelMergeBenchmarkTest {
         Path faithfulFile = writeParquet(root.resolve("faithful.parquet"), source);
         assertThat(BenchmarkRowOracle.validateOutput(List.of(faithfulFile), oracle, CMP).rows())
                 .isEqualTo(2);
-        try (SegmentReader reader = new SegmentReader(faithfulFile)) {
+        try (ParquetEntryReader reader = new ParquetEntryReader(faithfulFile)) {
             assertThat(reader.next()).isEqualTo(object);
             assertThat(reader.next()).isEqualTo(marker);
             assertThat(reader.hasNext()).isFalse();

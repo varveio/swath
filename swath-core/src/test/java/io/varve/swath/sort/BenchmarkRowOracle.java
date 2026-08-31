@@ -9,7 +9,7 @@ import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
-import io.varve.swath.output.parquet.fixture.SegmentReader;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -83,7 +83,7 @@ final class BenchmarkRowOracle {
         ListEntry previous = null;
         long rows = 0;
         for (Path file : files) {
-            try (SegmentReader reader = new SegmentReader(file)) {
+            try (ParquetEntryReader reader = new ParquetEntryReader(file)) {
                 while (reader.hasNext()) {
                     ListEntry entry = reader.next();
                     if (previous != null && comparator.compare(previous, entry) > 0) {
