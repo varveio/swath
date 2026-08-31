@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 151;
+    static final int EXPECTED_OTLP_METER_COUNT = 161;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -145,6 +145,10 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "COUNTER|swath.sort.merge.proof_spool.preallocation.operations|{}",
             "COUNTER|swath.sort.merge.range.framed.bytes|{}",
             "COUNTER|swath.sort.merge.range.index.bytes|{}",
+            "COUNTER|swath.sort.pipeline.cluster_pages|{}",
+            "COUNTER|swath.sort.pipeline.cluster_rows|{}",
+            "COUNTER|swath.sort.pipeline.encoder_page_reads|{}",
+            "COUNTER|swath.sort.pipeline.pages_forwarded|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
             "COUNTER|swath.split.guard_aborts|{}",
@@ -200,6 +204,8 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "GAUGE|swath.sort.merge.overlap.pages.peak|{}",
             "GAUGE|swath.sort.merge.overlap.rows.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
+            "GAUGE|swath.sort.pipeline.decoded_page_bytes.peak|{}",
+            "GAUGE|swath.sort.pipeline.parts_open|{}",
             "GAUGE|swath.sort.staging.bytes.peak|{}",
             "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=10}",
             "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=5}",
@@ -242,6 +248,10 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.sort.merge.latency|{}",
             "TIMER|swath.sort.merge.proof_spool.latency|{}",
             "TIMER|swath.sort.merge.range.latency|{}",
+            "TIMER|swath.sort.pipeline.encoder_read_wait|{}",
+            "TIMER|swath.sort.pipeline.header_scan|{}",
+            "TIMER|swath.sort.pipeline.plan_queue_wait|{}",
+            "TIMER|swath.sort.pipeline.router_wait|{}",
             "TIMER|swath.sort.publication.latency|{}");
 
     /**

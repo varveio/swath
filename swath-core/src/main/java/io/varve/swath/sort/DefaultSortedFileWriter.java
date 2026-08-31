@@ -21,6 +21,7 @@ import java.util.Optional;
 final class DefaultSortedFileWriter implements SortedFileWriter {
 
     private final PartWriter delegate;
+    private boolean closed;
 
     DefaultSortedFileWriter(Path path) throws IOException {
         this.delegate = new PartWriter(path, ParquetSchema.canonical());
@@ -51,8 +52,20 @@ final class DefaultSortedFileWriter implements SortedFileWriter {
     }
 
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
+        if (closed) {
+            return;
+        }
         delegate.close();
+        closed = true;
+    }
+
+    @Override
+    public synchronized void discard() {
+        if (!closed) {
+            delegate.discard();
+            closed = true;
+        }
     }
 
     @Override

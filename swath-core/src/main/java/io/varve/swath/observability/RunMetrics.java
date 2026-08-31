@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntSupplier;
@@ -246,6 +247,7 @@ public final class RunMetrics {
     private final Counter sortMergeOverlapClusters;
     private final AtomicLong sortMergeOverlapPagesPeak = new AtomicLong();
     private final AtomicLong sortMergeOverlapRowsPeak = new AtomicLong();
+    private final AtomicLong sortPipelineDecodedPageBytesPeak = new AtomicLong();
     private final Counter sortMergeRangeFramedBytes;
     private final Counter sortMergeRangeIndexBytes;
     private final Counter sortMergeProofSpoolLogicalExtentBytes;
@@ -254,6 +256,16 @@ public final class RunMetrics {
     private final Counter sortMergeProofSpoolMappedOperations;
     private final Counter sortMergeProofSpoolMappedBytes;
     private final Timer sortMergeProofSpoolLatency;
+    private final Counter sortPipelinePagesForwarded;
+    private final Counter sortPipelineClusterPages;
+    private final Counter sortPipelineClusterRows;
+    private final Timer sortPipelineRouterWait;
+    private final Timer sortPipelineHeaderScan;
+    private final Timer sortPipelinePlanQueueWait;
+    private final Counter sortPipelineEncoderPageReads;
+    private final Timer sortPipelineEncoderReadWait;
+    private final AtomicReference<AtomicInteger> sortPipelinePartsOpen =
+            new AtomicReference<>(new AtomicInteger());
     private final Timer sortFinalizeCloseLatency;
     private final Timer sortFinalizeLatency;
     private final Timer sortPublicationLatency;
@@ -616,6 +628,28 @@ public final class RunMetrics {
                         .baseUnit("bytes").register(registry);
         sortMergeProofSpoolLatency =
                 runScopedTimer("swath.sort.merge.proof_spool.latency").register(registry);
+        sortPipelinePagesForwarded =
+                Counter.builder("swath.sort.pipeline.pages_forwarded").register(registry);
+        sortPipelineClusterPages =
+                Counter.builder("swath.sort.pipeline.cluster_pages").register(registry);
+        sortPipelineClusterRows =
+                Counter.builder("swath.sort.pipeline.cluster_rows").register(registry);
+        sortPipelineRouterWait =
+                runScopedTimer("swath.sort.pipeline.router_wait").register(registry);
+        sortPipelineHeaderScan =
+                runScopedTimer("swath.sort.pipeline.header_scan").register(registry);
+        sortPipelinePlanQueueWait =
+                runScopedTimer("swath.sort.pipeline.plan_queue_wait").register(registry);
+        sortPipelineEncoderPageReads =
+                Counter.builder("swath.sort.pipeline.encoder_page_reads").register(registry);
+        sortPipelineEncoderReadWait =
+                runScopedTimer("swath.sort.pipeline.encoder_read_wait").register(registry);
+        Gauge.builder("swath.sort.pipeline.decoded_page_bytes.peak",
+                        sortPipelineDecodedPageBytesPeak, AtomicLong::get)
+                .baseUnit("bytes").register(registry);
+        Gauge.builder("swath.sort.pipeline.parts_open", sortPipelinePartsOpen,
+                        current -> current.get().get())
+                .register(registry);
         sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
         sortPublicationLatency = runScopedTimer("swath.sort.publication.latency").register(registry);
         sortManifestMd5Bytes = Counter.builder("swath.sort.manifest.md5.bytes")
@@ -1178,6 +1212,11 @@ public final class RunMetrics {
         sortMergeOverlapRowsPeak.getAndAccumulate(retainedRows, Math::max);
     }
 
+    /** Fold one encoder cluster's exact decoded-page residency peak into the run high-water mark. */
+    public void recordSortPipelineDecodedPagePeak(long bytes) {
+        sortPipelineDecodedPageBytesPeak.getAndAccumulate(bytes, Math::max);
+    }
+
     /** Cumulative logical page-frame bytes read by parallel range workers, including cascades. */
     public void recordSortMergeRangeFramedBytes(long bytes) {
         sortMergeRangeFramedBytes.increment(Math.max(0L, bytes));
@@ -1203,6 +1242,39 @@ public final class RunMetrics {
         sortMergeProofSpoolMappedOperations.increment(Math.max(0L, mappedOperations));
         sortMergeProofSpoolMappedBytes.increment(Math.max(0L, mappedBytes));
         sortMergeProofSpoolLatency.record(Math.max(0L, serviceNanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelinePagesForwarded(long pages) {
+        sortPipelinePagesForwarded.increment(Math.max(0L, pages));
+    }
+
+    public void recordSortPipelineCluster(long pages, long rows) {
+        sortPipelineClusterPages.increment(Math.max(0L, pages));
+        sortPipelineClusterRows.increment(Math.max(0L, rows));
+    }
+
+    public void recordSortPipelineRouterWait(long nanos) {
+        sortPipelineRouterWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelineHeaderScan(long nanos) {
+        sortPipelineHeaderScan.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelinePlanQueueWait(long nanos) {
+        sortPipelinePlanQueueWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void recordSortPipelineEncoderPageReads(long pages) {
+        sortPipelineEncoderPageReads.increment(Math.max(0L, pages));
+    }
+
+    public void recordSortPipelineEncoderReadWait(long nanos) {
+        sortPipelineEncoderReadWait.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    public void bindSortPipelinePartsOpen(AtomicInteger partsOpen) {
+        sortPipelinePartsOpen.set(Objects.requireNonNull(partsOpen, "partsOpen"));
     }
 
     /** One final part's footer-write + fsync durability span. */

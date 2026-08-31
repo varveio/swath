@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 /** Shared fixtures for the {@code io.varve.swath.sort} unit tests (all in-package, so package-private types are reachable). */
@@ -61,12 +62,18 @@ final class SortTestSupport {
     /** Write caller-supplied sorted listing pages with an explicit persisted ordering mode. */
     static Path writeIndexedPages(Path path, List<List<ListEntry>> pages, SortMode orderingMode)
             throws IOException {
+        return writeIndexedPages(path, pages, orderingMode, PageCodec.NONE);
+    }
+
+    /** Write caller-supplied indexed pages with an explicit payload codec. */
+    static Path writeIndexedPages(Path path, List<List<ListEntry>> pages, SortMode orderingMode,
+            PageCodec codec) throws IOException {
         ListEntryComparator comparator = new ListEntryComparator();
-        SortBuffer buffer = new SortBuffer(SortConfigs.base(), comparator);
+        SortBuffer buffer = new SortBuffer(SortConfigs.base().withSegmentCodec(codec), comparator);
         for (int page = 0; page < pages.size(); page++) {
             buffer.admit(page, pages.get(page));
         }
-        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE,
+        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, codec,
                 orderingMode)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
         return path;
@@ -152,6 +159,11 @@ final class SortTestSupport {
         @Override
         public Optional<FinalPartMetadata> finalMetadata() {
             return delegate.finalMetadata();
+        }
+
+        @Override
+        public void discard() throws IOException {
+            delegate.discard();
         }
 
         @Override
@@ -306,6 +318,9 @@ final class SortTestSupport {
         final LongAdder proofSpoolMappedBytes = new LongAdder();
         final LongAdder proofSpoolServiceNanos = new LongAdder();
         final LongAdder proofSpoolMetricUpdates = new LongAdder();
+        final LongAdder pipelinePagesForwarded = new LongAdder();
+        final LongAdder pipelineClusterPages = new LongAdder();
+        final AtomicLong pipelineDecodedPageBytesPeak = new AtomicLong();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -353,6 +368,21 @@ final class SortTestSupport {
             proofSpoolMappedOperations.add(mappedOperations);
             proofSpoolMappedBytes.add(mappedBytes);
             proofSpoolServiceNanos.add(serviceNanos);
+        }
+
+        @Override
+        public void recordPipelinePagesForwarded(long pages) {
+            pipelinePagesForwarded.add(pages);
+        }
+
+        @Override
+        public void recordPipelineCluster(long pages, long rows) {
+            pipelineClusterPages.add(pages);
+        }
+
+        @Override
+        public void recordPipelineDecodedPagePeak(long bytes) {
+            pipelineDecodedPageBytesPeak.getAndAccumulate(bytes, Math::max);
         }
 
         int count(String key) {

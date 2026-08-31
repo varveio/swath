@@ -804,6 +804,32 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) gaugeValue("swath.sort.merge.overlap.pages.peak"));
         sortNode.put("merge_overlap_rows_peak",
                 (long) gaugeValue("swath.sort.merge.overlap.rows.peak"));
+        sortNode.put("pipeline_pages_forwarded",
+                (long) counterCount("swath.sort.pipeline.pages_forwarded"));
+        sortNode.put("pipeline_cluster_pages",
+                (long) counterCount("swath.sort.pipeline.cluster_pages"));
+        sortNode.put("pipeline_cluster_rows",
+                (long) counterCount("swath.sort.pipeline.cluster_rows"));
+        long pipelineRouterWaitMs = timerTotalMs("swath.sort.pipeline.router_wait");
+        long pipelineHeaderScanMs = timerTotalMs("swath.sort.pipeline.header_scan");
+        long pipelinePlanQueueWaitMs = timerTotalMs("swath.sort.pipeline.plan_queue_wait");
+        long pipelineEncoderReadWaitMs = timerTotalMs("swath.sort.pipeline.encoder_read_wait");
+        sortNode.put("pipeline_router_wait_ms", pipelineRouterWaitMs);
+        sortNode.put("pipeline_header_scan_ms", pipelineHeaderScanMs);
+        sortNode.put("pipeline_router_wait_share", mergeMs <= 0
+                ? 0.0 : (double) pipelineRouterWaitMs / mergeMs);
+        sortNode.put("pipeline_plan_queue_wait_ms", pipelinePlanQueueWaitMs);
+        sortNode.put("pipeline_plan_queue_wait_share", mergeMs <= 0
+                ? 0.0 : (double) pipelinePlanQueueWaitMs / mergeMs);
+        sortNode.put("pipeline_encoder_page_reads",
+                (long) counterCount("swath.sort.pipeline.encoder_page_reads"));
+        sortNode.put("pipeline_encoder_read_wait_ms", pipelineEncoderReadWaitMs);
+        sortNode.put("pipeline_encoder_read_wait_share", mergeMs <= 0
+                ? 0.0 : (double) pipelineEncoderReadWaitMs / mergeMs);
+        sortNode.put("pipeline_decoded_page_bytes_peak",
+                (long) gaugeValue("swath.sort.pipeline.decoded_page_bytes.peak"));
+        sortNode.put("pipeline_parts_open",
+                (long) gaugeValue("swath.sort.pipeline.parts_open"));
         sortNode.put("merge_range_framed_bytes",
                 (long) counterCount("swath.sort.merge.range.framed.bytes"));
         sortNode.put("merge_range_index_bytes",

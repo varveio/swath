@@ -380,6 +380,23 @@ class PageBlockSerdeTest {
 
     @ParameterizedTest
     @EnumSource(PageCodec.class)
+    void routingAndFullHeaderParsersAgreeOnSerializedFixtures(PageCodec codec)
+            throws IOException {
+        for (List<ListEntry> shape : adversarialShapes()) {
+            byte[] body = PageBlock.pack(shape, CMP, codec).serialize();
+            PageBlockCodec.Header full = PageBlockCodec.parseHeader(body);
+            PageBlockCodec.RoutingHeader routing = PageBlockCodec.parseRoutingHeader(
+                    body.length, (position, bytes) -> ByteBuffer.wrap(body, position, bytes).slice());
+
+            assertThat(routing.minKey()).containsExactly(full.minKey());
+            assertThat(routing.maxKey()).containsExactly(full.maxKey());
+            assertThat(routing.count()).isEqualTo(full.count());
+            assertThat(routing.rawPayloadLength()).isEqualTo(full.rawPayloadLength());
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(PageCodec.class)
     void corruptRawPayloadLengthFailsFastOnDecodeForEveryCodec(PageCodec codec) {
         List<ListEntry> in = List.of(object("aaa"), object("mmm"), object("zzz"));
         PageBlock block = PageBlock.pack(in, CMP, codec);

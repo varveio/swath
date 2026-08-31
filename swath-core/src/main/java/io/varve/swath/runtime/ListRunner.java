@@ -1490,6 +1490,11 @@ public final class ListRunner {
         }
 
         @Override
+        public synchronized void discard() throws IOException {
+            delegate.discard();
+        }
+
+        @Override
         public java.util.Optional<FinalPartMetadata> finalMetadata() {
             return delegate.finalMetadata();
         }

@@ -110,6 +110,39 @@ class SortTransformPageRunParallelMergePropTest {
                 Long.MAX_VALUE, Long.MAX_VALUE);
     }
 
+    @Property(tries = 60)
+    void pipelineFinalizationIsByteExactToSerial(
+            @ForAll @IntRange(min = 1, max = 6) int segmentCount,
+            @ForAll @IntRange(min = 1, max = 320) int entryCount,
+            @ForAll KeyStyle style,
+            @ForAll @IntRange(min = 1, max = 6) int encoders,
+            @ForAll @IntRange(min = 1, max = 16_384) int finalFileBytes,
+            @ForAll long seed) throws IOException {
+        Scenario scenario = build(segmentCount, entryCount, style, seed);
+        Path root = Files.createTempDirectory("pipeline-pagerun-");
+        try {
+            SortTransformResult serial = run(scenario, 1, root, "serial", finalFileBytes,
+                    Long.MAX_VALUE, DuplicateHook.NO_OP, SortMetrics.NO_OP);
+            SortTransformResult pipeline = run(scenario, encoders, root, "pipeline",
+                    finalFileBytes, Long.MAX_VALUE, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                    SortFinalization.PIPELINE);
+
+            List<ListEntry> input = scenario.allEntries();
+            List<ListEntry> pipelineRows = readAll(pipeline.finalFiles());
+            assertThat(pipeline.totalRows()).isEqualTo(input.size());
+            assertThat(pipelineRows).isSortedAccordingTo(cmp)
+                    .containsExactlyInAnyOrderElementsOf(input)
+                    .containsExactlyElementsOf(readAll(serial.finalFiles()));
+            assertStrictlyDisjointPartBoundaries(pipeline.finalFiles());
+            for (int i = 0; i < pipeline.finalFiles().size(); i++) {
+                assertThat(pipeline.finalFiles().get(i).getFileName().toString())
+                        .isEqualTo(String.format("part-%05d.parquet", i));
+            }
+        } finally {
+            deleteTreeBestEffort(root);
+        }
+    }
+
     /**
      * The same property with each range forced to CASCADE (the helper prices exactly two safe
      * decoded streams per range). This is the arm that exercises
@@ -1014,6 +1047,41 @@ class SortTransformPageRunParallelMergePropTest {
         }
     }
 
+    @Example
+    void pipelinePartsCarryDenseGlobalStamps() throws IOException {
+        Scenario scenario = manyDistinctKeys(4, 4_800);
+        Path root = Files.createTempDirectory("pipeline-pagerun-stamp-");
+        try {
+            SortConfig config = SortConfigs.base()
+                    .withFinalization(SortFinalization.PIPELINE)
+                    .withFinalFileBytes(4_096L)
+                    .withMergeBudgetBytes(Long.MAX_VALUE)
+                    .withMergeParallelism(4);
+            Path output = Files.createDirectories(root.resolve("out"));
+            Path staging = Files.createDirectories(output.resolve("_staging"));
+            List<Path> segments = stage(staging, scenario.segments());
+            SortTransform transform = new SortTransform(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, new SortedParquetWriterFactory(config, SortMode.OBJECTS),
+                    SortRun.PROCESS_SOFT_FD_LIMIT));
+            SortTransformResult result = transform.transform(segments, output, staging,
+                    PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
+
+            assertThat(result.finalFiles()).hasSizeGreaterThan(1);
+            for (int i = 0; i < result.finalFiles().size(); i++) {
+                Map<String, String> footer = footerKv(result.finalFiles().get(i));
+                assertThat(footer.get(SortedParquetWriter.FILE_INDEX_KEY))
+                        .isEqualTo(String.valueOf(i + 1));
+                assertThat(footer.containsKey(SortedParquetWriter.FILE_FINAL_KEY))
+                        .isEqualTo(i == result.finalFiles().size() - 1);
+            }
+            assertStrictlyDisjointPartBoundaries(result.finalFiles());
+            assertThat(readAll(result.finalFiles()))
+                    .containsExactlyElementsOf(scenario.allEntries().stream().sorted(cmp).toList());
+        } finally {
+            deleteTreeBestEffort(root);
+        }
+    }
+
     private static Map<String, String> footerKv(Path file) throws IOException {
         try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
             return reader.getFooter().getFileMetaData().getKeyValueMetaData();
@@ -1421,13 +1489,21 @@ class SortTransformPageRunParallelMergePropTest {
     private SortTransformResult run(Scenario s, int parallelism, Path root, String name,
                                     long finalFileBytes, long mergeBudgetBytes, DuplicateHook hook,
                                     SortMetrics metrics) throws IOException {
+        return run(s, parallelism, root, name, finalFileBytes, mergeBudgetBytes, hook, metrics,
+                SortFinalization.RANGES);
+    }
+
+    private SortTransformResult run(Scenario s, int parallelism, Path root, String name,
+                                    long finalFileBytes, long mergeBudgetBytes, DuplicateHook hook,
+                                    SortMetrics metrics, SortFinalization finalization) throws IOException {
         Path output = Files.createDirectories(root.resolve(name));
         Path staging = Files.createDirectories(output.resolve("_staging"));
         List<Path> segs = stage(staging, s.segments());
         SortConfig config = SortConfigs.base()
                 .withFinalFileBytes(finalFileBytes)
                 .withMergeBudgetBytes(mergeBudgetBytes)
-                .withMergeParallelism(parallelism);
+                .withMergeParallelism(parallelism)
+                .withFinalization(finalization);
         SortTransform transform = new SortTransform(sortRun(config, hook, metrics,
                 SortedFileWriterFactory.DEFAULT, SortRun.PROCESS_SOFT_FD_LIMIT));
         return transform.transform(segs, output, staging, PublishListener.NO_OP,
@@ -1515,6 +1591,21 @@ class SortTransformPageRunParallelMergePropTest {
                         .isNegative();
             }
             previousMax = max;
+        }
+    }
+
+    private void assertStrictlyDisjointPartBoundaries(List<Path> files) throws IOException {
+        byte[] previousMax = null;
+        for (Path file : files) {
+            List<ListEntry> rows = readAll(List.of(file));
+            assertThat(rows).isNotEmpty().isSortedAccordingTo(cmp);
+            byte[] min = rows.getFirst().key().rawUnsafe();
+            if (previousMax != null) {
+                assertThat(KeyBytes.compareUnsigned(previousMax, min))
+                        .as("adjacent pipeline parts have strict maxKey < minKey")
+                        .isNegative();
+            }
+            previousMax = rows.getLast().key().rawUnsafe();
         }
     }
 

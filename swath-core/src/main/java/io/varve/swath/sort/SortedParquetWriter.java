@@ -228,6 +228,14 @@ public final class SortedParquetWriter implements SortedFileWriter {
         return Optional.ofNullable(finalMetadata);
     }
 
+    @Override
+    public synchronized void discard() {
+        if (!closed) {
+            tracked.discard();
+            closed = true;
+        }
+    }
+
     private record WriterOptions(long writebackBytes, DatasetDataSyncMetrics syncMetrics,
                                  ListEntryParquetWriters.DataForcer dataForcer) {
         private static final WriterOptions DEFAULT = new WriterOptions(0L, null, null);

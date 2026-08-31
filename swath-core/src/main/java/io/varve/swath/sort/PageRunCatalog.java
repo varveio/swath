@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -32,6 +33,8 @@ final class PageRunCatalog {
     private final Map<Path, PageRunSegmentDescriptor> byPath;
     private final long maxRecordLen;
     private final int maxRawPayloadLength;
+    private final int maxKeyLength;
+    private final long totalRecords;
     private final long totalEntries;
 
     private PageRunCatalog(List<PageRunSegmentDescriptor> descriptors) {
@@ -41,6 +44,8 @@ final class PageRunCatalog {
         Set<Path> normalizedIdentities = new LinkedHashSet<>();
         long maximum = -1;
         int maximumRaw = 0;
+        int maximumKey = 0;
+        long records = 0;
         long entries = 0;
         for (PageRunSegmentDescriptor descriptor : descriptors) {
             Path identity = normalizedIdentity(descriptor.path());
@@ -53,12 +58,17 @@ final class PageRunCatalog {
             if (descriptor.hasDecodedPageMaximum()) {
                 maximumRaw = Math.max(maximumRaw, descriptor.maxRawPayloadLength());
             }
+            maximumKey = Math.max(maximumKey, (int) Math.min(
+                    ByteMidpoint.MAX_KEY_LEN, descriptor.trailer().maxRecordLen()));
+            records = Math.addExact(records, descriptor.trailer().totalRecords());
             entries = Math.addExact(entries, descriptor.trailer().totalEntries());
         }
         this.paths = List.copyOf(orderedPaths);
         this.byPath = Map.copyOf(indexed);
         this.maxRecordLen = maximum;
         this.maxRawPayloadLength = maximumRaw;
+        this.maxKeyLength = maximumKey;
+        this.totalRecords = records;
         this.totalEntries = entries;
     }
 
@@ -197,6 +207,15 @@ final class PageRunCatalog {
     /** Exact maximum decoded payload bytes for one original input page. */
     int maxRawPayloadLength() {
         return maxRawPayloadLength;
+    }
+
+    /** Largest key a record can contain, capped by the object-store key contract. */
+    int maxKeyLength() {
+        return maxKeyLength;
+    }
+
+    long totalRecords() {
+        return totalRecords;
     }
 
     /** Exact source-row authority summed from every independently validated original trailer. */

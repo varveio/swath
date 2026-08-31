@@ -5,6 +5,8 @@
  */
 package io.varve.swath.sort;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * Engagement-counter hook for the sort library (metrics discipline,
  * {@code docs/internals/metrics-internals.md} §5). Mirrors the signature of
@@ -57,6 +59,7 @@ public interface SortMetrics {
                                      long mappedBytes,
                                      long serviceNanos) {
         }
+
     };
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
@@ -111,4 +114,40 @@ public interface SortMetrics {
                           long mappedOperations,
                           long mappedBytes,
                           long serviceNanos);
+
+    /** Count pages routed to an encoder without materializing rows on the router thread. */
+    default void recordPipelinePagesForwarded(long pages) {
+    }
+
+    /** Count pages and rows processed by the router's shared overlap-cluster row heap. */
+    default void recordPipelineCluster(long pages, long rows) {
+    }
+
+    /** Record total time the router spent blocked on reader input or encoder back-pressure. */
+    default void recordPipelineRouterWait(long nanos) {
+    }
+
+    /** Record one header cursor's positional metadata-read service time. */
+    default void recordPipelineHeaderScan(long nanos) {
+    }
+
+    /** Record time the router spent waiting for a full plan lane. */
+    default void recordPipelinePlanQueueWait(long nanos) {
+    }
+
+    /** Count positional page reads performed by encoders. */
+    default void recordPipelineEncoderPageReads(long pages) {
+    }
+
+    /** Record encoder positional read and CRC service time. */
+    default void recordPipelineEncoderReadWait(long nanos) {
+    }
+
+    /** Observe one encoder cluster's exact retained decoded-page high-water mark. */
+    default void recordPipelineDecodedPagePeak(long bytes) {
+    }
+
+    /** Bind the pipeline's owning counter directly to the live open-part gauge. */
+    default void bindPipelinePartsOpen(AtomicInteger partsOpen) {
+    }
 }

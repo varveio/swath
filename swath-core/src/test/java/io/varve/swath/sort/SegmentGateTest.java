@@ -36,6 +36,6 @@ final class SegmentGateTest {
 
         PageBlock block = PageBlock.pack(entries, new ListEntryComparator(), PageCodec.NONE);
 
-        assertThat(block.estimatedBytes()).isEqualTo(entryStreamEstimate);
+        assertThat(block.stagingEstimatedBytes()).isEqualTo(entryStreamEstimate);
     }
 }

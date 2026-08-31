@@ -61,7 +61,7 @@ final class PageBlock {
     private final byte[] lastKeyBytes;
     private ListEntry firstEntry;
     private ListEntry lastEntry;
-    private final long estimatedBytes;
+    private final long stagingEstimatedBytes;
     private final boolean orderedUnderFullComparator;
     /** Non-null only for a persisted page, so cursor-time decode faults retain typed path context. */
     private final Path sourcePath;
@@ -84,7 +84,7 @@ final class PageBlock {
         this.lastKeyBytes = lastKeyBytes;
         this.firstEntry = firstEntry;
         this.lastEntry = lastEntry;
-        this.estimatedBytes = estimatedBytes;
+        this.stagingEstimatedBytes = estimatedBytes;
         this.orderedUnderFullComparator = orderedUnderFullComparator;
         this.sourcePath = sourcePath;
         this.parsedHeader = null;
@@ -92,7 +92,7 @@ final class PageBlock {
 
     /** Persisted-page constructor: retains the one owned record body and its parsed payload slice. */
     PageBlock(PageBlockCodec.Header header, byte[] recordBody,
-              ListEntry firstEntry, ListEntry lastEntry, long estimatedBytes, Path sourcePath) {
+              ListEntry firstEntry, ListEntry lastEntry, Path sourcePath) {
         this.payloadOwner = recordBody;
         this.payloadOffset = header.payloadOffset();
         this.payloadLength = header.payloadLength();
@@ -105,7 +105,7 @@ final class PageBlock {
         this.lastKeyBytes = header.maxKey();
         this.firstEntry = firstEntry;
         this.lastEntry = lastEntry;
-        this.estimatedBytes = estimatedBytes;
+        this.stagingEstimatedBytes = -1;
         this.orderedUnderFullComparator = header.ordered();
         this.sourcePath = sourcePath;
         this.parsedHeader = header;
@@ -245,9 +245,12 @@ final class PageBlock {
         return codec;
     }
 
-    /** Logical bytes used by the pre-encode staging gate. */
-    long estimatedBytes() {
-        return estimatedBytes;
+    /** Entry-shape estimate used only while an admission-packed block enters the staging gate. */
+    long stagingEstimatedBytes() {
+        if (stagingEstimatedBytes < 0) {
+            throw new IllegalStateException("persisted pages do not carry a staging estimate");
+        }
+        return stagingEstimatedBytes;
     }
 
     /** The shared logical-byte estimate used by every staging-segment gate. */

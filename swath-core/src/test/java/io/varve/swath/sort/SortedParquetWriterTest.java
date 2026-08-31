@@ -6,6 +6,7 @@
 package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -140,6 +141,19 @@ class SortedParquetWriterTest {
         }
 
         assertThat(SortStamp.read(path)).isEmpty();
+    }
+
+    @Test
+    void defaultWriterCloseIsIdempotentAfterDiscard(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("discarded.parquet");
+        SortedFileWriter writer = SortedFileWriterFactory.DEFAULT.create(path, 1);
+        writer.write(object("a"));
+
+        writer.discard();
+        Files.delete(path);
+
+        assertThatCode(writer::close).doesNotThrowAnyException();
+        assertThat(path).doesNotExist();
     }
 
     @Test

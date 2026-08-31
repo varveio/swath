@@ -129,6 +129,10 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "COUNTER|swath.sort.merge.proof_spool.preallocation.operations|{}",
             "COUNTER|swath.sort.merge.range.framed.bytes|{}",
             "COUNTER|swath.sort.merge.range.index.bytes|{}",
+            "COUNTER|swath.sort.pipeline.cluster_pages|{}",
+            "COUNTER|swath.sort.pipeline.cluster_rows|{}",
+            "COUNTER|swath.sort.pipeline.encoder_page_reads|{}",
+            "COUNTER|swath.sort.pipeline.pages_forwarded|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
             "COUNTER|swath.split.guard_aborts|{}",
@@ -253,6 +257,8 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.sort.merge.overlap.pages.peak|{}",
             "GAUGE|swath.sort.merge.overlap.rows.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
+            "GAUGE|swath.sort.pipeline.decoded_page_bytes.peak|{}",
+            "GAUGE|swath.sort.pipeline.parts_open|{}",
             "GAUGE|swath.sort.staging.bytes.peak|{}",
             "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=10}",
             "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=5}",
@@ -295,6 +301,10 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "TIMER|swath.sort.merge.latency|{}",
             "TIMER|swath.sort.merge.proof_spool.latency|{}",
             "TIMER|swath.sort.merge.range.latency|{}",
+            "TIMER|swath.sort.pipeline.encoder_read_wait|{}",
+            "TIMER|swath.sort.pipeline.header_scan|{}",
+            "TIMER|swath.sort.pipeline.plan_queue_wait|{}",
+            "TIMER|swath.sort.pipeline.router_wait|{}",
             "TIMER|swath.sort.publication.latency|{}");
 
     /** Deterministic event counts for the same workload, as {@code name{tags}=count}. FROZEN. */
@@ -389,6 +399,14 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.sort.merge.range.index.bytes{}=0",
             "swath.sort.merge.range.latency{}=1",
             "swath.sort.page_runs_per_buffer{}=1",
+            "swath.sort.pipeline.cluster_pages{}=0",
+            "swath.sort.pipeline.cluster_rows{}=0",
+            "swath.sort.pipeline.encoder_page_reads{}=0",
+            "swath.sort.pipeline.encoder_read_wait{}=0",
+            "swath.sort.pipeline.header_scan{}=0",
+            "swath.sort.pipeline.pages_forwarded{}=0",
+            "swath.sort.pipeline.plan_queue_wait{}=0",
+            "swath.sort.pipeline.router_wait{}=0",
             "swath.sort.publication.latency{}=0",
             "swath.sort.segment.bytes{}=2048",
             "swath.sort.segments.written{}=3",
@@ -422,7 +440,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 220;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 230;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

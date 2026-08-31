@@ -118,14 +118,16 @@ class SortConfigTest {
                 .withSegmentCodec(PageCodec.NONE)
                 .withMinParallelStagedBytes(11)
                 .withStagingRetention(StagingRetention.RETAIN_ORIGINALS)
-                .withMergeBoundaryPolicy(MergeBoundaryPolicy.ROWS);
+                .withMergeBoundaryPolicy(MergeBoundaryPolicy.ROWS)
+                .withFinalization(SortFinalization.PIPELINE);
 
         SortConfig equivalent = config.withFanIn(config.fanIn());
         assertThat(config).isEqualTo(equivalent).hasSameHashCodeAs(equivalent);
         assertThat(config).hasToString("SortConfig[segmentBytes=1, segmentEntries=2, heapFraction=0.25, "
                 + "buffers=3, fanIn=4, finalFileBytes=5, finalRowGroupBytes=6, finalPageRows=7, "
                 + "mergeBudgetBytes=8, mergeParallelism=9, mergePerStreamBytes=10, segmentCodec=NONE, "
-                + "minParallelStagedBytes=11, stagingRetention=RETAIN_ORIGINALS, mergeBoundaryPolicy=ROWS]");
+                + "minParallelStagedBytes=11, stagingRetention=RETAIN_ORIGINALS, mergeBoundaryPolicy=ROWS, "
+                + "finalization=PIPELINE]");
     }
 
     @Test

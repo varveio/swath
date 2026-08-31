@@ -46,7 +46,7 @@ finalized-part metadata is `O(parts)` and sorted staging metadata is
 - [9. Versioned listing (`ListObjectVersions`)](#9-versioned-listing-listobjectversions)
 - [10. Express One Zone (directory buckets)](#10-express-one-zone-directory-buckets)
 - [11. Edge-case checklist (must be handled / tested)](#11-edge-case-checklist-must-be-handled--tested)
-- [12. Parallel sort boundary selection](#12-parallel-sort-boundary-selection)
+- [12. Sort finalization](#12-sort-finalization)
 
 ---
 
@@ -1664,20 +1664,102 @@ only to general-purpose buckets.
 
 ---
 
-## 12. Parallel sort boundary selection
+## 12. Sort finalization
 
-When the range-merge gates admit `R > 1`, each page-run original listing-phase segment contributes
-the systematic page-minimum sample in contracts §6.1. Boundary selection deduplicates those keys and
-retains the deterministic bottom-hash 16,384 candidates across the whole run (1,024 per range at
-the supported 16-range maximum); this bounds retained
-candidate state independently of segment count and is invariant to segment/input order. It sorts the
-retained keys unsigned and chooses ranks `j * candidates / R` for `j = 1..R-1`. Cascade
-intermediates are produced after this phase and therefore carry no sample. A valid embedded sample
-is committed only after its complete block passes structural, CRC, count, and ordering validation;
-otherwise that segment alone is scanned through `PageFrontierReader`, preserving legacy behavior. Repeated
-minima remain in the per-segment sample and are deduplicated by the whole-run sampler. Embedded,
-legacy, and mixed inputs therefore feed the same deterministic selection rule.
+Finalization turns the checkpoint-owned sealed page-run segments into one globally sorted Parquet
+dataset. It does not change the listing result: both mechanisms consume the same durable rows, apply
+the same complete comparator and equal-key policy, verify the same source/output cardinality, and
+publish the same ordered part contract. They differ only in how they divide the final merge work.
 
-Boundary choice affects balance only: every range still filters every retained page row against its
-exact `[lo, hi)` bounds. The final unbounded range drains every original segment to EOF, retaining
-the whole-input CRC/order/count proof even though all-new boundary selection reads no page bodies.
+### `ranges`: key-space partitioning
+
+`ranges` is the default. It divides the raw-key space into contiguous intervals and assigns one
+worker to each admitted interval. Every worker reads the relevant portion of every segment, filters
+rows against its exact `[lo, hi)` bounds, and writes one or more temporary parts. Concatenating the
+workers' output in range order therefore gives the global order.
+
+```text
+sealed segments
+    -> validated page samples and sparse indexes
+    -> R contiguous raw-key ranges
+    -> R range workers (seek + exact row filtering)
+    -> physical-zone proof
+    -> globally ordered temporary parts
+```
+
+Each original listing-phase segment contributes its systematic page-minimum sample. Boundary
+selection deduplicates minima and retains a deterministic bottom-hash sample of at most 16,384 keys
+across the run. For `R` ranges, the default `distinct` policy sorts those candidates by unsigned
+bytes and chooses ranks `j * candidates / R` for `j = 1..R-1`; the experimental `rows` policy uses
+validated cumulative-entry metadata to approximate row quantiles. An absent or invalid index makes
+that segment use a full header scan for `distinct`, and makes the whole `rows` attempt fall back to
+`distinct`. Boundaries affect balance only because workers still enforce their exact key bounds.
+
+Validated type-2/type-3 indexes provide page seek points. While workers merge their intervals, they
+also fill an exact physical-zone proof covering every page from the segment header to its trailer.
+The coordinator accepts the output only after those zones tile every source segment with consistent
+offsets, counts, bounds, CRC-checked records, and no unproved gap or overlap. The last unbounded range
+drains each segment to EOF.
+
+### `pipeline`: reference routing and part encoding
+
+`pipeline` is experimental and selected with `--tune sort.finalization=pipeline`. Instead of dividing
+the key space, it makes a header-only pass, routes page coordinates into complete part plans, and lets
+`N` encoders build those independent parts. Page bodies are read only by the encoder that receives
+their plan.
+
+```text
+sealed segments
+    -> one sequential header cursor per segment
+    -> one global page-reference router
+    -> complete, ordered part plans
+    -> N shared-queue encoders (positional reads)
+    -> globally ordered temporary parts
+```
+
+Each cursor walks one segment from its header to `trailerStart`, skips stored payloads, and proves
+frame tiling, page order, and trailer totals. Metadata reads are limited to
+`min(segment count, available processors)` at once, and each cursor has a two-reference queue. The
+router keeps one frontier reference per segment, consumes references in raw-minimum order, and puts
+each reference into exactly one plan. Plans carry dense merge-order ordinals and enter one shared
+queue of at most `2 * N` complete plans; any free encoder may take the next plan. The ordinal, not
+encoder identity or completion order, determines final part order.
+
+Admission also prices the transient ownership between those structures: each scanner may hold one
+reference while its queue is full, and each encoder may own one executing plan in addition to the
+`2 * N` queued plans. A reference's price includes both key arrays at the largest per-segment
+`min(1,024, maxRecordLen)` bound in the post-cascade catalog. This covers interior page keys without
+an admission-time page scan. The retained-page price adds the format-derived maximum
+dictionary-cache object overhead to its encoded/decoded payload multiplier, so a planner-admitted
+page cannot fail the lane guard solely because all five dictionaries reached their 64-value cap.
+If the surviving segment channels consume the entire usable descriptor budget, pipeline admission
+refuses before opening them instead of inventing a one-writer floor.
+
+A page whose key range is strictly below the next page minimum is a whole-page item. The encoder can
+decode and write that page directly. Transitively overlapping page ranges form one cluster item
+because their rows may interleave. Its encoder positionally reads and CRC-checks the referenced
+frames, then admits pages incrementally into a row merger as their minima can compete with the next
+active row. Exhausted pages release their retained-byte reservation before later pages enter. Thus a
+long overlap chain need not retain the whole cluster, while a cluster remains indivisible for part
+ordering.
+
+Part boundaries target `swath.sort.final-file-bytes` using uncompressed page-payload bytes as the
+logical unit. The first target assumes a 1:1 encoded/logical ratio. After dispatching that first plan,
+the router waits for its durable Parquet size; later targets use the cumulative observed ratio. This
+single-part warm-up prevents an uncalibrated queueful of plans. Footer cost makes very small targets
+noisy, and an equal-key group may exceed the soft target because a boundary is allowed only between
+distinct raw keys. Independently, a plan normally holds at most 16,384 references. If that reference
+wave does not fit, admission lowers the runtime cap to as few as 256 before reducing encoder count.
+Reaching either cap closes the current plan even before the calibrated byte target, including for
+nominal single-file output; one overlap cluster larger than the effective cap is refused because
+splitting it could interleave rows across parts.
+
+### Cascade fallback
+
+Both mechanisms use the same bounded `KWayMerge` cascade when the surviving segment count exceeds
+the runtime fan-in. A cascade writes page-run intermediates until one final pass can open all
+survivors. `ranges` admits parallel workers only when each worker can open the required survivors;
+otherwise it falls back to the serial final merge, which cascades as needed. `pipeline` reserves the
+requested output descriptors while choosing cascade width, runs the cascade first, and then admits
+encoders from the survivor catalog's actual descriptor and page maxima. Cascade intermediates are
+disposable: resume restarts the cascade from the original sealed segments.

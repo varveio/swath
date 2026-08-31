@@ -92,7 +92,8 @@ class PageBlockTest {
         assertThat(block.firstEntry()).isEqualTo(object("aaa"));
         assertThat(block.lastEntry()).isEqualTo(object("zzz"));
         // Σ(key.len + 64) = 3 * (3 + 64) = 201.
-        assertThat(block.estimatedBytes()).isEqualTo(3L * (3 + PageBlock.ENTRY_OVERHEAD_BYTES));
+        assertThat(block.stagingEstimatedBytes())
+                .isEqualTo(3L * (3 + PageBlock.ENTRY_OVERHEAD_BYTES));
     }
 
     @Test
@@ -104,7 +105,21 @@ class PageBlockTest {
         }
         PageBlock block = PageBlock.pack(in, CMP);
         // Compact: the packed bytes stay well under the §5 logical estimate (~1× target, not 2–3×).
-        assertThat(block.packedBytes()).isLessThan(block.estimatedBytes());
+        assertThat(block.packedBytes()).isLessThan(block.stagingEstimatedBytes());
+    }
+
+    @Test
+    void compressedPersistedPageExposesUncompressedRawPayloadLength() {
+        List<ListEntry> entries = new ArrayList<>();
+        for (int i = 0; i < 1_000; i++) {
+            entries.add(object(String.format("repeated-prefix/object-%04d", i)));
+        }
+        PageBlock packed = PageBlock.pack(entries, CMP, PageCodec.LZ4);
+        PageBlock persisted = PageBlock.deserialize(packed.serialize());
+
+        assertThat(persisted.codec()).isEqualTo(PageCodec.LZ4);
+        assertThat(persisted.packedBytes()).isLessThan(persisted.rawPayloadLength());
+        assertThat(persisted.rawPayloadLength()).isEqualTo(packed.rawPayloadLength());
     }
 
     @Test

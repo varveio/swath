@@ -126,6 +126,12 @@ public final class SortConfig {
     public static final String MERGE_BOUNDARY_POLICY_PROPERTY =
             "swath." + MERGE_BOUNDARY_POLICY_TUNE_KEY;
 
+    /** Resume-free selector for the range and reference-router-encoder finalization paths. */
+    public static final String FINALIZATION_TUNE_KEY = "sort.finalization";
+
+    /** JVM-property form of {@link #FINALIZATION_TUNE_KEY}. */
+    public static final String FINALIZATION_PROPERTY = "swath." + FINALIZATION_TUNE_KEY;
+
     /**
      * Default for {@code minParallelStagedBytes}: staged bytes below which the merge stays serial no
      * matter what {@code merge-parallelism} says.
@@ -181,7 +187,7 @@ public final class SortConfig {
             new Merge(
                     10000, adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION), DEFAULT_MERGE_PARALLELISM,
                     DEFAULT_MERGE_PER_STREAM_BYTES, DEFAULT_MIN_PARALLEL_STAGED_BYTES,
-                    MergeBoundaryPolicy.DISTINCT),
+                    MergeBoundaryPolicy.DISTINCT, SortFinalization.RANGES),
             new FinalOutput(1L << 30, 8L * 1024 * 1024, DEFAULT_FINAL_PAGE_ROWS),
             new Retention(StagingRetention.DELETE_AFTER_PUBLISH));
 
@@ -254,6 +260,9 @@ public final class SortConfig {
         if (mergeBoundaryPolicy() == null) {
             throw new IllegalArgumentException("merge-boundary-policy must not be null");
         }
+        if (finalization() == null) {
+            throw new IllegalArgumentException("finalization must not be null");
+        }
     }
 
     public SortConfig withSegmentBytes(long segmentBytes) {
@@ -274,7 +283,7 @@ public final class SortConfig {
 
     public SortConfig withFanIn(int fanIn) {
         return copy(new Merge(fanIn, mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy()));
+                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization()));
     }
 
     public SortConfig withFinalFileBytes(long finalFileBytes) {
@@ -291,17 +300,17 @@ public final class SortConfig {
 
     public SortConfig withMergeBudgetBytes(long mergeBudgetBytes) {
         return copy(new Merge(fanIn(), mergeBudgetBytes, mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy()));
+                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization()));
     }
 
     public SortConfig withMergeParallelism(int mergeParallelism) {
         return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism, mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy()));
+                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization()));
     }
 
     public SortConfig withMergePerStreamBytes(long mergePerStreamBytes) {
         return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes,
-                minParallelStagedBytes(), mergeBoundaryPolicy()));
+                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization()));
     }
 
     public SortConfig withSegmentCodec(PageCodec segmentCodec) {
@@ -348,17 +357,21 @@ public final class SortConfig {
                 ? DEFAULT.mergeBoundaryPolicy()
                 : MergeBoundaryPolicy.fromConfigValue(
                         MERGE_BOUNDARY_POLICY_PROPERTY, boundaryPolicyProp);
+        String finalizationProp = lookup.apply(FINALIZATION_PROPERTY);
+        SortFinalization finalization = finalizationProp == null
+                ? DEFAULT.finalization()
+                : SortFinalization.fromConfigValue(FINALIZATION_PROPERTY, finalizationProp);
         return new SortConfig(
                 new StagingBuffering(segmentBytes, segmentEntries, heapFraction, buffers, segmentCodec),
                 new Merge(fanIn, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                        minParallelStagedBytes, mergeBoundaryPolicy),
+                        minParallelStagedBytes, mergeBoundaryPolicy, finalization),
                 new FinalOutput(finalFileBytes, finalRowGroupBytes, finalPageRows),
                 new Retention(stagingRetention));
     }
 
     public SortConfig withMinParallelStagedBytes(long minParallelStagedBytes) {
         return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes, mergeBoundaryPolicy()));
+                minParallelStagedBytes, mergeBoundaryPolicy(), finalization()));
     }
 
     public SortConfig withStagingRetention(StagingRetention stagingRetention) {
@@ -367,7 +380,12 @@ public final class SortConfig {
 
     public SortConfig withMergeBoundaryPolicy(MergeBoundaryPolicy mergeBoundaryPolicy) {
         return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
-                minParallelStagedBytes(), mergeBoundaryPolicy));
+                minParallelStagedBytes(), mergeBoundaryPolicy, finalization()));
+    }
+
+    public SortConfig withFinalization(SortFinalization finalization) {
+        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
+                minParallelStagedBytes(), mergeBoundaryPolicy(), finalization));
     }
 
     private SortConfig copy(StagingBuffering updated) {
@@ -444,6 +462,10 @@ public final class SortConfig {
 
     public MergeBoundaryPolicy mergeBoundaryPolicy() {
         return merge.boundaryPolicy();
+    }
+
+    public SortFinalization finalization() {
+        return merge.finalization();
     }
 
     private static PageCodec parseSegmentCodec(String raw) {
@@ -532,7 +554,8 @@ public final class SortConfig {
         hash = 31 * hash + segmentCodec().hashCode();
         hash = 31 * hash + Long.hashCode(minParallelStagedBytes());
         hash = 31 * hash + stagingRetention().hashCode();
-        return 31 * hash + mergeBoundaryPolicy().hashCode();
+        hash = 31 * hash + mergeBoundaryPolicy().hashCode();
+        return 31 * hash + finalization().hashCode();
     }
 
     @Override
@@ -551,14 +574,16 @@ public final class SortConfig {
                 + ", segmentCodec=" + segmentCodec()
                 + ", minParallelStagedBytes=" + minParallelStagedBytes()
                 + ", stagingRetention=" + stagingRetention()
-                + ", mergeBoundaryPolicy=" + mergeBoundaryPolicy() + ']';
+                + ", mergeBoundaryPolicy=" + mergeBoundaryPolicy()
+                + ", finalization=" + finalization() + ']';
     }
 
     private record StagingBuffering(long segmentBytes, long segmentEntries, double heapFraction,
                                     int buffers, PageCodec codec) { }
 
     private record Merge(int fanIn, long budgetBytes, int parallelism, long perStreamBytes,
-                         long minParallelStagedBytes, MergeBoundaryPolicy boundaryPolicy) { }
+                         long minParallelStagedBytes, MergeBoundaryPolicy boundaryPolicy,
+                         SortFinalization finalization) { }
 
     private record FinalOutput(long fileBytes, long rowGroupBytes, int pageRows) { }
 

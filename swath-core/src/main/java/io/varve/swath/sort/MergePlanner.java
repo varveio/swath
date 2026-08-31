@@ -32,6 +32,13 @@ final class MergePlanner {
     static final int MAX_BOUNDARY_CANDIDATES = 16_384;
     /** One shared temporary proof spool descriptor, independent of the range count. */
     static final int PROOF_SPOOL_FDS = 1;
+    /**
+     * A complete plan may retain no more coordinates than this. The cap keeps the unbounded-output
+     * case independent of catalog size; reaching it may create another correctly ordered part.
+     */
+    static final int MAX_PIPELINE_PLAN_REFS = 16_384;
+    /** Smallest runtime plan cap used to trade part geometry for truthful heap admission. */
+    static final int MIN_PIPELINE_PLAN_REFS = 256;
 
     private final SortConfig config;
     private final SortMetrics metrics;
@@ -112,14 +119,240 @@ final class MergePlanner {
 
     /** Runtime-clamped serial fan-in plus its exact predicted-cascade signal. */
     int serialFanIn(PageRunCatalog catalog) throws MergeMemoryExhaustedException {
+        return runtimeFanIn(catalog, 1);
+    }
+
+    /**
+     * Clamp cascade inputs while reserving descriptors for every concurrently open pipeline output.
+     * Reserving the requested count is intentionally conservative: final admission happens after
+     * cascade, but the cascade itself can overlap its input readers with those output descriptors.
+     */
+    int pipelineFanIn(PageRunCatalog catalog, int encoderCount)
+            throws MergeMemoryExhaustedException {
+        if (encoderCount < 1) {
+            throw new IllegalArgumentException("pipeline encoder count must be positive");
+        }
+        return runtimeFanIn(catalog, encoderCount);
+    }
+
+    /**
+     * Admit encoders for only the resources owned by the reference pipeline. Reference waves use a
+     * capped average-row estimate, and page residency is priced in the same retained-byte unit as
+     * {@link DecodedPageBudget}; raw payload maxima alone are not a heap reservation.
+     */
+    PipelinePlan pipelineParallelism(int requested, PageRunCatalog catalog)
+            throws MergeMemoryExhaustedException {
+        if (requested < 1) {
+            throw new IllegalArgumentException("pipeline encoder count must be positive");
+        }
+        int segments = catalog.descriptors().size();
+        int legacyDecodedLimit = decodedPageLimit(config.mergeBudgetBytes());
+        long readPageBytes = pipelineReadPageBytes(catalog);
+        long retainedPageBytes = pipelineRetainedPageBytes(catalog, legacyDecodedLimit);
+        int refBytes = PageRef.retainedBytes(catalog.maxKeyLength());
+        long cursorRefs = saturatedMultiply(segments,
+                SegmentHeaderCursors.QUEUE_DEPTH + 2L);
+        long usableFds = usableFdBudget();
+        long byFd = usableFds == Long.MAX_VALUE
+                ? Long.MAX_VALUE : Math.max(0L, usableFds - segments);
+        if (byFd == 0) {
+            metrics.recordStealReason("SORT", "pipeline_encoders_fd_floor_exhausted");
+            throw new MergeMemoryExhaustedException(
+                    "minimum pipeline lane does not fit descriptor budget: usable_fds="
+                            + usableFds + ", segments=" + segments + ", reason=fd_exhausted");
+        }
+        int fdAdmitted = (int) Math.max(1L, Math.min(requested, byFd));
+        int admitted = fdAdmitted;
+        long requestedPlanRefs = pipelinePlanRefs(catalog);
+        long admittedPlanRefs = -1;
+        while (admittedPlanRefs < 0 && admitted > 0) {
+            admittedPlanRefs = largestFittingPlanRefs(admitted, cursorRefs, refBytes,
+                    readPageBytes, retainedPageBytes, requestedPlanRefs);
+            if (admittedPlanRefs < 0) {
+                admitted--;
+            }
+        }
+        if (admitted == 0) {
+            metrics.recordStealReason("SORT", "pipeline_encoder_heap_floor_exhausted");
+            throw new MergeMemoryExhaustedException(
+                    "minimum pipeline lane does not fit retained-page residency: "
+                            + "read_page_bytes=" + readPageBytes
+                            + ", retained_page_bytes=" + retainedPageBytes
+                            + ", merge_budget_bytes=" + config.mergeBudgetBytes());
+        }
+        boolean planRefCapped = admittedPlanRefs < requestedPlanRefs;
+        if (planRefCapped) {
+            metrics.recordStealReason("SORT", "pipeline_plan_ref_capped");
+            log.warn("sort_pipeline_plan_refs_capped requested={} effective={} encoders={} "
+                            + "ref_bytes={} merge_budget_bytes={}",
+                    requestedPlanRefs, admittedPlanRefs, admitted, refBytes,
+                    config.mergeBudgetBytes());
+        }
+        PipelineClampReason reason = PipelineClampReason.NONE;
+        if (admitted < requested) {
+            reason = fdAdmitted < requested && admitted == fdAdmitted
+                    ? PipelineClampReason.FD_CLAMPED : PipelineClampReason.HEAP_CLAMPED;
+        }
+        long fixedBytes = pipelineFixedBytes(
+                admitted, cursorRefs, refBytes, readPageBytes, admittedPlanRefs);
+        long clusterPool = fixedBytes >= config.mergeBudgetBytes()
+                ? 0L : config.mergeBudgetBytes() - fixedBytes;
+        long clusterBudget = clusterPool / admitted;
+        int planRefLimit = planRefCapped
+                ? Math.toIntExact(admittedPlanRefs) : MAX_PIPELINE_PLAN_REFS;
+        return new PipelinePlan(admitted, reason, SegmentHeaderCursors.QUEUE_DEPTH,
+                refBytes, readPageBytes, retainedPageBytes,
+                clusterBudget, legacyDecodedLimit, planRefLimit);
+    }
+
+    /**
+     * Find the largest plan reference price that fits this encoder count. The floor is relative to
+     * the catalog: a smaller catalog keeps its natural bound, while a larger one may trade earlier
+     * raw-key-safe part boundaries for admission down to {@link #MIN_PIPELINE_PLAN_REFS}.
+     */
+    private long largestFittingPlanRefs(int encoders, long cursorRefs, int refBytes,
+            long readPageBytes, long retainedPageBytes, long requestedPlanRefs) {
+        long floor = Math.min(requestedPlanRefs, MIN_PIPELINE_PLAN_REFS);
+        if (!pipelineHeapFits(encoders, cursorRefs, refBytes,
+                readPageBytes, retainedPageBytes, floor)) {
+            return -1;
+        }
+        long low = floor;
+        long high = requestedPlanRefs;
+        while (low < high) {
+            long candidate = low + (high - low + 1) / 2;
+            if (pipelineHeapFits(encoders, cursorRefs, refBytes,
+                    readPageBytes, retainedPageBytes, candidate)) {
+                low = candidate;
+            } else {
+                high = candidate - 1;
+            }
+        }
+        return low;
+    }
+
+    /** Require the priced ref wave plus one runtime-admissible retained page for every lane. */
+    private boolean pipelineHeapFits(int encoders, long cursorRefs, int refBytes,
+            long readPageBytes, long retainedPageBytes, long planRefs) {
+        long fixedBytes = pipelineFixedBytes(
+                encoders, cursorRefs, refBytes, readPageBytes, planRefs);
+        long clusterBytes = saturatedMultiply(encoders, retainedPageBytes);
+        return saturatedAdd(fixedBytes, clusterBytes) <= config.mergeBudgetBytes();
+    }
+
+    /**
+     * Price cursor heads, a bounded wave of complete plans, writer buffers, and the body read that
+     * happens before exact reservation. The retained-page shares are charged by the caller because
+     * those bytes become the lane budgets returned in the plan.
+     */
+    private long pipelineFixedBytes(int encoders, long cursorRefs, int refBytes,
+            long readPageBytes, long planRefs) {
+        long retainedPlanRefs = saturatedMultiply(planRefs,
+                saturatedAdd(1L, saturatedMultiply(
+                        PartEncoders.QUEUE_DEPTH + 1L, encoders)));
+        long routerBytes = saturatedMultiply(
+                saturatedAdd(cursorRefs, retainedPlanRefs), refBytes);
+        long writers = saturatedMultiply(encoders,
+                PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
+        long reads = saturatedMultiply(encoders, readPageBytes);
+        return saturatedAdd(saturatedAdd(routerBytes, writers), reads);
+    }
+
+    /**
+     * Bound references retained by one plan from average staged bytes per source row, not the
+     * largest page. A row is a conservative proxy because every page ref represents at least one;
+     * dividing by a page maximum would underestimate a skewed catalog full of small pages. The hard
+     * constant remains the runtime and unbounded-target authority.
+     */
+    long pipelinePlanRefs(PageRunCatalog catalog) {
+        long records = catalog.totalRecords();
+        if (records <= 0) {
+            return 0;
+        }
+        long averageRecordBytes = Math.max(1L, stagedBytes(catalog) / records);
+        long estimated = ceilDiv(
+                PipelinePartSizer.initialLogicalTarget(config.finalFileBytes()), averageRecordBytes);
+        return Math.min(records, Math.min(MAX_PIPELINE_PLAN_REFS, estimated));
+    }
+
+    /** Largest body allocated by a positional page read before retained-byte admission runs. */
+    private static long pipelineReadPageBytes(PageRunCatalog catalog) {
+        long maximum = 1;
+        for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
+            if (descriptor.trailer().totalRecords() == 0) {
+                continue;
+            }
+            maximum = Math.max(maximum, descriptor.trailer().maxRecordLen());
+        }
+        return maximum;
+    }
+
+    /**
+     * Convert every segment's admitted raw ceiling and exact record maximum to the guard's retained
+     * unit. Legacy inputs use a compatibility raw ceiling reduced by the same conservative factor,
+     * so a planned legacy page cannot consume the entire merge budget before its writer exists.
+     */
+    private static long pipelineRetainedPageBytes(
+            PageRunCatalog catalog, int legacyDecodedLimit) {
+        long maximum = 1;
+        for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
+            if (descriptor.trailer().totalRecords() == 0) {
+                continue;
+            }
+            int rawPayloadBytes = descriptor.hasDecodedPageMaximum()
+                    ? descriptor.maxRawPayloadLength()
+                    : legacyDecodedLimit;
+            maximum = Math.max(maximum, DecodedPageBudget.retainedPageUpperBound(
+                    rawPayloadBytes, descriptor.trailer().maxRecordLen()));
+        }
+        return maximum;
+    }
+
+    /**
+     * Legacy readers admit only the raw share that a conservative retained page can represent. Half
+     * the merge budget remains outside that maximum so one lane still has room for its writer,
+     * reference wave, transient body read, and the guarded retained set.
+     */
+    private static int decodedPageLimit(long mergeBudgetBytes) {
+        long bounded = Math.min(PageBlock.MAX_RAW_PAYLOAD_BYTES,
+                mergeBudgetBytes / (2L * DecodedPageBudget.RETAINED_PAGE_FACTOR));
+        return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, bounded));
+    }
+
+    private static long saturatedMultiply(long left, long right) {
+        try {
+            return Math.multiplyExact(left, right);
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        try {
+            return Math.addExact(left, right);
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private static long ceilDiv(long dividend, long divisor) {
+        if (dividend == Long.MAX_VALUE) {
+            return Long.MAX_VALUE;
+        }
+        return 1L + (dividend - 1L) / divisor;
+    }
+
+    private int runtimeFanIn(PageRunCatalog catalog, int outputWriters)
+            throws MergeMemoryExhaustedException {
         requireDecodedPageFits(catalog);
         int staticFanIn = config.effectiveFanIn();
         int softFdLimit = softFdLimitSupplier.getAsInt();
         int recordSizedFanIn = recordSizedFanIn(catalog);
+        int headroom = saturatedHeadroom(outputWriters);
         int clamped = MergeFdBudget.clampedFanIn(staticFanIn, softFdLimit,
-                MergeFdBudget.FD_HEADROOM, recordSizedFanIn);
+                headroom, recordSizedFanIn);
         if (clamped < staticFanIn) {
-            int fdBound = MergeFdBudget.fdBoundedFanIn(softFdLimit, MergeFdBudget.FD_HEADROOM);
+            int fdBound = MergeFdBudget.fdBoundedFanIn(softFdLimit, headroom);
             metrics.recordStealReason("SORT", "merge_fanin_clamped");
             if (fdBound < staticFanIn) {
                 metrics.recordStealReason("SORT", "merge_fanin_fd_clamped");
@@ -134,6 +367,11 @@ final class MergePlanner {
         }
         warnIfCascadePredicted(catalog.descriptors().size(), clamped);
         return clamped;
+    }
+
+    private static int saturatedHeadroom(int outputWriters) {
+        long adjusted = (long) MergeFdBudget.FD_HEADROOM + outputWriters - 1L;
+        return (int) Math.min(Integer.MAX_VALUE, adjusted);
     }
 
     /** Exact pass-count warning shared by serial and admitted parallel planning. */
@@ -460,6 +698,43 @@ final class MergePlanner {
         EffectiveRanges {
             if (ranges < 1) {
                 throw new IllegalArgumentException("ranges must be >= 1");
+            }
+        }
+    }
+
+    enum PipelineClampReason {
+        NONE("none"),
+        FD_CLAMPED("fd_clamped"),
+        HEAP_CLAMPED("heap_clamped");
+
+        private final String logValue;
+
+        PipelineClampReason(String logValue) {
+            this.logValue = logValue;
+        }
+
+        String logValue() {
+            return logValue;
+        }
+    }
+
+    /**
+     * One immutable pipeline admission result shared by cursor open and encoders. Both page fields
+     * are bytes but have distinct lifetimes: {@code readPageBytes} is the pre-reservation transient,
+     * while {@code retainedPageBytes} is the conservative unit required of every lane guard. The
+     * router enforces {@code planRefLimit}; it is the structural maximum unless heap admission
+     * lowered that maximum to preserve a truthful bound.
+     */
+    record PipelinePlan(int encoders, PipelineClampReason reason, int cursorDepth,
+                        int refBytes, long readPageBytes, long retainedPageBytes,
+                        long clusterBudgetBytes,
+                        int legacyDecodedLimit, int planRefLimit) {
+        PipelinePlan {
+            if (encoders < 1 || cursorDepth < 1 || refBytes < 1 || readPageBytes < 1
+                    || retainedPageBytes < 1
+                    || clusterBudgetBytes < 1 || legacyDecodedLimit < 1
+                    || planRefLimit < 1 || planRefLimit > MAX_PIPELINE_PLAN_REFS) {
+                throw new IllegalArgumentException("pipeline resource plan must be positive");
             }
         }
     }
