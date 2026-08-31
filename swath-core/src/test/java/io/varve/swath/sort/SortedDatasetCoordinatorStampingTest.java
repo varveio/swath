@@ -12,7 +12,9 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
-import io.varve.swath.output.sorted.PublishListener;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
@@ -28,11 +30,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@link SortTransform} wired with {@link SortedParquetWriterFactory} (instead of
+ * {@link SortedDatasetCoordinator} wired with {@link SortedParquetWriterFactory} (instead of
  * {@link SortedFileWriterFactory#DEFAULT}): the published final file(s) carry the sortedness
  * stamp and small row groups; staging uses page-run files.
  */
-class SortTransformStampingTest {
+class SortedDatasetCoordinatorStampingTest {
 
     private final ListEntryComparator cmp = new ListEntryComparator();
 
@@ -55,12 +57,12 @@ class SortTransformStampingTest {
         SortConfig config = SortConfig.fromProperties(
                 key -> Map.of("final-row-group-bytes", "4096").get(key.substring("swath.sort.".length())));
         SortedParquetWriterFactory stampedFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
-        SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+        SortedDatasetCoordinator transform = new SortedDatasetCoordinator(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stampedFactory,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
-        SortTransformResult result = transform.transform(
-                List.of(seg0, seg1), output, staging, PublishListener.NO_OP,
+        SortedDatasetResult result = transform.transform(
+                List.of(seg0, seg1), output, staging, SortedDatasetCommitter.NO_OP,
                 units -> { }, FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(1);

@@ -6,11 +6,12 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import java.util.Iterator;
 
 /**
  * A forward-only stream of {@link ListEntry} in {@link ListEntryComparator} order — returned by a
- * fixture-staging chunk or the {@link SortTransform} merge phase. Backed either by an in-memory
+ * fixture-staging chunk or the {@link SortedDatasetCoordinator} merge phase. Backed either by an in-memory
  * sorted list or by the page-run merge pipeline, so it is {@link AutoCloseable}: use it in a
  * try-with-resources to release any open readers.
  *

@@ -3,15 +3,13 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
-import io.varve.swath.output.sorted.CommittedPublicationCleanupException;
-import io.varve.swath.output.sorted.DatasetPublisher;
-import io.varve.swath.output.sorted.PublicationStepHook;
-import io.varve.swath.output.sorted.PublishListener;
-import io.varve.swath.output.sorted.SortedDatasetCommit;
-import io.varve.swath.output.sorted.SortedPublicationContext;
-import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.PreparedSortedParts;
+import io.varve.swath.sort.SortFinalizer;
+import io.varve.swath.sort.SortRun;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
@@ -27,57 +25,54 @@ import org.slf4j.LoggerFactory;
  * after every part is durable and verified. The publication and resume contracts are owned by
  * {@code docs/internals/contracts.md} §6.
  */
-public final class SortTransform {
+public final class SortedDatasetCoordinator {
 
-    private static final Logger log = LoggerFactory.getLogger(SortTransform.class);
+    private static final Logger log = LoggerFactory.getLogger(SortedDatasetCoordinator.class);
 
-    private final DatasetPublisher datasetPublisher;
+    private final SortedDatasetPublisher datasetPublisher;
     private final SortFinalizer sortFinalizer;
 
     /** Build one transform from the complete immutable run policy. */
-    public SortTransform(SortRun run) {
+    public SortedDatasetCoordinator(SortRun run) {
         this(run, PublicationStepHook.NO_OP);
     }
 
     /** Build a transform with the internal deterministic publication crash-test seam. */
-    public SortTransform(SortRun run, PublicationStepHook publicationStepHook) {
+    public SortedDatasetCoordinator(SortRun run, PublicationStepHook publicationStepHook) {
         this(run, publicationStepHook, new SortFinalizer(run));
     }
 
     /** Build a transform around an injected finalizer for deterministic boundary tests. */
-    public SortTransform(
+    SortedDatasetCoordinator(
             SortRun run, PublicationStepHook publicationStepHook, SortFinalizer sortFinalizer) {
-        this.datasetPublisher = new DatasetPublisher(run, publicationStepHook, log);
+        this.datasetPublisher = new SortedDatasetPublisher(run, publicationStepHook, log);
         this.sortFinalizer = sortFinalizer;
     }
 
     /** Merge and publish checkpoint-owned page-run segments. */
-    public SortTransformResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
-            PublishListener publishListener, LongConsumer progressCallback,
+    public SortedDatasetResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
+            SortedDatasetCommitter publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         return transform(stagingSegments, Map.of(), outputDir, stagingDir, publishListener,
                 progressCallback, onFinalPassStarting);
     }
 
     /** Merge with checkpoint-declared PageRun formats keyed by staging path. */
-    public SortTransformResult transform(List<Path> stagingSegments,
+    public SortedDatasetResult transform(List<Path> stagingSegments,
             Map<Path, PageRunFormat> expectedFormats, Path outputDir, Path stagingDir,
-            PublishListener publishListener, LongConsumer progressCallback,
+            SortedDatasetCommitter publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         try {
             return transformInterruptibly(stagingSegments, expectedFormats, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting);
-        } catch (MergeCancellation.Cancelled cancelled) {
-            Thread.currentThread().interrupt();
-            throw new IOException("sort merge interrupted", cancelled);
         } catch (UncheckedIOException unchecked) {
             throw unchecked.getCause();
         }
     }
 
-    private SortTransformResult transformInterruptibly(List<Path> stagingSegments,
+    private SortedDatasetResult transformInterruptibly(List<Path> stagingSegments,
             Map<Path, PageRunFormat> expectedFormats, Path outputDir, Path stagingDir,
-            PublishListener publishListener, LongConsumer progressCallback,
+            SortedDatasetCommitter publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         sortFinalizer.requireSourceNames(stagingSegments);
         SortedPublicationContext publicationContext = datasetPublisher.publicationContext(
@@ -91,7 +86,11 @@ public final class SortTransform {
                     publicationContext.ownedInputs()));
             return result(datasetPublisher.publish(prepared, publicationContext));
         } catch (CommittedPublicationCleanupException committedCleanup) {
-            throw committedCleanup.withPublishedResult(result(committedCleanup.publishedCommit()));
+            SortedDatasetCommit committed = committedCleanup.publishedCommitOrNull();
+            if (committed == null) {
+                throw committedCleanup;
+            }
+            throw committedCleanup.withPublishedResult(result(committed));
         } catch (IOException | RuntimeException | Error failure) {
             try {
                 publicationContext.ownedInputs().sweepDisposables(
@@ -103,9 +102,9 @@ public final class SortTransform {
         }
     }
 
-    private static SortTransformResult result(SortedDatasetCommit commit) {
+    private static SortedDatasetResult result(SortedDatasetCommit commit) {
         PreparedSortedParts.MergeStatistics statistics = commit.mergeStatistics();
-        return new SortTransformResult(commit.finalFiles(), commit.outputBytes(), commit.totalRows(),
+        return new SortedDatasetResult(commit.finalFiles(), commit.outputBytes(), commit.totalRows(),
                 statistics.mergePasses(), statistics.cascadedPasses(), statistics.pagesForwarded(),
                 statistics.finalizationParallelism());
     }

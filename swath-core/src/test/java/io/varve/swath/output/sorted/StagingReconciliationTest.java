@@ -151,7 +151,7 @@ class StagingReconciliationTest {
         StagingReconciliation.DirectoryAuthority outputAuthority =
                 StagingReconciliation.DirectoryAuthority.capture(
                         output, "sort output directory");
-        DatasetPublisher publisher = publisher((step, ignored) -> {
+        SortedDatasetPublisher publisher = publisher((step, ignored) -> {
             if (step == PublicationStep.AFTER_WORKING_SWEEP) {
                 Files.move(staging, root.resolve("old-staging"));
                 Files.createSymbolicLink(staging, outside);
@@ -206,16 +206,16 @@ class StagingReconciliationTest {
         assertThat(reconciliation.ownedPaths()).containsExactly(segment, fixture);
     }
 
-    private static DatasetPublisher publisher() {
+    private static SortedDatasetPublisher publisher() {
         return publisher(PublicationStepHook.NO_OP);
     }
 
-    private static DatasetPublisher publisher(PublicationStepHook hook) {
+    private static SortedDatasetPublisher publisher(PublicationStepHook hook) {
         SortRun run = new SortRun(
                 SortConfigs.base(), new ListEntryComparator(), DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        return new DatasetPublisher(
+        return new SortedDatasetPublisher(
                 run, hook, LoggerFactory.getLogger(StagingReconciliationTest.class));
     }
 

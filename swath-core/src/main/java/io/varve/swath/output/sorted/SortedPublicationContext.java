@@ -9,15 +9,15 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /** Validated filesystem and commit authority for one sorted-dataset replacement. */
-public record SortedPublicationContext(
+record SortedPublicationContext(
         Path outputDir,
         Path stagingDir,
-        PublishListener publishListener,
+        SortedDatasetCommitter publishListener,
         StagingReconciliation ownedInputs,
         StagingReconciliation retainedOriginals,
         StagingReconciliation.DirectoryAuthority outputAuthority) {
 
-    public SortedPublicationContext {
+    SortedPublicationContext {
         Objects.requireNonNull(outputDir, "outputDir");
         Objects.requireNonNull(stagingDir, "stagingDir");
         Objects.requireNonNull(publishListener, "publishListener");

@@ -26,11 +26,11 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.sorted.CommittedPublicationCleanupException;
 import io.varve.swath.output.sorted.PublicationStep;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.StagingReconciliation;
 import io.varve.swath.output.sorted.StagingRetention;
 import io.varve.swath.runtime.ListRunner;
 import io.varve.swath.sort.SortConfig;
-import io.varve.swath.sort.SortTransform;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.ParquetReads;
 import java.nio.charset.StandardCharsets;
@@ -106,7 +106,7 @@ final class SortPostPublishCleanupRecoveryTest {
             }
         });
 
-        Logger logger = (Logger) LoggerFactory.getLogger(SortTransform.class);
+        Logger logger = (Logger) LoggerFactory.getLogger(SortedDatasetCoordinator.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
         Level previous = logger.getLevel();

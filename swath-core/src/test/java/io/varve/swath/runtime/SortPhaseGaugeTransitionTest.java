@@ -61,7 +61,7 @@ import org.junit.jupiter.api.io.TempDir;
  * </ul>
  *
  * <p><b>WRITING coverage gap.</b> {@link Phase#WRITING} has no durable {@link SortPhase} counterpart:
- * it is set by the {@code onFinalPassStarting} hook inside {@code SortTransform.transform} and leaves
+ * it is set by the {@code onFinalPassStarting} hook inside {@code SortedDatasetCoordinator.transform} and leaves
  * no durable trace, so it cannot be observed here without reintroducing a timing race. Its
  * {@code setPhase(WRITING)} -> gauge {@code == 2} mapping is pinned deterministically by
  * {@code RunMetricsContractTest}, and this test proves the phases on either side of it (MERGING

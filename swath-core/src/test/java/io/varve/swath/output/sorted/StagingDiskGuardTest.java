@@ -20,16 +20,16 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 /**
- * {@link SortDiskGuard}'s pure decision function ({@code insufficientDiskReason}) and the
+ * {@link StagingDiskGuard}'s pure decision function ({@code insufficientDiskReason}) and the
  * {@code tick()} wiring — no real disk is ever touched: usable-free-bytes and staging-bytes-so-far
  * are both injected.
  */
-class SortDiskGuardTest {
+class StagingDiskGuardTest {
 
     @Test
     void aboveTheFloorAndBelowTheSafetyFactorIsSufficient() {
         // 10 GiB free, 1 GiB staged so far, 3x safety factor => need ~3 GiB, have 10 GiB: fine.
-        Optional<String> reason = SortDiskGuard.insufficientDiskReason(
+        Optional<String> reason = StagingDiskGuard.insufficientDiskReason(
                 10L * 1024 * 1024 * 1024, 1L * 1024 * 1024 * 1024, 3.0, 1L * 1024 * 1024 * 1024);
         assertThat(reason).isEmpty();
     }
@@ -37,7 +37,7 @@ class SortDiskGuardTest {
     @Test
     void belowTheAbsoluteFloorIsInsufficientEvenWithNoStagingYet() {
         // A fresh run (zero staged), but the volume itself is already below the floor.
-        Optional<String> reason = SortDiskGuard.insufficientDiskReason(
+        Optional<String> reason = StagingDiskGuard.insufficientDiskReason(
                 100L * 1024 * 1024, 0L, 3.0, 1L * 1024 * 1024 * 1024);
         assertThat(reason).isPresent();
         assertThat(reason.get()).contains("minimum floor");
@@ -46,7 +46,7 @@ class SortDiskGuardTest {
     @Test
     void projectedNeedExceedingFreeSpaceIsInsufficient() {
         // 10 GiB free, 5 GiB already staged, 3x safety factor => need ~15 GiB > 10 GiB free: refuse.
-        Optional<String> reason = SortDiskGuard.insufficientDiskReason(
+        Optional<String> reason = StagingDiskGuard.insufficientDiskReason(
                 10L * 1024 * 1024 * 1024, 5L * 1024 * 1024 * 1024, 3.0, 1L * 1024 * 1024 * 1024);
         assertThat(reason).isPresent();
         assertThat(reason.get()).contains("need ~15").contains("have ~10");
@@ -55,14 +55,14 @@ class SortDiskGuardTest {
     @Test
     void unknownUsableFreeBytesNeverFalsePositives() {
         // A FileStore query failure is signalled as negative -- must never trip a refusal.
-        Optional<String> reason = SortDiskGuard.insufficientDiskReason(-1L, Long.MAX_VALUE, 3.0, 1L);
+        Optional<String> reason = StagingDiskGuard.insufficientDiskReason(-1L, Long.MAX_VALUE, 3.0, 1L);
         assertThat(reason).isEmpty();
     }
 
     @Test
     void zeroStagingSoFarNeverTripsTheProjectionArmOnlyTheFloor() {
         // A brand-new run: nothing staged yet, plenty of free space above the floor -- fine.
-        Optional<String> reason = SortDiskGuard.insufficientDiskReason(
+        Optional<String> reason = StagingDiskGuard.insufficientDiskReason(
                 50L * 1024 * 1024 * 1024, 0L, 3.0, 1L * 1024 * 1024 * 1024);
         assertThat(reason).isEmpty();
     }
@@ -70,7 +70,7 @@ class SortDiskGuardTest {
     @Test
     void disabledGuardNeverTicksOrTrips() {
         AtomicLong staged = new AtomicLong(Long.MAX_VALUE);   // would trip if ever checked
-        try (SortDiskGuard guard = SortDiskGuard.arm(
+        try (StagingDiskGuard guard = StagingDiskGuard.arm(
                 Path.of("."), staged::get, true)) {
             // arm(disabled=true) returns a no-op guard: no scheduler, tick() would be harmless too.
             guard.tick();   // must not throw / must not halt the test JVM
@@ -82,7 +82,7 @@ class SortDiskGuardTest {
         AtomicLong staged = new AtomicLong(0L);
         AtomicReference<String> tripped = new AtomicReference<>();
         // Tiny free-bytes supplier (the injectable seam) -- no real disk is ever touched.
-        SortDiskGuard guard = new SortDiskGuard(null, staged::get, () -> 100L * 1024 * 1024,
+        StagingDiskGuard guard = new StagingDiskGuard(null, staged::get, () -> 100L * 1024 * 1024,
                 3.0, 1L * 1024 * 1024 * 1024, tripped::set);
 
         guard.tick();
@@ -94,7 +94,7 @@ class SortDiskGuardTest {
         AtomicLong staged = new AtomicLong(0L);
         AtomicReference<String> tripped = new AtomicReference<>();
         long tenGib = 10L * 1024 * 1024 * 1024;
-        SortDiskGuard guard = new SortDiskGuard(null, staged::get, () -> tenGib,
+        StagingDiskGuard guard = new StagingDiskGuard(null, staged::get, () -> tenGib,
                 3.0, 1L * 1024 * 1024 * 1024, tripped::set);
 
         guard.tick();
@@ -115,14 +115,14 @@ class SortDiskGuardTest {
     @Test
     void exhaustionMarkerCarriesADistinctErrorClassAndAResumableStopReason() {
         Logger logger =
-                (Logger) LoggerFactory.getLogger(SortDiskGuard.class);
+                (Logger) LoggerFactory.getLogger(StagingDiskGuard.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
         Level previous = logger.getLevel();
         logger.setLevel(Level.ERROR);
         logger.addAppender(appender);
         try {
-            SortDiskGuard.logExhaustionMarker("need ~15.00 GiB, have ~10.00 GiB free");
+            StagingDiskGuard.logExhaustionMarker("need ~15.00 GiB, have ~10.00 GiB free");
         } finally {
             logger.detachAppender(appender);
             logger.setLevel(previous);
@@ -150,14 +150,14 @@ class SortDiskGuardTest {
         // production wiring (arm/close) actually schedules and can be torn down cleanly.
         //
         // DELIBERATELY never trips: this exercises the production `arm()` factory, whose trip
-        // action is the REAL `Runtime.halt(1)` (SortDiskGuard#haltOnInsufficientDisk) -- tripping
+        // action is the REAL `Runtime.halt(1)` (StagingDiskGuard#haltOnInsufficientDisk) -- tripping
         // it here would halt this very test JVM mid-run. staged stays 0 (never exceeds any real
         // free-space reading on the volume this test happens to run on), so only the "did it
         // actually poll" behavior is observed; the halt path itself is covered, non-destructively,
         // by the injected-consumer tests above.
         AtomicLong staged = new AtomicLong(0L);
         AtomicLong ticks = new AtomicLong();
-        SortDiskGuard guard = SortDiskGuard.arm(Path.of("."), () -> {
+        StagingDiskGuard guard = StagingDiskGuard.arm(Path.of("."), () -> {
             ticks.incrementAndGet();
             return staged.get();
         }, false, 3.0, 1L, Duration.ofMillis(50));

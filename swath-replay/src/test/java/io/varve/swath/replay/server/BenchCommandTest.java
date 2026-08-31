@@ -8,11 +8,11 @@ package io.varve.swath.replay.server;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
 import io.varve.swath.sort.SortConfig;
-import io.varve.swath.sort.SortTransformResult;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -173,7 +173,7 @@ class BenchCommandTest {
             }
         }
         Path out = Files.createDirectories(dir.resolve("sorted"));
-        SortTransformResult result = new CaptureSorter(SortConfig.fromSystemProperties()).sort(capture, out);
+        SortedDatasetResult result = new CaptureSorter(SortConfig.fromSystemProperties()).sort(capture, out);
         return result.finalFiles().getFirst();
     }
 

@@ -6,7 +6,7 @@
 package io.varve.swath.sort;
 
 /** Cooperative cancellation point shared by the merge and final-drain hot loops. */
-final class MergeCancellation {
+public final class MergeCancellation {
 
     private MergeCancellation() {
     }
@@ -18,7 +18,7 @@ final class MergeCancellation {
     }
 
     /** Internal control-flow exception; the finalization coordinator translates the initiating failure. */
-    static final class Cancelled extends RuntimeException {
+    public static final class Cancelled extends RuntimeException {
         Cancelled() {
             super("sort finalization cancelled");
         }

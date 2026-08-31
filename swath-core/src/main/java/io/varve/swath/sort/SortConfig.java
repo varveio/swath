@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.StagingRetention;
 import java.util.function.UnaryOperator;
 
@@ -380,7 +381,7 @@ public final class SortConfig {
      *
      * <p>The denominator is {@code mergePerStreamBytes} (a page-run packed-page estimate).
      * This is the <em>static</em> config-level bound; the actual merge additionally applies a
-     * <em>runtime</em> clamp at merge entry ({@link SortTransform}) against the process fd limit and the
+     * <em>runtime</em> clamp at merge entry ({@link SortedDatasetCoordinator}) against the process fd limit and the
      * largest per-segment encoded {@code maxRecordLen}, the decoded-page maximum, and the runtime
      * aggregate decoded-page guard.
      *

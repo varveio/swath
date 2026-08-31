@@ -16,7 +16,6 @@ import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortTestSupport;
-import io.varve.swath.sort.SortTransform;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-class DatasetPublisherInvariantTest {
+class SortedDatasetPublisherInvariantTest {
 
     @Test
     void stagingReplacementBeforePublishCannotDeletePriorFinal(@TempDir Path root)
@@ -52,7 +51,7 @@ class DatasetPublisherInvariantTest {
                 SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
-        assertThatThrownBy(() -> new SortTransform(run, replaceAfterClose).transform(
+        assertThatThrownBy(() -> new SortedDatasetCoordinator(run, replaceAfterClose).transform(
                 List.of(segment), output, staging,
                 (parts, rows) -> publications.incrementAndGet(), ignored -> { },
                 FinalPassListener.NO_OP))

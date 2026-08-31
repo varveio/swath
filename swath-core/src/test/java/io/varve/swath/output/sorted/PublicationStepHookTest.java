@@ -19,7 +19,6 @@ import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortTestSupport;
-import io.varve.swath.sort.SortTransform;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -72,7 +71,7 @@ final class PublicationStepHookTest {
         transform(SortConfigs.base().withMergeParallelism(3)
                         .withMergeBudgetBytes(64L << 20).withFinalFileBytes(1),
                 (step, ordinal) -> hits.add(new Hit(step, ordinal)))
-                .transform(segments, output, staging, PublishListener.NO_OP,
+                .transform(segments, output, staging, SortedDatasetCommitter.NO_OP,
                         units -> { }, FinalPassListener.NO_OP);
 
         assertThat(hits).containsExactly(
@@ -87,11 +86,11 @@ final class PublicationStepHookTest {
                 hit(PublicationStep.AFTER_STAGING_COMPLETION));
     }
 
-    private SortTransform transform(SortConfig config, PublicationStepHook hook) {
+    private SortedDatasetCoordinator transform(SortConfig config, PublicationStepHook hook) {
         SortRun run = new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        return new SortTransform(run, hook);
+        return new SortedDatasetCoordinator(run, hook);
     }
 
     private List<Path> stage(Path staging, List<List<ListEntry>> segmentRows) throws IOException {

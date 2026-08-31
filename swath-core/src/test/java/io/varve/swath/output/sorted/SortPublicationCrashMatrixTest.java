@@ -23,7 +23,6 @@ import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortTestSupport;
-import io.varve.swath.sort.SortTransform;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
@@ -42,7 +41,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
-/** Adversarial replacement-publication crash/re-entry matrix for {@link SortTransform}. */
+/** Adversarial replacement-publication crash/re-entry matrix for {@link SortedDatasetCoordinator}. */
 final class SortPublicationCrashMatrixTest {
 
     private final ListEntryComparator comparator = new ListEntryComparator();
@@ -131,7 +130,7 @@ final class SortPublicationCrashMatrixTest {
 
             assertThatThrownBy(() -> transform(shape.config(false), writers,
                     (step, ordinal) -> steps.add(step)).transform(
-                            originals, output, staging, PublishListener.NO_OP,
+                            originals, output, staging, SortedDatasetCommitter.NO_OP,
                             units -> { }, FinalPassListener.NO_OP))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("injected close failure");
@@ -145,7 +144,7 @@ final class SortPublicationCrashMatrixTest {
 
             transform(shape.config(false), SortedFileWriterFactory.DEFAULT,
                     PublicationStepHook.NO_OP).transform(originals, output, staging,
-                            PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
+                            SortedDatasetCommitter.NO_OP, units -> { }, FinalPassListener.NO_OP);
             assertPublishedSet(output, shape.expectedKeys(), shape.expectedParts());
             assertNoWorkingDebris(scenario);
             assertThat(staging).doesNotExist();
@@ -153,13 +152,13 @@ final class SortPublicationCrashMatrixTest {
     }
 
     @Test
-    void onlyThePublishListenerCreatesAuthorityAndStagingCompletesAfterIt(@TempDir Path root)
+    void onlyTheSortedDatasetCommitterCreatesAuthorityAndStagingCompletesAfterIt(@TempDir Path root)
             throws Exception {
         Path output = Files.createDirectories(root.resolve("data"));
         Path staging = Files.createDirectories(root.resolve("_staging"));
         List<Path> originals = stage(staging, MergeShape.ONE_ENCODER_SINGLE_PART.segmentRows());
         AtomicInteger listenerCalls = new AtomicInteger();
-        PublishListener authorityListener = (parts, rows) -> {
+        SortedDatasetCommitter authorityListener = (parts, rows) -> {
             listenerCalls.incrementAndGet();
             Files.writeString(root.resolve(Manifest.FILE_NAME), "listener-owned manifest");
             Files.writeString(root.resolve(Manifest.SUCCESS_FILE_NAME), "");
@@ -195,7 +194,7 @@ final class SortPublicationCrashMatrixTest {
         Path staging = Files.createDirectories(root.resolve("_staging"));
         List<Path> originals = stage(staging, MergeShape.ONE_ENCODER_SINGLE_PART.segmentRows());
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        PublishListener authorityListener = (parts, rows) -> {
+        SortedDatasetCommitter authorityListener = (parts, rows) -> {
             Files.writeString(root.resolve(Manifest.FILE_NAME), "listener-owned manifest");
             Files.writeString(root.resolve(Manifest.SUCCESS_FILE_NAME), "");
             // The merge has already consumed this original. Replacing it with a non-empty directory
@@ -211,7 +210,7 @@ final class SortPublicationCrashMatrixTest {
                 SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
-        assertThatThrownBy(() -> new SortTransform(run).transform(
+        assertThatThrownBy(() -> new SortedDatasetCoordinator(run).transform(
                 originals, output, staging, authorityListener,
                 units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(CommittedPublicationCleanupException.class)
@@ -235,9 +234,9 @@ final class SortPublicationCrashMatrixTest {
                                 .map(retain -> Arguments.of(shape, prior, retain))));
     }
 
-    private SortTransform transform(SortConfig config, SortedFileWriterFactory writers,
+    private SortedDatasetCoordinator transform(SortConfig config, SortedFileWriterFactory writers,
             PublicationStepHook hook) {
-        return new SortTransform(run(config, writers), hook);
+        return new SortedDatasetCoordinator(run(config, writers), hook);
     }
 
     private SortRun run(SortConfig config, SortedFileWriterFactory writers) {

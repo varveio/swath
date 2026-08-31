@@ -11,6 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.S3ListRequest;
@@ -22,7 +23,6 @@ import io.varve.swath.sort.CaptureSorter;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortTransformResult;
 import io.varve.swath.sort.SortedFileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -144,7 +144,7 @@ class ReplayServingFactoryEligibilityScanTest {
         writeUnsortedPart(capture.resolve("part-0.parquet"), keys);
         Path outputDir = Files.createDirectories(dir.resolve("out-" + System.nanoTime()));
         SortConfig rolling = SortConfigs.rolledPerEntry();
-        SortTransformResult result = new CaptureSorter(rolling).sort(capture, outputDir);
+        SortedDatasetResult result = new CaptureSorter(rolling).sort(capture, outputDir);
         assertThat(result.finalFiles()).hasSize(keys.length);
         return outputDir;
     }

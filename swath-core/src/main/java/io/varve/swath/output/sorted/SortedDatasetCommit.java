@@ -10,13 +10,13 @@ import java.nio.file.Path;
 import java.util.List;
 
 /** The consumer-visible files and preserved algorithm facts after publication commits. */
-public record SortedDatasetCommit(
+record SortedDatasetCommit(
         List<Path> finalFiles,
         long outputBytes,
         long totalRows,
         PreparedSortedParts.MergeStatistics mergeStatistics) {
 
-    public SortedDatasetCommit {
+    SortedDatasetCommit {
         finalFiles = List.copyOf(finalFiles);
     }
 }

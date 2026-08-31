@@ -57,9 +57,9 @@ import org.slf4j.LoggerFactory;
  * segment/row-group overhead variance and the fact that the projection here is a LOWER bound
  * (staging can only grow further from whatever has been observed so far).
  */
-public final class SortDiskGuard implements AutoCloseable {
+public final class StagingDiskGuard implements AutoCloseable {
 
-    private static final Logger log = LoggerFactory.getLogger(SortDiskGuard.class);
+    private static final Logger log = LoggerFactory.getLogger(StagingDiskGuard.class);
 
     /** Conservative multiplier over the issue's own {@code ~2x} peak-disk observation (headroom). */
     public static final double DEFAULT_SAFETY_FACTOR = 3.0;
@@ -75,7 +75,7 @@ public final class SortDiskGuard implements AutoCloseable {
     private final long minFreeBytesFloor;
     private final Consumer<String> onInsufficient;
 
-    SortDiskGuard(ScheduledExecutorService scheduler, LongSupplier stagingBytesSupplier,
+    StagingDiskGuard(ScheduledExecutorService scheduler, LongSupplier stagingBytesSupplier,
                   LongSupplier usableFreeBytesSupplier, double safetyFactor, long minFreeBytesFloor,
                   Consumer<String> onInsufficient) {
         this.scheduler = scheduler;
@@ -122,23 +122,23 @@ public final class SortDiskGuard implements AutoCloseable {
      * class javadoc for why a halt, not a cooperative cancel, is the right (and safe) response here.
      * The poller runs on a daemon thread; {@link #close()} tears it down (try-with-resources).
      */
-    public static SortDiskGuard arm(Path stagingVolumeDir, LongSupplier stagingBytesWrittenSoFar,
+    public static StagingDiskGuard arm(Path stagingVolumeDir, LongSupplier stagingBytesWrittenSoFar,
                                      boolean disabled) {
         return arm(stagingVolumeDir, stagingBytesWrittenSoFar, disabled,
                 DEFAULT_SAFETY_FACTOR, DEFAULT_MIN_FREE_BYTES, DEFAULT_POLL_INTERVAL);
     }
 
-    static SortDiskGuard arm(Path stagingVolumeDir, LongSupplier stagingBytesWrittenSoFar, boolean disabled,
+    static StagingDiskGuard arm(Path stagingVolumeDir, LongSupplier stagingBytesWrittenSoFar, boolean disabled,
                               double safetyFactor, long minFreeBytesFloor, Duration pollInterval) {
         if (disabled) {
-            return new SortDiskGuard(null, stagingBytesWrittenSoFar, () -> -1L,
+            return new StagingDiskGuard(null, stagingBytesWrittenSoFar, () -> -1L,
                     safetyFactor, minFreeBytesFloor, reason -> { });
         }
         LongSupplier usableFreeBytesSupplier = () -> usableSpaceOrMinusOne(stagingVolumeDir);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r ->
                 Thread.ofPlatform().daemon(true).name("swath-sort-disk-guard").unstarted(r));
-        SortDiskGuard guard = new SortDiskGuard(scheduler, stagingBytesWrittenSoFar, usableFreeBytesSupplier,
-                safetyFactor, minFreeBytesFloor, SortDiskGuard::haltOnInsufficientDisk);
+        StagingDiskGuard guard = new StagingDiskGuard(scheduler, stagingBytesWrittenSoFar, usableFreeBytesSupplier,
+                safetyFactor, minFreeBytesFloor, StagingDiskGuard::haltOnInsufficientDisk);
         long pollMs = Math.max(1_000L, pollInterval.toMillis());
         scheduler.scheduleAtFixedRate(guard::tickSafely, pollMs, pollMs, TimeUnit.MILLISECONDS);
         return guard;

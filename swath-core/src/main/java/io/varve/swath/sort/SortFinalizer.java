@@ -207,7 +207,7 @@ public final class SortFinalizer {
     }
 
     /** Enforce strict raw-byte adjacency after durable close and before publication can begin. */
-    public static void requireDisjointParts(List<PreparedSortedParts.Part> parts) {
+    static void requireDisjointParts(List<PreparedSortedParts.Part> parts) {
         requireDisjointParts(parts, SortMetrics.NO_OP);
     }
 
@@ -238,7 +238,7 @@ public final class SortFinalizer {
     }
 
     /** Refuse a prepared value unless source, router, and durable part counts agree exactly. */
-    public static void requireExactCardinality(
+    static void requireExactCardinality(
             long sourceRows, long routedRows, long finalPartRows) throws IOException {
         requireExactCardinality(sourceRows, routedRows, finalPartRows, SortMetrics.NO_OP);
     }

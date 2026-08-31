@@ -11,7 +11,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
-import io.varve.swath.output.sorted.PublishListener;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -23,13 +25,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * The runtime merge-entry fan-in clamp in {@link SortTransform}. The fd limit is injected (never
+ * The runtime merge-entry fan-in clamp in {@link SortedDatasetCoordinator}. The fd limit is injected (never
  * the real process {@code ulimit}) so the clamp — and the {@code SORT.merge_fanin_*} counters —
  * fire deterministically. Also covers pipeline multi-part rolling at the transform level (small
  * {@code final-file-bytes} ⇒ several ordered {@code part-NNNNN.parquet} whose concatenation is the
  * global sort).
  */
-class SortTransformFanInClampTest {
+class SortedDatasetCoordinatorFanInClampTest {
 
     private static final int HEALTHY_FD = 10_000;
     private final ListEntryComparator cmp = new ListEntryComparator();
@@ -140,8 +142,8 @@ class SortTransformFanInClampTest {
         // final-file-bytes small ⇒ several multi-row parts (not one-per-row); healthy fd so nothing else
         // interferes with the roll behaviour under test.
         SortConfig rolling = SortConfigs.base().withFinalFileBytes(2048L);
-        SortTransformResult result = newTransform(rolling, SortMetrics.NO_OP, () -> HEALTHY_FD)
-                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP,
+        SortedDatasetResult result = newTransform(rolling, SortMetrics.NO_OP, () -> HEALTHY_FD)
+                .transform(stagePageRun(staging, segs), output, staging, SortedDatasetCommitter.NO_OP,
                         units -> { }, FinalPassListener.NO_OP);
 
         List<Path> parts = result.finalFiles();
@@ -167,7 +169,7 @@ class SortTransformFanInClampTest {
 
     // --- harness ---
 
-    private record Result(SortTransformResult result, List<String> keys, List<String> expected) {
+    private record Result(SortedDatasetResult result, List<String> keys, List<String> expected) {
     }
 
     /** Stage 5 interleaved page-run segments, run the merge with the injected fd limit, read the output. */
@@ -188,14 +190,14 @@ class SortTransformFanInClampTest {
 
         Path staging = Files.createDirectories(root.resolve("prun/_staging"));
         Path output = Files.createDirectories(root.resolve("prun"));
-        SortTransformResult result = newTransform(config, metrics, softFdLimit)
-                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP,
+        SortedDatasetResult result = newTransform(config, metrics, softFdLimit)
+                .transform(stagePageRun(staging, segs), output, staging, SortedDatasetCommitter.NO_OP,
                         units -> { }, FinalPassListener.NO_OP);
         return new Result(result, keys(result.finalFiles()), expected);
     }
 
-    private SortTransform newTransform(SortConfig config, SortMetrics metrics, IntSupplier softFdLimit) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+    private SortedDatasetCoordinator newTransform(SortConfig config, SortMetrics metrics, IntSupplier softFdLimit) {
+        return new SortedDatasetCoordinator(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
                 softFdLimit, StaleFinalSweep.OWN_PARTS_ONLY));
     }

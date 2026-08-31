@@ -25,8 +25,6 @@ import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortTestSupport;
-import io.varve.swath.sort.SortTransform;
-import io.varve.swath.sort.SortTransformResult;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -41,7 +39,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Characterization pins for one- and multi-encoder pipeline publication, captured at the
- * {@link SortTransform} boundary so a change to finalization cannot silently alter observable
+ * {@link SortedDatasetCoordinator} boundary so a change to finalization cannot silently alter observable
  * output.
  *
  * <p><b>The pinned invariant: both encoder shapes stamp identically.</b> Whichever shape produced the output,
@@ -77,7 +75,7 @@ class SortRollPublishStampCharacterizationTest {
         SortConfig config = SortConfigs.base().withFinalFileBytes(1L);
         List<Long> progress = new ArrayList<>();
         List<FinalPart> published = new ArrayList<>();
-        SortTransformResult result = stampedTransform(config)
+        SortedDatasetResult result = stampedTransform(config)
                 .transform(staging, dirs.output, dirs.staging,
                         (parts, ignoredRows) -> published.addAll(parts), progress::add,
                         FinalPassListener.NO_OP);
@@ -140,8 +138,8 @@ class SortRollPublishStampCharacterizationTest {
         SortConfig config = SortConfigs.base()
                 .withFinalFileBytes(1L).withMergeParallelism(3).withMergeBudgetBytes(64L << 20);
         List<Long> progress = new ArrayList<>();
-        SortTransformResult result = stampedTransform(config)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, progress::add,
+        SortedDatasetResult result = stampedTransform(config)
+                .transform(staging, dirs.output, dirs.staging, SortedDatasetCommitter.NO_OP, progress::add,
                         FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(9);
@@ -196,8 +194,8 @@ class SortRollPublishStampCharacterizationTest {
         // base(): fan-in 512 ≫ 2 segments and an unbounded budget ⇒ a single merge pass (no cascade),
         // and a single output file ⇒ the whole 2500-row stream drains through one encoder.
         List<Long> batches = new ArrayList<>();
-        SortTransformResult result = transform(SortConfigs.base())
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, batches::add,
+        SortedDatasetResult result = transform(SortConfigs.base())
+                .transform(staging, dirs.output, dirs.staging, SortedDatasetCommitter.NO_OP, batches::add,
                         FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(1);
@@ -208,16 +206,16 @@ class SortRollPublishStampCharacterizationTest {
 
     // --- helpers ---
 
-    private SortTransform transform(SortConfig config) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+    private SortedDatasetCoordinator transform(SortConfig config) {
+        return new SortedDatasetCoordinator(new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
-    private SortTransform stampedTransform(SortConfig config) {
+    private SortedDatasetCoordinator stampedTransform(SortConfig config) {
         SortedFileWriterFactory stamped = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+        return new SortedDatasetCoordinator(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stamped,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }

@@ -29,7 +29,7 @@ import org.slf4j.Logger;
  * sweeps sorter-owned working namespaces, assigns consumer-visible part names, commits the complete
  * prepared set, invokes the consumer committer, and applies the final staging policy.
  */
-public final class DatasetPublisher {
+final class SortedDatasetPublisher {
 
     private final SortRun run;
     private final SortConfig config;
@@ -37,7 +37,7 @@ public final class DatasetPublisher {
     private final PublicationStepHook publicationStepHook;
     private final Logger log;
 
-    public DatasetPublisher(SortRun run, PublicationStepHook publicationStepHook, Logger log) {
+    SortedDatasetPublisher(SortRun run, PublicationStepHook publicationStepHook, Logger log) {
         this.run = run;
         this.config = run.config();
         this.metrics = run.metrics();
@@ -46,11 +46,11 @@ public final class DatasetPublisher {
     }
 
     /** Capture all source/destination authority without mutating either directory. */
-    public SortedPublicationContext publicationContext(
+    SortedPublicationContext publicationContext(
             List<Path> stagingSegments,
             Path outputDir,
             Path stagingDir,
-            PublishListener publishListener) throws IOException {
+            SortedDatasetCommitter publishListener) throws IOException {
         StagingReconciliation ownedInputs =
                 StagingReconciliation.fromPaths(stagingDir, stagingSegments);
         StagingReconciliation.DirectoryAuthority outputAuthority =
@@ -61,18 +61,18 @@ public final class DatasetPublisher {
     }
 
     /** Derive diagnostic retention from the unconditionally validated owned input set. */
-    public StagingReconciliation retainedOriginals(StagingReconciliation ownedInputs) {
+    StagingReconciliation retainedOriginals(StagingReconciliation ownedInputs) {
         return config.stagingRetention().retainsOriginals() ? ownedInputs : null;
     }
 
     /** Sweep every disposable working namespace after source preflight has succeeded. */
-    public void sweepWorking(SortedPublicationContext context) throws IOException {
+    void sweepWorking(SortedPublicationContext context) throws IOException {
         sweepWorking(context.outputDir(), context.stagingDir(), context.ownedInputs(),
                 context.outputAuthority());
     }
 
     /** Package-level test seam retaining the exact authority checks around the working sweep. */
-    public void sweepWorking(Path outputDir, Path stagingDir, StagingReconciliation ownedInputs,
+    void sweepWorking(Path outputDir, Path stagingDir, StagingReconciliation ownedInputs,
             StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
         ownedInputs.requireOwnedStagingAuthority(stagingDir);
         outputAuthority.requireSame(outputDir);
@@ -93,7 +93,7 @@ public final class DatasetPublisher {
      * final sweep, after the dense set, exact cardinality, and raw adjacency proof have all completed
      * in the finalizer.
      */
-    public SortedDatasetCommit publish(
+    SortedDatasetCommit publish(
             PreparedSortedParts prepared, SortedPublicationContext context) throws IOException {
         validatePreparedAuthority(prepared, context);
         publicationStep(PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE);

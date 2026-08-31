@@ -2213,7 +2213,7 @@ public final class RunMetrics {
 
     /**
      * A live read of total bytes flushed to {@code --sort} staging segments so far
-     * ({@code swath.sort.segment.bytes}), cheap enough for {@link io.varve.swath.sort.SortDiskGuard}
+     * ({@code swath.sort.segment.bytes}), cheap enough for {@link io.varve.swath.output.sorted.StagingDiskGuard}
      * to poll periodically during the listing phase without building a full snapshot.
      */
     public long sortSegmentBytesWritten() {

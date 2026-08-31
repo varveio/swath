@@ -5,8 +5,6 @@
  */
 package io.varve.swath.output.sorted;
 
-import io.varve.swath.sort.SortTransform;
-import io.varve.swath.sort.SortTransformResult;
 import java.io.IOException;
 
 /**
@@ -15,7 +13,7 @@ import java.io.IOException;
  * <p>The final files and listener-owned manifest/state/symlink/{@code _SUCCESS} must not be rolled
  * back or republished in response to this exception. The managed runtime maps it to its resumable
  * publication-pending error and re-enters only the PUBLISHED cleanup path. When it escapes a
- * {@link SortTransform}, {@link #publishedResult()} carries the exact committed output and merge
+ * {@link SortedDatasetCoordinator}, {@link #publishedResult()} carries the exact committed output and merge
  * facts even though cleanup prevented the ordinary return.
  */
 public final class CommittedPublicationCleanupException extends IOException {
@@ -42,7 +40,7 @@ public final class CommittedPublicationCleanupException extends IOException {
 
     private final Stage stage;
     private SortedDatasetCommit publishedCommit;
-    private SortTransformResult publishedResult;
+    private SortedDatasetResult publishedResult;
 
     CommittedPublicationCleanupException(Stage stage, Throwable cause) {
         super("sorted dataset publication committed; cleanup pending at " + stage.logValue(), cause);
@@ -54,7 +52,7 @@ public final class CommittedPublicationCleanupException extends IOException {
         return new CommittedPublicationCleanupException(Stage.PUBLISHED_REENTRY_CLEANUP, cause);
     }
 
-    public CommittedPublicationCleanupException withPublishedResult(SortTransformResult result) {
+    CommittedPublicationCleanupException withPublishedResult(SortedDatasetResult result) {
         if (publishedResult != null) {
             throw new IllegalStateException("published sort result already attached");
         }
@@ -70,10 +68,7 @@ public final class CommittedPublicationCleanupException extends IOException {
         return this;
     }
 
-    public SortedDatasetCommit publishedCommit() {
-        if (publishedCommit == null) {
-            throw new IllegalStateException("committed cleanup failure has no dataset commit");
-        }
+    SortedDatasetCommit publishedCommitOrNull() {
         return publishedCommit;
     }
 
@@ -82,8 +77,8 @@ public final class CommittedPublicationCleanupException extends IOException {
         return stage;
     }
 
-    /** Exact committed result, attached by {@link SortTransform} before this exception escapes it. */
-    public SortTransformResult publishedResult() {
+    /** Exact committed result, attached by {@link SortedDatasetCoordinator} before this exception escapes it. */
+    public SortedDatasetResult publishedResult() {
         if (publishedResult == null) {
             throw new IllegalStateException("committed cleanup failure has no published sort result");
         }

@@ -6,13 +6,14 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.util.Comparator;
 import java.util.function.IntSupplier;
 
 /**
  * The immutable inputs defining one sort/merge run — the inputs threaded whole through
- * {@link SortTransform} and its package-private planner/worker/publisher owners: the {@link SortConfig knobs},
+ * {@link SortedDatasetCoordinator} and its package-private planner/worker/publisher owners: the {@link SortConfig knobs},
  * the §0.3 key {@code comparator}, the {@link DuplicateHook dedup hook}, the final-output
  * {@link EqualKeyPolicy}, the {@link SortMetrics} sink, the {@link SortedFileWriterFactory} for the
  * final output, fd seams, and the stale-final ownership scope.

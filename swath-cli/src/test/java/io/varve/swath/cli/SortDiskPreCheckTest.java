@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * {@link ListCommand#checkSortDiskHeadroom} — the one-shot startup half of {@code
- * SortDiskGuard}, exercised directly (package-private method, plain object construction — no
+ * StagingDiskGuard}, exercised directly (package-private method, plain object construction — no
  * picocli parsing needed) with a FAKED usable-free-bytes value ({@link
  * ListCommand#usableFreeBytesOverride}) so no real disk is ever filled.
  */
@@ -45,7 +45,7 @@ final class SortDiskPreCheckTest {
 
     /**
      * The pre-check's refusal must be greppable via the SAME distinct classification
-     * as the in-run halt path ({@code SortDiskGuard#logExhaustionMarker}) so an external supervisor
+     * as the in-run halt path ({@code StagingDiskGuard#logExhaustionMarker}) so an external supervisor
      * can tell "ran out of --sort staging disk" apart from an unclassified crash regardless of
      * WHEN it fires (startup vs. mid-run).
      */
@@ -89,7 +89,7 @@ final class SortDiskPreCheckTest {
         // filled) so the pre-check's own staging-bytes-on-disk WALK (not the override, which only
         // fakes usable free space) is genuinely exercised end to end. Large enough that 3x it
         // clears the 1 GiB absolute floor, so this trips the PROJECTION arm specifically, not the
-        // floor arm (SortDiskGuardTest's pure-function tests already pin the floor arm precisely).
+        // floor arm (StagingDiskGuardTest's pure-function tests already pin the floor arm precisely).
         long stagedBytes = 400L * 1024 * 1024;
         writeFileOfSize(stagingDir.resolve("seg-0.parquet"), stagedBytes);
 
@@ -131,7 +131,7 @@ final class SortDiskPreCheckTest {
         cmd.output.destination = outDir.toString();
         // Below the default 3x-staged need, but still above the absolute floor and nothing is
         // staged yet -- a brand-new run's pre-check cannot know the eventual bucket size (the
-        // periodic in-run SortDiskGuard is what catches that case once real data starts flowing).
+        // periodic in-run StagingDiskGuard is what catches that case once real data starts flowing).
         cmd.usableFreeBytesOverride = dir -> 2L * 1024 * 1024 * 1024;
 
         assertThatNoException().isThrownBy(cmd::checkSortDiskHeadroom);

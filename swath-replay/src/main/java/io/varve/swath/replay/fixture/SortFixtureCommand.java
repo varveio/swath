@@ -6,11 +6,11 @@
 package io.varve.swath.replay.fixture;
 
 import io.micrometer.core.instrument.Timer;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.sort.CaptureSorter;
 import io.varve.swath.sort.DuplicateKeyException;
 import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortConfig;
-import io.varve.swath.sort.SortTransformResult;
 import io.varve.swath.sort.VersionedCaptureException;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -58,7 +58,7 @@ public final class SortFixtureCommand implements Callable<Integer> {
     public Integer call() {
         long wallStartNanos = System.nanoTime();
         Timer.Sample sample = metrics.startTimer();
-        SortTransformResult result;
+        SortedDatasetResult result;
         try {
             CaptureSorter sorter = new CaptureSorter(SortConfig.fromSystemProperties(), metrics);
             result = sorter.sort(capture, output);
@@ -78,7 +78,7 @@ public final class SortFixtureCommand implements Callable<Integer> {
         }
         metrics.recordSortFixtureBuild(sample, outputBytes);
         long wallMs = (System.nanoTime() - wallStartNanos) / 1_000_000;
-        // segments has no field on SortTransformResult, so it's read back from the registry-backed
+        // segments has no field on SortedDatasetResult, so it's read back from the registry-backed
         // metrics adapter above (SORT.segment_flushed) — see FixtureMetrics#segmentsFlushed.
         System.out.printf("sort_fixture arm=%s rows=%d files=%d bytes=%d wall_ms=%d segments=%d "
                         + "merge_passes=%d cascaded_passes=%d output=%s%n",

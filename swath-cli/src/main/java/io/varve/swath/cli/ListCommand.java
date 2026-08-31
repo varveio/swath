@@ -53,7 +53,7 @@ import io.varve.swath.output.parquet.ParquetResume;
 import io.varve.swath.output.parquet.ParquetWriterMemoryPlan;
 import io.varve.swath.output.parquet.PartInfo;
 import io.varve.swath.output.sorted.CommittedPublicationCleanupException;
-import io.varve.swath.output.sorted.SortDiskGuard;
+import io.varve.swath.output.sorted.StagingDiskGuard;
 import io.varve.swath.output.sorted.StagingReconciliation;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.runtime.ArgsHashFields;
@@ -247,7 +247,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * #checkSortDiskHeadroom} uses this instead of a real {@code Files.getFileStore(dir)
      * .getUsableSpace()} query — so a test can fake a tiny/generous usable-space value without
      * actually filling a disk. Takes the resolved output dir and returns bytes (negative ⇒ unknown,
-     * never trips a refusal — mirrors {@link io.varve.swath.sort.SortDiskGuard}'s own convention).
+     * never trips a refusal — mirrors {@link io.varve.swath.output.sorted.StagingDiskGuard}'s own convention).
      */
     ToLongFunction<Path> usableFreeBytesOverride;
 
@@ -1453,7 +1453,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     }
 
     /**
-     * The one-shot startup half of {@link io.varve.swath.sort.SortDiskGuard} — see its class
+     * The one-shot startup half of {@link io.varve.swath.output.sorted.StagingDiskGuard} — see its class
      * javadoc for the two-check design and why this one is a plain, user-correctable
      * {@code OutputException} (exit 1) rather than anything routed through the fatal-error
      * machinery. Skipped entirely when {@code --tune sort.ignore-disk-check=on} is set. Uses whatever staging bytes are
@@ -1482,13 +1482,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 ? usableFreeBytesOverride.applyAsLong(outputDir)
                 : usableFreeBytesReal(outputDir);
         long stagingBytesOnDisk = stagingBytesOnDisk(outputDir.resolve(SORT_STAGING_DIR));
-        Optional<String> reason = SortDiskGuard
+        Optional<String> reason = StagingDiskGuard
                 .insufficientDiskReason(usableFreeBytes, stagingBytesOnDisk,
-                        SortDiskGuard.DEFAULT_SAFETY_FACTOR,
-                        SortDiskGuard.DEFAULT_MIN_FREE_BYTES);
+                        StagingDiskGuard.DEFAULT_SAFETY_FACTOR,
+                        StagingDiskGuard.DEFAULT_MIN_FREE_BYTES);
         if (reason.isPresent()) {
             // OutputException carries no error_class field (SwathException only exposes
-            // exitCode()), so — mirroring SortDiskGuard's runtime-halt marker — log the same
+            // exitCode()), so — mirroring StagingDiskGuard's runtime-halt marker — log the same
             // distinct error_class=sort_disk_exhausted / stop_reason=sort_disk_exhausted /
             // resumable=true classification here too, so an external supervisor greps the SAME
             // marker whether the refusal fires at startup or mid-run.
@@ -1620,7 +1620,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 return ExitCodes.SUCCESS;
             }
             // Merge pending (crashed post-listing, pre-publish; or a foreign manifest.json logged
-            // above): re-run the merge. SortTransform#cleanStaleFinals (landed alongside the
+            // above): re-run the merge. The sorted publication step (landed alongside the
             // merge-budget fix; widened to ALL data/*.parquet) sweeps any stale finals before
             // this run writes its own, so a foreign manifest's finals never survive into this run's
             // published output.
@@ -1633,10 +1633,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // The periodic half of the disk pre-check — polls the LIVE swath.sort.segment.bytes
         // counter against usable free space while the (possibly multi-hour) listing runs, so a
         // brand-new giant bucket's true disk trajectory trips this well before the merge, not after
-        // it. See SortDiskGuard's class javadoc for why it halts directly rather than throwing.
+        // it. See StagingDiskGuard's class javadoc for why it halts directly rather than throwing.
         Files.createDirectories(stagingDir);
         probeDirectoryFsync(stagingDir);
-        try (SortDiskGuard diskGuard = SortDiskGuard.arm(
+        try (StagingDiskGuard diskGuard = StagingDiskGuard.arm(
                 outputDir, ctx.metrics()::sortSegmentBytesWritten, sorting.forceSort)) {
             listRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
                     store, run.id(), connection.maxParallelListings, nodes, sortConfig, sortMode, engine.toggles,

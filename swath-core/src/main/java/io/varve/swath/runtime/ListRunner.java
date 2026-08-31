@@ -58,6 +58,8 @@ import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import io.varve.swath.output.sorted.CommittedPublicationCleanupException;
 import io.varve.swath.output.sorted.PublicationStepHook;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StagingReconciliation;
 import io.varve.swath.output.sorted.StaleFinalSweep;
 import io.varve.swath.output.text.TextWriterPool;
@@ -83,8 +85,6 @@ import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortOrderException;
 import io.varve.swath.sort.SortPagePacker;
 import io.varve.swath.sort.SortRun;
-import io.varve.swath.sort.SortTransform;
-import io.varve.swath.sort.SortTransformResult;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.store.ListPage;
@@ -815,7 +815,7 @@ public final class ListRunner {
         // The merge result is produced by the completion chain and read by the terminal summary +
         // epilogue, which the template runs strictly after completion returns — so the backfill and the
         // published-file counts land in the summary, never before the merge.
-        SortTransformResult[] merged = new SortTransformResult[1];
+        SortedDatasetResult[] merged = new SortedDatasetResult[1];
 
         return this.<RuntimeException>runLifecycle(ctx, LifecyclePlan.<RuntimeException>builder()
                 .strategy("WORK_STEALING").strategyWhy("checkpointed_resumable_nodes").runId(runId)
@@ -879,9 +879,9 @@ public final class ListRunner {
         ctx.metrics().setPrefix(spec.prefix());
         ctx.metrics().setPhase(Phase.LISTING);
         ctx.metrics().recordStealReason("SORT", "merge_redone");
-        SortTransformResult[] published = new SortTransformResult[1];
+        SortedDatasetResult[] published = new SortedDatasetResult[1];
         Supplier<RunSummary> snapshot = () -> {
-            SortTransformResult result = published[0];
+            SortedDatasetResult result = published[0];
             if (result == null) {
                 return ctx.metrics().summary(
                         elapsedSince(startedNs), "WORK_STEALING", 0L, 0L);
@@ -908,7 +908,7 @@ public final class ListRunner {
             List<PartRef> segRows = sortedSegmentRows(store, runId);
             // Merge-only resume: identity-verified merge-reentry (ListCommand#isPublishedByThisRun
             // gated this call), so the WIDE data/*.parquet stale-finals sweep is safe here.
-            SortTransformResult result;
+            SortedDatasetResult result;
             try {
                 result = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                         segRows, sortConfig, mode, spec.bucket(),
@@ -975,7 +975,7 @@ public final class ListRunner {
      * land at the dataset root.
      */
     /**
-     * @param staleFinalSweep whether {@link SortTransform}'s wide {@code data/*.parquet}
+     * @param staleFinalSweep whether {@link SortedDatasetCoordinator}'s wide {@code data/*.parquet}
      *         stale-finals sweep may fire (vs. the narrow {@code part-*.parquet} sweep).
      *         {@link StaleFinalSweep#ALL_PARQUET} is valid only from an identity-verified
      *         merge-reentry caller (today:
@@ -985,7 +985,7 @@ public final class ListRunner {
      *         reaching this method. The normal listing-completion caller ({@link #run}) passes
      *         {@code false}: it has no such identity guarantee.
      */
-    private SortTransformResult sortMergeAndPublish(RunContext ctx, CheckpointStore store,
+    private SortedDatasetResult sortMergeAndPublish(RunContext ctx, CheckpointStore store,
             Path outputDir, Path stagingDir,
             List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
             Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep)
@@ -1024,11 +1024,11 @@ public final class ListRunner {
         // The WIDE stale-finals sweep (ALL data/*.parquet, not
         // just this transform's own naming) is safe ONLY on the identity-verified merge-reentry path
         // (ListCommand#isPublishedByThisRun gates whether runSortMergeOnly is ever reached) — see
-        // SortTransform's class javadoc / cleanStaleFinals for the full argument, and the
+        // SortedDatasetCoordinator's class javadoc / cleanStaleFinals for the full argument, and the
         // staleFinalSweep javadoc above for which caller passes which value. Every other
-        // SortTransform caller (e.g. CaptureSorter's sort-fixture path) has no such guard and must NOT
+        // SortedDatasetCoordinator caller (e.g. CaptureSorter's sort-fixture path) has no such guard and must NOT
         // opt in.
-        SortTransform transform = new SortTransform(
+        SortedDatasetCoordinator transform = new SortedDatasetCoordinator(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, equalKeyPolicy(mode),
                         sortMetrics, writerFactory,
                         SortRun.PROCESS_SOFT_FD_LIMIT,
@@ -1048,7 +1048,7 @@ public final class ListRunner {
         // exception path.
         try (RunProgressReporter progress = startProgress(ctx, progressInterval)) {
             Files.createDirectories(dataDir);
-            SortTransformResult result = transform.transform(
+            SortedDatasetResult result = transform.transform(
                     segments, expectedPageRunFormats, dataDir, stagingDir,
                     (finalParts, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
                             finalParts, ctx.metrics(), finalizeClock,
@@ -1072,7 +1072,7 @@ public final class ListRunner {
             // next resume choose PUBLISHED cleanup; retain the latch error only as a suppressed
             // diagnostic rather than poisoning an otherwise valid dataset.
             ctx.metrics().recordSortMerge(mergeSample);
-            SortTransformResult result = e.publishedResult();
+            SortedDatasetResult result = e.publishedResult();
             ctx.metrics().recordSortMergePasses(result.mergePasses());
             ctx.metrics().recordSortFinalizeParallelism(result.finalizationParallelism());
             ctx.metrics().recordOutput("parquet", "written",
@@ -1166,7 +1166,7 @@ public final class ListRunner {
         return mode == SortMode.OBJECTS ? EqualKeyPolicy.REJECT : EqualKeyPolicy.ALLOW;
     }
 
-    private static SortTransformResult committedSortResult(PublicationPendingException pending) {
+    private static SortedDatasetResult committedSortResult(PublicationPendingException pending) {
         if (pending.getCause() instanceof CommittedPublicationCleanupException committed) {
             return committed.publishedResult();
         }
@@ -1175,7 +1175,7 @@ public final class ListRunner {
     }
 
     private static RunSummary sortedSummary(
-            RunContext ctx, Duration elapsed, SortTransformResult result) {
+            RunContext ctx, Duration elapsed, SortedDatasetResult result) {
         if (result == null) {
             return ctx.metrics().summary(elapsed, "WORK_STEALING", 0L, 0L);
         }

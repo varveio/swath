@@ -13,7 +13,9 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.observability.Phase;
 import io.varve.swath.observability.ProgressEvent;
 import io.varve.swath.observability.RunMetrics;
-import io.varve.swath.output.sorted.PublishListener;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,7 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * What live progress reports during a REAL merge — driven through {@link SortTransform} exactly as
+ * What live progress reports during a REAL merge — driven through {@link SortedDatasetCoordinator} exactly as
  * {@code ListRunner} wires it (staged rows recorded up front, the progress callback feeding {@code
  * swath.progress.units}, the final-pass hook advancing the phase), because the failure this pins is
  * invisible to a synthetic single-pass value: a cascading merge rewrites every staged row once per
@@ -45,7 +47,7 @@ class SortMergeLiveProgressTest {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         List<ProgressEvent> samples = new ArrayList<>();
 
-        SortTransformResult result = mergeWithProgress(root, metrics, samples);
+        SortedDatasetResult result = mergeWithProgress(root, metrics, samples);
 
         assertThat(result.cascadedPasses()).as("the case under test is a genuine multi-pass merge")
                 .isGreaterThan(0);
@@ -89,7 +91,7 @@ class SortMergeLiveProgressTest {
         List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
 
         // Fan-in 2 against five staged segments forces the pipeline to cascade before encoding.
-        SortTransformResult result = mergePipelineWithProgress(root, metrics, samples,
+        SortedDatasetResult result = mergePipelineWithProgress(root, metrics, samples,
                 parallelConfig().withFanIn(2));
 
         assertThat(result.cascadedPasses()).as("the case under test is a genuine multi-pass merge")
@@ -115,7 +117,7 @@ class SortMergeLiveProgressTest {
         List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
 
         // Fan-in wider than the staged segment count: the pipeline does not cascade.
-        SortTransformResult result = mergePipelineWithProgress(root, metrics, samples,
+        SortedDatasetResult result = mergePipelineWithProgress(root, metrics, samples,
                 parallelConfig().withFanIn(SEGMENTS + 1));
 
         assertThat(result.cascadedPasses()).isZero();
@@ -134,7 +136,7 @@ class SortMergeLiveProgressTest {
     }
 
     /** The production wiring again, over page-run staging. */
-    private SortTransformResult mergePipelineWithProgress(Path root, RunMetrics metrics,
+    private SortedDatasetResult mergePipelineWithProgress(Path root, RunMetrics metrics,
                                                           List<ProgressEvent> samples, SortConfig config)
             throws IOException {
         Path staging = Files.createDirectories(root.resolve("run/_staging"));
@@ -143,12 +145,12 @@ class SortMergeLiveProgressTest {
 
         metrics.recordSortStaged(segments.size(), STAGED_ROWS);
         metrics.setPhase(Phase.MERGING);
-        SortTransform transform = new SortTransform(
+        SortedDatasetCoordinator transform = new SortedDatasetCoordinator(
                 new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                         SortMetrics.NO_OP,
                         SortedFileWriterFactory.DEFAULT,
                         SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
-        return transform.transform(segments, output, staging, PublishListener.NO_OP,
+        return transform.transform(segments, output, staging, SortedDatasetCommitter.NO_OP,
                 units -> {
                     metrics.recordProgress(units);
                     samples.add(metrics.progressEvent(Duration.ofSeconds(1)));
@@ -157,7 +159,7 @@ class SortMergeLiveProgressTest {
     }
 
     /** The production wiring: fan-in pinned to 2 so five staged segments genuinely cascade. */
-    private SortTransformResult mergeWithProgress(Path root, RunMetrics metrics, List<ProgressEvent> samples)
+    private SortedDatasetResult mergeWithProgress(Path root, RunMetrics metrics, List<ProgressEvent> samples)
             throws IOException {
         Path staging = Files.createDirectories(root.resolve("run/_staging"));
         Path output = Files.createDirectories(root.resolve("run"));
@@ -165,12 +167,12 @@ class SortMergeLiveProgressTest {
 
         metrics.recordSortStaged(segments.size(), STAGED_ROWS);
         metrics.setPhase(Phase.MERGING);
-        SortTransform transform = new SortTransform(
+        SortedDatasetCoordinator transform = new SortedDatasetCoordinator(
                 new SortRun(SortConfigs.base().withFanIn(2), cmp, DuplicateHook.NO_OP,
                         EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                         SortedFileWriterFactory.DEFAULT,
                         SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
-        return transform.transform(segments, output, staging, PublishListener.NO_OP,
+        return transform.transform(segments, output, staging, SortedDatasetCommitter.NO_OP,
                 units -> {
                     metrics.recordProgress(units);
                     samples.add(metrics.progressEvent(Duration.ofSeconds(1)));

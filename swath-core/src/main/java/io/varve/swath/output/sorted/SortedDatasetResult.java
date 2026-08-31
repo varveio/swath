@@ -3,13 +3,13 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 import java.nio.file.Path;
 import java.util.List;
 
 /**
- * The outcome of a {@link SortTransform} run: the published final sorted file(s), in key order, and
+ * The outcome of a {@link SortedDatasetCoordinator} run: the published final sorted file(s), in key order, and
  * their exact durable byte total, and the total row count. Range-disjoint and named
  * {@code part-00000.parquet}… when
  * {@code final-file-bytes} rolls the output; a single file otherwise.
@@ -17,7 +17,7 @@ import java.util.List;
  * <p>{@code mergePasses}/{@code cascadedPasses} surface cascade engagement. {@code
  * pagesForwarded} is the final router's page-whole count.
  */
-public record SortTransformResult(List<Path> finalFiles, long outputBytes, long totalRows,
+public record SortedDatasetResult(List<Path> finalFiles, long outputBytes, long totalRows,
                                   long mergePasses, long cascadedPasses, long pagesForwarded,
                                   int finalizationParallelism) {
 }

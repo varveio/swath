@@ -30,6 +30,8 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StaleFinalSweep;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.EqualKeyPolicy;
@@ -44,8 +46,6 @@ import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortRun;
-import io.varve.swath.sort.SortTransform;
-import io.varve.swath.sort.SortTransformResult;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.testkit.Keyspaces;
@@ -71,7 +71,7 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <ul>
  *   <li><b>mid-merge crash (single-pass, the design point):</b> a merge that fails while writing the
- *       final file leaves stale {@code *.tmp}; re-running {@link SortTransform#transform} over the
+ *       final file leaves stale {@code *.tmp}; re-running {@link SortedDatasetCoordinator#transform} over the
  *       still-durable staging segments is idempotent — it cleans the stale tmp and republishes the
  *       exact sorted whole.</li>
  *   <li><b>crash after the final rename but BEFORE the manifest:</b> the state machine treats a
@@ -136,14 +136,14 @@ final class SortMergeReentryContractTest {
         List<Path> segments = buildStagingSegments(keyspace, stagingDir);
         assertThat(segments).as("multiple durable staging segments").hasSizeGreaterThan(1);
 
-        SortTransform transform = new SortTransform(new SortRun(singlePass(), cmp,
+        SortedDatasetCoordinator transform = new SortedDatasetCoordinator(new SortRun(singlePass(), cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new SortedParquetWriterFactoryLocal(singlePass(), SortMode.OBJECTS),
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
         // First attempt crashes partway through writing the final file (a real mid-merge kill).
         AtomicBoolean crashArmed = new AtomicBoolean(true);
-        SortTransform crashingTransform = new SortTransform(new SortRun(singlePass(), cmp,
+        SortedDatasetCoordinator crashingTransform = new SortedDatasetCoordinator(new SortRun(singlePass(), cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new CrashingFactory(singlePass(), SortMode.OBJECTS, crashArmed, 100),
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
@@ -153,7 +153,7 @@ final class SortMergeReentryContractTest {
         assertThat(Files.exists(DatasetLayout.of(outputDir).manifest())).as("nothing published on crash").isFalse();
 
         // Re-run over the SAME still-durable segments: idempotent, cleans stale tmp, republishes.
-        SortTransformResult result = transform.transform(segments, outputDir, stagingDir,
+        SortedDatasetResult result = transform.transform(segments, outputDir, stagingDir,
                 (files, rows) -> writeManifest(outputDir,
                         files.stream().map(io.varve.swath.sort.FinalPart::path).toList()),
                 units -> { }, FinalPassListener.NO_OP);
@@ -297,7 +297,7 @@ final class SortMergeReentryContractTest {
      * redo can no longer find them it throws {@link java.io.FileNotFoundException} forever.
      * {@code KWayMerge} deletes <b>only its own intermediates from an earlier pass of the same
      * merge</b> — the caller's original input segments are never deleted by the merge itself, at any
-     * pass; {@link io.varve.swath.sort.SortTransform} reclaims originals (and any surviving cascade
+     * pass; {@link io.varve.swath.output.sorted.SortedDatasetCoordinator} reclaims originals (and any surviving cascade
      * intermediate) together, only after a successful publish. See {@code KWayMerge}'s class javadoc
      * for the full deletion-policy rationale, including the accepted transient ~2× staging disk cost
      * during an in-flight cascade.
@@ -326,7 +326,7 @@ final class SortMergeReentryContractTest {
         assertThat(segments).as("more than fan-in segments ⇒ a multi-pass cascade").hasSizeGreaterThan(2);
 
         AtomicBoolean armed = new AtomicBoolean(true);
-        SortTransform crashing = new SortTransform(new SortRun(cascade, cmp,
+        SortedDatasetCoordinator crashing = new SortedDatasetCoordinator(new SortRun(cascade, cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new CrashingFactory(cascade, SortMode.OBJECTS, armed, 100),
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
@@ -336,11 +336,11 @@ final class SortMergeReentryContractTest {
 
         // Contract: re-running the merge from the checkpoint's (original) segment list must republish
         // the exact sorted whole — the originals are still on disk (KWayMerge's deletion-policy fix).
-        SortTransform redo = new SortTransform(new SortRun(cascade, cmp,
+        SortedDatasetCoordinator redo = new SortedDatasetCoordinator(new SortRun(cascade, cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new SortedParquetWriterFactoryLocal(cascade, SortMode.OBJECTS),
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
-        SortTransformResult result = redo.transform(segments, outputDir, stagingDir,
+        SortedDatasetResult result = redo.transform(segments, outputDir, stagingDir,
                 (files, rows) -> writeManifest(outputDir,
                         files.stream().map(io.varve.swath.sort.FinalPart::path).toList()),
                 units -> { }, FinalPassListener.NO_OP);
