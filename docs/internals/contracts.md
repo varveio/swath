@@ -398,7 +398,7 @@ not parse it.
 
 | Column | Physical / logical | Null? | Notes |
 | --- | --- | --- | --- |
-| `key` | `BINARY` | no | raw key bytes (byte-exact; not UTF-8-coerced); = the prefix for `COMMON_PREFIX` rows |
+| `key` | `BINARY` (STRING) | no | well-formed UTF-8 key; physical bytes remain byte-exact; malformed internal/fixture keys fail with a typed output error; = the prefix for `COMMON_PREFIX` rows |
 | `size` | `INT64` | **yes** | bytes; **null** for `COMMON_PREFIX` and `DELETE_MARKER` rows |
 | `last_modified` | `INT64` TIMESTAMP(MICROS,UTC) | **yes** | **null** for `COMMON_PREFIX` rows |
 | `etag` | `BINARY` (UTF8) | yes | **quotes stripped**; multipart form `hex-N` kept verbatim as string; never panic-parse |

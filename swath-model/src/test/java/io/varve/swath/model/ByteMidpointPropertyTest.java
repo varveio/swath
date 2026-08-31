@@ -51,7 +51,7 @@ class ByteMidpointPropertyTest {
         } else {
             assertThat(Arrays.compareUnsigned(a, m)).as("a < m").isNegative();
             assertThat(Arrays.compareUnsigned(m, b)).as("m < b").isNegative();
-            assertThat(ByteMidpoint.isValidUtf8(m)).as("m is valid UTF-8: %s", Arrays.toString(m)).isTrue();
+            assertThat(KeyBytes.isValidUtf8(m)).as("m is valid UTF-8: %s", Arrays.toString(m)).isTrue();
         }
     }
 
@@ -114,7 +114,7 @@ class ByteMidpointPropertyTest {
             assertThat(m).isNotNull();
             assertThat(Arrays.compareUnsigned(a, m)).as("a < m").isNegative();
             assertThat(Arrays.compareUnsigned(m, b)).as("m < b").isNegative();
-            assertThat(ByteMidpoint.isValidUtf8(m)).as("m is valid UTF-8").isTrue();
+            assertThat(KeyBytes.isValidUtf8(m)).as("m is valid UTF-8").isTrue();
             assertNoExcluded(m, "between");   // a is safe and the synthesized scalar is safe
         }
     }
@@ -137,7 +137,7 @@ class ByteMidpointPropertyTest {
         assertThat(m.length).isLessThanOrEqualTo(1024);
         assertThat(Arrays.compareUnsigned(a, m)).as("a < m").isNegative();
         assertThat(Arrays.compareUnsigned(m, b)).as("m < b").isNegative();
-        assertThat(ByteMidpoint.isValidUtf8(m)).as("m is valid UTF-8").isTrue();
+        assertThat(KeyBytes.isValidUtf8(m)).as("m is valid UTF-8").isTrue();
     }
 
     /** ASCII leads whose +1 successor is still a single-byte scalar (0x41..0x7D ⇒ ≤0x7E). */

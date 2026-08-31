@@ -247,7 +247,7 @@ listing, so several columns are present but unpopulated today.
 
 | Column | Type | Nullable | Meaning |
 | --- | --- | --- | --- |
-| `key` | `BINARY` | no | Raw key bytes, preserved byte-for-byte |
+| `key` | `STRING` (physical `BINARY`) | no | UTF-8 object key; physical bytes are preserved byte-for-byte |
 | `size` | `INT64` | yes | Object size in bytes |
 | `last_modified` | `TIMESTAMP(MICROS,UTC)` | yes | Last-modified time |
 | `etag` | `BINARY (UTF8)` | yes | Quotes removed; multipart form retained |

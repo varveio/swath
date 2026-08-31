@@ -136,7 +136,7 @@ public final class SortedParquetWriter implements SortedFileWriter {
 
     @Override
     public void write(ListEntry e) throws IOException {
-        writer.write(e);
+        tracked.write(e);
         byte[] key = e.key().rawUnsafe();
         if (firstKey == null) {
             firstKey = key.clone();

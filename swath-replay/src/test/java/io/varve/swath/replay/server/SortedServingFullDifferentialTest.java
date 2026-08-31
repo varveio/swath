@@ -36,7 +36,7 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p>Keyspaces cover: flat listings; delimiter'd deep hierarchies; a giant single prefix spanning
  * many row groups; keys straddling row-group boundaries at various {@code max-keys}; a
- * {@code successor(P)}-is-a-real-key case; {@code 0xFF}-laden keys; and a multi-byte delimiter. Each
+ * {@code successor(P)}-is-a-real-key case; high-scalar UTF-8 keys; and a multi-byte delimiter. Each
  * runs the {@code encoding-type=url} on/off × {@code fetch-owner} on/off matrix, and the whole thing
  * runs once more over a <b>rolled multi-file</b> sorted fixture (tiny {@code final-file-bytes}) to
  * prove the file-aware index serves identically.
@@ -206,16 +206,15 @@ class SortedServingFullDifferentialTest {
     }
 
     @Test
-    void ffLadenKeysAreByteIdentical(@TempDir Path dir) throws Exception {
+    void highScalarKeysAreByteIdentical(@TempDir Path dir) throws Exception {
         List<byte[]> keys = new ArrayList<>();
         for (int i = 0; i < 12; i++) {
             keys.add(new byte[]{'k', (byte) i});
-            keys.add(new byte[]{'k', (byte) i, (byte) 0xFF});
-            keys.add(new byte[]{'k', (byte) i, (byte) 0xFF, (byte) 0x01});
+            keys.add(new byte[]{'k', (byte) i, (byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF});
+            keys.add(new byte[]{'k', (byte) i, (byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF, 0x01});
         }
-        keys.add(new byte[]{(byte) 0xFF});                        // all-0xFF: successor is end-of-keyspace
-        keys.add(new byte[]{(byte) 0xFF, (byte) 0xFF});
-        // 0xFF is not valid UTF-8, so only encoding-type=url is safe here; both projections of it.
+        keys.add("\uDBFF\uDFFF".getBytes(StandardCharsets.UTF_8));
+        keys.add("\uDBFF\uDFFF\uDBFF\uDFFF".getBytes(StandardCharsets.UTF_8));
         List<Scenario> scenarios = new ArrayList<>();
         scenarios.add(new Scenario(null, null, null, 1, true, false));
         scenarios.add(new Scenario(null, null, null, 3, true, true));

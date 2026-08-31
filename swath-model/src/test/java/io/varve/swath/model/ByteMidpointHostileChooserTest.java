@@ -97,7 +97,7 @@ final class ByteMidpointHostileChooserTest {
             } else {
                 assertThat(Arrays.compareUnsigned(a, m)).as("a < m (%s)", Arrays.toString(m)).isNegative();
                 assertThat(Arrays.compareUnsigned(m, b)).as("m < b (%s)", Arrays.toString(m)).isNegative();
-                assertThat(ByteMidpoint.isValidUtf8(m)).as("m is valid UTF-8 (%s)", Arrays.toString(m)).isTrue();
+                assertThat(KeyBytes.isValidUtf8(m)).as("m is valid UTF-8 (%s)", Arrays.toString(m)).isTrue();
                 assertNoExcludedScalar(m);
             }
         }

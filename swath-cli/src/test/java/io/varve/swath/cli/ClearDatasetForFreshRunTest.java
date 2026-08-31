@@ -36,7 +36,7 @@ final class ClearDatasetForFreshRunTest {
         // marker, a consumer manifest, a symlink, plus an EXTRA data/ part from a wider prior run.
         Files.writeString(layout.success(), "");
         Files.writeString(layout.state(), "{\"args_hash\":\"foreign\",\"run_id\":42}");
-        Manifest.write(outputDir, "stale", "message swath { required binary key; }",
+        Manifest.write(outputDir, "stale", "message swath { required binary key (STRING); }",
                 List.of(), false, null);
         Files.writeString(layout.symlink(), "data/part-wZ-99999.parquet\n");
         Path dataDir = Files.createDirectories(layout.dataDir());

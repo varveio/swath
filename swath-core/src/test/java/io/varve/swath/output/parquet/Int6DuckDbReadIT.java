@@ -70,7 +70,7 @@ class Int6DuckDbReadIT {
         // information_schema.columns name) — duckdb binds the column name strictly.
         String types = duck(duckdb, "SELECT lower(string_agg(column_name || ':' || column_type, ',' ORDER BY column_name))"
                 + " FROM (DESCRIBE SELECT * FROM read_parquet('" + glob + "'))");
-        assertThat(types).contains("key:blob").contains("size:bigint").contains("etag:varchar")
+        assertThat(types).contains("key:varchar").contains("size:bigint").contains("etag:varchar")
                 .contains("row_type:varchar").contains("is_delete_marker:boolean");
 
         // ETag stored verbatim (multipart hex-N), and size NULL for the common-prefix row.

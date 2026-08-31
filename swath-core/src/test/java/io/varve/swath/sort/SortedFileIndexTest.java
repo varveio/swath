@@ -39,7 +39,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * {@link SortedFileIndex#firstKeysPerRowGroup} — the index-derive API (§9.1): derived first keys
  * must exactly match the true first row of each row group (never Parquet footer stats), including
- * for adversarial key shapes (1&nbsp;KB, embedded {@code 0x00}/{@code 0xFF} bytes) and for a file
+ * for adversarial key shapes (1&nbsp;KB, embedded NUL/U+10FFFF) and for a file
  * whose truncated footer stats provably diverge from the true first row.
  */
 class SortedFileIndexTest {
@@ -102,10 +102,10 @@ class SortedFileIndexTest {
     }
 
     @Test
-    void derivesTrueFirstKeysFor1KbKeysWithEmbeddedNulAndFfBytes(@TempDir Path dir) throws IOException {
+    void derivesTrueFirstKeysFor1KbKeysWithEmbeddedNulAndHighScalar(@TempDir Path dir) throws IOException {
         List<byte[]> keys = new ArrayList<>();
         for (int i = 0; i < 150; i++) {
-            keys.add(adversarialKey(i));   // 1024 B, ascending, embeds 0x00 and 0xFF
+            keys.add(adversarialKey(i));   // 1024 B, ascending, embeds NUL and U+10FFFF
         }
         Path path = dir.resolve("part-00001.parquet");
         SortConfig tinyRowGroups = config(Map.of("final-row-group-bytes", "4096"));
@@ -259,16 +259,17 @@ class SortedFileIndexTest {
         }
     }
 
-    /** {@code i}-th 1024-byte key: ascending, embeds a run of {@code 0x00} then a run of {@code 0xFF}. */
+    /** {@code i}-th 1024-byte key: ascending, valid UTF-8 with NUL and U+10FFFF. */
     private static byte[] adversarialKey(int i) {
         byte[] key = new byte[1024];
         key[0] = 0x00;
-        key[1] = (byte) 0xFF;
-        // Ascending, distinguishing suffix at a fixed tail position (unsigned byte order).
-        key[1020] = (byte) ((i >>> 24) & 0xFF);
-        key[1021] = (byte) ((i >>> 16) & 0xFF);
-        key[1022] = (byte) ((i >>> 8) & 0xFF);
-        key[1023] = (byte) (i & 0xFF);
+        key[1] = (byte) 0xF4;
+        key[2] = (byte) 0x8F;
+        key[3] = (byte) 0xBF;
+        key[4] = (byte) 0xBF;
+        java.util.Arrays.fill(key, 5, key.length - 8, (byte) 'x');
+        byte[] suffix = String.format("%08x", i).getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(suffix, 0, key, key.length - suffix.length, suffix.length);
         return key;
     }
 

@@ -319,7 +319,7 @@ public final class StealMath {
      * {@link #MAX_UTF8_KEY} (whole-bucket scope, or a {@code prefixCeil} that is not valid UTF-8).
      */
     private static byte[] effectiveCeiling(byte[] ceil) {
-        return (ceil == null || !ByteMidpoint.isValidUtf8(ceil)) ? MAX_UTF8_KEY : ceil;
+        return (ceil == null || !KeyBytes.isValidUtf8(ceil)) ? MAX_UTF8_KEY : ceil;
     }
 
     /**

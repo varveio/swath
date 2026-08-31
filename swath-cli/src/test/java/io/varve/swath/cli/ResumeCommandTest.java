@@ -632,7 +632,7 @@ final class ResumeCommandTest {
         DatasetLayout layout =
                 DatasetLayout.of(outputDir);
         Files.createDirectories(layout.dataDir());
-        Manifest.write(outputDir, BUCKET, "message swath { required binary key; }",
+        Manifest.write(outputDir, BUCKET, "message swath { required binary key (STRING); }",
                 List.of(), false, null);
         Files.writeString(layout.success(), "");
         // No co-located checkpoint: completion deleted it.

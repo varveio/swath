@@ -220,20 +220,6 @@ public final class ByteMidpoint {
     }
 
     /**
-     * True iff {@code bytes} is valid UTF-8 — the precondition {@link #between} enforces on
-     * its bounds. Lets callers screen a synthetic bound (e.g. a {@code prefixCeil} that bumped
-     * a continuation byte) before passing it in, rather than catching the precondition throw.
-     */
-    public static boolean isValidUtf8(byte[] bytes) {
-        try {
-            strictDecoder().decode(ByteBuffer.wrap(bytes));
-            return true;
-        } catch (CharacterCodingException e) {
-            return false;
-        }
-    }
-
-    /**
      * Open-frontier forward pivot (algorithms.md §3.1): reflect the consumed span {@code (lo, c]}
      * forward in <b>code-point</b> space to a valid-UTF-8 {@code m > c} that shares {@code c}'s
      * leading code points, so a retry-nearer-cursor can refine an overshoot by bisecting within

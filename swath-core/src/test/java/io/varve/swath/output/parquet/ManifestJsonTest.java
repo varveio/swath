@@ -29,7 +29,7 @@ class ManifestJsonTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private static final String SCHEMA = "message swath { required binary key (UTF8); }";
+    private static final String SCHEMA = "message swath { required binary key (STRING); }";
 
     @Test
     void sortedManifestCarriesEveryFieldInOrder(@TempDir Path dir) throws IOException {

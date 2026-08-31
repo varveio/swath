@@ -9,6 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * UNIT-1 (I10): {@code KeyBytes.compareUnsigned} (S3's UTF-8 byte
@@ -17,6 +19,42 @@ import org.junit.jupiter.api.Test;
  * {@code String} comparison for boundaries is a silent correctness bug.
  */
 class KeyBytesTest {
+
+    @ParameterizedTest(name = "accepts well-formed UTF-8 {0}")
+    @MethodSource("wellFormedUtf8")
+    void recognizesWellFormedUtf8(String description, byte[] bytes) {
+        assertThat(KeyBytes.isValidUtf8(bytes)).as(description).isTrue();
+    }
+
+    @ParameterizedTest(name = "rejects malformed UTF-8 {0}")
+    @MethodSource("malformedUtf8")
+    void rejectsMalformedUtf8(String description, byte[] bytes) {
+        assertThat(KeyBytes.isValidUtf8(bytes)).as(description).isFalse();
+    }
+
+    private static Object[][] malformedUtf8() {
+        return new Object[][]{
+                {"bare continuation", new byte[]{(byte) 0x80}},
+                {"invalid lead", new byte[]{(byte) 0xFF}},
+                {"two-byte overlong", new byte[]{(byte) 0xC0, (byte) 0x80}},
+                {"three-byte overlong", new byte[]{(byte) 0xE0, (byte) 0x80, (byte) 0x80}},
+                {"four-byte overlong", new byte[]{(byte) 0xF0, (byte) 0x80, (byte) 0x80, (byte) 0x80}},
+                {"surrogate", new byte[]{(byte) 0xED, (byte) 0xA0, (byte) 0x80}},
+                {"above Unicode maximum", new byte[]{(byte) 0xF4, (byte) 0x90, (byte) 0x80, (byte) 0x80}},
+                {"truncated multibyte tail", new byte[]{(byte) 0xE2, (byte) 0x82}}
+        };
+    }
+
+    private static Object[][] wellFormedUtf8() {
+        return new Object[][]{
+                {"empty", new byte[0]},
+                {"ASCII", "plain/ascii".getBytes(StandardCharsets.UTF_8)},
+                {"two-byte minimum", new byte[]{(byte) 0xC2, (byte) 0x80}},
+                {"BMP below surrogate", new byte[]{(byte) 0xED, (byte) 0x9F, (byte) 0xBF}},
+                {"BMP above surrogate", new byte[]{(byte) 0xEE, (byte) 0x80, (byte) 0x80}},
+                {"Unicode maximum", new byte[]{(byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF}}
+        };
+    }
 
     @Test
     void supplementaryVsBmpKeysOrderOppositelyUnderByteVsUtf16() {

@@ -46,6 +46,54 @@ public final class KeyBytes implements Comparable<KeyBytes> {
         return Arrays.compareUnsigned(a, b);
     }
 
+    /** True when {@code bytes} is a well-formed UTF-8 encoding. */
+    public static boolean isValidUtf8(byte[] bytes) {
+        int end = bytes.length;
+        for (int p = 0; p < end; ) {
+            int first = bytes[p] & 0xFF;
+            int width;
+            int secondMin = 0x80;
+            int secondMax = 0xBF;
+            if (first <= 0x7F) {
+                p++;
+                continue;
+            } else if (first >= 0xC2 && first <= 0xDF) {
+                width = 2;
+            } else if (first >= 0xE0 && first <= 0xEF) {
+                width = 3;
+                if (first == 0xE0) {
+                    secondMin = 0xA0;
+                } else if (first == 0xED) {
+                    secondMax = 0x9F;
+                }
+            } else if (first >= 0xF0 && first <= 0xF4) {
+                width = 4;
+                if (first == 0xF0) {
+                    secondMin = 0x90;
+                } else if (first == 0xF4) {
+                    secondMax = 0x8F;
+                }
+            } else {
+                return false;
+            }
+            if (p > end - width) {
+                return false;
+            }
+            int second = bytes[p + 1] & 0xFF;
+            if (second < secondMin || second > secondMax) {
+                return false;
+            }
+            for (int i = 2; i < width; i++) {
+                int continuation = bytes[p + i] & 0xFF;
+                if (continuation < 0x80 || continuation > 0xBF) {
+                    return false;
+                }
+            }
+            p += width;
+        }
+        return true;
+    }
+
     @Override
     public int compareTo(KeyBytes o) {
         return Arrays.compareUnsigned(this.raw, o.raw);

@@ -13,6 +13,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.ParquetSchema;
+import io.varve.swath.output.parquet.PartWriter;
 import io.varve.swath.replay.fixture.FixtureMetrics;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
@@ -44,8 +46,13 @@ import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.apache.parquet.schema.MessageType;
+import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
+import org.apache.parquet.schema.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * {@link SortedParquetStore} over real, multi-row-group stamped sorted files (built through {@link
@@ -68,6 +75,32 @@ class SortedParquetStoreTest {
                 .withFinalRowGroupBytes(1024L)
                 .withSegmentEntries(1)
                 .withMergeBudgetBytes(64L << 20);
+    }
+
+    @ParameterizedTest(name = "key STRING annotation present: {0}")
+    @ValueSource(booleans = {false, true})
+    void readsFormerAndCurrentKeyAnnotations(boolean stringAnnotation, @TempDir Path dir)
+            throws IOException {
+        MessageType canonical = ParquetSchema.canonical();
+        MessageType schema = canonical;
+        if (!stringAnnotation) {
+            var fields = new ArrayList<>(canonical.getFields());
+            fields.set(0, Types.required(PrimitiveTypeName.BINARY).named("key"));
+            schema = new MessageType(canonical.getName(), fields);
+        }
+        Path file = dir.resolve(stringAnnotation ? "string-key.parquet" : "binary-key.parquet");
+        try (PartWriter writer = new PartWriter(file, schema)) {
+            writer.write(object("a/1"));
+            writer.write(object("b/2"));
+        }
+        List<Path> files = List.of(file);
+        IndexLoadResult result = SortedFixtures.loadIndex(files, new FixtureMetrics());
+        List<IndexEntry> index = ((IndexLoadResult.Loaded) result).entries();
+
+        try (SortedParquetStore store = new SortedParquetStore(files, index, new ReplayMetrics(), 1)) {
+            assertThat(keyStrings(store.rows(null, true, null, 10, Projection.KEYS_ONLY)))
+                    .containsExactly("a/1", "b/2");
+        }
     }
 
     @Test

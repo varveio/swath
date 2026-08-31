@@ -98,6 +98,7 @@ final class PartWriterStreamingDigestTest {
             for (int batchRow = 0; batchRow < 1000; batchRow++) {
                 byte[] key = new byte[1024];
                 random.nextBytes(key);
+                ParquetPoolTestSupport.printableAscii(key);
                 writer.write(new ObjectEntry(KeyBytes.of(key), rows, 1_700_000_000_000_000L + rows,
                         "etag", "STANDARD", null, true, null, null, null, null));
                 rows++;
