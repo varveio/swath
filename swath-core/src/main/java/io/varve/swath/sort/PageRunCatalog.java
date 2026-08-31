@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.sorted.StagingNames;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;

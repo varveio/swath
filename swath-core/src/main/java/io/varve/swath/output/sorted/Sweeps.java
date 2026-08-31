@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -15,7 +15,7 @@ import java.util.Comparator;
 import java.util.function.Consumer;
 
 /** Shared deletion primitives for sorter-owned staging files and trees. */
-final class Sweeps {
+public final class Sweeps {
 
     private Sweeps() {
     }
@@ -36,7 +36,7 @@ final class Sweeps {
     }
 
     /** Recursively delete one caller-owned tree; a no-op when it is absent. */
-    static void deleteTree(Path dir) throws IOException {
+    public static void deleteTree(Path dir) throws IOException {
         if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
             return;
         }

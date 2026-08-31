@@ -3,9 +3,20 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
+import io.varve.swath.output.dataset.DurableFiles;
+import io.varve.swath.sort.FinalPart;
+import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.MergeCancellation;
+import io.varve.swath.sort.SortCardinalityException;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortOrderException;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;
@@ -25,7 +36,7 @@ import org.slf4j.Logger;
  * listener remains the owner of consumer manifest/state/symlink/{@code _SUCCESS}; this class does
  * not know their format. {@link SortTransform} stays the public orchestration façade.
  */
-final class DatasetPublisher {
+public final class DatasetPublisher {
 
     private final SortRun run;
     private final SortConfig config;
@@ -36,7 +47,7 @@ final class DatasetPublisher {
     // existing sweep/retention diagnostics.
     private final Logger log;
 
-    DatasetPublisher(SortRun run, PublicationStepHook publicationStepHook, Logger log) {
+    public DatasetPublisher(SortRun run, PublicationStepHook publicationStepHook, Logger log) {
         this.run = run;
         this.config = run.config();
         this.metrics = run.metrics();
@@ -46,7 +57,7 @@ final class DatasetPublisher {
     }
 
     /** Derive diagnostic retention from the unconditionally validated owned input set. */
-    StagingReconciliation retainedOriginals(StagingReconciliation ownedInputs) {
+    public StagingReconciliation retainedOriginals(StagingReconciliation ownedInputs) {
         if (!config.stagingRetention().retainsOriginals()) {
             return null;
         }
@@ -54,7 +65,7 @@ final class DatasetPublisher {
     }
 
     /** Sweep every disposable working namespace, then expose the post-sweep publication boundary. */
-    void sweepWorking(Path outputDir, Path stagingDir, StagingReconciliation ownedInputs,
+    public void sweepWorking(Path outputDir, Path stagingDir, StagingReconciliation ownedInputs,
             StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
         ownedInputs.requireOwnedStagingAuthority(stagingDir);
         outputAuthority.requireSame(outputDir);
@@ -75,7 +86,7 @@ final class DatasetPublisher {
      * Verify and assemble parts whose producer already assigned global stamps and durably closed them.
      * The publisher deliberately does not restamp or close: pipeline encoders are the sole footer owner.
      */
-    PendingParts preclosedParts(Path outputDir, Path stagingDir, List<Path> tmpFiles,
+    public PendingParts preclosedParts(Path outputDir, Path stagingDir, List<Path> tmpFiles,
             List<SortedFileWriter> writers, StagingReconciliation ownedInputs,
             StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
         if (tmpFiles.isEmpty() || tmpFiles.size() != writers.size()) {
@@ -150,7 +161,7 @@ final class DatasetPublisher {
     }
 
     /** Serial drain closes its writers itself; this records the same post-close boundary. */
-    void allTmpPartsDurable() throws IOException {
+    public void allTmpPartsDurable() throws IOException {
         publicationStep(PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE);
     }
 
@@ -159,7 +170,7 @@ final class DatasetPublisher {
      * account for the same exact row total. Writer rows are read only after every part has closed,
      * so an open or failed footer can never satisfy this gate.
      */
-    void verifyCardinality(PendingParts pending, long sourceRows, long drainedRows)
+    public void verifyCardinality(PendingParts pending, long sourceRows, long drainedRows)
             throws IOException {
         long finalPartRows = 0;
         for (SortedFileWriter writer : pending.writers) {
@@ -168,7 +179,7 @@ final class DatasetPublisher {
         requireExactCardinality(sourceRows, drainedRows, finalPartRows, metrics);
     }
 
-    static void requireExactCardinality(long sourceRows, long drainedRows, long finalPartRows)
+    public static void requireExactCardinality(long sourceRows, long drainedRows, long finalPartRows)
             throws IOException {
         requireExactCardinality(sourceRows, drainedRows, finalPartRows, SortMetrics.NO_OP);
     }
@@ -185,7 +196,7 @@ final class DatasetPublisher {
     }
 
     /** Complete the ordered physical publish and configured staging ownership policy. */
-    void publish(PendingParts pending, long totalRows, PublishListener publishListener,
+    public void publish(PendingParts pending, long totalRows, PublishListener publishListener,
             StagingReconciliation ownedInputs, StagingReconciliation retainedOriginals,
             List<Path> disposableIntermediates) throws IOException {
         // Validate both source and destination authorities before the first publication mutation.
@@ -201,7 +212,7 @@ final class DatasetPublisher {
             atomicRename(pending.tmpFiles.get(i), pending.finalFiles.get(i));
             publicationStep(PublicationStep.AFTER_PART_RENAME, i);
         }
-        Durability.directory(pending.outputDir);
+        DurableFiles.directory(pending.outputDir);
         publicationStep(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC);
         publishListener.onPublished(finalParts(pending.finalFiles, pending.writers), totalRows);
         CommittedPublicationCleanupException.Stage cleanupStage =
@@ -305,7 +316,7 @@ final class DatasetPublisher {
     }
 
     /** Mutable only while a single transform constructs its ordered replacement set. */
-    final class PendingParts {
+    public final class PendingParts {
         private final Path outputDir;
         private final Path stagingDir;
         private final SortedFileWriterFactory outputSequence;
@@ -338,11 +349,11 @@ final class DatasetPublisher {
             return writer;
         }
 
-        List<Path> finalFiles() {
+        public List<Path> finalFiles() {
             return List.copyOf(finalFiles);
         }
 
-        long outputBytes() throws IOException {
+        public long outputBytes() throws IOException {
             long bytes = 0L;
             for (Path tmpFile : tmpFiles) {
                 bytes = Math.addExact(bytes, Files.size(tmpFile));

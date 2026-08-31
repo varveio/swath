@@ -11,6 +11,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.sorted.PublishListener;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

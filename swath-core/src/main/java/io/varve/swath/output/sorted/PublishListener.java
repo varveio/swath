@@ -3,8 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
+import io.varve.swath.sort.FinalPart;
+import io.varve.swath.sort.SortTransform;
 import java.io.IOException;
 import java.util.List;
 

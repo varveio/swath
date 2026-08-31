@@ -9,6 +9,7 @@ import com.sun.management.OperatingSystemMXBean;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.sorted.Sweeps;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.nio.file.DirectoryStream;

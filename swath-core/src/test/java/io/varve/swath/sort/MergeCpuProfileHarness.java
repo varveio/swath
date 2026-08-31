@@ -6,6 +6,8 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
+import io.varve.swath.output.sorted.PublishListener;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

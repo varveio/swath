@@ -7,8 +7,8 @@ package io.varve.swath.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.output.sorted.StagingRetention;
 import io.varve.swath.sort.SortConfig;
-import io.varve.swath.sort.StagingRetention;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;

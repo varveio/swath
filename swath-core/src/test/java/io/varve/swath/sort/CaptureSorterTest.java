@@ -15,6 +15,7 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
+import io.varve.swath.output.sorted.StagingNames;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

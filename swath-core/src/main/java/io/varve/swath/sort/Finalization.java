@@ -5,6 +5,11 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.sorted.CommittedPublicationCleanupException;
+import io.varve.swath.output.sorted.DatasetPublisher;
+import io.varve.swath.output.sorted.PublishListener;
+import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.output.sorted.StagingReconciliation;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;

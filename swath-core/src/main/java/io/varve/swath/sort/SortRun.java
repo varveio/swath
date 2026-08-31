@@ -6,6 +6,7 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.util.Comparator;
 import java.util.function.IntSupplier;
 

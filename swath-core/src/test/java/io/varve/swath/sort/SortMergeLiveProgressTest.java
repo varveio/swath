@@ -13,6 +13,8 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.observability.Phase;
 import io.varve.swath.observability.ProgressEvent;
 import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.sorted.PublishListener;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

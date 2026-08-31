@@ -8,6 +8,7 @@ package io.varve.swath.sort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.output.sorted.StagingRetention;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 

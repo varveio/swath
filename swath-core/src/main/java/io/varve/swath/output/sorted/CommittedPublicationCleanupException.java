@@ -3,8 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
+import io.varve.swath.sort.SortTransform;
+import io.varve.swath.sort.SortTransformResult;
 import java.io.IOException;
 
 /**
@@ -51,7 +53,7 @@ public final class CommittedPublicationCleanupException extends IOException {
         return new CommittedPublicationCleanupException(Stage.PUBLISHED_REENTRY_CLEANUP, cause);
     }
 
-    CommittedPublicationCleanupException withPublishedResult(SortTransformResult result) {
+    public CommittedPublicationCleanupException withPublishedResult(SortTransformResult result) {
         if (publishedResult != null) {
             throw new IllegalStateException("published sort result already attached");
         }

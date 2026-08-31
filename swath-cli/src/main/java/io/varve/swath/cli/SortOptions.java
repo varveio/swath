@@ -5,8 +5,8 @@
  */
 package io.varve.swath.cli;
 
+import io.varve.swath.output.sorted.StagingRetention;
 import io.varve.swath.sort.SortConfig;
-import io.varve.swath.sort.StagingRetention;
 
 /** The globally-sorted-output flags (contract §6): {@code --sort} and its disk-guard override. */
 final class SortOptions {

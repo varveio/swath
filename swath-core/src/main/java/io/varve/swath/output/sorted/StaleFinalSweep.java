@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 /** Ownership scope for stale final-output cleanup immediately before replacement publication. */
 public enum StaleFinalSweep {

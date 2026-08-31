@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,6 +13,21 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPart;
+import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortTestSupport;
+import io.varve.swath.sort.SortTransform;
+import io.varve.swath.sort.SortTransformResult;
+import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,7 +50,8 @@ import org.junit.jupiter.api.io.TempDir;
  * "served-file footer stamp"). That symmetry is what lets {@code merge-parallelism} be a performance
  * knob rather than a change to what the output means.
  *
- * <p>Both loops also share one progress-feed cadence — batched at {@link KWayMerge#PROGRESS_BATCH_ROWS},
+ * <p>Both loops also share one progress-feed cadence — batched at the finalization progress batch
+ * size,
  * a full batch each time the counter reaches it and a remainder flush at the end — pinned here for the
  * one-encoder path as an exact ordered sequence; the multi-encoder path drains concurrently, so
  * only its total (every row accounted for) is a deterministic observable (see that test).
@@ -159,7 +175,7 @@ class SortRollPublishStampCharacterizationTest {
     }
 
     /**
-     * The serial progress feed is batched at {@link KWayMerge#PROGRESS_BATCH_ROWS} (1000): a full batch
+     * The serial progress feed is batched at 1000 rows: a full batch
      * each time the counter reaches it, then a remainder flush. A single-pass merge (fan-in ≫ segment
      * count, no cascade) of 2500 rows into one file therefore emits exactly {@code 1000, 1000, 500}. The
      * multi-encoder loop shares this cadence, but concurrent emissions interleave nondeterministically,

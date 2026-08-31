@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.sorted.StagingRetention;
 import java.util.function.UnaryOperator;
 
 /**

@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
 import io.varve.swath.output.parquet.Manifest;
+import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.runtime.ListRunner;
 import java.io.IOException;
 import java.nio.file.Files;

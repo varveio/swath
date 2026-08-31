@@ -7,8 +7,8 @@ package io.varve.swath.cli;
 
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
+import io.varve.swath.output.sorted.StagingRetention;
 import io.varve.swath.sort.SortConfig;
-import io.varve.swath.sort.StagingRetention;
 import java.io.PrintWriter;
 import java.time.Duration;
 import java.util.ArrayList;
