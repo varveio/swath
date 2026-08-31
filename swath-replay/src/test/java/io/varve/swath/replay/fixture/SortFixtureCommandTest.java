@@ -9,10 +9,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.sorted.SortStamp;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
-import io.varve.swath.sort.SortStamp;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;

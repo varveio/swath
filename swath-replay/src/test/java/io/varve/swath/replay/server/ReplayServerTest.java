@@ -9,13 +9,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.ListingFixture;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
 import io.varve.swath.replay.testkit.HttpProbe;
-import io.varve.swath.sort.RowGroupOrderException;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;

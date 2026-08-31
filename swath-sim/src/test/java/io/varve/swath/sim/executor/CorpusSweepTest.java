@@ -10,16 +10,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 import static org.assertj.core.api.Assertions.tuple;
 
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.sim.store.SimStoreBackend;
 import io.varve.swath.sim.store.SimStoreConfig;
-import io.varve.swath.sort.RowGroupOrderException;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortedFileWriter;
-import io.varve.swath.sort.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;

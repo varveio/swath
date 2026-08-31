@@ -10,6 +10,8 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ParquetParts;
+import io.varve.swath.output.parquet.fixture.SegmentReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

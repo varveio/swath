@@ -3,8 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
+import io.varve.swath.output.parquet.fixture.SegmentReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;

@@ -5,15 +5,15 @@
  */
 package io.varve.swath.replay.store;
 
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.output.parquet.sorted.SortedRangeReader;
+import io.varve.swath.output.parquet.sorted.SortedRowGroupReader;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.Successor;
 import io.varve.swath.replay.server.ReplayMetrics;
-import io.varve.swath.sort.RowGroupOrderException;
-import io.varve.swath.sort.SortedRangeReader;
-import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayDeque;

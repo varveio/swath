@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.parquet.sorted.SortedFileIndex;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;

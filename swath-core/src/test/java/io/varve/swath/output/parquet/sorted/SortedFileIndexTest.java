@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -14,7 +14,11 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ListEntryWriteSupport;
 import io.varve.swath.output.parquet.ParquetSchema;
-import io.varve.swath.sort.SortedFileIndex.RowGroupKey;
+import io.varve.swath.output.parquet.sorted.SortedFileIndex.RowGroupKey;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedFileWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -48,7 +52,9 @@ class SortedFileIndexTest {
     }
 
     private static SortConfig config(Map<String, String> overrides) {
-        return SortConfig.fromProperties(key -> overrides.get(key.substring("swath.sort.".length())));
+        SortConfig config = SortConfigs.base();
+        String rowGroupBytes = overrides.get("final-row-group-bytes");
+        return rowGroupBytes == null ? config : config.withFinalRowGroupBytes(Long.parseLong(rowGroupBytes));
     }
 
     @Test

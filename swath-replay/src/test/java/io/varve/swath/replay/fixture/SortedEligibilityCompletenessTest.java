@@ -7,8 +7,8 @@ package io.varve.swath.replay.fixture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.output.parquet.sorted.SortStamp;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortStamp;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;

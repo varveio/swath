@@ -7,10 +7,10 @@ package io.varve.swath.replay.fixture;
 
 import io.micrometer.core.instrument.Timer;
 import io.varve.swath.output.parquet.ParquetParts;
+import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.sorted.SortedFileIndex;
+import io.varve.swath.output.parquet.sorted.SortedFileIndex.RowGroupKey;
 import io.varve.swath.replay.protocol.ByteKey;
-import io.varve.swath.sort.SortStamp;
-import io.varve.swath.sort.SortedFileIndex;
-import io.varve.swath.sort.SortedFileIndex.RowGroupKey;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -95,9 +95,9 @@ public final class SortedFixtures {
      * One row group's derived routing entry: which file, its actual first key, and its row count.
      *
      * @param rowGroup {@code file}'s <b>physical</b> row-group block index — the ordinal
-     *                 {@link io.varve.swath.sort.SortedFileIndex.RowGroupSpan#blockIndex} names and
-     *                 {@link io.varve.swath.sort.SortedRowGroupReader#openKeyCursor}/{@link
-     *                 io.varve.swath.sort.SortedRowGroupReader#rows} take directly. Plain range routing
+     *                 {@link io.varve.swath.output.parquet.sorted.SortedFileIndex.RowGroupSpan#blockIndex} names and
+     *                 {@link io.varve.swath.output.parquet.sorted.SortedRowGroupReader#openKeyCursor}/{@link
+     *                 io.varve.swath.output.parquet.sorted.SortedRowGroupReader#rows} take directly. Plain range routing
      *                 ({@code SortedRouting}) never reads it — only the {@code delimiter=/} skip-scan
      *                 ({@code SortedParquetStore#delimitedRollup}) does, to random-access the exact row
      *                 group a scan cursor lands in without decoding the groups before it.

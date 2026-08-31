@@ -13,6 +13,7 @@ import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.fixture.SegmentReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;

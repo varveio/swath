@@ -7,6 +7,8 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.Manifest;
+import io.varve.swath.output.parquet.fixture.SegmentReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;

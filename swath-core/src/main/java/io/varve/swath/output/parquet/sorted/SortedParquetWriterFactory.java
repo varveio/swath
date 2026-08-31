@@ -3,10 +3,15 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.dataset.DatasetDataSyncMetrics;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortTransform;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Path;
 

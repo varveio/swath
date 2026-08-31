@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.parquet.fixture.SegmentReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

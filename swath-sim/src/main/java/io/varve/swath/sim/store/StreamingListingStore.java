@@ -6,14 +6,14 @@
 package io.varve.swath.sim.store;
 
 import io.micrometer.core.instrument.Timer;
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.output.parquet.sorted.SortedRowGroupReader;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.store.SortedRouting;
-import io.varve.swath.sort.RowGroupOrderException;
-import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;

@@ -5,6 +5,8 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.parquet.sorted.SortStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import java.util.Optional;
 
 /**

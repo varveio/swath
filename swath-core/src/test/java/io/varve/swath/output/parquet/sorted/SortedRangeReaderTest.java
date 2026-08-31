@@ -3,12 +3,15 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedFileWriter;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;

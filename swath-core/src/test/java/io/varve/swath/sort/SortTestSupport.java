@@ -8,6 +8,7 @@ package io.varve.swath.sort;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;

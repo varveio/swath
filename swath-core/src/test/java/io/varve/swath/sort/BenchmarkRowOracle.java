@@ -9,6 +9,7 @@ import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.fixture.SegmentReader;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;

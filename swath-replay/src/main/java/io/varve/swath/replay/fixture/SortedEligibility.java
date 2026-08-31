@@ -5,10 +5,10 @@
  */
 package io.varve.swath.replay.fixture;
 
+import io.varve.swath.output.parquet.sorted.SortStamp;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexLoadResult;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortStamp;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;

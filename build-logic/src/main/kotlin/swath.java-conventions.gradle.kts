@@ -15,8 +15,8 @@ plugins {
     // model is that a module declares everything it touches and exposes as `api` everything
     // that reaches its own signatures, and this build deliberately does the opposite in
     // places: swath-core keeps parquet-hadoop and hadoop-common `implementation`-scoped
-    // precisely so no consumer can import those types, a boundary swath-replay enforces with
-    // its own verifyNoParquetOrHadoopOnCompileClasspath task. Taken as a gate, the plugin
+    // precisely so no consumer can import those types, a boundary selected modules enforce with
+    // shared verifyNoParquetOrHadoopOnCompileClasspath tasks. Taken as a gate, the plugin
     // would demand that swath-core promote both to `api` and undo it. Read the report, apply
     // judgement.
     id("com.autonomousapps.dependency-analysis")
@@ -152,6 +152,62 @@ plugins.withId("application") {
         }
     }
     tasks.named("check") { dependsOn(verifyNoDuplicateModuleVersions) }
+}
+
+// The applications and simulator deliberately keep Parquet/Hadoop out of their main compile
+// classpaths. They consume swath-core's byte[]/long/String-facing seams, while swath-core keeps
+// its Parquet/Hadoop implementation dependencies runtime-only to consumers. Keep the opt-in list
+// and both checks here so these boundaries cannot drift between modules.
+val parquetHadoopBoundaryProjects = setOf(":swath-cli", ":swath-replay", ":swath-sim")
+if (project.path in parquetHadoopBoundaryProjects) {
+    val verifyNoParquetOrHadoopOnCompileClasspath by tasks.registering {
+        group = "verification"
+        description = "Fails if Parquet/Hadoop artifacts reach the main compile classpath."
+        val compileClasspath = configurations.named("compileClasspath")
+        inputs.files(compileClasspath)
+        doLast {
+            val offenders = compileClasspath.get().resolvedConfiguration.resolvedArtifacts
+                .map { it.moduleVersion.id }
+                .filter { it.group == "org.apache.parquet" || it.group == "org.apache.hadoop" }
+                .map { "${it.group}:${it.name}:${it.version}" }
+                .distinct()
+                .sorted()
+            check(offenders.isEmpty()) {
+                "${project.path} main COMPILE classpath must not carry org.apache.parquet/" +
+                    "org.apache.hadoop artifacts: ${offenders.joinToString(", ")}"
+            }
+        }
+    }
+
+    val verifyNoParquetOrHadoopSourceImports by tasks.registering {
+        group = "verification"
+        description = "Fails if main sources import org.apache.parquet or org.apache.hadoop."
+        val mainSources = fileTree("src/main/java") { include("**/*.java") }
+        inputs.files(mainSources)
+        val forbiddenImport = Regex("""^\s*import\s+(?:static\s+)?org\.apache\.(?:parquet|hadoop)\.""")
+        doLast {
+            val offenders = mainSources.files.flatMap { source ->
+                source.useLines { lines ->
+                    lines.mapIndexedNotNull { index, line ->
+                        if (forbiddenImport.containsMatchIn(line)) {
+                            "${source.relativeTo(projectDir)}:${index + 1}: ${line.trim()}"
+                        } else {
+                            null
+                        }
+                    }.toList()
+                }
+            }
+            check(offenders.isEmpty()) {
+                "${project.path} main sources must not import org.apache.parquet/" +
+                    "org.apache.hadoop:\n${offenders.joinToString("\n")}"
+            }
+        }
+    }
+
+    tasks.named("check") {
+        dependsOn(verifyNoParquetOrHadoopOnCompileClasspath)
+        dependsOn(verifyNoParquetOrHadoopSourceImports)
+    }
 }
 
 // Spotless enforces import hygiene and the SPDX license header on every first-party Java

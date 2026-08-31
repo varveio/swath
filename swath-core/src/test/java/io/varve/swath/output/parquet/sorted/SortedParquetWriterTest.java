@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -15,6 +15,11 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.dataset.PeriodicDataSync;
+import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,7 +41,9 @@ import org.junit.jupiter.api.io.TempDir;
 class SortedParquetWriterTest {
 
     private static SortConfig config(Map<String, String> overrides) {
-        return SortConfig.fromProperties(key -> overrides.get(key.substring("swath.sort.".length())));
+        SortConfig config = SortConfigs.base();
+        String rowGroupBytes = overrides.get("final-row-group-bytes");
+        return rowGroupBytes == null ? config : config.withFinalRowGroupBytes(Long.parseLong(rowGroupBytes));
     }
 
     @Test
