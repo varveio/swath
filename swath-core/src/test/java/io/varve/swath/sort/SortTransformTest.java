@@ -784,10 +784,10 @@ class SortTransformTest {
         SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        return new SortTransform(run, PublicationStepHook.NO_OP, path -> {
+        return new SortTransform(run, PublicationStepHook.NO_OP, new SortFinalizer(run, path -> {
                     opens.incrementAndGet();
                     return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-                });
+                }));
     }
 
     private record Dirs(Path output, Path staging) {

@@ -41,13 +41,14 @@ public final class SortTransform {
 
     /** Build a transform with the internal deterministic publication crash-test seam. */
     public SortTransform(SortRun run, PublicationStepHook publicationStepHook) {
-        this(run, publicationStepHook, path -> PageRunSegmentIo.open(path, run.metrics()));
+        this(run, publicationStepHook, new SortFinalizer(run));
     }
 
-    SortTransform(SortRun run, PublicationStepHook publicationStepHook,
-            PageRunCatalog.Opener catalogOpener) {
+    /** Build a transform around an injected finalizer for deterministic boundary tests. */
+    public SortTransform(
+            SortRun run, PublicationStepHook publicationStepHook, SortFinalizer sortFinalizer) {
         this.datasetPublisher = new DatasetPublisher(run, publicationStepHook, log);
-        this.sortFinalizer = new SortFinalizer(run, catalogOpener);
+        this.sortFinalizer = sortFinalizer;
     }
 
     /** Merge and publish checkpoint-owned page-run segments. */
