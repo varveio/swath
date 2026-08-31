@@ -42,7 +42,7 @@ class SortFinalizerPreparationTest {
         StagingReconciliation owned = StagingReconciliation.fromPaths(staging, sources);
 
         PreparedSortedParts prepared = finalizer.prepare(new SortFinalizer.Request(
-                finalizer.admit(owned.ownedPaths(), Map.of()), staging, ignored -> { },
+                finalizer.admit(sources, Map.of()), staging, ignored -> { },
                 FinalPassListener.NO_OP, owned));
 
         assertThat(prepared.sourceRows()).isEqualTo(2);

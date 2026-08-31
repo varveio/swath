@@ -282,7 +282,7 @@ public final class SortConfig {
         String keepStagingProp = lookup.apply(KEEP_STAGING_PROPERTY);
         StagingRetention stagingRetention = keepStagingProp == null
                 ? DEFAULT.stagingRetention()
-                : StagingRetention.fromProperty(KEEP_STAGING_PROPERTY, keepStagingProp);
+                : parseStagingRetention(KEEP_STAGING_PROPERTY, keepStagingProp);
         return new SortConfig(
                 new StagingBuffering(segmentBytes, segmentEntries, heapFraction, buffers, segmentCodec),
                 new Merge(fanIn, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes),
@@ -368,6 +368,15 @@ public final class SortConfig {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("swath.sort.segment-codec: " + e.getMessage(), e);
         }
+    }
+
+    private static StagingRetention parseStagingRetention(String property, String value) {
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "on" -> StagingRetention.RETAIN_ORIGINALS;
+            case "off" -> StagingRetention.DELETE_AFTER_PUBLISH;
+            default -> throw new IllegalArgumentException(
+                    property + " must be on or off, got " + value);
+        };
     }
 
     /**

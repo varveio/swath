@@ -16,8 +16,8 @@ import io.varve.swath.output.sorted.SortedDatasetCommitter;
 import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.output.sorted.StagingReconciliation;
 import io.varve.swath.output.sorted.StaleFinalSweep;
-import io.varve.swath.output.sorted.Sweeps;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -119,7 +119,7 @@ public final class CaptureSorter {
     public SortedDatasetResult sort(List<Path> inputParts, Path outputDir) throws IOException {
         Files.createDirectories(outputDir);
         Path stagingDir = outputDir.resolve(STAGING_DIR_NAME);
-        Sweeps.deleteTree(stagingDir);
+        StagingReconciliation.discardStagingTree(stagingDir);
         Files.createDirectories(stagingDir);
 
         Comparator<ListEntry> comparator = new ListEntryComparator();

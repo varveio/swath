@@ -14,7 +14,7 @@ public final class StagingNames {
 
     static final String FINAL_TMP_GLOB = "part-*.parquet.tmp";
     public static final String PIPELINE_TMP_GLOB = "pipeline-*.parquet.tmp";
-    public static final String OWN_FINAL_GLOB = "part-*.parquet";
+    static final String OWN_FINAL_GLOB = "part-*.parquet";
     static final String ALL_PARQUET_GLOB = "*.parquet";
     static final String CASCADE_PAGE_RUN_GLOB = "merge-*.pageseg";
     /** Retained for resume tests and older attempts that planted Parquet cascade debris. */
@@ -27,7 +27,7 @@ public final class StagingNames {
     private StagingNames() {
     }
 
-    public static String finalPart(int index) {
+    static String finalPart(int index) {
         return String.format("part-%05d.parquet", index);
     }
 

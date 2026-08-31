@@ -102,12 +102,23 @@ public final class StagingReconciliation {
         return new StagingReconciliation(null, Set.of());
     }
 
+    /** Delete one sorter-owned staging tree after validating its physical directory authority. */
+    public static void discardStagingTree(Path stagingDir) throws IOException {
+        if (!Files.exists(stagingDir, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        StagingReconciliation owned = fromPaths(stagingDir, List.of());
+        owned.reconcile(stagingDir);
+        owned.requireOwnedStagingAuthority(stagingDir);
+        Files.delete(stagingDir);
+    }
+
     /**
      * Return the path-backed originals in their caller-supplied order, after lexical aliases have
      * been collapsed to the validated absolute staging authority. Only {@link #fromPaths} creates
      * a path-backed reconciliation.
      */
-    public List<Path> ownedPaths() {
+    List<Path> ownedPaths() {
         if (ownedStagingAuthority == null) {
             throw new IllegalStateException(
                     "checkpoint-name reconciliation has no owned path authority");
@@ -265,7 +276,7 @@ public final class StagingReconciliation {
     }
 
     /** Canonical physical identity retained for destructive directory authority checks. */
-    public static final class DirectoryAuthority {
+    static final class DirectoryAuthority {
         private final Path normalizedPath;
         private final Path realPath;
         private final Object fileKey;
@@ -279,7 +290,7 @@ public final class StagingReconciliation {
             this.description = description;
         }
 
-        public static DirectoryAuthority capture(Path path, String description) throws IOException {
+        static DirectoryAuthority capture(Path path, String description) throws IOException {
             Path normalized = path.toAbsolutePath().normalize();
             BasicFileAttributes attributes = Files.readAttributes(
                     normalized, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
@@ -299,7 +310,7 @@ public final class StagingReconciliation {
             return new DirectoryAuthority(normalized, real, fileKey, description);
         }
 
-        public void requireSame(Path path) throws IOException {
+        void requireSame(Path path) throws IOException {
             Path normalized = path.toAbsolutePath().normalize();
             if (!normalizedPath.equals(normalized)) {
                 throw new IOException(description + " path changed after validation: expected "

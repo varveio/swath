@@ -9,7 +9,6 @@ import com.sun.management.OperatingSystemMXBean;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
-import io.varve.swath.output.sorted.Sweeps;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.nio.file.DirectoryStream;
@@ -99,7 +98,14 @@ public final class SortBenchCorpus {
     /** Best-effort removal of a measurement temporary tree. */
     public static void deleteTree(Path root) {
         try {
-            Sweeps.deleteTree(root);
+            if (!Files.exists(root)) {
+                return;
+            }
+            try (var paths = Files.walk(root)) {
+                for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.deleteIfExists(path);
+                }
+            }
         } catch (IOException ignored) {
             // Best-effort cleanup of a measurement temporary tree.
         }

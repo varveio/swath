@@ -20,13 +20,13 @@ import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.output.sorted.StaleFinalSweep;
-import io.varve.swath.output.sorted.Sweeps;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
 import net.jqwik.api.ForAll;
@@ -111,7 +111,15 @@ class FinalizationPipelinePropertyTest {
                         });
             }
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTree(root);
+        }
+    }
+
+    private static void deleteTree(Path root) throws IOException {
+        try (var paths = Files.walk(root)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
         }
     }
 

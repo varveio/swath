@@ -15,7 +15,7 @@ import java.util.Comparator;
 import java.util.function.Consumer;
 
 /** Shared deletion primitives for sorter-owned staging files and trees. */
-public final class Sweeps {
+final class Sweeps {
 
     private Sweeps() {
     }
@@ -36,7 +36,7 @@ public final class Sweeps {
     }
 
     /** Recursively delete one caller-owned tree; a no-op when it is absent. */
-    public static void deleteTree(Path dir) throws IOException {
+    static void deleteTree(Path dir) throws IOException {
         if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
             return;
         }

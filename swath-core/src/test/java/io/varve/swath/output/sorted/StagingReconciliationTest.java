@@ -59,6 +59,10 @@ class StagingReconciliationTest {
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("sort staging directory")
                 .hasMessageContaining("symbolic link");
+        assertThatThrownBy(() -> StagingReconciliation.discardStagingTree(stagingLink))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("sort staging directory")
+                .hasMessageContaining("symbolic link");
 
         assertThat(segment).hasContent("outside segment");
         assertThat(stale).hasContent("outside stale");

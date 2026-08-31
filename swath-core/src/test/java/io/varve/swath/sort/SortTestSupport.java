@@ -8,7 +8,6 @@ package io.varve.swath.sort;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
-import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -25,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
-/** Shared fixtures for the {@code io.varve.swath.sort} unit tests (all in-package, so package-private types are reachable). */
+/** Shared fixtures for sort tests, with narrow public helpers used by {@code output.sorted} tests. */
 public final class SortTestSupport {
 
     private SortTestSupport() {
@@ -45,19 +44,6 @@ public final class SortTestSupport {
             writer.writeIntermediate(cursor, path);
         }
         return path;
-    }
-
-    /** Read keys from sorted Parquet parts without widening the package-private segment reader. */
-    public static List<String> readKeys(List<Path> files) throws IOException {
-        List<String> keys = new ArrayList<>();
-        for (Path file : files) {
-            try (ParquetEntryReader reader = new ParquetEntryReader(file)) {
-                while (reader.hasNext()) {
-                    keys.add(reader.next().key().asString());
-                }
-            }
-        }
-        return keys;
     }
 
     /** Write one single-row listing page per ordinal, including the production type-2 index. */
