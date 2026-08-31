@@ -60,8 +60,8 @@ The paired staging ratios were 0.709255×, 0.709253×, and 0.709253×.
 | --- | ---: | ---: | ---: |
 | Rows | 9,919,142 | 9,919,142 | 1.000000× |
 | Staging bytes | 893,285,391 | 633,565,914 | 0.709254× |
-| `backpressure.wait` total ms | 0.027339 | 0.028438 | 1.04020× |
-| `backpressure.wait` max ms | 0.018045 | 0.020594 | 1.14126× |
+| `backpressure.wait` total ms | 0.027339 | 0.028438 | — |
+| `backpressure.wait` max ms | 0.018045 | 0.020594 | — |
 | Fetch-worker sampled CPU s | 46.16 | 45.44 | 0.984402× |
 | Pack sampled CPU s | 8.33 | 9.14 | 1.09724× |
 | Process CPU s | 96.51 | 95.85 | 0.993161× |
@@ -71,13 +71,33 @@ The paired staging ratios were 0.709255×, 0.709253×, and 0.709253×.
 | Report run wall ms | 32,703 | 32,472 | 0.992936× |
 | Fresh-process wall s | 38.30 | 38.10 | 0.994778× |
 
+## Output-neutrality check
+
+A separate untimed paired run listed the same bucket once with LZ4 and then once with ZSTD1,
+retaining both completed datasets and manifests until comparison. Both arms produced four parts
+and 9,919,142 rows. The physical parts were not digest-identical because the runs chose different
+part boundaries: none of the four manifest MD5 values matched across arms, independently computed
+SHA-256 values also differed, and total part bytes were 540,820,618 versus 540,865,380. Every
+manifest MD5 did match its actual part bytes. All non-file manifest fields other than the expected
+creation timestamp matched, including schema, sortedness, sort key, and global bounds. DuckDB
+1.5.5 exact all-column `EXCEPT ALL` comparisons returned zero rows in both directions; both arms
+also had 9,919,142 distinct keys, the same aggregate logical `size`, and zero descending adjacent
+key pairs. The staging codec was therefore output-neutral in logical content and ordering, while
+physical partitioning was not byte-identical.
+
 ## Gate verdict
 
 **PASS; flip the default to ZSTD1.** ZSTD1 reduced median staging bytes by 29.07% while
 every run retained the same row count and recorded zero actual sort-backpressure engagements.
-The timer's three acquisition observations per run totaled only 0.024–0.038 ms, so its small
-relative median increase is not sustained backpressure. ZSTD1's sampled pack CPU was 9.72%
-higher, as expected, but fetch-worker sampled CPU, process CPU, and RSS did not increase. The
-local decode-and-merge median was 38 ms (0.55%) higher, inside the observed run-to-run spread,
-while median report wall was 0.71% lower and median fresh-process wall was 0.52% lower. The
-required no-sustained-backpressure and no-final-wall-regression gates therefore both pass.
+The `backpressure.wait` event count was exactly 3 in all six runs, and those observations totaled
+only 0.024–0.038 ms per run, so they do not show sustained backpressure. ZSTD1's sampled pack CPU
+was 9.72% higher, as expected, but fetch-worker sampled CPU, process CPU, and RSS did not increase.
+The local decode-and-merge median was 38 ms (0.55%) higher, inside the observed run-to-run spread.
+There was no regression detectable at n=3 (ranges fully overlap): median report wall was 0.71%
+lower and median fresh-process wall was 0.52% lower. The required no-sustained-backpressure and
+no-final-wall-regression gates therefore both pass.
+
+Limitations: the backpressure limb passed vacuously. This listing was network-bound at about 19%
+of ZSTD1's pack ceiling and used about 0.28 core of pack CPU, so a pack-bound regime such as an
+in-region source or higher concurrency remains unvalidated. A future backpressure report must not
+be dismissed against this evidence.

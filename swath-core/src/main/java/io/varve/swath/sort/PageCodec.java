@@ -100,9 +100,6 @@ enum PageCodec {
         }
     };
 
-    /** {@code swath.sort.segment-codec} default: compress-at-pack on by default. */
-    static final PageCodec DEFAULT = LZ4;
-
     private static final int ZSTD_LEVEL = 1;
 
     private final byte code;
