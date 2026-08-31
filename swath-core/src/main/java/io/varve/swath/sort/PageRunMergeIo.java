@@ -51,11 +51,11 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     }
 
     @Override
-    public long decodedPageBudgetBytes(List<Path> segments) throws IOException {
+    public long decodedPageBudgetBytes(List<KWayMerge.PageStream> streams) throws IOException {
         long encodedFrontiers = 0;
-        for (Path segment : segments) {
-            long maximum = PageRunTrailer.read(segment).maxRecordLen();
-            encodedFrontiers = Math.addExact(encodedFrontiers, maximum);
+        for (KWayMerge.PageStream stream : streams) {
+            encodedFrontiers = Math.addExact(
+                    encodedFrontiers, stream.frontierRetainedBytes());
         }
         long available = run.config().mergeBudgetBytes() - encodedFrontiers;
         if (available <= 0) {
@@ -92,18 +92,19 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
         private final PageRunSegmentIo io;
         private PageRunSegmentIo.Page current;
 
-        PageStream(PageRunSegmentIo io) throws IOException {
+        PageStream(PageRunSegmentIo io) {
             this.io = io;
-            try {
-                advance();
-            } catch (IOException | RuntimeException failure) {
-                try {
-                    io.close();
-                } catch (IOException closeFailure) {
-                    failure.addSuppressed(closeFailure);
-                }
-                throw failure;
-            }
+        }
+
+        @Override
+        public void initialize() throws IOException {
+            advance();
+        }
+
+        @Override
+        public long frontierRetainedBytes() {
+            return Math.addExact(
+                    io.maxRecordLen, PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES);
         }
 
         @Override

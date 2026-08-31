@@ -735,8 +735,7 @@ public final class ListRunner {
             SortConfig sortConfig, SortMode mode, EngineToggles toggles,
             TraceSink trace, boolean reattach) throws SwathException, InterruptedException {
         return runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, spec, store, runId,
-                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, RetryConfig.DEFAULT,
-                false);
+                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, RetryConfig.DEFAULT);
     }
 
     /**
@@ -750,18 +749,6 @@ public final class ListRunner {
             SortConfig sortConfig, SortMode mode, EngineToggles toggles,
             TraceSink trace, boolean reattach, RetryConfig retryConfig)
             throws SwathException, InterruptedException {
-        return runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, spec, store, runId,
-                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, retryConfig, false);
-    }
-
-    /** Full overload including the explicit CLI {@code sort.ignore-disk-check} core policy. */
-    public ListingStatistics runToSortedParquetWorkStealing(
-            RunContext ctx, PageFetcher fetcher, Path outputDir, Path stagingDir, ParquetSpec spec,
-            CheckpointStore store, long runId, int workerCount, List<Node> seeds,
-            SortConfig sortConfig, SortMode mode, EngineToggles toggles,
-            TraceSink trace, boolean reattach, RetryConfig retryConfig, boolean ignoreDiskCheck)
-            throws SwathException, InterruptedException {
-
         WorkStealingScan producer = new WorkStealingScan(
                 new EngineContext(runId, spec.prefix(), ListingMode.OBJECTS, ctx.metrics(), toggles, trace, retryConfig),
                 fetcher, store, workerCount, spec.maxKeys(), seeds, spec.filters());
@@ -859,7 +846,7 @@ public final class ListRunner {
                         merged[0] = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                                 sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
                                 spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                                StaleFinalSweep.OWN_PARTS_ONLY, ignoreDiskCheck);
+                                StaleFinalSweep.OWN_PARTS_ONLY);
                     } catch (PublicationPendingException e) {
                         merged[0] = committedSortResult(e);
                         throw e;
@@ -884,16 +871,6 @@ public final class ListRunner {
     public ListingStatistics runSortMergeOnly(RunContext ctx, Path outputDir, Path stagingDir,
             CheckpointStore store, long runId, SortConfig sortConfig, SortMode mode, ParquetSpec spec)
             throws SwathException, InterruptedException {
-        return runSortMergeOnly(ctx, outputDir, stagingDir, store, runId, sortConfig, mode, spec,
-                false);
-    }
-
-    /** Merge-only resume with the explicit CLI {@code sort.ignore-disk-check} core policy. */
-    public ListingStatistics runSortMergeOnly(RunContext ctx, Path outputDir, Path stagingDir,
-            CheckpointStore store, long runId, SortConfig sortConfig, SortMode mode, ParquetSpec spec,
-            boolean ignoreDiskCheck)
-            throws SwathException, InterruptedException {
-
         long startedNs = System.nanoTime();
         ctx.metrics().markRunStarted();
         ctx.metrics().setStrategy("WORK_STEALING");
@@ -936,7 +913,7 @@ public final class ListRunner {
                 result = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                         segRows, sortConfig, mode, spec.bucket(),
                         spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                        StaleFinalSweep.ALL_PARQUET, ignoreDiskCheck);
+                        StaleFinalSweep.ALL_PARQUET);
                 published[0] = result;
             } catch (PublicationPendingException e) {
                 result = committedSortResult(e);
@@ -1011,8 +988,7 @@ public final class ListRunner {
     private SortTransformResult sortMergeAndPublish(RunContext ctx, CheckpointStore store,
             Path outputDir, Path stagingDir,
             List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
-            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep,
-            boolean ignoreDiskCheck)
+            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep)
             throws SwathException {
         // The exact merge denominator, recorded HERE because this is the one point both merge
         // callers pass through with the staged parts in hand: rows merged is measured against the

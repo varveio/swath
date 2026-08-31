@@ -347,6 +347,7 @@ final class FinalizationPipelineTest {
         assertThat(result.mergePasses()).isEqualTo(3);
         assertThat(keys(result.finalFiles())).containsExactly("a", "b", "c", "d", "e");
         assertThat(metrics.count("SORT.cascade_page_whole_merge")).isPositive();
+        assertThat(metrics.pipelineDecodedPageBytesPeak.get()).isPositive();
     }
 
     @Test

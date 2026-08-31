@@ -272,6 +272,7 @@ final class PageRunSegmentIo implements AutoCloseable {
                     "malformed page body: " + e.getMessage(), e);
         }
         requirePlannedDecodedPayload(header.rawPayloadLength());
+        requirePersistedKeyMaximum(header.minKey(), header.maxKey());
         pagesRead++;
         checkMinMonotonic(header.minKey());
         checkDisjoint(header.minKey());
@@ -312,6 +313,7 @@ final class PageRunSegmentIo implements AutoCloseable {
                     "malformed page routing header: " + e.getMessage(), e);
         }
         requirePlannedDecodedPayload(header.rawPayloadLength());
+        requirePersistedKeyMaximum(header.minKey(), header.maxKey());
         pagesRead++;
         checkMinMonotonic(header.minKey());
         checkDisjoint(header.minKey());
@@ -362,6 +364,7 @@ final class PageRunSegmentIo implements AutoCloseable {
                     "malformed page body: " + e.getMessage(), e);
         }
         requirePlannedDecodedPayload(header.rawPayloadLength());
+        requirePersistedKeyMaximum(header.minKey(), header.maxKey());
         if (!Arrays.equals(header.minKey(), ref.minKey())
                 || !Arrays.equals(header.maxKey(), ref.maxKey())
                 || header.count() != ref.count()
@@ -460,6 +463,17 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw corruption(SegmentCorruptionException.PAGE_RUN_DECODED_PAGE_LIMIT,
                     "decoded page payload " + rawPayloadLength
                             + " exceeds the planned segment maximum " + maxRawPayloadLength, null);
+        }
+    }
+
+    private void requirePersistedKeyMaximum(byte[] minKey, byte[] maxKey) throws IOException {
+        int observed = Math.max(minKey.length, maxKey.length);
+        if (observed > persistedMaxKeyLength) {
+            metrics.recordStealReason("SORT", "page_run_key_length_limit");
+            throw corruption(SegmentCorruptionException.PAGE_RUN_KEY_LENGTH_LIMIT,
+                    "page-bound key length " + observed
+                            + " exceeds the persisted segment maximum "
+                            + persistedMaxKeyLength, null);
         }
     }
 

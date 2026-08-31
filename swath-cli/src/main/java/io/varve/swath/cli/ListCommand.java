@@ -1627,7 +1627,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             Files.createDirectories(stagingDir);
             probeDirectoryFsync(stagingDir);
             listRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
-                    sortConfig, sortMode, parquetSpec, sorting.forceSort);
+                    sortConfig, sortMode, parquetSpec);
             return ExitCodes.SUCCESS;
         }
         // The periodic half of the disk pre-check — polls the LIVE swath.sort.segment.bytes
@@ -1640,7 +1640,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 outputDir, ctx.metrics()::sortSegmentBytesWritten, sorting.forceSort)) {
             listRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
                     store, run.id(), connection.maxParallelListings, nodes, sortConfig, sortMode, engine.toggles,
-                    traceSink, run.resumed(), retryConfig(), sorting.forceSort);
+                    traceSink, run.resumed(), retryConfig());
         }
         return ExitCodes.SUCCESS;
     }

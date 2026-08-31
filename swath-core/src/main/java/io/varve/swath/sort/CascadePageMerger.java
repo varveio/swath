@@ -54,7 +54,18 @@ final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
                 frontiers.add(new Source(source, stream));
             }
         }
-        pending = computeNext();
+        try {
+            pending = computeNext();
+        } catch (RuntimeException failure) {
+            try {
+                close();
+            } catch (RuntimeException closeFailure) {
+                if (closeFailure != failure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
+        }
     }
 
     @Override
@@ -185,6 +196,7 @@ final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
             failure = append(failure, rowFailure);
         }
         budget.release(rows.releaseAllBytes());
+        metrics.recordPipelineDecodedPagePeak(budget.peakResidentBytes());
         for (KWayMerge.PageStream stream : streams) {
             try {
                 stream.close();

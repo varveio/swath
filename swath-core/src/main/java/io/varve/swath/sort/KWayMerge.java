@@ -100,14 +100,23 @@ final class KWayMerge<S> {
             throw new UnsupportedOperationException("page merge is not supported");
         }
 
-        /** Decoded-page residency available after encoded frontier bodies are priced. */
-        default long decodedPageBudgetBytes(List<S> segments) throws IOException {
+        /** Decoded-page residency available after the opened streams' frontiers are priced. */
+        default long decodedPageBudgetBytes(List<PageStream> streams) throws IOException {
             return Long.MAX_VALUE;
         }
     }
 
     /** Minimal page frontier used only by cascade passes; no range/seek machinery survives here. */
     interface PageStream extends AutoCloseable {
+        /** Complete any deferred first-page read after the group has passed frontier admission. */
+        default void initialize() throws IOException {
+        }
+
+        /** Heap retained by this stream's encoded current-page frontier. */
+        default long frontierRetainedBytes() {
+            return 0;
+        }
+
         boolean hasPage();
 
         byte[] minKey();
@@ -193,13 +202,16 @@ final class KWayMerge<S> {
     private SortedCursor openMerger(List<S> group, MergeRunSink disjointSink)
             throws IOException {
         if (allSupportPageMerge(group)) {
-            long decodedBudget = io.decodedPageBudgetBytes(group);
             List<PageStream> pages = openPages(group);
             try {
+                long decodedBudget = io.decodedPageBudgetBytes(pages);
+                for (PageStream page : pages) {
+                    page.initialize();
+                }
                 return new DuplicateReporting(new CascadePageMerger(
                         pages, comparator, metrics, disjointSink,
                         decodedBudget), comparator, hook);
-            } catch (RuntimeException failure) {
+            } catch (IOException | RuntimeException failure) {
                 closePagesAfterFailedOpen(pages, failure);
                 throw failure;
             }

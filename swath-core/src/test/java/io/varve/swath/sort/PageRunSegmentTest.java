@@ -137,6 +137,33 @@ class PageRunSegmentTest {
     }
 
     @Test
+    void persistedKeyMaximumRejectsAnUnderstatedTrailerClaim(@TempDir Path dir)
+            throws IOException {
+        Path path = SortTestSupport.writePages(
+                dir.resolve("key-limit.pageseg"),
+                List.of(List.of(object("claimed-maximum-key"))),
+                SortMode.OBJECTS, PageCodec.NONE);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
+        byte[] raw = Files.readAllBytes(path);
+        int maxKeyLengthOffset = raw.length
+                - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES
+                + Long.BYTES + Integer.BYTES + Long.BYTES + 2 * Integer.BYTES;
+        ByteBuffer.wrap(raw, maxKeyLengthOffset, Integer.BYTES)
+                .putInt(trailer.maxKeyLength() - 1);
+        rewriteFixedTrailerCrc(raw);
+        Files.write(path, raw);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, metrics)) {
+            assertThatThrownBy(io::nextPage)
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_key_length_limit")
+                    .hasMessageContaining("exceeds the persisted segment maximum");
+        }
+        assertThat(metrics.count("SORT.page_run_key_length_limit")).isEqualTo(1);
+    }
+
+    @Test
     void versionsEqualKeySeamMergesSeveralPagesEndToEnd(@TempDir Path dir)
             throws IOException {
         List<ListEntry> versions = new ArrayList<>(List.of(

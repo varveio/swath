@@ -947,8 +947,10 @@ end offset to equal `trailerStart`, and requires the sum of PageBlock row counts
 `totalEntries`. A missing tail magic, tail CRC mismatch, impossible tail metadata, frame crossing,
 invalid length, body CRC mismatch, row-total mismatch, or leftover gap is typed corruption. These
 rules reject a torn suffix and any offset or count declaration that does not describe the framed
-contents. The maxima are writer-computed, CRC-protected admission claims; every read still applies
-the corresponding format and planned-allocation bounds before decoding.
+contents. The maxima are writer-computed, CRC-protected admission claims. Every page read checks
+its header's decoded payload against the admitted maximum and its minimum/maximum key lengths
+against the persisted maximum before decoding; an understated claim is typed corruption rather
+than an under-priced allocation.
 
 ## 7. Config defaults (single source of truth)
 

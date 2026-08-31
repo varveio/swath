@@ -133,7 +133,8 @@ class FinalizationPipelinePropertyTest {
         List<ListEntry> all = new ArrayList<>();
         for (int band = 0; band < bandCount; band++) {
             for (int segment = 0; segment < segmentCount; segment++) {
-                if (!participates(overlapShape, segment, random)) {
+                if (!participates(
+                        overlapShape, band, bandCount, segment, segmentCount, random)) {
                     continue;
                 }
                 int pageRows = Math.max(1, rowsPerPage + random.nextInt(5) - 2);
@@ -152,14 +153,13 @@ class FinalizationPipelinePropertyTest {
     }
 
     private static boolean participates(
-            OverlapShape shape, int segment, Random random) {
-        if (segment == 0) {
-            return true;
-        }
+            OverlapShape shape, int band, int bandCount,
+            int segment, int segmentCount, Random random) {
         return switch (shape) {
-            case DISJOINT_BANDS -> false;
+            case DISJOINT_BANDS -> segment == Math.min(
+                    segmentCount - 1, (int) ((long) band * segmentCount / bandCount));
             case SHARED_BANDS -> true;
-            case SPARSE_OVERLAP -> random.nextBoolean();
+            case SPARSE_OVERLAP -> segment == 0 || random.nextBoolean();
         };
     }
 
