@@ -55,7 +55,7 @@ import java.util.function.UnaryOperator;
  *       configured price.</li>
  *   <li>{@code segmentCodec} — the codec {@link PageBlock#pack} compresses a page's
  *       front-coded PAYLOAD at pack time ({@code NONE}, {@code LZ4}, or {@code ZSTD1}; default
- *       {@code LZ4}) — the record HEADER (min/max, dict
+ *       {@code ZSTD1}) — the record HEADER (min/max, dict
  *       tables, {@code useDict}, count, ordered-bit) is never compressed, so
  *       {@link PageFrontierReader} keeps parsing it without decompressing. Threaded to
  *       {@link PageBlock#pack} at the one seal call site ({@link SortBuffer#admit}).</li>
@@ -88,11 +88,11 @@ public final class SortConfig {
 
     /**
      * Default for {@code segmentCodec}: compress-at-pack is ON by default ({@link
-     * PageCodec#LZ4}) — staging disk exhaustion ({@code sort_disk_exhausted}) is the primary
+     * PageCodec#ZSTD1}) — staging disk exhaustion ({@code sort_disk_exhausted}) is the primary
      * staging-disk risk, and compressing the page-run PAYLOAD (never the plain header) directly
      * cuts both staging disk and in-flight buffered memory.
      */
-    static final PageCodec DEFAULT_SEGMENT_CODEC = PageCodec.LZ4;
+    static final PageCodec DEFAULT_SEGMENT_CODEC = PageCodec.ZSTD1;
 
     /**
      * Default for {@code finalPageRows}: <b>1,024</b> rows per data page in the final, served file.

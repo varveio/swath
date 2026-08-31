@@ -22,7 +22,7 @@ public final class SortConfigs {
     /**
      * The canonical test config: a 64&nbsp;MB segment gate, unbounded segment-entries and
      * merge-budget (so the bytes gate and raw fan-in govern), fan-in 512, single-file output, and the
-     * shipped defaults for the remaining knobs (LZ4, 64&nbsp;KiB per-stream estimate).
+     * shipped defaults for the remaining knobs (ZSTD1, 64&nbsp;KiB per-stream estimate).
      *
      * <p>Pins the merge SERIAL rather than inheriting {@link SortConfig#DEFAULT_MERGE_PARALLELISM},
      * which is now core-derived and greater than one. Most tests here are about something other than

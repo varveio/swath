@@ -45,7 +45,7 @@ enum PageCodec {
         }
     },
 
-    /** Pure-Java LZ4 (aircompressor) — default codec: fast compress/decompress. */
+    /** Pure-Java LZ4 (aircompressor) — fast compress/decompress alternative. */
     LZ4((byte) 1) {
         @Override
         byte[] compress(byte[] raw) {
@@ -72,7 +72,7 @@ enum PageCodec {
         }
     },
 
-    /** ZSTD (zstd-jni) at compression level 1 — a higher-ratio alternative to {@link #LZ4}. */
+    /** ZSTD (zstd-jni) at compression level 1 — the default, higher-ratio codec. */
     ZSTD1((byte) 2) {
         @Override
         byte[] compress(byte[] raw) {
