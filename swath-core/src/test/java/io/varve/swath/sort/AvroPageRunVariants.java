@@ -93,6 +93,7 @@ final class AvroPageRunVariants {
         private final Schema kindSchema;
         private final DataFileWriter<GenericRecord> file;
         private final GenericData.Record frame;
+        private final java.util.List<Long> pageBoundaries = new java.util.ArrayList<>();
         private long totalEntries;
         private long totalRecords;
         private byte[] lastKey = new byte[0];
@@ -130,7 +131,9 @@ final class AvroPageRunVariants {
             frame.put("count", header.count());
             frame.put("rawPayloadLength", header.rawPayloadLength());
             file.append(frame);
-            file.sync();
+            pageBoundaries.add(file.sync());
+            // Do not let the reused record pin the 25 KiB page after the block is flushed.
+            frame.put("page", ByteBuffer.wrap(new byte[0]));
             totalRecords++;
             totalEntries += header.count();
             lastKey = header.maxKey();
@@ -146,6 +149,10 @@ final class AvroPageRunVariants {
             file.close();
             sealed = true;
             force(path);
+        }
+
+        java.util.List<Long> pageBoundaries() {
+            return java.util.List.copyOf(pageBoundaries);
         }
 
         private void reset(String kind) {

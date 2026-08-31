@@ -53,6 +53,9 @@ public final class PageRunContainerSpike {
             case "deep" -> deep(Path.of(args[1]),
                     args.length > 2 ? Integer.parseInt(args[2]) : 1_000_000);
             case "writerheap" -> writerHeap(Path.of(args[1]));
+            case "crc" -> crcCost(Path.of(args[1]));
+            case "bootstrap" -> bootstrapChild(Path.of(args[1]));
+            case "bootstraps" -> bootstraps(Path.of(args[1]));
             default -> throw new IllegalArgumentException("unknown mode " + args[0]);
         }
     }
@@ -102,6 +105,115 @@ public final class PageRunContainerSpike {
         System.out.println("INSPECT_COMMAND ./gradlew :swath-core:pr6bSpike -PspikeArgs='inspect "
                 + inspect + "'");
         System.out.print(AvroPageRunContainer.inspect(inspect));
+    }
+
+    /**
+     * Names the fixed cost that a fresh child JVM charges to whichever arm it runs: Avro schema
+     * parsing (which drags Jackson in), the first reader open, and the first record decode, each
+     * measured once cold and once warm inside the SAME JVM.
+     */
+    private static void bootstrapChild(Path directory) throws IOException {
+        long t0 = System.nanoTime();
+        org.apache.avro.Schema schema = new org.apache.avro.Schema.Parser().parse(
+                AvroPageRunContainer.SCHEMA.toString());
+        long parseCold = System.nanoTime() - t0;
+        t0 = System.nanoTime();
+        org.apache.avro.Schema.Parser again = new org.apache.avro.Schema.Parser();
+        again.parse(schema.toString());
+        long parseWarm = System.nanoTime() - t0;
+
+        Path custom = segmentPath(directory, Arm.CUSTOM, 0);
+        t0 = System.nanoTime();
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(custom, SortMetrics.NO_OP)) {
+            io.nextPage();
+        }
+        long customCold = System.nanoTime() - t0;
+        t0 = System.nanoTime();
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(custom, SortMetrics.NO_OP)) {
+            io.nextPage();
+        }
+        long customWarm = System.nanoTime() - t0;
+
+        Path avro = segmentPath(directory, Arm.AVRO, 0);
+        t0 = System.nanoTime();
+        try (AvroPageRunContainer.Reader reader = AvroPageRunContainer.openReader(avro)) {
+            reader.nextPage();
+        }
+        long avroCold = System.nanoTime() - t0;
+        t0 = System.nanoTime();
+        try (AvroPageRunContainer.Reader reader = AvroPageRunContainer.openReader(avro)) {
+            reader.nextPage();
+        }
+        long avroWarm = System.nanoTime() - t0;
+
+        System.out.printf(Locale.ROOT,
+                "BOOTSTRAP_RESULT schemaParseColdMs=%.3f schemaParseWarmMs=%.3f "
+                        + "customOpenColdMs=%.3f customOpenWarmMs=%.3f "
+                        + "avroOpenColdMs=%.3f avroOpenWarmMs=%.3f%n",
+                parseCold / 1e6, parseWarm / 1e6, customCold / 1e6, customWarm / 1e6,
+                avroCold / 1e6, avroWarm / 1e6);
+    }
+
+    private static void bootstraps(Path directory) throws Exception {
+        String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+        for (int sample = 0; sample < 3; sample++) {
+            Process process = new ProcessBuilder(java, "-Xms128m", "-Xmx2g", "-cp",
+                    System.getProperty("java.class.path"), PageRunContainerSpike.class.getName(),
+                    "bootstrap", directory.toString()).redirectErrorStream(true).start();
+            try (BufferedReader output = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = output.readLine()) != null) {
+                    if (line.startsWith("BOOTSTRAP_RESULT ")) {
+                        System.out.println(line);
+                    }
+                }
+            }
+            process.waitFor();
+        }
+    }
+
+    /**
+     * How much of the custom arm's body pass is the CRC32C verify that no Avro arm performs? This
+     * bounds the "the custom arm skips work" fairness question from the other direction.
+     */
+    private static void crcCost(Path directory) throws IOException {
+        long bytes = 0;
+        List<byte[]> bodies = new ArrayList<>();
+        for (int segment = 0; segment < SEGMENTS; segment++) {
+            try (PageRunSegmentIo io = PageRunSegmentIo.open(
+                    segmentPath(directory, Arm.CUSTOM, segment), SortMetrics.NO_OP)) {
+                PageRunSegmentIo.Page page;
+                while ((page = io.nextPage()) != null && bodies.size() < 100_000) {
+                    bodies.add(page.body());
+                    bytes += page.body().length;
+                }
+            } catch (IOException end) {
+                // the trailer terminates the walk
+            }
+        }
+        for (int warm = 0; warm < 5; warm++) {
+            crcAll(bodies);
+        }
+        long best = Long.MAX_VALUE;
+        for (int sample = 0; sample < 7; sample++) {
+            long start = System.nanoTime();
+            crcAll(bodies);
+            best = Math.min(best, System.nanoTime() - start);
+        }
+        System.out.printf(Locale.ROOT, "CRC pages=%d bytes=%d bestMs=%.3f%n",
+                bodies.size(), bytes, best / 1e6);
+    }
+
+    private static long crcAll(List<byte[]> bodies) {
+        java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
+        long sink = 0;
+        for (byte[] body : bodies) {
+            crc.reset();
+            crc.update(body, 0, body.length);
+            sink += crc.getValue();
+        }
+        return sink;
     }
 
     // ------------------------------------------------------------ deep dive
@@ -183,11 +295,14 @@ public final class PageRunContainerSpike {
                         concurrency, afterAppend ? "after-append" : "just-opened",
                         openHeap(directory, concurrency, afterAppend, pages,
                                 (path) -> AvroPageRunContainer.openWriter(path, PageCodec.LZ4)));
-                System.out.printf(Locale.ROOT, "HEAP %s %d %s %d%n", "avro-sync64", concurrency,
-                        afterAppend ? "after-append" : "just-opened",
-                        openHeap(directory, concurrency, afterAppend, pages,
-                                (path) -> new AvroPageRunVariants.Writer(
-                                        path, PageCodec.LZ4, false, 64)));
+                for (int syncInterval : List.of(64, 32768)) {
+                    System.out.printf(Locale.ROOT, "HEAP %s %d %s %d%n",
+                            "avro-sync" + syncInterval, concurrency,
+                            afterAppend ? "after-append" : "just-opened",
+                            openHeap(directory, concurrency, afterAppend, pages,
+                                    (path) -> new AvroPageRunVariants.Writer(
+                                            path, PageCodec.LZ4, false, syncInterval)));
+                }
             }
         }
     }
