@@ -45,6 +45,19 @@ class HelpUsageGoldenTest {
         assertUsageMatchesGolden(App.commandLine().getSubcommands().get("resume"), "swath-resume.txt");
     }
 
+    @Test
+    void expertAndDiagnosticSurfaceIsHiddenButRegistered() {
+        CommandLine root = App.commandLine();
+        CommandLine list = root.getSubcommands().get("list");
+        CommandLine resume = root.getSubcommands().get("resume");
+
+        assertThat(root.getSubcommands().get("dump-run").getCommandSpec().usageMessage().hidden())
+                .isTrue();
+        assertThat(list.getCommandSpec().findOption("--engine-toggle").hidden()).isTrue();
+        assertThat(list.getCommandSpec().findOption("--tune").hidden()).isTrue();
+        assertThat(resume.getCommandSpec().findOption("--tune").hidden()).isTrue();
+    }
+
     private static void assertUsageMatchesGolden(CommandLine command, String resource) {
         String actual = command.getUsageMessage(Ansi.OFF);
         if (UPDATE) {

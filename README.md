@@ -141,7 +141,7 @@ request count. A fresh precomputed inventory is normally cheaper.
 
 - **Start:** [getting started](docs/getting-started.md) and
   [installation](docs/install.md).
-- **Use:** [common workflows](docs/usage.md),
+- **Use:** [supported CLI surface](docs/cli.md), [common workflows](docs/usage.md),
   [credentials and cost](docs/operating.md), and
   [troubleshooting](docs/faq.md).
 - **Tune and diagnose:** [configuration](docs/configuration.md),

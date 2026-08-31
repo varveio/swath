@@ -8,8 +8,9 @@ swath list --help
 swath resume --help
 ```
 
-For a first run, start with [Getting started](getting-started.md). Credentials, IAM,
-endpoint compatibility, and request cost are in [Operating swath](operating.md).
+For a first run, start with [Getting started](getting-started.md). The stable flag contract
+is listed in [Supported CLI surface](cli.md). Credentials, IAM, endpoint compatibility,
+and request cost are in [Operating swath](operating.md).
 
 ## Commands and targets
 

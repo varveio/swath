@@ -413,14 +413,10 @@ class ParallelMergeBenchmark {
         Path staging = Files.createDirectory(armRoot.resolve("_staging"));
         List<Path> stagingSegments = corpus.materialize(staging);
 
-        // merge-parallelism is the swept encoder-count knob; every other swath.sort.* property falls
-        // through to the real system properties.
-        SortConfig config = SortConfig.fromProperties(
-                key -> "swath.sort.merge-parallelism".equals(key)
-                        ? String.valueOf(spec.parallelism())
-                        : SortConfig.FINALIZATION_PROPERTY.equals(key)
-                                ? SortFinalization.PIPELINE.configValue()
-                        : System.getProperty(key));
+        // The swept encoder count uses the typed derivation; unrelated development-tier properties
+        // still flow through the ordinary SortConfig entry point.
+        SortConfig config = SortConfig.fromSystemProperties()
+                .withMergeParallelism(spec.parallelism());
         ThreadSafeMetrics metrics = new ThreadSafeMetrics();
         SortedFileWriterFactory writerFactory = writerProvider.create(config);
         SortTransform transform = new SortTransform(

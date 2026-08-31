@@ -284,7 +284,7 @@ public final class SortConfig {
         long finalRowGroupBytes = longProp(lookup, "final-row-group-bytes", DEFAULT.finalRowGroupBytes());
         int finalPageRows = intProp(lookup, "final-page-rows", DEFAULT.finalPageRows());
         long mergeBudgetBytes = longProp(lookup, "merge-budget-bytes", adaptiveSegmentBytes(heapFraction));
-        int mergeParallelism = intProp(lookup, "merge-parallelism", DEFAULT.mergeParallelism());
+        int mergeParallelism = DEFAULT.mergeParallelism();
         long mergePerStreamBytes = longProp(lookup, "merge-per-stream-bytes", DEFAULT.mergePerStreamBytes());
         String segmentCodecProp = lookup.apply(PREFIX + "segment-codec");
         PageCodec segmentCodec = segmentCodecProp == null
