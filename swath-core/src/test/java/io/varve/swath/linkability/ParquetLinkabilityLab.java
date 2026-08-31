@@ -49,7 +49,9 @@ public final class ParquetLinkabilityLab {
             "io.varve.swath.output.parquet.DigestingOutputFile",
             "io.varve.swath.output.parquet.ListEntryParquetWriters",
             "io.varve.swath.output.parquet.ListEntryWriteSupport",
+            "io.varve.swath.output.parquet.ParquetCodecs",
             "io.varve.swath.output.parquet.ParquetDatasetFormat",
+            "io.varve.swath.output.parquet.ParquetFiles",
             "io.varve.swath.output.parquet.ParquetSchema",
             "io.varve.swath.output.parquet.ParquetWriterPool",
             "io.varve.swath.output.parquet.PartWriter",
@@ -59,7 +61,8 @@ public final class ParquetLinkabilityLab {
             "io.varve.swath.sort.SortedFileIndex",
             "io.varve.swath.sort.SortedParquetWriter",
             "io.varve.swath.sort.SortedRangeReader",
-            "io.varve.swath.sort.SortedRowGroupReader");
+            "io.varve.swath.sort.SortedRowGroupReader",
+            "org.apache.parquet.SwathReadOptions");
     private static final List<String> PROBES = List.of(
             "classload", "direct_writer", "sorted_writer", "codec", "footer", "index", "segment",
             "range", "row_group", "reader_bridge", "reader_bridge_duckdb");
@@ -215,6 +218,13 @@ public final class ParquetLinkabilityLab {
                 "hadoop_class_entries", "0"));
         for (String name : PROBES) {
             results.addAll(runChild(version, name, fixture));
+        }
+        List<String> blocked = results.stream()
+                .filter(line -> line.contains("\"status\":\"blocked\""))
+                .toList();
+        if (blocked.size() != 1 || !blocked.getFirst().contains("\"probe\":\"codec\"")) {
+            throw new IllegalStateException(
+                    "candidate must block only the deliberately unused Hadoop codec: " + blocked);
         }
         String header = json(
                 "probe", "run",

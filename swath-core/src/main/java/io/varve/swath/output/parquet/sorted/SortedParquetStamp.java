@@ -5,13 +5,13 @@
  */
 package io.varve.swath.output.parquet.sorted;
 
+import io.varve.swath.output.parquet.ParquetFiles;
 import io.varve.swath.sort.SortMode;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 import org.apache.parquet.hadoop.ParquetFileReader;
-import org.apache.parquet.io.LocalInputFile;
 
 /**
  * Detects and reads the sortedness stamp ({@link SortedParquetWriter}) from a Parquet file's
@@ -40,7 +40,7 @@ public record SortedParquetStamp(String order, SortMode mode, int formatVersion,
     private static final int SUPPORTED_FORMAT_VERSION = Integer.parseInt(SortedParquetWriter.FORMAT_VERSION_VALUE);
 
     public static Optional<SortedParquetStamp> read(Path file) throws IOException {
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+        try (ParquetFileReader reader = ParquetFiles.open(file)) {
             return fromKeyValueMetaData(reader.getFooter().getFileMetaData().getKeyValueMetaData());
         }
     }

@@ -5,6 +5,7 @@
  */
 package io.varve.swath.testkit;
 
+import io.varve.swath.output.parquet.ParquetFiles;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -15,15 +16,13 @@ import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.ColumnIOFactory;
-import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.schema.MessageType;
 
 /**
- * Reads Parquet via the low-level {@link ParquetFileReader} + {@link
- * LocalInputFile} — no Hadoop {@code FileSystem} / mapreduce dependency. Used by
- * the round-trip and INT-6 assertions.
+ * Reads Parquet via swath's low-level {@link ParquetFileReader} boundary — no Hadoop {@code
+ * FileSystem} / mapreduce dependency. Used by the round-trip and INT-6 assertions.
  */
 public final class ParquetReads {
 
@@ -31,14 +30,14 @@ public final class ParquetReads {
     }
 
     public static MessageType schema(Path file) throws IOException {
-        try (ParquetFileReader r = ParquetFileReader.open(new LocalInputFile(file))) {
+        try (ParquetFileReader r = ParquetFiles.open(file)) {
             return r.getFooter().getFileMetaData().getSchema();
         }
     }
 
     public static List<Group> readAll(Path file) throws IOException {
         List<Group> out = new ArrayList<>();
-        try (ParquetFileReader r = ParquetFileReader.open(new LocalInputFile(file))) {
+        try (ParquetFileReader r = ParquetFiles.open(file)) {
             MessageType schema = r.getFooter().getFileMetaData().getSchema();
             MessageColumnIO io = new ColumnIOFactory().getColumnIO(schema);
             PageReadStore pages;

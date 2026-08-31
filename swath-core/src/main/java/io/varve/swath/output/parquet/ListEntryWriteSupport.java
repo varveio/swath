@@ -15,6 +15,7 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.model.RowType;
 import java.util.Map;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.conf.ParquetConfiguration;
 import org.apache.parquet.hadoop.api.WriteSupport;
 import org.apache.parquet.io.api.Binary;
 import org.apache.parquet.io.api.RecordConsumer;
@@ -31,8 +32,17 @@ public final class ListEntryWriteSupport extends WriteSupport<ListEntry> {
     }
 
     @Override
-    @SuppressWarnings("deprecation")   // init(Configuration) is the abstract method in parquet 1.15
+    @SuppressWarnings("deprecation")
     public WriteContext init(Configuration configuration) {
+        return context();
+    }
+
+    @Override
+    public WriteContext init(ParquetConfiguration configuration) {
+        return context();
+    }
+
+    private WriteContext context() {
         return new WriteContext(schema, Map.of());
     }
 

@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.column.ParquetProperties;
+import org.apache.parquet.conf.ParquetConfiguration;
 import org.apache.parquet.hadoop.ParquetFileWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.api.WriteSupport;
@@ -77,10 +78,10 @@ public final class ListEntryParquetWriters {
 
     private static ParquetWriter<ListEntry> build(WriteSupport<ListEntry> writeSupport,
             long rowGroupBytes, PageLayout layout, OutputFile output) throws IOException {
-        Configuration conf = new Configuration(false);
-        conf.setInt("parquet.compression.codec.zstd.level", ZSTD_LEVEL);
+        ParquetConfiguration conf = ParquetFiles.newConfiguration();
         return new Builder(output, writeSupport)
                 .withConf(conf)
+                .withCodecFactory(ParquetFiles.newCodecFactory())
                 .withCompressionCodec(CompressionCodecName.ZSTD)
                 .withRowGroupSize(rowGroupBytes)
                 .withPageSize(PAGE_BYTES)
@@ -206,6 +207,11 @@ public final class ListEntryParquetWriters {
         @Override
         @SuppressWarnings("deprecation")
         protected WriteSupport<ListEntry> getWriteSupport(Configuration conf) {
+            return writeSupport;
+        }
+
+        @Override
+        protected WriteSupport<ListEntry> getWriteSupport(ParquetConfiguration conf) {
             return writeSupport;
         }
     }

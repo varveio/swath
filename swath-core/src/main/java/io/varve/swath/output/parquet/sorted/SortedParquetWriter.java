@@ -24,6 +24,7 @@ import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.conf.ParquetConfiguration;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.api.WriteSupport;
 import org.apache.parquet.io.api.RecordConsumer;
@@ -249,8 +250,13 @@ public final class SortedParquetWriter implements SortedFileWriter {
         }
 
         @Override
-        @SuppressWarnings("deprecation")   // init(Configuration) is the abstract method in parquet 1.15
+        @SuppressWarnings("deprecation")
         public WriteContext init(Configuration configuration) {
+            return delegate.init(configuration);
+        }
+
+        @Override
+        public WriteContext init(ParquetConfiguration configuration) {
             return delegate.init(configuration);
         }
 

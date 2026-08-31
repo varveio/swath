@@ -6,6 +6,7 @@
 package io.varve.swath.output.parquet.sorted;
 
 import io.varve.swath.model.KeyBytes;
+import io.varve.swath.output.parquet.ParquetFiles;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -21,6 +22,7 @@ import org.apache.parquet.column.impl.ColumnReadStoreImpl;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
+import org.apache.parquet.filter2.columnindex.RowRanges;
 import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.filter2.predicate.FilterApi;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
@@ -32,9 +34,7 @@ import org.apache.parquet.internal.column.columnindex.ColumnIndex;
 import org.apache.parquet.internal.column.columnindex.OffsetIndex;
 import org.apache.parquet.internal.filter2.columnindex.ColumnIndexFilter;
 import org.apache.parquet.internal.filter2.columnindex.ColumnIndexStore;
-import org.apache.parquet.internal.filter2.columnindex.RowRanges;
 import org.apache.parquet.io.ColumnIOFactory;
-import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.io.api.Binary;
@@ -151,7 +151,7 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
 
     public SortedParquetRowGroupReader(Path file) throws IOException {
         this.file = file;
-        this.reader = ParquetFileReader.open(new LocalInputFile(file));
+        this.reader = ParquetFiles.open(file);
         this.createdBy = reader.getFooter().getFileMetaData().getCreatedBy();
         this.blocks = List.copyOf(reader.getFooter().getBlocks());
         MessageType full = reader.getFooter().getFileMetaData().getSchema();
@@ -323,8 +323,12 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
             return null;
         }
         reader.setRequestedSchema(keySchema);
-        RowRanges window = RowRanges.create(rowCount,
-                pages.stream().mapToInt(Integer::intValue).iterator(), offsets);
+        RowRanges.Builder windowBuilder = RowRanges.builder();
+        for (int selectedPage : pages) {
+            windowBuilder.addSelectedRange(offsets.getFirstRowIndex(selectedPage),
+                    offsets.getLastRowIndex(selectedPage, rowCount));
+        }
+        RowRanges window = windowBuilder.build();
         PageReadStore store = reader.readFilteredRowGroup(blockIndex, window);
         try {
             RecordReader<Group> rowReader =

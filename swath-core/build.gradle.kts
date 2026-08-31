@@ -49,6 +49,10 @@ dependencies {
     // --rate-limit-api: Bucket4j's blocking acquire respects Thread.interrupt(),
     // so a paced worker is woken on --max-duration/SIGTERM cancel.
     implementation(libs.bucket4j.core)
+    // Directly used by run summaries, manifests, digests, and resume-token logging. These were
+    // previously supplied accidentally by Hadoop's transitive closure.
+    implementation(libs.jackson.databind)
+    implementation(libs.commons.codec)
 
     // Parquet output (canonical schema §4, ZSTD via zstd-jni). hadoop-common is
     // dragged in by parquet-hadoop for Configuration/codecs; exclude its log4j
@@ -61,26 +65,29 @@ dependencies {
     // rules). A published-swath-core consumer that uses the parquet-output classes adds parquet
     // itself for now; the clean fix is extracting a separate swath-parquet module (see
     // docs/internals/build-and-modules.md).
-    implementation(libs.parquet.hadoop)
+    implementation(libs.parquet.hadoop) {
+        exclude(group = "org.apache.hadoop")
+        exclude(group = "org.apache.hadoop.thirdparty")
+    }
+    // parquet-hadoop still exposes deprecated Hadoop overloads in the same public class files as
+    // its generic APIs. javac resolves those descriptors even though swath never calls them.
+    compileOnly(libs.hadoop.common) {
+        isTransitive = false
+    }
     implementation(libs.zstd.jni)
     // PageCompression's LZ4 path uses io.airlift.compress.lz4 (pure-Java LZ4) directly —
     // promoted from a transitive dep of parquet-hadoop/hadoop-mapreduce-client-core to a direct
     // one so a future upstream bump can't silently drop/rev it out from under this reference.
     implementation(libs.aircompressor)
-    // Reading Parquet back (ParquetEntryReader / the sort merge phase, and the planned derive API) needs
-    // parquet-hadoop's read path, which resolves org.apache.hadoop.mapreduce FileInputFormat at
-    // runtime. The sort read path is main-scope (all parquet-touching code lives in swath-core,
-    // per the compile-classpath-purity guard above), so this is a runtime dependency, not test-only.
-    implementation(libs.hadoop.mapreduce.client.core) {
+    // Checkpoint store: SQLite via the xerial JDBC driver. WAL single-writer
+    // — all checkpoint writes funnel through one thread (algorithms.md §4.1).
+    implementation(libs.sqlite.jdbc)
+    testImplementation(libs.hadoop.mapreduce.client.core) {
         exclude(group = "org.slf4j", module = "slf4j-reload4j")
         exclude(group = "org.slf4j", module = "slf4j-log4j12")
         excludeHadoopServiceStack()
     }
-
-    // Checkpoint store: SQLite via the xerial JDBC driver. WAL single-writer
-    // — all checkpoint writes funnel through one thread (algorithms.md §4.1).
-    implementation(libs.sqlite.jdbc)
-    implementation(libs.hadoop.common) {
+    testImplementation(libs.hadoop.common) {
         exclude(group = "org.slf4j", module = "slf4j-reload4j")
         exclude(group = "org.slf4j", module = "slf4j-log4j12")
         exclude(group = "log4j", module = "log4j")
@@ -153,7 +160,6 @@ val parquetOperationBaseline by tasks.registering(JavaExec::class) {
 }
 
 val parquetLinkabilityVersions = mapOf(
-    "1151" to "1.15.1",
     "1180" to "1.18.0",
 )
 
@@ -218,7 +224,7 @@ val parquetLinkabilityTasks = parquetLinkabilityVersions.map { (taskSuffix, parq
 
 tasks.register("parquetLinkability") {
     group = "verification"
-    description = "Runs the Hadoop-free laboratory against parquet-java 1.15.1 and 1.18.0."
+    description = "Runs the Hadoop-free candidate laboratory against parquet-java 1.18.0."
     dependsOn(parquetLinkabilityTasks, parquetOperationBaseline)
 }
 
