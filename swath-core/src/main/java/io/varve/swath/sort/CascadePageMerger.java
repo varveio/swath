@@ -51,6 +51,8 @@ final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
             KWayMerge.PageStream stream = streams.get(source);
             if (stream.hasPage()) {
                 frontiers.add(new Source(source, stream));
+            } else {
+                metrics.recordStealReason("SORT", "cascade_page_empty_segment");
             }
         }
         try {

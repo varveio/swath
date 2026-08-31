@@ -181,10 +181,10 @@ class PageRunSegmentTest {
         Path path = dir.resolve("seg.pgr");
         writeSimpleSegment(path, 200);
 
-        // Flip a byte inside the first record body (offset 14 = just past the 6-byte header + 8-byte
-        // frame [len][crc]) — the CRC32C over the body no longer matches, so the read must throw.
+        // Flip a byte inside the first record body, just past the format header and frame [len][crc].
+        // The CRC32C over the body no longer matches, so the read must throw.
         byte[] raw = Files.readAllBytes(path);
-        raw[14] ^= 0x7F;
+        raw[PageRunSegmentWriter.HEADER_BYTES + 8] ^= 0x7F;
         Files.write(path, raw);
 
         assertThatThrownBy(() -> readBack(path))

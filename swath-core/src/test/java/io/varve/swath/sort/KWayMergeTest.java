@@ -81,6 +81,25 @@ class KWayMergeTest {
     }
 
     @Test
+    void emptySegmentsAreReportedOnceWithoutChangingNonEmptyClassification() throws IOException {
+        SortTestSupport.InMemorySegments io = new SortTestSupport.InMemorySegments();
+        Integer emptyA = io.add(List.of());
+        Integer nonEmpty = io.add(List.of(object("a"), object("b")));
+        Integer emptyB = io.add(List.of());
+
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        KWayMerge<Integer> merge = new KWayMerge<>(cmp, 512, io, DuplicateHook.NO_OP, metrics);
+        List<ListEntry> out = drain(merge.merge(new ArrayList<>(List.of(emptyA, nonEmpty, emptyB))));
+
+        assertThat(out).containsExactly(object("a"), object("b"));
+        assertThat(metrics.count("SORT.cascade_page_empty_segment")).isEqualTo(2);
+        assertThat(metrics.count("SORT.cascade_page_whole_merge")).isEqualTo(1);
+        assertThat(metrics.count("SORT.cascade_page_overlap_merge")).isZero();
+        assertThat(metrics.count("SORT.merge_disjoint_copyable")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_interleaved_segment")).isZero();
+    }
+
+    @Test
     void duplicateHookFiresOnAdjacentEqualEntries() throws IOException {   // I3
         SortTestSupport.InMemorySegments io = new SortTestSupport.InMemorySegments();
         Integer a = io.add(List.of(object("dup"), object("later")));

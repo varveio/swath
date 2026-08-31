@@ -1690,9 +1690,10 @@ disposable; a retry starts from the checkpoint-owned sealed segments.
 `CascadePageMerger` keeps this reduction page-granular. It streams a current page directly when
 that page's stored maximum is strictly below every successor minimum. When page bounds overlap, it
 collects the transitive component and delegates its rows to the bounded `PageRowMerger`. The
-`SORT.cascade_page_whole_merge` and `SORT.cascade_page_overlap_merge` reasons show which branch
-engaged. The survivor catalog is preflighted again because its descriptor count and persisted
-maxima are the inputs to final encoder admission.
+`SORT.cascade_page_whole_merge` and `SORT.cascade_page_overlap_merge` reasons show which non-empty
+branch engaged; `SORT.cascade_page_empty_segment` records each initialized input that contained no
+page. The survivor catalog is preflighted again because its descriptor count and persisted maxima
+are the inputs to final encoder admission.
 
 ### Header scan and reference routing
 

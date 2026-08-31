@@ -39,7 +39,7 @@ import java.util.List;
  *
  * <p><b>On-disk format, big-endian:</b>
  * <pre>
- * [magic u32][format-version u16 = 3][header-version u16][metadata-length u32]
+ * [magic u32][format-version u16 = 4][header-version u16][metadata-length u32]
  * [metadata TLVs: ordering mode][header crc32c u32]
  * record* : [len u32][crc32c u32][ &lt;PageBlock.serialize() body&gt; ]   // crc32c over the body bytes
  * trailer : [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32]

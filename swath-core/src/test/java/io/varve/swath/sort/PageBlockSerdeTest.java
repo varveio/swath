@@ -7,7 +7,9 @@ package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
+import com.github.luben.zstd.ZstdException;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
@@ -419,9 +421,15 @@ class PageBlockSerdeTest {
         body[body.length - 1] ^= 1;
 
         PageBlock corrupted = PageBlockCodec.deserialize(body, header, Path.of("checksum.pageseg"));
-        assertThatThrownBy(corrupted::cursor)
+        Throwable failure = catchThrowable(corrupted::cursor);
+        assertThat(failure)
                 .isInstanceOf(java.io.UncheckedIOException.class)
+                .hasStackTraceContaining("ZSTD PageBlock decompress failed: Restored data doesn't match checksum")
                 .hasRootCauseMessage("Restored data doesn't match checksum");
+        assertThat(failure.getCause().getCause())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("ZSTD PageBlock decompress failed: Restored data doesn't match checksum")
+                .hasCauseInstanceOf(ZstdException.class);
     }
 
     @Test

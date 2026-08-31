@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import com.github.luben.zstd.Zstd;
 import com.github.luben.zstd.ZstdCompressCtx;
+import com.github.luben.zstd.ZstdException;
 import io.airlift.compress.MalformedInputException;
 import io.airlift.compress.lz4.Lz4Compressor;
 import io.airlift.compress.lz4.Lz4Decompressor;
@@ -85,7 +86,12 @@ enum PageCodec {
         @Override
         byte[] decompress(byte[] stored, int offset, int length, int rawLen) {
             byte[] out = new byte[rawLen];
-            long n = Zstd.decompressByteArray(out, 0, rawLen, stored, offset, length);
+            long n;
+            try {
+                n = Zstd.decompressByteArray(out, 0, rawLen, stored, offset, length);
+            } catch (ZstdException e) {
+                throw new IllegalStateException("ZSTD PageBlock decompress failed: " + e.getMessage(), e);
+            }
             if (Zstd.isError(n)) {
                 throw new IllegalStateException("ZSTD PageBlock decompress failed: " + Zstd.getErrorName(n));
             }
