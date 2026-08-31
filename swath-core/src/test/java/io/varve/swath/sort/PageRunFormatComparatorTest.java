@@ -28,7 +28,7 @@ class PageRunFormatComparatorTest {
         assertThatThrownBy(() -> new SortRun(
                 SortConfigs.base(), ALTERNATE, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY))
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("page-run format v3 requires ListEntryComparator");
     }

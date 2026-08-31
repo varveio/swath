@@ -200,7 +200,7 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | Maximum pipeline encoder count in the final merge; `1` selects one encoder. Prefer `--tune sort.merge-parallelism=N` for an operator-selected value; the typed CLI value wins over this property. |
 | `swath.sort.finalization` | `pipeline` | Finalization architecture. `pipeline` is the only valid value. Prefer `--tune sort.finalization=pipeline`; the typed CLI value wins over this property. |
 | `swath.sort.keep-staging` | `off` | Diagnostic retention of exactly the original checkpoint-tracked page-run staging and the co-located checkpoint after successful sorted publication. `--tune sort.keep-staging=on` wins over this property. Every other immediate staging entry is deleted. |
-| `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts; an equal-key group is never split across files. The experimental pipeline may roll earlier at its heap-admitted 256–16,384 refs-per-plan cap. |
+| `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts. Rolls occur only at page-reference or overlap-cluster boundaries: the pipeline never splits a staging page across parts, and an equal-key group is never split across files. Tiny-file fixtures therefore pin `segmentEntries(1)`. The pipeline may also roll earlier at its heap-admitted 256–16,384 refs-per-plan cap. |
 | `swath.sort.final-row-group-bytes` | `8 MiB` | Final Parquet seek granularity. |
 | `swath.sort.final-page-rows` | `1024` | Maximum rows per final-file data page; the within-row-group seek granularity. |
 | `swath.git.sha` | unset | Optional commit value included in the run fingerprint. |

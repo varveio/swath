@@ -40,6 +40,35 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     }
 
     @Override
+    public boolean supportsPageMerge(Path segment) {
+        return true;
+    }
+
+    @Override
+    public KWayMerge.PageStream openPages(Path segment) throws IOException {
+        return new PageStream(PageRunSegmentIo.openUsingPersistedMaximum(
+                segment, run.metrics()));
+    }
+
+    @Override
+    public long decodedPageBudgetBytes(List<Path> segments) throws IOException {
+        long encodedFrontiers = 0;
+        for (Path segment : segments) {
+            long maximum = PageRunTrailer.read(segment).maxRecordLen();
+            encodedFrontiers = Math.addExact(encodedFrontiers, maximum);
+        }
+        long available = run.config().mergeBudgetBytes() - encodedFrontiers;
+        if (available <= 0) {
+            run.metrics().recordStealReason("SORT", "merge_decoded_residency_exhausted");
+            throw new MergeMemoryExhaustedException(
+                    "encoded cascade page frontiers exhaust the merge budget: frontier_bytes="
+                            + encodedFrontiers + ", merge_budget_bytes="
+                            + run.config().mergeBudgetBytes());
+        }
+        return available;
+    }
+
+    @Override
     public Path writeIntermediate(SortedCursor sorted) throws IOException {
         Path destination = stagingDir.resolve(
                 StagingNames.cascadeIntermediate(intermediatePrefix, sequence++));
@@ -56,5 +85,55 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
 
     List<Path> intermediates() {
         return intermediates;
+    }
+
+    /** One CRC-valid current page plus its independently validated successor advance. */
+    private static final class PageStream implements KWayMerge.PageStream {
+        private final PageRunSegmentIo io;
+        private PageRunSegmentIo.Page current;
+
+        PageStream(PageRunSegmentIo io) throws IOException {
+            this.io = io;
+            try {
+                advance();
+            } catch (IOException | RuntimeException failure) {
+                try {
+                    io.close();
+                } catch (IOException closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+                throw failure;
+            }
+        }
+
+        @Override
+        public boolean hasPage() {
+            return current != null;
+        }
+
+        @Override
+        public byte[] minKey() {
+            return current.header().minKey();
+        }
+
+        @Override
+        public byte[] maxKey() {
+            return current.header().maxKey();
+        }
+
+        @Override
+        public PageBlock decodeCurrentPage() {
+            return current.decode(io.path());
+        }
+
+        @Override
+        public void advance() throws IOException {
+            current = io.nextPage();
+        }
+
+        @Override
+        public void close() throws IOException {
+            io.close();
+        }
     }
 }

@@ -49,7 +49,7 @@ final class ReferenceRoutingPropertyTest {
                 channels.add(PageRunSegmentIo.open(path, SortMetrics.NO_OP));
                 expectedRefs += pages;
             }
-            Failure failure = new Failure();
+            FinalizationFailure failure = new FinalizationFailure();
             List<PartPlan> plans = new ArrayList<>();
             PartSizer sizer = new PartSizer(
                     PartSizer.Target.fixedRows(1 + random.nextInt(20)), Long.MAX_VALUE);

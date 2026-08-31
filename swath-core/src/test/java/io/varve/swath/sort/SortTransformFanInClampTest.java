@@ -194,7 +194,7 @@ class SortTransformFanInClampTest {
     private SortTransform newTransform(SortConfig config, SortMetrics metrics, IntSupplier softFdLimit) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, softFdLimit, StaleFinalSweep.OWN_PARTS_ONLY));
+                softFdLimit, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private List<Path> stagePageRun(Path dir, List<List<ListEntry>> segs) throws IOException {

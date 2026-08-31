@@ -7,8 +7,8 @@ package io.varve.swath.sort;
 
 import java.util.concurrent.atomic.AtomicReference;
 
-/** First-failure relay shared by readers, router, and encoders. */
-final class Failure {
+/** First-failure relay shared by finalization readers, router, and encoders. */
+final class FinalizationFailure {
     private final AtomicReference<Throwable> first = new AtomicReference<>();
 
     void record(Throwable failure) {

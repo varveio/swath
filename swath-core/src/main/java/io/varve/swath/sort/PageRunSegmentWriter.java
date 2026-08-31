@@ -43,6 +43,7 @@ import java.util.List;
  * [metadata TLVs: ordering mode][header crc32c u32]
  * record* : [len u32][crc32c u32][ &lt;PageBlock.serialize() body&gt; ]   // crc32c over the body bytes
  * trailer : [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32]
+ *           [maxRawPayloadLen u32][maxKeyLen u32]
  *           [trailer crc32c u32][magic u32]
  * </pre>
  * {@code trailerStart} is the absolute file offset where the fixed trailer begins.
@@ -66,13 +67,14 @@ final class PageRunSegmentWriter {
     /** Bytes in the header emitted by this build. Readers honor the envelope's dynamic metadata length. */
     static final int HEADER_BYTES = PageRunHeader.CURRENT_BYTES;
 
-    /** Fixed trailer: trailerStart u64 + totalRecords u32 +
-     *  totalEntries u64 + maxRecordLen u32 + CRC32C u32 + magic u32 = 32 bytes. The reader reads exactly this
+    /** Fixed trailer: trailerStart u64 + totalRecords u32 + totalEntries u64 + maxRecordLen u32 +
+     *  maxRawPayloadLen u32 + maxKeyLen u32 + CRC32C u32 + magic u32 = 40 bytes. The reader reads exactly this
      *  (positioned from EOF) to recover {@code trailerStart},
      *  {@code totalRecords}/{@code totalEntries} (end-of-stream completeness
-     *  cross-check), {@code maxRecordLen} (the per-record length bound), and validate the trailing
+     *  cross-check), {@code maxRecordLen} (the per-record length bound), exact decoded-page/key
+     *  maxima used by kickoff admission, and validate the trailing
      *  magic (truncation check) — all without scanning records. */
-    static final int TRAILER_FIELDS_BYTES = 8 + 4 + 8 + 4;
+    static final int TRAILER_FIELDS_BYTES = 8 + 4 + 8 + 4 + 4 + 4;
     static final int TRAILER_FIXED_TAIL_BYTES = TRAILER_FIELDS_BYTES + 4 + 4;
 
     /** Rows per page when batching an already-sorted {@link SortedCursor} in {@link #writeIntermediate}

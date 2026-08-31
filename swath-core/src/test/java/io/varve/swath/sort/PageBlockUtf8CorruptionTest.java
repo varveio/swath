@@ -38,8 +38,7 @@ class PageBlockUtf8CorruptionTest {
         corruptNeedleAndRepairFrameCrc(segment, field.needle(), field.header());
         SortRun run = new SortRun(SortConfigs.base(), CMP, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY,
-                MergeDiskPolicy.bypassed());
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
         assertThatThrownBy(() -> new SortTransform(run).transform(
                 List.of(segment), output, staging, PublishListener.NO_OP,

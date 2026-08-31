@@ -21,8 +21,8 @@ import picocli.CommandLine.Spec;
  * {@code swath dump-run <file.pageseg>} — a hidden, read-only debug inspector for a page-run
  * staging segment. It prints the header (magic/version), one line per framed record
  * ({@code [minKey, maxKey, count, codec, len]} with a CRC32C {@code OK}/{@code FAIL} verdict), and the
- * trailer-extension index summary, and completeness trailer ({@code segMin}/{@code segMax}/
- * {@code totalRecords}/{@code totalEntries}/{@code maxRecordLen}). This is the page-run equivalent of
+ * fixed completeness trailer ({@code totalRecords}/{@code totalEntries}/{@code maxRecordLen}).
+ * This is the page-run equivalent of
  * the inspectability {@code duckdb} gives
  * columnar Parquet staging; the file is never modified.
  *

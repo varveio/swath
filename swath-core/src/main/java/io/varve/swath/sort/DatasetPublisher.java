@@ -30,7 +30,6 @@ final class DatasetPublisher {
     private final SortConfig config;
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
-    private final MergeInputProfile inputProfile;
     private final PublicationStepHook publicationStepHook;
     // Deliberately supplied by SortTransform: extraction must not change the logger name carried by
     // existing sweep/retention diagnostics.
@@ -41,15 +40,13 @@ final class DatasetPublisher {
         this.config = run.config();
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
-        this.inputProfile = run.inputProfile();
         this.publicationStepHook = publicationStepHook;
         this.log = log;
     }
 
     /** Derive diagnostic retention from the unconditionally validated owned input set. */
     StagingReconciliation retainedOriginals(StagingReconciliation ownedInputs) {
-        if (!config.stagingRetention().retainsOriginals()
-                || inputProfile != MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES) {
+        if (!config.stagingRetention().retainsOriginals()) {
             return null;
         }
         return ownedInputs;
@@ -64,6 +61,8 @@ final class DatasetPublisher {
         StagingReconciliation.sweepFinalTemporaries(outputDir);
         ownedInputs.sweepDisposables(StagingNames.CASCADE_PAGE_RUN_GLOB);
         ownedInputs.sweepDisposables(StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
+        ownedInputs.sweepDisposables(StagingNames.LEGACY_RANGE_TMP_GLOB);
+        ownedInputs.sweepDisposables(StagingNames.LEGACY_RANGE_PROOF_TMP_GLOB);
         ownedInputs.sweepDisposables(StagingNames.PIPELINE_TMP_GLOB);
         publicationStep(PublicationStep.AFTER_WORKING_SWEEP);
         // The hook is the deterministic stand-in for a directory replacement between phases.

@@ -19,6 +19,10 @@ final class StagingNames {
     static final String CASCADE_PAGE_RUN_GLOB = "merge-*.pageseg";
     /** Retained for resume tests and older attempts that planted Parquet cascade debris. */
     static final String LEGACY_CASCADE_PARQUET_GLOB = "merge-*.parquet";
+    /** Retained only to sweep disposable files left by pre-pipeline finalization attempts. */
+    static final String LEGACY_RANGE_TMP_GLOB = "prange-*.parquet.tmp";
+    /** Retained only to sweep proof debris left by pre-pipeline finalization attempts. */
+    static final String LEGACY_RANGE_PROOF_TMP_GLOB = "prange-proof*.tmp";
 
     private StagingNames() {
     }

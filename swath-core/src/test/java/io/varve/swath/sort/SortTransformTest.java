@@ -25,7 +25,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * {@link SortTransform} end-to-end over real page-run staging segments: single-file publish, rolled
- * multi-file publish (range-disjoint, named in key order), cascade through the merge, the publish
+ * multi-file publish (strictly key-disjoint, named in key order), cascade through the merge, the publish
  * callback ordering (renames done, staging still present), idempotent re-run, and stale-{@code .tmp}
  * cleanup.
  */
@@ -364,7 +364,7 @@ class SortTransformTest {
         };
         SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, dropsSecondRow,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
         assertThatThrownBy(() -> new SortTransform(run).transform(List.of(segment), dirs.output,
                 dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
@@ -741,7 +741,7 @@ class SortTransformTest {
         };
         SortTransform transform = new SortTransform(new SortRun(rolling, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, spy,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         SortTransformResult result = transform.transform(staged, output, staging, PublishListener.NO_OP,
                 units -> { }, FinalPassListener.NO_OP);
 
@@ -764,19 +764,19 @@ class SortTransformTest {
     private SortTransform transform(SortConfig config) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private SortTransform transformWithMetrics(SortConfig config, SortMetrics metrics) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private SortTransform countingTransform(AtomicInteger opens) {
         SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
         return new SortTransform(run, PublicationStepHook.NO_OP, path -> {
                     opens.incrementAndGet();
                     return PageRunSegmentIo.open(path, SortMetrics.NO_OP);

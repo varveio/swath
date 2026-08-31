@@ -119,7 +119,7 @@ public final class CaptureSorter {
 
         SortTransform transform = new SortTransform(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.REJECT,
-                        metrics, finalWriterDelegate, MergeInputProfile.ARBITRARY_SORTED_RUNS, SortRun.PROCESS_SOFT_FD_LIMIT,
+                        metrics, finalWriterDelegate, SortRun.PROCESS_SOFT_FD_LIMIT,
                         StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP,
                 ignored -> metrics.markProgress(), FinalPassListener.NO_OP);

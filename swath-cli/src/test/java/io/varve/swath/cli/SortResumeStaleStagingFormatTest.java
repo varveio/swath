@@ -39,7 +39,8 @@ import org.junit.jupiter.api.io.TempDir;
  * their data. The reattach path selects staging by {@link ListRunner#SORT_SEGMENT_FORMAT}
  * ("page-run"), so an old-format row would be invisible to it and the finalized segment re-listed
  * (dup/loss). Refused exactly like the {@code --sort/--no-sort} mismatch (InvalidArgsException, exit
- * 2). A page-run→page-run resume is NOT refused for the format.
+ * 2). A page-run resume is accepted only when its recorded and physical format versions match the
+ * current version.
  */
 final class SortResumeStaleStagingFormatTest {
 

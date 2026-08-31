@@ -143,7 +143,7 @@ final class SortPublicationCrashMatrixTest {
             throws Exception {
         Path output = Files.createDirectories(root.resolve("data"));
         Path staging = Files.createDirectories(root.resolve("_staging"));
-        List<Path> originals = stage(staging, MergeShape.SERIAL.segmentRows());
+        List<Path> originals = stage(staging, MergeShape.ONE_ENCODER_SINGLE_PART.segmentRows());
         AtomicInteger listenerCalls = new AtomicInteger();
         PublishListener authorityListener = (parts, rows) -> {
             listenerCalls.incrementAndGet();
@@ -151,7 +151,7 @@ final class SortPublicationCrashMatrixTest {
             Files.writeString(root.resolve(Manifest.SUCCESS_FILE_NAME), "");
         };
 
-        assertThatThrownBy(() -> transform(MergeShape.SERIAL.config(false),
+        assertThatThrownBy(() -> transform(MergeShape.ONE_ENCODER_SINGLE_PART.config(false),
                 SortedFileWriterFactory.DEFAULT,
                 crashAt(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC)).transform(
                         originals, output, staging, authorityListener,
@@ -162,7 +162,7 @@ final class SortPublicationCrashMatrixTest {
         assertThat(root.resolve(Manifest.SUCCESS_FILE_NAME)).doesNotExist();
         assertThat(originals).allMatch(Files::exists);
 
-        assertThatThrownBy(() -> transform(MergeShape.SERIAL.config(false),
+        assertThatThrownBy(() -> transform(MergeShape.ONE_ENCODER_SINGLE_PART.config(false),
                 SortedFileWriterFactory.DEFAULT,
                 crashAt(PublicationStep.AFTER_PUBLISH_LISTENER)).transform(
                         originals, output, staging, authorityListener,
@@ -179,7 +179,7 @@ final class SortPublicationCrashMatrixTest {
             throws Exception {
         Path output = Files.createDirectories(root.resolve("data"));
         Path staging = Files.createDirectories(root.resolve("_staging"));
-        List<Path> originals = stage(staging, MergeShape.SERIAL.segmentRows());
+        List<Path> originals = stage(staging, MergeShape.ONE_ENCODER_SINGLE_PART.segmentRows());
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         PublishListener authorityListener = (parts, rows) -> {
             Files.writeString(root.resolve(Manifest.FILE_NAME), "listener-owned manifest");
@@ -192,10 +192,10 @@ final class SortPublicationCrashMatrixTest {
             Files.createDirectory(blocked);
             Files.writeString(blocked.resolve("still-present"), "cleanup blocker");
         };
-        SortRun run = new SortRun(MergeShape.SERIAL.config(false), comparator,
+        SortRun run = new SortRun(MergeShape.ONE_ENCODER_SINGLE_PART.config(false), comparator,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, metrics,
                 SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
         assertThatThrownBy(() -> new SortTransform(run).transform(
                 originals, output, staging, authorityListener,
@@ -208,13 +208,13 @@ final class SortPublicationCrashMatrixTest {
 
         assertThat(root.resolve(Manifest.FILE_NAME)).hasContent("listener-owned manifest");
         assertThat(root.resolve(Manifest.SUCCESS_FILE_NAME)).exists();
-        assertPublishedSet(output, MergeShape.SERIAL.expectedKeys(),
-                MergeShape.SERIAL.expectedParts());
+        assertPublishedSet(output, MergeShape.ONE_ENCODER_SINGLE_PART.expectedKeys(),
+                MergeShape.ONE_ENCODER_SINGLE_PART.expectedParts());
         assertThat(metrics.count("SORT.post_publish_cleanup_pending")).isEqualTo(1);
     }
 
     private static Stream<Arguments> publicationMatrix() {
-        return Stream.of(MergeShape.SERIAL, MergeShape.PIPELINE,
+        return Stream.of(MergeShape.ONE_ENCODER_SINGLE_PART, MergeShape.PIPELINE,
                         MergeShape.EMPTY_PIPELINE_REQUEST)
                 .flatMap(shape -> Stream.of(false, true)
                         .flatMap(prior -> Stream.of(false, true)
@@ -228,7 +228,7 @@ final class SortPublicationCrashMatrixTest {
 
     private SortRun run(SortConfig config, SortedFileWriterFactory writers) {
         return new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
-                SortMetrics.NO_OP, writers, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT,
+                SortMetrics.NO_OP, writers, SortRun.PROCESS_SOFT_FD_LIMIT,
                 StaleFinalSweep.OWN_PARTS_ONLY);
     }
 
@@ -308,7 +308,7 @@ final class SortPublicationCrashMatrixTest {
     }
 
     private enum MergeShape {
-        SERIAL(1, Long.MAX_VALUE,
+        ONE_ENCODER_SINGLE_PART(1, Long.MAX_VALUE,
                 List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
                 1),
         ONE_ENCODER_ROLLED(1, 1L,

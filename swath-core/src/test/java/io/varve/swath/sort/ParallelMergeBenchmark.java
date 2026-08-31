@@ -426,7 +426,6 @@ class ParallelMergeBenchmark {
         SortTransform transform = new SortTransform(
                 new SortRun(config, CMP, DuplicateHook.NO_OP,
                         EqualKeyPolicy.ALLOW, metrics, writerFactory,
-                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
                         SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY)
                         .withPartTarget(spec.partTarget()));
 

@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import net.jqwik.api.ForAll;
@@ -45,15 +46,24 @@ class FinalizationPipelinePropertyTest {
         BINARY_ADVERSARIAL
     }
 
+    enum OverlapShape {
+        DISJOINT_BANDS,
+        SHARED_BANDS,
+        SPARSE_OVERLAP
+    }
+
     @Property(tries = 60)
     void pipelineFinalizationIsByteExactAcrossEncoderCounts(
             @ForAll @IntRange(min = 1, max = 6) int segmentCount,
-            @ForAll @IntRange(min = 1, max = 320) int entryCount,
+            @ForAll @IntRange(min = 2, max = 7) int bandCount,
+            @ForAll @IntRange(min = 4, max = 12) int rowsPerPage,
             @ForAll KeyStyle style,
+            @ForAll OverlapShape overlapShape,
             @ForAll @IntRange(min = 1, max = 6) int encoders,
-            @ForAll @IntRange(min = 1, max = 16_384) int finalFileBytes,
+            @ForAll @IntRange(min = 1, max = 32) int finalFileBytes,
             @ForAll long seed) throws IOException {
-        Scenario scenario = build(segmentCount, entryCount, style, seed);
+        Scenario scenario = build(
+                segmentCount, bandCount, rowsPerPage, style, overlapShape, seed);
         Path root = Files.createTempDirectory("pipeline-pagerun-");
         try {
             SortTransformResult oneEncoder = run(
@@ -63,14 +73,32 @@ class FinalizationPipelinePropertyTest {
 
             List<ListEntry> expected = scenario.allEntries();
             List<ListEntry> actual = readAll(parallel.finalFiles());
+            BenchmarkRowOracle.InputOracle oracle = BenchmarkRowOracle.inputForTesting(expected);
+            String expectedFingerprint = BenchmarkRowOracle.validateEntriesForTesting(
+                    expected, oracle, comparator).orderedFingerprint();
+            String oneEncoderFingerprint = BenchmarkRowOracle.validateEntriesForTesting(
+                    readAll(oneEncoder.finalFiles()), oracle, comparator).orderedFingerprint();
+            String parallelFingerprint = BenchmarkRowOracle.validateEntriesForTesting(
+                    actual, oracle, comparator).orderedFingerprint();
             assertThat(parallel.totalRows()).isEqualTo(expected.size());
+            assertThat(parallel.finalFiles())
+                    .as("every generated multi-page scenario must exercise a real roll")
+                    .hasSizeGreaterThan(1);
             assertThat(actual).isSortedAccordingTo(comparator)
-                    .containsExactlyInAnyOrderElementsOf(expected)
-                    .containsExactlyElementsOf(readAll(oneEncoder.finalFiles()));
+                    .containsExactlyInAnyOrderElementsOf(expected);
+            assertThat(oneEncoderFingerprint).isEqualTo(expectedFingerprint);
+            assertThat(parallelFingerprint).isEqualTo(expectedFingerprint);
             assertStrictlyDisjointPartBoundaries(parallel.finalFiles());
             for (int i = 0; i < parallel.finalFiles().size(); i++) {
                 assertThat(parallel.finalFiles().get(i).getFileName().toString())
                         .isEqualTo(String.format("part-%05d.parquet", i));
+                int ordinal = i;
+                assertThat(SortStamp.read(parallel.finalFiles().get(i)))
+                        .hasValueSatisfying(stamp -> {
+                            assertThat(stamp.fileIndex()).isEqualTo(ordinal + 1);
+                            assertThat(stamp.fileFinal())
+                                    .isEqualTo(ordinal == parallel.finalFiles().size() - 1);
+                        });
             }
         } finally {
             Sweeps.deleteTree(root);
@@ -86,56 +114,84 @@ class FinalizationPipelinePropertyTest {
                 .withFinalFileBytes(finalFileBytes)
                 .withMergeBudgetBytes(Long.MAX_VALUE)
                 .withMergeParallelism(encoders);
+        SortedFileWriterFactory writerFactory =
+                new SortedParquetWriterFactory(config, SortMode.VERSIONS);
         SortRun run = new SortRun(config, comparator, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, writerFactory,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
         return new SortTransform(run).transform(segments, output, staging,
                 PublishListener.NO_OP, ignored -> { }, FinalPassListener.NO_OP);
     }
 
-    private Scenario build(int segmentCount, int entryCount, KeyStyle style, long seed) {
+    private Scenario build(int segmentCount, int bandCount, int rowsPerPage,
+            KeyStyle style, OverlapShape overlapShape, long seed) {
         Random random = new Random(seed);
-        List<List<ListEntry>> segments = new ArrayList<>();
+        List<List<List<ListEntry>>> segments = new ArrayList<>();
         for (int i = 0; i < segmentCount; i++) {
             segments.add(new ArrayList<>());
         }
         List<ListEntry> all = new ArrayList<>();
-        for (int i = 0; i < entryCount; i++) {
-            ListEntry entry = entry(key(style, random), random);
-            all.add(entry);
-            segments.get(random.nextInt(segmentCount)).add(entry);
+        for (int band = 0; band < bandCount; band++) {
+            for (int segment = 0; segment < segmentCount; segment++) {
+                if (!participates(overlapShape, segment, random)) {
+                    continue;
+                }
+                int pageRows = Math.max(1, rowsPerPage + random.nextInt(5) - 2);
+                List<ListEntry> page = new ArrayList<>(pageRows);
+                for (int row = 0; row < pageRows; row++) {
+                    ListEntry entry = entry(key(style, band, row, random), random);
+                    page.add(entry);
+                    all.add(entry);
+                }
+                page.sort(comparator);
+                segments.get(segment).add(page);
+            }
         }
-        for (List<ListEntry> segment : segments) {
-            segment.sort(comparator);
-        }
+        all.sort(comparator);
         return new Scenario(segments, all);
     }
 
-    private List<Path> stage(Path directory, List<List<ListEntry>> segments) throws IOException {
-        PageRunSegmentWriter writer = new PageRunSegmentWriter(
-                comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
+    private static boolean participates(
+            OverlapShape shape, int segment, Random random) {
+        if (segment == 0) {
+            return true;
+        }
+        return switch (shape) {
+            case DISJOINT_BANDS -> false;
+            case SHARED_BANDS -> true;
+            case SPARSE_OVERLAP -> random.nextBoolean();
+        };
+    }
+
+    private List<Path> stage(Path directory, List<List<List<ListEntry>>> segments)
+            throws IOException {
         List<Path> paths = new ArrayList<>();
         for (int i = 0; i < segments.size(); i++) {
             Path path = directory.resolve("seg-" + i + StagingNames.PAGE_RUN_SUFFIX);
-            try (SortedCursor cursor = new InMemoryCursor(
-                    segments.get(i), comparator, DuplicateHook.NO_OP)) {
-                writer.writeIntermediate(cursor, path);
-            }
+            SortTestSupport.writePages(
+                    path, segments.get(i), SortMode.VERSIONS, PageCodec.LZ4);
             paths.add(path);
         }
         return paths;
     }
 
-    private byte[] key(KeyStyle style, Random random) {
+    private byte[] key(KeyStyle style, int band, int row, Random random) {
         return switch (style) {
             case DENSE_SEQUENTIAL ->
-                    String.format("k%03d", random.nextInt(64)).getBytes(StandardCharsets.UTF_8);
-            case SMALL_ALPHABET -> new byte[]{(byte) ('a' + random.nextInt(5))};
-            case CLUSTERED -> String.format("c%d-%03d", random.nextInt(3), random.nextInt(8))
+                    String.format("b%03d/k%03d", band, row).getBytes(StandardCharsets.UTF_8);
+            case SMALL_ALPHABET -> String.format("b%03d/%c", band,
+                    (char) ('a' + random.nextInt(5))).getBytes(StandardCharsets.UTF_8);
+            case CLUSTERED -> String.format("b%03d/c%d-%03d", band,
+                    random.nextInt(3), random.nextInt(8))
                     .getBytes(StandardCharsets.UTF_8);
-            case BINARY_ADVERSARIAL ->
-                    BINARY_KEYS[random.nextInt(BINARY_KEYS.length)].clone();
+            case BINARY_ADVERSARIAL -> {
+                byte[] suffix = BINARY_KEYS[random.nextInt(BINARY_KEYS.length)];
+                byte[] key = Arrays.copyOf(suffix, suffix.length + 2);
+                System.arraycopy(key, 0, key, 2, suffix.length);
+                key[0] = (byte) band;
+                key[1] = 0;
+                yield key;
+            }
         };
     }
 
@@ -180,6 +236,7 @@ class FinalizationPipelinePropertyTest {
         }
     }
 
-    private record Scenario(List<List<ListEntry>> segments, List<ListEntry> allEntries) {
+    private record Scenario(
+            List<List<List<ListEntry>>> segments, List<ListEntry> allEntries) {
     }
 }

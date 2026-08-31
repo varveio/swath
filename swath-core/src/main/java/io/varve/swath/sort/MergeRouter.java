@@ -32,7 +32,7 @@ final class MergeRouter {
     private final Consumer<PartPlan> plans;
     private final PartSizer sizer;
     private final SortMetrics metrics;
-    private final Failure failure;
+    private final FinalizationFailure failure;
     private final Runnable awaitFirstCompletion;
     private final int maxPlanRefs;
     private final PriorityQueue<PageRef> frontier = new PriorityQueue<>((left, right) -> {
@@ -49,7 +49,7 @@ final class MergeRouter {
      * consulted only for first-part calibration; it never influences merge ordering.
      */
     MergeRouter(SegmentHeaderCursors cursors, Consumer<PartPlan> plans,
-            PartSizer sizer, SortMetrics metrics, Failure failure,
+            PartSizer sizer, SortMetrics metrics, FinalizationFailure failure,
             Runnable awaitFirstCompletion, int maxPlanRefs) {
         if (maxPlanRefs < 1 || maxPlanRefs > MergePlanner.MAX_PIPELINE_PLAN_REFS) {
             throw new IllegalArgumentException("pipeline plan reference cap is out of bounds");

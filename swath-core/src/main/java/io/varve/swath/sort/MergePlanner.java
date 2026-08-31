@@ -47,7 +47,6 @@ final class MergePlanner {
             throw new IllegalArgumentException("pipeline encoder count must be positive");
         }
         int segments = catalog.descriptors().size();
-        int decodedPageLimit = decodedPageLimit(config.mergeBudgetBytes());
         long readPageBytes = readPageBytes(catalog);
         long retainedPageBytes = retainedPageBytes(catalog);
         int refBytes = PageRef.retainedBytes(catalog.maxKeyLength());
@@ -101,7 +100,7 @@ final class MergePlanner {
                 ? Math.toIntExact(admittedPlanRefs) : MAX_PIPELINE_PLAN_REFS;
         return new PipelinePlan(admitted, reason, SegmentHeaderCursors.QUEUE_DEPTH,
                 refBytes, readPageBytes, retainedPageBytes, clusterBudget,
-                decodedPageLimit, planRefLimit);
+                planRefLimit);
     }
 
     private long largestFittingPlanRefs(int encoders, long cursorRefs, int refBytes,
@@ -173,12 +172,6 @@ final class MergePlanner {
             }
         }
         return maximum;
-    }
-
-    private static int decodedPageLimit(long mergeBudgetBytes) {
-        long bounded = Math.min(PageBlock.MAX_RAW_PAYLOAD_BYTES,
-                mergeBudgetBytes / (2L * DecodedPageBudget.RETAINED_PAGE_FACTOR));
-        return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, bounded));
     }
 
     private int runtimeFanIn(PageRunCatalog catalog, int outputWriters)
@@ -297,12 +290,11 @@ final class MergePlanner {
 
     record PipelinePlan(int encoders, PipelineClampReason reason, int cursorDepth,
                         int refBytes, long readPageBytes, long retainedPageBytes,
-                        long clusterBudgetBytes, int decodedPageLimit, int planRefLimit) {
+                        long clusterBudgetBytes, int planRefLimit) {
         PipelinePlan {
             if (encoders < 1 || cursorDepth < 1 || refBytes < 1 || readPageBytes < 1
                     || retainedPageBytes < 1 || clusterBudgetBytes < 1
-                    || decodedPageLimit < 1 || planRefLimit < 1
-                    || planRefLimit > MAX_PIPELINE_PLAN_REFS) {
+                    || planRefLimit < 1 || planRefLimit > MAX_PIPELINE_PLAN_REFS) {
                 throw new IllegalArgumentException("pipeline resource plan must be positive");
             }
         }

@@ -102,6 +102,60 @@ class PageRunSegmentTest {
     }
 
     @Test
+    void readSideRejectsAscendingPageMinsWhoseRangesOverlap(@TempDir Path dir)
+            throws IOException {
+        Path path = dir.resolve("ascending-overlap.pageseg");
+        PageRunRawFixtures.writeRawPageRun(path,
+                List.of(List.of(object("a"), object("m")),
+                        List.of(object("c"), object("z"))), CMP);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> reader(path, metrics))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_page_overlap");
+        assertThat(metrics.count("SORT.page_run_page_overlap")).isEqualTo(1);
+        assertThat(metrics.count("SORT.page_run_min_regression")).isZero();
+    }
+
+    @Test
+    void plannedDecodedPayloadLimitRejectsBeforePageDecode(@TempDir Path dir)
+            throws IOException {
+        Path path = SortTestSupport.writePages(
+                dir.resolve("decoded-limit.pageseg"),
+                List.of(List.of(object("repeated-prefix/alpha"),
+                        object("repeated-prefix/bravo"))), SortMode.OBJECTS, PageCodec.LZ4);
+        int plannedMaximum = PageRunTrailer.read(path).maxRawPayloadLength() - 1;
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, metrics, plannedMaximum)) {
+            assertThatThrownBy(io::nextPage)
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_decoded_page_limit")
+                    .hasMessageContaining("exceeds the planned segment maximum");
+        }
+        assertThat(metrics.count("SORT.page_run_decoded_page_limit")).isEqualTo(1);
+    }
+
+    @Test
+    void versionsEqualKeySeamMergesSeveralPagesEndToEnd(@TempDir Path dir)
+            throws IOException {
+        List<ListEntry> versions = new ArrayList<>(List.of(
+                version("same", "v3"), version("same", "v1"),
+                version("same", "v4"), version("same", "v2")));
+        versions.sort(CMP);
+        List<ListEntry> tail = List.of(version("z", "v1"));
+        Path path = SortTestSupport.writePages(
+                dir.resolve("versions.pageseg"),
+                List.of(versions.subList(0, 2), versions.subList(2, 4), tail),
+                SortMode.VERSIONS, PageCodec.LZ4);
+        List<ListEntry> expected = new ArrayList<>(versions);
+        expected.addAll(tail);
+
+        assertThat(readBack(path)).containsExactlyElementsOf(expected);
+        assertThat(PageRunTrailer.read(path).totalRecords()).isEqualTo(3);
+    }
+
+    @Test
     void corruptRecordBodyFailsFastOnRead(@TempDir Path dir) throws IOException {
         Path path = dir.resolve("seg.pgr");
         writeSimpleSegment(path, 200);
@@ -143,6 +197,29 @@ class PageRunSegmentTest {
         Files.write(path, Arrays.copyOf(raw, raw.length / 2));
 
         assertThatThrownBy(() -> reader(path, SortMetrics.NO_OP)).isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void fixedTrailerCrcAndMagicFailuresKeepTheirTypedClassification(@TempDir Path dir)
+            throws IOException {
+        for (boolean corruptMagic : List.of(false, true)) {
+            Path path = dir.resolve(corruptMagic
+                    ? "bad-trailer-magic.pageseg" : "bad-trailer-crc.pageseg");
+            writeSimpleSegment(path, 2);
+            byte[] raw = Files.readAllBytes(path);
+            int mutation = corruptMagic
+                    ? raw.length - 1
+                    : raw.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+            raw[mutation] ^= 0x01;
+            Files.write(path, raw);
+            SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+            assertThatThrownBy(() -> PageRunSegmentIo.open(path, metrics))
+                    .as(corruptMagic ? "trailing magic" : "fixed trailer CRC")
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_trailer_corruption");
+            assertThat(metrics.count("SORT.page_run_trailer_corruption")).isEqualTo(1);
+        }
     }
 
     @Test
@@ -588,7 +665,8 @@ class PageRunSegmentTest {
         // Keep the fixed trailer CRC valid so this reaches the logical body/trailer cross-check,
         // rather than stopping at the outer corruption gate.
         byte[] raw = Files.readAllBytes(path);
-        int totalEntriesOffset = raw.length - 20;
+        int totalEntriesOffset = raw.length
+                - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES + Long.BYTES + Integer.BYTES;
         long declared = ByteBuffer.wrap(raw, totalEntriesOffset, 8).getLong();
         ByteBuffer.wrap(raw, totalEntriesOffset, 8).putLong(declared - 1);
         rewriteFixedTrailerCrc(raw);
@@ -616,10 +694,12 @@ class PageRunSegmentTest {
         assertThat(before.totalRecords()).isEqualTo(1);   // precondition: exactly one page / one record
         assertThat(before.totalEntries()).isEqualTo(2);
 
-        // totalRecords is the u32 at [size-24, size-20). Repair the fixed-trailer CRC so the
+        // totalRecords follows trailerStart in the fixed tail. Repair the trailer CRC so the
         // independent empty/count consistency check is exercised.
         byte[] raw = Files.readAllBytes(path);
-        ByteBuffer.wrap(raw, raw.length - 24, 4).putInt(0);
+        int totalRecordsOffset = raw.length
+                - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES + Long.BYTES;
+        ByteBuffer.wrap(raw, totalRecordsOffset, Integer.BYTES).putInt(0);
         rewriteFixedTrailerCrc(raw);
         Files.write(path, raw);
 

@@ -207,7 +207,7 @@ class StagingReconciliationTest {
         SortRun run = new SortRun(
                 SortConfigs.base(), new ListEntryComparator(), DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
         return new DatasetPublisher(
                 run, hook, LoggerFactory.getLogger(StagingReconciliationTest.class));
     }

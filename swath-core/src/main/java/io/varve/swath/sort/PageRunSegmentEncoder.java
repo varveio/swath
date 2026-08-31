@@ -28,6 +28,8 @@ final class PageRunSegmentEncoder implements AutoCloseable {
     private int totalRecords;
     private long totalEntries;
     private int maxRecordLen;
+    private int maxRawPayloadLength;
+    private int maxKeyLength;
     private byte[] previousPageMax;
     private boolean closed;
 
@@ -76,6 +78,9 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         byte[] body = page.serialize();
         writeFrame(channel, body);
         maxRecordLen = Math.max(maxRecordLen, body.length);
+        maxRawPayloadLength = Math.max(maxRawPayloadLength, page.rawPayloadLength());
+        maxKeyLength = Math.max(maxKeyLength,
+                Math.max(pageMin.length, pageMax.length));
         totalEntries += page.count();
         totalRecords++;
         previousPageMax = pageMax;
@@ -85,7 +90,8 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         requireOpen();
         Objects.requireNonNull(kind, "kind");
         long trailerStart = channel.position();
-        writeTrailer(channel, trailerStart, totalRecords, totalEntries, maxRecordLen);
+        writeTrailer(channel, trailerStart, totalRecords, totalEntries, maxRecordLen,
+                maxRawPayloadLength, maxKeyLength);
         channel.force(true);
         channel.close();
         closed = true;
@@ -119,12 +125,15 @@ final class PageRunSegmentEncoder implements AutoCloseable {
     }
 
     private static void writeTrailer(FileChannel channel, long trailerStart, int totalRecords,
-                                     long totalEntries, int maxRecordLen) throws IOException {
+                                     long totalEntries, int maxRecordLen,
+                                     int maxRawPayloadLength, int maxKeyLength) throws IOException {
         ByteBuffer trailer = ByteBuffer.allocate(PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES);
         trailer.putLong(trailerStart);
         trailer.putInt(totalRecords);
         trailer.putLong(totalEntries);
         trailer.putInt(maxRecordLen);
+        trailer.putInt(maxRawPayloadLength);
+        trailer.putInt(maxKeyLength);
         CRC32C crc = new CRC32C();
         crc.update(trailer.array(), 0, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
         trailer.putInt((int) crc.getValue());

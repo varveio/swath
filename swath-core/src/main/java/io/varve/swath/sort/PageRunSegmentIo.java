@@ -22,7 +22,8 @@ import java.util.zip.CRC32C;
  * encoders share this framing owner.
  *
  * <p><b>What is single-sourced here:</b> the header magic/version check, the fixed trailer-tail read
- * (recovering {@code trailerStart}/{@code totalRecords}/{@code totalEntries}/{@code maxRecordLen} + the
+ * (recovering {@code trailerStart}/{@code totalRecords}/{@code totalEntries}/{@code maxRecordLen},
+ * exact decoded-page/key maxima, and the
  * trailing-magic truncation check), the framed-record read ({@code [len u32][crc32c u32][body]} with
  * the {@code len<=0 || len>maxRecordLen} bound applied BEFORE allocation and a CRC32C body verify), the
  * end-of-stream completeness cross-check ({@code seenEntries == totalEntries}), the bounded
@@ -53,6 +54,10 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /** Largest framed body length (from the trailer): bounds a record's claimed length before alloc. */
     final long maxRecordLen;
+    /** Exact largest decoded payload declared by any page header in this segment. */
+    final int persistedMaxRawPayloadLength;
+    /** Exact largest page-bound key length in this segment. */
+    final int persistedMaxKeyLength;
     /** Declared record count (from the trailer): how many framed records precede the trailer. */
     final long totalRecords;
     /** Declared entry count (from the trailer): the end-of-stream completeness cross-check target. */
@@ -77,16 +82,19 @@ final class PageRunSegmentIo implements AutoCloseable {
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
                             short formatVersion, SortMode orderingMode, int headerBytes,
                             long maxRecordLen, long totalRecords,
-                            long totalEntries, long trailerStart, long fileSize) {
+                            long totalEntries, int persistedMaxRawPayloadLength,
+                            int persistedMaxKeyLength, long trailerStart, long fileSize) {
         this(channel, path, metrics, magic, formatVersion, orderingMode, headerBytes,
                 maxRecordLen, totalRecords,
-                totalEntries, trailerStart, fileSize, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+                totalEntries, persistedMaxRawPayloadLength, persistedMaxKeyLength,
+                trailerStart, fileSize, PageBlock.MAX_RAW_PAYLOAD_BYTES);
     }
 
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
                             short formatVersion, SortMode orderingMode, int headerBytes,
                             long maxRecordLen, long totalRecords,
-                            long totalEntries, long trailerStart, long fileSize,
+                            long totalEntries, int persistedMaxRawPayloadLength,
+                            int persistedMaxKeyLength, long trailerStart, long fileSize,
                             int maxRawPayloadLength) {
         this.channel = channel;
         this.path = path;
@@ -99,6 +107,8 @@ final class PageRunSegmentIo implements AutoCloseable {
         this.maxRecordLen = maxRecordLen;
         this.totalRecords = totalRecords;
         this.totalEntries = totalEntries;
+        this.persistedMaxRawPayloadLength = persistedMaxRawPayloadLength;
+        this.persistedMaxKeyLength = persistedMaxKeyLength;
         this.trailerStart = trailerStart;
         this.fileSize = fileSize;
         this.nextFrameOffset = headerBytes;
@@ -106,7 +116,8 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /**
      * Open {@code path}, validate the header magic/version and the fixed trailer tail (recovering the
-     * record/entry counts, {@code maxRecordLen}, {@code trailerStart}, and the trailing magic /
+     * record/entry counts, {@code maxRecordLen}, exact decoded-page/key maxima,
+     * {@code trailerStart}, and the trailing magic /
      * truncation check), then position the channel after the variable-length header at the first record.
      * Closes the channel on any open-time failure. {@code metrics} carries the
      * {@code SORT.page_run_min_regression} engagement counter into the run summary.
@@ -115,10 +126,16 @@ final class PageRunSegmentIo implements AutoCloseable {
         return open(path, metrics, PageBlock.MAX_RAW_PAYLOAD_BYTES);
     }
 
+    /** Open with the segment's own CRC-protected fixed-trailer decoded-page maximum. */
+    static PageRunSegmentIo openUsingPersistedMaximum(Path path, SortMetrics metrics)
+            throws IOException {
+        return open(path, metrics, -1);
+    }
+
     /** Open with the decoded-page maximum admitted for this segment by kickoff planning. */
     static PageRunSegmentIo open(Path path, SortMetrics metrics, int maxRawPayloadLength)
             throws IOException {
-        if (maxRawPayloadLength < 0 || maxRawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
+        if (maxRawPayloadLength < -1 || maxRawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
             throw new IllegalArgumentException("decoded-page limit is outside the format bound: "
                     + maxRawPayloadLength);
         }
@@ -138,7 +155,7 @@ final class PageRunSegmentIo implements AutoCloseable {
             int magic = PageRunSegmentWriter.MAGIC;
             short version = header.formatVersion();
 
-            // The fixed trailer tail carries trailerStart/totalRecords/totalEntries/maxRecordLen and the
+            // The fixed trailer tail carries counts, allocation/admission maxima, and the
             // trailing magic — reading it lets us stop after exactly totalRecords records (so we never
             // misread the trailer as a record) and validates the file is complete (a truncated file has
             // no valid trailing magic here).
@@ -150,6 +167,8 @@ final class PageRunSegmentIo implements AutoCloseable {
             long totalRecords = tail.getInt() & 0xFFFFFFFFL;
             long totalEntries = tail.getLong();
             long maxRecordLen = tail.getInt() & 0xFFFFFFFFL;
+            long persistedMaxRawPayloadLength = tail.getInt() & 0xFFFFFFFFL;
+            long persistedMaxKeyLength = tail.getInt() & 0xFFFFFFFFL;
             int expectedTrailerCrc = tail.getInt();
             int trailerMagic = tail.getInt();
             CRC32C trailerCrc = new CRC32C();
@@ -172,21 +191,28 @@ final class PageRunSegmentIo implements AutoCloseable {
             }
             long recordBytes = trailerStart - header.encodedBytes();
             if (totalRecords == 0) {
-                if (recordBytes != 0 || totalEntries != 0 || maxRecordLen != 0) {
+                if (recordBytes != 0 || totalEntries != 0 || maxRecordLen != 0
+                        || persistedMaxRawPayloadLength != 0 || persistedMaxKeyLength != 0) {
                     throw failFor(path, "inconsistent empty page-run trailer counts");
                 }
             } else if (totalEntries < totalRecords
                     || maxRecordLen == 0
                     || recordBytes < 9
                     || totalRecords > recordBytes / 9
-                    || maxRecordLen > recordBytes - 8) {
+                    || maxRecordLen > recordBytes - 8
+                    || persistedMaxRawPayloadLength == 0
+                    || persistedMaxRawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES
+                    || persistedMaxKeyLength > ByteMidpoint.MAX_KEY_LEN) {
                 throw failFor(path, "inconsistent page-run trailer record metadata");
             }
 
             channel.position(header.encodedBytes());
             return new PageRunSegmentIo(channel, path, metrics, magic, version,
                     header.orderingMode(), header.encodedBytes(), maxRecordLen,
-                    totalRecords, totalEntries, trailerStart, size, maxRawPayloadLength);
+                    totalRecords, totalEntries, (int) persistedMaxRawPayloadLength,
+                    (int) persistedMaxKeyLength, trailerStart, size,
+                    maxRawPayloadLength < 0
+                            ? (int) persistedMaxRawPayloadLength : maxRawPayloadLength);
         } catch (IOException | RuntimeException e) {
             channel.close();
             throw e;

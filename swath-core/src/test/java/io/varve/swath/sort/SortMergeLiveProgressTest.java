@@ -145,7 +145,7 @@ class SortMergeLiveProgressTest {
                 new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                         SortMetrics.NO_OP,
                         SortedFileWriterFactory.DEFAULT,
-                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                        SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, output, staging, PublishListener.NO_OP,
                 units -> {
                     metrics.recordProgress(units);
@@ -167,7 +167,7 @@ class SortMergeLiveProgressTest {
                 new SortRun(SortConfigs.base().withFanIn(2), cmp, DuplicateHook.NO_OP,
                         EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                         SortedFileWriterFactory.DEFAULT,
-                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                        SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, output, staging, PublishListener.NO_OP,
                 units -> {
                     metrics.recordProgress(units);

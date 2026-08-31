@@ -75,7 +75,7 @@ final class Finalization {
         MergePlanner.PipelinePlan plan = planner.pipelineParallelism(encoderCount, pipelineCatalog);
         recordEncoderClamp(encoderCount, plan, pipelineCatalog);
         int effectiveEncoders = plan.encoders();
-        Failure failure = new Failure();
+        FinalizationFailure failure = new FinalizationFailure();
         PartSizer sizer = new PartSizer(
                 run.partTarget(), config.finalFileBytes());
         List<PageRunSegmentIo> channels = List.of();
@@ -160,8 +160,8 @@ final class Finalization {
 
     /**
      * Open exactly one shared positional-read channel per surviving segment. Current segments use
-     * the planner's decoded-page ceiling so a body larger than the retained-byte plan is rejected
-     * before decompression.
+     * its preflight-observed decoded-page maximum so admission and retained-byte pricing use the
+     * same exact per-descriptor value.
      */
     private static List<PageRunSegmentIo> openChannels(PageRunCatalog catalog,
             MergePlanner.PipelinePlan plan, SortMetrics metrics) throws IOException {
@@ -169,7 +169,7 @@ final class Finalization {
         try {
             for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
                 channels.add(PageRunSegmentIo.open(
-                        descriptor.path(), metrics, plan.decodedPageLimit()));
+                        descriptor.path(), metrics, descriptor.maxRawPayloadLength()));
             }
             return List.copyOf(channels);
         } catch (Throwable failure) {
@@ -219,7 +219,7 @@ final class Finalization {
      * everything as a generic I/O failure would change operator-visible retry semantics.
      */
     private static Throwable failureCause(Throwable failure) {
-        return failure instanceof Failure.Failed && failure.getCause() != null
+        return failure instanceof FinalizationFailure.Failed && failure.getCause() != null
                 ? failure.getCause() : failure;
     }
 

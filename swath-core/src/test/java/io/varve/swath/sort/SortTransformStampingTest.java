@@ -52,7 +52,7 @@ class SortTransformStampingTest {
         SortedParquetWriterFactory stampedFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stampedFactory,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
         SortTransformResult result = transform.transform(
                 List.of(seg0, seg1), output, staging, PublishListener.NO_OP,

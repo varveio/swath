@@ -14,8 +14,9 @@ public final class PageRunTrailer {
     private PageRunTrailer() {
     }
 
-    /** Exact record and entry totals plus the maximum framed body length. */
-    public record Trailer(long totalRecords, long totalEntries, long maxRecordLen) {
+    /** Exact record/entry totals and the allocation/admission maxima from the fixed trailer. */
+    public record Trailer(long totalRecords, long totalEntries, long maxRecordLen,
+                          int maxRawPayloadLength, int maxKeyLength) {
     }
 
     /** Open {@code path}, validate it, and read its fixed trailer. */
@@ -27,6 +28,7 @@ public final class PageRunTrailer {
 
     /** Read the trailer metadata retained by an already-open segment. */
     static Trailer read(PageRunSegmentIo io) {
-        return new Trailer(io.totalRecords, io.totalEntries, io.maxRecordLen);
+        return new Trailer(io.totalRecords, io.totalEntries, io.maxRecordLen,
+                io.persistedMaxRawPayloadLength, io.persistedMaxKeyLength);
     }
 }

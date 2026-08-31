@@ -42,6 +42,8 @@ public final class PageRunRawFixtures {
         }
         long totalEntries = 0;
         int maxRecordLen = 0;
+        int maxRawPayloadLength = 0;
+        int maxKeyLength = 0;
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
             PageRunHeader.write(channel, orderingMode);
@@ -50,9 +52,14 @@ public final class PageRunRawFixtures {
                 writeFrame(channel, body);
                 totalEntries += block.count();
                 maxRecordLen = Math.max(maxRecordLen, body.length);
+                maxRawPayloadLength = Math.max(
+                        maxRawPayloadLength, block.rawPayloadLength());
+                maxKeyLength = Math.max(maxKeyLength, Math.max(
+                        block.firstKeyUnsafe().length, block.lastKeyUnsafe().length));
             }
             writeFixedTrailerTail(
-                    channel, channel.position(), blocks.size(), totalEntries, maxRecordLen);
+                    channel, channel.position(), blocks.size(), totalEntries, maxRecordLen,
+                    maxRawPayloadLength, maxKeyLength);
             channel.force(true);
         }
     }
@@ -117,7 +124,9 @@ public final class PageRunRawFixtures {
                 StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
             PageRunHeader.write(channel, SortMode.OBJECTS);
             writeFrame(channel, malformedBody);
-            writeFixedTrailerTail(channel, channel.position(), 1, block.count(), malformedBody.length);
+            writeFixedTrailerTail(channel, channel.position(), 1, block.count(), malformedBody.length,
+                    block.rawPayloadLength(), Math.max(
+                            block.firstKeyUnsafe().length, block.lastKeyUnsafe().length));
             channel.force(true);
         }
         return path;
@@ -167,12 +176,15 @@ public final class PageRunRawFixtures {
     }
 
     private static void writeFixedTrailerTail(FileChannel channel, long trailerStart,
-            int totalRecords, long totalEntries, int maxRecordLen) throws IOException {
+            int totalRecords, long totalEntries, int maxRecordLen,
+            int maxRawPayloadLength, int maxKeyLength) throws IOException {
         ByteBuffer tail = ByteBuffer.allocate(PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES)
                 .putLong(trailerStart)
                 .putInt(totalRecords)
                 .putLong(totalEntries)
-                .putInt(maxRecordLen);
+                .putInt(maxRecordLen)
+                .putInt(maxRawPayloadLength)
+                .putInt(maxKeyLength);
         CRC32C crc = new CRC32C();
         crc.update(tail.array(), 0, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
         tail.putInt((int) crc.getValue()).putInt(PageRunSegmentWriter.MAGIC);

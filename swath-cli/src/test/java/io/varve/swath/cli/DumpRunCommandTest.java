@@ -25,7 +25,7 @@ import picocli.CommandLine;
  */
 class DumpRunCommandTest {
 
-    private static final int PAGE_RUN_V2_HEADER_BYTES = 21;
+    private static final int PAGE_RUN_V3_HEADER_BYTES = 21;
 
     private static String run(int[] exit, String... args) {
         StringWriter out = new StringWriter();
@@ -73,7 +73,7 @@ class DumpRunCommandTest {
 
         // Flip a byte inside the record body after the v2 header and 8-byte [len][crc] frame.
         byte[] raw = Files.readAllBytes(seg);
-        raw[PAGE_RUN_V2_HEADER_BYTES + 8] ^= 0x7F;
+        raw[PAGE_RUN_V3_HEADER_BYTES + 8] ^= 0x7F;
         Files.write(seg, raw);
 
         int[] exit = new int[1];

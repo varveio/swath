@@ -26,7 +26,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
 
     private final List<ArrayBlockingQueue<Item>> queues;
     private final List<Thread> cursors = new ArrayList<>();
-    private final Failure failure;
+    private final FinalizationFailure failure;
     private final SortMetrics metrics;
     private final AtomicBoolean closing = new AtomicBoolean();
 
@@ -36,7 +36,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
      * issuing simultaneous small reads against the filesystem.
      */
     SegmentHeaderCursors(List<PageRunSegmentIo> segments, Settings settings, SortMetrics metrics,
-            Failure failure) {
+            FinalizationFailure failure) {
         this.failure = failure;
         this.metrics = metrics;
         Semaphore scanPermits = new Semaphore(settings.scanParallelism());

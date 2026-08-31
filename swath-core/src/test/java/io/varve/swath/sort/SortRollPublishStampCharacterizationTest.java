@@ -193,14 +193,14 @@ class SortRollPublishStampCharacterizationTest {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private SortTransform stampedTransform(SortConfig config) {
         SortedFileWriterFactory stamped = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stamped,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private record Dirs(Path output, Path staging) {

@@ -1728,8 +1728,9 @@ encoder identity or completion order, determines final part order.
 Admission also prices the transient ownership between those structures: each scanner may hold one
 reference while its queue is full, and each encoder may own one executing plan in addition to the
 `2 * N` queued plans. A reference's price includes both key arrays at the largest per-segment
-`min(1,024, maxRecordLen)` bound in the post-cascade catalog. This covers interior page keys without
-an admission-time page scan. The retained-page price adds the format-derived maximum
+persisted exact key-length maximum in the post-cascade catalog. This covers interior page keys
+without an admission-time page scan. The retained-page price uses the persisted exact decoded-page
+maximum and adds the format-derived maximum
 dictionary-cache object overhead to its encoded/decoded payload multiplier, so a planner-admitted
 page cannot fail the lane guard solely because all five dictionaries reached their 64-value cap.
 If the surviving segment channels consume the entire usable descriptor budget, pipeline admission

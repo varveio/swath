@@ -24,7 +24,9 @@ import org.slf4j.LoggerFactory;
  * output being written (<b>fd bound ≤ F + 1</b>, I2) — then returns a streaming
  * {@link SortedCursor} over the surviving &le;{@code fanIn} segments.
  *
- * <p>Every pass uses the entry-typed {@link StreamingMerger}, wrapped in
+ * <p>Page-run cascade groups use {@link CascadePageMerger}, which forwards a globally disjoint
+ * page without a row heap and uses {@link PageRowMerger} only for overlapping page clusters.
+ * Other segment kinds use the entry-typed {@link StreamingMerger}. Both are wrapped in
  * {@link DuplicateReporting}, so adjacent equals are reported exactly once.
  *
  * <p><b>Merge-phase memory + fd bound (I11).</b> {@code fanIn} here is expected to already be the
@@ -88,6 +90,36 @@ final class KWayMerge<S> {
          */
         void delete(S segment) throws IOException;
 
+        /** Whether this segment can expose page bounds and bodies to the cascade page merger. */
+        default boolean supportsPageMerge(S segment) {
+            return false;
+        }
+
+        /** Open one page stream. Called only when {@link #supportsPageMerge} returned true. */
+        default PageStream openPages(S segment) throws IOException {
+            throw new UnsupportedOperationException("page merge is not supported");
+        }
+
+        /** Decoded-page residency available after encoded frontier bodies are priced. */
+        default long decodedPageBudgetBytes(List<S> segments) throws IOException {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    /** Minimal page frontier used only by cascade passes; no range/seek machinery survives here. */
+    interface PageStream extends AutoCloseable {
+        boolean hasPage();
+
+        byte[] minKey();
+
+        byte[] maxKey();
+
+        PageBlock decodeCurrentPage();
+
+        void advance() throws IOException;
+
+        @Override
+        void close() throws IOException;
     }
 
     private final Comparator<ListEntry> comparator;
@@ -160,10 +192,57 @@ final class KWayMerge<S> {
      */
     private SortedCursor openMerger(List<S> group, MergeRunSink disjointSink)
             throws IOException {
+        if (allSupportPageMerge(group)) {
+            long decodedBudget = io.decodedPageBudgetBytes(group);
+            List<PageStream> pages = openPages(group);
+            try {
+                return new DuplicateReporting(new CascadePageMerger(
+                        pages, comparator, metrics, disjointSink,
+                        decodedBudget), comparator, hook);
+            } catch (RuntimeException failure) {
+                closePagesAfterFailedOpen(pages, failure);
+                throw failure;
+            }
+        }
         List<EntryStream> streams = open(group);
         SortedCursor merger = new StreamingMerger(
                 streams, comparator, this::recordFastPath, disjointSink);
         return new DuplicateReporting(merger, comparator, hook);
+    }
+
+    private boolean allSupportPageMerge(List<S> group) {
+        if (group.isEmpty()) {
+            return false;
+        }
+        for (S segment : group) {
+            if (!io.supportsPageMerge(segment)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private List<PageStream> openPages(List<S> group) throws IOException {
+        List<PageStream> streams = new ArrayList<>(group.size());
+        try {
+            for (S segment : group) {
+                streams.add(io.openPages(segment));
+            }
+            return List.copyOf(streams);
+        } catch (IOException | RuntimeException failure) {
+            closePagesAfterFailedOpen(streams, failure);
+            throw failure;
+        }
+    }
+
+    private static void closePagesAfterFailedOpen(List<PageStream> streams, Throwable failure) {
+        for (PageStream stream : streams) {
+            try {
+                stream.close();
+            } catch (IOException | RuntimeException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+        }
     }
 
     long mergePasses() {

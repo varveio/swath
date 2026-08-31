@@ -81,17 +81,6 @@ final class PageRunCatalog {
             PageRunFormat expected = normalizedExpected.get(path);
             try (PageRunSegmentIo io = opener.open(path)) {
                 PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
-                int maxRawPayloadLength = 0;
-                int maxKeyLength = 0;
-                PageRunSegmentIo.RoutingPage page;
-                while ((page = io.nextRoutingPage()) != null) {
-                    PageBlockCodec.RoutingHeader header = page.header();
-                    maxRawPayloadLength = Math.max(
-                            maxRawPayloadLength, header.rawPayloadLength());
-                    maxKeyLength = Math.max(maxKeyLength,
-                            Math.max(header.minKey().length, header.maxKey().length));
-                }
-                io.checkRoutingComplete();
                 PageRunFormat physical = new PageRunFormat(
                         Short.toUnsignedInt(io.formatVersion()), PageRunFormat.ABSENT_EXTENSION);
                 if (expected != null && !expected.equals(physical)) {
@@ -102,7 +91,7 @@ final class PageRunCatalog {
                                     + expected + ", physical=" + physical);
                 }
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
-                        trailer, maxRawPayloadLength, maxKeyLength,
+                        trailer, trailer.maxRawPayloadLength(), trailer.maxKeyLength(),
                         physical, io.headerBytes, io.orderingMode()));
             }
         }

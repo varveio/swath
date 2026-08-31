@@ -63,9 +63,6 @@ import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
-import io.varve.swath.sort.MergeDiskExhaustedException;
-import io.varve.swath.sort.MergeDiskPolicy;
-import io.varve.swath.sort.MergeInputProfile;
 import io.varve.swath.sort.MergeMemoryExhaustedException;
 import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.PublicationStepHook;
@@ -1057,10 +1054,9 @@ public final class ListRunner {
         // opt in.
         SortTransform transform = new SortTransform(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, equalKeyPolicy(mode),
-                        sortMetrics, writerFactory, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
+                        sortMetrics, writerFactory,
                         SortRun.PROCESS_SOFT_FD_LIMIT,
-                        staleFinalSweep, ignoreDiskCheck
-                                ? MergeDiskPolicy.bypassed() : MergeDiskPolicy.enforced()),
+                        staleFinalSweep),
                 publicationStepHook);
         Path dataDir = DatasetLayout.of(outputDir).dataDir();
         // Mark a phase-boundary progress tick so the merge/finalize tail starts with a fresh stall
@@ -1116,10 +1112,6 @@ public final class ListRunner {
             }
             throw new PublicationPendingException(
                     "sorted dataset publication committed; cleanup pending", e);
-        } catch (MergeDiskExhaustedException e) {
-            ctx.metrics().recordFatalErrorClass(e.errorClass());
-            throw new MergePendingException("sort merge deferred for insufficient disk; "
-                    + "free space and resume, or use sort.ignore-disk-check=on", e);
         } catch (MergeMemoryExhaustedException e) {
             ctx.metrics().recordFatalErrorClass(e.errorClass());
             throw new MergePendingException("sort merge deferred because decoded pages do not fit "
@@ -1176,9 +1168,6 @@ public final class ListRunner {
         for (Throwable c = t; c != null; c = c.getCause()) {
             if (c instanceof SegmentCorruptionException sce) {
                 return sce.errorClass();
-            }
-            if (c instanceof MergeDiskExhaustedException exhausted) {
-                return exhausted.errorClass();
             }
             if (c instanceof MergeMemoryExhaustedException exhausted) {
                 return exhausted.errorClass();

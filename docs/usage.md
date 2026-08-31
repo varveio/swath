@@ -276,9 +276,8 @@ Codes 74, 75, 124, 130, and 143 imply resumable work only when the run uses a ma
 Parquet directory. A deterministic failure may recur after resume; inspect the terminal
 error and `_swath_summary.json`.
 
-The sorted-output disk guards use the markers `sort_disk_precheck_refused`,
-`sort_disk_exhaustion_imminent`, `sort_merge_disk_refused`, and
-`sort_merge_disk_recheck_refused`, with `error_class=sort_disk_exhausted` and
+The sorted-output disk guards use the markers `sort_disk_precheck_refused` and
+`sort_disk_exhaustion_imminent`, with `error_class=sort_disk_exhausted` and
 `resumable=true`.
 
 ## Progress and reports
