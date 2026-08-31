@@ -173,6 +173,8 @@ With `-Dswath.bench.finalization=pipeline`, every requested encoder count runs b
 part-sizing controls in the same sweep: calibrated bytes and fixed rows. Set the fixed-row target
 with `-Dswath.bench.pipeline-fixed-rows=N`; each `BENCH_ROW` identifies the control and reports total
 router wait, plan-queue wait, header-scan service, encoder page reads, and encoder-read service.
+Pipeline rows report `requested_encoders`/`actual_encoders` and mark
+`requested_r`/`actual_ranges` unavailable; range rows do the inverse.
 These pipeline arms run once after the serial brackets and reverse-order range sweep, so they are an
 in-JVM hook/oracle smoke, not publishable performance evidence. The fresh-JVM
 `scripts/perf/finalization-ab.sh` protocol on the benchmark integration branch is the measurement

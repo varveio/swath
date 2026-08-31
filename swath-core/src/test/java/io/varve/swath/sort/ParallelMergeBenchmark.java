@@ -395,11 +395,13 @@ class ParallelMergeBenchmark {
         sample.fullRowExact = exact;
         if (!exact) {
             bench(context, "BENCH_FULL_ROW_EXACT_FAIL", sample.logicalOutputFingerprint,
-                    "requested_r=" + spec.parallelism() + " actual_ranges=" + sample.actualRanges
+                    sample.parallelismFields()
                             + " baseline_fingerprint=" + baseline.logicalOutputFingerprint);
-            throw new AssertionError("full-row mismatch at requested R=" + spec.parallelism()
-                    + " (actual ranges=" + sample.actualRanges
-                    + ") vs the R=1 baseline — silent data loss");
+            String requested = spec.finalization() == SortFinalization.PIPELINE
+                    ? "encoders=" + spec.parallelism()
+                    : "ranges=" + spec.parallelism();
+            throw new AssertionError("full-row mismatch at requested " + requested
+                    + " vs the R=1 baseline — silent data loss");
         }
         return sample;
     }
@@ -575,8 +577,12 @@ class ParallelMergeBenchmark {
         }
 
         ArmResult ar = new ArmResult();
-        ar.requestedRanges = spec.parallelism();
         ar.finalization = spec.finalization();
+        if (spec.finalization() == SortFinalization.PIPELINE) {
+            ar.requestedEncoders = spec.parallelism();
+        } else {
+            ar.requestedRanges = spec.parallelism();
+        }
         ar.pipelinePartPolicy = spec.finalization() == SortFinalization.PIPELINE
                 ? spec.partTarget().policy().name().toLowerCase(Locale.ROOT).replace('_', '-')
                 : "not_applicable";
@@ -621,7 +627,11 @@ class ParallelMergeBenchmark {
         }
         ar.inputSegments = stagingSegments.size();
         ar.rangeParallelCount = metrics.count("SORT.merge_range_parallel");
-        ar.actualRanges = ar.rangeParallelCount > 0 ? ar.rangeParallelCount : 1;
+        if (spec.finalization() == SortFinalization.PIPELINE) {
+            ar.actualEncoders = result.finalizationParallelism();
+        } else {
+            ar.actualRanges = ar.rangeParallelCount > 0 ? ar.rangeParallelCount : 1;
+        }
         ar.rangeBelowStagedFloorCount = metrics.count("SORT.merge_range_below_staged_floor");
         ar.rangeFdLimitedCount = metrics.count("SORT.merge_range_fd_limited");
         ar.rangeFdExhaustedCount = metrics.count("SORT.merge_range_fd_exhausted");
@@ -1137,8 +1147,10 @@ class ParallelMergeBenchmark {
     }
 
     static final class ArmResult {
-        int requestedRanges;
-        long actualRanges;
+        int requestedRanges = -1;
+        long actualRanges = -1;
+        int requestedEncoders = -1;
+        int actualEncoders = -1;
         SortFinalization finalization;
         String pipelinePartPolicy;
         int finalizationParallelism;
@@ -1201,7 +1213,7 @@ class ParallelMergeBenchmark {
             return String.format(
                     "BENCH_ROW %s label=%s staging_format=page-run finalization=%s "
                             + "pipeline_part_policy=%s "
-                            + "requested_r=%d actual_ranges=%d finalization_parallelism=%d "
+                            + "%s "
                             + "merge_elapsed_ms=%d boundary_ms=%s range_merge_sum_ms=%s "
                             + "avg_cores_busy=%.2f peak_heap_mb=%.1f peak_rss_mb=%.1f "
                             + "rows=%d input_segments=%d output_files=%d merge_passes=%d "
@@ -1225,7 +1237,7 @@ class ParallelMergeBenchmark {
                             + "range_latencies_ms=%s",
                     context.tags(logicalOutputFingerprint), label, finalization.configValue(),
                     pipelinePartPolicy,
-                    requestedRanges, actualRanges, finalizationParallelism,
+                    parallelismFields(),
                     elapsedNanos / 1_000_000, boundaryMs,
                     rangeMergeSumMs, avgCoresBusy, peakHeapBytes / (1024.0 * 1024.0),
                     peakRssBytes / (1024.0 * 1024.0), totalRows, inputSegments, finalFiles.size(),
@@ -1242,6 +1254,19 @@ class ParallelMergeBenchmark {
                     pipelineEncoderReadWaitNanos / 1_000_000L,
                     partBytes, partRows, fullRowExact, multisetDigest,
                     samplerCleanupNanos / 1_000_000, rangeLatenciesMs);
+        }
+
+        String parallelismFields() {
+            if (finalization == SortFinalization.PIPELINE) {
+                return String.format("requested_r=unavailable actual_ranges=unavailable "
+                                + "requested_encoders=%d actual_encoders=%d "
+                                + "finalization_parallelism=%d",
+                        requestedEncoders, actualEncoders, finalizationParallelism);
+            }
+            return String.format("requested_r=%d actual_ranges=%d "
+                            + "requested_encoders=unavailable actual_encoders=unavailable "
+                            + "finalization_parallelism=%d",
+                    requestedRanges, actualRanges, finalizationParallelism);
         }
     }
 

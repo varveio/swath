@@ -262,6 +262,7 @@ final class FinalizationPipelineTest {
         assertThat(keys(result.finalFiles())).containsExactly("a", "b", "c", "d");
         assertThat(metrics.pipelinePagesForwarded.sum()).isEqualTo(4);
         assertThat(metrics.pipelineClusterPages.sum()).isZero();
+        assertThat(metrics.count("SORT.pipeline_whole_page_merge")).isEqualTo(4);
     }
 
     @Test
@@ -853,6 +854,10 @@ final class FinalizationPipelineTest {
                         SortedFileWriterFactory.DEFAULT.create(path, index)) {
                     @Override
                     public void write(ListEntry entry) throws IOException {
+                        if (index == 1) {
+                            super.write(entry);
+                            return;
+                        }
                         writerStarted.countDown();
                         try {
                             blockWriter.await();
@@ -865,10 +870,11 @@ final class FinalizationPipelineTest {
                 };
         List<String> keys = java.util.stream.IntStream.range(0, 32)
                 .mapToObj(i -> String.format("k%03d", i)).toList();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread caller = Thread.ofPlatform().start(() -> {
             try {
-                run(root, List.of(keys), Long.MAX_VALUE, SortMetrics.NO_OP, blocking);
+                run(root, List.of(keys), 1, metrics, blocking);
             } catch (Throwable thrown) {
                 failure.set(thrown);
             }
@@ -876,6 +882,12 @@ final class FinalizationPipelineTest {
 
         try {
             assertThat(writerStarted.await(60, TimeUnit.SECONDS)).isTrue();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+            while (metrics.count("SORT.pipeline_plan_queue_saturated") == 0
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertThat(metrics.count("SORT.pipeline_plan_queue_saturated")).isEqualTo(1);
             caller.interrupt();
             assertThat(caller.join(Duration.ofSeconds(60))).isTrue();
         } finally {

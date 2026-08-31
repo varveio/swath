@@ -85,6 +85,7 @@ final class MergeRouter {
                 item = new PartPlan.Page(first);
                 pagesForwarded++;
                 metrics.recordPipelinePagesForwarded(1);
+                metrics.recordStealReason("SORT", "pipeline_whole_page_merge");
             } else {
                 item = collectCluster(first);
             }

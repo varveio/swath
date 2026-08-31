@@ -70,6 +70,26 @@ class PageRunDecodedResidencyTest {
     }
 
     @Test
+    void routingReadRecordsTypedDecodedPageLimit(@TempDir Path dir) throws IOException {
+        Path segment = writeCompressed(dir.resolve("routing-underclaim.pageseg"),
+                List.of(List.of(object("compressible-key-" + "x".repeat(900)))));
+        int declared = catalog(segment).maxRawPayloadLength();
+        underclaimDecodedMaximum(segment, declared - 1);
+        PageRunSegmentDescriptor forged = catalog(segment).descriptors().getFirst();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> {
+            try (PageRunSegmentIo io = PageRunSegmentIo.open(
+                    segment, metrics, forged.maxRawPayloadLength())) {
+                io.nextRoutingPage();
+            }
+        }).isInstanceOfSatisfying(SegmentCorruptionException.class, failure ->
+                assertThat(failure.errorClass())
+                        .isEqualTo(SegmentCorruptionException.PAGE_RUN_DECODED_PAGE_LIMIT));
+        assertThat(metrics.count("SORT.page_run_decoded_page_limit")).isEqualTo(1);
+    }
+
+    @Test
     void tinyCompressedBodyWithHugeRawClaimIsRejectedBeforeAllocation(@TempDir Path dir)
             throws IOException {
         Path segment = writeCompressed(dir.resolve("bomb.pageseg"),

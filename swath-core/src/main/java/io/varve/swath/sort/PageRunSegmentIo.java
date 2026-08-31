@@ -269,13 +269,7 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page body: " + e.getMessage(), e);
         }
-        if (header.rawPayloadLength() > maxRawPayloadLength) {
-            metrics.recordStealReason("SORT", "page_run_decoded_page_limit");
-            throw corruption(SegmentCorruptionException.PAGE_RUN_DECODED_PAGE_LIMIT,
-                    "decoded page payload " + header.rawPayloadLength()
-                            + " exceeds the planned segment maximum " + maxRawPayloadLength,
-                    null);
-        }
+        requirePlannedDecodedPayload(header.rawPayloadLength());
         long cumulativeFramedBytes = proofTracking
                 ? frameOffset - headerBytes : 0;
         if (seekExpectation != null) {
@@ -332,6 +326,7 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page routing header: " + e.getMessage(), e);
         }
+        requirePlannedDecodedPayload(header.rawPayloadLength());
         pagesRead++;
         checkMinMonotonic(header.minKey());
         checkDisjoint(header.minKey());
@@ -381,12 +376,7 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page body: " + e.getMessage(), e);
         }
-        if (header.rawPayloadLength() > maxRawPayloadLength) {
-            metrics.recordStealReason("SORT", "page_run_decoded_page_limit");
-            throw corruption(SegmentCorruptionException.PAGE_RUN_DECODED_PAGE_LIMIT,
-                    "decoded page payload " + header.rawPayloadLength()
-                            + " exceeds the planned segment maximum " + maxRawPayloadLength, null);
-        }
+        requirePlannedDecodedPayload(header.rawPayloadLength());
         if (!Arrays.equals(header.minKey(), ref.minKey())
                 || !Arrays.equals(header.maxKey(), ref.maxKey())
                 || header.count() != ref.count()
@@ -528,10 +518,14 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw new IllegalArgumentException(
                     "malformed PageBlock: minKey exceeds maxKey under unsigned byte order");
         }
-        if (header.rawPayloadLength() > maxRawPayloadLength) {
-            throw new IllegalArgumentException("decoded page payload "
-                    + header.rawPayloadLength() + " exceeds the planned segment maximum "
-                    + maxRawPayloadLength);
+    }
+
+    private void requirePlannedDecodedPayload(int rawPayloadLength) throws IOException {
+        if (rawPayloadLength > maxRawPayloadLength) {
+            metrics.recordStealReason("SORT", "page_run_decoded_page_limit");
+            throw corruption(SegmentCorruptionException.PAGE_RUN_DECODED_PAGE_LIMIT,
+                    "decoded page payload " + rawPayloadLength
+                            + " exceeds the planned segment maximum " + maxRawPayloadLength, null);
         }
     }
 

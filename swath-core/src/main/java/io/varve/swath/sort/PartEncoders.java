@@ -90,6 +90,7 @@ final class PartEncoders implements AutoCloseable {
         if (queue.offer(item)) {
             return;
         }
+        metrics.recordStealReason("SORT", "pipeline_plan_queue_saturated");
         long started = System.nanoTime();
         try {
             while (!queue.offer(item, FAILURE_CHECK_MILLIS, TimeUnit.MILLISECONDS)) {

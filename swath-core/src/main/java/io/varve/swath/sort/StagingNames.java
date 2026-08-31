@@ -44,7 +44,7 @@ final class StagingNames {
     }
 
     static String pipelineTmp(int ordinal) {
-        return String.format("pipeline-%05d.parquet.tmp", ordinal);
+        return String.format("pipeline-%05d", ordinal) + PARQUET_SUFFIX + TMP_SUFFIX;
     }
 
     static String cascadeIntermediate(String prefix, int sequence) {

@@ -53,6 +53,9 @@ final class DefaultSortedFileWriter implements SortedFileWriter {
 
     @Override
     public synchronized void close() throws IOException {
+        if (closed) {
+            return;
+        }
         delegate.close();
         closed = true;
     }
