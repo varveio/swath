@@ -125,8 +125,9 @@ final class ListOptionGroups {
         }
 
         @Resume(ResumeClass.FREE)
-        @Option(names = "--tune", paramLabel = "KEY=VALUE", hidden = true,
-                description = "Set a typed expert option (repeatable; use --tune help).")
+        @Option(names = "--tune", paramLabel = "KEY=VALUE",
+                description = "Set a typed expert option (repeatable; use --tune help; see Tuning "
+                        + "in docs/configuration.md).")
         void tune(String[] values) {
             tune.entries = new ArrayList<>(List.of(values));
         }

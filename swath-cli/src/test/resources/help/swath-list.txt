@@ -20,10 +20,10 @@ Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--requester-pays=requester] [--text-part-size=SIZE]
                   [--text-writers=N] [--trace=PATH] [--writeback-size=SIZE]
                   [--storage-class=CLASS[,CLASS][,CLASS[,CLASS]...]]...
-                  [<s3-uri>]
+                  [--tune=KEY=VALUE]... [<s3-uri>]
 List a bucket or prefix.
       [<s3-uri>]             Source URI, e.g. s3://bucket/prefix (required
-                               unless requesting tune help)
+                               unless using --tune help)
   -h, --help                 Show this help message and exit.
   -V, --version              Print version information and exit.
 
@@ -142,5 +142,7 @@ Diagnostics:
   -q, --quiet                Decrease verbosity (-q ERROR, -qq silent);
                                suppresses the startup destination echo.
       --trace=PATH           Write a diagnostic JSONL run trace to PATH.
+      --tune=KEY=VALUE       Set a typed expert option (repeatable; use --tune
+                               help; see Tuning in docs/configuration.md).
   -v                         Increase verbosity (-v INFO, -vv DEBUG, -vvv
                                TRACE).

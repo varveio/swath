@@ -1,31 +1,34 @@
 Usage: swath resume [-hVqv] [--[no-]progress] [--[no-]stats]
                     [--bearer-token-command=CMD]
                     [--bearer-token-refresh-interval=DURATION] [--color=MODE]
-                    [<dir>]
+                    [--tune=KEY=VALUE]... [<dir>]
 Resume a managed Parquet run by its output directory: swath resume <dir>.
-      [<dir>]           Managed Parquet output directory; its checkpoint is in .
-                          swath/.
+      [<dir>]            Managed Parquet output directory; its checkpoint is in
+                           .swath/.
       --bearer-token-command=CMD
-                        Shell command whose stdout is a fresh OAuth bearer
-                          token (e.g. 'gcloud auth print-access-token' for
-                          GCS's XML API), used instead of AWS SigV4 signing for
-                          every request. Never stored in the checkpoint, so a
-                          resumed run against a bearer-auth endpoint must
-                          re-pass it.
+                         Shell command whose stdout is a fresh OAuth bearer
+                           token (e.g. 'gcloud auth print-access-token' for
+                           GCS's XML API), used instead of AWS SigV4 signing
+                           for every request. Never stored in the checkpoint,
+                           so a resumed run against a bearer-auth endpoint must
+                           re-pass it.
       --bearer-token-refresh-interval=DURATION
-                        How often to re-run --bearer-token-command for a fresh
-                          token (default: 45m). Size it comfortably under the
-                          token source's real expiry.
-      --color=MODE      Color the progress line and end-of-run summary: auto,
-                          always, or never (default: auto).
-  -h, --help            Show this help message and exit.
-      --[no-]progress   Print live progress records to stderr (default: on when
-                          stderr is a terminal and neither -q nor -v was given).
-  -q, --quiet           Decrease verbosity (-q ERROR, -qq silent); suppresses
-                          the startup destination echo.
-      --[no-]stats      Print the end-of-run summary to stderr (default: on for
-                          runs over 1.5s, runs that produce output, and runs
-                          that stop short of finishing; a closed downstream
-                          pipe stays silent).
-  -v                    Increase verbosity (-v INFO, -vv DEBUG, -vvv TRACE).
-  -V, --version         Print version information and exit.
+                         How often to re-run --bearer-token-command for a fresh
+                           token (default: 45m). Size it comfortably under the
+                           token source's real expiry.
+      --color=MODE       Color the progress line and end-of-run summary: auto,
+                           always, or never (default: auto).
+  -h, --help             Show this help message and exit.
+      --[no-]progress    Print live progress records to stderr (default: on
+                           when stderr is a terminal and neither -q nor -v was
+                           given).
+  -q, --quiet            Decrease verbosity (-q ERROR, -qq silent); suppresses
+                           the startup destination echo.
+      --[no-]stats       Print the end-of-run summary to stderr (default: on
+                           for runs over 1.5s, runs that produce output, and
+                           runs that stop short of finishing; a closed
+                           downstream pipe stays silent).
+      --tune=KEY=VALUE   Set a resume-safe typed expert option (repeatable; use
+                           --tune help; see Tuning in docs/configuration.md).
+  -v                     Increase verbosity (-v INFO, -vv DEBUG, -vvv TRACE).
+  -V, --version          Print version information and exit.

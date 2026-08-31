@@ -21,6 +21,7 @@ swath resume --help
 
 ## Use and operate
 
+- [Supported CLI surface](cli.md)
 - [Common workflows and output choices](usage.md)
 - [Credentials, IAM, endpoints, and request cost](operating.md)
 - [Troubleshooting and FAQ](faq.md)

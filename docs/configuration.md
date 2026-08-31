@@ -116,9 +116,11 @@ An explicit `--color=always` or `--color=never` wins over terminal environment s
 
 ## Tuning (`--tune`)
 
-`--tune KEY=VALUE` holds typed expert settings that should not crowd the everyday flag
-surface. It is repeatable. Invalid values fail before swath opens a checkpoint or contacts
-the object store. Ask the running binary for all keys or one key:
+`--tune KEY=VALUE` is the visible entry point for typed expert settings that should not
+crowd the everyday flag surface. It is repeatable. Stability is classified per key as
+stable, experimental, or diagnostic, as shown below and by `--tune help`; it is not a
+single classification for the flag. Invalid values fail before swath opens a checkpoint
+or contacts the object store. Ask the running binary for all keys or one key:
 
 ```bash
 swath list --tune help
