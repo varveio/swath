@@ -36,16 +36,16 @@ jobs:
     # The perf tier (1M-key SORT-PERF, 100k PERF-1/2) is the long pole; deep is ~minutes.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Set up JDK 25
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165  # v4
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c  # v4
         with:
           distribution: temurin
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
 
       # Deep tier serially (-PtestMaxParallelForks=1) so probe budgets are asserted without
       # cross-fork CPU contention, exactly as the main-merge deep-tests job runs them.
@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: test-reports-nightly
           path: "*/build/reports/tests/"
@@ -109,16 +109,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Set up JDK 25
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165  # v4
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c  # v4
         with:
           distribution: temurin
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
 
       # installDist, not the shadow jar: the install `lib/` directory is the resolved closure
       # with each module still a separately identifiable artifact, which is what the scanner
@@ -133,12 +133,12 @@ jobs:
             swath-replay/build/install/swath-replay/lib
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
       # Builder-native arch only, and no push: this scans the base layer's OS packages, which
       # are the same image for both arches' JRE bases in every way this scan looks at.
       - name: Build the runtime images (builder-native arch)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           load: true
@@ -146,7 +146,7 @@ jobs:
           cache-from: type=gha,scope=swath
 
       - name: Build the replay runtime image (builder-native arch)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: Dockerfile.replay
