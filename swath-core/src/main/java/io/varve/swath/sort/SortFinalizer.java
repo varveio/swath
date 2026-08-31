@@ -35,8 +35,8 @@ import org.slf4j.LoggerFactory;
  * separate owned glob and remain disposable until the whole ordered set passes verification. Thus a
  * failed encoder can never make a footer-closed but unverified file resumable or consumer-visible.
  */
-final class Finalization {
-    private static final Logger log = LoggerFactory.getLogger(Finalization.class);
+final class SortFinalizer {
+    private static final Logger log = LoggerFactory.getLogger(SortFinalizer.class);
 
     private final SortRun run;
     private final MergePlanner planner;
@@ -46,7 +46,7 @@ final class Finalization {
      * Bind the run's policy, resource planner, and sole publication owner. Keeping publication here
      * prevents encoder threads from racing manifest order or cleanup authority.
      */
-    Finalization(SortRun run, MergePlanner planner, DatasetPublisher publisher) {
+    SortFinalizer(SortRun run, MergePlanner planner, DatasetPublisher publisher) {
         this.run = run;
         this.planner = planner;
         this.publisher = publisher;

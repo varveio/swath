@@ -93,10 +93,10 @@ public final class SortTransform {
                 stagingSegments, catalogOpener, expectedFormats, run.metrics());
         datasetPublisher.sweepWorking(outputDir, stagingDir, ownedInputs, outputAuthority);
 
-        Finalization.Request request = new Finalization.Request(
+        SortFinalizer.Request request = new SortFinalizer.Request(
                 outputDir, stagingDir, publishListener, progressCallback, onFinalPassStarting,
                 ownedInputs, retainedOriginals, outputAuthority);
-        return new Finalization(run, mergePlanner, datasetPublisher)
+        return new SortFinalizer(run, mergePlanner, datasetPublisher)
                 .run(catalog, request, run.config().mergeParallelism());
     }
 }
