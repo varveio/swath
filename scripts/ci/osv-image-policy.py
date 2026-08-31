@@ -145,31 +145,23 @@ def group_member_ids(group: dict, vulnerabilities: dict[str, dict]) -> set[str]:
     # this binary/version. `ids` is OSV-Scanner's exact set for this occurrence.
     identifiers = set(group["ids"])
     members = {value for value in identifiers if value.startswith("UBUNTU-CVE-")}
-    # A USN is a group record whose related/upstream fields name its member CVEs.
-    # Follow both directions because OSV-Scanner has emitted both shapes over time.
-    changed = True
-    while changed:
-        changed = False
-        for vulnerability_id, vulnerability in vulnerabilities.items():
-            related: set[str] = set()
-            for field_name in ("aliases", "related", "upstream"):
-                if field_name in vulnerability:
-                    related.update(
-                        string_list(
-                            vulnerability[field_name],
-                            f"vulnerability {vulnerability_id}.{field_name}",
-                        )
-                    )
-            if vulnerability_id in identifiers or related & identifiers:
-                # Only vulnerability documents present in this package result are members;
-                # a USN document's broader `related` list can include unaffected CVEs.
-                expanded = ({vulnerability_id} | related) & vulnerabilities.keys()
-                if not expanded <= identifiers:
-                    identifiers.update(expanded)
-                    changed = True
-                members.update(
-                    value for value in expanded if value.startswith("UBUNTU-CVE-")
-                )
+    # The partition check assigns every vulnerability document to exactly one group. A USN
+    # can relate to CVEs owned by another group, so relation traversal must stay inside this
+    # group's IDs rather than importing every document named by `related` or `upstream`.
+    for vulnerability_id in identifiers:
+        vulnerability = vulnerabilities[vulnerability_id]
+        for field_name in ("aliases", "related", "upstream"):
+            if field_name not in vulnerability:
+                continue
+            related = string_list(
+                vulnerability[field_name],
+                f"vulnerability {vulnerability_id}.{field_name}",
+            )
+            members.update(
+                value
+                for value in related
+                if value in identifiers and value.startswith("UBUNTU-CVE-")
+            )
     return members
 
 
@@ -442,7 +434,7 @@ def evaluate(
         if scanner_exit_code == 1 and not occurrences:
             raise SchemaError("scanner returned 1 but the report contains no findings")
         return render(occurrences, output)
-    except (OSError, json.JSONDecodeError, SchemaError) as error:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, SchemaError) as error:
         print(f"OSV image policy could not safely interpret the report: {error}", file=output)
         return 2
 
@@ -568,6 +560,38 @@ class PolicySelfTest(unittest.TestCase):
         )
         self.assertEqual(1, code)
         self.assertIn("FAIL high USN-1", output)
+
+    def test_cross_group_relations_do_not_contaminate_priority(self) -> None:
+        code, output = self.evaluate_document(
+            report(
+                [
+                    {
+                        "ids": ["USN-1", "UBUNTU-CVE-1"],
+                        "aliases": [],
+                    },
+                    {
+                        "ids": ["USN-2", "UBUNTU-CVE-2"],
+                        "aliases": [],
+                    },
+                ],
+                [
+                    vulnerability(
+                        "USN-1",
+                        None,
+                        related=["UBUNTU-CVE-1", "UBUNTU-CVE-2"],
+                    ),
+                    vulnerability("UBUNTU-CVE-1", "low"),
+                    vulnerability(
+                        "USN-2", None, related=["UBUNTU-CVE-2"]
+                    ),
+                    vulnerability("UBUNTU-CVE-2", "high"),
+                ],
+            )
+        )
+        self.assertEqual(1, code)
+        self.assertIn("REPORT low USN-1", output)
+        self.assertIn("FAIL high USN-2", output)
+        self.assertNotIn("FAIL high USN-1", output)
 
     def test_non_ubuntu_fails(self) -> None:
         code, output = self.evaluate_document(
@@ -699,6 +723,15 @@ reason = "datetime fixture"
         code, output = self.evaluate_document({}, scanner_rc=7)
         self.assertEqual(2, code)
         self.assertIn("failed with exit code 7", output)
+
+    def test_invalid_utf8_report_returns_script_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_bytes(b'{"results": ["\xff"]}')
+            output = io.StringIO()
+            code = evaluate(path, 1, output)
+        self.assertEqual(2, code)
+        self.assertIn("could not safely interpret", output.getvalue())
 
     def test_duplicate_occurrences_are_summarized(self) -> None:
         code, output = self.evaluate_document(
