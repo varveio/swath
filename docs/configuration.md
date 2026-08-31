@@ -116,9 +116,11 @@ An explicit `--color=always` or `--color=never` wins over terminal environment s
 
 ## Tuning (`--tune`)
 
-`--tune KEY=VALUE` holds typed expert settings that should not crowd the everyday flag
-surface. It is repeatable. Invalid values fail before swath opens a checkpoint or contacts
-the object store. Ask the running binary for all keys or one key:
+`--tune KEY=VALUE` is the visible entry point for typed expert settings that should not
+crowd the everyday flag surface. It is repeatable. Stability is classified per key as
+stable, experimental, or diagnostic, as shown below and by `--tune help`; it is not a
+single classification for the flag. Invalid values fail before swath opens a checkpoint
+or contacts the object store. Ask the running binary for all keys or one key:
 
 ```bash
 swath list --tune help
@@ -197,7 +199,6 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.fan-in` | `10000` | Merge-stream ceiling, further limited by the planning budget and open files. |
 | `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Runtime capacity budget for pipeline page-reference planning, transient positional reads, and retained decoded-page residency. A truthful one-encoder floor that cannot fit is a resumable merge-pending refusal. |
 | `swath.sort.merge-per-stream-bytes` | `64 KiB` | Configured per-stream floor used by cascade planning. The v3 fixed tail supplies the actual maximum record-body length; final encoder admission also uses its decoded-payload and key maxima. |
-| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | Maximum pipeline encoder count in the final merge; `1` selects one encoder. Prefer `--tune sort.merge-parallelism=N` for an operator-selected value; the typed CLI value wins over this property. |
 | `swath.sort.finalization` | `pipeline` | Finalization architecture. `pipeline` is the only valid value. Prefer `--tune sort.finalization=pipeline`; the typed CLI value wins over this property. |
 | `swath.sort.keep-staging` | `off` | Diagnostic retention of exactly the original checkpoint-tracked page-run staging and the co-located checkpoint after successful sorted publication. `--tune sort.keep-staging=on` wins over this property. Every other immediate staging entry is deleted. |
 | `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts. Rolls occur only before a complete router item: one staging page or one transitive overlap component. A staging page and an equal-key group are never split across parts. The heap-admitted 256–16,384-reference plan cap may roll earlier. |

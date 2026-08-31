@@ -28,6 +28,7 @@ Resume a managed Parquet run by its output directory: swath resume <dir>.
                            for runs over 1.5s, runs that produce output, and
                            runs that stop short of finishing; a closed
                            downstream pipe stays silent).
-      --tune=KEY=VALUE   Set a resume-safe typed expert option (repeatable).
+      --tune=KEY=VALUE   Set a resume-safe typed expert option (repeatable; use
+                           --tune help; see Tuning in docs/configuration.md).
   -v                     Increase verbosity (-v INFO, -vv DEBUG, -vvv TRACE).
   -V, --version          Print version information and exit.

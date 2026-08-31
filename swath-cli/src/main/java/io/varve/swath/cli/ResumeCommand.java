@@ -57,7 +57,8 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--tune", paramLabel = "KEY=VALUE",
-            description = "Set a resume-safe typed expert option (repeatable).")
+            description = "Set a resume-safe typed expert option (repeatable; use --tune help; see "
+                    + "Tuning in docs/configuration.md).")
     void tune(String[] values) {
         tune.entries = new ArrayList<>(List.of(values));
     }

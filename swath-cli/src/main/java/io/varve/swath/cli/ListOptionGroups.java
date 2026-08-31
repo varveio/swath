@@ -97,7 +97,7 @@ final class ListOptionGroups {
         }
 
         @Resume(ResumeClass.FREE)
-        @Option(names = "--engine-toggle", paramLabel = "NAME=VALUE",
+        @Option(names = "--engine-toggle", paramLabel = "NAME=VALUE", hidden = true,
                 description = "Set a diagnostic engine ablation (repeatable; see docs/configuration.md).")
         void engineToggle(String[] values) {
             engine.engineToggle = new ArrayList<>(List.of(values));
@@ -126,7 +126,8 @@ final class ListOptionGroups {
 
         @Resume(ResumeClass.FREE)
         @Option(names = "--tune", paramLabel = "KEY=VALUE",
-                description = "Set a typed expert option (repeatable; use --tune help).")
+                description = "Set a typed expert option (repeatable; use --tune help; see Tuning "
+                        + "in docs/configuration.md).")
         void tune(String[] values) {
             tune.entries = new ArrayList<>(List.of(values));
         }

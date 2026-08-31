@@ -98,9 +98,8 @@ class MergeCpuProfileHarness {
                         retained.identity(), stagingSegments.size(), retained.oracle().rows());
             }
 
-            // Force R=1 (serial merge) regardless of ambient swath.sort.merge-parallelism.
-            SortConfig config = SortConfig.fromProperties(
-                    key -> "swath.sort.merge-parallelism".equals(key) ? "1" : null);
+            // Force one encoder through the typed configuration path.
+            SortConfig config = SortConfig.DEFAULT.withMergeParallelism(1);
             SortMetrics metrics = SortMetrics.NO_OP;
             SortedFileWriterFactory writerFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
             SortTransform transform =

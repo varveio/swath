@@ -48,7 +48,7 @@ class SortConfigTest {
     }
 
     @Test
-    void mergeParallelismDefaultsToHalfTheCoresCappedAtEightAndIsReadable() {
+    void mergeParallelismDefaultsToHalfTheCoresCappedAtEight() {
         // On by default and core-derived: half the cores, capped at 8, floored at 1. The cap is where
         // parallel efficiency stops paying for the heap and read amplification (51 % at R=8 against
         // 34 % at R=16); the halving is the ramp for smaller machines. Runtime planning clamps this
@@ -58,9 +58,10 @@ class SortConfigTest {
         assertThat(fromProperties(Map.of()).mergeParallelism()).isEqualTo(expected);
         assertThat(expected).as("never zero, however few cores the host reports").isGreaterThanOrEqualTo(1);
         assertThat(expected).as("never past the efficiency cap, however many").isLessThanOrEqualTo(8);
-        // Still explicitly settable, including back down to a serial merge.
-        assertThat(fromProperties(Map.of("merge-parallelism", "4")).mergeParallelism()).isEqualTo(4);
-        assertThat(fromProperties(Map.of("merge-parallelism", "1")).mergeParallelism()).isEqualTo(1);
+        // The former JVM-property back door is ignored; callers use the typed derivation instead.
+        assertThat(fromProperties(Map.of("merge-parallelism", "4")).mergeParallelism())
+                .isEqualTo(expected);
+        assertThat(SortConfig.DEFAULT.withMergeParallelism(1).mergeParallelism()).isEqualTo(1);
     }
 
     @Test
@@ -68,9 +69,6 @@ class SortConfigTest {
         assertThatThrownBy(() -> minimalConfigWithMergeParallelism(0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("merge-parallelism must be between 1 and 16, got 0");
-        assertThatThrownBy(() -> fromProperties(Map.of("merge-parallelism", "0")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("merge-parallelism");
     }
 
     @Test
@@ -79,10 +77,6 @@ class SortConfigTest {
         assertThatThrownBy(() -> minimalConfigWithMergeParallelism(17))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("merge-parallelism must be between 1 and 16, got 17");
-        assertThatThrownBy(() -> fromProperties(Map.of("merge-parallelism", "17")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("merge-parallelism")
-                .hasMessageContaining("16");
     }
 
     @Test
@@ -139,7 +133,7 @@ class SortConfigTest {
     }
 
     @Test
-    void everyKnobIsReadable() {
+    void remainingJvmKnobsAreReadable() {
         SortConfig config = fromProperties(Map.of(
                 "heap-fraction", "0.5",
                 "segment-entries", "1000",

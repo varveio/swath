@@ -144,7 +144,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     CommandSpec spec;
 
     @Parameters(index = "0", arity = "0..1", paramLabel = "<s3-uri>",
-            description = "Source URI, e.g. s3://bucket/prefix (required unless requesting tune help)")
+            description = "Source URI, e.g. s3://bucket/prefix (required unless using --tune help or --tune KEY=?)")
     String uri;
 
     @ArgGroup(exclusive = false, validate = false, heading = "%nOutput:%n")

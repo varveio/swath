@@ -104,7 +104,8 @@ sentences and link to that owner.
 | First successful workflow | `docs/getting-started.md` |
 | Output and resume choices | `docs/usage.md` |
 | Credentials, IAM, endpoints, and cost | `docs/operating.md` |
-| Visible options and defaults | installed CLI help |
+| Supported flag names | `docs/cli.md` |
+| Option syntax, accepted values, and defaults | installed CLI help |
 | Expert and diagnostic controls | `docs/configuration.md` |
 | Performance interpretation | `docs/performance.md` |
 | Metrics and report fields | `docs/metrics-and-observability.md` |
