@@ -148,6 +148,28 @@ the retained tree remains byte-identical after each arm.
   -Dswath.bench.staging-dir=/path/to/_staging
 ```
 
+Register a retained corpus after its first validated benchmark run when later measurements need to
+prove that they used the same bytes and logical rows. Point `--evidence` at that run's JUnit XML,
+which contains its single `BENCH_CORPUS` and `BENCH_INPUT_ORACLE` records:
+
+```bash
+scripts/perf/corpus-record.sh register --corpus /path/to/_staging \
+  --evidence swath-core/build/test-results/test/TEST-io.varve.swath.sort.ParallelMergeBenchmark.xml
+scripts/perf/corpus-record.sh validate --corpus /path/to/_staging
+
+./gradlew :swath-core:test \
+  --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  -Dswath.bench=on -Pperf \
+  -Dswath.bench.staging-dir=/path/to/_staging \
+  -Dswath.bench.corpus-record=/path/to/CORPUS.varve
+```
+
+Corpus records are intentionally current-format-only: `swath-page-run-corpus-v4`. The shell helper
+checks path, segment count, and bytes; the benchmark then opens every segment through
+`PageRunSegmentIo`, checks the registered corpus identity and full-row multiset, and validates the
+sorted output against the same oracle. Regenerate and register a corpus after a page-run format
+change; there is no legacy conversion path.
+
 The encoder list must contain distinct values in `1..16` and begin with `1`. The harness
 materializes each arm with same-filesystem hard links and refuses a physical-copy fallback. Before
 timing, it fully reads and CRC-validates the source into a constant-memory row-count and multiset

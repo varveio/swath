@@ -65,6 +65,7 @@ class ParallelMergeBenchmark {
 
     private static final ListEntryComparator CMP = new ListEntryComparator();
     private static final String EXTERNAL_STAGING_PROPERTY = "swath.bench.staging-dir";
+    private static final String CORPUS_RECORD_PROPERTY = "swath.bench.corpus-record";
     static final String ARM = SortArm.MERGE_BENCH_PAGE_RUN.name();
     private static final String NO_FINGERPRINT = "not_applicable";
 
@@ -145,6 +146,7 @@ class ParallelMergeBenchmark {
                             + corpus.oracle().trailerEntries() + " trailer_records="
                             + corpus.oracle().trailerRecords() + " multiset_digest="
                             + corpus.oracle().multisetDigest());
+            BenchmarkCorpusRecord.verify(System.getProperty(CORPUS_RECORD_PROPERTY), corpus);
 
             List<Integer> candidates = ENCODERS.stream().filter(encoders -> encoders != 1).toList();
             WriterFactoryProvider writerProvider =

@@ -370,6 +370,56 @@ class ParallelMergeBenchmarkTest {
     }
 
     @Test
+    void currentFormatCorpusRecordPinsCanonicalGeneratedCorpus(@TempDir Path parent)
+            throws Exception {
+        ParallelMergeBenchmark.PreparedGenerated prepared =
+                ParallelMergeBenchmark.prepareGenerated(parent, 2, 40, 10, 5);
+        try {
+            Path record = parent.resolve("CORPUS.varve");
+            Files.writeString(record, corpusRecord(prepared.catalog()));
+
+            BenchmarkCorpusRecord.verify(record.toString(), prepared.catalog());
+
+            Files.writeString(record, corpusRecord(prepared.catalog())
+                    .replace(BenchmarkCorpusRecord.FORMAT, "swath-page-run-corpus-v3"));
+            assertThatThrownBy(() -> BenchmarkCorpusRecord.verify(
+                    record.toString(), prepared.catalog()))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("format")
+                    .hasMessageContaining(BenchmarkCorpusRecord.FORMAT);
+
+            Files.writeString(record, corpusRecord(prepared.catalog())
+                    + "legacy_page_run_format=v3\n");
+            assertThatThrownBy(() -> BenchmarkCorpusRecord.verify(
+                    record.toString(), prepared.catalog()))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("fields disagree");
+        } finally {
+            SortBenchCorpus.deleteTree(prepared.root());
+        }
+    }
+
+    @Test
+    void corpusRecordRejectsGeometryAndIdentityDrift(@TempDir Path staging) throws Exception {
+        Path segment = writeSegment(staging, "seg-generated-0.pageseg");
+        ParallelMergeBenchmark.CorpusCatalog catalog =
+                ParallelMergeBenchmark.snapshotCatalog("generated", staging, List.of(segment));
+        Path record = staging.resolveSibling("CORPUS.varve");
+        Files.writeString(record, corpusRecord(catalog).replace(
+                "corpus_id=" + catalog.identity(), "corpus_id=" + "0".repeat(64)));
+
+        assertThatThrownBy(() -> BenchmarkCorpusRecord.verify(record.toString(), catalog))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("corpus_id");
+
+        Files.writeString(record, corpusRecord(catalog).replace(
+                "bytes=" + Files.size(segment), "bytes=" + (Files.size(segment) + 1)));
+        assertThatThrownBy(() -> BenchmarkCorpusRecord.verify(record.toString(), catalog))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("bytes");
+    }
+
+    @Test
     void everyBenchLineCarriesCompleteContext(@TempDir Path staging) throws Exception {
         Path segment = writeSegment(staging, "seg-generated-0.pageseg");
         ParallelMergeBenchmark.CorpusCatalog catalog =
@@ -524,6 +574,21 @@ class ParallelMergeBenchmarkTest {
         } else {
             System.setProperty(key, value);
         }
+    }
+
+    private static String corpusRecord(ParallelMergeBenchmark.CorpusCatalog catalog) {
+        long bytes = catalog.inputs().stream()
+                .mapToLong(ParallelMergeBenchmark.CorpusInput::size)
+                .sum();
+        return String.join("\n",
+                "format=" + BenchmarkCorpusRecord.FORMAT,
+                "corpus=" + catalog.stagingDir().toAbsolutePath().normalize(),
+                "rows=" + catalog.oracle().rows(),
+                "segments=" + catalog.inputs().size(),
+                "bytes=" + bytes,
+                "corpus_id=" + catalog.identity(),
+                "multiset=" + catalog.oracle().multisetDigest(),
+                "created_by_head=" + "a".repeat(40)) + "\n";
     }
 
     private static ParallelMergeBenchmark.ArmResult sample(long elapsedNanos) {
