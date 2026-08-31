@@ -1,6 +1,9 @@
+import java.time.Instant
+import java.util.concurrent.TimeUnit
 import java.util.jar.JarFile
 import java.util.zip.ZipFile
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.jvm.toolchain.JavaToolchainService
 
 // The `swath` binary: cli/* (App, ListCommand, ResumeCommand, ...),
 // wiring S3PageFetcher/S3ClientFactory from swath-s3 into picocli commands.
@@ -165,6 +168,70 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
 
     // Deliberately no relocate(...): sqlite-jdbc extracts a native .so/.dll from its
     // packaged resource path at runtime, and relocation would break that lookup.
+}
+
+val parquetStartupToolchains = extensions.getByType<JavaToolchainService>()
+
+val parquetStartupBaseline by tasks.registering {
+    group = "reporting"
+    description = "Records fresh-process CLI and replay startup samples for the PR 7 baseline."
+    dependsOn("shadowJar", ":swath-replay:installDist")
+    val report = layout.buildDirectory.file("reports/parquet-linkability/startup-baseline.jsonl")
+    outputs.file(report)
+    outputs.upToDateWhen { false }
+    doLast {
+        val launcher = parquetStartupToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(25)
+        }.get()
+        val javaBinary = launcher.executablePath.asFile.absolutePath
+        val jar = tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar")
+            .get().archiveFile.get().asFile.absolutePath
+        val replay = project(":swath-replay").layout.buildDirectory.file(
+            "install/swath-replay/bin/swath-replay").get().asFile.absolutePath
+        fun json(fields: Map<String, String>): String = fields.entries.joinToString(
+            prefix = "{", postfix = "}") { (key, value) ->
+            val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
+            "\"$key\":\"$escaped\""
+        }
+        fun sample(app: String, mode: String, iteration: Int, command: List<String>): String {
+            val builder = ProcessBuilder(command)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+            builder.environment()["JAVA_HOME"] = launcher.metadata.installationPath.asFile.absolutePath
+            val start = System.nanoTime()
+            val process = builder.start()
+            check(process.waitFor(30, TimeUnit.SECONDS)) {
+                "$app $mode startup timed out"
+            }
+            check(process.exitValue() == 0) { "$app $mode startup exited ${process.exitValue()}" }
+            return json(linkedMapOf(
+                "format" to "swath-parquet-startup-baseline-v1",
+                "app" to app,
+                "mode" to mode,
+                "iteration" to iteration.toString(),
+                "elapsed_ns" to (System.nanoTime() - start).toString(),
+            ))
+        }
+
+        val lines = mutableListOf(json(linkedMapOf(
+            "format" to "swath-parquet-startup-baseline-v1",
+            "record" to "run",
+            "java_home" to launcher.metadata.installationPath.asFile.absolutePath,
+            "os" to "${System.getProperty("os.name")} ${System.getProperty("os.arch")}",
+            "clock" to "fresh process wall time; filesystem cache uncontrolled",
+            "recorded_at" to Instant.now().toString(),
+        )))
+        repeat(5) {
+            lines += sample("cli", "version", it, listOf(javaBinary, "-jar", jar, "--version"))
+        }
+        repeat(5) {
+            lines += sample("cli", "help", it, listOf(javaBinary, "-jar", jar, "--help"))
+        }
+        repeat(5) { lines += sample("replay", "help", it, listOf(replay, "--help")) }
+        val output = report.get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(lines.joinToString("\n", postfix = "\n"))
+    }
 }
 
 val verifyLegalArtifactContents by tasks.registering {

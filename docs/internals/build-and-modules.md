@@ -185,3 +185,9 @@ the pure writer first, or `runtime → sort → output.parquet → runtime` beco
 done, `swath-replay` repoints to `swath-sort` (it compiles against only the sort types today)
 and stops dragging the engine at runtime. New store backends (`swath-gcs`, `swath-azure`) and a REST
 `swath-server` slot in as `→ swath-core` (+ backend) without disturbing the graph.
+
+The [Hadoop-free Parquet linkability laboratory](../ops/dev/parquet-linkability.md) records the
+current boundary. Parquet 1.18.0 is not a drop-in Hadoop-free runtime: writer configuration, codec,
+and default reader construction still link Hadoop. A test-only plain-configuration bridge proves the
+deeper low-level reader and page/index machinery can read swath- and DuckDB-authored ZSTD files
+without Hadoop, but production dependencies remain unchanged pending a supported slim path.

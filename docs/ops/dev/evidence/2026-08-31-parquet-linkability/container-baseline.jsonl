@@ -1,0 +1,3 @@
+{"format":"swath-parquet-container-baseline-v1","record":"run","base_commit":"fad4bd6c72e134bd87d4e5db73894eb621547f5e","platform":"linux/amd64","runtime_base":"eclipse-temurin:25-jre-noble@sha256:b4c93a50fc67612798db73d68ca3b0ee4ebdd51736e59cca370e689b9797037e","build_mode":"promotion context from exact local shadowJar/installDist","recorded_at":"2026-08-31T20:09:00Z"}
+{"format":"swath-parquet-container-baseline-v1","image":"swath:pr7-baseline","size_bytes":"174320920","image_id":"sha256:7d22f6f87a0c73306fadecc8e40636b1be5a363c6c0f4d4c78752c0e656249fb"}
+{"format":"swath-parquet-container-baseline-v1","image":"swath-replay:pr7-baseline","size_bytes":"251820235","image_id":"sha256:9f09856f008b49148eef21327f733fcd0ec59c1ce4ac5be8ddb35911411d94df"}
