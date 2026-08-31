@@ -46,7 +46,6 @@ final class FinalizationPipelineScalingTest {
         Path output = Files.createDirectories(root.resolve("data"));
         List<Path> inputs = SortBenchCorpus.hardLinkCorpus(sources, staging);
         SortConfig config = SortConfigs.base()
-                .withFinalization(SortFinalization.PIPELINE)
                 .withMergeParallelism(encoders)
                 .withMergeBudgetBytes(512L << 20)
                 .withFinalFileBytes(8L << 20);

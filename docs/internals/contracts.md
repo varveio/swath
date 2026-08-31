@@ -823,7 +823,7 @@ the requested output-writer descriptors while choosing the cascade width. If `K`
 admitted fan-in, each pass writes bounded page-run intermediates and preflights the survivor catalog
 again.
 
-Final encoder admission uses the three exact per-descriptor maxima stored in the v3 fixed tail:
+Final encoder admission uses the three exact per-descriptor maxima stored in the v4 fixed tail:
 
 - `maxRecordLen` prices the largest transient positional record-body read;
 - `maxRawPayloadLength` prices retained decoded payload and the format's maximum lazy dictionary
@@ -857,7 +857,7 @@ failures are suppressed.
 Before publication commits, checkpoint-owned original segments and the previously published
 generation remain untouched. Resume therefore reruns cascade and finalization from those original
 segments without issuing LIST requests when listing is already complete. The current build reuses
-only staging whose checkpoint and physical format identities match v3; §6.1 defines the refusal.
+only staging whose checkpoint and physical format identities match v4; §6.1 defines the refusal.
 
 After the publication listener returns, the new dataset is authoritative even if later intermediate
 or staging cleanup fails. That suffix is reported as committed-publication cleanup pending.
@@ -869,7 +869,7 @@ provide the configured safety check; finalization itself relies on ordinary file
 `sort.ignore-disk-check=on` bypasses the startup and listing checks and does not weaken any
 durability or publication rule.
 
-### 6.1 Page-run v3 container
+### 6.1 Page-run v4 container
 
 A page-run is one header, zero or more framed PageBlocks, and one 40-byte fixed tail. All integer
 fields are big-endian.
@@ -879,7 +879,7 @@ fields are big-endian.
 The header contains:
 
 1. magic `0x53504752` (u32);
-2. page-run format version `3` (u16);
+2. page-run format version `4` (u16);
 3. header-envelope version `1` (u16);
 4. metadata length (u32);
 5. TLV metadata, including exactly one required ordering-mode field (`OBJECTS` or `VERSIONS`);
@@ -887,10 +887,10 @@ The header contains:
 
 Unknown TLV fields can be skipped by their bounded length. Missing, duplicate, malformed, or unknown
 ordering mode, an unsupported envelope version, an invalid metadata length, a bad magic value, or a
-CRC mismatch is `page_run_header_corruption`. A physical page-run format other than v3 is
+CRC mismatch is `page_run_header_corruption`. A physical page-run format other than v4 is
 `page_run_format_mismatch`.
 
-The checkpoint records each page-run as format name `page-run`, `format_version=3`, and
+The checkpoint records each page-run as format name `page-run`, `format_version=4`, and
 `extension_type=0`. Resume is a hard cut: missing, incomplete, older, newer, or otherwise
 unsupported page-run metadata is refused before staging reuse, with advice to use `--restart`.
 There is no compatibility reader for another physical format. Preflight also requires the
@@ -913,7 +913,10 @@ comparator-order flag, five bounded dictionary tables, dictionary-use mask, code
 length, stored payload length, and stored payload. Keys are at most 1,024 bytes. Dictionary values
 use bounded u16 lengths and strict UTF-8. Payloads use the declared `NONE`, `LZ4`, or `ZSTD1`
 codec, and the stored length must consume the body exactly. `NONE` requires equal raw and stored
-payload lengths.
+payload lengths. Every v4 ZSTD frame carries its built-in 32-bit content checksum derived from
+XXH64, which zstd verifies while decompressing. It covers decoded payload content; the frame-level CRC32C separately
+covers the complete PageBlock body, including its plain header. `NONE` and `LZ4` rely on that outer
+CRC32C.
 
 The routing scan reads only the bounded metadata needed to construct a reference and skips stored
 payload bytes. An encoder later reads the complete referenced body positionally, verifies its CRC,

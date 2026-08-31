@@ -165,7 +165,7 @@ as well.
 Every output must be physically sorted and match the independent source oracle in exact normalized
 rows, multiplicity, and logical fingerprint. Every `BENCH_*` line carries cache state, retained
 run identity or generated sentinels, Git SHA, corpus ID, and the output fingerprint when one exists.
-`BENCH_ROW` reports requested/admitted encoders, plan policy, elapsed time, output geometry,
+`BENCH_ROW` reports requested/admitted encoders, elapsed time, output geometry,
 cascade counts, router wait, queue wait, header service, positional page reads, encoder-read service,
 and peak RSS.
 
@@ -177,7 +177,7 @@ Correctness guards around this harness include:
 - `FinalizationPipelineTest`: routing, calibration, plan caps, failure relay, cancellation,
   cleanup, and publication behavior.
 - `FinalizationPipelineScalingTest`: shared-queue encoder scheduling and concurrency bounds.
-- `PageRunSegmentTest` and `PageRunSegmentInspectorTest`: v3 header/frame/fixed-tail
+- `PageRunSegmentTest` and `PageRunSegmentInspectorTest`: v4 header/frame/fixed-tail
   completeness, CRC, mode-aware page disjointness, and persisted-maximum checks.
 - `KWayMergeTest`: cascade whole-page and overlap-component behavior, including duplicate
   multiplicity through intermediates.

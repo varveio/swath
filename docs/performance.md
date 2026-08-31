@@ -436,6 +436,6 @@ method, not as an advertised envelope.
 The separate [S3-listing comparison study](https://github.com/varveio/s3-listing-study)
 publishes a methodology and tool roster; it does not currently publish comparative results.
 
-No publishable production scaling result exists yet for the current v3 finalization pipeline.
+No publishable production scaling result exists yet for the current v4 finalization pipeline.
 Use the one-encoder brackets, variance gate, exact-output checks, and provenance fields above before
 drawing a local conclusion.

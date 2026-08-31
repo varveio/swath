@@ -6,6 +6,8 @@
 package io.varve.swath.sort;
 
 import com.github.luben.zstd.Zstd;
+import com.github.luben.zstd.ZstdCompressCtx;
+import com.github.luben.zstd.ZstdException;
 import io.airlift.compress.MalformedInputException;
 import io.airlift.compress.lz4.Lz4Compressor;
 import io.airlift.compress.lz4.Lz4Decompressor;
@@ -18,11 +20,10 @@ import java.util.Arrays;
  * Centralizes the on-disk codec byte mapping ({@link #code()} / {@link #fromCode(byte)}) and every
  * codec's compress/decompress implementation in one place.
  *
- * <p><b>Thread-safety.</b> {@link #compress} and slice-aware {@link #decompress} allocate a fresh codec
- * instance (LZ4) or call stateless static methods (NONE, ZSTD1) on every invocation — no shared
- * mutable state, so concurrent calls from different threads (e.g. a future pack-on-fetch-thread
- * caller) never interfere with each other. Each call is otherwise a simple, one-shot,
- * whole-buffer compress/decompress — no streaming state to reuse across calls.
+ * <p><b>Thread-safety.</b> {@link #compress} and slice-aware {@link #decompress} use a fresh codec
+ * instance/context when state is required (LZ4 and ZSTD1 compression) and stateless calls otherwise.
+ * No mutable codec state is shared, so concurrent calls cannot interfere. Each call is a one-shot,
+ * whole-buffer operation with no streaming state reused across calls.
  */
 enum PageCodec {
 
@@ -76,19 +77,21 @@ enum PageCodec {
     ZSTD1((byte) 2) {
         @Override
         byte[] compress(byte[] raw) {
-            int bound = (int) Zstd.compressBound(raw.length);
-            byte[] out = new byte[bound];
-            long n = Zstd.compressByteArray(out, 0, out.length, raw, 0, raw.length, ZSTD_LEVEL);
-            if (Zstd.isError(n)) {
-                throw new IllegalStateException("ZSTD PageBlock compress failed: " + Zstd.getErrorName(n));
+            try (ZstdCompressCtx context = new ZstdCompressCtx()) {
+                context.setLevel(ZSTD_LEVEL).setChecksum(true);
+                return context.compress(raw);
             }
-            return Arrays.copyOf(out, (int) n);
         }
 
         @Override
         byte[] decompress(byte[] stored, int offset, int length, int rawLen) {
             byte[] out = new byte[rawLen];
-            long n = Zstd.decompressByteArray(out, 0, rawLen, stored, offset, length);
+            long n;
+            try {
+                n = Zstd.decompressByteArray(out, 0, rawLen, stored, offset, length);
+            } catch (ZstdException e) {
+                throw new IllegalStateException("ZSTD PageBlock decompress failed: " + e.getMessage(), e);
+            }
             if (Zstd.isError(n)) {
                 throw new IllegalStateException("ZSTD PageBlock decompress failed: " + Zstd.getErrorName(n));
             }

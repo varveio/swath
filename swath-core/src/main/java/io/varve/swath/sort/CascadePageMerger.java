@@ -17,8 +17,7 @@ import java.util.PriorityQueue;
 /**
  * Page-whole cascade merger for page-run inputs. A page is streamed directly when its maximum is
  * below every successor frontier; only a transitively overlapping component enters the shared
- * {@link PageRowMerger}. This keeps the surviving cascade path off the per-row heap for disjoint
- * pages without restoring the deleted range/seek frontier abstractions.
+ * {@link PageRowMerger}. Disjoint pages therefore stay off the per-row heap.
  */
 final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
 
@@ -52,6 +51,8 @@ final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
             KWayMerge.PageStream stream = streams.get(source);
             if (stream.hasPage()) {
                 frontiers.add(new Source(source, stream));
+            } else {
+                metrics.recordStealReason("SORT", "cascade_page_empty_segment");
             }
         }
         try {

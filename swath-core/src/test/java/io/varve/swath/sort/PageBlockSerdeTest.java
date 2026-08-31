@@ -7,7 +7,9 @@ package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
+import com.github.luben.zstd.ZstdException;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
@@ -405,6 +407,29 @@ class PageBlockSerdeTest {
 
         PageBlock restored = PageBlock.deserialize(record);
         assertThatThrownBy(restored::cursor).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void zstdContentChecksumRejectsPayloadCorruptionInsideThePageBody() {
+        byte[] body = PageBlock.pack(
+                List.of(object("aaa"), object("mmm"), object("zzz")), CMP, PageCodec.ZSTD1)
+                .serialize();
+        PageBlockCodec.Header header = PageBlockCodec.parseHeader(body);
+
+        // ZSTD appends its four-byte content checksum to the frame. Corrupt only that checksum;
+        // the PageBlock header remains structurally valid, proving decompression verifies it.
+        body[body.length - 1] ^= 1;
+
+        PageBlock corrupted = PageBlockCodec.deserialize(body, header, Path.of("checksum.pageseg"));
+        Throwable failure = catchThrowable(corrupted::cursor);
+        assertThat(failure)
+                .isInstanceOf(java.io.UncheckedIOException.class)
+                .hasStackTraceContaining("ZSTD PageBlock decompress failed: Restored data doesn't match checksum")
+                .hasRootCauseMessage("Restored data doesn't match checksum");
+        assertThat(failure.getCause().getCause())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("ZSTD PageBlock decompress failed: Restored data doesn't match checksum")
+                .hasCauseInstanceOf(ZstdException.class);
     }
 
     @Test

@@ -107,7 +107,8 @@ For page-run staging, the `sort` block exposes the header-scan, router, and enco
 Whole-page and overlap-component counters show routing shape; service timers show where the
 pipeline waited; the decoded-page high-water mark shows retained merge state. Cascade activity is
 reported separately by `passes` and the `SORT.merge_pass_cascaded`,
-`SORT.cascade_page_whole_merge`, and `SORT.cascade_page_overlap_merge` reasons.
+`SORT.cascade_page_whole_merge`, `SORT.cascade_page_overlap_merge`, and
+`SORT.cascade_page_empty_segment` reasons.
 
 For an alternating sort campaign, `sort.pack_on_fetch_pages`, `segment_bytes`, and `segments` are
 cumulative snapshots: their deltas across periodic reports describe packed arrival and segment

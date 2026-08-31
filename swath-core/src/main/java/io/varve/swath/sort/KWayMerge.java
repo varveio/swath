@@ -24,10 +24,8 @@ import org.slf4j.LoggerFactory;
  * output being written (<b>fd bound ≤ F + 1</b>, I2) — then returns a streaming
  * {@link SortedCursor} over the surviving &le;{@code fanIn} segments.
  *
- * <p>Page-run cascade groups use {@link CascadePageMerger}, which forwards a globally disjoint
- * page without a row heap and uses {@link PageRowMerger} only for overlapping page clusters.
- * Other segment kinds use the entry-typed {@link StreamingMerger}. Both are wrapped in
- * {@link DuplicateReporting}, so adjacent equals are reported exactly once.
+ * <p>Every cascade group uses {@link CascadePageMerger}, which forwards a globally disjoint page
+ * without a row heap and uses {@link PageRowMerger} only for overlapping page clusters.
  *
  * <p><b>Merge-phase memory + fd bound (I11).</b> {@code fanIn} here is expected to already be the
  * RUNTIME-clamped fan-in {@link SortTransform} computes — the MIN of the static
@@ -49,15 +47,12 @@ import org.slf4j.LoggerFactory;
  * boundary and the accepted ~2× transient staging footprint this policy trades for
  * crash-recoverability.
  *
- * <p>A cascaded pass emits {@code SORT.merge_pass_cascaded}; {@code SORT.merge_fastpath} fires once
- * per pass that engaged the fast path (the accumulated total, not once per row), via
- * {@link StreamingMerger#close()}. Pass and fast-path counts are exposed for the JSON summary. Each
+ * <p>A cascaded pass emits {@code SORT.merge_pass_cascaded}. Each
  * cascade pass ({@link #onePass}) also logs {@code sort_merge_pass_cascaded} per-pass detail — see
  * {@link #onePass} for why that line stays log-only.
  *
- * <p><b>Disjoint-copyable measurement.</b> Every {@link StreamingMerger} pass
- * (each cascade group, and the final streaming pass) classifies its input segments per
- * {@link StreamingMerger}'s class javadoc and reports here via {@link #recordDisjoint}, which fires
+ * <p><b>Disjoint-copyable measurement.</b> Every cascade group and the final page merge report their
+ * input-segment classification through {@link #recordDisjoint}, which fires
  * {@code SORT.merge_disjoint_copyable} once per fully-disjoint input segment and
  * {@code SORT.merge_interleaved_segment} once per segment that shared its run with at least one
  * other input — so the disjoint fraction is directly computable from the counters before anyone
@@ -78,8 +73,6 @@ final class KWayMerge<S> {
 
     /** Storage seam: open a segment for reading, write an intermediate from a merged cursor, delete. */
     interface SegmentIo<S> {
-        EntryStream open(S segment) throws IOException;
-
         /** Write the fully-merged {@code sorted} to a new intermediate segment; do not close {@code sorted}. */
         S writeIntermediate(SortedCursor sorted) throws IOException;
 
@@ -90,15 +83,8 @@ final class KWayMerge<S> {
          */
         void delete(S segment) throws IOException;
 
-        /** Whether this segment can expose page bounds and bodies to the cascade page merger. */
-        default boolean supportsPageMerge(S segment) {
-            return false;
-        }
-
-        /** Open one page stream. Called only when {@link #supportsPageMerge} returned true. */
-        default PageStream openPages(S segment) throws IOException {
-            throw new UnsupportedOperationException("page merge is not supported");
-        }
+        /** Open one page stream for the only supported cascade representation. */
+        PageStream openPages(S segment) throws IOException;
 
         /** Decoded-page residency available after the opened streams' frontiers are priced. */
         default long decodedPageBudgetBytes(List<PageStream> streams) throws IOException {
@@ -139,7 +125,6 @@ final class KWayMerge<S> {
 
     private long mergePasses;
     private long cascadedPasses;
-    private long fastPathEmissions;
 
     KWayMerge(Comparator<ListEntry> comparator, int fanIn, SegmentIo<S> io, DuplicateHook hook,
               SortMetrics metrics) {
@@ -155,9 +140,8 @@ final class KWayMerge<S> {
 
     /**
      * Reduce {@code segments} to &le; {@code fanIn} via cascaded passes, then open a final streaming
-     * merge over the survivors. The returned cursor's fast-path emissions accumulate into
-     * {@link #fastPathEmissions()} as it is consumed. {@code segments} themselves (the originals) are
-     * never deleted by this call, even across multiple cascade passes — see the class javadoc. No
+     * merge over the survivors. {@code segments} themselves (the originals) are never deleted by
+     * this call, even across multiple cascade passes — see the class javadoc. No
      * merge-progress callback — see the overload below for the {@code swath.progress.units} (§3.2)
      * feed, threaded through every intermediate cascade pass, not just the final streaming pass.
      */
@@ -201,37 +185,19 @@ final class KWayMerge<S> {
      */
     private SortedCursor openMerger(List<S> group, MergeRunSink disjointSink)
             throws IOException {
-        if (allSupportPageMerge(group)) {
-            List<PageStream> pages = openPages(group);
-            try {
-                long decodedBudget = io.decodedPageBudgetBytes(pages);
-                for (PageStream page : pages) {
-                    page.initialize();
-                }
-                return new DuplicateReporting(new CascadePageMerger(
-                        pages, comparator, metrics, disjointSink,
-                        decodedBudget), comparator, hook);
-            } catch (IOException | RuntimeException failure) {
-                closePagesAfterFailedOpen(pages, failure);
-                throw failure;
+        List<PageStream> pages = openPages(group);
+        try {
+            long decodedBudget = io.decodedPageBudgetBytes(pages);
+            for (PageStream page : pages) {
+                page.initialize();
             }
+            return new DuplicateReporting(new CascadePageMerger(
+                    pages, comparator, metrics, disjointSink,
+                    decodedBudget), comparator, hook);
+        } catch (IOException | RuntimeException failure) {
+            closePagesAfterFailedOpen(pages, failure);
+            throw failure;
         }
-        List<EntryStream> streams = open(group);
-        SortedCursor merger = new StreamingMerger(
-                streams, comparator, this::recordFastPath, disjointSink);
-        return new DuplicateReporting(merger, comparator, hook);
-    }
-
-    private boolean allSupportPageMerge(List<S> group) {
-        if (group.isEmpty()) {
-            return false;
-        }
-        for (S segment : group) {
-            if (!io.supportsPageMerge(segment)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private List<PageStream> openPages(List<S> group) throws IOException {
@@ -265,10 +231,6 @@ final class KWayMerge<S> {
         return cascadedPasses;
     }
 
-    long fastPathEmissions() {
-        return fastPathEmissions;
-    }
-
     /**
      * Merge {@code segments} in groups of {@code <= fanIn} into fresh intermediate segments.
      * {@code segmentsAreOriginals} is {@code true} only for the very first pass over the caller's
@@ -294,9 +256,8 @@ final class KWayMerge<S> {
                         recordDisjoint(copyable, interleaved);
                     })) {
                 // Wrap the pass's merged cursor so io.writeIntermediate's full drain (whatever the
-                // SegmentIo implementation does under the hood) still advances progress in batches —
-                // the wrapper's close() is deliberately a no-op; this try-with-resources on `m` (the
-                // StreamingMerger, not the wrapper) owns the real close.
+                // SegmentIo implementation does under the hood) still advances progress in batches.
+                // The wrapper's close() is deliberately a no-op; this scope owns the real close.
                 ProgressTrackingCursor tracked = new ProgressTrackingCursor(m, progressCallback);
                 dest = io.writeIntermediate(tracked);
                 tracked.flushRemainder();
@@ -322,21 +283,7 @@ final class KWayMerge<S> {
     }
 
     /**
-     * Called once by a {@link StreamingMerger} at {@link StreamingMerger#close()} with the total
-     * fast-path emissions for that pass — never per row. {@link #fastPathEmissions} still
-     * accumulates the exact total across all passes for the JSON summary; the metric
-     * itself only fires (once per pass) when this pass actually took the fast path.
-     */
-    private void recordFastPath(long n) {
-        fastPathEmissions += n;
-        if (n > 0) {
-            metrics.recordStealReason("SORT", "merge_fastpath");
-        }
-    }
-
-    /**
-     * Called once per raw merger (i.e. per cascade group, or once for the final pass) with that
-     * pass's disjoint-copyable classification. Unlike {@link #recordFastPath}, this fires the
+     * Called once per cascade group with that pass's disjoint-copyable classification. This fires the
      * metric once per <em>segment</em> (not once per pass with the total) so the fraction
      * copyable-vs-interleaved is directly countable post-hoc.
      */
@@ -349,32 +296,13 @@ final class KWayMerge<S> {
         }
     }
 
-    private List<EntryStream> open(List<S> segments) throws IOException {
-        List<EntryStream> streams = new ArrayList<>(segments.size());
-        try {
-            for (S s : segments) {
-                streams.add(io.open(s));
-            }
-        } catch (IOException | RuntimeException e) {
-            for (EntryStream s : streams) {
-                try {
-                    s.close();
-                } catch (IOException ignored) {
-                    // best effort on the error path
-                }
-            }
-            throw e;
-        }
-        return streams;
-    }
-
     /**
      * Wraps a {@link SortedCursor} so rows drained through it advance {@code progressCallback}
      * in batches of {@link #PROGRESS_BATCH_ROWS}, flushing any remainder once the delegate is fully
      * drained — finalization's batching, applied to an intermediate cascade
      * pass instead of the final streaming pass. {@link #close()} is deliberately a no-op: the call
-     * site ({@link #onePass}) owns the delegate's lifecycle via its own try-with-resources on the
-     * underlying {@link StreamingMerger}, so this wrapper must never double-close it.
+     * site ({@link #onePass}) owns the delegate's lifecycle via its own try-with-resources, so this
+     * wrapper must never double-close it.
      */
     private static final class ProgressTrackingCursor implements SortedCursor {
         private final SortedCursor delegate;
@@ -413,8 +341,7 @@ final class KWayMerge<S> {
 
         @Override
         public void close() {
-            // Deliberately a no-op — see the class javadoc: onePass's try-with-resources on the
-            // underlying StreamingMerger owns the real close.
+            // Deliberately a no-op: onePass's try-with-resources owns the real close.
         }
     }
 }

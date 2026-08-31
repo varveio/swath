@@ -25,7 +25,7 @@ import picocli.CommandLine;
  */
 class DumpRunCommandTest {
 
-    private static final int PAGE_RUN_V3_HEADER_BYTES = 21;
+    private static final int PAGE_RUN_V4_HEADER_BYTES = 21;
 
     private static String run(int[] exit, String... args) {
         StringWriter out = new StringWriter();
@@ -54,7 +54,7 @@ class DumpRunCommandTest {
         String text = run(exit, "dump-run", seg.toString());
 
         assertThat(exit[0]).isZero();
-        assertThat(text).contains("header: magic=0x53504752 version=3");
+        assertThat(text).contains("header: magic=0x53504752 version=4");
         assertThat(text).contains("records: 1");
         // One page → one record: min=hex(alpha), max=hex(bravo), count=2, CRC verifies.
         assertThat(text).contains("min=" + hex("alpha"));
@@ -71,9 +71,9 @@ class DumpRunCommandTest {
         Path seg = dir.resolve("seg.pageseg");
         PageRunFixtures.writeSinglePageSegment(seg, List.of("alpha", "bravo"));
 
-        // Flip a byte inside the record body after the v3 header and 8-byte [len][crc] frame.
+        // Flip a byte inside the record body after the v4 header and 8-byte [len][crc] frame.
         byte[] raw = Files.readAllBytes(seg);
-        raw[PAGE_RUN_V3_HEADER_BYTES + 8] ^= 0x7F;
+        raw[PAGE_RUN_V4_HEADER_BYTES + 8] ^= 0x7F;
         Files.write(seg, raw);
 
         int[] exit = new int[1];

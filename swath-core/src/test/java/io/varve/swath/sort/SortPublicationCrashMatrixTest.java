@@ -337,7 +337,6 @@ final class SortPublicationCrashMatrixTest {
                     .withMergeParallelism(parallelism)
                     .withMergeBudgetBytes(64L << 20)
                     .withFinalFileBytes(rollBytes)
-                    .withFinalization(SortFinalization.PIPELINE)
                     .withStagingRetention(retain
                             ? StagingRetention.RETAIN_ORIGINALS
                             : StagingRetention.DELETE_AFTER_PUBLISH);

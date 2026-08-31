@@ -24,16 +24,16 @@ import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.schema.MessageType;
 
 /**
- * Streaming {@link EntryStream} over one sorted Parquet segment. Reads <b>one row group at a time</b>
+ * Forward-only reader over one sorted Parquet segment. Reads <b>one row group at a time</b>
  * via the low-level {@link ParquetFileReader} (no Hadoop mapreduce {@code InputFormat} path), so a
  * whole segment is never materialized — only the current row group's decompressed pages are in heap
  * (bounded read-ahead). Decodes each row to the canonical {@link ListEntry} by
  * {@code row_type}, the inverse of {@link io.varve.swath.output.parquet.ListEntryWriteSupport}.
  *
- * <p>The head record is pre-loaded so {@link #peek()} is a pure getter usable from the merge's
- * {@link java.util.PriorityQueue} comparator.
+ * <p>The next record is pre-loaded so {@link #hasNext()} stays non-throwing; {@link #next()} performs
+ * the read that advances to the following record and may fail.
  */
-final class SegmentReader implements EntryStream {
+final class SegmentReader implements AutoCloseable {
 
     private final ParquetFileReader reader;
     private final MessageColumnIO columnIo;
@@ -50,18 +50,11 @@ final class SegmentReader implements EntryStream {
         this.head = readNext();
     }
 
-    @Override
-    public boolean hasNext() {
+    boolean hasNext() {
         return head != null;
     }
 
-    @Override
-    public ListEntry peek() {
-        return head;
-    }
-
-    @Override
-    public ListEntry next() throws IOException {
+    ListEntry next() throws IOException {
         ListEntry current = head;
         head = readNext();
         return current;

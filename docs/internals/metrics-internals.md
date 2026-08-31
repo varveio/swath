@@ -475,8 +475,8 @@ taxonomy so the signal set stays comparable:
   (`cursor_passed_pivot ≫ split_committed` = the cursor-passed-pivot race; `OWNER_SPLIT.self_published` dominating
   = the owner-side split carrying the tail).
 
-Sort finalization follows the same rule. `SORT.finalization_pipeline` identifies selection of the
-experimental mechanism. `pages_forwarded` measures disjoint whole-page items; the cluster reason and
+Sort finalization follows the same rule. `SORT.finalization_pipeline` marks entry into the
+header-scan, router, and encoder lifecycle. `pages_forwarded` measures disjoint whole-page items; the cluster reason and
 page/row counters identify overlap work. `header_scan` sums header-read service across bounded segment
 cursors. `router_wait` sums waits for a segment's next reference and waits to submit to the shared
 complete-plan queue; `plan_queue_wait` is the queue-full subset. The one-part calibration wait is not
@@ -991,9 +991,9 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `post_publish_cleanup_pending` | the authority listener returned (so this run's final parts plus manifest/state/symlink/last-written `_SUCCESS` are committed), but cleanup after that publication boundary failed: disposable-intermediate cleanup, staging completion, a final hook, or PUBLISHED re-entry cleanup. Fires exactly once per affected transform or failed cleanup-only retry and maps to a non-fatal `PublicationPendingException`; it never means the dataset rolled back. The accompanying `sort_post_publish_cleanup_pending` warning carries `publication_committed=true`, `cleanup_pending=true`, and `stage=after_publish_listener_hook\|disposable_intermediate_cleanup\|original_staging_completion\|after_staging_completion_hook\|published_reentry_cleanup`; the re-entry form additionally carries `source=published_reentry`. Managed resume stays PUBLISHED and issues zero LIST requests until cleanup succeeds | |
 | `SORT` | `post_publish_phase_latch_failed` | publication was already committed and `post_publish_cleanup_pending` fired, but persisting the checkpoint's PUBLISHED phase also failed. Identity plus last-written `_SUCCESS` remains the recovery authority; the latch failure is suppressed onto the cleanup failure and the warning carries `publication_committed=true cleanup_pending=true` | |
 | `SORT` | `buffer_byte_gated` | the byte gate (not the entry cap) forced the segment flush — the 1 KB-key signal | |
-| `SORT` | `merge_fastpath` | same-reader fast-path emissions in a merge/seal pass (how much uninterrupted input order was exploited) | |
 | `SORT` | `cascade_page_whole_merge` | a cascade merger proved one current page strictly below every successor frontier and streamed it without the overlap row heap. Fires once per page-whole decision | |
 | `SORT` | `cascade_page_overlap_merge` | a cascade merger found one transitively overlapping page-range component and routed it through the bounded decoded-page row heap. Fires once per component, not per row | |
+| `SORT` | `cascade_page_empty_segment` | an initialized cascade input contained no page. Fires exactly once per empty input stream in each cascade group or final merge; the input contributes neither a whole/overlap decision nor a disjoint/interleaved segment classification | |
 | `SORT` | `buffer_sort_fallback` | **REMOVED 2026-08-27** — retired with the unused seal-time row-merge path; production page-run staging writes packed pages and resolves ordering in the external merge | |
 | `SORT` | `buffer_page_repacked` | a sealed buffer contained one or more pages that were not strictly ordered under the full comparator, so the page-run writer decoded, sorted, and re-packed those pages before persistence. Fires once per affected buffer, not once per page; expected 0 on the live OBJECTS path | |
 | `SORT` | `buffer_page_overlap` | seal-time disjointness failed for one adjacent page pair before segment fsync/checkpoint finalization. OBJECTS requires `previous.maxKey < next.minKey`; VERSIONS permits equality only. The segment is rejected as typed `page_run_page_overlap` | |

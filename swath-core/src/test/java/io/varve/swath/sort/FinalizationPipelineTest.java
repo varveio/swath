@@ -968,7 +968,6 @@ final class FinalizationPipelineTest {
                     segmentPages.get(segment), SortMode.OBJECTS, codec));
         }
         SortConfig config = SortConfigs.base()
-                .withFinalization(SortFinalization.PIPELINE)
                 .withMergeParallelism(encoderCount)
                 .withFanIn(fanIn)
                 .withMergeBudgetBytes(mergeBudgetBytes)
@@ -984,7 +983,6 @@ final class FinalizationPipelineTest {
             SortMetrics metrics, SortedFileWriterFactory writerFactory, int encoderCount)
             throws IOException {
         SortConfig config = SortConfigs.base()
-                .withFinalization(SortFinalization.PIPELINE)
                 .withMergeParallelism(encoderCount)
                 .withMergeBudgetBytes(64L << 20)
                 .withFinalFileBytes(finalFileBytes);

@@ -44,7 +44,6 @@ class SortConfigTest {
         // mergeBudgetBytes defaults to the SAME heap-adaptive shape as segmentBytes (floor 64 MB).
         assertThat(config.mergeBudgetBytes()).isEqualTo(config.segmentBytes());
         assertThat(config.stagingRetention()).isEqualTo(StagingRetention.DELETE_AFTER_PUBLISH);
-        assertThat(config.finalization()).isEqualTo(SortFinalization.PIPELINE);
     }
 
     @Test
@@ -109,15 +108,14 @@ class SortConfigTest {
                 .withMergeParallelism(9)
                 .withMergePerStreamBytes(10)
                 .withSegmentCodec(PageCodec.NONE)
-                .withStagingRetention(StagingRetention.RETAIN_ORIGINALS)
-                .withFinalization(SortFinalization.PIPELINE);
+                .withStagingRetention(StagingRetention.RETAIN_ORIGINALS);
 
         SortConfig equivalent = config.withFanIn(config.fanIn());
         assertThat(config).isEqualTo(equivalent).hasSameHashCodeAs(equivalent);
         assertThat(config).hasToString("SortConfig[segmentBytes=1, segmentEntries=2, heapFraction=0.25, "
                 + "buffers=3, fanIn=4, finalFileBytes=5, finalRowGroupBytes=6, finalPageRows=7, "
                 + "mergeBudgetBytes=8, mergeParallelism=9, mergePerStreamBytes=10, segmentCodec=NONE, "
-                + "stagingRetention=RETAIN_ORIGINALS, finalization=PIPELINE]");
+                + "stagingRetention=RETAIN_ORIGINALS]");
     }
 
     @Test
@@ -175,9 +173,6 @@ class SortConfigTest {
                 // merge-budget-bytes 0
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("merge-budget-bytes must be > 0, got 0");
-        assertThatThrownBy(() -> SortConfig.DEFAULT.withFinalization(null))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("finalization must not be null");
     }
 
     // ------------------------------------------------------------------

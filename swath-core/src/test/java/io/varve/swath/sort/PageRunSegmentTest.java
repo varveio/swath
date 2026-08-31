@@ -29,7 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@link PageRunSegmentWriter} + {@link PageRunSegmentReader} (page-run segment): round-trip,
+ * {@link PageRunSegmentWriter} + {@link PageRunSegmentIo} (page-run segment): round-trip,
  * exact-key trailer bounds, CRC/truncation fail-fast, the per-page re-sort of an out-of-order
  * page, multi-node minKey concatenation ordering, and the {@code writeIntermediate} cascade path.
  */
@@ -43,13 +43,7 @@ class PageRunSegmentTest {
     }
 
     private static List<ListEntry> readBack(Path path) throws IOException {
-        List<ListEntry> out = new ArrayList<>();
-        try (PageRunSegmentReader reader = reader(path, SortMetrics.NO_OP)) {
-            while (reader.hasNext()) {
-                out.add(reader.next());
-            }
-        }
-        return out;
+        return PageRunReads.entries(path);
     }
 
     @Test
@@ -110,7 +104,7 @@ class PageRunSegmentTest {
                         List.of(object("c"), object("z"))), CMP);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
 
-        assertThatThrownBy(() -> reader(path, metrics))
+        assertThatThrownBy(() -> PageRunReads.entries(path, metrics))
                 .isInstanceOf(SegmentCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_page_overlap");
         assertThat(metrics.count("SORT.page_run_page_overlap")).isEqualTo(1);
@@ -164,7 +158,7 @@ class PageRunSegmentTest {
     }
 
     @Test
-    void versionsEqualKeySeamMergesSeveralPagesEndToEnd(@TempDir Path dir)
+    void versionsEqualKeySeamsAreAdmittedAndDecodedAcrossPages(@TempDir Path dir)
             throws IOException {
         List<ListEntry> versions = new ArrayList<>(List.of(
                 version("same", "v3"), version("same", "v1"),
@@ -187,10 +181,10 @@ class PageRunSegmentTest {
         Path path = dir.resolve("seg.pgr");
         writeSimpleSegment(path, 200);
 
-        // Flip a byte inside the first record body (offset 14 = just past the 6-byte header + 8-byte
-        // frame [len][crc]) — the CRC32C over the body no longer matches, so the read must throw.
+        // Flip a byte inside the first record body, just past the format header and frame [len][crc].
+        // The CRC32C over the body no longer matches, so the read must throw.
         byte[] raw = Files.readAllBytes(path);
-        raw[14] ^= 0x7F;
+        raw[PageRunSegmentWriter.HEADER_BYTES + 8] ^= 0x7F;
         Files.write(path, raw);
 
         assertThatThrownBy(() -> readBack(path))
@@ -223,7 +217,7 @@ class PageRunSegmentTest {
         byte[] raw = Files.readAllBytes(path);
         Files.write(path, Arrays.copyOf(raw, raw.length / 2));
 
-        assertThatThrownBy(() -> reader(path, SortMetrics.NO_OP)).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> PageRunReads.entries(path)).isInstanceOf(IOException.class);
     }
 
     @Test
@@ -256,7 +250,7 @@ class PageRunSegmentTest {
         Files.write(path, new byte[PageRunHeader.PREFIX_BYTES]);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
 
-        assertThatThrownBy(() -> reader(path, metrics))
+        assertThatThrownBy(() -> PageRunReads.entries(path, metrics))
                 .isInstanceOf(SegmentCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_header_corruption")
                 .hasMessageContaining("file too small");
@@ -736,8 +730,7 @@ class PageRunSegmentTest {
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("inconsistent empty page-run trailer counts");
 
-        // The entry-typed reader rejects the same corruption too, since it drives the same frontier
-        // reader underneath.
+        // The test row oracle rejects the same corruption because it drives that canonical loop.
         assertThatThrownBy(() -> readBack(path))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("inconsistent empty page-run trailer counts");
@@ -749,10 +742,6 @@ class PageRunSegmentTest {
                 // drain
             }
         }
-    }
-
-    private static PageRunSegmentReader reader(Path path, SortMetrics metrics) throws IOException {
-        return new PageRunSegmentReader(PageRunSegmentIo.open(path, metrics), CMP);
     }
 
     @Test

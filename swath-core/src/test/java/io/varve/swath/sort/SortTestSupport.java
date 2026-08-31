@@ -101,17 +101,6 @@ final class SortTestSupport {
         return out;
     }
 
-    /** Drain a checked-IO entry stream, closing it. */
-    static List<ListEntry> drain(EntryStream stream) throws IOException {
-        List<ListEntry> out = new ArrayList<>();
-        try (stream) {
-            while (stream.hasNext()) {
-                out.add(stream.next());
-            }
-        }
-        return out;
-    }
-
     /** Write the complete buffer even when the channel performs a short write. */
     static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
         while (buffer.hasRemaining()) {
@@ -167,35 +156,6 @@ final class SortTestSupport {
         }
     }
 
-    /** An in-memory {@link EntryStream} over a pre-sorted list — for merger/KWayMerge tests without Parquet. */
-    static final class ListEntryStream implements EntryStream {
-        private final List<ListEntry> entries;
-        private int i;
-
-        ListEntryStream(List<ListEntry> entries) {
-            this.entries = entries;
-        }
-
-        @Override
-        public boolean hasNext() {
-            return i < entries.size();
-        }
-
-        @Override
-        public ListEntry peek() {
-            return i < entries.size() ? entries.get(i) : null;
-        }
-
-        @Override
-        public ListEntry next() {
-            return entries.get(i++);
-        }
-
-        @Override
-        public void close() {
-        }
-    }
-
     /**
      * In-memory {@link KWayMerge.SegmentIo} keyed by an int handle — lets the cascade be exercised
      * without writing Parquet. Intermediates are drained into fresh lists.
@@ -219,8 +179,8 @@ final class SortTestSupport {
         }
 
         @Override
-        public EntryStream open(Integer segment) {
-            return new ListEntryStream(store.get(segment));
+        public KWayMerge.PageStream openPages(Integer segment) {
+            return new ListPageStream(store.get(segment), () -> { });
         }
 
         @Override
@@ -240,11 +200,10 @@ final class SortTestSupport {
 
     /**
      * Wraps an {@link InMemorySegments} store, tracking the high-water mark of concurrently-open
-     * {@link EntryStream}s across an entire {@link KWayMerge#merge} call — the "SegmentIo open-count"
+     * page streams across an entire {@link KWayMerge#merge} call — the "SegmentIo open-count"
      * assertion point for the merge-memory-budget bound (I11): {@link KWayMerge}
      * must never hold more streams open at once than the caller's {@code fanIn} constructor arg
-     * allows, since each open stream stands in for a {@link SegmentReader} that preloads one full
-     * segment row group.
+     * allows.
      */
     static final class PeakTrackingSegments implements KWayMerge.SegmentIo<Integer> {
         private final InMemorySegments delegate = new InMemorySegments();
@@ -261,32 +220,10 @@ final class SortTestSupport {
         }
 
         @Override
-        public EntryStream open(Integer segment) throws IOException {
+        public KWayMerge.PageStream openPages(Integer segment) {
             live++;
             peak = Math.max(peak, live);
-            EntryStream inner = delegate.open(segment);
-            return new EntryStream() {
-                @Override
-                public boolean hasNext() {
-                    return inner.hasNext();
-                }
-
-                @Override
-                public ListEntry peek() {
-                    return inner.peek();
-                }
-
-                @Override
-                public ListEntry next() throws IOException {
-                    return inner.next();
-                }
-
-                @Override
-                public void close() throws IOException {
-                    inner.close();
-                    live--;
-                }
-            };
+            return new ListPageStream(delegate.store.get(segment), () -> live--);
         }
 
         @Override
@@ -297,6 +234,55 @@ final class SortTestSupport {
         @Override
         public void delete(Integer segment) throws IOException {
             delegate.delete(segment);
+        }
+    }
+
+    /** One in-memory page used to exercise the production page-only cascade in unit tests. */
+    private static final class ListPageStream implements KWayMerge.PageStream {
+        private final PageBlock page;
+        private final Runnable onClose;
+        private boolean available = true;
+        private boolean closed;
+
+        ListPageStream(List<ListEntry> entries, Runnable onClose) {
+            page = entries.isEmpty()
+                    ? null
+                    : PageBlock.pack(entries, new ListEntryComparator(), PageCodec.NONE);
+            available = page != null;
+            this.onClose = onClose;
+        }
+
+        @Override
+        public boolean hasPage() {
+            return available;
+        }
+
+        @Override
+        public byte[] minKey() {
+            return page.firstKeyUnsafe();
+        }
+
+        @Override
+        public byte[] maxKey() {
+            return page.lastKeyUnsafe();
+        }
+
+        @Override
+        public PageBlock decodeCurrentPage() {
+            return page;
+        }
+
+        @Override
+        public void advance() {
+            available = false;
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                onClose.run();
+            }
         }
     }
 

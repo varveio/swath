@@ -16,8 +16,9 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link KWayMerge} over in-memory sorted segments: ordering, same-reader fast path (I3/I4 fires and
- * doesn't-fire coverage of the duplicate hook), cascade beyond a tiny fan-in, and the fd-bound note.
+ * {@link KWayMerge} over in-memory sorted segments: ordering, whole-page disjoint forwarding,
+ * overlapping-page row merge, duplicate-hook coverage, cascade beyond a tiny fan-in, and the
+ * fd-bound note.
  */
 class KWayMergeTest {
 
@@ -52,10 +53,9 @@ class KWayMergeTest {
     }
 
     @Test
-    void disjointSegmentsExerciseTheSameReaderFastPath() throws IOException {
+    void disjointSegmentsExerciseThePageWholePath() throws IOException {
         SortTestSupport.InMemorySegments io = new SortTestSupport.InMemorySegments();
-        // A wholly precedes B: after the first poll of each stream, its monotone tail emits via the
-        // fast path — 2 tails of 2 = 4 fast-path emissions.
+        // A wholly precedes B, so both pages can be forwarded whole.
         Integer a = io.add(List.of(object("a"), object("b"), object("c")));
         Integer b = io.add(List.of(object("x"), object("y"), object("z")));
 
@@ -63,24 +63,40 @@ class KWayMergeTest {
         KWayMerge<Integer> merge = new KWayMerge<>(cmp, 512, io, DuplicateHook.NO_OP, metrics);
         drain(merge.merge(new ArrayList<>(List.of(a, b))));
 
-        // The exact-count accumulator (fastPathEmissions(), for the JSON summary) still tracks every
-        // emission...
-        assertThat(merge.fastPathEmissions()).isEqualTo(4);
-        // ...but the metrics hook fires ONCE per pass with the total, not once per row — a
-        // single streaming pass here, so exactly one SORT.merge_fastpath, not four.
-        assertThat(metrics.count("SORT.merge_fastpath")).isEqualTo(1);
+        assertThat(metrics.count("SORT.cascade_page_whole_merge")).isEqualTo(2);
+        assertThat(metrics.count("SORT.cascade_page_overlap_merge")).isZero();
     }
 
     @Test
-    void interleavedSegmentsTakeNoFastPath() throws IOException {
+    void interleavedSegmentsUseTheOverlapPath() throws IOException {
         SortTestSupport.InMemorySegments io = new SortTestSupport.InMemorySegments();
         Integer a = io.add(List.of(object("a"), object("c")));
         Integer b = io.add(List.of(object("b"), object("d")));
 
-        KWayMerge<Integer> merge = new KWayMerge<>(cmp, 512, io, DuplicateHook.NO_OP, SortMetrics.NO_OP);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        KWayMerge<Integer> merge = new KWayMerge<>(cmp, 512, io, DuplicateHook.NO_OP, metrics);
         drain(merge.merge(new ArrayList<>(List.of(a, b))));
 
-        assertThat(merge.fastPathEmissions()).isZero();
+        assertThat(metrics.count("SORT.cascade_page_overlap_merge")).isEqualTo(1);
+    }
+
+    @Test
+    void emptySegmentsAreReportedOnceWithoutChangingNonEmptyClassification() throws IOException {
+        SortTestSupport.InMemorySegments io = new SortTestSupport.InMemorySegments();
+        Integer emptyA = io.add(List.of());
+        Integer nonEmpty = io.add(List.of(object("a"), object("b")));
+        Integer emptyB = io.add(List.of());
+
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        KWayMerge<Integer> merge = new KWayMerge<>(cmp, 512, io, DuplicateHook.NO_OP, metrics);
+        List<ListEntry> out = drain(merge.merge(new ArrayList<>(List.of(emptyA, nonEmpty, emptyB))));
+
+        assertThat(out).containsExactly(object("a"), object("b"));
+        assertThat(metrics.count("SORT.cascade_page_empty_segment")).isEqualTo(2);
+        assertThat(metrics.count("SORT.cascade_page_whole_merge")).isEqualTo(1);
+        assertThat(metrics.count("SORT.cascade_page_overlap_merge")).isZero();
+        assertThat(metrics.count("SORT.merge_disjoint_copyable")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_interleaved_segment")).isZero();
     }
 
     @Test

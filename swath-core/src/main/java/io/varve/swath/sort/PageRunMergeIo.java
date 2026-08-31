@@ -34,17 +34,6 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     }
 
     @Override
-    public EntryStream open(Path segment) throws IOException {
-        return new PageRunSegmentReader(
-                segment, run.comparator(), run.metrics(), maxRawPayloadLength);
-    }
-
-    @Override
-    public boolean supportsPageMerge(Path segment) {
-        return true;
-    }
-
-    @Override
     public KWayMerge.PageStream openPages(Path segment) throws IOException {
         return new PageStream(PageRunSegmentIo.openUsingPersistedMaximum(
                 segment, run.metrics()));
