@@ -1,9 +1,12 @@
-# Accepted findings for the nightly supply-chain scan (scripts/ci/osv-scan.sh).
+# Accepted Java findings for the nightly supply-chain scan (scripts/ci/osv-scan.sh).
 #
-# The scan fails on anything not listed here, so every entry is an argued exception with an
-# expiry rather than a mute: past `ignoreUntil` the finding comes back and has to be argued
-# again. Nothing is listed because it is inconvenient — everything reachable by a version
-# constraint is pinned in gradle/libs.versions.toml instead.
+# The jar-closure scan has zero tolerance for anything not listed here, so every entry is an
+# argued exception with an expiry rather than a mute: on `ignoreUntil` the finding comes
+# back and has to be argued again. The image policy recognizes these same Java exceptions
+# after retaining the scanner's unfiltered JSON, but it never applies them to Ubuntu
+# packages. OS-package results must never be added here. Nothing is listed because it is
+# inconvenient — everything reachable by a version constraint is pinned in
+# gradle/libs.versions.toml instead.
 #
 # ---------------------------------------------------------------------------------------
 # parquet-jackson 1.15.1 (9 advisories against jackson-core / jackson-databind 2.18.1)
