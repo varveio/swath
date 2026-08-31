@@ -69,13 +69,9 @@ public final class DumpRunCommand implements Callable<Integer>, GlobalOptions.Ca
                     r.index(), hex(r.minKey()), hex(r.maxKey()), r.count(), r.codec(),
                     r.framedLen(), r.crcOk() ? "OK" : "FAIL");
         }
-        PageRunSegmentInspector.PageIndexInfo index = dump.pageIndex();
-        out.printf("page-index: type=%d status=%s entries=%d firstOffset=%d lastOffset=%d%n",
-                index.type(), index.status(), index.entries(), index.firstOffset(), index.lastOffset());
         PageRunTrailer.Trailer t = dump.trailer();
-        out.printf("trailer: segMin=%s segMax=%s totalRecords=%d totalEntries=%d maxRecordLen=%d%n",
-                hex(t.segMinKey()), hex(t.segMaxKey()), t.totalRecords(), t.totalEntries(),
-                t.maxRecordLen());
+        out.printf("trailer: totalRecords=%d totalEntries=%d maxRecordLen=%d%n",
+                t.totalRecords(), t.totalEntries(), t.maxRecordLen());
         out.flush();
         return anyFail ? 1 : 0;
     }

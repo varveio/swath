@@ -46,27 +46,27 @@ final class SortTestSupport {
     }
 
     /** Write one single-row listing page per ordinal, including the production type-2 index. */
-    static Path writeIndexedPages(Path path, int pages, int keyOffset) throws IOException {
+    static Path writePages(Path path, int pages, int keyOffset) throws IOException {
         List<List<ListEntry>> generated = new ArrayList<>(pages);
         for (int page = 0; page < pages; page++) {
             generated.add(List.of(object(String.format("k%05d", keyOffset + page))));
         }
-        return writeIndexedPages(path, generated);
+        return writePages(path, generated);
     }
 
     /** Write caller-supplied sorted listing pages, including the production type-2 index. */
-    static Path writeIndexedPages(Path path, List<List<ListEntry>> pages) throws IOException {
-        return writeIndexedPages(path, pages, SortMode.OBJECTS);
+    static Path writePages(Path path, List<List<ListEntry>> pages) throws IOException {
+        return writePages(path, pages, SortMode.OBJECTS);
     }
 
     /** Write caller-supplied sorted listing pages with an explicit persisted ordering mode. */
-    static Path writeIndexedPages(Path path, List<List<ListEntry>> pages, SortMode orderingMode)
+    static Path writePages(Path path, List<List<ListEntry>> pages, SortMode orderingMode)
             throws IOException {
-        return writeIndexedPages(path, pages, orderingMode, PageCodec.NONE);
+        return writePages(path, pages, orderingMode, PageCodec.NONE);
     }
 
     /** Write caller-supplied indexed pages with an explicit payload codec. */
-    static Path writeIndexedPages(Path path, List<List<ListEntry>> pages, SortMode orderingMode,
+    static Path writePages(Path path, List<List<ListEntry>> pages, SortMode orderingMode,
             PageCodec codec) throws IOException {
         ListEntryComparator comparator = new ListEntryComparator();
         SortBuffer buffer = new SortBuffer(SortConfigs.base().withSegmentCodec(codec), comparator);
@@ -149,11 +149,6 @@ final class SortTestSupport {
         @Override
         public void markFinal() {
             delegate.markFinal();
-        }
-
-        @Override
-        public void setFileIndex(int fileIndex) {
-            delegate.setFileIndex(fileIndex);
         }
 
         @Override
@@ -308,16 +303,7 @@ final class SortTestSupport {
     /** Counts recordStealReason calls per {@code outcome.reason}. */
     static final class CountingMetrics implements SortMetrics {
         final Map<String, Integer> counts = new ConcurrentHashMap<>();
-        final LongAdder rangeFramedBytes = new LongAdder();
-        final LongAdder rangeIndexBytes = new LongAdder();
         final LongAdder progress = new LongAdder();
-        final LongAdder proofSpoolLogicalExtentBytes = new LongAdder();
-        final LongAdder proofSpoolPreallocationOperations = new LongAdder();
-        final LongAdder proofSpoolPreallocationAttemptedBytes = new LongAdder();
-        final LongAdder proofSpoolMappedOperations = new LongAdder();
-        final LongAdder proofSpoolMappedBytes = new LongAdder();
-        final LongAdder proofSpoolServiceNanos = new LongAdder();
-        final LongAdder proofSpoolMetricUpdates = new LongAdder();
         final LongAdder pipelinePagesForwarded = new LongAdder();
         final LongAdder pipelineClusterPages = new LongAdder();
         final AtomicLong pipelineDecodedPageBytesPeak = new AtomicLong();
@@ -330,44 +316,6 @@ final class SortTestSupport {
         @Override
         public void markProgress() {
             progress.increment();
-        }
-
-        @Override
-        public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
-        }
-
-        @Override
-        public void recordPageAwareOverlapCluster() {
-        }
-
-        @Override
-        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
-        }
-
-        @Override
-        public void recordRangeIndexBytes(long bytes) {
-            rangeIndexBytes.add(bytes);
-        }
-
-        @Override
-        public void recordRangeFramedBytes(long bytes) {
-            rangeFramedBytes.add(bytes);
-        }
-
-        @Override
-        public void recordProofSpool(long logicalExtentBytes,
-                                     long preallocationOperations,
-                                     long preallocationAttemptedBytes,
-                                     long mappedOperations,
-                                     long mappedBytes,
-                                     long serviceNanos) {
-            proofSpoolMetricUpdates.increment();
-            proofSpoolLogicalExtentBytes.add(logicalExtentBytes);
-            proofSpoolPreallocationOperations.add(preallocationOperations);
-            proofSpoolPreallocationAttemptedBytes.add(preallocationAttemptedBytes);
-            proofSpoolMappedOperations.add(mappedOperations);
-            proofSpoolMappedBytes.add(mappedBytes);
-            proofSpoolServiceNanos.add(serviceNanos);
         }
 
         @Override

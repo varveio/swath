@@ -377,7 +377,7 @@ final class LivenessWatchdogTest {
         assertThat(LivenessWatchdog.isInterruptibleWorker("seg-0000-encoder-2")).isTrue();
         // The parallel range merge's threads. Omitted when the parallel path landed, which made the
         // cooperative rung a no-op for the threads that own the merge: every trip went straight to
-        // Runtime.halt with no terminal summary. The exact name shape ParallelRangeMerge produces.
+        // Runtime.halt with no terminal summary. The exact worker name shape finalization produces.
         assertThat(LivenessWatchdog.isInterruptibleWorker("swath-sort-range-1-8")).isTrue();
         // The VT-scheduler carrier match is kept (harmless best-effort).
         assertThat(LivenessWatchdog.isInterruptibleWorker("ForkJoinPool-3-worker-7")).isTrue();

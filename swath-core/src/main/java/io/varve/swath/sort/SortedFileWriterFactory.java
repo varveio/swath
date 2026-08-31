@@ -21,8 +21,7 @@ public interface SortedFileWriterFactory {
 
     /**
      * Return a factory whose mutable decorator state is scoped to one ordered output sequence.
-     * A serial publish has one sequence across all of its rolled files; a parallel range merge has
-     * one sequence per range. Stateless factories may return {@code this}.
+     * Pipeline encoders each own one sequence. Stateless factories may return {@code this}.
      */
     default SortedFileWriterFactory forOutputSequence() {
         return this;

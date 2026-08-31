@@ -64,51 +64,11 @@ final class DatasetPublisher {
         StagingReconciliation.sweepFinalTemporaries(outputDir);
         ownedInputs.sweepDisposables(StagingNames.CASCADE_PAGE_RUN_GLOB);
         ownedInputs.sweepDisposables(StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
-        ownedInputs.sweepDisposables(StagingNames.RANGE_TMP_GLOB);
         ownedInputs.sweepDisposables(StagingNames.PIPELINE_TMP_GLOB);
-        ownedInputs.sweepDisposables(StagingNames.RANGE_PROOF_TMP_GLOB);
         publicationStep(PublicationStep.AFTER_WORKING_SWEEP);
         // The hook is the deterministic stand-in for a directory replacement between phases.
         ownedInputs.requireOwnedStagingAuthority(stagingDir);
         outputAuthority.requireSame(outputDir);
-    }
-
-    PendingParts serialParts(Path outputDir, Path stagingDir,
-            StagingReconciliation ownedInputs,
-            StagingReconciliation.DirectoryAuthority outputAuthority) {
-        return new PendingParts(outputDir, stagingDir, finalWriterFactory.forOutputSequence(),
-                ownedInputs, outputAuthority);
-    }
-
-    /**
-     * Stamp and close every range-produced part in global order. An all-empty range fleet is
-     * normalized to the same one-file empty dataset as the serial path.
-     */
-    PendingParts parallelParts(Path outputDir, Path stagingDir, List<Path> tmpFiles,
-            List<SortedFileWriter> writers, StagingReconciliation ownedInputs,
-            StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
-        List<SortedFileWriter> open = new ArrayList<>(writers);
-        try {
-            for (int i = 0; i < open.size(); i++) {
-                open.get(i).setFileIndex(i + 1);
-            }
-            if (!open.isEmpty()) {
-                open.getLast().markFinal();
-            }
-            RolledPartWriter.closeInOrder(open);
-            open.clear();
-            requireDisjointParts(tmpFiles, writers);
-        } catch (IOException | RuntimeException e) {
-            try {
-                RolledPartWriter.closeQuietly(open);
-            } catch (IOException | RuntimeException releaseFailure) {
-                e.addSuppressed(releaseFailure);
-            }
-            throw e;
-        }
-
-        return assembleParallelParts(outputDir, stagingDir, tmpFiles, writers, ownedInputs,
-                outputAuthority);
     }
 
     /**

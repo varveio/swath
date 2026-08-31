@@ -18,7 +18,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
@@ -61,7 +60,7 @@ class SortTransformTest {
         // §3.2: the progress-callback overload is the merge-phase feed for swath.progress.units
         // (RunMetrics.recordProgress, wired by ListRunner). Batched at PROGRESS_BATCH_ROWS (1000);
         // this run is far below that, so the only invocation is the final-remainder flush in
-        // the roll loop's `finally` (RolledPartWriter#drain) — but every merged row must still be accounted for.
+        // the finalization loop's `finally` — but every merged row must still be accounted for.
         Dirs dirs = dirs(root);
         List<Path> staging = List.of(
                 writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c", "e")),
@@ -105,8 +104,10 @@ class SortTransformTest {
     void rolledOutputProducesRangeDisjointFilesNamedInKeyOrder(@TempDir Path root) throws IOException {
         Dirs dirs = dirs(root);
         List<Path> staging = List.of(
-                writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c", "e")),
-                writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d", "f")));
+                SortTestSupport.writePages(dirs.staging.resolve("seg-0.pageseg"),
+                        List.of(objects("a"), objects("c"), objects("e"))),
+                SortTestSupport.writePages(dirs.staging.resolve("seg-1.pageseg"),
+                        List.of(objects("b"), objects("d"), objects("f"))));
 
         // final-file-bytes = 1 ⇒ roll after every row: one entry per file.
         SortConfig rolling = SortConfigs.base().withFinalFileBytes(1L);
@@ -317,7 +318,7 @@ class SortTransformTest {
         assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment, alias), path -> {
             opens.incrementAndGet();
             return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-        }, Optional.empty()))
+        }))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("duplicate page-run catalog path");
 
@@ -331,12 +332,13 @@ class SortTransformTest {
         Path staging = Files.createDirectories(root.resolve("_staging"));
         Path segment = writeSegment(staging, "seg-0.parquet", objects("a"));
         PageRunSegmentDescriptor descriptor = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty())
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP))
                 .descriptors().getFirst();
         Path alias = staging.resolve(".").resolve(segment.getFileName());
         PageRunSegmentDescriptor duplicate = new PageRunSegmentDescriptor(alias,
                 descriptor.fileSize(), descriptor.trailerStart(), descriptor.trailer(),
-                descriptor.extension());
+                descriptor.maxRawPayloadLength(), descriptor.maxKeyLength(),
+                descriptor.physicalFormat(), descriptor.headerBytes(), descriptor.orderingMode());
 
         assertThatThrownBy(() -> PageRunCatalog.fromDescriptors(List.of(descriptor, duplicate)))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -362,8 +364,7 @@ class SortTransformTest {
         };
         SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, dropsSecondRow,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
         assertThatThrownBy(() -> new SortTransform(run).transform(List.of(segment), dirs.output,
                 dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
@@ -387,22 +388,6 @@ class SortTransformTest {
         assertThatThrownBy(() -> StagingReconciliation.fromNames(List.of("../escape.pageseg")))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("unsafe retained sort staging segment name");
-    }
-
-    @Test
-    void pageAwareKWayRouteClassifiesSourceRuns(@TempDir Path root) throws IOException {
-        Dirs dirs = dirs(root);
-        List<Path> staging = List.of(
-                writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c", "e")),
-                writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d", "f")),
-                writeSegment(dirs.staging, "seg-2.parquet", objects("x", "y")));
-        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-
-        transformWithMetrics(SortConfigs.base(), metrics).transform(staging, dirs.output, dirs.staging,
-                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
-
-        assertThat(metrics.count("SORT.merge_interleaved_segment")).isEqualTo(2);
-        assertThat(metrics.count("SORT.merge_disjoint_copyable")).isEqualTo(1);
     }
 
     @Test
@@ -521,8 +506,8 @@ class SortTransformTest {
         assertThatThrownBy(() -> transform(SortConfigs.base())
                 .transform(List.of(corrupt), dirs.output, dirs.staging, PublishListener.NO_OP,
                         units -> { }, FinalPassListener.NO_OP))
-                .isInstanceOf(IOException.class)
-                .hasMessageContaining("CRC32C mismatch");
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_body_corruption");
 
         assertThat(Files.readAllBytes(priorFinal))
                 .as("replacement is generated completely before prior finals are swept")
@@ -569,7 +554,7 @@ class SortTransformTest {
     void serialInteriorRowRegressionFailsBeforePublication(@TempDir Path root)
             throws IOException {
         Dirs dirs = dirs(root);
-        Path corrupt = PageRunRawFixtures.writeIndexedInteriorRowRegression(
+        Path corrupt = PageRunRawFixtures.writeInteriorRowRegression(
                 dirs.staging.resolve("seg-0.pageseg"));
         Path priorFinal = dirs.output.resolve(StagingNames.finalPart(0));
         byte[] priorContents = "prior published output".getBytes(
@@ -606,7 +591,9 @@ class SortTransformTest {
         for (int i = 0; i < keys.length; i++) {
             staging.add(writeSegment(dirs.staging, "seg-" + i + ".parquet", objects(keys[i])));
         }
-        SortConfig tinyBudget = SortConfigs.base().withMergeBudgetBytes(3L * (64L << 10));   // 192 KiB budget / 64 KiB per stream = 3
+        SortConfig tinyBudget = SortConfigs.base()
+                .withMergePerStreamBytes(4L << 20)
+                .withMergeBudgetBytes(12L << 20);
         assertThat(tinyBudget.effectiveFanIn()).isEqualTo(3);
 
         SortTransformResult result = transform(tinyBudget)
@@ -692,7 +679,6 @@ class SortTransformTest {
         assertThat(result.finalFiles()).hasSize(1);
         assertThat(keys(result.finalFiles())).containsExactly("a", "a");
         assertThat(metrics.count("SORT.equal_key_rejected")).isZero();
-        assertThat(metrics.count("SORT.final_roll_equal_key_deferred")).isEqualTo(1);
     }
 
     @Test
@@ -706,7 +692,9 @@ class SortTransformTest {
         for (int i = 0; i < keys.length; i++) {
             staging.add(writeSegment(dirs.staging, "seg-" + i + ".parquet", objects(keys[i])));
         }
-        SortConfig tinyBudget = SortConfigs.base().withMergeBudgetBytes(3L * (64L << 10));   // 192 KiB budget / 64 KiB per stream = 3
+        SortConfig tinyBudget = SortConfigs.base()
+                .withMergePerStreamBytes(4L << 20)
+                .withMergeBudgetBytes(12L << 20);
         assertThat(tinyBudget.effectiveFanIn()).isEqualTo(3);
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
@@ -753,8 +741,7 @@ class SortTransformTest {
         };
         SortTransform transform = new SortTransform(new SortRun(rolling, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, spy,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         SortTransformResult result = transform.transform(staged, output, staging, PublishListener.NO_OP,
                 units -> { }, FinalPassListener.NO_OP);
 
@@ -777,24 +764,20 @@ class SortTransformTest {
     private SortTransform transform(SortConfig config) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private SortTransform transformWithMetrics(SortConfig config, SortMetrics metrics) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private SortTransform countingTransform(AtomicInteger opens) {
         SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        return new SortTransform(run, PublicationStepHook.NO_OP,
-                PageRunProofSpool.Reader::new, System::nanoTime, path -> {
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+        return new SortTransform(run, PublicationStepHook.NO_OP, path -> {
                     opens.incrementAndGet();
                     return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
                 });

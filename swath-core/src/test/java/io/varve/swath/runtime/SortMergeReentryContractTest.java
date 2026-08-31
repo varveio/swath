@@ -33,7 +33,6 @@ import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPassListener;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.MergeInputProfile;
-import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentResult;
 import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
@@ -141,16 +140,14 @@ final class SortMergeReentryContractTest {
         SortTransform transform = new SortTransform(new SortRun(singlePass(), cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new SortedParquetWriterFactoryLocal(singlePass(), SortMode.OBJECTS),
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
         // First attempt crashes partway through writing the final file (a real mid-merge kill).
         AtomicBoolean crashArmed = new AtomicBoolean(true);
         SortTransform crashingTransform = new SortTransform(new SortRun(singlePass(), cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new CrashingFactory(singlePass(), SortMode.OBJECTS, crashArmed, 100),
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         assertThatThrownBy(() -> crashingTransform.transform(segments, outputDir, stagingDir,
                 (files, rows) -> { }, units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(IOException.class);
@@ -333,8 +330,7 @@ final class SortMergeReentryContractTest {
         SortTransform crashing = new SortTransform(new SortRun(cascade, cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new CrashingFactory(cascade, SortMode.OBJECTS, armed, 100),
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         assertThatThrownBy(() -> crashing.transform(segments, outputDir, stagingDir,
                 (f, r) -> { }, units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(IOException.class);
@@ -344,8 +340,7 @@ final class SortMergeReentryContractTest {
         SortTransform redo = new SortTransform(new SortRun(cascade, cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new SortedParquetWriterFactoryLocal(cascade, SortMode.OBJECTS),
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         SortTransformResult result = redo.transform(segments, outputDir, stagingDir,
                 (files, rows) -> writeManifest(outputDir,
                         files.stream().map(io.varve.swath.sort.FinalPart::path).toList()),
@@ -438,11 +433,6 @@ final class SortMergeReentryContractTest {
             this.delegate = delegate;
             this.armed = armed;
             this.crashAfterRows = crashAfterRows;
-        }
-
-        @Override
-        public void setFileIndex(int fileIndex) {
-            delegate.setFileIndex(fileIndex);   // forward: this fake only injects a mid-merge crash
         }
 
         @Override

@@ -419,7 +419,7 @@ public final class LivenessWatchdog implements AutoCloseable {
                 || name.contains("parquet-writer")
                 || name.contains("-encoder")
                 // swath-sort-range-<seq>-<n>: the parallel range merge's platform threads
-                // (ParallelRangeMerge). They are the textbook case for this rung -- when the merge
+                // finalization. They are the textbook case for this rung -- when the merge
                 // trips the watchdog they are parked in blocking read0 on staged segments -- and
                 // they were simply never added when the parallel path landed. Without them the
                 // cooperative rung is a no-op for the threads that OWN the merge, so every trip ran

@@ -867,8 +867,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 }
                 // A --sort run whose checkpoint carries unsupported staging must REFUSE before
                 // loadResumable or either sort path can inspect/delete a staging file. Null version/type
-                // pairs are pre-column page-run rows and remain compatible; explicit metadata is
-                // checked against the reader's page-run compatibility seam. Non-page-run rows are
+                // pairs are pre-column page-run rows and are refused after a format bump; explicit
+                // metadata is checked against the reader's page-run compatibility seam. Non-page-run rows are
                 // governed solely by the format-name mismatch and are never assigned page-run meaning.
                 if (sorting.sort) {
                     List<PartRef> finalizedParts = store.finalizedParts(run.id());
@@ -889,8 +889,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             .filter(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()))
                             .filter(p -> switch (PageRunFormat.compatibility(
                                     p.formatVersion(), p.extensionType())) {
-                                case LEGACY_UNRECORDED, SUPPORTED -> false;
-                                case INCOMPLETE, UNKNOWN_FORMAT_VERSION, UNKNOWN_EXTENSION_TYPE -> true;
+                                case SUPPORTED -> false;
+                                case LEGACY_UNRECORDED, INCOMPLETE, UNKNOWN_FORMAT_VERSION,
+                                        UNKNOWN_EXTENSION_TYPE -> true;
                             })
                             .toList();
                     if (!incompatiblePageRuns.isEmpty()) {
@@ -901,11 +902,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                 + incompatiblePageRuns.stream().map(ListCommand::pageRunMetadata)
                                         .toList()
                                 + " (this build reads format_version="
-                                + PageRunFormat.CURRENT_FORMAT_VERSION + " with extension_type in ["
-                                + PageRunFormat.ABSENT_EXTENSION + ", "
-                                + PageRunFormat.LEGACY_MINIMA_EXTENSION + ", "
-                                + PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION + ", "
-                                + PageRunFormat.PAGE_INDEX_EXTENSION + "]) — the staging "
+                                + PageRunFormat.CURRENT_FORMAT_VERSION + " with extension_type="
+                                + PageRunFormat.ABSENT_EXTENSION + ") — the staging "
                                 + "segments cannot be safely reused; use --restart to discard the "
                                 + "run and start fresh");
                     }

@@ -44,15 +44,15 @@ final class ReferenceRoutingPropertyTest {
                     }
                     contents.add(rows);
                 }
-                Path path = SortTestSupport.writeIndexedPages(
+                Path path = SortTestSupport.writePages(
                         root.resolve("seg-" + segment + StagingNames.PAGE_RUN_SUFFIX), contents);
                 channels.add(PageRunSegmentIo.open(path, SortMetrics.NO_OP));
                 expectedRefs += pages;
             }
-            PipelineFailure failure = new PipelineFailure();
+            Failure failure = new Failure();
             List<PartPlan> plans = new ArrayList<>();
-            PipelinePartSizer sizer = new PipelinePartSizer(
-                    PipelinePartSizer.Target.fixedRows(1 + random.nextInt(20)), Long.MAX_VALUE);
+            PartSizer sizer = new PartSizer(
+                    PartSizer.Target.fixedRows(1 + random.nextInt(20)), Long.MAX_VALUE);
             try (SegmentHeaderCursors cursors = new SegmentHeaderCursors(channels,
                     SegmentHeaderCursors.planned(channels.size()), SortMetrics.NO_OP, failure)) {
                 MergeRouter.Result result = new MergeRouter(

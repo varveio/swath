@@ -19,7 +19,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * {@link PageRunSegmentInspector} (the {@code swath dump-run} engine): a page-run segment
  * dumps its header magic/version, one {@link PageRunSegmentInspector.RecordInfo} per framed record
- * (min/max/count/codec/len matching the decode-free {@link PageFrontierReader}), and the completeness
+ * (min/max/count/codec/len matching {@link PageRunSegmentIo}), and the completeness
  * trailer — with each record CRC-verified. A body-only bit-flip is reported as {@code crcOk=false}
  * (not thrown), so a debug dump pinpoints the torn record.
  */
@@ -45,16 +45,8 @@ class PageRunSegmentInspectorTest {
 
         assertThat(dump.magic()).isEqualTo(PageRunSegmentWriter.MAGIC);
         assertThat(dump.formatVersion()).isEqualTo(PageRunSegmentWriter.FORMAT_VERSION);
-        assertThat(dump.pageIndex().type()).isEqualTo(PageRunPageIndex.TYPE);
-        assertThat(dump.pageIndex().status()).isEqualTo(PageRunPageIndex.Status.EMBEDDED.name());
-        assertThat(dump.pageIndex().entries()).isEqualTo(2);
-        assertThat(dump.pageIndex().firstOffset()).isEqualTo(PageRunSegmentWriter.HEADER_BYTES);
-        assertThat(dump.pageIndex().lastOffset()).isGreaterThan(dump.pageIndex().firstOffset());
-
         // The inspector exposes the shared trailer, and the record count/entry totals agree.
         PageRunTrailer.Trailer canonical = PageRunTrailer.read(path);
-        assertThat(dump.trailer().segMinKey()).containsExactly(canonical.segMinKey());
-        assertThat(dump.trailer().segMaxKey()).containsExactly(canonical.segMaxKey());
         assertThat(dump.trailer().totalRecords()).isEqualTo(canonical.totalRecords());
         assertThat(dump.trailer().totalEntries()).isEqualTo(canonical.totalEntries());
         assertThat(dump.trailer().maxRecordLen()).isEqualTo(canonical.maxRecordLen());
@@ -104,10 +96,12 @@ class PageRunSegmentInspectorTest {
 
     private static List<PageFrontierView> frontierWalk(Path path) throws IOException {
         List<PageFrontierView> out = new ArrayList<>();
-        try (PageFrontierReader r = new PageFrontierReader(path, SortMetrics.NO_OP)) {
-            while (r.hasPage()) {
-                out.add(new PageFrontierView(r.minKey().clone(), r.maxKey().clone(), r.count()));
-                r.advance();
+        try (PageRunSegmentIo reader = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
+            PageRunSegmentIo.Page page;
+            while ((page = reader.nextPage()) != null) {
+                out.add(new PageFrontierView(
+                        page.header().minKey().clone(), page.header().maxKey().clone(),
+                        page.header().count()));
             }
         }
         return out;

@@ -119,8 +119,7 @@ public final class CaptureSorter {
 
         SortTransform transform = new SortTransform(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.REJECT,
-                        metrics, finalWriterDelegate, MergeInputProfile.ARBITRARY_SORTED_RUNS,
-                        RangeMergeTimer.NO_OP, SortRun.PROCESS_SOFT_FD_LIMIT,
+                        metrics, finalWriterDelegate, MergeInputProfile.ARBITRARY_SORTED_RUNS, SortRun.PROCESS_SOFT_FD_LIMIT,
                         StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP,
                 ignored -> metrics.markProgress(), FinalPassListener.NO_OP);
@@ -169,9 +168,8 @@ public final class CaptureSorter {
         chunk.sort(comparator);
         Path path = stagingDir.resolve(StagingNames.fixtureSegment(seq));
         try (SortedCursor cursor = new InMemoryCursor(chunk, comparator, DuplicateHook.NO_OP)) {
-            // Arbitrary fixture chunks can overlap across their whole key ranges, so this pipeline
-            // intentionally uses the serial entry-stream merger and never selects parallel range
-            // boundaries. Do not retain an unused boundary sample in every staged chunk.
+            // Fixture chunks can overlap across their whole key ranges; the pipeline routes their
+            // page references by the persisted frame headers.
             segmentWriter.writeFixtureChunk(cursor, path);
         }
         return path;

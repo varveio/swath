@@ -783,27 +783,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("off_thread_buffers_peak",
                 (long) gaugeValue("swath.sort.off_thread.buffers.peak"));
         long mergeMs = timerTotalMs("swath.sort.merge.latency");
-        long boundariesMs = timerTotalMs("swath.sort.merge.boundaries.latency");
         long finalizeMs = timerTotalMs("swath.sort.finalize.latency");
-        long parallelRangeMs = timerMaxMs("swath.sort.merge.range.latency");
         sortNode.put("merge_ms", mergeMs);
-        // The parallel range merge's serial prologue. INCLUDED in merge_ms above and broken out here
-        // because it is the one term that does not shrink as R rises: subtract it to see the ranges'
-        // own scaling. Zero on explicit R=1/arbitrary serial input; a resource decline after
-        // structured parallel preflight retains the preflight time it actually spent.
-        sortNode.put("merge_boundaries_ms", boundariesMs);
-        sortNode.put("merge_boundary_embedded_entries",
-                (long) counterCount("swath.sort.merge.boundaries.embedded.entries"));
-        double embeddedBytes = counterCount("swath.sort.merge.boundaries.embedded.bytes");
-        double scanBytes = counterCount("swath.sort.merge.boundaries.scan.bytes");
-        sortNode.put("merge_boundary_embedded_bytes", (long) embeddedBytes);
-        sortNode.put("merge_boundary_scan_bytes", (long) scanBytes);
-        sortNode.put("merge_boundary_bytes", (long) (embeddedBytes + scanBytes));
-        sortNode.put("merge_overlap_clusters", (long) counterCount("swath.sort.merge.overlap.clusters"));
-        sortNode.put("merge_overlap_pages_peak",
-                (long) gaugeValue("swath.sort.merge.overlap.pages.peak"));
-        sortNode.put("merge_overlap_rows_peak",
-                (long) gaugeValue("swath.sort.merge.overlap.rows.peak"));
         sortNode.put("pipeline_pages_forwarded",
                 (long) counterCount("swath.sort.pipeline.pages_forwarded"));
         sortNode.put("pipeline_cluster_pages",
@@ -830,28 +811,6 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) gaugeValue("swath.sort.pipeline.decoded_page_bytes.peak"));
         sortNode.put("pipeline_parts_open",
                 (long) gaugeValue("swath.sort.pipeline.parts_open"));
-        sortNode.put("merge_range_framed_bytes",
-                (long) counterCount("swath.sort.merge.range.framed.bytes"));
-        sortNode.put("merge_range_index_bytes",
-                (long) counterCount("swath.sort.merge.range.index.bytes"));
-        sortNode.put("merge_proof_spool_logical_extent_bytes",
-                (long) counterCount("swath.sort.merge.proof_spool.logical_extent.bytes"));
-        sortNode.put("merge_proof_spool_preallocation_operations",
-                (long) counterCount("swath.sort.merge.proof_spool.preallocation.operations"));
-        sortNode.put("merge_proof_spool_preallocation_attempted_bytes",
-                (long) counterCount(
-                        "swath.sort.merge.proof_spool.preallocation.attempted.bytes"));
-        sortNode.put("merge_proof_spool_mapped_operations",
-                (long) counterCount("swath.sort.merge.proof_spool.mapped.operations"));
-        sortNode.put("merge_proof_spool_mapped_bytes",
-                (long) counterCount("swath.sort.merge.proof_spool.mapped.bytes"));
-        sortNode.put("merge_proof_spool_ms",
-                timerTotalMs("swath.sort.merge.proof_spool.latency"));
-        // Concurrent range timers overlap; their maximum, not their sum, is the parallel range
-        // wall. The serial path has no range samples, so its range term is the whole merge less the
-        // separately measured boundary/finalize tail (clamped for millisecond truncation).
-        sortNode.put("range_merge_ms", timerCount("swath.sort.merge.range.latency") > 0 ? parallelRangeMs
-                : Math.max(0L, mergeMs - boundariesMs - finalizeMs));
         sortNode.put("finalize_ms", finalizeMs);
         sortNode.put("finalize_close_ms", timerTotalMs("swath.sort.finalize.close.latency"));
         putTimerDistribution(sortNode, "finalize_close", "swath.sort.finalize.close.latency");

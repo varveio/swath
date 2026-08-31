@@ -88,8 +88,7 @@ class CaptureSorterTest {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         SortConfig config = SortConfigs.base()
                 .withSegmentEntries(1_500)
-                .withMergeParallelism(4)
-                .withMinParallelStagedBytes(0);
+                .withMergeParallelism(4);
         SortTransformResult result = new CaptureSorter(config, metrics).sort(captureDir, outputDir);
 
         assertThat(result.totalRows()).isEqualTo(6_000);
@@ -97,17 +96,11 @@ class CaptureSorterTest {
                 java.util.stream.IntStream.range(0, 6_000)
                         .mapToObj(i -> String.format("k%05d", i))
                         .toArray(String[]::new));
-        assertThat(metrics.count("SORT.merge_range_frontier_disabled")).isEqualTo(1);
-        assertThat(metrics.count("SORT.merge_range_parallel"))
-                .as("arbitrary sorted runs must never enter the parallel range merge")
-                .isZero();
-        assertThat(metrics.count("SORT.page_whole_emitted"))
-                .as("arbitrary chunks must not enter the overlap-retaining frontier merge")
-                .isZero();
+        assertThat(metrics.count("SORT.finalization_pipeline")).isEqualTo(1);
     }
 
     @Test
-    void arbitraryFixtureChunksArePageRunsWithoutUnusedBoundarySamples(@TempDir Path root) throws IOException {
+    void arbitraryFixtureChunksUseTheFixedPageRunTrailer(@TempDir Path root) throws IOException {
         Path captureDir = Files.createDirectories(root.resolve("capture"));
         Path outputDir = Files.createDirectories(root.resolve("out"));
         List<ListEntry> rows = new ArrayList<>();
@@ -129,11 +122,9 @@ class CaptureSorterTest {
         Path segment = staging.resolve(StagingNames.fixtureSegment(0));
         assertThat(Files.exists(segment)).isTrue();
         try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
-            PageRunBoundarySample.ReadResult sample =
-                    PageRunBoundarySample.read(io, PageRunTrailer.read(io), ignored -> { });
-            assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.ABSENT);
-            assertThat(sample.totalRecords()).isEqualTo(3);
-            assertThat(sample.entryCount()).isZero();
+            PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
+            assertThat(trailer.totalRecords()).isEqualTo(3);
+            assertThat(trailer.totalEntries()).isEqualTo(2_500);
         }
     }
 
@@ -226,15 +217,12 @@ class CaptureSorterTest {
         rows.add(new CommonPrefixEntry(KeyBytes.ofUtf8("a")));
         writePart(captureDir, "part-0.parquet", rows);
 
-        SortConfig rollEveryRow = SortConfigs.rolledPerEntry();
+        SortConfig rollEveryRow = SortConfigs.rolledPerEntry().withSegmentEntries(1);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         assertThatThrownBy(() -> new CaptureSorter(rollEveryRow, metrics).sort(captureDir, outputDir))
                 .isInstanceOf(DuplicateKeyException.class)
                 .hasMessageContaining("'a'");
         assertThat(metrics.count("SORT.equal_key_rejected")).isEqualTo(1);
-        assertThat(metrics.count("SORT.final_roll_equal_key_deferred"))
-                .as("REJECT wins at the common policy point before roll deferral is classified")
-                .isZero();
 
         // No final (non-tmp) file was ever renamed into place — detected before the rename loop runs.
         try (var stream = Files.newDirectoryStream(outputDir, "part-*.parquet")) {
@@ -242,14 +230,12 @@ class CaptureSorterTest {
                     .as("a duplicate detected mid-write must leave only .tmp files, no published final")
                     .isFalse();
         }
-        // Key-atomic rolling keeps equal raw keys together, so the duplicate fails before a second
-        // writer opens. The one tmp file lives in the sibling staging dir, never alongside finals.
+        // The failed pipeline discards its temporary before returning.
         Path stagingDir = outputDir.resolve(CaptureSorter.STAGING_DIR_NAME);
         try (var stream = Files.newDirectoryStream(stagingDir, "part-*.parquet.tmp")) {
             List<Path> tmpFiles = new ArrayList<>();
             stream.forEach(tmpFiles::add);
-            assertThat(tmpFiles).as("an equal-key group must not be split across final files")
-                    .hasSize(1);
+            assertThat(tmpFiles).isEmpty();
         }
 
         // A clean re-run owns and removes the failed attempt's tmp/staging state before publishing.
@@ -286,7 +272,7 @@ class CaptureSorterTest {
         Path outputDir = Files.createDirectories(root.resolve("out"));
         writePart(captureDir, "part-0.parquet", objects("a", "b", "c", "d"));
 
-        SortConfig rollEveryRow = SortConfigs.rolledPerEntry();
+        SortConfig rollEveryRow = SortConfigs.rolledPerEntry().withSegmentEntries(1);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         SortTransformResult result = new CaptureSorter(rollEveryRow, metrics).sort(captureDir, outputDir);
 
@@ -459,10 +445,6 @@ class CaptureSorterTest {
         @Override
         public long dataSize() {
             return rows;
-        }
-
-        @Override
-        public void setFileIndex(int fileIndex) {
         }
 
         @Override

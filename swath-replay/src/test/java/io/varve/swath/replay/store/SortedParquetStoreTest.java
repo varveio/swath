@@ -61,9 +61,13 @@ class SortedParquetStoreTest {
         return SortConfigs.manySmallRowGroups();
     }
 
-    /** Tiny final-file-bytes rolls the output into several range-disjoint files. */
+    /** Tiny final-file-bytes and singleton segments give the pipeline several legal roll points. */
     private static SortConfig rolledSmallFiles() {
-        return SortConfigs.base().withFinalFileBytes(4096L).withFinalRowGroupBytes(1024L).withMergeBudgetBytes(64L << 20);
+        return SortConfigs.base()
+                .withFinalFileBytes(4096L)
+                .withFinalRowGroupBytes(1024L)
+                .withSegmentEntries(1)
+                .withMergeBudgetBytes(64L << 20);
     }
 
     @Test

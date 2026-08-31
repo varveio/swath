@@ -12,16 +12,13 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.CRC32C;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -41,8 +38,7 @@ class PageBlockUtf8CorruptionTest {
         corruptNeedleAndRepairFrameCrc(segment, field.needle(), field.header());
         SortRun run = new SortRun(SortConfigs.base(), CMP, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY,
                 MergeDiskPolicy.bypassed());
 
         assertThatThrownBy(() -> new SortTransform(run).transform(
@@ -62,68 +58,6 @@ class PageBlockUtf8CorruptionTest {
             assertThat(files.map(path -> path.getFileName().toString()))
                     .containsExactly("input.pageseg");
         }
-    }
-
-    @Test
-    void dictionaryHeavyFrontierRetainsOnlyBodyCoordinatesUntilRowsDecode(@TempDir Path dir)
-            throws IOException {
-        List<ListEntry> rows = dictionaryHeavyRows("k");
-        Path segment = writeSegment(dir.resolve("dictionary-heavy.pageseg"), rows);
-        long decodedPageBudget;
-
-        try (PageFrontierReader reader = new PageFrontierReader(segment, SortMetrics.NO_OP)) {
-            PageBlockCodec.Header header = reader.currentHeader();
-            assertThat(header.dictionaries().byteBacked()).isTrue();
-            assertThat(header.dictionaries().coordinateBytes())
-                    .isEqualTo(PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES);
-            assertThat(header.dictionaries().size(
-                    PageBlockCodec.DictColumn.OWNER_ID.ordinal())).isEqualTo(PageBlock.DICT_CAP);
-
-            PageBlock page = reader.decodeCurrentPage();
-            assertThat(page.dictionariesUnsafe()).isSameAs(header.dictionaries());
-            assertThat(page.dictionaryCacheBudgetBytes())
-                    .isGreaterThan(header.dictionaries().coordinateBytes());
-            decodedPageBudget = page.retainedRecordBytes() + page.dictionaryCacheBudgetBytes();
-            assertThat(page.cursor().next()).isEqualTo(rows.getFirst());
-        }
-
-        PageFrontierReader constrained = new PageFrontierReader(segment, SortMetrics.NO_OP);
-        assertThatThrownBy(() -> new PageAwareMerger(List.of(constrained), CMP,
-                MergeScope.INTRA_SEGMENT, SortMetrics.NO_OP, MergeRunSink.NO_OP,
-                decodedPageBudget - 1))
-                .isInstanceOfSatisfying(UncheckedIOException.class, failure ->
-                        assertThat(failure.getCause())
-                                .isInstanceOf(MergeMemoryExhaustedException.class));
-    }
-
-    @Test
-    void twoStreamSuccessorAdvanceRefusesBeforeDictionaryCacheAllocation(@TempDir Path dir)
-            throws IOException {
-        Path first = writePages(dir.resolve("first.pageseg"),
-                dictionaryHeavyRows("a", "c"), dictionaryHeavyRows("e", "z"));
-        Path second = writePages(dir.resolve("second.pageseg"),
-                dictionaryHeavyRows("b", "d"), dictionaryHeavyRows("f", "y"));
-        long oneDecodedPage;
-        try (PageFrontierReader reader = new PageFrontierReader(first, SortMetrics.NO_OP)) {
-            PageBlock page = reader.decodeCurrentPage();
-            oneDecodedPage = page.retainedRecordBytes() + page.dictionaryCoordinateBytes()
-                    + page.dictionaryCacheBudgetBytes();
-        }
-        AtomicInteger advances = new AtomicInteger();
-        AtomicInteger decodes = new AtomicInteger();
-        CountingFrontier firstFrontier = new CountingFrontier(
-                new PageFrontierReader(first, SortMetrics.NO_OP), advances, decodes);
-        CountingFrontier secondFrontier = new CountingFrontier(
-                new PageFrontierReader(second, SortMetrics.NO_OP), advances, decodes);
-
-        assertThatThrownBy(() -> new PageAwareMerger(List.of(firstFrontier, secondFrontier), CMP,
-                MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP, MergeRunSink.NO_OP,
-                oneDecodedPage))
-                .isInstanceOfSatisfying(UncheckedIOException.class, failure ->
-                        assertThat(failure.getCause())
-                                .isInstanceOf(MergeMemoryExhaustedException.class));
-        assertThat(advances).hasValue(1);
-        assertThat(decodes).hasValue(2);
     }
 
     private static Path writeSegment(Path path, List<ListEntry> rows) throws IOException {
@@ -254,30 +188,4 @@ class PageBlockUtf8CorruptionTest {
         abstract List<ListEntry> rows();
     }
 
-    private static final class CountingFrontier implements PageFrontierStream {
-        private final PageFrontierStream delegate;
-        private final AtomicInteger advances;
-        private final AtomicInteger decodes;
-
-        private CountingFrontier(PageFrontierStream delegate, AtomicInteger advances,
-                AtomicInteger decodes) {
-            this.delegate = delegate;
-            this.advances = advances;
-            this.decodes = decodes;
-        }
-
-        @Override public boolean hasPage() { return delegate.hasPage(); }
-        @Override public byte[] minKey() { return delegate.minKey(); }
-        @Override public byte[] maxKey() { return delegate.maxKey(); }
-        @Override public int count() { return delegate.count(); }
-        @Override public PageBlock decodeCurrentPage() throws IOException {
-            decodes.incrementAndGet();
-            return delegate.decodeCurrentPage();
-        }
-        @Override public void advance() throws IOException {
-            advances.incrementAndGet();
-            delegate.advance();
-        }
-        @Override public void close() throws IOException { delegate.close(); }
-    }
 }

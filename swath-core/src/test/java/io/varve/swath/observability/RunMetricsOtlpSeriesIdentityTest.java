@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 161;
+    static final int EXPECTED_OTLP_METER_COUNT = 145;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -133,18 +133,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "COUNTER|swath.sort.manifest.bounds.bytes|{}",
             "COUNTER|swath.sort.manifest.bounds.rows|{}",
             "COUNTER|swath.sort.manifest.md5.bytes|{}",
-            "COUNTER|swath.sort.merge.boundaries.embedded.bytes|{}",
-            "COUNTER|swath.sort.merge.boundaries.embedded.entries|{}",
-            "COUNTER|swath.sort.merge.boundaries.scan.bytes|{}",
-            "COUNTER|swath.sort.merge.overlap.clusters|{}",
             "COUNTER|swath.sort.merge.passes|{}",
-            "COUNTER|swath.sort.merge.proof_spool.logical_extent.bytes|{}",
-            "COUNTER|swath.sort.merge.proof_spool.mapped.bytes|{}",
-            "COUNTER|swath.sort.merge.proof_spool.mapped.operations|{}",
-            "COUNTER|swath.sort.merge.proof_spool.preallocation.attempted.bytes|{}",
-            "COUNTER|swath.sort.merge.proof_spool.preallocation.operations|{}",
-            "COUNTER|swath.sort.merge.range.framed.bytes|{}",
-            "COUNTER|swath.sort.merge.range.index.bytes|{}",
             "COUNTER|swath.sort.pipeline.cluster_pages|{}",
             "COUNTER|swath.sort.pipeline.cluster_rows|{}",
             "COUNTER|swath.sort.pipeline.encoder_page_reads|{}",
@@ -201,8 +190,6 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "GAUGE|swath.s3.pool.pending_acquisition|{}",
             "GAUGE|swath.sort.finalize.parallelism|{}",
             "GAUGE|swath.sort.handoff.queue.depth.peak|{}",
-            "GAUGE|swath.sort.merge.overlap.pages.peak|{}",
-            "GAUGE|swath.sort.merge.overlap.rows.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
             "GAUGE|swath.sort.pipeline.decoded_page_bytes.peak|{}",
             "GAUGE|swath.sort.pipeline.parts_open|{}",
@@ -244,10 +231,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.sort.finalize.latency|{}",
             "TIMER|swath.sort.manifest.bounds.latency|{}",
             "TIMER|swath.sort.manifest.md5.latency|{}",
-            "TIMER|swath.sort.merge.boundaries.latency|{}",
             "TIMER|swath.sort.merge.latency|{}",
-            "TIMER|swath.sort.merge.proof_spool.latency|{}",
-            "TIMER|swath.sort.merge.range.latency|{}",
             "TIMER|swath.sort.pipeline.encoder_read_wait|{}",
             "TIMER|swath.sort.pipeline.header_scan|{}",
             "TIMER|swath.sort.pipeline.plan_queue_wait|{}",

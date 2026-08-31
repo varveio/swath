@@ -45,8 +45,7 @@ final class SortPublicationCrashMatrixTest {
             List<Path> originals = stage(staging, shape.segmentRows());
             List<String> originalNames = fileNames(originals);
             Files.writeString(staging.resolve("merge-abandoned.pageseg"), "debris");
-            Files.writeString(staging.resolve("prange-0-99.parquet.tmp"), "debris");
-            Files.writeString(staging.resolve(StagingNames.rangeProofTmp()), "debris");
+            Files.writeString(staging.resolve("pipeline-00099.parquet.tmp"), "debris");
             if (priorOutput) {
                 Files.writeString(output.resolve("part-00000.parquet"), "prior-zero");
                 Files.writeString(output.resolve("part-99999.parquet"), "prior-extra");
@@ -102,10 +101,10 @@ final class SortPublicationCrashMatrixTest {
     }
 
     @Test
-    void nthCloseFailureLeavesPriorFinalsAndOriginalsReachableThenRepairsSerialAndParallel(
+    void nthCloseFailureLeavesPriorFinalsAndOriginalsReachableThenRepairsPipelineShapes(
             @TempDir Path root) throws Exception {
         for (MergeShape shape : List.of(
-                MergeShape.SERIAL_ROLLED, MergeShape.PARALLEL, MergeShape.PIPELINE)) {
+                MergeShape.ONE_ENCODER_ROLLED, MergeShape.PIPELINE)) {
             Path scenario = root.resolve(shape.name().toLowerCase());
             Path output = Files.createDirectories(scenario.resolve("data"));
             Path staging = Files.createDirectories(scenario.resolve("_staging"));
@@ -137,45 +136,6 @@ final class SortPublicationCrashMatrixTest {
             assertNoWorkingDebris(scenario);
             assertThat(staging).doesNotExist();
         }
-    }
-
-    @Test
-    void postWorkerProofReaderFailureClosesWritersPreservesPriorFinalsAndRepairs(@TempDir Path root)
-            throws Exception {
-        Path output = Files.createDirectories(root.resolve("data"));
-        Path staging = Files.createDirectories(root.resolve("_staging"));
-        Path original = SortTestSupport.writeIndexedPages(staging.resolve("indexed.pageseg"), 32, 0);
-        Files.writeString(output.resolve("part-00000.parquet"), "prior-zero");
-        Files.writeString(output.resolve("part-99999.parquet"), "prior-extra");
-        CloseTrackingFactory writers = new CloseTrackingFactory(SortedFileWriterFactory.DEFAULT, -1);
-        SortConfig config = SortConfigs.base().withMergeParallelism(4).withMergeBudgetBytes(64L << 20);
-        SortRun run = run(config, writers);
-        List<PublicationStep> steps = new ArrayList<>();
-        SortTransform crashing = new SortTransform(run, (step, ordinal) -> steps.add(step),
-                (spool, expectedSlots, stats) -> {
-                    throw new IOException("injected coordinator proof-reader failure");
-                });
-
-        assertThatThrownBy(() -> crashing.transform(List.of(original), output, staging,
-                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
-                .isInstanceOf(IOException.class)
-                .hasMessageContaining("proof-reader failure");
-
-        assertThat(steps).containsExactly(PublicationStep.AFTER_WORKING_SWEEP);
-        assertThat(writers.openNow()).as("post-worker proof failure closes every range writer").isZero();
-        assertThat(original).exists();
-        assertThat(Files.readString(output.resolve("part-00000.parquet"))).isEqualTo("prior-zero");
-        assertThat(Files.readString(output.resolve("part-99999.parquet"))).isEqualTo("prior-extra");
-        assertNoWorkingDebris(root);
-
-        transform(config, SortedFileWriterFactory.DEFAULT, PublicationStepHook.NO_OP)
-                .transform(List.of(original), output, staging, PublishListener.NO_OP,
-                        units -> { }, FinalPassListener.NO_OP);
-        assertPublishedSet(output,
-                Stream.iterate(0, n -> n + 1).limit(32).map(n -> String.format("k%05d", n)).toList(),
-                4);
-        assertNoWorkingDebris(root);
-        assertThat(staging).doesNotExist();
     }
 
     @Test
@@ -235,8 +195,7 @@ final class SortPublicationCrashMatrixTest {
         SortRun run = new SortRun(MergeShape.SERIAL.config(false), comparator,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, metrics,
                 SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
         assertThatThrownBy(() -> new SortTransform(run).transform(
                 originals, output, staging, authorityListener,
@@ -255,8 +214,8 @@ final class SortPublicationCrashMatrixTest {
     }
 
     private static Stream<Arguments> publicationMatrix() {
-        return Stream.of(MergeShape.SERIAL, MergeShape.PARALLEL, MergeShape.PIPELINE,
-                        MergeShape.EMPTY_PARALLEL_REQUEST, MergeShape.EMPTY_PIPELINE_REQUEST)
+        return Stream.of(MergeShape.SERIAL, MergeShape.PIPELINE,
+                        MergeShape.EMPTY_PIPELINE_REQUEST)
                 .flatMap(shape -> Stream.of(false, true)
                         .flatMap(prior -> Stream.of(false, true)
                                 .map(retain -> Arguments.of(shape, prior, retain))));
@@ -269,8 +228,7 @@ final class SortPublicationCrashMatrixTest {
 
     private SortRun run(SortConfig config, SortedFileWriterFactory writers) {
         return new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
-                SortMetrics.NO_OP, writers, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
-                RangeMergeTimer.NO_OP, SortRun.PROCESS_SOFT_FD_LIMIT,
+                SortMetrics.NO_OP, writers, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT,
                 StaleFinalSweep.OWN_PARTS_ONLY);
     }
 
@@ -353,16 +311,12 @@ final class SortPublicationCrashMatrixTest {
         SERIAL(1, Long.MAX_VALUE,
                 List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
                 1),
-        SERIAL_ROLLED(1, 1L,
-                List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
-                9),
-        PARALLEL(3, Long.MAX_VALUE,
-                List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
+        ONE_ENCODER_ROLLED(1, 1L,
+                List.of(objects("a", "b", "c"), objects("d", "e", "f"), objects("g", "h", "i")),
                 3),
         PIPELINE(3, Long.MAX_VALUE,
                 List.of(objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")),
                 1),
-        EMPTY_PARALLEL_REQUEST(3, Long.MAX_VALUE, List.of(), 1),
         EMPTY_PIPELINE_REQUEST(3, Long.MAX_VALUE, List.of(), 1);
 
         private final int parallelism;
@@ -383,8 +337,7 @@ final class SortPublicationCrashMatrixTest {
                     .withMergeParallelism(parallelism)
                     .withMergeBudgetBytes(64L << 20)
                     .withFinalFileBytes(rollBytes)
-                    .withFinalization(this == PIPELINE || this == EMPTY_PIPELINE_REQUEST
-                            ? SortFinalization.PIPELINE : SortFinalization.RANGES)
+                    .withFinalization(SortFinalization.PIPELINE)
                     .withStagingRetention(retain
                             ? StagingRetention.RETAIN_ORIGINALS
                             : StagingRetention.DELETE_AFTER_PUBLISH);
@@ -408,7 +361,7 @@ final class SortPublicationCrashMatrixTest {
             points.add(CrashPoint.simple(PublicationStep.AFTER_WORKING_SWEEP));
             points.add(CrashPoint.simple(PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE));
             points.add(CrashPoint.simple(PublicationStep.AFTER_STALE_FINAL_SWEEP));
-            int renamedParts = this == PARALLEL ? expectedParts : 1;
+            int renamedParts = expectedParts;
             for (int ordinal = 0; ordinal < renamedParts; ordinal++) {
                 points.add(new CrashPoint(PublicationStep.AFTER_PART_RENAME, ordinal));
             }
@@ -494,11 +447,6 @@ final class SortPublicationCrashMatrixTest {
                 @Override
                 public void markFinal() {
                     writer.markFinal();
-                }
-
-                @Override
-                public void setFileIndex(int fileIndex) {
-                    writer.setFileIndex(fileIndex);
                 }
 
                 @Override

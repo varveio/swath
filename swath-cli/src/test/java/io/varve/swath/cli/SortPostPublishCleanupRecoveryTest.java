@@ -47,7 +47,6 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
@@ -293,27 +292,21 @@ final class SortPostPublishCleanupRecoveryTest {
     }
 
     @Test
-    @ResourceLock("SYSTEM_PROPERTIES")
-    void parallelCommittedFailureSummaryRetainsExactPublishedFacts(@TempDir Path root)
+    void pipelineCommittedFailureSummaryRetainsExactPublishedFacts(@TempDir Path root)
             throws Exception {
-        String property = "swath.sort.min-parallel-staged-bytes";
-        String previous = System.getProperty(property);
-        try {
-            System.setProperty(property, "0");
-            Path outputDir = root.resolve("out");
-            Path checkpoint = root.resolve("checkpoint.sqlite");
-            List<String> expectedKeys = Stream.iterate(0, n -> n + 1).limit(3_000)
-                    .map(n -> String.format("data/key-%05d", n)).toList();
-            ListCommand initial = command(outputDir, checkpoint, fetcher(expectedKeys), false);
-            initial.tune.entries = List.of(
-                    SortConfig.KEEP_STAGING_TUNE_KEY + "=off",
-                    "sort.merge-parallelism=3");
-            initial.listRunnerOverride = new ListRunner((step, ordinal) -> {
-                if (step == PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP) {
-                    throw new java.io.IOException(
-                            "injected verified proof-spool cleanup failure");
-                }
-            });
+        Path outputDir = root.resolve("out");
+        Path checkpoint = root.resolve("checkpoint.sqlite");
+        List<String> expectedKeys = Stream.iterate(0, n -> n + 1).limit(3_000)
+                .map(n -> String.format("data/key-%05d", n)).toList();
+        ListCommand initial = command(outputDir, checkpoint, fetcher(expectedKeys), false);
+        initial.tune.entries = List.of(
+                SortConfig.KEEP_STAGING_TUNE_KEY + "=off",
+                "sort.merge-parallelism=3");
+        initial.listRunnerOverride = new ListRunner((step, ordinal) -> {
+            if (step == PublicationStep.AFTER_PUBLISH_LISTENER) {
+                throw new java.io.IOException("injected pipeline post-publish cleanup failure");
+            }
+        });
 
             Throwable failure = catchThrowable(initial::call);
 
@@ -321,12 +314,12 @@ final class SortPostPublishCleanupRecoveryTest {
                     .hasCauseInstanceOf(CommittedPublicationCleanupException.class);
             CommittedPublicationCleanupException committed =
                     (CommittedPublicationCleanupException) failure.getCause();
-            assertThat(committed.stage()).isEqualTo(
-                    CommittedPublicationCleanupException.Stage.DISPOSABLE_INTERMEDIATE_CLEANUP);
+        assertThat(committed.stage()).isEqualTo(
+                CommittedPublicationCleanupException.Stage.AFTER_PUBLISH_LISTENER_HOOK);
             var result = committed.publishedResult();
             assertThat(result.finalizationParallelism()).isEqualTo(3);
             assertThat(result.mergePasses()).isPositive();
-            assertThat(result.finalFiles()).hasSize(3);
+        assertThat(result.finalFiles()).hasSize(1);
             long publishedBytes = result.finalFiles().stream().mapToLong(path -> {
                 try {
                     return Files.size(path);
@@ -366,14 +359,7 @@ final class SortPostPublishCleanupRecoveryTest {
             assertThat(forbidden.apiCalls()).isZero();
             assertThat(staging).doesNotExist();
             assertThat(outputKeys(outputDir)).containsExactlyElementsOf(expectedKeys);
-            assertThat(CheckpointDbProbe.runStatus(checkpoint)).isEqualTo("COMPLETED");
-        } finally {
-            if (previous == null) {
-                System.clearProperty(property);
-            } else {
-                System.setProperty(property, previous);
-            }
-        }
+        assertThat(CheckpointDbProbe.runStatus(checkpoint)).isEqualTo("COMPLETED");
     }
 
     private static ListCommand command(Path outputDir, Path checkpoint, MockPageFetcher fetcher,

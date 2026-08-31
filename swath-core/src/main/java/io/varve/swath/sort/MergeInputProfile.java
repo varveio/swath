@@ -10,13 +10,5 @@ package io.varve.swath.sort;
  */
 public enum MergeInputProfile {
     STRUCTURED_RANGE_OWNED_PAGES,
-    ARBITRARY_SORTED_RUNS;
-
-    boolean pageFrontierAllowed() {
-        return this == STRUCTURED_RANGE_OWNED_PAGES;
-    }
-
-    boolean parallelRangesAllowed() {
-        return this == STRUCTURED_RANGE_OWNED_PAGES;
-    }
+    ARBITRARY_SORTED_RUNS
 }

@@ -28,9 +28,7 @@ public final class SortConfigs {
      * which is now core-derived and greater than one. Most tests here are about something other than
      * parallelism and assert single-file output; inheriting the shipped default would silently turn
      * each of them into a test of the parallel path instead of the thing it names. A case that wants
-     * the parallel merge asks for it — {@code base().withMergeParallelism(R)} — and gets it, because
-     * the staged-bytes floor is dropped to zero here (test fixtures are far below the production
-     * floor, which exists to stop a small run multiplying its file count for a few seconds' gain).
+     * parallel finalization asks for it — {@code base().withMergeParallelism(R)} — and gets it.
      */
     public static SortConfig base() {
         return SortConfig.DEFAULT
@@ -38,16 +36,15 @@ public final class SortConfigs {
                 .withFanIn(512)
                 .withFinalFileBytes(Long.MAX_VALUE)
                 .withMergeBudgetBytes(Long.MAX_VALUE)
-                .withMergeParallelism(1)
-                .withMinParallelStagedBytes(0L);
+                .withMergeParallelism(1);
     }
 
     /**
      * {@link #base()} rolled into one file per entry (a 1-byte {@code final-file-bytes}) under a
-     * bounded 64&nbsp;MB merge budget — exercises range-disjoint multi-file sorted output.
+     * bounded 64&nbsp;MB merge budget. Singleton staging segments provide legal pipeline roll points.
      */
     public static SortConfig rolledPerEntry() {
-        return base().withFinalFileBytes(1L).withMergeBudgetBytes(64L << 20);
+        return base().withFinalFileBytes(1L).withSegmentEntries(1).withMergeBudgetBytes(64L << 20);
     }
 
     /**

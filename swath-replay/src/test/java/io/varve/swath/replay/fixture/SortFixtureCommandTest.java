@@ -63,11 +63,8 @@ class SortFixtureCommandTest {
         // The printed summary carries segments/merge_passes, and the real SORT.segment_flushed
         // engagement counter is recorded via FixtureMetrics#recordStealReason.
         String summary = out.toString(StandardCharsets.UTF_8);
-        assertThat(summary).contains("arm=SORT_FIXTURE", "segments=", "merge_passes=",
-                "cascaded_passes=", "proof_spool_logical_extent_bytes=",
-                "proof_spool_preallocation_operations=",
-                "proof_spool_preallocation_attempted_bytes=",
-                "proof_spool_mapped_operations=", "proof_spool_mapped_bytes=", "proof_spool_ms=");
+        assertThat(summary).contains(
+                "arm=SORT_FIXTURE", "segments=", "merge_passes=", "cascaded_passes=");
         assertThat(registry.find("swath.replay.sort.steal_reason")
                 .tag("outcome", "SORT").tag("reason", "segment_flushed").counter().count())
                 .isGreaterThan(0.0);

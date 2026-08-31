@@ -8,7 +8,6 @@ package io.varve.swath.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.sort.PageRunFixtures;
-import io.varve.swath.sort.PageRunFormat;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
@@ -55,7 +54,7 @@ class DumpRunCommandTest {
         String text = run(exit, "dump-run", seg.toString());
 
         assertThat(exit[0]).isZero();
-        assertThat(text).contains("header: magic=0x53504752 version=2");
+        assertThat(text).contains("header: magic=0x53504752 version=3");
         assertThat(text).contains("records: 1");
         // One page → one record: min=hex(alpha), max=hex(bravo), count=2, CRC verifies.
         assertThat(text).contains("min=" + hex("alpha"));
@@ -63,12 +62,6 @@ class DumpRunCommandTest {
         assertThat(text).contains("count=2");
         assertThat(text).contains("crc=OK");
         assertThat(text).doesNotContain("crc=FAIL");
-        assertThat(text).contains("page-index: type=" + PageRunFormat.PAGE_INDEX_EXTENSION
-                + " status=EMBEDDED entries=1 firstOffset=" + PAGE_RUN_V2_HEADER_BYTES
-                + " lastOffset=" + PAGE_RUN_V2_HEADER_BYTES);
-        // Trailer bounds are the exact segment min/max keys.
-        assertThat(text).contains("segMin=" + hex("alpha"));
-        assertThat(text).contains("segMax=" + hex("bravo"));
         assertThat(text).contains("totalRecords=1");
         assertThat(text).contains("totalEntries=2");
     }

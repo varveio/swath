@@ -193,12 +193,9 @@ final class SortResumeListingContractTest {
                     .as("independent confirmation: no seg-*.parquet sealed before or during the abort")
                     .isEmpty();
 
-            // ---- but listing had demonstrably started and advanced the checkpoint ----
+            // ---- but listing had demonstrably started ----
             assertThat(counterTotal(crashCtx, "swath.entries.emitted"))
                     .as("listing progressed: entries were staged before the crash").isGreaterThan(0.0);
-            assertThat(store.countNodes(runId))
-                    .as("the checkpoint advanced: the root range was split into child nodes")
-                    .isGreaterThan(1L);
 
             // ---- nothing published, a resumable tail remains ----
             assertThat(Files.exists(DatasetLayout.of(outputDir).manifest())).as("nothing published yet").isFalse();

@@ -19,10 +19,8 @@ public interface FinalPassListener {
 
     /**
      * @param stagedRowsAreTheDenominator whether the work from here on is exactly ONE pass over the
-     *         staged rows, and so has an honest completion fraction. False whenever the remaining
-     *         work still cascades — the serial path's cascade passes are complete by the time this
-     *         fires, but a parallel range merge's are not, and a cascading range rewrites its rows
-     *         once per pass, which is how cumulative merge work runs past the staged total.
+     *         staged rows, and so has an honest completion fraction. False whenever remaining work
+     *         can still rewrite rows before the final pass.
      */
     void onFinalPassStarting(boolean stagedRowsAreTheDenominator);
 }

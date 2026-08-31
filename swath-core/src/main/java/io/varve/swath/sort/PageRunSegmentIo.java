@@ -18,25 +18,21 @@ import java.util.zip.CRC32C;
 
 /**
  * Shared read-side IO/framing/validation for one {@link PageRunSegmentWriter} page-run segment.
- * The consumers — {@link PageRunSegmentReader} (entry-typed {@link EntryStream}),
- * {@link PageFrontierReader} (decode-free {@link PageFrontierStream}), and
- * {@link PageRunSegmentInspector} (the {@code dump-run} debug tool), plus reference-routing header
- * cursors and positional encoders — share this framing owner. This class keeps the corruption contract
- * in one place instead of hand-copying it per reader.
+ * Entry readers, the {@code dump-run} inspector, reference-routing header cursors, and positional
+ * encoders share this framing owner.
  *
  * <p><b>What is single-sourced here:</b> the header magic/version check, the fixed trailer-tail read
  * (recovering {@code trailerStart}/{@code totalRecords}/{@code totalEntries}/{@code maxRecordLen} + the
  * trailing-magic truncation check), the framed-record read ({@code [len u32][crc32c u32][body]} with
  * the {@code len<=0 || len>maxRecordLen} bound applied BEFORE allocation and a CRC32C body verify), the
- * end-of-stream completeness cross-check ({@code seenEntries == totalEntries}), the decode-free
- * bounded single-pass page-header validation/frontier parse (with a zero-copy payload slice), the
+ * end-of-stream completeness cross-check ({@code seenEntries == totalEntries}), the bounded
+ * single-pass page-header validation, the
  * <b>intra-segment min-monotonicity
  * guard</b> ({@link #nextPage()}), and
  * the positional/sequential read primitives.
  *
- * <p>Three record-read variants share the same len/crc read: the two streaming readers call
- * {@link #nextPage()} (CRC-verified body + parsed frontier fields + the min-monotonicity check — the ONE
- * page-advance primitive, so no page-run read path can be added later that forgets the LOGICAL guard),
+ * <p>The record-read variants share the same framing validation. The entry reader calls
+ * {@link #nextPage()} (CRC-verified body plus the min-monotonicity check),
  * and the inspector calls {@link #nextRecord()} (returns the body plus a {@code crcOk} flag so a debug
  * dump can pinpoint a torn record without aborting the walk, and deliberately does NOT abort on a
  * regression it is being run to diagnose).
@@ -61,9 +57,9 @@ final class PageRunSegmentIo implements AutoCloseable {
     final long totalRecords;
     /** Declared entry count (from the trailer): the end-of-stream completeness cross-check target. */
     final long totalEntries;
-    /** Absolute file offset where the trailer begins (the O(1) seek target for the key bounds). */
+    /** Absolute file offset where the fixed trailer begins. */
     final long trailerStart;
-    /** Complete file length captured at open; bounds the optional trailer extension. */
+    /** Complete file length captured at open. */
     final long fileSize;
 
     /** Previous page's minKey (monotonicity guard); null until the first page is read. */
@@ -72,24 +68,12 @@ final class PageRunSegmentIo implements AutoCloseable {
     private byte[] previousMax;
     /** Ordinal of the next page returned by {@link #nextPage()}. */
     private long pagesRead;
-    /** Actual or seek-seeded entries before the next page. */
+    /** Entries read before the next page. */
     private long cumulativeEntries;
     /** Framed page bytes physically read by this IO instance. */
     private long framedBytesRead;
     /** Tracked sequential frame offset; avoids a native FileChannel.position() query per page. */
     private long nextFrameOffset;
-    /** Physical proof accounting is enabled only for original indexed-parallel frontiers. */
-    private boolean proofTracking;
-    private long lastPageOrdinal;
-    private long lastFrameOffset;
-    private long lastCumulativeEntries;
-    private long lastCumulativeFramedBytes;
-    private int lastFramedBytes;
-    /** One-shot verification owed by the first page after an indexed seek. */
-    private SeekExpectation seekExpectation;
-    /** True after a page-index target positioned this reader away from the ordinary header path. */
-    private boolean indexedPosition;
-
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
                             short formatVersion, SortMode orderingMode, int headerBytes,
                             long maxRecordLen, long totalRecords,
@@ -183,8 +167,7 @@ final class PageRunSegmentIo implements AutoCloseable {
                         "bad or missing page-run trailer magic (truncated segment?)");
             }
             long fixedTailStart = size - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-            if (trailerStart < header.encodedBytes()
-                    || trailerStart > fixedTailStart - 4) {
+            if (trailerStart != fixedTailStart || trailerStart < header.encodedBytes()) {
                 throw failFor(path, "invalid page-run trailer offset " + trailerStart);
             }
             long recordBytes = trailerStart - header.encodedBytes();
@@ -230,13 +213,8 @@ final class PageRunSegmentIo implements AutoCloseable {
                        PageBlockCodec.RoutingHeader header) {
     }
 
-    private record SeekExpectation(long pageOrdinal, long frameOffset, long cumulativeEntries,
-                                   long cumulativeFramedBytes, byte[] minKey) {
-    }
-
     /**
-     * <b>The single page-advance primitive for every page-run READ path</b> ({@link PageFrontierReader}'s
-     * decode-free frontier AND {@link PageRunSegmentReader}'s entry-typed stream): read the next framed
+     * <b>The single sequential page-advance primitive</b>: read the next framed
      * record, CRC-verify its body, parse its frontier fields, and enforce the intra-segment
      * min-monotonicity and mode-aware disjointness invariants. Returning the parsed fields alongside the body costs the entry-typed
      * reader nothing (the leading min/max/count parse is a few bytes of the body it already holds) and buys
@@ -246,18 +224,16 @@ final class PageRunSegmentIo implements AutoCloseable {
      * exactly as the frontier path would.
      */
     Page nextPage() throws IOException {
-        long ordinal = pagesRead;
-        long frameOffset = nextFrameOffset;
-        if (indexedPosition && frameOffset >= trailerStart && ordinal < totalRecords) {
-            throw indexMismatch("indexed page offset reached the trailer before page ordinal "
-                    + ordinal + " of " + totalRecords, null);
+        if (pagesRead == totalRecords) {
+            if (nextFrameOffset != trailerStart) {
+                throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                        "page frames end at " + nextFrameOffset
+                                + " but trailer starts at " + trailerStart, null);
+            }
+            checkComplete(cumulativeEntries);
+            return null;
         }
-        Record record;
-        try {
-            record = nextRecord();
-        } catch (IOException e) {
-            throw seekFailureOr(e, "indexed seek did not land on a complete page frame");
-        }
+        Record record = nextRecord();
         if (!record.crcOk()) {
             throw fail("record CRC32C mismatch (torn or corrupt record)");
         }
@@ -270,30 +246,13 @@ final class PageRunSegmentIo implements AutoCloseable {
                     "malformed page body: " + e.getMessage(), e);
         }
         requirePlannedDecodedPayload(header.rawPayloadLength());
-        long cumulativeFramedBytes = proofTracking
-                ? frameOffset - headerBytes : 0;
-        if (seekExpectation != null) {
-            verifySeekExpectation(ordinal, frameOffset, cumulativeEntries,
-                    cumulativeFramedBytes, header.minKey());
-        }
         pagesRead++;
         checkMinMonotonic(header.minKey());
         checkDisjoint(header.minKey());
         previousMin = header.minKey();
         previousMax = header.maxKey();
-        int framedBytes = Math.addExact(8, record.framedLen());
-        // Every page body read by this IO instance contributes to the range's logical framed-byte
-        // total. Proof state applies only to the indexed-original physical coordinates below;
-        // cascade intermediates have no proof state but are still real page-frame reads.
-        framedBytesRead += framedBytes;
-        if (proofTracking) {
-            lastPageOrdinal = ordinal;
-            lastFrameOffset = frameOffset;
-            lastCumulativeEntries = cumulativeEntries;
-            lastCumulativeFramedBytes = cumulativeFramedBytes;
-            lastFramedBytes = framedBytes;
-            cumulativeEntries += header.count();
-        }
+        framedBytesRead += Math.addExact(8, record.framedLen());
+        cumulativeEntries = Math.addExact(cumulativeEntries, header.count());
         return new Page(body, header);
     }
 
@@ -385,57 +344,6 @@ final class PageRunSegmentIo implements AutoCloseable {
                     "page body metadata disagrees with its routed reference", null);
         }
         return PageBlockCodec.deserialize(body, header, path);
-    }
-
-    /**
-     * Position at one untrusted page-index entry. The next page must confirm every directly observable
-     * target field before it is exposed to a frontier; the zone proof later anchors the ordinal and
-     * cumulative entry claim to a header-to-trailer physical chain.
-     */
-    void seekToPage(PageRunPageIndex.IndexEntry target) throws IOException {
-        proofTracking = true;
-        long physicalCumulativeBytes = target.fileOffset() - headerBytes;
-        if (target.pageOrdinal() < 0 || target.pageOrdinal() >= totalRecords
-                || target.fileOffset() < headerBytes
-                || target.fileOffset() >= trailerStart
-                || target.cumulativeEntries() < 0
-                || target.cumulativeFramedBytes() != physicalCumulativeBytes) {
-            throw indexMismatch("indexed seek target is outside the physical page region", null);
-        }
-        channel.position(target.fileOffset());
-        nextFrameOffset = target.fileOffset();
-        pagesRead = target.pageOrdinal();
-        cumulativeEntries = target.cumulativeEntries();
-        previousMin = null;
-        previousMax = null;
-        indexedPosition = true;
-        seekExpectation = new SeekExpectation(target.pageOrdinal(), target.fileOffset(),
-                target.cumulativeEntries(), target.cumulativeFramedBytes(), target.minKey().clone());
-    }
-
-    private void verifySeekExpectation(long ordinal, long frameOffset, long entries,
-                                       long framedBytes, byte[] minKey) throws IOException {
-        SeekExpectation expected = seekExpectation;
-        if (expected == null) {
-            return;
-        }
-        seekExpectation = null;
-        if (ordinal != expected.pageOrdinal()
-                || frameOffset != expected.frameOffset()
-                || entries != expected.cumulativeEntries()
-                || framedBytes != expected.cumulativeFramedBytes()
-                || !Arrays.equals(minKey, expected.minKey())) {
-            throw indexMismatch("indexed seek target disagrees with the next physical page", null);
-        }
-    }
-
-    private IOException seekFailureOr(IOException failure, String message) {
-        return seekExpectation == null ? failure : indexMismatch(message, failure);
-    }
-
-    SegmentCorruptionException indexMismatch(String message, Throwable cause) {
-        metrics.recordStealReason("SORT", "page_run_index_mismatch");
-        return corruption(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, message, cause);
     }
 
     /**
@@ -614,12 +522,6 @@ final class PageRunSegmentIo implements AutoCloseable {
         return new SegmentCorruptionException(path, errorClass, message, cause);
     }
 
-    /** Classify variable-trailer corruption found after the fixed tail admitted the segment. */
-    SegmentCorruptionException trailerCorruption(String message) {
-        metrics.recordStealReason("SORT", "page_run_trailer_corruption");
-        return corruption(SegmentCorruptionException.PAGE_RUN_TRAILER_CORRUPTION, message, null);
-    }
-
     Path path() {
         return path;
     }
@@ -630,34 +532,6 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     long nextFrameOffset() {
         return nextFrameOffset;
-    }
-
-    void enableProofTracking() {
-        proofTracking = true;
-    }
-
-    boolean proofTracking() {
-        return proofTracking;
-    }
-
-    long lastPageOrdinal() {
-        return lastPageOrdinal;
-    }
-
-    long lastFrameOffset() {
-        return lastFrameOffset;
-    }
-
-    long lastCumulativeEntries() {
-        return lastCumulativeEntries;
-    }
-
-    long lastCumulativeFramedBytes() {
-        return lastCumulativeFramedBytes;
-    }
-
-    int lastFramedBytes() {
-        return lastFramedBytes;
     }
 
     int magic() {

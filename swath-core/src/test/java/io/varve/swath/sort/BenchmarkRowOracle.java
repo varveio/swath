@@ -53,7 +53,7 @@ final class BenchmarkRowOracle {
             }
             long segmentRows = 0;
             try (PageRunSegmentReader reader = new PageRunSegmentReader(
-                    new PageFrontierReader(input.path(), SortMetrics.NO_OP), comparator, SortMetrics.NO_OP)) {
+                    PageRunSegmentIo.open(input.path(), SortMetrics.NO_OP), comparator)) {
                 while (reader.hasNext()) {
                     multiset.add(reader.next());
                     segmentRows++;

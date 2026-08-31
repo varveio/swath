@@ -33,7 +33,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import org.junit.jupiter.api.Test;
@@ -41,15 +40,13 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 /**
- * MEASUREMENT harness: proves whether the concurrent range-merge path
- * ({@code swath.sort.merge-parallelism > 1}, with the live page-run skip) actually cuts
- * {@link SortTransform}'s merge-phase wall clock, and whether the effect is CPU-parallelizable or
- * disk-bandwidth-bound. Runs the ACTUAL production merge path — {@link SortTransform#transform}
+ * MEASUREMENT harness for the concurrent finalization pipeline. It runs the ACTUAL production
+ * merge path — {@link SortTransform#transform}
  * with {@link SortedParquetWriterFactory} over live-format page-run staging segments produced through
  * the same {@link SortBuffer} seal and {@link PageRunSegmentWriter#flush} seam as listing. After one
- * untimed full-transform warm-up, measured arms are interleaved as serial A, ascending candidates,
- * serial B, descending candidates, serial C; speedups use medians and are invalidated when either
- * bracket exceeds the explicit variance threshold.
+ * untimed full-transform warm-up, measured encoder counts are interleaved with one-encoder
+ * brackets; speedups use medians and are invalidated when either bracket exceeds the explicit
+ * variance threshold.
  *
  * <p>NOT part of the normal build or CI: this class only runs when {@code -Dswath.bench=on} is
  * passed (see {@link EnabledIfSystemProperty}), so {@code ./gradlew build} never executes it.
@@ -79,97 +76,23 @@ class ParallelMergeBenchmark {
     private static final int PAGE_ROWS = Integer.getInteger("swath.bench.pageRows", 1_000);
     private static final String MAX_VARIANCE_PROPERTY = "swath.bench.max-variance-pct";
     private static final double MAX_VARIANCE_PCT = parseMaxVariancePct();
-    /**
-     * The {@code R} values to sweep, in order. {@code R=1} must be FIRST — it is the identity baseline
-     * every later arm is full-row compared against. The sweep is user-settable through
-     * {@code swath.bench.ranges}, so this is enforced rather than assumed: a sweep starting anywhere
-     * else would otherwise dereference a null baseline and surface as an NPE partway through a
-     * half-hour run, instead of saying up front what the operator got wrong.
-     */
-    private static final List<Integer> RANGES = parseRanges();
-    private static final SortFinalization FINALIZATION = parseFinalization();
     private static final List<Integer> ENCODERS = parseEncoders();
-    private static final long PIPELINE_FIXED_ROWS = parsePipelineFixedRows();
-
-    private static long parsePipelineFixedRows() {
-        String configured = System.getProperty(
-                "swath.bench.pipeline-fixed-rows",
-                "1000000");
-        try {
-            long rows = Long.parseLong(configured);
-            if (rows <= 0) {
-                throw new NumberFormatException();
-            }
-            return rows;
-        } catch (NumberFormatException invalid) {
-            throw new IllegalArgumentException("invalid swath.bench.pipeline-fixed-rows='"
-                    + configured + "': expected a positive integer", invalid);
-        }
-    }
-
-    private static SortFinalization parseFinalization() {
-        return SortFinalization.fromConfigValue("swath.bench.finalization",
-                System.getProperty("swath.bench.finalization", "ranges"));
-    }
-
     private static List<Integer> parseEncoders() {
         String configured = System.getProperty("swath.bench.encoders", "1,4,8,16");
         try {
             List<Integer> values = Arrays.stream(configured.split(",", -1))
                     .map(String::trim).map(Integer::parseInt).toList();
             if (values.isEmpty() || values.stream().anyMatch(value -> value < 1 || value > 16)
+                    || values.getFirst() != 1
                     || new HashSet<>(values).size() != values.size()) {
                 throw new IllegalArgumentException();
             }
             return values;
         } catch (RuntimeException invalid) {
             throw new IllegalArgumentException("invalid swath.bench.encoders='" + configured
-                    + "': expected distinct comma-separated integers in 1..16", invalid);
+                    + "': expected distinct comma-separated integers in 1..16 starting with 1",
+                    invalid);
         }
-    }
-
-    private static List<Integer> parseRanges() {
-        String configured = System.getProperty("swath.bench.ranges", "1,2,4,8");
-        if (configured == null || configured.isBlank()) {
-            throw invalidRanges(configured, "must not be empty");
-        }
-        String[] tokens = configured.split(",", -1);
-        List<Integer> ranges = new ArrayList<>(tokens.length);
-        for (int i = 0; i < tokens.length; i++) {
-            String token = tokens[i].trim();
-            if (token.isEmpty()) {
-                throw invalidRanges(configured, "contains an empty value at position " + (i + 1));
-            }
-            try {
-                ranges.add(Integer.parseInt(token));
-            } catch (NumberFormatException e) {
-                throw invalidRanges(configured,
-                        "contains invalid integer '" + token + "' at position " + (i + 1));
-            }
-        }
-        if (ranges.get(0) != 1) {
-            throw invalidRanges(configured, "must start with R=1 for the identity baseline");
-        }
-        Set<Integer> seen = new HashSet<>();
-        for (int i = 0; i < ranges.size(); i++) {
-            int range = ranges.get(i);
-            if (range <= 0) {
-                throw invalidRanges(configured, "contains nonpositive R=" + range);
-            }
-            if (!seen.add(range)) {
-                throw invalidRanges(configured, "contains duplicate R=" + range);
-            }
-            if (i > 0 && range <= ranges.get(i - 1)) {
-                throw invalidRanges(configured, "must be strictly increasing; R=" + range
-                        + " follows R=" + ranges.get(i - 1));
-            }
-        }
-        return List.copyOf(ranges);
-    }
-
-    private static IllegalArgumentException invalidRanges(String configured, String reason) {
-        return new IllegalArgumentException(
-                "invalid swath.bench.ranges='" + configured + "': " + reason);
     }
 
     private static double parseMaxVariancePct() {
@@ -186,7 +109,7 @@ class ParallelMergeBenchmark {
                 + "': expected a finite percentage > 0");
     }
     private static final int TOTAL_DAYS = 1_500;
-    // Generous: the corpus knobs above (and swath.bench.ranges) govern how long a sweep actually takes,
+    // Generous: the corpus knobs above govern how long a sweep actually takes,
     // and this class never runs under the default suite — the timeout is a runaway backstop, not a budget.
     @Test
     @Timeout(value = 120, unit = TimeUnit.MINUTES)
@@ -224,40 +147,39 @@ class ParallelMergeBenchmark {
                             + corpus.oracle().trailerRecords() + " multiset_digest="
                             + corpus.oracle().multisetDigest());
 
-            measureOpenReaderHeap(corpus, context);
-
-            List<Integer> ranges = RANGES;
-            List<Integer> candidates = ranges.stream().filter(range -> range != 1).toList();
+            List<Integer> candidates = ENCODERS.stream().filter(encoders -> encoders != 1).toList();
             WriterFactoryProvider writerProvider =
                     config -> new SortedParquetWriterFactory(config, SortMode.OBJECTS);
 
             // Prime class loading, JIT compilation, Parquet writer initialization, and the RSS sampler
             // with a complete transform whose timing is deliberately discarded.
-            ArmResult warmup = runArm(root, corpus, ArmSpec.ranges(1, "warmup-r1"), writerProvider);
+            ArmResult warmup = runArm(root, corpus, ArmSpec.pipeline(1, "warmup-n1"), writerProvider);
             bench(context, "BENCH_WARMUP", warmup.logicalOutputFingerprint,
-                    "requested_r=1 actual_ranges=" + warmup.actualRanges + " rows=" + warmup.totalRows
+                    "requested_encoders=1 actual_encoders=" + warmup.actualEncoders
+                            + " rows=" + warmup.totalRows
                             + " elapsed_ignored=true");
             SortBenchCorpus.deleteTree(warmup.armRoot);
 
             Map<Integer, List<ArmResult>> samples = new LinkedHashMap<>();
-            for (int range : ranges) {
-                samples.put(range, new ArrayList<>());
+            for (int encoders : ENCODERS) {
+                samples.put(encoders, new ArrayList<>());
             }
 
-            // Round A: serial bracket, then candidates in ascending order.
-            ArmResult baseline = runArm(root, corpus, ArmSpec.ranges(1, "r1-a"), writerProvider);
+            // Round A: one-encoder bracket, then candidates in ascending order.
+            ArmResult baseline = runArm(root, corpus, ArmSpec.pipeline(1, "n1-a"), writerProvider);
             samples.get(1).add(baseline);
             System.out.println(baseline.toLine(context));
-            for (int r : candidates) {
-                ArmResult sample = runCheckedArm(root, corpus, ArmSpec.ranges(r, "r" + r + "-a"),
+            for (int encoders : candidates) {
+                ArmResult sample = runCheckedArm(root, corpus,
+                        ArmSpec.pipeline(encoders, "n" + encoders + "-a"),
                         writerProvider, baseline, context);
-                samples.get(r).add(sample);
+                samples.get(encoders).add(sample);
                 System.out.println(sample.toLine(context));
                 SortBenchCorpus.deleteTree(sample.armRoot);
             }
 
-            // Middle serial bracket.
-            ArmResult middle = runCheckedArm(root, corpus, ArmSpec.ranges(1, "r1-b"),
+            // Middle one-encoder bracket.
+            ArmResult middle = runCheckedArm(root, corpus, ArmSpec.pipeline(1, "n1-b"),
                     writerProvider, baseline, context);
             samples.get(1).add(middle);
             System.out.println(middle.toLine(context));
@@ -265,39 +187,23 @@ class ParallelMergeBenchmark {
 
             // Round B reverses candidate order to counter monotone temperature/JIT drift.
             for (int i = candidates.size() - 1; i >= 0; i--) {
-                int r = candidates.get(i);
-                ArmResult sample = runCheckedArm(root, corpus, ArmSpec.ranges(r, "r" + r + "-b"),
+                int encoders = candidates.get(i);
+                ArmResult sample = runCheckedArm(root, corpus,
+                        ArmSpec.pipeline(encoders, "n" + encoders + "-b"),
                         writerProvider, baseline, context);
-                samples.get(r).add(sample);
+                samples.get(encoders).add(sample);
                 System.out.println(sample.toLine(context));
                 SortBenchCorpus.deleteTree(sample.armRoot);
             }
 
-            // Closing serial bracket.
-            ArmResult closing = runCheckedArm(root, corpus, ArmSpec.ranges(1, "r1-c"),
+            // Closing one-encoder bracket.
+            ArmResult closing = runCheckedArm(root, corpus, ArmSpec.pipeline(1, "n1-c"),
                     writerProvider, baseline, context);
             samples.get(1).add(closing);
             System.out.println(closing.toLine(context));
             SortBenchCorpus.deleteTree(closing.armRoot);
 
             reportMeasurements(context, samples);
-            if (FINALIZATION == SortFinalization.PIPELINE) {
-                for (PipelinePartSizer.Target target : List.of(
-                        PipelinePartSizer.Target.calibrated(),
-                        PipelinePartSizer.Target.fixedRows(PIPELINE_FIXED_ROWS))) {
-                    for (int encoders : ENCODERS) {
-                        String policy = target.policy() == PipelinePartSizer.Policy.CALIBRATED_BYTES
-                                ? "calibrated" : "fixed-rows";
-                        ArmSpec spec = new ArmSpec(encoders,
-                                "pipeline-" + policy + "-n" + encoders,
-                                SortFinalization.PIPELINE, target);
-                        ArmResult sample = runCheckedArm(
-                                root, corpus, spec, writerProvider, baseline, context);
-                        System.out.println(sample.toLine(context));
-                        SortBenchCorpus.deleteTree(sample.armRoot);
-                    }
-                }
-            }
             SortBenchCorpus.deleteTree(baseline.armRoot);
         } catch (IOException | RuntimeException | Error e) {
             failure = e;
@@ -360,7 +266,7 @@ class ParallelMergeBenchmark {
 
     static ArmResult runArm(Path root, CorpusCatalog corpus, int mergeParallelism, String label,
                             WriterFactoryProvider writerProvider) throws IOException {
-        return runArm(root, corpus, ArmSpec.ranges(mergeParallelism, label), writerProvider);
+        return runArm(root, corpus, ArmSpec.pipeline(mergeParallelism, label), writerProvider);
     }
 
     private static ArmResult runArm(Path root, CorpusCatalog corpus, ArmSpec spec,
@@ -397,11 +303,8 @@ class ParallelMergeBenchmark {
             bench(context, "BENCH_FULL_ROW_EXACT_FAIL", sample.logicalOutputFingerprint,
                     sample.parallelismFields()
                             + " baseline_fingerprint=" + baseline.logicalOutputFingerprint);
-            String requested = spec.finalization() == SortFinalization.PIPELINE
-                    ? "encoders=" + spec.parallelism()
-                    : "ranges=" + spec.parallelism();
-            throw new AssertionError("full-row mismatch at requested " + requested
-                    + " vs the R=1 baseline — silent data loss");
+            throw new AssertionError("full-row mismatch at requested encoders=" + spec.parallelism()
+                    + " vs the one-encoder baseline — silent data loss");
         }
         return sample;
     }
@@ -414,7 +317,8 @@ class ParallelMergeBenchmark {
             stats.put(entry.getKey(), sampleStats);
             ArmResult first = entry.getValue().getFirst();
             bench(context, "BENCH_VARIANCE", first.logicalOutputFingerprint,
-                    String.format("requested_r=%d samples=%d median_elapsed_ms=%d min_elapsed_ms=%d "
+                    String.format("requested_encoders=%d samples=%d median_elapsed_ms=%d "
+                                    + "min_elapsed_ms=%d "
                                     + "max_elapsed_ms=%d spread_pct=%.1f threshold_pct=%.1f status=%s",
                             entry.getKey(), entry.getValue().size(), sampleStats.medianNanos / 1_000_000,
                             sampleStats.minNanos / 1_000_000, sampleStats.maxNanos / 1_000_000,
@@ -426,7 +330,7 @@ class ParallelMergeBenchmark {
         ArmResult baselineArm = samples.get(1).getFirst();
         boolean baselineStable = baseline.stable(MAX_VARIANCE_PCT);
         bench(context, "BENCH_SPEEDUP", baselineArm.logicalOutputFingerprint,
-                String.format("requested_r=1 actual_ranges=1 status=%s speedup=%s "
+                String.format("requested_encoders=1 actual_encoders=1 status=%s speedup=%s "
                                 + "baseline_median_ms=%d baseline_spread_pct=%.1f",
                         baselineStable ? "baseline" : "invalid_variance",
                         baselineStable ? "1.000" : "unavailable",
@@ -440,29 +344,30 @@ class ParallelMergeBenchmark {
             List<ArmResult> arms = entry.getValue();
             ArmResult first = arms.getFirst();
             SampleStats candidate = stats.get(requested);
-            ArmDisposition disposition = ArmDisposition.of(first);
-            boolean consistent = arms.stream().allMatch(arm -> disposition.equals(ArmDisposition.of(arm)));
+            int actualEncoders = first.actualEncoders;
+            boolean consistent = arms.stream().allMatch(arm -> arm.actualEncoders == actualEncoders);
             String engagementStatus = !consistent ? "inconsistent"
-                    : disposition.engaged(requested) ? "engaged"
-                    : disposition.actualRanges <= 1 ? "not_engaged" : "clamped_or_reduced";
+                    : actualEncoders == requested ? "engaged"
+                    : actualEncoders <= 1 ? "not_engaged" : "clamped_or_reduced";
             String status;
             String speedup = "unavailable";
             if (!consistent) {
                 status = "invalid_inconsistent_disposition";
             } else if (!baselineStable || !candidate.stable(MAX_VARIANCE_PCT)) {
                 status = "invalid_variance";
-            } else if (!disposition.engaged(requested)) {
+            } else if (actualEncoders != requested) {
                 status = engagementStatus;
             } else {
                 status = "engaged";
                 speedup = String.format("%.3f", (double) baseline.medianNanos / candidate.medianNanos);
             }
-            String actualRanges = consistent ? String.valueOf(disposition.actualRanges) : "mixed";
+            String actual = consistent ? String.valueOf(actualEncoders) : "mixed";
             bench(context, "BENCH_SPEEDUP", first.logicalOutputFingerprint,
-                    String.format("requested_r=%d actual_ranges=%s status=%s engagement_status=%s speedup=%s "
+                    String.format("requested_encoders=%d actual_encoders=%s status=%s "
+                                    + "engagement_status=%s speedup=%s "
                                     + "baseline_median_ms=%d candidate_median_ms=%d "
                                     + "baseline_spread_pct=%.1f candidate_spread_pct=%.1f",
-                            requested, actualRanges, status, engagementStatus, speedup,
+                            requested, actual, status, engagementStatus, speedup,
                             baseline.medianNanos / 1_000_000, candidate.medianNanos / 1_000_000,
                             baseline.spreadPct, candidate.spreadPct));
         }
@@ -494,25 +399,9 @@ class ParallelMergeBenchmark {
         }
     }
 
-    private record ArmDisposition(long actualRanges, long belowStagedFloor, long fdLimited,
-                                  long fdExhausted, long wouldCascade, long unsplittable) {
-        static ArmDisposition of(ArmResult arm) {
-            return new ArmDisposition(arm.actualRanges, arm.rangeBelowStagedFloorCount,
-                    arm.rangeFdLimitedCount, arm.rangeFdExhaustedCount,
-                    arm.rangeWouldCascadeCount, arm.rangeUnsplittableCount);
-        }
-
-        boolean engaged(int requestedRanges) {
-            return actualRanges == requestedRanges && belowStagedFloor == 0 && fdLimited == 0
-                    && fdExhausted == 0 && wouldCascade == 0 && unsplittable == 0;
-        }
-    }
-
-    private record ArmSpec(int parallelism, String label, SortFinalization finalization,
-                           PipelinePartSizer.Target partTarget) {
-        static ArmSpec ranges(int parallelism, String label) {
-            return new ArmSpec(parallelism, label, SortFinalization.RANGES,
-                    PipelinePartSizer.Target.calibrated());
+    private record ArmSpec(int parallelism, String label, PartSizer.Target partTarget) {
+        static ArmSpec pipeline(int parallelism, String label) {
+            return new ArmSpec(parallelism, label, PartSizer.Target.calibrated());
         }
     }
 
@@ -524,32 +413,29 @@ class ParallelMergeBenchmark {
         Path staging = Files.createDirectory(armRoot.resolve("_staging"));
         List<Path> stagingSegments = corpus.materialize(staging);
 
-        // merge-parallelism is the swept knob; every OTHER swath.sort.* property falls through to the
-        // real system properties, so an arm can hold one knob fixed while another varies (e.g. pinning
-        // merge-budget-bytes while -Xmx changes, to separate cascade removal from GC relief).
+        // merge-parallelism is the swept encoder-count knob; every other swath.sort.* property falls
+        // through to the real system properties.
         SortConfig config = SortConfig.fromProperties(
                 key -> "swath.sort.merge-parallelism".equals(key)
                         ? String.valueOf(spec.parallelism())
                         : SortConfig.FINALIZATION_PROPERTY.equals(key)
-                                ? spec.finalization().configValue()
+                                ? SortFinalization.PIPELINE.configValue()
                         : System.getProperty(key));
         ThreadSafeMetrics metrics = new ThreadSafeMetrics();
-        BenchRangeTimer timer = new BenchRangeTimer();
         SortedFileWriterFactory writerFactory = writerProvider.create(config);
         SortTransform transform = new SortTransform(
                 new SortRun(config, CMP, DuplicateHook.NO_OP,
                         EqualKeyPolicy.ALLOW, metrics, writerFactory,
-                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, timer,
+                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
                         SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY)
-                        .withPipelinePartTarget(spec.partTarget()));
+                        .withPartTarget(spec.partTarget()));
 
         RssSampler sampler = new RssSampler();
         Thread samplerThread = new Thread(sampler, "bench-rss-sampler-" + spec.label());
         samplerThread.setDaemon(true);
 
-        // Peak HEAP is the gating metric for merge-parallelism (the R× writer/floor term the merge
-        // budget does not cover), and unlike RSS it can be attributed per arm: RSS is process-wide and
-        // monotone across arms in one JVM (a later R=1 arm inherits an earlier R=8 arm's peak), whereas
+        // Peak HEAP is the gating metric for merge-parallelism, and unlike RSS it can be attributed per
+        // arm: RSS is process-wide and monotone across arms in one JVM, whereas
         // the heap pools' peak is resettable. Same measurement as production's efficiency.peak_heap_bytes
         // (ResourceMetrics#peakHeapBytes: used, summed across HEAP pools).
         System.gc();   // settle the prior arm's garbage so this arm's peak is its own
@@ -577,15 +463,9 @@ class ParallelMergeBenchmark {
         }
 
         ArmResult ar = new ArmResult();
-        ar.finalization = spec.finalization();
-        if (spec.finalization() == SortFinalization.PIPELINE) {
-            ar.requestedEncoders = spec.parallelism();
-        } else {
-            ar.requestedRanges = spec.parallelism();
-        }
-        ar.pipelinePartPolicy = spec.finalization() == SortFinalization.PIPELINE
-                ? spec.partTarget().policy().name().toLowerCase(Locale.ROOT).replace('_', '-')
-                : "not_applicable";
+        ar.requestedEncoders = spec.parallelism();
+        ar.pipelinePartPolicy =
+                spec.partTarget().policy().name().toLowerCase(Locale.ROOT).replace('_', '-');
         ar.label = spec.label();
         ar.armRoot = armRoot;
         ar.elapsedNanos = wallEndNanos - wallStartNanos;
@@ -626,83 +506,14 @@ class ParallelMergeBenchmark {
             throw new IOException("SortTransform row count disagrees with validated output");
         }
         ar.inputSegments = stagingSegments.size();
-        ar.rangeParallelCount = metrics.count("SORT.merge_range_parallel");
-        if (spec.finalization() == SortFinalization.PIPELINE) {
-            ar.actualEncoders = result.finalizationParallelism();
-        } else {
-            ar.actualRanges = ar.rangeParallelCount > 0 ? ar.rangeParallelCount : 1;
-        }
-        ar.rangeBelowStagedFloorCount = metrics.count("SORT.merge_range_below_staged_floor");
-        ar.rangeFdLimitedCount = metrics.count("SORT.merge_range_fd_limited");
-        ar.rangeFdExhaustedCount = metrics.count("SORT.merge_range_fd_exhausted");
-        ar.rangeWouldCascadeCount = metrics.count("SORT.merge_range_would_cascade");
-        ar.rangeUnsplittableCount = metrics.count("SORT.merge_range_unsplittable");
-        ar.pageSkipEngagedCount = metrics.count("SORT.merge_range_page_skipped");
-        ar.sampleCappedSegments = metrics.count("SORT.merge_range_sample_capped");
+        ar.actualEncoders = result.finalizationParallelism();
         ar.pipelineRouterWaitNanos = metrics.pipelineRouterWaitNanos.sum();
         ar.pipelineHeaderScanNanos = metrics.pipelineHeaderScanNanos.sum();
         ar.pipelinePlanQueueWaitNanos = metrics.pipelinePlanQueueWaitNanos.sum();
         ar.pipelineEncoderPageReads = metrics.pipelineEncoderPageReads.sum();
         ar.pipelineEncoderReadWaitNanos = metrics.pipelineEncoderReadWaitNanos.sum();
-        ar.pageWholeEmissions = metrics.count("SORT.page_whole_emitted");
-        ar.pageOverlapKeyMerges = metrics.count("SORT.page_overlap_keymerge");
-        ar.proofSpoolLogicalExtentBytes = metrics.proofSpoolLogicalExtentBytes.sum();
-        ar.proofSpoolPreallocationOperations = metrics.proofSpoolPreallocationOperations.sum();
-        ar.proofSpoolPreallocationAttemptedBytes =
-                metrics.proofSpoolPreallocationAttemptedBytes.sum();
-        ar.proofSpoolMappedOperations = metrics.proofSpoolMappedOperations.sum();
-        ar.proofSpoolMappedBytes = metrics.proofSpoolMappedBytes.sum();
-        ar.proofSpoolServiceNanos = metrics.proofSpoolServiceNanos.sum();
-        ar.boundaryNanos = timer.boundaryNanos;
-        ar.rangeLatenciesNanos = timer.rangeLatenciesNanos.stream().toList();
         ar.samplerCleanupNanos = sampler.cleanupNanos;
         return ar;
-    }
-
-    /**
-     * DIRECT measurement of the per-open-stream retained heap for the live page-run format. Opens a
-     * {@link PageFrontierReader} for every corpus segment (its constructor reads and CRC-verifies the
-     * first framed page body), settles the heap, and reports the retained delta per open frontier.
-     *
-     * <p>Without this the {@code R×} heap term can only be inferred by fitting the observed
-     * peak-heap slope and dividing by the segment count — which then "explains" the same slope it
-     * was derived from. This makes it a measurement instead.
-     */
-    private static void measureOpenReaderHeap(CorpusCatalog corpus, BenchContext context) throws IOException {
-        List<Path> segments = corpus.paths();
-        long before = settledHeapBytes();
-        List<PageFrontierReader> open = new ArrayList<>(segments.size());
-        try {
-            for (Path segment : segments) {
-                PageFrontierReader reader = new PageFrontierReader(segment, SortMetrics.NO_OP);
-                open.add(reader);
-            }
-            long after = settledHeapBytes();
-            long delta = after - before;
-            bench(context, "BENCH_STREAM_HEAP", NO_FINGERPRINT,
-                    String.format("staging_format=page-run open_frontiers=%d retained_bytes=%d "
-                                    + "per_frontier_bytes=%d per_frontier_mb=%.2f",
-                            open.size(), delta, delta / Math.max(1, open.size()),
-                            delta / (1024.0 * 1024.0) / Math.max(1, open.size())));
-        } finally {
-            for (PageFrontierReader reader : open) {
-                reader.close();
-            }
-        }
-    }
-
-    /** Used heap after giving the collector a chance to settle — the live-set estimate, not float. */
-    private static long settledHeapBytes() {
-        for (int i = 0; i < 3; i++) {
-            System.gc();
-            try {
-                Thread.sleep(120);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        return ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
     }
 
     static CorpusCatalog externalStaging() throws IOException {
@@ -1147,11 +958,8 @@ class ParallelMergeBenchmark {
     }
 
     static final class ArmResult {
-        int requestedRanges = -1;
-        long actualRanges = -1;
         int requestedEncoders = -1;
         int actualEncoders = -1;
-        SortFinalization finalization;
         String pipelinePartPolicy;
         int finalizationParallelism;
         String label;
@@ -1171,130 +979,54 @@ class ParallelMergeBenchmark {
         String logicalOutputFingerprint;
         String multisetDigest;
         long samplerCleanupNanos;
-        long rangeParallelCount;
-        long rangeBelowStagedFloorCount;
-        long rangeFdLimitedCount;
-        long rangeFdExhaustedCount;
-        long rangeWouldCascadeCount;
-        long rangeUnsplittableCount;
-        long pageSkipEngagedCount;
-        long sampleCappedSegments;
-        long pageWholeEmissions;
-        long pageOverlapKeyMerges;
-        long proofSpoolLogicalExtentBytes;
-        long proofSpoolPreallocationOperations;
-        long proofSpoolPreallocationAttemptedBytes;
-        long proofSpoolMappedOperations;
-        long proofSpoolMappedBytes;
-        long proofSpoolServiceNanos;
-        long boundaryNanos;
         long pipelineRouterWaitNanos;
         long pipelineHeaderScanNanos;
         long pipelinePlanQueueWaitNanos;
         long pipelineEncoderPageReads;
         long pipelineEncoderReadWaitNanos;
-        List<Long> rangeLatenciesNanos;
-        boolean fullRowExact = true;   // R=1 baseline is trivially exact against itself
+        boolean fullRowExact = true;
 
         String toLine(BenchContext context) {
-            long rangeMergeSumNanos = rangeLatenciesNanos.stream().mapToLong(Long::longValue).sum();
-            String boundaryMs = boundaryNanos < 0 ? "unavailable" : String.valueOf(boundaryNanos / 1_000_000);
-            String rangeMergeSumMs = rangeLatenciesNanos.isEmpty()
-                    ? "unavailable"
-                    : String.valueOf(rangeMergeSumNanos / 1_000_000);
-            List<Long> rangeLatenciesMs =
-                    rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).toList();
             double routerWaitShare = elapsedNanos <= 0 ? 0.0
                     : (double) pipelineRouterWaitNanos / elapsedNanos;
             double planQueueWaitShare = elapsedNanos <= 0 ? 0.0
                     : (double) pipelinePlanQueueWaitNanos / elapsedNanos;
-            String pageReads = finalization == SortFinalization.PIPELINE
-                    ? String.valueOf(pipelineEncoderPageReads) : "unavailable";
             return String.format(
-                    "BENCH_ROW %s label=%s staging_format=page-run finalization=%s "
+                    "BENCH_ROW %s label=%s staging_format=page-run finalization=pipeline "
                             + "pipeline_part_policy=%s "
                             + "%s "
-                            + "merge_elapsed_ms=%d boundary_ms=%s range_merge_sum_ms=%s "
+                            + "merge_elapsed_ms=%d "
                             + "avg_cores_busy=%.2f peak_heap_mb=%.1f peak_rss_mb=%.1f "
                             + "rows=%d input_segments=%d output_files=%d merge_passes=%d "
-                            + "cascaded_passes=%d fastpath_emissions=%d range_parallel_count=%d "
-                            + "range_below_staged_floor_count=%d range_fd_limited_count=%d "
-                            + "range_fd_exhausted_count=%d "
-                            + "range_would_cascade_count=%d range_unsplittable_count=%d "
-                            + "page_skip_engaged_ranges=%d "
-                            + "sample_capped_segments=%d page_whole_emissions=%d "
-                            + "page_overlap_keymerges=%d proof_spool_logical_extent_bytes=%d "
-                            + "proof_spool_preallocation_operations=%d "
-                            + "proof_spool_preallocation_attempted_bytes=%d "
-                            + "proof_spool_mapped_operations=%d proof_spool_mapped_bytes=%d "
-                            + "proof_spool_ms=%d page_reads=%s "
+                            + "cascaded_passes=%d fastpath_emissions=%d page_reads=%d "
                             + "pipeline_router_wait_share=%.4f "
                             + "pipeline_plan_queue_wait_share=%.4f "
                             + "pipeline_header_scan_ms=%d pipeline_encoder_read_wait_ms=%d "
                             + "part_bytes=%s part_rows=%s "
                             + "read_amplification=unavailable identity_check=full-row "
-                            + "full_row_exact=%s multiset_digest=%s sampler_cleanup_ms=%d "
-                            + "range_latencies_ms=%s",
-                    context.tags(logicalOutputFingerprint), label, finalization.configValue(),
-                    pipelinePartPolicy,
+                            + "full_row_exact=%s multiset_digest=%s sampler_cleanup_ms=%d",
+                    context.tags(logicalOutputFingerprint), label, pipelinePartPolicy,
                     parallelismFields(),
-                    elapsedNanos / 1_000_000, boundaryMs,
-                    rangeMergeSumMs, avgCoresBusy, peakHeapBytes / (1024.0 * 1024.0),
+                    elapsedNanos / 1_000_000, avgCoresBusy, peakHeapBytes / (1024.0 * 1024.0),
                     peakRssBytes / (1024.0 * 1024.0), totalRows, inputSegments, finalFiles.size(),
-                    mergePasses, cascadedPasses, fastPathEmissions, rangeParallelCount,
-                    rangeBelowStagedFloorCount, rangeFdLimitedCount, rangeFdExhaustedCount,
-                    rangeWouldCascadeCount, rangeUnsplittableCount, pageSkipEngagedCount,
-                    sampleCappedSegments, pageWholeEmissions,
-                    pageOverlapKeyMerges, proofSpoolLogicalExtentBytes,
-                    proofSpoolPreallocationOperations, proofSpoolPreallocationAttemptedBytes,
-                    proofSpoolMappedOperations, proofSpoolMappedBytes,
-                    proofSpoolServiceNanos / 1_000_000L, pageReads,
+                    mergePasses, cascadedPasses, fastPathEmissions, pipelineEncoderPageReads,
                     routerWaitShare, planQueueWaitShare,
                     pipelineHeaderScanNanos / 1_000_000L,
                     pipelineEncoderReadWaitNanos / 1_000_000L,
                     partBytes, partRows, fullRowExact, multisetDigest,
-                    samplerCleanupNanos / 1_000_000, rangeLatenciesMs);
+                    samplerCleanupNanos / 1_000_000);
         }
 
         String parallelismFields() {
-            if (finalization == SortFinalization.PIPELINE) {
-                return String.format("requested_r=unavailable actual_ranges=unavailable "
-                                + "requested_encoders=%d actual_encoders=%d "
-                                + "finalization_parallelism=%d",
-                        requestedEncoders, actualEncoders, finalizationParallelism);
-            }
-            return String.format("requested_r=%d actual_ranges=%d "
-                            + "requested_encoders=unavailable actual_encoders=unavailable "
+            return String.format("requested_encoders=%d actual_encoders=%d "
                             + "finalization_parallelism=%d",
-                    requestedRanges, actualRanges, finalizationParallelism);
+                    requestedEncoders, actualEncoders, finalizationParallelism);
         }
     }
 
-    /** Captures both timer methods without manufacturing timing unavailable on the serial path. */
-    private static final class BenchRangeTimer implements RangeMergeTimer {
-        private final ConcurrentLinkedQueue<Long> rangeLatenciesNanos = new ConcurrentLinkedQueue<>();
-        private volatile long boundaryNanos = -1;
-
-        @Override
-        public void recordRangeMerge(long nanos) {
-            rangeLatenciesNanos.add(nanos);
-        }
-
-        @Override
-        public void recordBoundarySampling(long nanos) {
-            boundaryNanos = nanos;
-        }
-    }
-
-    /** Thread-safe {@link SortMetrics} — the parallel path records from several range threads at once. */
+    /** Thread-safe {@link SortMetrics}; pipeline stages record from several threads at once. */
     private static final class ThreadSafeMetrics implements SortMetrics {
         private final Map<String, LongAdder> counts = new ConcurrentHashMap<>();
-        private final LongAdder proofSpoolLogicalExtentBytes = new LongAdder();
-        private final LongAdder proofSpoolPreallocationOperations = new LongAdder();
-        private final LongAdder proofSpoolPreallocationAttemptedBytes = new LongAdder();
-        private final LongAdder proofSpoolMappedOperations = new LongAdder();
-        private final LongAdder proofSpoolMappedBytes = new LongAdder();
-        private final LongAdder proofSpoolServiceNanos = new LongAdder();
         private final LongAdder pipelineRouterWaitNanos = new LongAdder();
         private final LongAdder pipelineHeaderScanNanos = new LongAdder();
         private final LongAdder pipelinePlanQueueWaitNanos = new LongAdder();
@@ -1308,41 +1040,6 @@ class ParallelMergeBenchmark {
 
         @Override
         public void markProgress() {
-        }
-
-        @Override
-        public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
-        }
-
-        @Override
-        public void recordPageAwareOverlapCluster() {
-        }
-
-        @Override
-        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
-        }
-
-        @Override
-        public void recordRangeIndexBytes(long bytes) {
-        }
-
-        @Override
-        public void recordRangeFramedBytes(long bytes) {
-        }
-
-        @Override
-        public void recordProofSpool(long logicalExtentBytes,
-                                     long preallocationOperations,
-                                     long preallocationAttemptedBytes,
-                                     long mappedOperations,
-                                     long mappedBytes,
-                                     long serviceNanos) {
-            proofSpoolLogicalExtentBytes.add(logicalExtentBytes);
-            proofSpoolPreallocationOperations.add(preallocationOperations);
-            proofSpoolPreallocationAttemptedBytes.add(preallocationAttemptedBytes);
-            proofSpoolMappedOperations.add(mappedOperations);
-            proofSpoolMappedBytes.add(mappedBytes);
-            proofSpoolServiceNanos.add(serviceNanos);
         }
 
         @Override

@@ -9,24 +9,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.sort.DuplicateKeyException;
 import io.varve.swath.sort.EqualKeyPolicy;
-import io.varve.swath.sort.ProofSpoolAllocationException;
 import io.varve.swath.sort.SortCardinalityException;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortOrderException;
-import java.io.IOException;
-import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 class SortErrorClassTest {
-
-    @Test
-    void proofSpoolAllocationClassificationSurvivesTheMergeWrapper() {
-        Throwable wrapped = new RuntimeException(new ProofSpoolAllocationException(
-                Path.of("proof.tmp"), new IOException("ENOSPC")));
-
-        assertThat(ListRunner.sortErrorClass(wrapped))
-                .isEqualTo(ProofSpoolAllocationException.ERROR_CLASS);
-    }
 
     @Test
     void outputOrderClassificationSurvivesTheFatalMergeWrapper() {

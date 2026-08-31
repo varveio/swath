@@ -12,7 +12,7 @@ package io.varve.swath.sort;
  * geometry. A small first part costs one footer, while an oversized first wave can leave most
  * encoders idle.
  */
-final class PipelinePartSizer {
+final class PartSizer {
     static final double INITIAL_ENCODED_TO_LOGICAL_RATIO = 1.0;
 
     /** Production byte calibration and a benchmark-only row-count control. */
@@ -51,7 +51,7 @@ final class PipelinePartSizer {
      * Freeze one sizing policy for the merge. Policy is not mutable because changing it after plans
      * are queued would make adjacent parts obey incomparable boundary rules.
      */
-    PipelinePartSizer(Target target, long finalFileBytes) {
+    PartSizer(Target target, long finalFileBytes) {
         if (finalFileBytes <= 0) {
             throw new IllegalArgumentException("pipeline byte target must be positive");
         }

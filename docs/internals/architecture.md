@@ -136,7 +136,7 @@ rename/fsync/listener ordering, and staging completion.
 
 On `ranges`, `ParallelRangeMerge` owns boundary and seek planning, executor lifecycle, global
 physical-zone proof, writer registration, and failure cleanup; each `ParallelRangeWorker` executes
-one key range. On `pipeline`, `PipelineFinalization` owns the common failure domain:
+one key range. On `pipeline`, `Finalization` owns the common failure domain:
 `SegmentHeaderCursors` produces bounded header-only reference streams, `MergeRouter` is the single
 global order and part-boundary owner, and `PartEncoders` positionally reads complete plans from one
 shared bounded work queue. Encoder completion order is reconciled by dense plan ordinal before the

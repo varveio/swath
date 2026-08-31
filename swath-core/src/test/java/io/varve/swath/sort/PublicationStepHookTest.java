@@ -50,15 +50,16 @@ final class PublicationStepHookTest {
     }
 
     @Test
-    void parallelTailUsesGlobalPartOrdinalsAndTheSamePublicationOrder(@TempDir Path root)
+    void pipelineTailUsesGlobalPartOrdinalsAndTheSamePublicationOrder(@TempDir Path root)
             throws Exception {
         Path output = Files.createDirectories(root.resolve("data"));
         Path staging = Files.createDirectories(root.resolve("_staging"));
         List<Path> segments = stage(staging, List.of(
-                objects("a", "d", "g"), objects("b", "e", "h"), objects("c", "f", "i")));
+                objects("a", "b", "c"), objects("d", "e", "f"), objects("g", "h", "i")));
         List<Hit> hits = new ArrayList<>();
 
-        transform(SortConfigs.base().withMergeParallelism(3).withMergeBudgetBytes(64L << 20),
+        transform(SortConfigs.base().withMergeParallelism(3)
+                        .withMergeBudgetBytes(64L << 20).withFinalFileBytes(1),
                 (step, ordinal) -> hits.add(new Hit(step, ordinal)))
                 .transform(segments, output, staging, PublishListener.NO_OP,
                         units -> { }, FinalPassListener.NO_OP);
@@ -72,15 +73,13 @@ final class PublicationStepHookTest {
                 new Hit(PublicationStep.AFTER_PART_RENAME, 2),
                 hit(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC),
                 hit(PublicationStep.AFTER_PUBLISH_LISTENER),
-                new Hit(PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP, 0),
                 hit(PublicationStep.AFTER_STAGING_COMPLETION));
     }
 
     private SortTransform transform(SortConfig config, PublicationStepHook hook) {
         SortRun run = new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
         return new SortTransform(run, hook);
     }
 

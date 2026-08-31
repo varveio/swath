@@ -10,9 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.observability.RunMetrics;
-import io.varve.swath.sort.SortMetrics;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -21,16 +18,6 @@ import org.junit.jupiter.api.Test;
  * <p>These tests pin the live adapter's forwarding contract to the actual run-scoped meters.
  */
 class RunSortMetricsTest {
-
-    @Test
-    void rangeAndProofIoHooksRemainRequiredAdapterMethods() throws NoSuchMethodException {
-        Method rangeFramed = SortMetrics.class.getMethod("recordRangeFramedBytes", long.class);
-        Method proofSpool = SortMetrics.class.getMethod("recordProofSpool",
-                long.class, long.class, long.class, long.class, long.class, long.class);
-
-        assertTrue(Modifier.isAbstract(rangeFramed.getModifiers()));
-        assertTrue(Modifier.isAbstract(proofSpool.getModifiers()));
-    }
 
     @Test
     void markProgressReachesTheLivenessSignalTheWatchdogReads() {
@@ -47,72 +34,13 @@ class RunSortMetricsTest {
     void recordStealReasonStillReaches() {
         var registry = new SimpleMeterRegistry();
 
-        new RunSortMetrics(new RunMetrics(registry)).recordStealReason("SORT", "merge_range_sample_capped");
+        new RunSortMetrics(new RunMetrics(registry)).recordStealReason("SORT", "finalization_pipeline");
 
         // Read the counter back off the registry, not "it did not throw": the first draft of this
         // test asserted progressSignal() >= 0, which passes for a delegate that does nothing at all.
         assertEquals(1.0, registry.get("swath.steal_reason")
             .tag("outcome", "SORT")
-            .tag("reason", "merge_range_sample_capped")
+            .tag("reason", "finalization_pipeline")
             .counter().count());
-    }
-
-    @Test
-    void boundaryIoStillReaches() {
-        var registry = new SimpleMeterRegistry();
-
-        new RunSortMetrics(new RunMetrics(registry)).recordBoundaryIo(7, 123, 456);
-
-        assertEquals(7.0, registry.get("swath.sort.merge.boundaries.embedded.entries").counter().count());
-        assertEquals(123.0, registry.get("swath.sort.merge.boundaries.embedded.bytes").counter().count());
-        assertEquals(456.0, registry.get("swath.sort.merge.boundaries.scan.bytes").counter().count());
-    }
-
-    @Test
-    void pageAwareOverlapMetersReachTheLiveRegistry() {
-        var registry = new SimpleMeterRegistry();
-        var adapter = new RunSortMetrics(new RunMetrics(registry));
-
-        adapter.recordPageAwareOverlapCluster();
-        adapter.recordPageAwareOverlapState(2, 10);
-        adapter.recordPageAwareOverlapState(3, 8);
-
-        assertEquals(1.0, registry.get("swath.sort.merge.overlap.clusters").counter().count());
-        assertEquals(3.0, registry.get("swath.sort.merge.overlap.pages.peak").gauge().value());
-        assertEquals(10.0, registry.get("swath.sort.merge.overlap.rows.peak").gauge().value());
-    }
-
-    @Test
-    void rangeFramedAndIndexBytesReach() {
-        var registry = new SimpleMeterRegistry();
-
-        RunSortMetrics adapter = new RunSortMetrics(new RunMetrics(registry));
-        adapter.recordRangeFramedBytes(456);
-        adapter.recordRangeIndexBytes(789);
-
-        assertEquals(456.0, registry.get("swath.sort.merge.range.framed.bytes").counter().count());
-        assertEquals(789.0, registry.get("swath.sort.merge.range.index.bytes").counter().count());
-    }
-
-    @Test
-    void proofSpoolOperationsBytesAndTimeReach() {
-        var registry = new SimpleMeterRegistry();
-
-        new RunSortMetrics(new RunMetrics(registry)).recordProofSpool(
-                6_212, 2, 6_212, 7, 1_234, 5_000_000);
-
-        assertEquals(6_212.0, registry.get("swath.sort.merge.proof_spool.logical_extent.bytes")
-                .counter().count());
-        assertEquals(2.0, registry.get("swath.sort.merge.proof_spool.preallocation.operations")
-                .counter().count());
-        assertEquals(6_212.0,
-                registry.get("swath.sort.merge.proof_spool.preallocation.attempted.bytes")
-                        .counter().count());
-        assertEquals(7.0, registry.get("swath.sort.merge.proof_spool.mapped.operations")
-                .counter().count());
-        assertEquals(1_234.0, registry.get("swath.sort.merge.proof_spool.mapped.bytes")
-                .counter().count());
-        assertEquals(5.0, registry.get("swath.sort.merge.proof_spool.latency")
-                .timer().totalTime(java.util.concurrent.TimeUnit.MILLISECONDS));
     }
 }
