@@ -9,6 +9,7 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
+import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
@@ -20,10 +21,12 @@ import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.spill.PageBlock;
 import io.varve.swath.sort.spill.PageCompression;
 import io.varve.swath.sort.spill.PageRunWriter;
+import io.varve.swath.sort.spill.SpillTestFixtures;
 import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -38,6 +41,11 @@ import java.util.concurrent.atomic.LongAdder;
 
 /** Shared fixtures for sort tests, with narrow public helpers used by {@code output.sorted} tests. */
 public final class SortTestSupport {
+
+    private static final int CASCADE_SOURCE_PAGE_ROWS = 600;
+    /** Enough pages that the cascade drains more than one intermediate write batch before the last. */
+    private static final int CASCADE_SOURCE_PAGES = 4;
+    private static final int CASCADE_SOURCE_MULTI_PAGE_SEGMENT = 2;
 
     private SortTestSupport() {
     }
@@ -89,6 +97,59 @@ public final class SortTestSupport {
             SortMode orderingMode,
             PageCompression codec) throws IOException {
         return PageRunFixtures.writePages(path, pages, orderingMode, codec);
+    }
+
+    /**
+     * Stage five sorted page-run sources named {@code seg-0}…{@code seg-4}, where {@code seg-2}
+     * carries {@link #CASCADE_SOURCE_PAGES} pages. Under fan-in two the cascade reduces them in the
+     * groups {@code (seg-0, seg-1)}, {@code (seg-2, seg-3)}, {@code (seg-4)}, so damaging a late page
+     * of {@code seg-2} fails the second group only, and only after the first has committed and the
+     * second has already written page bytes of its own.
+     */
+    public static List<Path> writeCascadeSources(Path staging) throws IOException {
+        List<Path> sources = new ArrayList<>(5);
+        String[] prefixes = {"a", "b", "c", "d", "e"};
+        for (int segment = 0; segment < prefixes.length; segment++) {
+            List<List<ListEntry>> pages = new ArrayList<>();
+            int pageCount = segment == CASCADE_SOURCE_MULTI_PAGE_SEGMENT ? CASCADE_SOURCE_PAGES : 1;
+            for (int page = 0; page < pageCount; page++) {
+                List<ListEntry> rows = new ArrayList<>(CASCADE_SOURCE_PAGE_ROWS);
+                for (int row = 0; row < CASCADE_SOURCE_PAGE_ROWS; row++) {
+                    rows.add(object(String.format("%s%05d", prefixes[segment],
+                            page * CASCADE_SOURCE_PAGE_ROWS + row)));
+                }
+                pages.add(rows);
+            }
+            sources.add(writePages(
+                    staging.resolve("seg-" + segment + StagingNames.PAGE_RUN_SUFFIX), pages));
+        }
+        return List.copyOf(sources);
+    }
+
+    /** Total rows staged by {@link #writeCascadeSources}, for post-retry completeness assertions. */
+    public static int cascadeSourceRows() {
+        return (4 + CASCADE_SOURCE_PAGES) * CASCADE_SOURCE_PAGE_ROWS;
+    }
+
+    /**
+     * Make the multi-page source's last page unreadable and return it, so the group that owns it
+     * fails only after the cascade has committed the previous group and written pages of its own.
+     */
+    public static Path corruptLateCascadeSourcePage(List<Path> sources) throws IOException {
+        Path damaged = sources.get(CASCADE_SOURCE_MULTI_PAGE_SEGMENT);
+        corruptPageFrame(damaged, CASCADE_SOURCE_PAGES - 1);
+        return damaged;
+    }
+
+    /** Flip one byte of the {@code frameIndex}-th persisted page so reading it fails mid-stream. */
+    private static void corruptPageFrame(Path segment, int frameIndex) throws IOException {
+        byte[] bytes = Files.readAllBytes(segment);
+        int frame = SpillTestFixtures.pageRunHeaderBytes();
+        for (int i = 0; i < frameIndex; i++) {
+            frame += 8 + ByteBuffer.wrap(bytes, frame, 4).getInt();
+        }
+        bytes[frame + 8] ^= 0x01;
+        Files.write(segment, bytes);
     }
 
     /** Write canonical Parquet input for tests of CaptureSorter/ParquetEntryReader, not internal staging. */
