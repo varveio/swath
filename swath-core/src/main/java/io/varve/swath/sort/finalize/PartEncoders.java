@@ -45,10 +45,10 @@ final class PartEncoders implements AutoCloseable {
 
     /**
      * Measured lower bound for one open Parquet writer: prior in-repo measurements observed
-     * 8-13&nbsp;MiB for a writer at the default 8&nbsp;MiB row group, so a smaller configured
-     * row group must not be priced below what an idle writer has already been seen to cost.
+     * 8-13&nbsp;MiB for a writer at the default 8&nbsp;MiB row group, so no configured row group
+     * may be priced below the top of that observed range.
      */
-    private static final long MEASURED_WRITER_FLOOR_BYTES = 8L << 20;
+    private static final long MEASURED_WRITER_FLOOR_BYTES = 13L << 20;
 
     /**
      * Conservative allowance for column/page/dictionary encoding buffers and footer/metadata state

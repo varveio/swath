@@ -457,6 +457,16 @@ final class FinalizationPipelineTest {
     }
 
     @Test
+    void writerHeapEstimateNeverPricesBelowTheObservedWriterPeak() {
+        // Prior in-repo measurements saw an open writer reach 13 MiB at the default 8 MiB row
+        // group, so the default and anything smaller must reserve at least that much.
+        assertThat(PartEncoders.writerHeapEstimateBytes(SortConfig.DEFAULT.finalRowGroupBytes()))
+                .isEqualTo(13L << 20);
+        assertThat(PartEncoders.writerHeapEstimateBytes(1L << 20)).isEqualTo(13L << 20);
+        assertThat(PartEncoders.writerHeapEstimateBytes(32L << 20)).isEqualTo(36L << 20);
+    }
+
+    @Test
     void millionPageCatalogPricesOnlyBoundedInFlightPlans(@TempDir Path root) throws IOException {
         Path segment = SortTestSupport.writePages(
                 root.resolve("large-catalog" + StagingNames.PAGE_RUN_SUFFIX),

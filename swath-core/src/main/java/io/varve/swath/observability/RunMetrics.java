@@ -1134,8 +1134,9 @@ public final class RunMetrics {
 
     /**
      * Fold one routed overlap component into the cluster totals and the widest-component
-     * high-water mark ({@code swath.sort.pipeline.cluster_refs.peak}) — the signal that says how
-     * far past the plan reference cap an indivisible component actually reached.
+     * high-water mark ({@code swath.sort.pipeline.cluster_refs.peak}). Every cluster updates the
+     * peak, spilled or not; comparing it with the effective plan reference cap says whether the
+     * widest indivisible component stayed in heap or outgrew the cap.
      */
     public void recordSortPipelineCluster(long pages, long rows) {
         sortPipelineClusterPages.increment(Math.max(0L, pages));
