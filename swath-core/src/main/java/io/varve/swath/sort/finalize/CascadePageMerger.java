@@ -7,7 +7,7 @@ package io.varve.swath.sort.finalize;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.sort.SortMetrics;
-import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedEntryCursor;
 import io.varve.swath.sort.spill.PageBlock;
 import io.varve.swath.sort.spill.PageBlockCursor;
 import java.io.IOException;
@@ -23,9 +23,9 @@ import java.util.PriorityQueue;
  * below every successor frontier; only a transitively overlapping component enters the shared
  * {@link PageRowMerger}. Disjoint pages therefore stay off the per-row heap.
  */
-final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
+final class CascadePageMerger implements SortedEntryCursor, LogicalMergeCompletion {
 
-    private final List<KWayMerge.PageStream> streams;
+    private final List<CascadeReducer.PageStream> streams;
     private final PriorityQueue<Source> frontiers;
     private final PageRowMerger rows;
     private final DecodedPageBudget budget;
@@ -40,7 +40,7 @@ final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
     private boolean logicalMergeComplete;
     private boolean closed;
 
-    CascadePageMerger(List<KWayMerge.PageStream> streams,
+    CascadePageMerger(List<CascadeReducer.PageStream> streams,
             Comparator<ListEntry> comparator, SortMetrics metrics,
             MergeRunSink runSink, long decodedPageBudgetBytes) {
         this.streams = List.copyOf(streams);
@@ -52,7 +52,7 @@ final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
         this.frontiers = new PriorityQueue<>((left, right) ->
                 Arrays.compareUnsigned(left.stream.minKey(), right.stream.minKey()));
         for (int source = 0; source < streams.size(); source++) {
-            KWayMerge.PageStream stream = streams.get(source);
+            CascadeReducer.PageStream stream = streams.get(source);
             if (stream.hasPage()) {
                 frontiers.add(new Source(source, stream));
             } else {
@@ -202,7 +202,7 @@ final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
         }
         budget.release(rows.releaseAllBytes());
         metrics.recordPipelineDecodedPagePeak(budget.peakResidentBytes());
-        for (KWayMerge.PageStream stream : streams) {
+        for (CascadeReducer.PageStream stream : streams) {
             try {
                 stream.close();
             } catch (IOException closeFailure) {
@@ -240,6 +240,6 @@ final class CascadePageMerger implements SortedCursor, LogicalMergeCompletion {
         return first;
     }
 
-    private record Source(int ordinal, KWayMerge.PageStream stream) {
+    private record Source(int ordinal, CascadeReducer.PageStream stream) {
     }
 }

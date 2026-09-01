@@ -15,7 +15,7 @@ import io.varve.swath.sort.SortOrderException;
 import java.util.Comparator;
 
 /** Shared adjacent-row order, duplicate-reporting, and raw-key uniqueness policy. */
-final class AdjacentEntryGuard {
+final class OrderedEntryGuard {
     private final Comparator<ListEntry> comparator;
     private final DuplicateHook hook;
     private final EqualKeyPolicy equalKeyPolicy;
@@ -23,7 +23,7 @@ final class AdjacentEntryGuard {
     private final String streamName;
     private ListEntry previous;
 
-    AdjacentEntryGuard(Comparator<ListEntry> comparator, DuplicateHook hook,
+    OrderedEntryGuard(Comparator<ListEntry> comparator, DuplicateHook hook,
             EqualKeyPolicy equalKeyPolicy, SortMetrics metrics, String streamName) {
         this.comparator = comparator;
         this.hook = hook;

@@ -32,12 +32,12 @@ import java.util.Set;
  * ordered under the full §0.3 preorder — not just key bytes. The page-run writer repairs
  * full-comparator disorder only while raw keys remain non-decreasing, which makes the admitted
  * {@link PageBlock#lastKey()} a safe durable maximum; raw-key regression is rejected before the
- * {@link SegmentSink} checkpoint seam.
+ * {@link StagedRunCommitter} checkpoint seam.
  */
 final class SortBuffer {
 
     private final SortConfig config;
-    private final SegmentGate gate;
+    private final SpillGate gate;
     private final Comparator<ListEntry> comparator;
     private List<PageBlock> pages = new ArrayList<>();
     private Set<Long> nodeIds = new HashSet<>();
@@ -47,7 +47,7 @@ final class SortBuffer {
 
     SortBuffer(SortConfig config, Comparator<ListEntry> comparator) {
         this.config = config;
-        this.gate = new SegmentGate(config);
+        this.gate = new SpillGate(config);
         this.comparator = comparator;
     }
 

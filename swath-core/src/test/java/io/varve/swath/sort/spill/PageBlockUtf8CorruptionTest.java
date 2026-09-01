@@ -55,9 +55,9 @@ class PageBlockUtf8CorruptionTest {
         assertThatThrownBy(() -> new SortedDatasetCoordinator(run).transform(
                 List.of(segment), output, staging, SortedDatasetCommitter.NO_OP,
                 ignored -> { }, FinalPassListener.NO_OP))
-                .isInstanceOfSatisfying(SegmentCorruptionException.class, failure -> {
+                .isInstanceOfSatisfying(PageRunCorruptionException.class, failure -> {
                     assertThat(failure.errorClass())
-                            .isEqualTo(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION);
+                            .isEqualTo(PageRunCorruptionException.PAGE_RUN_BODY_CORRUPTION);
                     assertThat(failure).hasStackTraceContaining("malformed UTF-8")
                             .hasNoSuppressedExceptions();
                 });
@@ -78,12 +78,12 @@ class PageBlockUtf8CorruptionTest {
     @SafeVarargs
     private static Path writePages(Path path, List<ListEntry>... pages) throws IOException {
         PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(
-                SortConfigs.base().withSegmentCodec(PageCodec.NONE), CMP);
+                SortConfigs.base().withSegmentCodec(PageCompression.NONE), CMP);
         long node = 0;
         for (List<ListEntry> page : pages) {
             buffer.admit(node++, page);
         }
-        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+        new PageRunWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
         return path;
     }
@@ -91,7 +91,7 @@ class PageBlockUtf8CorruptionTest {
     private static void corruptNeedleAndRepairFrameCrc(
             Path path, byte[] needle, boolean header) throws IOException {
         byte[] file = Files.readAllBytes(path);
-        int frameStart = PageRunSegmentWriter.HEADER_BYTES;
+        int frameStart = PageRunWriter.HEADER_BYTES;
         int bodyLength = ByteBuffer.wrap(file).getInt(frameStart);
         int bodyStart = frameStart + 2 * Integer.BYTES;
         byte[] body = java.util.Arrays.copyOfRange(file, bodyStart, bodyStart + bodyLength);

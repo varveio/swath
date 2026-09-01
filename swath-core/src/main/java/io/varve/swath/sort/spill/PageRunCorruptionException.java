@@ -23,7 +23,7 @@ import java.nio.file.Path;
  * reads — the same typed-exception → terminal-status → {@code error_class} seam a classified seed
  * failure uses. (The engagement counter travels separately, in the serialized meter registry.)
  */
-public final class SegmentCorruptionException extends IOException {
+public final class PageRunCorruptionException extends IOException {
 
     private static final long serialVersionUID = 1L;
 
@@ -59,12 +59,12 @@ public final class SegmentCorruptionException extends IOException {
 
     private final String errorClass;
 
-    SegmentCorruptionException(Path path, String errorClass, String message) {
+    PageRunCorruptionException(Path path, String errorClass, String message) {
         super("page-run segment " + path + ": error_class=" + errorClass + ": " + message);
         this.errorClass = errorClass;
     }
 
-    SegmentCorruptionException(Path path, String errorClass, String message, Throwable cause) {
+    PageRunCorruptionException(Path path, String errorClass, String message, Throwable cause) {
         super("page-run segment " + path + ": error_class=" + errorClass + ": " + message, cause);
         this.errorClass = errorClass;
     }

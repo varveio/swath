@@ -30,7 +30,7 @@ final class MergeRouter {
     record Result(long rows, long pagesForwarded, long refs, int parts) {
     }
 
-    private final SegmentHeaderCursors cursors;
+    private final PageRunHeaderStreams cursors;
     private final Consumer<PartPlan> plans;
     private final PartSizer sizer;
     private final SortMetrics metrics;
@@ -50,10 +50,10 @@ final class MergeRouter {
      * Bind the sole frontier and boundary owner to a bounded plan consumer. Encoder completion is
      * consulted only for first-part calibration; it never influences merge ordering.
      */
-    MergeRouter(SegmentHeaderCursors cursors, Consumer<PartPlan> plans,
+    MergeRouter(PageRunHeaderStreams cursors, Consumer<PartPlan> plans,
             PartSizer sizer, SortMetrics metrics, FinalizationFailure failure,
             Runnable awaitFirstCompletion, int maxPlanRefs) {
-        if (maxPlanRefs < 1 || maxPlanRefs > MergePlanner.MAX_PIPELINE_PLAN_REFS) {
+        if (maxPlanRefs < 1 || maxPlanRefs > FinalizationPlanner.MAX_PIPELINE_PLAN_REFS) {
             throw new IllegalArgumentException("pipeline plan reference cap is out of bounds");
         }
         this.cursors = cursors;

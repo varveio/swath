@@ -5,13 +5,13 @@
  */
 package io.varve.swath.output.parquet.sorted;
 
-import io.varve.swath.sort.spill.SegmentCorruptionException;
+import io.varve.swath.sort.spill.PageRunCorruptionException;
 import java.nio.file.Path;
 
 /**
  * One row group's rows are not in strictly ascending unsigned key order, raised where they are read.
  * Typed rather than a bare {@link IllegalStateException} for the same reason
- * {@link SegmentCorruptionException} is: the caller that hits this is a sweep over a corpus of
+ * {@link PageRunCorruptionException} is: the caller that hits this is a sweep over a corpus of
  * fixtures, and it must be able to classify the exclusion — "this fixture is internally disordered",
  * as opposed to any other read failure — from {@link #reason()} and a counter, never by matching
  * substrings of a message.

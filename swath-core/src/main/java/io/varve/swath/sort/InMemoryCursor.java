@@ -12,11 +12,11 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 /**
- * {@link SortedCursor} over an already-sorted in-memory list. The fixture sorter uses it to stream a
+ * {@link SortedEntryCursor} over an already-sorted in-memory list. The fixture sorter uses it to stream a
  * bounded, locally sorted chunk into page-run staging. Applies the {@link DuplicateHook} on adjacent
  * equal entries so behavior matches the streaming merge path.
  */
-final class InMemoryCursor implements SortedCursor {
+final class InMemoryCursor implements SortedEntryCursor {
 
     private final Iterator<ListEntry> it;
     private final Comparator<ListEntry> comparator;

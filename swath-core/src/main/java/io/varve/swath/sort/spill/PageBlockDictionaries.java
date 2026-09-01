@@ -46,7 +46,7 @@ final class PageBlockDictionaries {
     }
 
     int coordinateBytes() {
-        return owner == null ? 0 : PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES;
+        return owner == null ? 0 : PageBlockFormat.PERSISTED_DICTIONARY_COORDINATE_BYTES;
     }
 
     long decodedCacheBudgetBytes() {
@@ -60,8 +60,8 @@ final class PageBlockDictionaries {
         if (totalValues == 0) {
             return 0;
         }
-        long bytes = 16L + (long) PageBlockCodec.DICT_COLUMN_COUNT * Long.BYTES;
-        for (int column = 0; column < PageBlockCodec.DICT_COLUMN_COUNT; column++) {
+        long bytes = 16L + (long) PageBlockFormat.DICT_COLUMN_COUNT * Long.BYTES;
+        for (int column = 0; column < PageBlockFormat.DICT_COLUMN_COUNT; column++) {
             bytes += 16L + (long) size(column) * Long.BYTES;
             for (int index = 0; index < size(column); index++) {
                 bytes += 2L * encodedLength(column, index) + 64L;
@@ -78,7 +78,7 @@ final class PageBlockDictionaries {
             return packed[column][index];
         }
         Slice slice = locate(column, index);
-        return PageBlockCodec.decodeUtf8Strict(owner, slice.offset(), slice.length(),
+        return PageBlockFormat.decodeUtf8Strict(owner, slice.offset(), slice.length(),
                 "dictionary " + column + " value " + index);
     }
 

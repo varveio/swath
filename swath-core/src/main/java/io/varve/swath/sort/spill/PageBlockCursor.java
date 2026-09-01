@@ -37,7 +37,7 @@ public final class PageBlockCursor {
         this.position = offset;
         this.payloadEnd = Math.addExact(offset, length);
         if (offset < 0 || length < 0 || payloadEnd > payload.length) {
-            throw PageBlockCodec.malformed("payload slice exceeds its owning array");
+            throw PageBlockFormat.malformed("payload slice exceeds its owning array");
         }
     }
 
@@ -53,15 +53,15 @@ public final class PageBlockCursor {
             requireRemaining(1, "row tag");
             byte tag = payload[position++];
             ListEntry entry = switch (tag) {
-                case PageBlockCodec.TAG_OBJECT -> object();
-                case PageBlockCodec.TAG_COMMON_PREFIX -> new CommonPrefixEntry(key());
-                case PageBlockCodec.TAG_DELETE_MARKER -> deleteMarker();
+                case PageBlockFormat.TAG_OBJECT -> object();
+                case PageBlockFormat.TAG_COMMON_PREFIX -> new CommonPrefixEntry(key());
+                case PageBlockFormat.TAG_DELETE_MARKER -> deleteMarker();
                 default -> throw new IllegalStateException("bad PageBlock tag: " + tag);
             };
             if (block.validatesPersistedOrder() && previousEntry != null) {
                 if (currentRawOrder > 0 || (currentRawOrder == 0
-                        && PageBlockCodec.ENTRY_COMPARATOR.compare(previousEntry, entry) > 0)) {
-                    throw PageBlockCodec.malformed(
+                        && PageBlockFormat.ENTRY_COMPARATOR.compare(previousEntry, entry) > 0)) {
+                    throw PageBlockFormat.malformed(
                             "decoded row order regressed inside persisted page");
                 }
             }
@@ -91,13 +91,13 @@ public final class PageBlockCursor {
         long size = fixedLong();
         long lastModified = fixedLong();
         String etag = etag();
-        String storageClass = dictOrRaw(PageBlockCodec.DictColumn.STORAGE_CLASS);
+        String storageClass = dictOrRaw(PageBlockFormat.DictColumn.STORAGE_CLASS);
         String versionId = nullableString();
         boolean isLatest = bool();
-        String ownerId = dictOrRaw(PageBlockCodec.DictColumn.OWNER_ID);
-        String ownerDisplayName = dictOrRaw(PageBlockCodec.DictColumn.OWNER_DISPLAY_NAME);
-        String checksumAlgorithm = dictOrRaw(PageBlockCodec.DictColumn.CHECKSUM_ALGORITHM);
-        String checksumType = dictOrRaw(PageBlockCodec.DictColumn.CHECKSUM_TYPE);
+        String ownerId = dictOrRaw(PageBlockFormat.DictColumn.OWNER_ID);
+        String ownerDisplayName = dictOrRaw(PageBlockFormat.DictColumn.OWNER_DISPLAY_NAME);
+        String checksumAlgorithm = dictOrRaw(PageBlockFormat.DictColumn.CHECKSUM_ALGORITHM);
+        String checksumType = dictOrRaw(PageBlockFormat.DictColumn.CHECKSUM_TYPE);
         return new ObjectEntry(key, size, lastModified, etag, storageClass, versionId, isLatest,
                 ownerId, ownerDisplayName, checksumAlgorithm, checksumType);
     }
@@ -107,18 +107,18 @@ public final class PageBlockCursor {
         String versionId = nullableString();
         boolean isLatest = bool();
         long lastModified = fixedLong();
-        String ownerId = dictOrRaw(PageBlockCodec.DictColumn.OWNER_ID);
+        String ownerId = dictOrRaw(PageBlockFormat.DictColumn.OWNER_ID);
         return new DeleteMarkerEntry(key, versionId, isLatest, lastModified, ownerId);
     }
 
     private void validateEnd(ListEntry lastEntry) {
         if (position != payloadEnd) {
-            throw PageBlockCodec.malformed("decoded " + block.count() + " rows with "
+            throw PageBlockFormat.malformed("decoded " + block.count() + " rows with "
                     + (payloadEnd - position) + " trailing payload bytes");
         }
         if (!Arrays.equals(decodedFirstKey, block.firstKeyUnsafe())
                 || !Arrays.equals(lastEntry.key().rawUnsafe(), block.lastKeyUnsafe())) {
-            throw PageBlockCodec.malformed(
+            throw PageBlockFormat.malformed(
                     "decoded first/last raw keys do not match persisted page bounds");
         }
     }
@@ -127,7 +127,7 @@ public final class PageBlockCursor {
         int shared = varint("key shared-prefix length");
         int suffixLength = varint("key suffix length");
         if (shared > previousKey.length) {
-            throw PageBlockCodec.malformed("key shared-prefix length " + shared
+            throw PageBlockFormat.malformed("key shared-prefix length " + shared
                     + " exceeds previous key length " + previousKey.length);
         }
         requireRemaining(suffixLength, "key suffix");
@@ -135,10 +135,10 @@ public final class PageBlockCursor {
         try {
             fullLength = Math.addExact(shared, suffixLength);
         } catch (ArithmeticException e) {
-            throw PageBlockCodec.malformed("reconstructed key length overflows int32");
+            throw PageBlockFormat.malformed("reconstructed key length overflows int32");
         }
         if (fullLength > ByteMidpoint.MAX_KEY_LEN) {
-            throw PageBlockCodec.malformed("reconstructed key length " + fullLength
+            throw PageBlockFormat.malformed("reconstructed key length " + fullLength
                     + " exceeds the S3 key limit of " + ByteMidpoint.MAX_KEY_LEN + " bytes");
         }
         byte[] prior = previousKey;
@@ -185,7 +185,7 @@ public final class PageBlockCursor {
         requireRemaining(1, "boolean");
         byte value = payload[position++];
         if (value != 0 && value != 1) {
-            throw PageBlockCodec.malformed("boolean must be 0 or 1, got " + (value & 0xFF));
+            throw PageBlockFormat.malformed("boolean must be 0 or 1, got " + (value & 0xFF));
         }
         return value == 1;
     }
@@ -197,7 +197,7 @@ public final class PageBlockCursor {
         }
         int length = encodedLength - 1;
         requireRemaining(length, "nullable string");
-        String value = PageBlockCodec.decodeUtf8Strict(
+        String value = PageBlockFormat.decodeUtf8Strict(
                 payload, position, length, "nullable string");
         position += length;
         return value;
@@ -207,17 +207,17 @@ public final class PageBlockCursor {
         requireRemaining(1, "etag marker");
         byte marker = payload[position++];
         return switch (marker) {
-            case PageBlockCodec.ETAG_NULL -> null;
-            case PageBlockCodec.ETAG_PACKED_MD5 -> {
+            case PageBlockFormat.ETAG_NULL -> null;
+            case PageBlockFormat.ETAG_PACKED_MD5 -> {
                 requireRemaining(16, "packed etag");
-                String value = PageBlockCodec.unpackMd5(payload, position);
+                String value = PageBlockFormat.unpackMd5(payload, position);
                 position += 16;
                 yield value;
             }
-            case PageBlockCodec.ETAG_RAW -> {
+            case PageBlockFormat.ETAG_RAW -> {
                 int length = varint("raw etag length");
                 requireRemaining(length, "raw etag");
-                String value = PageBlockCodec.decodeUtf8Strict(
+                String value = PageBlockFormat.decodeUtf8Strict(
                         payload, position, length, "raw etag");
                 position += length;
                 yield value;
@@ -226,7 +226,7 @@ public final class PageBlockCursor {
         };
     }
 
-    private String dictOrRaw(PageBlockCodec.DictColumn column) {
+    private String dictOrRaw(PageBlockFormat.DictColumn column) {
         int encoded = varint(column + " value");
         if (encoded == 0) {
             return null;
@@ -235,14 +235,14 @@ public final class PageBlockCursor {
             PageBlockDictionaries dictionaries = block.dictionariesUnsafe();
             int index = encoded - 1;
             if (index >= dictionaries.size(column.ordinal())) {
-                throw PageBlockCodec.malformed(column + " dictionary index " + index
+                throw PageBlockFormat.malformed(column + " dictionary index " + index
                         + " exceeds dictionary size " + dictionaries.size(column.ordinal()));
             }
             return dictionaryValue(dictionaries, column.ordinal(), index);
         }
         int length = encoded - 1;
         requireRemaining(length, column + " raw value");
-        String value = PageBlockCodec.decodeUtf8Strict(
+        String value = PageBlockFormat.decodeUtf8Strict(
                 payload, position, length, column + " raw value");
         position += length;
         return value;
@@ -254,7 +254,7 @@ public final class PageBlockCursor {
             return dictionaries.value(column, index);
         }
         if (dictionaryCache == null) {
-            dictionaryCache = new String[PageBlockCodec.DICT_COLUMN_COUNT][];
+            dictionaryCache = new String[PageBlockFormat.DICT_COLUMN_COUNT][];
         }
         String[] values = dictionaryCache[column];
         if (values == null) {
@@ -275,19 +275,19 @@ public final class PageBlockCursor {
             requireRemaining(1, field + " varint");
             int value = payload[position++] & 0xFF;
             if (shift == 28 && (value & 0xF8) != 0) {
-                throw PageBlockCodec.malformed(field + " varint overflows int32");
+                throw PageBlockFormat.malformed(field + " varint overflows int32");
             }
             result |= (value & 0x7F) << shift;
             if ((value & 0x80) == 0) {
                 return result;
             }
         }
-        throw PageBlockCodec.malformed(field + " varint is too long");
+        throw PageBlockFormat.malformed(field + " varint is too long");
     }
 
     private void requireRemaining(int needed, String field) {
         if (needed < 0 || needed > payloadEnd - position) {
-            throw PageBlockCodec.malformed(field + " exceeds decoded payload (needed " + needed
+            throw PageBlockFormat.malformed(field + " exceeds decoded payload (needed " + needed
                     + ", remaining " + (payloadEnd - position) + ")");
         }
     }

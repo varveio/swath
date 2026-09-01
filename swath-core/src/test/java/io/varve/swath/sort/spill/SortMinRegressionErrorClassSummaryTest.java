@@ -42,7 +42,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * The {@code error_class} of a classified sort abort must reach {@code summary.json}, not just
- * stderr: {@link SegmentCorruptionException} carries the class, {@code ListRunner} records it on
+ * stderr: {@link PageRunCorruptionException} carries the class, {@code ListRunner} records it on
  * {@code RunMetrics#recordFatalErrorClass} as the merge failure unwinds, and the CRASH terminal
  * status ({@code ListRunner#terminalStatus()}, via {@code JsonRunSummaryWriter#close}) reads it
  * back — a staged page-run segment whose page {@code minKey}s regress must not be indistinguishable,
@@ -112,7 +112,7 @@ final class SortMinRegressionErrorClassSummaryTest {
                 // throwable is an UncheckedIOException — which is why ListRunner#sortMergeAndPublish's
                 // `catch (IOException e)` never runs its recordFatalErrorClass call. See below.)
                 softly.assertThat(hasCorruptionCause(thrown))
-                        .as("the unwinding throwable carries the classified SegmentCorruptionException in "
+                        .as("the unwinding throwable carries the classified PageRunCorruptionException in "
                                 + "its cause chain (observed outer type: %s)", thrown.getClass().getName())
                         .isTrue();
                 // The engagement counter is bumped BEFORE the throw, so it must survive the abort into the
@@ -134,11 +134,11 @@ final class SortMinRegressionErrorClassSummaryTest {
         }
     }
 
-    /** True iff {@code t}'s cause chain holds a {@link SegmentCorruptionException} — the shape
+    /** True iff {@code t}'s cause chain holds a {@link PageRunCorruptionException} — the shape
      *  {@code ListRunner#segmentErrorClass}'s walk depends on. */
     private static boolean hasCorruptionCause(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
-            if (c instanceof SegmentCorruptionException) {
+            if (c instanceof PageRunCorruptionException) {
                 return true;
             }
         }
@@ -164,7 +164,7 @@ final class SortMinRegressionErrorClassSummaryTest {
     private static void recordSegment(SqliteCheckpointStore store, long runId, long nodeId, Path segment,
                                       long rows) throws Exception {
         store.partFinalized(new PartFinalize(runId, 0, segment.getFileName().toString(),
-                new PageRunFormat(PageRunSegmentWriter.FORMAT_VERSION,
+                new PageRunFormat(PageRunWriter.FORMAT_VERSION,
                         PageRunFormat.ABSENT_EXTENSION),
                 rows, Files.size(segment),
                 List.of(new PartFinalize.DurableAdvance(nodeId, KeyBytes.ofUtf8("z").raw()))));

@@ -16,7 +16,7 @@ import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.sort.spill.PageBlock;
 import io.varve.swath.sort.spill.PageBlockCursor;
 import io.varve.swath.sort.spill.PageRef;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunReader;
 import java.io.IOException;
 import java.nio.channels.AsynchronousCloseException;
 import java.nio.file.Files;
@@ -68,7 +68,7 @@ final class PartEncoders implements AutoCloseable {
      * independent output-sequence factory because Parquet writer state is not shareable; segment
      * channels are shared because all encoder reads are positional and therefore commute.
      */
-    PartEncoders(int count, List<PageRunSegmentIo> segments, long clusterBudgetBytes,
+    PartEncoders(int count, List<PageRunReader> segments, long clusterBudgetBytes,
             Path stagingDir, SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
             DuplicateHook hook, EqualKeyPolicy equalKeyPolicy, SortMetrics metrics,
             FinalizationFailure failure, PartSizer sizer, LongConsumer progressCallback) {
@@ -214,11 +214,11 @@ final class PartEncoders implements AutoCloseable {
     }
 
     private final class Lane {
-        private final List<PageRunSegmentIo> segments;
+        private final List<PageRunReader> segments;
         private final Path stagingDir;
         private final SortedFileWriterFactory factory;
         private final Comparator<ListEntry> comparator;
-        private final AdjacentEntryGuard entryGuard;
+        private final OrderedEntryGuard entryGuard;
         private final DecodedPageBudget decodedBudget;
         private SortedFileWriter writer;
         private Path path;
@@ -229,7 +229,7 @@ final class PartEncoders implements AutoCloseable {
          * Give one worker its own guard, decoded budget, and output factory. None of those objects is
          * shared between virtual threads, so their hot row path needs no synchronization.
          */
-        Lane(List<PageRunSegmentIo> segments, long clusterBudgetBytes, Path stagingDir,
+        Lane(List<PageRunReader> segments, long clusterBudgetBytes, Path stagingDir,
                 SortedFileWriterFactory factory, Comparator<ListEntry> comparator,
                 DuplicateHook hook, EqualKeyPolicy equalKeyPolicy) {
             this.segments = segments;
@@ -237,7 +237,7 @@ final class PartEncoders implements AutoCloseable {
             this.factory = factory;
             this.comparator = comparator;
             decodedBudget = new DecodedPageBudget(clusterBudgetBytes, metrics);
-            entryGuard = new AdjacentEntryGuard(
+            entryGuard = new OrderedEntryGuard(
                     comparator, hook, equalKeyPolicy, metrics, "pipeline");
         }
 
@@ -405,7 +405,7 @@ final class PartEncoders implements AutoCloseable {
         private void write(ListEntry entry) throws IOException {
             entryGuard.accept(entry);
             writer.write(entry);
-            if (++progressRows >= KWayMerge.PROGRESS_BATCH_ROWS) {
+            if (++progressRows >= CascadeReducer.PROGRESS_BATCH_ROWS) {
                 progressCallback.accept(progressRows);
                 progressRows = 0;
             }

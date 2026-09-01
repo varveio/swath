@@ -19,6 +19,6 @@ import java.util.Map;
  *                       — {@code durable_cursor} for a node advances to its value here
  * @param pageRunFormat  the exact page-run header/extension identity written to this segment
  */
-public record SegmentResult(Path path, long rows, long bytes, Map<Long, byte[]> perNodeMaxKeys,
+public record StagedRun(Path path, long rows, long bytes, Map<Long, byte[]> perNodeMaxKeys,
                             PageRunFormat pageRunFormat) {
 }

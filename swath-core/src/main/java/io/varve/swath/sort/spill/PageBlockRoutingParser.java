@@ -15,23 +15,23 @@ final class PageBlockRoutingParser {
     private PageBlockRoutingParser() {
     }
 
-    static PageBlockCodec.RoutingHeader parse(
-            int recordLength, PageBlockCodec.RoutingInput input) throws IOException {
+    static PageBlockFormat.RoutingHeader parse(
+            int recordLength, PageBlockFormat.RoutingInput input) throws IOException {
         Cursor cursor = new Cursor(recordLength, input);
         byte[] minKey = cursor.readKey("minKey");
         byte[] maxKey = cursor.readKey("maxKey");
         int count = cursor.readInt("count");
         if (count <= 0) {
-            throw PageBlockCodec.malformed("count must be positive, got " + count);
+            throw PageBlockFormat.malformed("count must be positive, got " + count);
         }
         int ordered = cursor.readByte("ordered flag") & 0xFF;
         if (ordered > 1) {
-            throw PageBlockCodec.malformed("ordered flag must be 0 or 1, got " + ordered);
+            throw PageBlockFormat.malformed("ordered flag must be 0 or 1, got " + ordered);
         }
-        for (int dictionary = 0; dictionary < PageBlockCodec.DICT_COLUMN_COUNT; dictionary++) {
+        for (int dictionary = 0; dictionary < PageBlockFormat.DICT_COLUMN_COUNT; dictionary++) {
             int values = cursor.readUnsignedShort("dictionary count");
             if (values > PageBlock.DICT_CAP) {
-                throw PageBlockCodec.malformed("dictionary " + dictionary + " count " + values
+                throw PageBlockFormat.malformed("dictionary " + dictionary + " count " + values
                         + " exceeds " + PageBlock.DICT_CAP);
             }
             for (int value = 0; value < values; value++) {
@@ -40,47 +40,47 @@ final class PageBlockRoutingParser {
             }
         }
         int packedUseDict = cursor.readByte("useDict") & 0xFF;
-        int validUseDictBits = (1 << PageBlockCodec.DICT_COLUMN_COUNT) - 1;
+        int validUseDictBits = (1 << PageBlockFormat.DICT_COLUMN_COUNT) - 1;
         if ((packedUseDict & ~validUseDictBits) != 0) {
-            throw PageBlockCodec.malformed("useDict contains unknown bits: 0x"
+            throw PageBlockFormat.malformed("useDict contains unknown bits: 0x"
                     + Integer.toHexString(packedUseDict));
         }
         int codecCode = cursor.readByte("codec") & 0xFF;
-        PageCodec codec;
+        PageCompression codec;
         try {
-            codec = PageCodec.fromCode((byte) codecCode);
+            codec = PageCompression.fromCode((byte) codecCode);
         } catch (IllegalStateException e) {
-            throw PageBlockCodec.malformed("unsupported codec " + codecCode, e);
+            throw PageBlockFormat.malformed("unsupported codec " + codecCode, e);
         }
         int rawPayloadLength = cursor.readInt("raw payload length");
         int storedPayloadLength = cursor.readInt("stored payload length");
         if (rawPayloadLength <= 0 || rawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
-            throw PageBlockCodec.malformed("raw payload length " + rawPayloadLength
+            throw PageBlockFormat.malformed("raw payload length " + rawPayloadLength
                     + " is outside 1.." + PageBlock.MAX_RAW_PAYLOAD_BYTES);
         }
         if (storedPayloadLength <= 0 || storedPayloadLength != cursor.remaining()) {
-            throw PageBlockCodec.malformed("stored payload length " + storedPayloadLength
+            throw PageBlockFormat.malformed("stored payload length " + storedPayloadLength
                     + " does not equal remaining body bytes " + cursor.remaining());
         }
-        if (codec == PageCodec.NONE && storedPayloadLength != rawPayloadLength) {
-            throw PageBlockCodec.malformed("NONE payload lengths differ: raw=" + rawPayloadLength
+        if (codec == PageCompression.NONE && storedPayloadLength != rawPayloadLength) {
+            throw PageBlockFormat.malformed("NONE payload lengths differ: raw=" + rawPayloadLength
                     + " stored=" + storedPayloadLength);
         }
-        return new PageBlockCodec.RoutingHeader(minKey, maxKey, count, rawPayloadLength);
+        return new PageBlockFormat.RoutingHeader(minKey, maxKey, count, rawPayloadLength);
     }
 
     private static final class Cursor {
         private static final int READ_AHEAD_BYTES = 8 << 10;
 
         private final int length;
-        private final PageBlockCodec.RoutingInput input;
+        private final PageBlockFormat.RoutingInput input;
         private ByteBuffer cache = ByteBuffer.allocate(0);
         private int cacheStart;
         private int position;
 
-        Cursor(int length, PageBlockCodec.RoutingInput input) {
+        Cursor(int length, PageBlockFormat.RoutingInput input) {
             if (length <= 0) {
-                throw PageBlockCodec.malformed("record body must be non-empty");
+                throw PageBlockFormat.malformed("record body must be non-empty");
             }
             this.length = length;
             this.input = input;
@@ -89,7 +89,7 @@ final class PageBlockRoutingParser {
         byte[] readKey(String field) throws IOException {
             int keyLength = readUnsignedShort(field + " length");
             if (keyLength > ByteMidpoint.MAX_KEY_LEN) {
-                throw PageBlockCodec.malformed(field + " exceeds the S3 key limit of "
+                throw PageBlockFormat.malformed(field + " exceeds the S3 key limit of "
                         + ByteMidpoint.MAX_KEY_LEN + " bytes");
             }
             return readBytes(keyLength, field);
@@ -126,7 +126,7 @@ final class PageBlockRoutingParser {
 
         void skip(int bytes, String field) {
             if (bytes < 0 || position > length - bytes) {
-                throw PageBlockCodec.malformed(field + " exceeds record body");
+                throw PageBlockFormat.malformed(field + " exceeds record body");
             }
             position += bytes;
         }
@@ -137,7 +137,7 @@ final class PageBlockRoutingParser {
 
         private void ensure(int bytes, String field) throws IOException {
             if (bytes < 0 || position > length - bytes) {
-                throw PageBlockCodec.malformed(field + " exceeds record body");
+                throw PageBlockFormat.malformed(field + " exceeds record body");
             }
             int cacheEnd = cacheStart + cache.limit();
             if (position >= cacheStart && position + bytes <= cacheEnd) {
@@ -147,7 +147,7 @@ final class PageBlockRoutingParser {
             cache = input.read(position, read);
             cacheStart = position;
             if (cache.remaining() != read) {
-                throw PageBlockCodec.malformed("short metadata read");
+                throw PageBlockFormat.malformed("short metadata read");
             }
         }
     }

@@ -9,19 +9,19 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.SortMetrics;
-import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedEntryCursor;
 import java.util.Comparator;
 
 /** Reports adjacent comparator-equal rows from one merged cursor without changing multiplicity. */
-final class DuplicateReporting implements SortedCursor, LogicalMergeCompletion {
+final class DuplicateReportingCursor implements SortedEntryCursor, LogicalMergeCompletion {
 
-    private final SortedCursor inner;
-    private final AdjacentEntryGuard guard;
+    private final SortedEntryCursor inner;
+    private final OrderedEntryGuard guard;
     private boolean closed;
 
-    DuplicateReporting(SortedCursor inner, Comparator<ListEntry> comparator, DuplicateHook hook) {
+    DuplicateReportingCursor(SortedEntryCursor inner, Comparator<ListEntry> comparator, DuplicateHook hook) {
         this.inner = inner;
-        this.guard = new AdjacentEntryGuard(comparator, hook, EqualKeyPolicy.ALLOW,
+        this.guard = new OrderedEntryGuard(comparator, hook, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP, "merged");
     }
 

@@ -13,7 +13,7 @@ import io.varve.swath.model.PackedPage;
 import io.varve.swath.model.PagePacker;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.spill.PageBlock;
-import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageCompression;
 import java.util.Comparator;
 import java.util.List;
 
@@ -32,7 +32,7 @@ import java.util.List;
 public final class SortPagePacker implements PagePacker {
 
     private final Comparator<ListEntry> comparator;
-    private final PageCodec codec;
+    private final PageCompression codec;
 
     /** Built from public config — {@code comparator} is the §0.3 preorder, the codec comes from {@code config}. */
     public SortPagePacker(Comparator<ListEntry> comparator, SortConfig config) {
@@ -57,6 +57,6 @@ public final class SortPagePacker implements PagePacker {
             }
         }
         PageBlock block = PageBlock.pack(entries, comparator, codec);
-        return new PackedPageBlock(block, objects, commonPrefixes, deleteMarkers, totalObjectSize);
+        return new PackedListingPage(block, objects, commonPrefixes, deleteMarkers, totalObjectSize);
     }
 }

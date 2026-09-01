@@ -19,11 +19,11 @@ import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortRun;
-import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedEntryCursor;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.sort.spill.PageBlockAllocationCharacterizationTest;
-import io.varve.swath.sort.spill.PageCodec;
-import io.varve.swath.sort.spill.PageRunSegmentWriter;
+import io.varve.swath.sort.spill.PageCompression;
+import io.varve.swath.sort.spill.PageRunWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -55,7 +55,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * under {@code java.io.tmpdir}).
  *
  * <p>Run: {@code JAVA_TOOL_OPTIONS="-Dswath.profile=on -Dswath.profile.jfr=<path>" ./gradlew
- * :swath-core:test --tests 'io.varve.swath.sort.MergeCpuProfileHarness' -Pperf} — {@code -D} on the
+ * :swath-core:test --tests 'io.varve.swath.sort.finalize.MergeCpuProfileHarness' -Pperf} — {@code -D} on the
  * {@code ./gradlew} command line does not reach the forked test-worker JVM;
  * {@code JAVA_TOOL_OPTIONS} does. Add {@code -Dswath.bench.staging-dir=<out>/_staging} there for a
  * retained corpus. Persisted-page copy allocation has its separate exact,
@@ -192,10 +192,10 @@ class MergeCpuProfileHarness {
         long totalBytes = 0;
         for (int seg = 0; seg < NUM_SEGMENTS; seg++) {
             Path path = master.resolve(String.format("seg-%05d.pageseg", seg));
-            PageRunSegmentWriter writer =
-                    new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
+            PageRunWriter writer =
+                    new PageRunWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE);
             long rows;
-            try (SortedCursor cursor =
+            try (SortedEntryCursor cursor =
                          SortBenchCorpus.generatedCursor(
                                  seg, NUM_SEGMENTS, BLOCK_ROWS, TOTAL_ROWS, rowsPerDay, base)) {
                 rows = writer.writeIntermediate(cursor, path);

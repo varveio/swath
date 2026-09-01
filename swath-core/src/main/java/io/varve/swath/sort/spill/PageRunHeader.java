@@ -37,8 +37,8 @@ final class PageRunHeader {
         Objects.requireNonNull(orderingMode, "orderingMode");
         int metadataLength = Short.BYTES + Short.BYTES + 1;
         ByteBuffer header = ByteBuffer.allocate(PREFIX_BYTES + metadataLength + CRC_BYTES);
-        header.putInt(PageRunSegmentWriter.MAGIC);
-        header.putShort(PageRunSegmentWriter.FORMAT_VERSION);
+        header.putInt(PageRunWriter.MAGIC);
+        header.putShort(PageRunWriter.FORMAT_VERSION);
         header.putShort(HEADER_VERSION);
         header.putInt(metadataLength);
         header.putShort(ORDERING_MODE_FIELD);
@@ -64,14 +64,14 @@ final class PageRunHeader {
         short formatVersion = prefix.getShort();
         short headerVersion = prefix.getShort();
         int metadataLength = prefix.getInt();
-        if (magic != PageRunSegmentWriter.MAGIC) {
+        if (magic != PageRunWriter.MAGIC) {
             throw headerCorruption(path, metrics,
                     "bad page-run magic 0x" + Integer.toHexString(magic));
         }
-        if (formatVersion != PageRunSegmentWriter.FORMAT_VERSION) {
+        if (formatVersion != PageRunWriter.FORMAT_VERSION) {
             metrics.recordStealReason("SORT", "page_run_format_mismatch");
-            throw new SegmentCorruptionException(path,
-                    SegmentCorruptionException.PAGE_RUN_FORMAT_MISMATCH,
+            throw new PageRunCorruptionException(path,
+                    PageRunCorruptionException.PAGE_RUN_FORMAT_MISMATCH,
                     "unsupported page-run format version " + formatVersion);
         }
         if (headerVersion != HEADER_VERSION) {
@@ -127,11 +127,11 @@ final class PageRunHeader {
         return new Header(formatVersion, orderingMode, encodedBytes);
     }
 
-    private static SegmentCorruptionException headerCorruption(
+    private static PageRunCorruptionException headerCorruption(
             Path path, SortMetrics metrics, String message) {
         recordHeaderRejection(metrics);
-        return new SegmentCorruptionException(path,
-                SegmentCorruptionException.PAGE_RUN_HEADER_CORRUPTION, message);
+        return new PageRunCorruptionException(path,
+                PageRunCorruptionException.PAGE_RUN_HEADER_CORRUPTION, message);
     }
 
     private static void recordHeaderRejection(SortMetrics metrics) {

@@ -22,19 +22,19 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@link PageRunSegmentInspector} (the {@code swath dump-run} engine): a page-run segment
- * dumps its header magic/version, one {@link PageRunSegmentInspector.RecordInfo} per framed record
- * (min/max/count/codec/len matching {@link PageRunSegmentIo}), and the completeness
+ * {@link PageRunInspector} (the {@code swath dump-run} engine): a page-run segment
+ * dumps its header magic/version, one {@link PageRunInspector.RecordInfo} per framed record
+ * (min/max/count/codec/len matching {@link PageRunReader}), and the completeness
  * trailer — with each record CRC-verified. A body-only bit-flip is reported as {@code crcOk=false}
  * (not thrown), so a debug dump pinpoints the torn record.
  */
-class PageRunSegmentInspectorTest {
+class PageRunInspectorTest {
 
     private static final ListEntryComparator CMP = new ListEntryComparator();
     private final SortConfig config = SortConfig.fromSystemProperties();
 
-    private PageRunSegmentWriter writer() {
-        return new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
+    private PageRunWriter writer() {
+        return new PageRunWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE);
     }
 
     @Test
@@ -46,10 +46,10 @@ class PageRunSegmentInspectorTest {
         Path path = dir.resolve("seg.pageseg");
         writer().flush(buffer.seal(SealTrigger.DRAIN), path);
 
-        PageRunSegmentInspector.Dump dump = PageRunSegmentInspector.inspect(path);
+        PageRunInspector.Dump dump = PageRunInspector.inspect(path);
 
-        assertThat(dump.magic()).isEqualTo(PageRunSegmentWriter.MAGIC);
-        assertThat(dump.formatVersion()).isEqualTo(PageRunSegmentWriter.FORMAT_VERSION);
+        assertThat(dump.magic()).isEqualTo(PageRunWriter.MAGIC);
+        assertThat(dump.formatVersion()).isEqualTo(PageRunWriter.FORMAT_VERSION);
         // The inspector exposes the shared trailer, and the record count/entry totals agree.
         PageRunTrailer.Trailer canonical = PageRunTrailer.read(path);
         assertThat(dump.trailer().totalRecords()).isEqualTo(canonical.totalRecords());
@@ -58,12 +58,12 @@ class PageRunSegmentInspectorTest {
         assertThat(dump.records()).hasSize((int) canonical.totalRecords());
 
         // Every record's decode-free min/max/count matches the frontier reader, CRC verifies, and the
-        // codec resolved to a real PageCodec (never the "?" corruption sentinel).
+        // codec resolved to a real PageCompression (never the "?" corruption sentinel).
         List<PageFrontierView> frontier = frontierWalk(path);
         assertThat(dump.records()).hasSameSizeAs(frontier);
         long entrySum = 0;
         for (int i = 0; i < frontier.size(); i++) {
-            PageRunSegmentInspector.RecordInfo rec = dump.records().get(i);
+            PageRunInspector.RecordInfo rec = dump.records().get(i);
             PageFrontierView exp = frontier.get(i);
             assertThat(rec.index()).isEqualTo(i);
             assertThat(rec.minKey()).as("record %d minKey", i).containsExactly(exp.min);
@@ -87,10 +87,10 @@ class PageRunSegmentInspectorTest {
         // Flip a byte inside the first record body (offset HEADER_BYTES + 8-byte [len][crc] frame) so
         // its CRC32C no longer matches — the inspector must REPORT the failure, not throw.
         byte[] raw = Files.readAllBytes(path);
-        raw[PageRunSegmentWriter.HEADER_BYTES + 8] ^= 0x7F;
+        raw[PageRunWriter.HEADER_BYTES + 8] ^= 0x7F;
         Files.write(path, raw);
 
-        PageRunSegmentInspector.Dump dump = PageRunSegmentInspector.inspect(path);
+        PageRunInspector.Dump dump = PageRunInspector.inspect(path);
         assertThat(dump.records()).isNotEmpty();
         assertThat(dump.records().get(0).crcOk()).isFalse();
         assertThat(dump.records().get(0).codec()).isEqualTo("?");   // not trusted after a CRC failure
@@ -101,8 +101,8 @@ class PageRunSegmentInspectorTest {
 
     private static List<PageFrontierView> frontierWalk(Path path) throws IOException {
         List<PageFrontierView> out = new ArrayList<>();
-        try (PageRunSegmentIo reader = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
-            PageRunSegmentIo.Page page;
+        try (PageRunReader reader = PageRunReader.open(path, SortMetrics.NO_OP)) {
+            PageRunReader.Page page;
             while ((page = reader.nextPage()) != null) {
                 out.add(new PageFrontierView(
                         page.header().minKey().clone(), page.header().maxKey().clone(),

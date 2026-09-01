@@ -19,15 +19,15 @@ import org.slf4j.LoggerFactory;
  * fail with {@code EMFILE} hours into a merge. This computes a fan-in ceiling from the process's SOFT
  * open-file limit, reserving {@link #FD_HEADROOM} descriptors for the checkpoint SQLite handle, the
  * output part writers, log files, and the JVM's own fds. When the ceiling forces fan-in below the
- * segment count the merge degrades to the {@link KWayMerge} cascade backstop (multi-pass) rather than
+ * segment count the merge degrades to the {@link CascadeReducer} cascade backstop (multi-pass) rather than
  * crashing — a misconfigured launcher becomes slower, never fatal.
  *
  * <p>The arithmetic is a pure, injectable function ({@link #clampedFanIn}) so it is testable without
  * depending on the real process {@code ulimit}; only {@link #softOpenFileLimit()} touches the OS.
  */
-public final class MergeFdBudget {
+public final class FileDescriptorBudget {
 
-    private static final Logger log = LoggerFactory.getLogger(MergeFdBudget.class);
+    private static final Logger log = LoggerFactory.getLogger(FileDescriptorBudget.class);
 
     /** Descriptors reserved for checkpoint SQLite, output part writers, logs, and JVM internals. */
     static final int FD_HEADROOM = 128;
@@ -35,7 +35,7 @@ public final class MergeFdBudget {
     /** Conservative soft-limit fallback when {@code /proc/self/limits} is unreadable (non-Linux, etc.). */
     static final int FALLBACK_SOFT_FD_LIMIT = 1024;
 
-    private MergeFdBudget() {
+    private FileDescriptorBudget() {
     }
 
     /**

@@ -115,10 +115,10 @@ class PageBlockTest {
         for (int i = 0; i < 1_000; i++) {
             entries.add(object(String.format("repeated-prefix/object-%04d", i)));
         }
-        PageBlock packed = PageBlock.pack(entries, CMP, PageCodec.LZ4);
+        PageBlock packed = PageBlock.pack(entries, CMP, PageCompression.LZ4);
         PageBlock persisted = PageBlock.deserialize(packed.serialize());
 
-        assertThat(persisted.codec()).isEqualTo(PageCodec.LZ4);
+        assertThat(persisted.codec()).isEqualTo(PageCompression.LZ4);
         assertThat(persisted.packedBytes()).isLessThan(persisted.rawPayloadLength());
         assertThat(persisted.rawPayloadLength()).isEqualTo(packed.rawPayloadLength());
     }

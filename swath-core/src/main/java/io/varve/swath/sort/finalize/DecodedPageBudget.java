@@ -7,8 +7,8 @@ package io.varve.swath.sort.finalize;
 
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.spill.PageBlock;
-import io.varve.swath.sort.spill.PageBlockCodec;
-import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageBlockFormat;
+import io.varve.swath.sort.spill.PageCompression;
 
 /**
  * Exact retained-byte admission for decoded pages. Reservation precedes cursor creation because a
@@ -63,7 +63,7 @@ final class DecodedPageBudget {
     static long retainedBytes(PageBlock page) {
         long bytes = saturatedAdd(page.retainedRecordBytes(), page.dictionaryCoordinateBytes());
         bytes = saturatedAdd(bytes, page.dictionaryCacheBudgetBytes());
-        return page.codec() == PageCodec.NONE
+        return page.codec() == PageCompression.NONE
                 ? bytes : saturatedAdd(bytes, page.rawPayloadLength());
     }
 
@@ -81,7 +81,7 @@ final class DecodedPageBudget {
         return saturatedAdd(
                 saturatedMultiply(RETAINED_PAGE_FACTOR,
                         Math.max(rawPayloadBytes, recordBytes)),
-                PageBlockCodec.MAX_PERSISTED_DICTIONARY_OVERHEAD_BYTES);
+                PageBlockFormat.MAX_PERSISTED_DICTIONARY_OVERHEAD_BYTES);
     }
 
     private static long saturatedAdd(long left, long right) {

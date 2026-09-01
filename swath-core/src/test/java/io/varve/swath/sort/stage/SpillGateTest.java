@@ -13,17 +13,17 @@ import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.finalize.SortTestSupport;
 import io.varve.swath.sort.spill.PageBlock;
-import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageCompression;
 import io.varve.swath.sort.spill.SealTrigger;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-final class SegmentGateTest {
+final class SpillGateTest {
 
     @Test
     void thresholdsAreInclusiveAndByteGateWinsWhenBothFire() {
         SortConfig config = SortConfigs.base().withSegmentBytes(130).withSegmentEntries(3);
-        SegmentGate gate = new SegmentGate(config);
+        SpillGate gate = new SpillGate(config);
 
         assertThat(gate.trigger(129, 2)).isEqualTo(SealTrigger.DRAIN);
         assertThat(gate.full(129, 2)).isFalse();
@@ -41,7 +41,7 @@ final class SegmentGateTest {
                 SortTestSupport.object("\u0000\u00ff"));
         long captureEntryEstimate = entries.stream().mapToLong(PageBlock::estimatedBytes).sum();
 
-        PageBlock block = PageBlock.pack(entries, new ListEntryComparator(), PageCodec.NONE);
+        PageBlock block = PageBlock.pack(entries, new ListEntryComparator(), PageCompression.NONE);
 
         assertThat(block.stagingEstimatedBytes()).isEqualTo(captureEntryEstimate);
     }

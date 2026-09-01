@@ -10,15 +10,15 @@ import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.spill.PageRef;
 import io.varve.swath.sort.spill.PageRunCatalog;
-import io.varve.swath.sort.spill.PageRunSegmentDescriptor;
+import io.varve.swath.sort.spill.PageRunDescriptor;
 import java.util.function.IntSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Resource planning for cascade fan-in and reference-routed finalization. */
-final class MergePlanner {
+final class FinalizationPlanner {
 
-    private static final Logger log = LoggerFactory.getLogger(MergePlanner.class);
+    private static final Logger log = LoggerFactory.getLogger(FinalizationPlanner.class);
 
     static final int MAX_PIPELINE_PLAN_REFS = 16_384;
     static final int MIN_PIPELINE_PLAN_REFS = 256;
@@ -27,11 +27,11 @@ final class MergePlanner {
     private final SortMetrics metrics;
     private final IntSupplier softFdLimitSupplier;
 
-    MergePlanner(SortRun run) {
+    FinalizationPlanner(SortRun run) {
         this(run.config(), run.metrics(), run.softFdLimitSupplier());
     }
 
-    MergePlanner(SortConfig config, SortMetrics metrics, IntSupplier softFdLimitSupplier) {
+    FinalizationPlanner(SortConfig config, SortMetrics metrics, IntSupplier softFdLimitSupplier) {
         this.config = config;
         this.metrics = metrics;
         this.softFdLimitSupplier = softFdLimitSupplier;
@@ -56,7 +56,7 @@ final class MergePlanner {
         long readPageBytes = readPageBytes(catalog);
         long retainedPageBytes = retainedPageBytes(catalog);
         int refBytes = PageRef.retainedBytes(catalog.maxKeyLength());
-        long cursorRefs = saturatedMultiply(segments, SegmentHeaderCursors.QUEUE_DEPTH + 2L);
+        long cursorRefs = saturatedMultiply(segments, PageRunHeaderStreams.QUEUE_DEPTH + 2L);
         long usableFds = usableFdBudget();
         long byFd = usableFds == Long.MAX_VALUE
                 ? Long.MAX_VALUE : Math.max(0L, usableFds - segments);
@@ -104,7 +104,7 @@ final class MergePlanner {
         long clusterBudget = clusterPool / admitted;
         int planRefLimit = planRefCapped
                 ? Math.toIntExact(admittedPlanRefs) : MAX_PIPELINE_PLAN_REFS;
-        return new PipelinePlan(admitted, reason, SegmentHeaderCursors.QUEUE_DEPTH,
+        return new PipelinePlan(admitted, reason, PageRunHeaderStreams.QUEUE_DEPTH,
                 refBytes, readPageBytes, retainedPageBytes, clusterBudget,
                 planRefLimit);
     }
@@ -161,7 +161,7 @@ final class MergePlanner {
 
     private static long readPageBytes(PageRunCatalog catalog) {
         long maximum = 1;
-        for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
+        for (PageRunDescriptor descriptor : catalog.descriptors()) {
             if (descriptor.trailer().totalRecords() > 0) {
                 maximum = Math.max(maximum, descriptor.trailer().maxRecordLen());
             }
@@ -171,7 +171,7 @@ final class MergePlanner {
 
     private static long retainedPageBytes(PageRunCatalog catalog) {
         long maximum = 1;
-        for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
+        for (PageRunDescriptor descriptor : catalog.descriptors()) {
             if (descriptor.trailer().totalRecords() > 0) {
                 maximum = Math.max(maximum, DecodedPageBudget.retainedPageUpperBound(
                         descriptor.maxRawPayloadLength(), descriptor.trailer().maxRecordLen()));
@@ -186,10 +186,10 @@ final class MergePlanner {
         int softFdLimit = softFdLimitSupplier.getAsInt();
         int recordSizedFanIn = recordSizedFanIn(catalog);
         int headroom = saturatedHeadroom(outputWriters);
-        int clamped = MergeFdBudget.clampedFanIn(staticFanIn, softFdLimit,
+        int clamped = FileDescriptorBudget.clampedFanIn(staticFanIn, softFdLimit,
                 headroom, recordSizedFanIn);
         if (clamped < staticFanIn) {
-            int fdBound = MergeFdBudget.fdBoundedFanIn(softFdLimit, headroom);
+            int fdBound = FileDescriptorBudget.fdBoundedFanIn(softFdLimit, headroom);
             metrics.recordStealReason("SORT", "merge_fanin_clamped");
             if (fdBound < staticFanIn) {
                 metrics.recordStealReason("SORT", "merge_fanin_fd_clamped");
@@ -207,7 +207,7 @@ final class MergePlanner {
     }
 
     private static int saturatedHeadroom(int outputWriters) {
-        long adjusted = (long) MergeFdBudget.FD_HEADROOM + outputWriters - 1L;
+        long adjusted = (long) FileDescriptorBudget.FD_HEADROOM + outputWriters - 1L;
         return (int) Math.min(Integer.MAX_VALUE, adjusted);
     }
 
@@ -243,12 +243,12 @@ final class MergePlanner {
         int softLimit = softFdLimitSupplier.getAsInt();
         return softLimit < 0
                 ? Long.MAX_VALUE
-                : Math.max(0L, (long) softLimit - MergeFdBudget.FD_HEADROOM);
+                : Math.max(0L, (long) softLimit - FileDescriptorBudget.FD_HEADROOM);
     }
 
     private static long stagedBytes(PageRunCatalog catalog) {
         long total = 0;
-        for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
+        for (PageRunDescriptor descriptor : catalog.descriptors()) {
             long bytes = Math.max(0L, descriptor.fileSize());
             total = total > Long.MAX_VALUE - bytes ? Long.MAX_VALUE : total + bytes;
         }

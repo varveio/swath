@@ -25,7 +25,7 @@ import java.util.Arrays;
  * No mutable codec state is shared, so concurrent calls cannot interfere. Each call is a one-shot,
  * whole-buffer operation with no streaming state reused across calls.
  */
-public enum PageCodec {
+public enum PageCompression {
 
     /** Payload stored verbatim — {@link #compress}/{@link #decompress} are no-ops. */
     NONE((byte) 0) {
@@ -107,7 +107,7 @@ public enum PageCodec {
 
     private final byte code;
 
-    PageCodec(byte code) {
+    PageCompression(byte code) {
         this.code = code;
     }
 
@@ -128,8 +128,8 @@ public enum PageCodec {
     abstract byte[] decompress(byte[] stored, int offset, int length, int rawLen);
 
     /** The codec whose {@link #code()} is {@code code}, or throws if none matches (corrupt record). */
-    static PageCodec fromCode(byte code) {
-        for (PageCodec c : values()) {
+    static PageCompression fromCode(byte code) {
+        for (PageCompression c : values()) {
             if (c.code == code) {
                 return c;
             }
@@ -138,9 +138,9 @@ public enum PageCodec {
     }
 
     /** Case-insensitive parse of a config value ({@code NONE}/{@code LZ4}/{@code ZSTD1}). */
-    public static PageCodec fromConfigValue(String raw) {
+    public static PageCompression fromConfigValue(String raw) {
         String v = raw.trim();
-        for (PageCodec c : values()) {
+        for (PageCompression c : values()) {
             if (c.name().equalsIgnoreCase(v)) {
                 return c;
             }

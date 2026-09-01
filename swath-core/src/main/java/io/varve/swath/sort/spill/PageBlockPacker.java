@@ -28,7 +28,7 @@ final class PageBlockPacker {
     }
 
     static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator,
-            PageCodec codec, int maxRawPayloadBytes) {
+            PageCompression codec, int maxRawPayloadBytes) {
         if (entries.isEmpty()) {
             throw new IllegalArgumentException("cannot pack an empty page");
         }
@@ -39,7 +39,7 @@ final class PageBlockPacker {
 
         boolean ordered = true;
         ListEntry previous = null;
-        DictProbe[] probes = new DictProbe[PageBlockCodec.DICT_COLUMN_COUNT];
+        DictProbe[] probes = new DictProbe[PageBlockFormat.DICT_COLUMN_COUNT];
         for (int i = 0; i < probes.length; i++) {
             probes[i] = new DictProbe();
         }
@@ -50,22 +50,22 @@ final class PageBlockPacker {
             previous = entry;
             switch (entry) {
                 case ObjectEntry object -> {
-                    probes[PageBlockCodec.DictColumn.STORAGE_CLASS.ordinal()]
+                    probes[PageBlockFormat.DictColumn.STORAGE_CLASS.ordinal()]
                             .offer(object.storageClass());
-                    probes[PageBlockCodec.DictColumn.CHECKSUM_ALGORITHM.ordinal()]
+                    probes[PageBlockFormat.DictColumn.CHECKSUM_ALGORITHM.ordinal()]
                             .offer(object.checksumAlgorithm());
-                    probes[PageBlockCodec.DictColumn.CHECKSUM_TYPE.ordinal()]
+                    probes[PageBlockFormat.DictColumn.CHECKSUM_TYPE.ordinal()]
                             .offer(object.checksumType());
-                    probes[PageBlockCodec.DictColumn.OWNER_ID.ordinal()].offer(object.ownerId());
-                    probes[PageBlockCodec.DictColumn.OWNER_DISPLAY_NAME.ordinal()]
+                    probes[PageBlockFormat.DictColumn.OWNER_ID.ordinal()].offer(object.ownerId());
+                    probes[PageBlockFormat.DictColumn.OWNER_DISPLAY_NAME.ordinal()]
                             .offer(object.ownerDisplayName());
                 }
                 case DeleteMarkerEntry marker ->
-                        probes[PageBlockCodec.DictColumn.OWNER_ID.ordinal()].offer(marker.ownerId());
+                        probes[PageBlockFormat.DictColumn.OWNER_ID.ordinal()].offer(marker.ownerId());
                 case CommonPrefixEntry ignored -> { }
             }
         }
-        boolean[] useDict = new boolean[PageBlockCodec.DICT_COLUMN_COUNT];
+        boolean[] useDict = new boolean[PageBlockFormat.DICT_COLUMN_COUNT];
         for (int i = 0; i < probes.length; i++) {
             useDict[i] = probes[i].useDict();
         }
@@ -101,7 +101,7 @@ final class PageBlockPacker {
             }
             this.useDict = useDict;
             this.maxRawPayloadBytes = maxRawPayloadBytes;
-            this.dicts = new Dict[PageBlockCodec.DICT_COLUMN_COUNT];
+            this.dicts = new Dict[PageBlockFormat.DICT_COLUMN_COUNT];
             for (int i = 0; i < dicts.length; i++) {
                 dicts[i] = new Dict();
             }
@@ -111,7 +111,7 @@ final class PageBlockPacker {
             switch (entry) {
                 case ObjectEntry object -> writeObject(object);
                 case CommonPrefixEntry prefix -> {
-                    put(PageBlockCodec.TAG_COMMON_PREFIX);
+                    put(PageBlockFormat.TAG_COMMON_PREFIX);
                     key(prefix.key());
                 }
                 case DeleteMarkerEntry marker -> writeDeleteMarker(marker);
@@ -119,32 +119,32 @@ final class PageBlockPacker {
         }
 
         private void writeObject(ObjectEntry object) {
-            put(PageBlockCodec.TAG_OBJECT);
+            put(PageBlockFormat.TAG_OBJECT);
             key(object.key());
             fixedLong(object.size());
             fixedLong(object.lastModifiedEpochMicros());
             etag(object.etag());
-            dictOrRaw(PageBlockCodec.DictColumn.STORAGE_CLASS, object.storageClass());
+            dictOrRaw(PageBlockFormat.DictColumn.STORAGE_CLASS, object.storageClass());
             nullableString(object.versionId());
             bool(object.isLatest());
-            dictOrRaw(PageBlockCodec.DictColumn.OWNER_ID, object.ownerId());
-            dictOrRaw(PageBlockCodec.DictColumn.OWNER_DISPLAY_NAME, object.ownerDisplayName());
-            dictOrRaw(PageBlockCodec.DictColumn.CHECKSUM_ALGORITHM, object.checksumAlgorithm());
-            dictOrRaw(PageBlockCodec.DictColumn.CHECKSUM_TYPE, object.checksumType());
+            dictOrRaw(PageBlockFormat.DictColumn.OWNER_ID, object.ownerId());
+            dictOrRaw(PageBlockFormat.DictColumn.OWNER_DISPLAY_NAME, object.ownerDisplayName());
+            dictOrRaw(PageBlockFormat.DictColumn.CHECKSUM_ALGORITHM, object.checksumAlgorithm());
+            dictOrRaw(PageBlockFormat.DictColumn.CHECKSUM_TYPE, object.checksumType());
         }
 
         private void writeDeleteMarker(DeleteMarkerEntry marker) {
-            put(PageBlockCodec.TAG_DELETE_MARKER);
+            put(PageBlockFormat.TAG_DELETE_MARKER);
             key(marker.key());
             nullableString(marker.versionId());
             bool(marker.isLatest());
             fixedLong(marker.lastModifiedEpochMicros());
-            dictOrRaw(PageBlockCodec.DictColumn.OWNER_ID, marker.ownerId());
+            dictOrRaw(PageBlockFormat.DictColumn.OWNER_ID, marker.ownerId());
         }
 
         private void key(KeyBytes key) {
             byte[] raw = key.rawUnsafe();
-            PageBlockCodec.requireWriterKey(raw, "row key");
+            PageBlockFormat.requireWriterKey(raw, "row key");
             int shared = commonPrefixLength(previousKey, raw);
             int suffixLength = raw.length - shared;
             varint(shared);
@@ -176,22 +176,22 @@ final class PageBlockPacker {
 
         private void etag(String etag) {
             if (etag == null) {
-                put(PageBlockCodec.ETAG_NULL);
+                put(PageBlockFormat.ETAG_NULL);
                 return;
             }
             byte[] packed = tryPackMd5(etag);
             if (packed != null) {
-                put(PageBlockCodec.ETAG_PACKED_MD5);
+                put(PageBlockFormat.ETAG_PACKED_MD5);
                 write(packed, 0, packed.length);
             } else {
-                put(PageBlockCodec.ETAG_RAW);
+                put(PageBlockFormat.ETAG_RAW);
                 byte[] bytes = etag.getBytes(StandardCharsets.UTF_8);
                 varint(bytes.length);
                 write(bytes, 0, bytes.length);
             }
         }
 
-        private void dictOrRaw(PageBlockCodec.DictColumn column, String value) {
+        private void dictOrRaw(PageBlockFormat.DictColumn column, String value) {
             if (value == null) {
                 varint(0);
             } else if (useDict[column.ordinal()]) {

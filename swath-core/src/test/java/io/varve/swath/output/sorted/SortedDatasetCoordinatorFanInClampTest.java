@@ -22,7 +22,7 @@ import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.sort.finalize.SortTestSupport;
 import io.varve.swath.sort.spill.PageRunCatalog;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -122,7 +122,7 @@ class SortedDatasetCoordinatorFanInClampTest {
         Files.write(segment, bytes);
 
         assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP)))
+                path -> PageRunReader.open(path, SortMetrics.NO_OP)))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("bad or missing page-run trailer");
     }

@@ -21,7 +21,7 @@ import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.finalize.SortTestSupport;
 import io.varve.swath.sort.spill.PageRunReads;
-import io.varve.swath.sort.spill.SegmentResult;
+import io.varve.swath.sort.spill.StagedRun;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,8 +36,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Pack-on-fetch behavior-preservation guard. Packing a page on the fetch worker
- * ({@link SortPagePacker} → {@link SortLane#admit(long, PackedPage)}) must produce byte-identical sorted
- * staging to the old pack-on-drain path ({@link SortLane#admit(long, java.util.List)} which packs inside
+ * ({@link SortPagePacker} → {@link SpillLane#admit(long, PackedPage)}) must produce byte-identical sorted
+ * staging to the old pack-on-drain path ({@link SpillLane#admit(long, java.util.List)} which packs inside
  * {@link SortBuffer}), and concurrent packing across threads must still yield correct per-node sorted runs.
  */
 final class PackOnFetchEquivalenceTest {
@@ -69,9 +69,9 @@ final class PackOnFetchEquivalenceTest {
     /** Drive one lane either via the raw admit (packs on the drain thread) or via SortPagePacker (fetch-pack). */
     private List<String> runLane(Path dir, List<PageOnNode> input, boolean fetchPack) throws Exception {
         Path staging = Files.createDirectories(dir.resolve("_staging"));
-        List<SegmentResult> finalized = new ArrayList<>();
+        List<StagedRun> finalized = new ArrayList<>();
         SortPagePacker packer = new SortPagePacker(cmp, gate3());
-        try (SortLane lane = new SortLane(gate3(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        try (SpillLane lane = new SpillLane(gate3(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                 new SortLaneMeters() { }, staging, "seg-" + (fetchPack ? "fetch" : "drain"), finalized::add)) {
             for (PageOnNode p : input) {
                 if (fetchPack) {
@@ -82,7 +82,7 @@ final class PackOnFetchEquivalenceTest {
             }
         }
         List<String> all = new ArrayList<>();
-        for (SegmentResult r : finalized) {
+        for (StagedRun r : finalized) {
             List<String> segKeys = keys(r.path());
             assertThat(segKeys).isSorted();
             all.addAll(segKeys);
@@ -132,8 +132,8 @@ final class PackOnFetchEquivalenceTest {
 
         // Feed the concurrently-packed pages into a single lane (admit is single-caller) → sorted segments.
         Path staging = Files.createDirectories(tmp.resolve("_staging"));
-        List<SegmentResult> finalized = new ArrayList<>();
-        try (SortLane lane = new SortLane(gate3(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        List<StagedRun> finalized = new ArrayList<>();
+        try (SpillLane lane = new SpillLane(gate3(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                 new SortLaneMeters() { }, staging, "seg-conc", finalized::add)) {
             for (PageOnPacked p : packed) {
                 lane.admit(p.node(), p.packed());
@@ -141,7 +141,7 @@ final class PackOnFetchEquivalenceTest {
         }
 
         List<String> all = new ArrayList<>();
-        for (SegmentResult r : finalized) {
+        for (StagedRun r : finalized) {
             List<String> segKeys = keys(r.path());
             assertThat(segKeys).isSorted();   // each staging segment is internally sorted per page-run merge
             all.addAll(segKeys);

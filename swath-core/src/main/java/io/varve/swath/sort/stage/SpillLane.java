@@ -15,10 +15,10 @@ import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.spill.PageRunSegmentWriter;
+import io.varve.swath.sort.spill.PageRunWriter;
 import io.varve.swath.sort.spill.SealTrigger;
 import io.varve.swath.sort.spill.SealedBuffer;
-import io.varve.swath.sort.spill.SegmentResult;
+import io.varve.swath.sort.spill.StagedRun;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p><b>Finalize strictly in seal order</b>: the encoder is a <b>single</b>
  * thread draining a FIFO handoff queue, so segments finalize — and {@code durable_cursor} advances,
- * via {@link SegmentSink} — in the exact order buffers were sealed. Parallel encoders are forbidden:
+ * via {@link StagedRunCommitter} — in the exact order buffers were sealed. Parallel encoders are forbidden:
  * an out-of-order finalize would let {@code durable_cursor} over-advance past keys still sitting in an
  * earlier unfinalized buffer and silently lose them on resume.
  *
@@ -67,7 +67,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@code ParquetWriterPool}'s lifecycle. {@link #abort()} itself IS safe to call concurrently with a
  * blocked {@link #admit}/seal (e.g. a cancellation signal on another thread).
  */
-public final class SortLane implements AutoCloseable {
+public final class SpillLane implements AutoCloseable {
 
     /** Handoff sentinel telling the encoder loop to stop after draining the queue. */
     private static final Object POISON = new Object();
@@ -79,8 +79,8 @@ public final class SortLane implements AutoCloseable {
     private final DuplicateHook hook;
     private final SortMetrics metrics;
     private final SortLaneMeters laneMeters;
-    private final PageRunSegmentWriter segmentWriter;
-    private final SegmentSink sink;
+    private final PageRunWriter segmentWriter;
+    private final StagedRunCommitter sink;
     private final Path stagingDir;
     private final String segmentPrefix;
 
@@ -124,21 +124,21 @@ public final class SortLane implements AutoCloseable {
 
     private SortBuffer fill;
 
-    public SortLane(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
+    public SpillLane(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
                     SortMetrics metrics, SortLaneMeters laneMeters, Path stagingDir,
-                    String segmentPrefix, SegmentSink sink) {
+                    String segmentPrefix, StagedRunCommitter sink) {
         this(config, comparator, hook, metrics, laneMeters, stagingDir, segmentPrefix, sink,
                 SortMode.OBJECTS);
     }
 
-    public SortLane(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
+    public SpillLane(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
                     SortMetrics metrics, SortLaneMeters laneMeters, Path stagingDir,
-                    String segmentPrefix, SegmentSink sink, SortMode orderingMode) {
+                    String segmentPrefix, StagedRunCommitter sink, SortMode orderingMode) {
         this.comparator = comparator;
         this.hook = hook;
         this.metrics = metrics;
         this.laneMeters = laneMeters;
-        this.segmentWriter = new PageRunSegmentWriter(
+        this.segmentWriter = new PageRunWriter(
                 comparator, hook, metrics, config.segmentCodec(), orderingMode);
         this.sink = sink;
         this.stagingDir = stagingDir;
@@ -185,7 +185,7 @@ public final class SortLane implements AutoCloseable {
             return;   // never happens (empty pages are skipped before send); defensive, mirrors the raw path
         }
         long bytesBefore = fill.estimatedBytes();
-        fill.admit(nodeId, ((PackedPageBlock) packed).block());
+        fill.admit(nodeId, ((PackedListingPage) packed).block());
         afterAdmit(bytesBefore, packed.entryCount());
     }
 
@@ -289,7 +289,7 @@ public final class SortLane implements AutoCloseable {
                 int pageRuns = sealed.runCount();
                 Path path = stagingDir.resolve(
                         StagingNames.listingSegment(segmentPrefix, seq.getAndIncrement()));
-                SegmentResult result = segmentWriter.flush(sealed, path);
+                StagedRun result = segmentWriter.flush(sealed, path);
                 sink.onSegmentFinalized(result);   // commit point: part_file row + durable_cursor advance
                 laneMeters.segmentFinalized(result.bytes(), pageRuns);
             } catch (Throwable t) {

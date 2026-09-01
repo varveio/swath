@@ -17,10 +17,10 @@ import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.finalize.SortTestSupport;
-import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageCompression;
+import io.varve.swath.sort.spill.PageRunInspector;
 import io.varve.swath.sort.spill.PageRunReads;
-import io.varve.swath.sort.spill.PageRunSegmentInspector;
-import io.varve.swath.sort.spill.SegmentResult;
+import io.varve.swath.sort.spill.StagedRun;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,12 +31,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Unit coverage for the ordered {@link SortLane}: a small entry gate seals multiple segments, each
- * finalized in seal order via {@link SegmentSink}, and every admitted entry round-trips through the
+ * Unit coverage for the ordered {@link SpillLane}: a small entry gate seals multiple segments, each
+ * finalized in seal order via {@link StagedRunCommitter}, and every admitted entry round-trips through the
  * staging segments. The strict-seal-order / durable_cursor-correctness properties are exercised by
  * the resume adversarial suite; this pins the lane's own mechanics + the meters seam.
  */
-final class SortLaneTest {
+final class SpillLaneTest {
 
     private final ListEntryComparator cmp = new ListEntryComparator();
 
@@ -48,7 +48,7 @@ final class SortLaneTest {
     @Test
     void sealsMultipleSegmentsInOrderAndRoundTripsEveryEntry(@TempDir Path tmp) throws Exception {
         Path staging = Files.createDirectories(tmp.resolve("_staging"));
-        List<SegmentResult> finalized = new ArrayList<>();
+        List<StagedRun> finalized = new ArrayList<>();
         AtomicLong entries = new AtomicLong();
         AtomicLong segments = new AtomicLong();
 
@@ -64,7 +64,7 @@ final class SortLaneTest {
             }
         };
 
-        SortLane lane = new SortLane(gate3(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, meters,
+        SpillLane lane = new SpillLane(gate3(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, meters,
                 staging, "seg-test", finalized::add);
 
         // node 1 ascending a..f, node 2 ascending g..j — disjoint ranges (the work-stealing invariant).
@@ -75,7 +75,7 @@ final class SortLaneTest {
 
         // Every admitted entry landed in a durable segment, and each segment is internally sorted.
         List<String> all = new ArrayList<>();
-        for (SegmentResult r : finalized) {
+        for (StagedRun r : finalized) {
             assertThat(Files.exists(r.path())).isTrue();
             List<String> segKeys = keys(r.path());
             assertThat(segKeys).isSorted();
@@ -94,21 +94,21 @@ final class SortLaneTest {
 
     @Test
     void wiresTheConfiguredSegmentCodecIntoAnOutOfOrderReSortedPage(@TempDir Path tmp) throws Exception {
-        // SortLane must thread SortConfig#segmentCodec() into its PageRunSegmentWriter so an
+        // SpillLane must thread SortConfig#segmentCodec() into its PageRunWriter so an
         // full-comparator-disordered but raw-key-monotonic page's re-pack (at flush time) honors it
         // too, not just the page's original admission-time pack.
         Path staging = Files.createDirectories(tmp.resolve("_staging"));
-        List<SegmentResult> finalized = new ArrayList<>();
-        SortConfig zstdConfig = SortConfigs.base().withSegmentCodec(PageCodec.ZSTD1);
+        List<StagedRun> finalized = new ArrayList<>();
+        SortConfig zstdConfig = SortConfigs.base().withSegmentCodec(PageCompression.ZSTD1);
 
-        SortLane lane = new SortLane(zstdConfig, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, NO_OP_METERS,
+        SpillLane lane = new SpillLane(zstdConfig, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, NO_OP_METERS,
                 staging, "seg-test", finalized::add);
         lane.admit(1L, List.of(version("k", "v2"), version("k", "v1"),
                 SortTestSupport.object("z")));
         lane.close();
 
         assertThat(finalized).hasSize(1);
-        PageRunSegmentInspector.Dump dump = PageRunSegmentInspector.inspect(finalized.get(0).path());
+        PageRunInspector.Dump dump = PageRunInspector.inspect(finalized.get(0).path());
         assertThat(dump.records()).hasSize(1);
         assertThat(dump.records().get(0).codec()).isEqualTo("ZSTD1");
     }

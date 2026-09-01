@@ -13,9 +13,9 @@ import java.util.Objects;
  * The shared staging-segment fullness policy. The byte threshold has precedence when both limits
  * are reached by the same entry, preserving the listing lane's trigger classification.
  */
-public record SegmentGate(SortConfig config) {
+public record SpillGate(SortConfig config) {
 
-    public SegmentGate {
+    public SpillGate {
         Objects.requireNonNull(config, "config");
     }
 

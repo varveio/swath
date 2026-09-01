@@ -19,9 +19,9 @@ import java.util.zip.CRC32C;
 /**
  * The single page-run file encoder. Callers append already-packed pages, then finish with a
  * CRC-protected fixed trailer. A successful finish forces and closes the file, fsyncs its
- * directory, and only then records completion for the supplied {@link SegmentKind}.
+ * directory, and only then records completion for the supplied {@link PageRunKind}.
  */
-final class PageRunSegmentEncoder implements AutoCloseable {
+final class PageRunEncoder implements AutoCloseable {
 
     private final Path path;
     private final FileChannel channel;
@@ -35,7 +35,7 @@ final class PageRunSegmentEncoder implements AutoCloseable {
     private byte[] previousPageMax;
     private boolean closed;
 
-    private PageRunSegmentEncoder(Path path, FileChannel channel, SortMetrics metrics,
+    private PageRunEncoder(Path path, FileChannel channel, SortMetrics metrics,
                                   SortMode orderingMode) {
         this.path = path;
         this.channel = channel;
@@ -43,7 +43,7 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         this.orderingMode = orderingMode;
     }
 
-    static PageRunSegmentEncoder open(Path path, SortMetrics metrics,
+    static PageRunEncoder open(Path path, SortMetrics metrics,
                                       SortMode orderingMode) throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(metrics, "metrics");
@@ -52,7 +52,7 @@ final class PageRunSegmentEncoder implements AutoCloseable {
                 StandardOpenOption.TRUNCATE_EXISTING);
         try {
             PageRunHeader.write(channel, orderingMode);
-            return new PageRunSegmentEncoder(path, channel, metrics, orderingMode);
+            return new PageRunEncoder(path, channel, metrics, orderingMode);
         } catch (IOException | RuntimeException | Error failure) {
             try {
                 channel.close();
@@ -71,8 +71,8 @@ final class PageRunSegmentEncoder implements AutoCloseable {
             int comparison = Arrays.compareUnsigned(previousPageMax, pageMin);
             if (comparison > 0 || (comparison == 0 && orderingMode == SortMode.OBJECTS)) {
                 metrics.recordStealReason("SORT", "buffer_page_overlap");
-                throw new SegmentCorruptionException(path,
-                        SegmentCorruptionException.PAGE_RUN_PAGE_OVERLAP,
+                throw new PageRunCorruptionException(path,
+                        PageRunCorruptionException.PAGE_RUN_PAGE_OVERLAP,
                         "adjacent pages are not disjoint under " + orderingMode
                                 + " ordering (previous maxKey must be below next minKey)");
             }
@@ -88,7 +88,7 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         previousPageMax = pageMax;
     }
 
-    long finish(SegmentKind kind) throws IOException {
+    long finish(PageRunKind kind) throws IOException {
         requireOpen();
         Objects.requireNonNull(kind, "kind");
         long trailerStart = channel.position();
@@ -102,7 +102,7 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         return totalEntries;
     }
 
-    private void recordCompletion(SegmentKind kind) {
+    private void recordCompletion(PageRunKind kind) {
         switch (kind) {
             case LISTING, FIXTURE_CHUNK ->
                     metrics.recordStealReason("SORT", "segment_flushed");
@@ -129,7 +129,7 @@ final class PageRunSegmentEncoder implements AutoCloseable {
     private static void writeTrailer(FileChannel channel, long trailerStart, int totalRecords,
                                      long totalEntries, int maxRecordLen,
                                      int maxRawPayloadLength, int maxKeyLength) throws IOException {
-        ByteBuffer trailer = ByteBuffer.allocate(PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES);
+        ByteBuffer trailer = ByteBuffer.allocate(PageRunWriter.TRAILER_FIXED_TAIL_BYTES);
         trailer.putLong(trailerStart);
         trailer.putInt(totalRecords);
         trailer.putLong(totalEntries);
@@ -137,9 +137,9 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         trailer.putInt(maxRawPayloadLength);
         trailer.putInt(maxKeyLength);
         CRC32C crc = new CRC32C();
-        crc.update(trailer.array(), 0, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
+        crc.update(trailer.array(), 0, PageRunWriter.TRAILER_FIELDS_BYTES);
         trailer.putInt((int) crc.getValue());
-        trailer.putInt(PageRunSegmentWriter.MAGIC);
+        trailer.putInt(PageRunWriter.MAGIC);
         writeFully(channel, trailer.flip());
     }
 

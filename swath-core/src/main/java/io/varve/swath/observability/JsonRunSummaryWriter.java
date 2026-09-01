@@ -840,7 +840,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // Segments/passes are populated exactly ONCE, after the whole merge
         // finishes, so a mid-merge summary.json snapshot is flat/indistinguishable from a
         // wedged run. merge_progress_units is fed by the SAME swath.progress.units counter
-        // KWayMerge's per-pass batched callback already bumps live during merge (the internal
+        // CascadeReducer's per-pass batched callback already bumps live during merge (the internal
         // LivenessWatchdog's own forward-progress signal) -- surfacing it here gives an
         // external watcher (log tail / summary.json poller) a field that genuinely advances
         // mid-merge.

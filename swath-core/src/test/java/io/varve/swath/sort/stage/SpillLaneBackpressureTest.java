@@ -16,7 +16,7 @@ import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.finalize.SortTestSupport;
-import io.varve.swath.sort.spill.SegmentResult;
+import io.varve.swath.sort.spill.StagedRun;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,17 +35,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@link SortLane}'s liveness and memory-corridor guarantees.
+ * {@link SpillLane}'s liveness and memory-corridor guarantees.
  *
- * <p>{@link SortLane#admit} must never hang forever: a bounded-timeout poll re-checks the
- * encoder's failure state and an in-flight {@link SortLane#abort()} while backpressured, instead of
+ * <p>{@link SpillLane#admit} must never hang forever: a bounded-timeout poll re-checks the
+ * encoder's failure state and an in-flight {@link SpillLane#abort()} while backpressured, instead of
  * blindly blocking on a full handoff queue with nothing left to wake it once the encoder dies.
  *
  * <p>Live sealed buffers (fill + off-thread) must never exceed {@code buffers()} — enforced by
  * releasing the off-thread capacity permit only after a segment's encode fully completes, not
  * merely once it is dequeued.
  */
-final class SortLaneBackpressureTest {
+final class SpillLaneBackpressureTest {
 
     private final ListEntryComparator cmp = new ListEntryComparator();
 
@@ -61,11 +61,11 @@ final class SortLaneBackpressureTest {
         CountDownLatch buffer1EncodingStarted = new CountDownLatch(1);
         CountDownLatch releaseBuffer1 = new CountDownLatch(1);
 
-        SegmentSink failingSink = result -> {
+        StagedRunCommitter failingSink = result -> {
             throw new IOException("injected: disk full");
         };
 
-        SortLane lane = new SortLane(buffers2Gate1(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        SpillLane lane = new SpillLane(buffers2Gate1(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                 SortLaneMeters.NO_OP, staging, "seg-m1a", failingSink);
         lane.beforeEncodeHookForTesting = () -> {
             buffer1EncodingStarted.countDown();
@@ -112,8 +112,8 @@ final class SortLaneBackpressureTest {
         CountDownLatch buffer1EncodingStarted = new CountDownLatch(1);
         CountDownLatch releaseBuffer1 = new CountDownLatch(1);   // deliberately never released by the test
 
-        SortLane lane = new SortLane(buffers2Gate1(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
-                SortLaneMeters.NO_OP, staging, "seg-m1b", SegmentSink.NONE);
+        SpillLane lane = new SpillLane(buffers2Gate1(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                SortLaneMeters.NO_OP, staging, "seg-m1b", StagedRunCommitter.NONE);
         lane.beforeEncodeHookForTesting = () -> {
             buffer1EncodingStarted.countDown();
             await(releaseBuffer1);
@@ -152,9 +152,9 @@ final class SortLaneBackpressureTest {
         // buffers=3 ⇒ offThreadCapacity=2: fill(1) + off-thread(<=2) <= 3 total live.
         SortConfig config = SortConfigs.base().withSegmentEntries(1).withBuffers(3);
         Path staging = Files.createDirectories(tmp.resolve("_staging"));
-        List<SegmentResult> finalized = Collections.synchronizedList(new ArrayList<>());
+        List<StagedRun> finalized = Collections.synchronizedList(new ArrayList<>());
 
-        SortLane lane = new SortLane(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        SpillLane lane = new SpillLane(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                 SortLaneMeters.NO_OP, staging, "seg-m2", finalized::add);
         // A small artificial per-segment delay so the drain thread (sealing one buffer per admit,
         // gate=1) races ahead of the encoder and genuinely overlaps — the scenario the live-buffer bound must handle.
@@ -213,8 +213,8 @@ final class SortLaneBackpressureTest {
             }
         };
 
-        SortLane lane = new SortLane(buffers2Gate1(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
-                meters, staging, "seg-peak", SegmentSink.NONE);
+        SpillLane lane = new SpillLane(buffers2Gate1(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                meters, staging, "seg-peak", StagedRunCommitter.NONE);
         lane.beforeEncodeHookForTesting = () -> {
             buffer1EncodingStarted.countDown();
             await(releaseBuffer1);

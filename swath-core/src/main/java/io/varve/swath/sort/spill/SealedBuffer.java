@@ -11,7 +11,7 @@ import java.util.Map;
 
 /**
  * The state moved out of a sealed {@link io.varve.swath.sort.stage.SortBuffer}: packed pages, distinct-node count, per-node
- * max keys, and the {@link SealTrigger}. {@link PageRunSegmentWriter} owns and sorts the page list
+ * max keys, and the {@link SealTrigger}. {@link PageRunWriter} owns and sorts the page list
  * in place; merge ordering is resolved by the page-aware external merge.
  */
 public final class SealedBuffer {
@@ -39,8 +39,8 @@ public final class SealedBuffer {
 
     /**
      * The buffer's admission-time byte estimate (the same §5 estimate that gated this buffer's
-     * seal) — NOT the encoded/compressed staging-segment size ({@link SegmentResult#bytes()}).
-     * {@link SortLane} keeps this live in memory from seal until the segment is fully encoded +
+     * seal) — NOT the encoded/compressed staging-segment size ({@link StagedRun#bytes()}).
+     * {@link SpillLane} keeps this live in memory from seal until the segment is fully encoded +
      * finalized (success or failure), feeding the in-flight staging-bytes high-water mark
      * ({@code swath.sort.staging.bytes.peak}).
      */

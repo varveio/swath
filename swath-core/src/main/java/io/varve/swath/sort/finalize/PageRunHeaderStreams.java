@@ -6,9 +6,9 @@
 package io.varve.swath.sort.finalize;
 
 import io.varve.swath.sort.SortMetrics;
-import io.varve.swath.sort.spill.PageBlockCodec;
+import io.varve.swath.sort.spill.PageBlockFormat;
 import io.varve.swath.sort.spill.PageRef;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * one shared cursor queue, preserve the router's ability to hold exactly one ordered frontier head
  * from every run without decoding bodies or allowing a hot segment to hide an unstarted one.
  */
-final class SegmentHeaderCursors implements AutoCloseable {
+final class PageRunHeaderStreams implements AutoCloseable {
     static final int QUEUE_DEPTH = 2;
     private static final long FAILURE_CHECK_MILLIS = 100;
 
@@ -39,7 +39,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
      * cursor per file preserves frame order; the semaphore prevents thousands of open segments from
      * issuing simultaneous small reads against the filesystem.
      */
-    SegmentHeaderCursors(List<PageRunSegmentIo> segments, Settings settings, SortMetrics metrics,
+    PageRunHeaderStreams(List<PageRunReader> segments, Settings settings, SortMetrics metrics,
             FinalizationFailure failure) {
         this.failure = failure;
         this.metrics = metrics;
@@ -98,13 +98,13 @@ final class SegmentHeaderCursors implements AutoCloseable {
      * header-to-trailer tiling and totals. The scan permit is released before queue handoff so a full
      * slot cannot monopolize the only permit and deadlock an unstarted segment's frontier head.
      */
-    private void scan(int segment, PageRunSegmentIo io, Semaphore scanPermits, Hook hook) {
+    private void scan(int segment, PageRunReader io, Semaphore scanPermits, Hook hook) {
         long pageNumber = 0;
         try {
             while (true) {
                 hook.beforePermitAcquire(segment, pageNumber);
                 scanPermits.acquire();
-                PageRunSegmentIo.RoutingPage page;
+                PageRunReader.RoutingPage page;
                 long started = System.nanoTime();
                 try {
                     page = io.nextRoutingPage();
@@ -119,7 +119,7 @@ final class SegmentHeaderCursors implements AutoCloseable {
                     put(segment, Item.End.INSTANCE);
                     return;
                 }
-                PageBlockCodec.RoutingHeader header = page.header();
+                PageBlockFormat.RoutingHeader header = page.header();
                 PageRef ref = new PageRef(segment, page.ordinal(), page.offset(), page.framedLen(),
                         header.minKey(), header.maxKey(), header.count(),
                         header.rawPayloadLength());

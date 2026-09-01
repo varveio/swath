@@ -24,13 +24,13 @@ import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortRun;
-import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedEntryCursor;
 import io.varve.swath.sort.SortedFileWriterFactory;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
-import io.varve.swath.sort.spill.PageRunSegmentWriter;
 import io.varve.swath.sort.spill.PageRunTrailer;
+import io.varve.swath.sort.spill.PageRunWriter;
 import io.varve.swath.sort.spill.SealTrigger;
-import io.varve.swath.sort.spill.SegmentResult;
+import io.varve.swath.sort.spill.SpillTestFixtures;
+import io.varve.swath.sort.spill.StagedRun;
 import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.IOException;
 import java.io.InputStream;
@@ -67,7 +67,8 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * MEASUREMENT harness for the concurrent finalization pipeline. It runs the ACTUAL production
  * merge path — {@link SortedDatasetCoordinator#transform}
  * with {@link SortedParquetWriterFactory} over live-format page-run staging segments produced through
- * the same {@link PageRunFixtures} seal and {@link PageRunSegmentWriter#flush} seam as listing. After one
+ * the same {@link io.varve.swath.sort.stage.SortBuffer SortBuffer} seal and {@link PageRunWriter#flush}
+ * seam as listing. After one
  * untimed full-transform warm-up, measured encoder counts are interleaved with one-encoder
  * brackets; speedups use medians and are invalidated when either bracket exceeds the explicit
  * variance threshold.
@@ -76,7 +77,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * passed (see {@link EnabledIfSystemProperty}), so {@code ./gradlew build} never executes it.
  *
  * <p>Run: {@code ./gradlew :swath-core:test --tests
- * 'io.varve.swath.sort.ParallelMergeBenchmark' -Dswath.bench=on -Pperf}
+ * 'io.varve.swath.sort.finalize.ParallelMergeBenchmark' -Dswath.bench=on -Pperf}
  * ({@code -Pperf} widens the forked test JVM's heap to 2&nbsp;GB — see
  * {@code build-logic/.../swath.java-conventions.gradle.kts} — since the default forked-test-worker
  * heap is far too small for a GB-scale merge corpus.)
@@ -575,11 +576,9 @@ class ParallelMergeBenchmark {
     static CorpusCatalog snapshotCatalog(String source, Path staging, List<Path> inputs) throws IOException {
         List<BenchmarkRowOracle.SourceSegment> sources = new ArrayList<>();
         for (Path input : inputs) {
-            try (PageRunSegmentIo io = PageRunSegmentIo.open(input, SortMetrics.NO_OP)) {
-                PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
-                sources.add(new BenchmarkRowOracle.SourceSegment(
-                        input, trailer.totalEntries(), Files.size(input)));
-            }
+            PageRunTrailer.Trailer trailer = SpillTestFixtures.trailer(input);
+            sources.add(new BenchmarkRowOracle.SourceSegment(
+                    input, trailer.totalEntries(), Files.size(input)));
         }
         return snapshotCatalog(source, staging, sources, -1, "not_applicable", null);
     }
@@ -819,8 +818,8 @@ class ParallelMergeBenchmark {
             throw new IllegalArgumentException("swath.bench.pageRows must be > 0, got " + pageRows);
         }
         SortConfig config = SortConfig.fromSystemProperties();
-        PageRunSegmentWriter writer =
-                new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, config.segmentCodec());
+        PageRunWriter writer =
+                new PageRunWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, config.segmentCodec());
         long rowsPerDay = Math.max(1, totalRows / TOTAL_DAYS);
         LocalDate base = LocalDate.of(2019, 1, 1);
         int totalSegments = 0;
@@ -828,7 +827,7 @@ class ParallelMergeBenchmark {
         long totalBytes = 0;
         for (int seg = 0; seg < numSegments; seg++) {
             PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
-            try (SortedCursor cursor =
+            try (SortedEntryCursor cursor =
                          SortBenchCorpus.generatedCursor(
                                  seg, numSegments, blockRows, totalRows, rowsPerDay, base)) {
                 List<ListEntry> page = new ArrayList<>(pageRows);
@@ -848,7 +847,7 @@ class ParallelMergeBenchmark {
                 continue;
             }
             Path path = master.resolve(String.format("seg-%05d.pageseg", seg));
-            SegmentResult result = writer.flush(buffer.seal(SealTrigger.DRAIN), path);
+            StagedRun result = writer.flush(buffer.seal(SealTrigger.DRAIN), path);
             totalSegments++;
             accumulatedRows += result.rows();
             totalBytes += result.bytes();

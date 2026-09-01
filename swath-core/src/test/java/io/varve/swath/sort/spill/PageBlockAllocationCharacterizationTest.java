@@ -45,7 +45,7 @@ import org.junit.jupiter.api.io.TempDir;
  * <pre>
  * JAVA_TOOL_OPTIONS='-Dswath.profile.allocations=exact' ./gradlew \
  *   :swath-core:test \
- *   --tests 'io.varve.swath.sort.PageBlockAllocationCharacterizationTest'
+ *   --tests 'io.varve.swath.sort.spill.PageBlockAllocationCharacterizationTest'
  * </pre>
  * The normal build sees this class but skips it.
  */
@@ -104,12 +104,12 @@ public class PageBlockAllocationCharacterizationTest {
         }
 
         byte[] body = largeNoneBody();
-        PageBlockCodec.Header warmHeader = PageBlockCodec.parseHeader(body);
+        PageBlockFormat.Header warmHeader = PageBlockFormat.parseHeader(body);
         if (warmHeader.payloadLength() < ALLOCATION_FLOOR_BYTES) {
             throw new AssertionError("probe payload is below allocation floor: "
                     + warmHeader.payloadLength());
         }
-        drain(PageBlockCodec.deserialize(body, warmHeader, Path.of("warmup.pageseg")));
+        drain(PageBlockFormat.deserialize(body, warmHeader, Path.of("warmup.pageseg")));
 
         try (Recording recording = new Recording()) {
             recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
@@ -149,7 +149,7 @@ public class PageBlockAllocationCharacterizationTest {
                     i, i, null, storageClass, null, false,
                     null, null, null, null));
         }
-        return PageBlock.pack(rows, CMP, PageCodec.NONE).serialize();
+        return PageBlock.pack(rows, CMP, PageCompression.NONE).serialize();
     }
 
     private static void drain(PageBlock block) {
@@ -180,7 +180,7 @@ public class PageBlockAllocationCharacterizationTest {
                         "positiveControlAllocation")) {
                     positive++;
                 }
-                if (hasAnyFrame(frames, PageBlockCodec.class,
+                if (hasAnyFrame(frames, PageBlockFormat.class,
                         Set.of("parseHeader", "deserialize"))) {
                     currentCodec++;
                 }

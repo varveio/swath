@@ -15,7 +15,7 @@ import java.util.List;
 
 /**
  * Test-only row oracle for page-run staging segments. It deliberately drives the production
- * {@link PageRunSegmentIo#nextPage()} loop instead of maintaining a second segment reader.
+ * {@link PageRunReader#nextPage()} loop instead of maintaining a second segment reader.
  */
 public final class PageRunReads {
 
@@ -36,8 +36,8 @@ public final class PageRunReads {
     static List<ListEntry> entries(Path segment, SortMetrics metrics) throws IOException {
         List<ListEntry> result = new ArrayList<>();
         try {
-            try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, metrics)) {
-                PageRunSegmentIo.Page page;
+            try (PageRunReader io = PageRunReader.open(segment, metrics)) {
+                PageRunReader.Page page;
                 while ((page = io.nextPage()) != null) {
                     PageBlockCursor cursor = page.decode(segment).cursor();
                     while (cursor.hasNext()) {

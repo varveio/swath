@@ -64,7 +64,7 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
     ```bash
     JAVA_TOOL_OPTIONS='-Dswath.profile.allocations=exact' ./gradlew \
       :swath-core:test \
-      --tests 'io.varve.swath.sort.PageBlockAllocationCharacterizationTest'
+      --tests 'io.varve.swath.sort.spill.PageBlockAllocationCharacterizationTest'
     ```
 
     The default build skips it; a zero target count without the positive control is a failure, not
@@ -142,7 +142,7 @@ the retained tree remains byte-identical after each arm.
 
 ```bash
 ./gradlew :swath-core:test \
-  --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  --tests 'io.varve.swath.sort.finalize.ParallelMergeBenchmark' \
   -Dswath.bench=on -Pperf \
   -Dswath.bench.encoders=1,4,8 \
   -Dswath.bench.staging-dir=/path/to/_staging
@@ -154,11 +154,11 @@ which contains its single `BENCH_CORPUS` and `BENCH_INPUT_ORACLE` records:
 
 ```bash
 scripts/perf/corpus-record.sh register --corpus /path/to/_staging \
-  --evidence swath-core/build/test-results/test/TEST-io.varve.swath.sort.ParallelMergeBenchmark.xml
+  --evidence swath-core/build/test-results/test/TEST-io.varve.swath.sort.finalize.ParallelMergeBenchmark.xml
 scripts/perf/corpus-record.sh validate --corpus /path/to/_staging
 
 ./gradlew :swath-core:test \
-  --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  --tests 'io.varve.swath.sort.finalize.ParallelMergeBenchmark' \
   -Dswath.bench=on -Pperf \
   -Dswath.bench.staging-dir=/path/to/_staging \
   -Dswath.bench.corpus-record=/path/to/CORPUS.varve
@@ -166,7 +166,7 @@ scripts/perf/corpus-record.sh validate --corpus /path/to/_staging
 
 Corpus records are intentionally current-format-only: `swath-page-run-corpus-v4`. The shell helper
 checks path, segment count, and bytes; the benchmark then opens every segment through
-`PageRunSegmentIo`, checks the registered corpus identity and full-row multiset, and validates the
+`PageRunReader`, checks the registered corpus identity and full-row multiset, and validates the
 sorted output against the same oracle. Regenerate and register a corpus after a page-run format
 change; there is no legacy conversion path.
 
@@ -199,9 +199,9 @@ Correctness guards around this harness include:
 - `FinalizationPipelineTest`: routing, calibration, plan caps, failure relay, cancellation,
   cleanup, and publication behavior.
 - `FinalizationPipelineScalingTest`: shared-queue encoder scheduling and concurrency bounds.
-- `PageRunSegmentTest` and `PageRunSegmentInspectorTest`: v4 header/frame/fixed-tail
+- `PageRunTest` and `PageRunInspectorTest`: v4 header/frame/fixed-tail
   completeness, CRC, mode-aware page disjointness, and persisted-maximum checks.
-- `KWayMergeTest`: cascade whole-page and overlap-component behavior, including duplicate
+- `CascadeReducerTest`: cascade whole-page and overlap-component behavior, including duplicate
   multiplicity through intermediates.
 
 ## JMH micro-benchmarks

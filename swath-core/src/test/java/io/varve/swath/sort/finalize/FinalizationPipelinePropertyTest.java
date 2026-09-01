@@ -30,7 +30,7 @@ import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriterFactory;
-import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageCompression;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -198,7 +198,7 @@ class FinalizationPipelinePropertyTest {
         for (int i = 0; i < segments.size(); i++) {
             Path path = directory.resolve("seg-" + i + StagingNames.PAGE_RUN_SUFFIX);
             SortTestSupport.writePages(
-                    path, segments.get(i), SortMode.VERSIONS, PageCodec.LZ4);
+                    path, segments.get(i), SortMode.VERSIONS, PageCompression.LZ4);
             paths.add(path);
         }
         return paths;

@@ -65,10 +65,10 @@ import io.varve.swath.runtime.LivenessWatchdog;
 import io.varve.swath.runtime.OutputPublisher;
 import io.varve.swath.runtime.RunContext;
 import io.varve.swath.runtime.SignalHandlers;
-import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.spill.PageRunFormat;
 import io.varve.swath.store.FirstRequestMarkerFetcher;
 import io.varve.swath.store.PageFetcher;
 import io.varve.swath.store.s3.S3ClientFactory;
@@ -1796,7 +1796,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             throws InvalidConfigException, InvalidArgsException {
         boolean singleFile = output.resolvedKind == OutputOptions.DestinationKind.FILE;
         long targetBytes = output.partSizeBytes();
-        // Sorted output stages through SortLane and publishes through SortedParquetWriterFactory;
+        // Sorted output stages through SpillLane and publishes through SortedParquetWriterFactory;
         // it never constructs the direct dataset writer pool. Keep the otherwise-unused writer
         // fields inert so an expert direct-sink setting cannot reject or warn on a sorted run.
         int writers = sorting.sort ? 1 : OutputOptions.resolveParquetWriters(

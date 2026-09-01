@@ -8,21 +8,21 @@ package io.varve.swath.sort.finalize;
 import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.output.sorted.StagingReconciliation;
 import io.varve.swath.sort.SortRun;
-import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedEntryCursor;
 import io.varve.swath.sort.spill.PageBlock;
-import io.varve.swath.sort.spill.PageBlockCodec;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
-import io.varve.swath.sort.spill.PageRunSegmentWriter;
+import io.varve.swath.sort.spill.PageBlockFormat;
+import io.varve.swath.sort.spill.PageRunReader;
+import io.varve.swath.sort.spill.PageRunWriter;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 /** Page-run storage seam used by cascade passes. */
-final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
+final class PageRunCascadeStore implements CascadeReducer.SegmentIo<Path> {
 
     private final SortRun run;
-    private final PageRunSegmentWriter segmentWriter;
+    private final PageRunWriter segmentWriter;
     private final Path stagingDir;
     private final StagingReconciliation stagingAuthority;
     private final String intermediatePrefix;
@@ -30,7 +30,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     private final List<Path> intermediates = new ArrayList<>();
     private int sequence;
 
-    PageRunMergeIo(SortRun run, PageRunSegmentWriter segmentWriter, Path stagingDir,
+    PageRunCascadeStore(SortRun run, PageRunWriter segmentWriter, Path stagingDir,
             StagingReconciliation stagingAuthority, String intermediatePrefix) {
         this.run = run;
         this.segmentWriter = segmentWriter;
@@ -42,15 +42,15 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     }
 
     @Override
-    public KWayMerge.PageStream openPages(Path segment) throws IOException {
-        return new PageStream(PageRunSegmentIo.openUsingPersistedMaximum(
+    public CascadeReducer.PageStream openPages(Path segment) throws IOException {
+        return new PageStream(PageRunReader.openUsingPersistedMaximum(
                 segment, run.metrics()));
     }
 
     @Override
-    public long decodedPageBudgetBytes(List<KWayMerge.PageStream> streams) throws IOException {
+    public long decodedPageBudgetBytes(List<CascadeReducer.PageStream> streams) throws IOException {
         long encodedFrontiers = 0;
-        for (KWayMerge.PageStream stream : streams) {
+        for (CascadeReducer.PageStream stream : streams) {
             encodedFrontiers = Math.addExact(
                     encodedFrontiers, stream.frontierRetainedBytes());
         }
@@ -66,7 +66,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     }
 
     @Override
-    public Path writeIntermediate(SortedCursor sorted) throws IOException {
+    public Path writeIntermediate(SortedEntryCursor sorted) throws IOException {
         Path destination = stagingDir.resolve(
                 StagingNames.cascadeIntermediate(intermediatePrefix, sequence++));
         stagingAuthority.requireOwnedStagingAuthority(stagingDir);
@@ -85,11 +85,11 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     }
 
     /** One CRC-valid current page plus its independently validated successor advance. */
-    private static final class PageStream implements KWayMerge.PageStream {
-        private final PageRunSegmentIo io;
-        private PageRunSegmentIo.Page current;
+    private static final class PageStream implements CascadeReducer.PageStream {
+        private final PageRunReader io;
+        private PageRunReader.Page current;
 
-        PageStream(PageRunSegmentIo io) {
+        PageStream(PageRunReader io) {
             this.io = io;
         }
 
@@ -101,7 +101,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
         @Override
         public long frontierRetainedBytes() {
             return Math.addExact(
-                    io.maxRecordLen, PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES);
+                    io.maxRecordLen, PageBlockFormat.PERSISTED_DICTIONARY_COORDINATE_BYTES);
         }
 
         @Override

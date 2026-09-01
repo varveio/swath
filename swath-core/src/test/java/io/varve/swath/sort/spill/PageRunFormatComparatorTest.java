@@ -24,8 +24,8 @@ class PageRunFormatComparatorTest {
 
     @Test
     void persistedWriterRejectsAnAlternateComparator() {
-        assertThatThrownBy(() -> new PageRunSegmentWriter(
-                ALTERNATE, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE))
+        assertThatThrownBy(() -> new PageRunWriter(
+                ALTERNATE, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("page-run format v4 requires ListEntryComparator");
     }

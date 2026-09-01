@@ -47,9 +47,9 @@ class PageRunHeaderTest {
 
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
             assertThatThrownBy(() -> PageRunHeader.read(channel, path, header.length, metrics))
-                    .isInstanceOfSatisfying(SegmentCorruptionException.class, failure ->
+                    .isInstanceOfSatisfying(PageRunCorruptionException.class, failure ->
                             assertThat(failure.errorClass())
-                                    .isEqualTo(SegmentCorruptionException.PAGE_RUN_HEADER_CORRUPTION));
+                                    .isEqualTo(PageRunCorruptionException.PAGE_RUN_HEADER_CORRUPTION));
         }
         assertThat(metrics.count("SORT.page_run_header_corruption")).isEqualTo(1);
     }
@@ -62,7 +62,7 @@ class PageRunHeaderTest {
 
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
             assertThatThrownBy(() -> PageRunHeader.read(channel, path, Files.size(path), metrics))
-                    .isInstanceOf(SegmentCorruptionException.class)
+                    .isInstanceOf(PageRunCorruptionException.class)
                     .hasMessageContaining("error_class=page_run_header_corruption")
                     .hasMessageContaining("truncated page-run header");
         }
@@ -85,7 +85,7 @@ class PageRunHeaderTest {
         try (FileChannel channel = FileChannel.open(oldFormatPath, StandardOpenOption.READ)) {
             assertThatThrownBy(() -> PageRunHeader.read(
                     channel, oldFormatPath, oldFormat.length, metrics))
-                    .isInstanceOf(SegmentCorruptionException.class)
+                    .isInstanceOf(PageRunCorruptionException.class)
                     .hasMessageContaining("error_class=page_run_format_mismatch")
                     .hasMessageContaining("unsupported page-run format version 1");
         }
@@ -101,7 +101,7 @@ class PageRunHeaderTest {
 
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
             assertThatThrownBy(() -> PageRunHeader.read(channel, path, header.length, metrics))
-                    .isInstanceOf(SegmentCorruptionException.class)
+                    .isInstanceOf(PageRunCorruptionException.class)
                     .hasMessageContaining("error_class=page_run_header_corruption")
                     .hasMessageContaining("unexpected EOF");
         }
@@ -114,7 +114,7 @@ class PageRunHeaderTest {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
             assertThatThrownBy(() -> PageRunHeader.read(channel, path, header.length, metrics))
-                    .isInstanceOf(SegmentCorruptionException.class)
+                    .isInstanceOf(PageRunCorruptionException.class)
                     .hasMessageContaining("error_class=" + reason)
                     .hasMessageContaining(message);
         }
@@ -125,8 +125,8 @@ class PageRunHeaderTest {
         int metadataLength = 5 + 5;
         ByteBuffer header = ByteBuffer.allocate(
                 PageRunHeader.PREFIX_BYTES + metadataLength + PageRunHeader.CRC_BYTES)
-                .putInt(PageRunSegmentWriter.MAGIC)
-                .putShort(PageRunSegmentWriter.FORMAT_VERSION)
+                .putInt(PageRunWriter.MAGIC)
+                .putShort(PageRunWriter.FORMAT_VERSION)
                 .putShort(PageRunHeader.HEADER_VERSION)
                 .putInt(metadataLength)
                 .putShort((short) 99).putShort((short) 1).put((byte) 42)

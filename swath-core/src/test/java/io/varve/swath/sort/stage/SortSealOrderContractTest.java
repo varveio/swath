@@ -29,7 +29,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * SORT-RESUME-1, out-of-order-finalize hazard case. The single ordered encoder MUST finalize
- * staging segments — and therefore advance {@code durable_cursor} through {@link SegmentSink} —
+ * staging segments — and therefore advance {@code durable_cursor} through {@link StagedRunCommitter} —
  * <b>strictly in seal order</b>, even when a LATER buffer is already sealed and queued while an
  * EARLIER one is still mid-encode. An out-of-order finalize would let {@code durable_cursor}
  * over-advance past keys still sitting in an earlier unfinalized buffer and silently lose them on
@@ -37,8 +37,8 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p>Rigged via the package-private {@code beforeEncodeHookForTesting} seam: the first segment's
  * encode is stalled while the drain thread seals additional buffers behind it (double-buffering is
- * proven engaged — {@link SortLane#maxObservedOffThreadBuffers()} &gt; 1). Despite that concurrency,
- * the {@link SegmentSink} must observe the per-node max keys strictly ascending in seal order (never
+ * proven engaged — {@link SpillLane#maxObservedOffThreadBuffers()} &gt; 1). Despite that concurrency,
+ * the {@link StagedRunCommitter} must observe the per-node max keys strictly ascending in seal order (never
  * a later-sealed-but-earlier-finalized inversion), so {@code durable_cursor} never regresses or
  * over-advances.
  */
@@ -57,12 +57,12 @@ final class SortSealOrderContractTest {
             @TempDir Path tmp) throws Exception {
         Path staging = Files.createDirectories(tmp.resolve("_staging"));
 
-        // The SegmentSink records each finalized segment's node-1 max key, in the exact order the
+        // The StagedRunCommitter records each finalized segment's node-1 max key, in the exact order the
         // single ordered encoder invokes it — this is the durable_cursor advance order.
         List<byte[]> finalizeOrderMaxKeys = Collections.synchronizedList(new ArrayList<>());
-        SegmentSink recordingSink = result -> finalizeOrderMaxKeys.add(result.perNodeMaxKeys().get(1L));
+        StagedRunCommitter recordingSink = result -> finalizeOrderMaxKeys.add(result.perNodeMaxKeys().get(1L));
 
-        SortLane lane = new SortLane(config(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        SpillLane lane = new SpillLane(config(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                 SortLaneMeters.NO_OP, staging, "seg-sealorder", recordingSink);
 
         // Stall ONLY the first segment's encode so later buffers seal + queue behind it.

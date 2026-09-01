@@ -45,7 +45,7 @@ public final class PageRunRawFixtures {
             Comparator<ListEntry> comparator, SortMode orderingMode) throws IOException {
         List<PageBlock> blocks = new ArrayList<>(pages.size());
         for (List<ListEntry> page : pages) {
-            blocks.add(PageBlock.pack(page, comparator, PageCodec.NONE));
+            blocks.add(PageBlock.pack(page, comparator, PageCompression.NONE));
         }
         long totalEntries = 0;
         int maxRecordLen = 0;
@@ -75,13 +75,13 @@ public final class PageRunRawFixtures {
     public static Path writeInteriorRowRegression(Path path) throws IOException {
         ListEntryComparator comparator = new ListEntryComparator();
         PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(
-                SortConfigs.base().withSegmentCodec(PageCodec.NONE), comparator);
+                SortConfigs.base().withSegmentCodec(PageCompression.NONE), comparator);
         buffer.admit(0L, List.of(prefix("a"), prefix("m"), prefix("z")));
-        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+        new PageRunWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
 
         byte[] bytes = Files.readAllBytes(path);
-        int frameStart = PageRunSegmentWriter.HEADER_BYTES;
+        int frameStart = PageRunWriter.HEADER_BYTES;
         int bodyLength = ByteBuffer.wrap(bytes).getInt(frameStart);
         int bodyStart = frameStart + 2 * Integer.BYTES;
         ByteBuffer body = ByteBuffer.wrap(bytes, bodyStart, bodyLength).slice();
@@ -114,7 +114,7 @@ public final class PageRunRawFixtures {
                 ? List.of(objectWithKey(atLimit), SortTestSupport.object("z"))
                 : List.of(SortTestSupport.object("a"), objectWithKey(atLimit));
         ListEntryComparator comparator = new ListEntryComparator();
-        PageBlock block = PageBlock.pack(rows, comparator, PageCodec.NONE);
+        PageBlock block = PageBlock.pack(rows, comparator, PageCompression.NONE);
         byte[] validBody = block.serialize();
         int minLength = unsignedShort(validBody, 0);
         int lengthPosition = overlongMinimum ? 0 : Short.BYTES + minLength;
@@ -151,7 +151,7 @@ public final class PageRunRawFixtures {
         position += Short.BYTES + unsignedShort(cursor, position);
         int countOffset = position;
         position += Integer.BYTES + 1;
-        for (int dictionary = 0; dictionary < PageBlockCodec.DICT_COLUMN_COUNT; dictionary++) {
+        for (int dictionary = 0; dictionary < PageBlockFormat.DICT_COLUMN_COUNT; dictionary++) {
             int values = unsignedShort(cursor, position);
             position += Short.BYTES;
             for (int value = 0; value < values; value++) {
@@ -185,7 +185,7 @@ public final class PageRunRawFixtures {
     private static void writeFixedTrailerTail(FileChannel channel, long trailerStart,
             int totalRecords, long totalEntries, int maxRecordLen,
             int maxRawPayloadLength, int maxKeyLength) throws IOException {
-        ByteBuffer tail = ByteBuffer.allocate(PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES)
+        ByteBuffer tail = ByteBuffer.allocate(PageRunWriter.TRAILER_FIXED_TAIL_BYTES)
                 .putLong(trailerStart)
                 .putInt(totalRecords)
                 .putLong(totalEntries)
@@ -193,8 +193,8 @@ public final class PageRunRawFixtures {
                 .putInt(maxRawPayloadLength)
                 .putInt(maxKeyLength);
         CRC32C crc = new CRC32C();
-        crc.update(tail.array(), 0, PageRunSegmentWriter.TRAILER_FIELDS_BYTES);
-        tail.putInt((int) crc.getValue()).putInt(PageRunSegmentWriter.MAGIC);
+        crc.update(tail.array(), 0, PageRunWriter.TRAILER_FIELDS_BYTES);
+        tail.putInt((int) crc.getValue()).putInt(PageRunWriter.MAGIC);
         SortTestSupport.writeFully(channel, tail.flip());
     }
 

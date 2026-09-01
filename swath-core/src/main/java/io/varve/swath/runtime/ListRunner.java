@@ -82,11 +82,11 @@ import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.sort.finalize.MergeMemoryExhaustedException;
+import io.varve.swath.sort.spill.PageRunCorruptionException;
 import io.varve.swath.sort.spill.PageRunFormat;
-import io.varve.swath.sort.spill.SegmentCorruptionException;
-import io.varve.swath.sort.stage.SegmentSink;
-import io.varve.swath.sort.stage.SortLane;
 import io.varve.swath.sort.stage.SortPagePacker;
+import io.varve.swath.sort.stage.SpillLane;
+import io.varve.swath.sort.stage.StagedRunCommitter;
 import io.varve.swath.store.ListPage;
 import io.varve.swath.store.PageFetcher;
 import io.varve.swath.store.PageRequest;
@@ -697,7 +697,7 @@ public final class ListRunner {
     /**
      * Staging {@code part_file} format namespace, so segment rows never pollute the root manifest.
      * Runs stage page-run segments — this is the value the writer/reader agree on. Both the write side
-     * ({@code SegmentSink.onSegmentFinalized}) and the select side ({@code sortedSegmentRows}) use this
+     * ({@code StagedRunCommitter.onSegmentFinalized}) and the select side ({@code sortedSegmentRows}) use this
      * one constant, so new segments are tagged and selected consistently.
      *
      * <p>{@code public} so the CLI resume-safety guard can refuse a resume whose
@@ -708,7 +708,7 @@ public final class ListRunner {
 
     /**
      * Engine-backed <b>sorted</b> Parquet run: the listing feeds the single ordered
-     * {@link SortLane} (segments finalized in seal order, {@code durable_cursor} advancing per
+     * {@link SpillLane} (segments finalized in seal order, {@code durable_cursor} advancing per
      * segment via the reused {@code partFinalized} machinery), then — once the listing drains and the
      * encoder is flushed — the merge k-way-merges the durable staging segments into the final sorted
      * output and publishes it (manifest written LAST, the "final output present" commit point).
@@ -801,14 +801,14 @@ public final class ListRunner {
             }
         }
 
-        SegmentSink sink = result -> {
+        StagedRunCommitter sink = result -> {
             List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                     .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
             store.partFinalized(new PartFinalize(runId, 0, result.path().getFileName().toString(),
                     result.pageRunFormat(), result.rows(), result.bytes(), advances));
         };
         String segmentPrefix = "seg-" + runId + "-" + Long.toHexString(System.nanoTime());
-        SortLane lane = new SortLane(sortConfig, comparator, DuplicateHook.NO_OP, sortMetrics,
+        SpillLane lane = new SpillLane(sortConfig, comparator, DuplicateHook.NO_OP, sortMetrics,
                 sortLaneMeters(ctx.metrics()), stagingDir, segmentPrefix, sink, mode);
         SortOutputStage stage = new SortOutputStage(lane);
 
@@ -1040,7 +1040,7 @@ public final class ListRunner {
         ctx.metrics().markProgress();
         Timer.Sample mergeSample = ctx.metrics().startSortMergeTimer();
         // The merge/publish tail must keep reporting: it is genuinely advancing (swath.progress.units,
-        // fed by KWayMerge's per-pass callback below) and an external supervisor reading only the log
+        // fed by CascadeReducer's per-pass callback below) and an external supervisor reading only the log
         // tail would otherwise see silence and kill a healthy, still-merging run. Normally the run's
         // session reporter is already ticking and this start JOINS it (see RunProgressReporter); on
         // the merge-only resume path, where no listing ever ran, this IS the owner. Either way it
@@ -1111,7 +1111,7 @@ public final class ListRunner {
             // error_class seam the classified seed-failure path uses.
             //
             // UncheckedIOException is caught HERE, not just IOException: BOTH mergers wrap a read failure
-            // in one merge step because SortedCursor#next
+            // in one merge step because SortedEntryCursor#next
             // cannot throw a checked exception — and a corruption detected mid-drain (the common case: the
             // FIRST page can never regress) therefore arrives as an UncheckedIOException, not an
             // IOException. With only the checked catch this whole classification was INERT on the very
@@ -1142,7 +1142,7 @@ public final class ListRunner {
      */
     static String sortErrorClass(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
-            if (c instanceof SegmentCorruptionException sce) {
+            if (c instanceof PageRunCorruptionException sce) {
                 return sce.errorClass();
             }
             if (c instanceof MergeMemoryExhaustedException exhausted) {
@@ -1475,7 +1475,7 @@ public final class ListRunner {
     }
 
     /** Drain the sort lane's encoder, mapping its checked failure onto the pipeline's exception types. */
-    private static void closeLane(SortLane lane, RunMetrics metrics)
+    private static void closeLane(SpillLane lane, RunMetrics metrics)
             throws SwathException, InterruptedException {
         try {
             lane.close();
@@ -1958,7 +1958,7 @@ public final class ListRunner {
     }
 
     /** Drain for a sort sink: drain the lane's encoder (every segment durable) on success, abort on failure. */
-    private static DrainStep laneDrain(SortLane lane, RunMetrics metrics) {
+    private static DrainStep laneDrain(SpillLane lane, RunMetrics metrics) {
         return new DrainStep() {
             @Override
             public void onDrained() throws SwathException, InterruptedException {
