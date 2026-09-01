@@ -1,5 +1,5 @@
 Usage: swath [-hVqv] [--color=MODE] [COMMAND]
-High-performance object-store lister.
+Parallel, resumable S3 object lister.
       --color=MODE   Color the progress line and end-of-run summary: auto,
                        always, or never (default: auto).
   -h, --help         Show this help message and exit.
