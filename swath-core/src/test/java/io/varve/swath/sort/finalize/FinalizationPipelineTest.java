@@ -1149,6 +1149,34 @@ final class FinalizationPipelineTest {
         assertThat(progress).containsExactly(1_000L, 1_000L, 500L);
     }
 
+    /**
+     * Progress counts merge work, not output rows. Every intermediate cascade pass rewrites the
+     * whole corpus and reports it, and the final encode reports it once more, so five rows reduced
+     * over two cascade passes report fifteen units. A consumer that read the total as an output
+     * row count would report a merge as 300% complete.
+     */
+    @Test
+    void cascadeProgressReportsEveryRowOncePerPassAndOnceAtFinalEncode(@TempDir Path root)
+            throws IOException {
+        List<List<List<ListEntry>>> segments = new ArrayList<>();
+        for (String key : List.of("a", "b", "c", "d", "e")) {
+            segments.add(List.of(List.of(SortTestSupport.object(key))));
+        }
+        List<Long> progress = new ArrayList<>();
+
+        SortedDatasetResult result = runPages(root, segments, Long.MAX_VALUE, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT, 2, 64L << 20, PageCompression.NONE, 1,
+                progress::add);
+
+        assertThat(result.totalRows()).isEqualTo(5);
+        assertThat(result.cascadedPasses()).as("five segments at fan-in two cascade twice")
+                .isEqualTo(2);
+        assertThat(progress).allSatisfy(units -> assertThat(units).isPositive());
+        assertThat(progress.stream().mapToLong(Long::longValue).sum())
+                .as("five rows, twice rewritten and once encoded")
+                .isEqualTo(15);
+    }
+
     @Test
     void encoderProgressIsNeverDeliveredConcurrentlyAcrossLanes(@TempDir Path root) throws IOException {
         int lanes = 8;

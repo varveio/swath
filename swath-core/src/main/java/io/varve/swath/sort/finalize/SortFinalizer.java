@@ -351,10 +351,16 @@ public final class SortFinalizer {
      * Invocation state for preparation only; it carries no publication destination or committer.
      *
      * <p>{@code progressCallback} is invoked serially — never concurrently, even though both the
-     * cascade reducer and multiple encoder lanes report into it — with a non-negative row-count
-     * increment each call, batched in fixed-size row groups. Treat it like a counter increment
-     * (production wires it into exactly that): the running sum of every value observed is
-     * monotonically non-decreasing and totals the exact row count prepared.
+     * cascade reducer and multiple encoder lanes report into it — with a non-negative increment of
+     * completed merge work each call, batched in 1,000-row batches plus each stage's final
+     * remainder. Treat it like a counter increment (production wires it into exactly that): the
+     * running sum of every value observed is monotonically non-decreasing.
+     *
+     * <p>It counts work, not output cardinality. A row is reported once per intermediate cascade
+     * pass that rewrites it and once more when it is encoded into a final part, so the total may
+     * exceed the number of rows prepared — five rows reduced over two cascade passes report fifteen
+     * units, not five. Consumers must read the values as progress increments and never as a
+     * row-count oracle.
      */
     public record Request(
             Admission admission,
