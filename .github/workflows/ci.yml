@@ -61,10 +61,10 @@ jobs:
       # executes before any other gate can run. Validate its checksum against the published
       # Gradle releases so a tampered wrapper cannot bootstrap the build.
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
 
       # The CLI jar and replay installDist are built here so docker-publish ships the EXACT
       # artifacts that passed this job's tests — "test what you built".
@@ -126,7 +126,7 @@ jobs:
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
 
       # INT-6 reads swath's Parquet parts back with DuckDB (an independent engine).
       # Without the CLI on PATH the test aborts (skips), so the DuckDB-readback
@@ -175,7 +175,7 @@ jobs:
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
 
       - name: Deep tier (schedule-sensitive + latency tests, serial)
         run: ./gradlew test -Pdeep -PtestMaxParallelForks=1 --no-daemon --stacktrace

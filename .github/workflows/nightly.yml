@@ -45,7 +45,7 @@ jobs:
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
 
       # Deep tier serially (-PtestMaxParallelForks=1) so probe budgets are asserted without
       # cross-fork CPU contention, exactly as the main-merge deep-tests job runs them.
@@ -120,7 +120,7 @@ jobs:
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
 
       # installDist, not the shadow jar: the install `lib/` directory is the resolved closure
       # with each module still a separately identifiable artifact, which is what the scanner
