@@ -33,7 +33,7 @@ import picocli.CommandLine.UnmatchedArgumentException;
         name = "swath",
         mixinStandardHelpOptions = true,
         versionProvider = App.VersionProvider.class,
-        description = "High-performance object-store lister.",
+        description = "Parallel, resumable S3 object lister.",
         footer = "Built by Varve: https://varve.io",
         subcommands = {
                 ListCommand.class,

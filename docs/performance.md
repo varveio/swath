@@ -7,6 +7,26 @@ one run per point—not a portable performance promise or a release-candidate be
 For a first listing, use [Getting started](getting-started.md). Return here after a
 representative run has produced `_swath_summary.json`.
 
+### Three diagnostic recipes
+
+1. **Listing-bound vs. output-bound.** Rerun with `--format discard --checkpoint none
+   --report discard.json` and compare `keys_per_sec` and `duration_ms` against the
+   original report. A similar rate with output removed points at the listing path; a
+   large gain points at the output sink. See [Find the limiting
+   stage](#find-the-limiting-stage).
+2. **Underfilled concurrency.** Compare `engine.avg_in_flight` against the configured
+   `--concurrency` ceiling, and check `engine.splits`, steal counts, and probe reasons.
+   Low in-flight utilization with idle splits/probes means another stage is limiting
+   throughput, not the concurrency ceiling. See [In-flight
+   utilization](#in-flight-utilization).
+3. **Sorted-finalization bound.** Compare `pipeline_router_wait_ms`,
+   `pipeline_plan_queue_wait_ms`, and `pipeline_encoder_read_wait_ms`, and check cascade
+   pass count and encoder clamp/floor reasons. High router wait points at segment
+   production (header scan or cascade passes) rather than the encoders; high plan-queue
+   wait means the encoders cannot drain plans as fast as the router produces them, so
+   more encoder parallelism (if heap and descriptors allow) is the lever. See [The
+   sorted merge](#the-sorted-merge).
+
 <a id="diagnosing-a-run"></a>
 
 ## Start with your own run
@@ -21,17 +41,17 @@ Bucket shape, client location, output disk, filters, CPU architecture, and servi
 all affect the result. Absolute numbers from another bucket are rarely useful; the
 relationships among your own report fields are.
 
-### In-flight utilisation
+### In-flight utilization
 
 `--concurrency N` is a ceiling. The achieved request concurrency is
 `engine.avg_in_flight`:
 
 ```text
-utilisation = engine.avg_in_flight / configured concurrency
+utilization = engine.avg_in_flight / configured concurrency
 ```
 
-Use the configured ceiling, not `peak_in_flight`. High utilisation means the ceiling may
-be the bottleneck. Low utilisation means useful ranges, CPU, or another stage could not
+Use the configured ceiling, not `peak_in_flight`. High utilization means the ceiling may
+be the bottleneck. Low utilization means useful ranges, CPU, or another stage could not
 keep it full; raising the ceiling usually adds overhead.
 
 For a sorted run, the report's whole-run average includes the post-listing merge, where
@@ -63,7 +83,7 @@ Across a concurrency sweep:
   `engine.splits`, steals, probe reasons, tail occupancy, and the shape block.
 - High `queue.wait`, Parquet latency, or checkpoint waits identify a local downstream stage
   rather than the object store.
-- The combination of falling utilisation, falling throughput, and rising CPU per key is a
+- The combination of falling utilization, falling throughput, and rising CPU per key is a
   sign of an overshot ceiling, regardless of which resource ran out first.
 
 Treat `shape.divergence_depth_histogram`, `mass_skew_gini`, and `delimiter_fanout` as clues,
@@ -172,7 +192,7 @@ counts. The public PERF-2 gate covers 100,000 keys and requires peak heap below 
 its default Parquet fixture; it does not establish a billion-object memory envelope.
 
 For production sizing, sweep realistic concurrency under an explicit `-Xmx`, watch peak
-heap/RSS and disk, and keep the setting below the point where utilisation collapses.
+heap/RSS and disk, and keep the setting below the point where utilization collapses.
 
 <a id="retain-a-jfr-cpu-profile"></a>
 
@@ -247,7 +267,7 @@ not local SSD.
 
 One unsorted Parquet sweep against `pds-css-archive` (96,022,559 objects) produced:
 
-| `--concurrency` | keys/s | avg in-flight (utilisation) | CPU-s/Mkey | peak heap | peak RSS |
+| `--concurrency` | keys/s | avg in-flight (utilization) | CPU-s/Mkey | peak heap | peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: |
 | 32 | 165,831 | 29.9 (93%) | 7.42 | 0.92 GB | 1.27 GB |
 | 64 | 327,275 | 56.9 (89%) | 7.28 | 2.24 GB | 2.51 GB |
@@ -256,7 +276,7 @@ One unsorted Parquet sweep against `pds-css-archive` (96,022,559 objects) produc
 | 512 | 519,286 | 93.2 (18%) | 11.06 | 5.25 GB | 5.66 GB |
 
 The peak in this sweep was 655,346 keys/s at 256—not a global ceiling or recommended
-default. At 512, utilisation collapsed and CPU cost rose while request latency stayed near
+default. At 512, utilization collapsed and CPU cost rose while request latency stayed near
 175 ms. Split counts had plateaued around 4,900, so extra slots had little useful work.
 
 Across the measured buckets, API calls per 1,000 objects were 1.016–1.089 against the 1.0
