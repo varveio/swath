@@ -41,7 +41,7 @@ successfully exercised:
 - the direct canonical writer;
 - the sorted final writer and footer stamps;
 - footer, index, bounded-range, and row-group readers;
-- merge-input `SegmentReader`;
+- merge-input `ParquetEntryReader`;
 - swath-authored ZSTD data; and
 - DuckDB-authored ZSTD data.
 
@@ -80,14 +80,14 @@ jar.
 
 ## Measured gain and change
 
-The baseline is the PR 7 build at `fad4bd6`; the candidate is this branch on top of `c76f002`, using
-Temurin 25.0.4 on Linux x86-64.
+The baseline is the PR 7 build at `fad4bd6`; the candidate was remeasured after rebasing the PR 7
+measurement commit as `6a395f4` onto `b6181a1`, using Temurin 25.0.4 on Linux x86-64.
 
 | Package | PR 7 bytes | Candidate bytes | Reduction |
 | --- | ---: | ---: | ---: |
-| CLI fat jar | 75,449,028 | 55,713,872 | 19,735,156 (26.2%) |
-| CLI install distribution | 76,454,120 | 57,042,906 | 19,411,214 (25.4%) |
-| replay install distribution | 152,627,426 | 131,315,741 | 21,311,685 (14.0%) |
+| CLI fat jar | 75,449,028 | 55,727,856 | 19,721,172 (26.1%) |
+| CLI install distribution | 76,454,120 | 57,056,701 | 19,397,419 (25.4%) |
+| replay install distribution | 152,627,426 | 131,329,569 | 21,297,857 (14.0%) |
 
 The candidate core runtime graph is 29 artifacts and 43,331,005 bytes, down from 59 artifacts and
 64,634,573 bytes. No candidate runtime graph contains an Apache Hadoop coordinate, and the CLI fat

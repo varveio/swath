@@ -9,14 +9,15 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ParquetSchema;
 import io.varve.swath.output.parquet.PartWriter;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
+import io.varve.swath.output.parquet.sorted.SortedParquetRangeReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortStamp;
-import io.varve.swath.sort.SortedFileIndex;
 import io.varve.swath.sort.SortedFileWriter;
-import io.varve.swath.sort.SortedParquetWriter;
-import io.varve.swath.sort.SortedRangeReader;
-import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -56,12 +57,12 @@ public final class ParquetLinkabilityLab {
             "io.varve.swath.output.parquet.ParquetWriterPool",
             "io.varve.swath.output.parquet.PartWriter",
             "io.varve.swath.output.parquet.SyncableLocalOutputFile",
-            "io.varve.swath.sort.SegmentReader",
-            "io.varve.swath.sort.SortStamp",
-            "io.varve.swath.sort.SortedFileIndex",
-            "io.varve.swath.sort.SortedParquetWriter",
-            "io.varve.swath.sort.SortedRangeReader",
-            "io.varve.swath.sort.SortedRowGroupReader",
+            "io.varve.swath.output.parquet.fixture.ParquetEntryReader",
+            "io.varve.swath.output.parquet.sorted.SortedParquetIndex",
+            "io.varve.swath.output.parquet.sorted.SortedParquetRangeReader",
+            "io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader",
+            "io.varve.swath.output.parquet.sorted.SortedParquetStamp",
+            "io.varve.swath.output.parquet.sorted.SortedParquetWriter",
             "org.apache.parquet.SwathReadOptions");
     private static final List<String> PROBES = List.of(
             "classload", "direct_writer", "sorted_writer", "codec", "footer", "index", "segment",
@@ -108,7 +109,7 @@ public final class ParquetLinkabilityLab {
                 writer.write(entry(i));
             }
         }
-        if (SortedFileIndex.rowCount(fixture) != 2_048) {
+        if (SortedParquetIndex.rowCount(fixture) != 2_048) {
             throw new IllegalStateException("prepared fixture row count changed");
         }
     }
@@ -150,16 +151,16 @@ public final class ParquetLinkabilityLab {
             long writerNanos = System.nanoTime() - writerStart;
 
             long footerStart = System.nanoTime();
-            SortStamp stamp = SortStamp.read(file).orElseThrow();
+            SortedParquetStamp stamp = SortedParquetStamp.read(file).orElseThrow();
             long footerNanos = System.nanoTime() - footerStart;
 
             long indexStart = System.nanoTime();
-            List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(file);
+            List<SortedParquetIndex.RowGroupSpan> spans = SortedParquetIndex.rowGroupSpans(file);
             long indexNanos = System.nanoTime() - indexStart;
 
             long rangeStart = System.nanoTime();
             int rangeRows;
-            try (SortedRangeReader reader = new SortedRangeReader(file, 1)) {
+            try (SortedParquetRangeReader reader = new SortedParquetRangeReader(file, 1)) {
                 rangeRows = reader.range(
                         0, KeyBytes.ofUtf8("key-00001000").raw(), true, null, 128, true).size();
             }
@@ -167,7 +168,7 @@ public final class ParquetLinkabilityLab {
 
             long rowGroupStart = System.nanoTime();
             int rowGroupRows;
-            try (SortedRowGroupReader reader = new SortedRowGroupReader(file)) {
+            try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(file)) {
                 rowGroupRows = reader.rows(spans.getFirst().blockIndex(), true).size();
             }
             long rowGroupNanos = System.nanoTime() - rowGroupStart;
@@ -348,13 +349,13 @@ public final class ParquetLinkabilityLab {
     }
 
     private static void footer(Path fixture) throws IOException {
-        if (SortStamp.read(fixture).isEmpty()) {
+        if (SortedParquetStamp.read(fixture).isEmpty()) {
             throw new IllegalStateException("fixture lost its sorted stamp");
         }
     }
 
     private static void index(Path fixture) throws IOException {
-        if (SortedFileIndex.rowGroupSpans(fixture).isEmpty()) {
+        if (SortedParquetIndex.rowGroupSpans(fixture).isEmpty()) {
             throw new IllegalStateException("fixture must have an indexed row group");
         }
     }
@@ -366,18 +367,10 @@ public final class ParquetLinkabilityLab {
     }
 
     private static int segmentRows(Path fixture) throws Exception {
-        Class<?> type = Class.forName("io.varve.swath.sort.SegmentReader", true,
-                ParquetLinkabilityLab.class.getClassLoader());
-        var constructor = type.getDeclaredConstructor(Path.class);
-        constructor.setAccessible(true);
-        var hasNext = type.getDeclaredMethod("hasNext");
-        var next = type.getDeclaredMethod("next");
-        hasNext.setAccessible(true);
-        next.setAccessible(true);
-        try (AutoCloseable reader = (AutoCloseable) constructor.newInstance(fixture)) {
+        try (ParquetEntryReader reader = new ParquetEntryReader(fixture)) {
             int rows = 0;
-            while ((boolean) hasNext.invoke(reader)) {
-                next.invoke(reader);
+            while (reader.hasNext()) {
+                reader.next();
                 rows++;
             }
             return rows;
@@ -385,7 +378,7 @@ public final class ParquetLinkabilityLab {
     }
 
     private static void range(Path fixture) throws IOException {
-        try (SortedRangeReader reader = new SortedRangeReader(fixture, 1)) {
+        try (SortedParquetRangeReader reader = new SortedParquetRangeReader(fixture, 1)) {
             byte[] from = KeyBytes.ofUtf8("key-00001000").raw();
             if (reader.range(0, from, true, null, 4, true).size() != 4) {
                 throw new IllegalStateException("bounded range returned the wrong row count");
@@ -394,9 +387,9 @@ public final class ParquetLinkabilityLab {
     }
 
     private static void rowGroup(Path fixture) throws IOException {
-        int block = SortedFileIndex.rowGroupSpans(fixture).getFirst().blockIndex();
-        try (SortedRowGroupReader reader = new SortedRowGroupReader(fixture);
-             SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(block)) {
+        int block = SortedParquetIndex.rowGroupSpans(fixture).getFirst().blockIndex();
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(fixture);
+             SortedParquetRowGroupReader.KeyCursor cursor = reader.openKeyCursor(block)) {
             if (!cursor.hasCurrent() || cursor.currentKey().length == 0 || reader.rows(block, true).isEmpty()) {
                 throw new IllegalStateException("row-group reader did not return the fixture rows");
             }
