@@ -155,9 +155,12 @@ public final class SortedParquetStore implements ListingStore {
         return Math.max(8, Math.min(32, Runtime.getRuntime().availableProcessors()));
     }
 
-    /** Default delimiter readers per file, resolved independently from the ordinary range width. */
+    /**
+     * Default delimiter readers per file: at least eight for I/O headroom, one per visible core above
+     * that, and no more than 32 open footers and reader-local key-index caches per file.
+     */
     public static int defaultDelimiterConnectionCount() {
-        return defaultConnectionCount();
+        return Math.max(8, Math.min(32, Runtime.getRuntime().availableProcessors()));
     }
 
     @Override
@@ -674,10 +677,11 @@ public final class SortedParquetStore implements ListingStore {
             byte[] key, byte[] upper, int want, boolean includeOwner) throws IOException {
         if (lookahead.isEmpty() || !Arrays.equals(lookahead.peek().keyUnsafe(), key)) {
             lookahead.clear();
-            metrics.recordDelimiterObjectLookaheadDelegation();
-            lookahead.addAll(rangeReader(entry.file()).range(
+            List<SortedParquetRowGroupReader.ObjectRow> rows = rangeReader(entry.file()).range(
                     entry.rowGroup(), key, true, upper, Math.max(1, want), includeOwner,
-                    metrics::recordDelimiterRangeReaderPoolWait));
+                    metrics::recordDelimiterRangeReaderPoolWait);
+            metrics.recordDelimiterObjectLookaheadDelegation();
+            lookahead.addAll(rows);
         }
         SortedParquetRowGroupReader.ObjectRow row = lookahead.poll();
         if (row != null && Arrays.equals(row.keyUnsafe(), key)) {
@@ -685,8 +689,8 @@ public final class SortedParquetStore implements ListingStore {
         }
         // Only reachable if the key vanished between the cursor reading it and this read, which the
         // skip-scan cannot recover from silently.
-        throw new IllegalStateException("sorted fixture has no OBJECT row at a key its own key cursor "
-                + "just returned, in " + entry.file() + " row group " + entry.rowGroup());
+        throw new IllegalStateException("sorted fixture has no OBJECT row for a key its delimiter "
+                + "cursor just returned, in " + entry.file());
     }
 
     /**

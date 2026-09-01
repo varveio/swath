@@ -185,7 +185,8 @@ pool per file (`parquet connections × files` readers).
 `--delimiter-connections N` independently controls the lazy key-only reader fleet used by native
 `delimiter=/` skip-scans. Its `0` default resolves to the sorted store's same
 `max(8, min(32, available processors))` rule even when `--parquet-connections` is explicit, so a wide
-worker fleet does not silently multiply delimiter footers and reader-local key-index caches. The
+worker fleet does not silently multiply delimiter footers and reader-local key-index caches. DuckDB
+serving ignores this flag and reports `delimiter_connections=0` in its startup line. The
 delimiter pool opens one file at a time only when routing-index bounds cannot answer a hop. The
 conservative fully engaged reader bound is `(parquet connections + delimiter connections) × files`.
 An ordinary range fill uses only the range pool. A skip-scan owns one key-only delimiter reader; an

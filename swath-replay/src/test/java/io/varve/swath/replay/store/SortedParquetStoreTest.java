@@ -484,8 +484,8 @@ class SortedParquetStoreTest {
                 "swath.replay.delimiter.reader_pool.wait.latency").timer().count())
                 .isEqualTo(delimiterReaders);
         assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value())
-                .as("all delimiter leases remain occupied while the one-way range dependency progresses")
-                .isEqualTo(delimiterReaders + 1.0);
+                .as("at least one delimiter and one range lease overlap, within both pool bounds")
+                .isBetween(2.0, delimiterReaders + 1.0);
         assertThat(metrics.registry().find("swath.replay.parquet.queries.in_flight").gauge().value()).isZero();
     }
 

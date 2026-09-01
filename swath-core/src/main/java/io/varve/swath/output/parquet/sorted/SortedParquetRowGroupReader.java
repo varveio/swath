@@ -44,7 +44,7 @@ import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Type;
 
 /**
- * Per-row-group decode of a sorted Parquet file's {@code OBJECT} rows, addressed by the file's
+ * Per-row-group key access for a sorted Parquet file's {@code OBJECT} rows, addressed by the file's
  * <b>physical</b> row-group block index (what {@code
  * io.varve.swath.replay.fixture.SortedFixtures.IndexEntry#rowGroup} carries once index-derive has
  * run, and what {@link ParquetFileReader#readRowGroup(int)} takes directly). Built for the replay
@@ -60,12 +60,8 @@ import org.apache.parquet.schema.Type;
  * lands in the same group. A forward cursor instead decodes only the rows between the last position
  * and the next, whichever hop asks; parquet's page-level decompression is itself lazy per read, so a
  * cursor that never revisits an earlier row also never re-pays for a page already stepped past.
- * {@link #objectRange} is the bounded full-row tier for standalone callers and decodes only the
- * answer's pages. It opens a separate object-projected file reader lazily, so a caller that only uses
- * the key tiers never loads listing-column indexes. {@link #rows} uses that same lazy object reader
- * and remains the explicit whole-row-group tier for callers that genuinely need every object row.
  *
- * <p>{@link #forEachKey} is the third shape: <b>every</b> key of one row group, in order, handed to a
+ * <p>{@link #forEachKey} is the other shape: <b>every</b> key of one row group, in order, handed to a
  * visitor. A caller that is going to consume the whole group anyway (the simulator's decode-once
  * streaming tier packs each faulted group into an in-memory key block) wants neither the cursor's
  * resumability nor its per-step comparison, and reads the key column through parquet's column API
@@ -83,14 +79,12 @@ import org.apache.parquet.schema.Type;
  * {@code verifyNoParquetOrHadoopOnCompileClasspath}), the same seam {@link SortedParquetIndex} already
  * keeps for the routing-index derive.
  *
- * <p>The key and object tiers use separate {@link ParquetFileReader}s because parquet-java's column
- * index cache is fixed by the projection active on first access. The key reader therefore remains
- * genuinely key-only, while the lazy object reader primes its own cache under the maximal listing
- * projection. Not thread-safe — a caller serving concurrent requests must not share one instance
- * across threads (mirrors {@link ParquetEntryReader}).
+ * <p>Not thread-safe — a caller serving concurrent requests must not share one instance across
+ * threads (mirrors {@link ParquetEntryReader}).
  */
 public final class SortedParquetRowGroupReader implements AutoCloseable {
 
+    private static final KeyIndexListener NO_KEY_INDEX_LISTENER = (elapsedNanos, firstLoad) -> { };
     private static final String KEY_FIELD = "key";
     private static final String[] OBJECT_FIELDS_WITH_OWNER = {
             "key", "size", "last_modified", "etag", "storage_class",
@@ -104,9 +98,8 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
     /**
      * One decoded {@code OBJECT} row — the plain-typed twin of the replay server's own row shape,
      * kept independent so this module never depends on {@code io.varve.swath.replay}.
-     * {@code ownerId}/{@code ownerDisplayName} are {@code null} when the row group was decoded without
-     * owner columns (see {@link #objectRange} and {@link #rows}), matching how a projection-pruning
-     * store reports an unrequested column elsewhere in the replay server.
+     * {@code ownerId}/{@code ownerDisplayName} are {@code null} when decoded without owner columns,
+     * matching how a projection-pruning store reports an unrequested column elsewhere in replay.
      */
     public record ObjectRow(byte[] key, long size, long lastModifiedEpochMicros, String etag,
                             String storageClass, String ownerId, String ownerDisplayName,
@@ -136,26 +129,17 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
 
     private final Path file;
     private final ParquetFileReader keyReader;
-    private ParquetFileReader objectReader;
     private final List<org.apache.parquet.hadoop.metadata.BlockMetaData> blocks;
     private final ColumnIOFactory columnIoFactory = new ColumnIOFactory();
     private final String createdBy;
     private final MessageType keySchema;
     private final MessageColumnIO keyColumnIo;
     private final ColumnDescriptor keyColumn;
-    private final MessageType objectSchemaWithOwner;
-    private final MessageColumnIO objectColumnIoWithOwner;
-    private final MessageType objectSchemaWithoutOwner;
-    private final MessageColumnIO objectColumnIoWithoutOwner;
-    private final MessageType objectRangeSchemaWithOwner;
-    private final MessageColumnIO objectRangeColumnIoWithOwner;
-    private final MessageType objectRangeSchemaWithoutOwner;
-    private final MessageColumnIO objectRangeColumnIoWithoutOwner;
     private final BitSet loadedKeyIndexes = new BitSet();
     private final KeyIndexListener keyIndexListener;
 
     public SortedParquetRowGroupReader(Path file) throws IOException {
-        this(file, (elapsedNanos, firstLoad) -> { });
+        this(file, NO_KEY_INDEX_LISTENER);
     }
 
     /**
@@ -172,14 +156,6 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         this.keySchema = project(full, KEY_FIELD);
         this.keyColumnIo = columnIoFactory.getColumnIO(keySchema);
         this.keyColumn = keySchema.getColumns().getFirst();
-        this.objectSchemaWithOwner = objectProjection(full, true);
-        this.objectColumnIoWithOwner = columnIoFactory.getColumnIO(objectSchemaWithOwner);
-        this.objectSchemaWithoutOwner = objectProjection(full, false);
-        this.objectColumnIoWithoutOwner = columnIoFactory.getColumnIO(objectSchemaWithoutOwner);
-        this.objectRangeSchemaWithOwner = objectProjection(full, true, true);
-        this.objectRangeColumnIoWithOwner = columnIoFactory.getColumnIO(objectRangeSchemaWithOwner);
-        this.objectRangeSchemaWithoutOwner = objectProjection(full, false, true);
-        this.objectRangeColumnIoWithoutOwner = columnIoFactory.getColumnIO(objectRangeSchemaWithoutOwner);
     }
 
     /**
@@ -229,83 +205,18 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
                 indexStore.getColumnIndex(KEY_COLUMN_PATH), rowCount);
     }
 
-    /**
-     * The first {@code limit} object rows in one physical row group at/after {@code from}. This is the
-     * full-row companion to {@link #openKeyCursor(int, byte[], boolean, byte[])} for a delimiter
-     * skip-scan that lands on bare objects.
-     *
-     * <p>This standalone API remains correct after the key tier became genuinely key-only by owning a
-     * second, lazily opened object reader. Replay serving delegates its bare-object batches to its
-     * existing {@link SortedParquetRangeReader} pool instead, so delimiter readers normally never open
-     * this second handle.
-     */
-    public List<ObjectRow> objectRange(int blockIndex, byte[] from, boolean fromInclusive,
-                                       byte[] toExclusive, int limit, boolean includeOwner) throws IOException {
-        if (limit <= 0 || blockIndex < 0 || blockIndex >= blocks.size()) {
-            return List.of();
-        }
-        MessageType schema = includeOwner ? objectRangeSchemaWithOwner : objectRangeSchemaWithoutOwner;
-        MessageColumnIO columnIo = includeOwner
-                ? objectRangeColumnIoWithOwner : objectRangeColumnIoWithoutOwner;
-        ParquetFileReader reader = objectReader();
-        ColumnIndexStore indexStore = objectColumnIndexStore(reader, blockIndex, schema);
-        requirePagesAscend(indexStore, file, blockIndex);
-        RowRanges ranges = ColumnIndexFilter.calculateRowRanges(
-                FilterCompat.get(SortedParquetRangeReader.predicate(from, fromInclusive, toExclusive)),
-                indexStore, KEY_COLUMN, blocks.get(blockIndex).getRowCount());
-        if (ranges.rowCount() == 0) {
-            return List.of();
-        }
-        RowRanges wanted = SortedParquetRangeReader.firstRowsOf(ranges, indexStore, limit);
-        List<ObjectRow> out = new ArrayList<>(Math.min(limit, 1024));
-        readObjectsInto(out, reader, blockIndex, wanted, from, fromInclusive, toExclusive,
-                limit, schema, columnIo, includeOwner);
-        if (out.size() < limit && wanted.rowCount() < ranges.rowCount()) {
-            // Eligibility promises pure OBJECT groups, so this is only a correctness backstop if
-            // that promise ever slips: widen to every page the key predicate retained.
-            out.clear();
-            readObjectsInto(out, reader, blockIndex, ranges, from, fromInclusive, toExclusive,
-                    limit, schema, columnIo, includeOwner);
-        }
-        return out;
-    }
-
     /** Loads or reuses this key reader's row-group index under the key-only projection. */
     private ColumnIndexStore keyColumnIndexStore(int blockIndex) {
+        keyReader.setRequestedSchema(keySchema);
+        if (keyIndexListener == NO_KEY_INDEX_LISTENER) {
+            return keyReader.getColumnIndexStore(blockIndex);
+        }
         boolean firstLoad = !loadedKeyIndexes.get(blockIndex);
         long startedNanos = System.nanoTime();
-        keyReader.setRequestedSchema(keySchema);
         ColumnIndexStore indexStore = keyReader.getColumnIndexStore(blockIndex);
         loadedKeyIndexes.set(blockIndex);
         keyIndexListener.record(System.nanoTime() - startedNanos, firstLoad);
         return indexStore;
-    }
-
-    private ColumnIndexStore objectColumnIndexStore(
-            ParquetFileReader reader, int blockIndex, MessageType requestedSchema) {
-        reader.setRequestedSchema(objectRangeSchemaWithOwner);
-        ColumnIndexStore indexStore = reader.getColumnIndexStore(blockIndex);
-        reader.setRequestedSchema(requestedSchema);
-        return indexStore;
-    }
-
-    private void readObjectsInto(List<ObjectRow> out, ParquetFileReader reader, int blockIndex,
-                                 RowRanges ranges, byte[] from,
-                                 boolean fromInclusive, byte[] toExclusive, int limit,
-                                 MessageType schema, MessageColumnIO columnIo, boolean includeOwner)
-            throws IOException {
-        try (PageReadStore pages = reader.readFilteredRowGroup(blockIndex, ranges)) {
-            RecordReader<ObjectRow> rowReader = columnIo.getRecordReader(
-                    pages, new SortedParquetRangeReader.ObjectRowMaterializer(schema, includeOwner));
-            long rowCount = pages.getRowCount();
-            for (long i = 0; i < rowCount && out.size() < limit; i++) {
-                ObjectRow row = rowReader.read();
-                if (row != null && SortedParquetRangeReader.inRange(
-                        row.keyUnsafe(), from, fromInclusive, toExclusive)) {
-                    out.add(row);
-                }
-            }
-        }
     }
 
     /**
@@ -687,65 +598,9 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         }
     }
 
-    /**
-     * The physical row group {@code blockIndex}'s full {@code OBJECT} rows, in on-disk (ascending) row
-     * order — the explicit whole-group tier. Callers needing only a bounded range should use {@link
-     * #objectRange}. When {@code includeOwner} is {@code false}, owner columns are never decoded and
-     * every row's owner fields are {@code null}.
-     */
-    public List<ObjectRow> rows(int blockIndex, boolean includeOwner) throws IOException {
-        MessageType schema = includeOwner ? objectSchemaWithOwner : objectSchemaWithoutOwner;
-        MessageColumnIO columnIo = includeOwner ? objectColumnIoWithOwner : objectColumnIoWithoutOwner;
-        ParquetFileReader reader = objectReader();
-        reader.setRequestedSchema(schema);
-        // The rows are fully materialized before returning, so the page store (and its buffers —
-        // released by close(), not by closing the file reader) is done the moment this method is.
-        try (PageReadStore pages = reader.readRowGroup(blockIndex)) {
-            RecordReader<Group> rowReader = columnIo.getRecordReader(pages, new GroupRecordConverter(schema));
-            long rowCount = pages.getRowCount();
-            List<ObjectRow> out = new ArrayList<>((int) rowCount);
-            for (long i = 0; i < rowCount; i++) {
-                Group g = rowReader.read();
-                out.add(toObjectRow(g, g.getBinary(KEY_FIELD, 0).getBytes(), includeOwner));
-            }
-            return out;
-        }
-    }
-
     @Override
     public void close() throws IOException {
-        IOException failure = null;
-        try {
-            keyReader.close();
-        } catch (IOException e) {
-            failure = e;
-        }
-        if (objectReader != null) {
-            try {
-                objectReader.close();
-            } catch (IOException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
-            }
-        }
-        if (failure != null) {
-            throw failure;
-        }
-    }
-
-    private ParquetFileReader objectReader() throws IOException {
-        if (objectReader == null) {
-            objectReader = ParquetFileReader.open(new LocalInputFile(file));
-        }
-        return objectReader;
-    }
-
-    /** Package-private diagnostic used to pin that the key tiers never open the object handle. */
-    boolean objectReaderInitialized() {
-        return objectReader != null;
+        keyReader.close();
     }
 
     /** Receives one reader-local key-column index lookup. */
@@ -757,15 +612,7 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
     }
 
     /**
-     * The listing projection over {@code full}, with or without the owner columns — shared with
-     * {@link SortedParquetRangeReader} so the two readers cannot drift on which columns a served row has.
-     */
-    static MessageType objectProjection(MessageType full, boolean includeOwner) {
-        return objectProjection(full, includeOwner, false);
-    }
-
-    /**
-     * As {@link #objectProjection(MessageType, boolean)}, optionally carrying {@code row_type}.
+     * The listing projection over {@code full}, with or without owner and {@code row_type} columns.
      *
      * <p>{@link SortedParquetRangeReader} needs it: sorted-serving eligibility is supposed to guarantee
      * every row group is pure {@code OBJECT}, but a reader that trusts that guarantee absolutely
