@@ -17,12 +17,15 @@ After installation, continue with [Getting started](getting-started.md).
 ## Docker
 
 ```bash
-docker pull ghcr.io/varveio/swath:latest
-docker run --rm ghcr.io/varveio/swath:latest --version
+docker pull ghcr.io/varveio/swath:0.3.0
+docker run --rm ghcr.io/varveio/swath:0.3.0 --version
 ```
 
-For reproducible automation, replace `latest` with a release tag or the immutable digest
-published with that release.
+`--version` prints the swath version and commit; use its output for support requests and
+reproduction reports. A stable tagged release also publishes a rolling `X.Y` tag and
+`latest`; prefer the exact `X.Y.Z` tag shown above for reproducible examples, and prefer
+the immutable digest over any tag for reproducible automation. See [Tags &
+versioning](packaging-and-docker.md#tags--versioning) for the full tag policy.
 
 The image supports `linux/amd64` and `linux/arm64` and runs as non-root UID 10001. The
 [getting-started guide](getting-started.md) shows writable output mounts for Linux, macOS,
@@ -71,6 +74,14 @@ swath --version
 `./gradlew build` is the integration gate and includes LocalStack tests. For the
 Docker-free contributor loop and opt-in test tiers, see
 [Testing](ops/dev/TESTING.md).
+
+## Check the install
+
+`--version` prints the version, commit, and Java runtime without contacting object
+storage, using the invocation shown for your install path above: `docker run --rm
+ghcr.io/varveio/swath:0.3.0 --version`, `java -jar swath-X.Y.Z.jar --version`, or plain
+`swath --version` once a launcher is on `PATH`. Include this output when filing a
+support request or reproduction report.
 
 <a id="verifying-a-download"></a>
 
