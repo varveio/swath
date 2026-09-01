@@ -5,18 +5,15 @@
  */
 package io.varve.swath.sort.finalize;
 
-import java.io.IOException;
-
 /** Resumable refusal when decoded page residency cannot fit the configured merge budget. */
-public final class MergeMemoryExhaustedException extends IOException {
+public final class MergeMemoryExhaustedException extends FinalizationCapacityException {
 
     public static final String ERROR_CLASS = "sort_merge_memory_exhausted";
 
-    MergeMemoryExhaustedException(String message) {
-        super(message);
-    }
+    private static final String DEFERRAL = "sort merge deferred because decoded pages do not fit "
+            + "the merge budget; raise swath.sort.merge-budget-bytes and resume";
 
-    public String errorClass() {
-        return ERROR_CLASS;
+    MergeMemoryExhaustedException(String message) {
+        super(ERROR_CLASS, DEFERRAL, message);
     }
 }

@@ -81,7 +81,7 @@ import io.varve.swath.sort.SortOrderException;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
-import io.varve.swath.sort.finalize.MergeMemoryExhaustedException;
+import io.varve.swath.sort.finalize.FinalizationCapacityException;
 import io.varve.swath.sort.spill.PageRunCorruptionException;
 import io.varve.swath.sort.spill.PageRunFormat;
 import io.varve.swath.sort.stage.SortPagePacker;
@@ -1088,10 +1088,14 @@ public final class ListRunner {
             }
             throw new PublicationPendingException(
                     "sorted dataset publication committed; cleanup pending", e);
-        } catch (MergeMemoryExhaustedException e) {
+        } catch (FinalizationCapacityException e) {
+            // A budget refusal, not a broken merge: every staged segment is still durable and
+            // nothing was published, so the run defers instead of failing. MergePendingException is
+            // what keeps the checkpoint eligible for the zero-LIST merge-only retry once the budget
+            // the refusal names is raised. Catching the shared supertype rather than each capacity
+            // type keeps a future one from silently falling through to the fatal branch below.
             ctx.metrics().recordFatalErrorClass(e.errorClass());
-            throw new MergePendingException("sort merge deferred because decoded pages do not fit "
-                    + "the merge budget; raise swath.sort.merge-budget-bytes and resume", e);
+            throw new MergePendingException(e.deferral(), e);
         } catch (SortOrderException e) {
             // Re-running the same durable staging deterministically repeats this invariant failure;
             // classify it and keep the ordinary fatal OutputException disposition rather than
@@ -1145,8 +1149,8 @@ public final class ListRunner {
             if (c instanceof PageRunCorruptionException sce) {
                 return sce.errorClass();
             }
-            if (c instanceof MergeMemoryExhaustedException exhausted) {
-                return exhausted.errorClass();
+            if (c instanceof FinalizationCapacityException capacity) {
+                return capacity.errorClass();
             }
             if (c instanceof SortOrderException order) {
                 return order.errorClass();

@@ -5,18 +5,15 @@
  */
 package io.varve.swath.sort.finalize;
 
-import java.io.IOException;
-
 /** Resumable refusal when the fd or memory budget cannot open even a minimum two-stream cascade. */
-public final class CascadeCapacityExhaustedException extends IOException {
+public final class CascadeCapacityExhaustedException extends FinalizationCapacityException {
 
     public static final String ERROR_CLASS = "sort_cascade_capacity_exhausted";
 
-    CascadeCapacityExhaustedException(String message) {
-        super(message);
-    }
+    private static final String DEFERRAL = "sort merge deferred because the cascade cannot open two "
+            + "input streams; raise the open-file limit or swath.sort.merge-budget-bytes and resume";
 
-    public String errorClass() {
-        return ERROR_CLASS;
+    CascadeCapacityExhaustedException(String message) {
+        super(ERROR_CLASS, DEFERRAL, message);
     }
 }
