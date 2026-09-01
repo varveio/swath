@@ -468,3 +468,124 @@ small-shape regression or improvement. Unit coverage therefore carries the dense
 claim directly: one large row group with 120 singleton prefixes on a shared page is decoded once
 with zero replacement-cursor reseeks. This is a local implementation-path check, not a production
 S3 latency model or a portable throughput claim.
+
+## 2026-09-01 — replay `delimiter=/` structure probes under concurrent burst load
+
+A follow-up to the entry above, asking why the same probes that cost 3–20 ms in isolation cost a
+114 ms mean in a campaign. It measured first and changed nothing: the measurement did not reproduce
+the hypothesised cause on this host, and the candidate it motivated regressed the phase it was
+supposed to fix, so no serving change was made.
+
+### Fixture, host, and command
+
+- **Arm A (baseline):** `origin/main` `6835bd5` — includes PR #194.
+- **Arm B (candidate, measured then discarded):** the lazy delimiter reader pool grown one reader
+  per unsatisfied borrow, opened off the pool monitor, instead of opening the whole
+  `--parquet-connections`-wide fleet inside the first delimiter request for a file.
+- **Host:** 8 logical CPUs, 15 GiB RAM; OpenJDK 25.0.4+7; `-Xmx4g`. The load driver ran on the same
+  host, so client CPU competes with the server — see the limits below.
+- **Fixture:** four sorted Parquet parts, 143,008,674 rows, 2.96 GiB, manifest SHA-256
+  `f4a839f23a1be94047491339dfd1ae5dd40d075c5a7c2eac1e07156dd985d4b0`.
+- **Cache state:** filesystem cache warm from earlier runs. "Cold" means a fresh server and fresh
+  reader pools, not cold storage.
+- **Injection:** off. Prefetch: off. `--serving-mode sorted --parquet-connections 32
+  --max-concurrent-requests 512`, `-Dswath.replay.slow-request-log-ms=0` so every request logs its
+  own pre-injection server cost.
+
+```bash
+/home/sagi_varve_io/.jdks/jdk-25.0.4+7/bin/java -Xmx4g \
+  -Dswath.replay.prefetch.enabled=false -Dswath.replay.slow-request-log-ms=0 \
+  -cp '<arm>/swath-replay/build/install/swath-replay/lib/*' \
+  io.varve.swath.replay.server.ReplayServerApp serve \
+  --fixture /home/sagi_varve_io/work/replay-fixtures/aws-public-blockchain-current-eba31d9 \
+  --bucket aws-public-blockchain --host 127.0.0.1 --port 19091 --metrics-port 19193 \
+  --serving-mode sorted --parquet-connections 32 --max-concurrent-requests 512
+```
+
+### Request set and driver
+
+A throwaway Python driver (not committed) derived the request set once by a breadth-first
+`delimiter=/` walk of the fixture from the root to depth 4, capped at 600 prefixes: **601 requests**
+(1 root, 2 at depth 1, 7 at depth 2, 37 at depth 3, 554 at depth 4), including
+`v1.1/stellar/ledgers/`, `v1.1/stellar/parquet/`, `v1.0/btc/`, `v1.0/btc/blocks/` and its `date=`
+leaves. Every request was `GET /aws-public-blockchain?list-type=2&delimiter=%2F&max-keys=1000&prefix=<p>`.
+Each phase fired the whole set as a burst at a fixed number of connections in flight, recording each
+response body's SHA-256. The page-load phases first started 200 background `max-keys=1000`
+continuation walkers from 40 anchors spread across the keyspace. Percentiles below are over the 601
+`STRUCTURE_PROBE` slow-request lines in each phase's window — that is the pre-injection server cost,
+the same quantity `swath.replay.request.latency{shape=structure_probe}` records.
+
+### Result: arms alternated, two repetitions, `--parquet-connections 32`
+
+Structure-probe server cost, p50 / p99 / mean ms. Bursts run back to back on one server, in order.
+
+| Phase | base r1 | base r2 | cand r1 | cand r2 |
+| --- | ---: | ---: | ---: | ---: |
+| cold, 256 in flight (1st burst) | 316 / 1077 / 558 | 303 / 1053 / 546 | 568 / 1721 / 656 | 541 / 1649 / 637 |
+| warm, 256 (2nd burst) | 1.3 / 227 / 10.0 | 77.5 / 182 / 69.4 | 1.4 / 149 / 7.6 | 1.4 / 151 / 8.1 |
+| warm, 256 (3rd burst) | 1.3 / 160 / 8.0 | 1.3 / 176 / 7.5 | 47.5 / 103 / 46.5 | 1.3 / 86 / 6.2 |
+| warm, 256 (4th burst) | 1.3 / 89 / 6.7 | 1.2 / 135 / 6.5 | 1.2 / 115 / 6.3 | 1.2 / 66 / 4.4 |
+| warm, 256 (5th burst) | 1.2 / 65 / 4.7 | 1.2 / 173 / 7.5 | 1.3 / 57 / 4.1 | 1.2 / 58 / 3.7 |
+| warm, 64 in flight | 1.1 / 57 / 3.8 | 1.1 / 44 / 3.5 | 1.2 / 51 / 3.8 | 1.2 / 49 / 3.7 |
+| warm, 256 + 200 page walkers | 164 / 226 / 168 | 138 / 182 / 141 | 123 / 169 / 124 | 157 / 220 / 158 |
+| repeat | 1.3 / 71 / 5.8 | 139 / 172 / 139 | 173 / 217 / 170 | 81 / 174 / 80 |
+| repeat | 1.3 / 41 / 4.8 | 1.3 / 60 / 4.5 | 137 / 204 / 141 | 130 / 159 / 131 |
+
+Reader-pool meters over the cold burst:
+
+| Meter | base r1 / r2 | cand r1 / r2 |
+| --- | --- | --- |
+| `delimiter.reader_pool.open.latency` count | 4 / 4 (one per file) | 48 / 45 (one per reader) |
+| …sum ms | 1,648 / 1,586 | 3,593 / 4,282 |
+| …max ms | 654 / 595 | 198 / 243 |
+| `delimiter.reader_pool.readers_opened` max | 32 / 32 (fleet width) | 27 / 27 (widest pool grew) |
+
+An earlier uncontrolled sweep at `--parquet-connections 8` put the same four fleet opens at 510 ms
+total (mean 127 ms), with a cold-burst structure-probe p50 of 218 ms.
+
+13,222 response bodies were hashed across 23 phase captures on both arms; **zero mismatches**.
+
+### Attribution
+
+1. **The burst is throughput-bound on this host, not lock-bound.** Comparing the store's own timer
+   with the request timer over the same phase: at 8 in flight `request.latency` mean 2.1 ms versus
+   `parquet.query.latency` mean 2.1 ms (no queueing); at 64 in flight, 29.3 ms versus 3.2 ms; at 256
+   in flight, 120 ms versus 4.1 ms. The store work per probe barely moves; what grows is the wait for
+   one of 8 CPUs. 601 probes at roughly 25 ms of cold CPU each is about 15 core-seconds on an
+   8-core box, which is the ~2 s cold burst and the ~550 ms mean latency it implies.
+2. **Most of the "warm versus campaign" gap is JIT warm-up of the delimiter path, not I/O.** With
+   nothing changed between them, the same 601-probe burst repeated on one server fell from
+   10.0 → 8.0 → 6.7 → 4.7 ms mean and 227 → 160 → 89 → 65 ms p99. A campaign issues only a few
+   hundred structure probes in total against millions of worker pages, so this path never leaves the
+   interpreter/C1 there. Isolation measurements that warm up first cannot see this.
+3. **The lazy fleet open is real but second-order here.** It is 1.6 s of the cold burst's ~15
+   core-seconds at `--parquet-connections 32`. Hypothesis (a) predicted it would dominate; it does
+   not, on this host.
+4. **Growing the pool incrementally made the cold burst worse** (p50 316 → 568 ms, p99 1077 →
+   1721 ms, both repetitions). Serialising four fleet opens under a monitor costs 1.6 s of
+   thread-time; letting ~45 opens race on a saturated 8-core box costs 3.6–4.3 s, and every probe
+   pays for the contention. The candidate was therefore discarded, not committed.
+5. **The page-load phases are host-saturation, not a delimiter signal.** 200 walkers plus 256 probes
+   plus the co-located driver oversubscribe 8 cores; the phase is bimodal across repetitions on both
+   arms (1.3 ms p50 in one repetition, 140 ms in the next) with no separation between the arms. The
+   campaign ran 64 vCPUs at ~48 busy, which is not this regime.
+6. **Per-probe work is small and unchanged:** `delimiter.skipscan.decoded_key_rows` mean 494 rows per
+   probe (max 10,201), `page_reseeks` mean 0.23, `row_group_opens` 757 per 601 probes,
+   `whole_group_shortcuts` 0 on this fixture.
+
+### Limits
+
+- The driver is co-located with the server on the same 8 cores, so every 256-in-flight number
+  includes client CPU. Only same-host arm-versus-arm comparisons are meaningful.
+- The acceptance target this investigation was given (p50 ≤ 27 ms, p99 ≤ 55 ms at 256 in flight)
+  is already met by the baseline once the JVM is warm (p50 1.2 ms, p99 57–65 ms by the fifth burst,
+  still falling), and is unreachable in the cold burst on 8 cores at any lock granularity: 256 in
+  flight against 8 cores needs a sub-millisecond service time to hold a 27 ms p50.
+- Nothing here tests the campaign's regime — 64 vCPUs, `--parquet-connections 128`, an unsaturated
+  server. Four serialized 128-reader fleet opens extrapolate to roughly 6 s of blocking there, and
+  that remains the one untested reason the campaign's structure probes could be slow. Testing it
+  needs a host with that core count, not this one.
+- Hypothesis (b), sharing the immutable per-row-group column and offset indexes across pooled
+  readers, was not attempted: `ParquetFileReader.readFilteredRowGroup` resolves offset indexes
+  through its own per-reader `getColumnIndexStore`, so sharing them would need an upstream seam
+  rather than a cache in `SortedParquetRowGroupReader`.
