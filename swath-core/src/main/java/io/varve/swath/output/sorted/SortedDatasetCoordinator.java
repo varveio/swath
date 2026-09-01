@@ -93,8 +93,11 @@ public final class SortedDatasetCoordinator {
             throw committedCleanup.withPublishedResult(result(committed));
         } catch (IOException | RuntimeException | Error failure) {
             try {
-                publicationContext.ownedInputs().sweepDisposables(
-                        StagingNames.PIPELINE_TMP_GLOB);
+                // Reached only once prepare has joined every encoder and closed every cascade
+                // writer, so no disposable staging namespace still has a live writer. Sweeping here
+                // rather than at the next kickoff keeps a failed attempt's intermediates from
+                // counting against the retry's disk pre-check.
+                publicationContext.ownedInputs().sweepDisposableWorkingFiles();
             } catch (IOException cleanupFailure) {
                 failure.addSuppressed(cleanupFailure);
             }

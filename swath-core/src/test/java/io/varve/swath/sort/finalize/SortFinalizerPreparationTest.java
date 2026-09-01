@@ -20,7 +20,9 @@ import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.spill.SpillTestFixtures;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -148,5 +150,46 @@ class SortFinalizerPreparationTest {
             assertThat(entries).isEmpty();
         }
         assertThat(sources).allSatisfy(source -> assertThat(source).isRegularFile());
+    }
+
+    @Test
+    void aCascadeGroupFailingMidWriteNeverLeavesTheDurableIntermediateName(@TempDir Path root)
+            throws IOException {
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        ListEntryComparator comparator = new ListEntryComparator();
+        List<Path> sources = SortTestSupport.writeCascadeSources(staging);
+        SortTestSupport.corruptLateCascadeSourcePage(sources);
+        SortRun run = new SortRun(SortConfigs.base().withFanIn(2), comparator, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+        SortFinalizer finalizer = new SortFinalizer(run);
+        StagingReconciliation owned = StagingReconciliation.fromPaths(staging, sources);
+
+        assertThatThrownBy(() -> finalizer.prepare(new SortFinalizer.Request(
+                finalizer.admit(sources, Map.of()), staging, ignored -> { },
+                FinalPassListener.NO_OP, owned)))
+                .isInstanceOf(UncheckedIOException.class)
+                .hasMessageContaining("cascade page merge read failed")
+                .rootCause().hasMessageContaining("record CRC32C mismatch");
+
+        assertThat(staging.resolve(StagingNames.cascadeIntermediate(0)))
+                .as("the group that finished durably keeps the intermediate name")
+                .isRegularFile();
+        assertThat(staging.resolve(StagingNames.cascadeIntermediate(1)))
+                .as("the group that failed mid-write never claims one")
+                .doesNotExist();
+        Path unfinished = staging.resolve(StagingNames.cascadeIntermediateTmp(1));
+        assertThat(unfinished).isRegularFile();
+        assertThat(Files.size(unfinished))
+                .as("the failure really landed mid-write, after page bytes were appended")
+                .isGreaterThan(SpillTestFixtures.pageRunHeaderBytes());
+        assertThat(sources).allSatisfy(source -> assertThat(source).isRegularFile());
+
+        owned.sweepDisposableWorkingFiles();
+        try (var remaining = Files.list(staging)) {
+            assertThat(remaining)
+                    .as("the caller's sweep reclaims both cascade names and leaves the sources")
+                    .containsExactlyInAnyOrderElementsOf(sources);
+        }
     }
 }

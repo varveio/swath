@@ -40,6 +40,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -56,6 +57,8 @@ import java.util.function.LongConsumer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 final class FinalizationPipelineTest {
     private final ListEntryComparator comparator = new ListEntryComparator();
@@ -306,7 +309,8 @@ final class FinalizationPipelineTest {
         long retainedRefs = (100L * (PageRunHeaderStreams.QUEUE_DEPTH + 2L)
                 + 100L * (PartEncoders.QUEUE_DEPTH + 2L))
                 * PageRef.retainedBytes(SpillTestFixtures.serialize(sample).length);
-        long mergeBudget = PartEncoders.WRITER_HEAP_ESTIMATE_BYTES + retainedRefs
+        long mergeBudget = PartEncoders.writerHeapEstimateBytes(SortConfig.DEFAULT.finalRowGroupBytes())
+                + retainedRefs
                 + SpillTestFixtures.serialize(sample).length + 3L * plannedPageBytes - 1L;
 
         DecodedPageBudget eager = new DecodedPageBudget(3L * pageBytes - 1L,
@@ -398,10 +402,10 @@ final class FinalizationPipelineTest {
         long readPageBytes = catalog.maxRecordLen();
         long retainedPageBytes = fdPlanner.pipelineParallelism(1, catalog).retainedPageBytes();
         long routerRefs = 4L + catalog.totalRecords()
-                * (1L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
+                * (2L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
         long routerBytes = routerRefs * PageRef.retainedBytes(catalog.maxKeyLength());
         long perEncoder = readPageBytes + retainedPageBytes
-                + PartEncoders.WRITER_HEAP_ESTIMATE_BYTES;
+                + PartEncoders.writerHeapEstimateBytes(base.finalRowGroupBytes());
         FinalizationPlanner heapPlanner = new FinalizationPlanner(
                 base.withMergeBudgetBytes(routerBytes + 2 * perEncoder),
                 SortMetrics.NO_OP, () -> -1);
@@ -417,6 +421,49 @@ final class FinalizationPipelineTest {
                 .isInstanceOf(MergeMemoryExhaustedException.class)
                 .hasMessageContaining("minimum pipeline lane does not fit");
         assertThat(metrics.count("SORT.pipeline_encoder_heap_floor_exhausted")).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {8L << 20, 32L << 20, 64L << 20, 128L << 20})
+    void writerHeapEstimateScalesEncoderAdmissionWithConfiguredRowGroupSize(
+            long finalRowGroupBytes, @TempDir Path root) throws IOException {
+        Path segment = SortTestSupport.writePages(
+                root.resolve("row-group-admission" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("a"))));
+        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        SortConfig base = SortConfigs.base().withFinalRowGroupBytes(finalRowGroupBytes);
+
+        long readPageBytes = catalog.maxRecordLen();
+        FinalizationPlanner probe = new FinalizationPlanner(
+                base.withMergeBudgetBytes(Long.MAX_VALUE), SortMetrics.NO_OP, () -> -1);
+        long retainedPageBytes = probe.pipelineParallelism(1, catalog).retainedPageBytes();
+        long routerRefs = 4L + catalog.totalRecords()
+                * (2L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
+        long routerBytes = routerRefs * PageRef.retainedBytes(catalog.maxKeyLength());
+        long writerEstimate = PartEncoders.writerHeapEstimateBytes(finalRowGroupBytes);
+        long perEncoder = readPageBytes + retainedPageBytes + writerEstimate;
+
+        // Sized to fit exactly two writers at THIS row-group size's estimate. If admission still
+        // priced writers at the old fixed constant, a 128 MiB row group would leave this budget
+        // large enough to admit all four requested encoders instead of clamping to two.
+        FinalizationPlanner planner = new FinalizationPlanner(
+                base.withMergeBudgetBytes(routerBytes + 2 * perEncoder), SortMetrics.NO_OP, () -> -1);
+
+        FinalizationPlanner.PipelinePlan plan = planner.pipelineParallelism(4, catalog);
+
+        assertThat(plan.encoders()).isEqualTo(2);
+        assertThat(plan.reason()).isEqualTo(FinalizationPlanner.PipelineClampReason.HEAP_CLAMPED);
+    }
+
+    @Test
+    void writerHeapEstimateNeverPricesBelowTheObservedWriterPeak() {
+        // Prior in-repo measurements saw an open writer reach 13 MiB at the default 8 MiB row
+        // group, so the default and anything smaller must reserve at least that much.
+        assertThat(PartEncoders.writerHeapEstimateBytes(SortConfig.DEFAULT.finalRowGroupBytes()))
+                .isEqualTo(13L << 20);
+        assertThat(PartEncoders.writerHeapEstimateBytes(1L << 20)).isEqualTo(13L << 20);
+        assertThat(PartEncoders.writerHeapEstimateBytes(32L << 20)).isEqualTo(36L << 20);
     }
 
     @Test
@@ -478,16 +525,16 @@ final class FinalizationPipelineTest {
         int budgetedEncoders = 3;
         long cursorRefs = (long) segments * (PageRunHeaderStreams.QUEUE_DEPTH + 2L);
         long planRefs = (long) FinalizationPlanner.MAX_PIPELINE_PLAN_REFS
-                * (1L + budgetedEncoders * (PartEncoders.QUEUE_DEPTH + 1L));
+                * (2L + budgetedEncoders * (PartEncoders.QUEUE_DEPTH + 1L));
         long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
                 base.maxRawPayloadLength(),
                 catalog.maxRecordLen());
-        long budgetForThree = (cursorRefs + planRefs) * refBytes
-                + budgetedEncoders * (PartEncoders.WRITER_HEAP_ESTIMATE_BYTES
-                + catalog.maxRecordLen() + retainedPageBytes);
         SortConfig config = SortConfigs.base()
-                .withFinalFileBytes(1L << 40)
-                .withMergeBudgetBytes(budgetForThree);
+                .withFinalFileBytes(1L << 40);
+        long budgetForThree = (cursorRefs + planRefs) * refBytes
+                + budgetedEncoders * (PartEncoders.writerHeapEstimateBytes(config.finalRowGroupBytes())
+                + catalog.maxRecordLen() + retainedPageBytes);
+        config = config.withMergeBudgetBytes(budgetForThree);
 
         FinalizationPlanner.PipelinePlan plan = new FinalizationPlanner(
                 config, SortMetrics.NO_OP, () -> -1).pipelineParallelism(4, catalog);
@@ -498,6 +545,61 @@ final class FinalizationPipelineTest {
         assertThat(plan.reason()).isEqualTo(FinalizationPlanner.PipelineClampReason.NONE);
         assertThat(plan.planRefLimit()).isLessThan(FinalizationPlanner.MAX_PIPELINE_PLAN_REFS);
         assertThat(plan.clusterBudgetBytes()).isGreaterThanOrEqualTo(retainedPageBytes);
+    }
+
+    /**
+     * The router can hold two full reference waves at once: {@code route} closes an entire overlap
+     * component before offering it, so a part that has already accumulated the cap's worth of
+     * disjoint references is still live while the component beside it collects up to the same cap.
+     * Admission must price both, otherwise a run at the 1,024-byte key ceiling under-reserves a
+     * whole wave. A budget sized to exactly the two-wave price admits the full cap; one wave less
+     * cannot.
+     */
+    @Test
+    void admissionPricesBothRouterReferenceWaves(@TempDir Path root) throws IOException {
+        String maximumKey = "m" + "x".repeat(1_023);
+        Path segment = SortTestSupport.writePages(
+                root.resolve("router-waves" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object(maximumKey))));
+        PageRunCatalog physical = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        PageRunDescriptor base = physical.descriptors().getFirst();
+        PageRunCatalog catalog = SpillTestFixtures.catalog(List.of(new PageRunDescriptor(
+                base.path(), base.fileSize(), base.trailerStart(),
+                new PageRunTrailer.Trailer(1_000_000, 1_000_000, base.trailer().maxRecordLen(),
+                        base.maxRawPayloadLength(), base.maxKeyLength()),
+                base.maxRawPayloadLength(), base.maxKeyLength(), base.physicalFormat(),
+                base.headerBytes(), base.orderingMode())));
+        int cap = FinalizationPlanner.MAX_PIPELINE_PLAN_REFS;
+        int refBytes = PageRef.retainedBytes(catalog.maxKeyLength());
+        long cursorRefs = (long) catalog.descriptors().size()
+                * (PageRunHeaderStreams.QUEUE_DEPTH + 2L);
+        // Two router waves — the current part and the overlap component beside it — plus the
+        // queued and executing plans of the single encoder.
+        long waves = 2L + (PartEncoders.QUEUE_DEPTH + 1L);
+        SortConfig config = SortConfigs.base().withFinalFileBytes(1L << 40);
+        long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
+                base.maxRawPayloadLength(), catalog.maxRecordLen());
+        long exactFit = (cursorRefs + cap * waves) * refBytes
+                + PartEncoders.writerHeapEstimateBytes(config.finalRowGroupBytes())
+                + catalog.maxRecordLen() + retainedPageBytes;
+
+        FinalizationPlanner.PipelinePlan fits = new FinalizationPlanner(
+                config.withMergeBudgetBytes(exactFit), SortMetrics.NO_OP, () -> -1)
+                .pipelineParallelism(1, catalog);
+        FinalizationPlanner.PipelinePlan short1 = new FinalizationPlanner(
+                config.withMergeBudgetBytes(exactFit - (long) cap * refBytes),
+                SortMetrics.NO_OP, () -> -1)
+                .pipelineParallelism(1, catalog);
+
+        assertThat(fits.encoders()).isEqualTo(1);
+        assertThat(fits.reason()).isEqualTo(FinalizationPlanner.PipelineClampReason.NONE);
+        assertThat(fits.planRefLimit())
+                .as("the two-wave price is not an over-reservation: the full cap still fits")
+                .isEqualTo(cap);
+        assertThat(short1.planRefLimit())
+                .as("a budget one router wave short cannot carry the full cap")
+                .isLessThan(cap);
     }
 
     @Test
@@ -575,6 +677,227 @@ final class FinalizationPipelineTest {
     }
 
     @Test
+    void overlapComponentWiderThanTheReferenceCapKeepsItsExactOrderInOnePart(@TempDir Path root)
+            throws IOException {
+        List<String> componentKeys = componentKeys();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        SortedDatasetResult result = runPages(root, oversizedComponent(), Long.MAX_VALUE,
+                metrics, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
+                PageCompression.NONE, 4);
+
+        assertThat(metrics.count("SORT.pipeline_cluster_spilled")).isEqualTo(1);
+        assertThat(metrics.pipelineClusterPages.sum())
+                .isEqualTo(FinalizationPlanner.MAX_PIPELINE_PLAN_REFS + 1L);
+        assertThat(result.totalRows()).isEqualTo(componentKeys.size() + 2L);
+        // The component is indivisible, so it takes a part of its own and caps the part after it.
+        assertThat(result.finalFiles()).hasSize(2);
+        assertThat(keys(List.of(result.finalFiles().getFirst())))
+                .containsExactlyElementsOf(componentKeys);
+        assertThat(keys(List.of(result.finalFiles().getLast())))
+                .containsExactly("zzz-0", "zzz-1");
+        assertNoClusterReferenceSpills(root);
+    }
+
+    @Test
+    void routingAnOversizedComponentRetainsNoneOfItsReferences(@TempDir Path root)
+            throws IOException {
+        int heapLimit = 64;
+        int narrowPages = 400;
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        List<List<ListEntry>> broad = List.of(
+                List.of(SortTestSupport.object("a"), SortTestSupport.object("zz")));
+        List<List<ListEntry>> narrow = new ArrayList<>(narrowPages);
+        for (int page = 0; page < narrowPages; page++) {
+            narrow.add(List.of(SortTestSupport.object(String.format("b%05d", page))));
+        }
+        List<PageRunReader> channels = List.of(
+                PageRunReader.open(SortTestSupport.writePages(
+                        staging.resolve("broad" + StagingNames.PAGE_RUN_SUFFIX), broad),
+                        SortMetrics.NO_OP),
+                PageRunReader.open(SortTestSupport.writePages(
+                        staging.resolve("narrow" + StagingNames.PAGE_RUN_SUFFIX), narrow),
+                        SortMetrics.NO_OP));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        List<PartPlan> plans = new ArrayList<>();
+        FinalizationFailure failure = new FinalizationFailure();
+        MergeRouter.Result routed;
+        try (PageRunHeaderStreams cursors = new PageRunHeaderStreams(channels,
+                PageRunHeaderStreams.planned(channels.size()), metrics, failure)) {
+            routed = new MergeRouter(cursors, plans::add,
+                    new PartSizer(PartSizer.Target.calibrated(), Long.MAX_VALUE), metrics,
+                    failure, () -> { }, heapLimit, staging)
+                    .route(channels.size());
+        } finally {
+            for (PageRunReader channel : channels) {
+                channel.close();
+            }
+        }
+
+        assertThat(routed.refs()).isEqualTo(narrowPages + 1L);
+        assertThat(metrics.count("SORT.pipeline_cluster_spilled")).isEqualTo(1);
+        assertThat(plans).hasSize(1);
+        PartPlan.Cluster cluster = (PartPlan.Cluster) plans.getFirst().items().getFirst();
+        assertThat(cluster.refCount()).isEqualTo(narrowPages + 1L);
+        // The dispatched plan holds a staging coordinate rather than one PageRef per page, so the
+        // queued reference wave stays priced by the cap however wide the component grows.
+        assertThat(cluster.refs()).isInstanceOf(ClusterRefs.Spilled.class);
+        Path spill = ((ClusterRefs.Spilled) cluster.refs()).file();
+        assertThat(spill).exists().hasParent(staging);
+        List<String> spilledMinimums = new ArrayList<>();
+        try (ClusterRefs.Cursor refs = cluster.refs().open()) {
+            while (refs.peek() != null) {
+                spilledMinimums.add(new String(refs.next().minKey(), StandardCharsets.UTF_8));
+            }
+        }
+        assertThat(spilledMinimums).hasSize(narrowPages + 1)
+                .startsWith("a", "b00000").endsWith("b00399");
+        cluster.discard();
+        assertThat(spill).doesNotExist();
+    }
+
+    @Test
+    void clusterReferenceCollectionPromotesExactlyAtTheHeapLimit(@TempDir Path root)
+            throws IOException {
+        List<PageRef> refs = new ArrayList<>();
+        for (int page = 0; page < 5; page++) {
+            refs.add(new PageRef(0, page, 64L + page, 32, ("k" + page).getBytes(StandardCharsets.UTF_8),
+                    ("k" + page).getBytes(StandardCharsets.UTF_8), 1, 16));
+        }
+
+        try (ClusterRefs.Builder atLimit = new ClusterRefs.Builder(4, root, 0)) {
+            for (PageRef ref : refs.subList(0, 4)) {
+                atLimit.add(ref);
+            }
+            assertThat(atLimit.spilled()).isFalse();
+            assertThat(atLimit.build()).isInstanceOf(ClusterRefs.Heap.class);
+        }
+
+        ClusterRefs promoted;
+        try (ClusterRefs.Builder builder = new ClusterRefs.Builder(4, root, 1)) {
+            for (PageRef ref : refs) {
+                builder.add(ref);
+            }
+            assertThat(builder.spilled()).isTrue();
+            promoted = builder.build();
+        }
+        assertThat(promoted).isEqualTo(new ClusterRefs.Spilled(
+                root.resolve(StagingNames.clusterRefsTmp(1)), 5));
+        List<PageRef> replayed = new ArrayList<>();
+        try (ClusterRefs.Cursor cursor = promoted.open()) {
+            while (cursor.peek() != null) {
+                replayed.add(cursor.next());
+            }
+        }
+        assertThat(replayed).usingRecursiveFieldByFieldElementComparator()
+                .containsExactlyElementsOf(refs);
+        promoted.discard();
+        assertThat(root.resolve(StagingNames.clusterRefsTmp(1))).doesNotExist();
+    }
+
+    @Test
+    void partialClusterCollectionLeavesNoSpillBehind(@TempDir Path root) throws IOException {
+        PageRef ref = new PageRef(0, 0, 64L, 32, "k".getBytes(StandardCharsets.UTF_8),
+                "k".getBytes(StandardCharsets.UTF_8), 1, 16);
+        Path spill = root.resolve(StagingNames.clusterRefsTmp(7));
+
+        try (ClusterRefs.Builder builder = new ClusterRefs.Builder(1, root, 7)) {
+            builder.add(ref);
+            builder.add(ref);
+            assertThat(spill).exists();
+        }
+
+        assertThat(spill).doesNotExist();
+    }
+
+    @Test
+    void cancellingAnOversizedComponentReleasesItsSpilledReferences(@TempDir Path root)
+            throws Exception {
+        CountDownLatch componentEncoderStarted = new CountDownLatch(1);
+        CountDownLatch blockWriter = new CountDownLatch(1);
+        SortedFileWriterFactory blocking = (path, index) ->
+                new SortTestSupport.DelegatingSortedFileWriter(
+                        SortedFileWriterFactory.DEFAULT.create(path, index)) {
+                    @Override
+                    public void write(ListEntry entry) throws IOException {
+                        if (index != 1) {
+                            super.write(entry);
+                            return;
+                        }
+                        componentEncoderStarted.countDown();
+                        try {
+                            blockWriter.await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException("pipeline encoder interrupted", e);
+                        }
+                        super.write(entry);
+                    }
+                };
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread caller = Thread.ofPlatform().start(() -> {
+            try {
+                runPages(root, oversizedComponent(), Long.MAX_VALUE, SortMetrics.NO_OP, blocking,
+                        10_000, 64L << 20, PageCompression.NONE, 1);
+            } catch (Throwable thrown) {
+                failure.set(thrown);
+            }
+        });
+
+        try {
+            assertThat(componentEncoderStarted.await(60, TimeUnit.SECONDS)).isTrue();
+            assertThat(clusterReferenceSpills(root)).isNotEmpty();
+            caller.interrupt();
+            assertThat(caller.join(Duration.ofSeconds(60))).isTrue();
+        } finally {
+            blockWriter.countDown();
+        }
+        assertThat(failure.get()).isInstanceOf(IOException.class)
+                .hasMessageContaining("sort merge interrupted");
+        assertNoPublishedOrTemporaryFiles(root);
+        assertNoClusterReferenceSpills(root);
+    }
+
+    /**
+     * One broad page overlapping every page of a second run: a legal set of sorted runs whose
+     * transitive component is wider than the hard plan reference cap, plus two pages above it.
+     */
+    private static List<List<List<ListEntry>>> oversizedComponent() {
+        List<List<ListEntry>> broad = new ArrayList<>();
+        broad.add(List.of(SortTestSupport.object("a"), SortTestSupport.object("zz")));
+        broad.add(List.of(SortTestSupport.object("zzz-0")));
+        broad.add(List.of(SortTestSupport.object("zzz-1")));
+        List<List<ListEntry>> narrow = new ArrayList<>();
+        for (int page = 0; page < FinalizationPlanner.MAX_PIPELINE_PLAN_REFS; page++) {
+            narrow.add(List.of(SortTestSupport.object(String.format("b%05d", page))));
+        }
+        return List.of(broad, narrow);
+    }
+
+    /** The exact row order {@link #oversizedComponent()}'s single component must produce. */
+    private static List<String> componentKeys() {
+        List<String> keys = new ArrayList<>();
+        keys.add("a");
+        for (int page = 0; page < FinalizationPlanner.MAX_PIPELINE_PLAN_REFS; page++) {
+            keys.add(String.format("b%05d", page));
+        }
+        keys.add("zz");
+        return keys;
+    }
+
+    private static List<Path> clusterReferenceSpills(Path root) throws IOException {
+        try (var files = Files.walk(root)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".pagerefs.tmp"))
+                    .toList();
+        }
+    }
+
+    private static void assertNoClusterReferenceSpills(Path root) throws IOException {
+        assertThat(clusterReferenceSpills(root)).isEmpty();
+    }
+
+    @Test
     void cascadeFanInReservesEveryPipelineOutputDescriptor(@TempDir Path root) throws IOException {
         Path segment = SortTestSupport.writePages(
                 root.resolve("fanin" + StagingNames.PAGE_RUN_SUFFIX),
@@ -589,6 +912,81 @@ final class FinalizationPipelineTest {
                 () -> FileDescriptorBudget.FD_HEADROOM + 5);
 
         assertThat(planner.pipelineFanIn(catalog, 4)).isEqualTo(2);
+    }
+
+    @Test
+    void cascadeFanInGivesDescriptorsBackToTheInputsRatherThanRefusingTheMerge(@TempDir Path root)
+            throws IOException {
+        PageRunCatalog catalog = twoSegmentCatalog(root, "degrade");
+        SortConfig config = tightFanInConfig();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        // headroom for four reserved writers is FD_HEADROOM + 3, so a soft limit of FD_HEADROOM + 4
+        // leaves an fd-bounded capacity of 1. The requested encoder count is only a ceiling, so
+        // lowering the reservation buys back the second input stream and the merge runs.
+        FinalizationPlanner planner = new FinalizationPlanner(config, metrics,
+                () -> FileDescriptorBudget.FD_HEADROOM + 4);
+
+        assertThat(planner.pipelineFanIn(catalog, 4)).isEqualTo(2);
+
+        assertThat(metrics.count("SORT.merge_fanin_writer_reservation_degraded")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_fanin_floor_exhausted")).isZero();
+        // Two segments at fan-in two need no cascade pass at all, and admission independently
+        // settles the lanes that actually run against the same descriptor budget.
+        assertThat(planner.pipelineParallelism(4, catalog).encoders()).isEqualTo(2);
+    }
+
+    @Test
+    void cascadeFanInRefusesBeforeOpeningReadersWhenCapacityCannotFitTwoStreams(@TempDir Path root)
+            throws IOException {
+        PageRunCatalog catalog = twoSegmentCatalog(root, "fanin");
+        SortConfig config = tightFanInConfig();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        // Below the boundary above: even the minimum one-writer reservation (headroom exactly
+        // FD_HEADROOM) leaves an fd-bounded capacity of 1, so no reservation makes this run.
+        FinalizationPlanner planner = new FinalizationPlanner(config, metrics,
+                () -> FileDescriptorBudget.FD_HEADROOM + 1);
+
+        assertThatThrownBy(() -> planner.pipelineFanIn(catalog, 4))
+                .isInstanceOf(CascadeCapacityExhaustedException.class)
+                .hasMessageContaining("cascade cannot open the minimum two streams")
+                .hasMessageContaining("reserved_writers=1");
+        assertThat(metrics.count("SORT.merge_fanin_floor_exhausted")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_fanin_writer_reservation_degraded")).isZero();
+    }
+
+    @Test
+    void singleSourceSegmentBypassesCascadeEvenUnderTheSameStarvedFdBudget(@TempDir Path root)
+            throws IOException {
+        Path segment = SortTestSupport.writePages(
+                root.resolve("fanin-single" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("a"))));
+        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        FinalizationPlanner planner = new FinalizationPlanner(tightFanInConfig(), SortMetrics.NO_OP,
+                () -> FileDescriptorBudget.FD_HEADROOM + 1);
+
+        // A single source segment never opens a cascade group, so the same exhausted budget that
+        // refuses a two-segment catalog above must not refuse here.
+        assertThat(planner.pipelineFanIn(catalog, 4)).isEqualTo(2);
+    }
+
+    /** Fan-in bounded by descriptors alone: neither the static setting nor record size binds. */
+    private static SortConfig tightFanInConfig() {
+        return SortConfigs.base()
+                .withFanIn(100)
+                .withMergeBudgetBytes(64L << 20)
+                .withMergePerStreamBytes(1);
+    }
+
+    private static PageRunCatalog twoSegmentCatalog(Path root, String prefix) throws IOException {
+        Path segA = SortTestSupport.writePages(
+                root.resolve(prefix + "-a" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("a"))));
+        Path segB = SortTestSupport.writePages(
+                root.resolve(prefix + "-b" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("b"))));
+        return PageRunCatalog.preflight(List.of(segA, segB),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
     }
 
     @Test
@@ -749,6 +1147,77 @@ final class FinalizationPipelineTest {
 
         assertThat(result.totalRows()).isEqualTo(2_500);
         assertThat(progress).containsExactly(1_000L, 1_000L, 500L);
+    }
+
+    /**
+     * Progress counts merge work, not output rows. Every intermediate cascade pass rewrites the
+     * whole corpus and reports it, and the final encode reports it once more, so five rows reduced
+     * over two cascade passes report fifteen units. A consumer that read the total as an output
+     * row count would report a merge as 300% complete.
+     */
+    @Test
+    void cascadeProgressReportsEveryRowOncePerPassAndOnceAtFinalEncode(@TempDir Path root)
+            throws IOException {
+        List<List<List<ListEntry>>> segments = new ArrayList<>();
+        for (String key : List.of("a", "b", "c", "d", "e")) {
+            segments.add(List.of(List.of(SortTestSupport.object(key))));
+        }
+        List<Long> progress = new ArrayList<>();
+
+        SortedDatasetResult result = runPages(root, segments, Long.MAX_VALUE, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT, 2, 64L << 20, PageCompression.NONE, 1,
+                progress::add);
+
+        assertThat(result.totalRows()).isEqualTo(5);
+        assertThat(result.cascadedPasses()).as("five segments at fan-in two cascade twice")
+                .isEqualTo(2);
+        assertThat(progress).allSatisfy(units -> assertThat(units).isPositive());
+        assertThat(progress.stream().mapToLong(Long::longValue).sum())
+                .as("five rows, twice rewritten and once encoded")
+                .isEqualTo(15);
+    }
+
+    @Test
+    void encoderProgressIsNeverDeliveredConcurrentlyAcrossLanes(@TempDir Path root) throws IOException {
+        int lanes = 8;
+        int rowsPerSegment = 2_500;
+        List<List<List<ListEntry>>> segments = new ArrayList<>();
+        for (int segment = 0; segment < lanes; segment++) {
+            List<ListEntry> rows = new ArrayList<>();
+            for (int row = 0; row < rowsPerSegment; row++) {
+                rows.add(SortTestSupport.object(String.format("k%02d-%05d", segment, row)));
+            }
+            segments.add(List.of(rows));
+        }
+        AtomicBoolean insideCallback = new AtomicBoolean();
+        AtomicBoolean overlapDetected = new AtomicBoolean();
+        List<Long> observed = new java.util.concurrent.CopyOnWriteArrayList<>();
+        LongConsumer reentrancyDetectingCallback = units -> {
+            if (!insideCallback.compareAndSet(false, true)) {
+                overlapDetected.set(true);
+            }
+            try {
+                observed.add(units);
+            } finally {
+                insideCallback.set(false);
+            }
+        };
+
+        SortedDatasetResult result = runPages(root, segments, Long.MAX_VALUE,
+                SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
+                PageCompression.NONE, lanes, reentrancyDetectingCallback);
+
+        assertThat(overlapDetected).isFalse();
+        assertThat(result.totalRows()).isEqualTo((long) lanes * rowsPerSegment);
+        long running = 0;
+        long previousRunning = 0;
+        for (long value : observed) {
+            assertThat(value).isNotNegative();
+            running += value;
+            assertThat(running).isGreaterThanOrEqualTo(previousRunning);
+            previousRunning = running;
+        }
+        assertThat(running).isEqualTo(result.totalRows());
     }
 
     @Test

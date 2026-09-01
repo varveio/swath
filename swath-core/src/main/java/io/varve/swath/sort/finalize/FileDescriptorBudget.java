@@ -39,27 +39,30 @@ public final class FileDescriptorBudget {
     }
 
     /**
-     * The fd-bounded fan-in ceiling: {@code softFdLimit - headroom}, never below 2. Pure/injectable —
-     * an unlimited ({@code < 0} sentinel, e.g. {@code RLIM_INFINITY}) soft limit yields
+     * The fd-bounded fan-in ceiling: {@code softFdLimit - headroom}, never below 0. This is capacity,
+     * not a promise of a usable cascade width — {@code 0} or {@code 1} honestly reports that even the
+     * minimum two-stream cascade does not fit; the caller decides whether that is admissible (a
+     * single source segment never opens a cascade group) or a refusal. Pure/injectable — an
+     * unlimited ({@code < 0} sentinel, e.g. {@code RLIM_INFINITY}) soft limit yields
      * {@link Integer#MAX_VALUE} (no fd constraint).
      */
     static int fdBoundedFanIn(int softFdLimit, int headroom) {
         if (softFdLimit < 0) {
             return Integer.MAX_VALUE;   // unlimited (RLIM_INFINITY) — no fd constraint
         }
-        return Math.max(2, softFdLimit - headroom);
+        return Math.max(0, softFdLimit - headroom);
     }
 
     /**
-     * Compose the runtime-clamped fan-in:
-     * {@code max(2, min(staticFanIn, fdBound, recordSizedFanIn))}.
-     * {@code recordSizedFanIn} is {@link Integer#MAX_VALUE} when no page-run record-size refinement
-     * was computed, so it drops out of the {@code min} and the configured estimate governs.
-     * Pure/injectable.
+     * Compose the runtime-clamped fan-in: {@code min(staticFanIn, fdBound, recordSizedFanIn)}, not
+     * floored — {@code 0} or {@code 1} means minimum cascade width is unavailable and the caller must
+     * decide whether that matters (see {@link #fdBoundedFanIn}). {@code recordSizedFanIn} is
+     * {@link Integer#MAX_VALUE} when no page-run record-size refinement was computed, so it drops out
+     * of the {@code min} and the configured estimate governs. Pure/injectable.
      */
     static int clampedFanIn(int staticFanIn, int softFdLimit, int headroom, int recordSizedFanIn) {
         int fdBound = fdBoundedFanIn(softFdLimit, headroom);
-        return Math.max(2, Math.min(staticFanIn, Math.min(fdBound, recordSizedFanIn)));
+        return Math.min(staticFanIn, Math.min(fdBound, recordSizedFanIn));
     }
 
     /**

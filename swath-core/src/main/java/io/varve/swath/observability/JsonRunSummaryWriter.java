@@ -791,6 +791,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) counterCount("swath.sort.pipeline.cluster_pages"));
         sortNode.put("pipeline_cluster_rows",
                 (long) counterCount("swath.sort.pipeline.cluster_rows"));
+        sortNode.put("pipeline_cluster_refs_peak",
+                (long) gaugeValue("swath.sort.pipeline.cluster_refs.peak"));
         long pipelineRouterWaitMs = timerTotalMs("swath.sort.pipeline.router_wait");
         long pipelineHeaderScanMs = timerTotalMs("swath.sort.pipeline.header_scan");
         long pipelinePlanQueueWaitMs = timerTotalMs("swath.sort.pipeline.plan_queue_wait");

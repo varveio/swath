@@ -30,6 +30,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongConsumer;
 
 /**
@@ -41,8 +42,33 @@ import java.util.function.LongConsumer;
  */
 final class PartEncoders implements AutoCloseable {
     static final int QUEUE_DEPTH = 2;
-    static final long WRITER_HEAP_ESTIMATE_BYTES = 8L << 20;
+
+    /**
+     * Measured lower bound for one open Parquet writer: prior in-repo measurements observed
+     * 8-13&nbsp;MiB for a writer at the default 8&nbsp;MiB row group, so no configured row group
+     * may be priced below the top of that observed range.
+     */
+    private static final long MEASURED_WRITER_FLOOR_BYTES = 13L << 20;
+
+    /**
+     * Conservative allowance for column/page/dictionary encoding buffers and footer/metadata state
+     * that a writer holds on top of one buffered row group — not measured precisely, deliberately
+     * generous so admission stays conservative as {@code final-row-group-bytes} grows.
+     */
+    private static final long WRITER_WORKING_OVERHEAD_BYTES = 4L << 20;
+
     private static final long FAILURE_CHECK_MILLIS = 100;
+
+    /**
+     * Per-writer heap reservation for admission planning, scaled to the configured row-group size
+     * so a caller requesting large row groups cannot admit more encoders than the writers can
+     * actually fit in.
+     */
+    static long writerHeapEstimateBytes(long finalRowGroupBytes) {
+        long working = finalRowGroupBytes > Long.MAX_VALUE - WRITER_WORKING_OVERHEAD_BYTES
+                ? Long.MAX_VALUE : finalRowGroupBytes + WRITER_WORKING_OVERHEAD_BYTES;
+        return Math.max(MEASURED_WRITER_FLOOR_BYTES, working);
+    }
 
     /**
      * A footer-closed temporary and its close-gated metadata owner. The writer remains attached so
@@ -61,6 +87,7 @@ final class PartEncoders implements AutoCloseable {
     private final AtomicBoolean aborting = new AtomicBoolean();
     private final AtomicInteger partsOpen = new AtomicInteger();
     private final LongConsumer progressCallback;
+    private final AtomicLong progressTally = new AtomicLong();
     private final CountDownLatch firstCompletion = new CountDownLatch(1);
 
     /**
@@ -158,6 +185,23 @@ final class PartEncoders implements AutoCloseable {
     }
 
     /**
+     * Deliver one lane's batched row count to the external callback, serialized so at most one lane
+     * is ever inside {@code progressCallback.accept} at a time. Every lane keeps its own hot-path
+     * batch counter (unsynchronized, see {@link Lane#progressRows}); only the handoff to the
+     * caller-supplied callback — which production wires straight into a metrics counter increment —
+     * is serialized here, which is what lets {@link SortFinalizer.Request} promise serial
+     * invocation. {@link #progressTally} is the internal running total this serializes against; it is not
+     * itself passed to the callback so an existing delta/increment-style consumer keeps working
+     * unchanged.
+     */
+    private void reportProgress(long batchRows) {
+        synchronized (progressTally) {
+            progressTally.addAndGet(batchRows);
+            progressCallback.accept(batchRows);
+        }
+    }
+
+    /**
      * Enqueue one terminal token per consumer after all plans. Tokens share normal queue ordering,
      * which guarantees no lane exits ahead of accepted work; timed admission still detects failure.
      */
@@ -184,6 +228,25 @@ final class PartEncoders implements AutoCloseable {
             }
         }
         joinAll();
+        discardQueuedPlans();
+    }
+
+    /**
+     * Release staging references held by plans no lane will ever execute. Draining after the join
+     * is what makes this safe: no consumer can still be reading a plan this loop is about to
+     * release.
+     */
+    private void discardQueuedPlans() {
+        Item item;
+        while ((item = queue.poll()) != null) {
+            if (item instanceof Item.Plan plan) {
+                try {
+                    plan.value().discard();
+                } catch (IOException discardFailure) {
+                    failure.record(discardFailure);
+                }
+            }
+        }
     }
 
     /**
@@ -300,7 +363,7 @@ final class PartEncoders implements AutoCloseable {
                 MergeCancellation.check();
                 switch (item) {
                     case PartPlan.Page page -> writePage(read(page.ref()));
-                    case PartPlan.Cluster cluster -> writeCluster(cluster.refs());
+                    case PartPlan.Cluster cluster -> writeCluster(cluster);
                 }
             }
             metrics.recordPipelineDecodedPagePeak(decodedBudget.peakResidentBytes());
@@ -355,36 +418,24 @@ final class PartEncoders implements AutoCloseable {
         /**
          * Incrementally admit a cluster so a long transitive chain need not be resident at once.
          * A future page enters only when its minimum can compete with the next active row; admitting
-         * the full component eagerly would make valid overlap consume O(component pages) heap.
+         * the full component eagerly would make valid overlap consume O(component pages) heap. The
+         * references arrive as a single ordered pass, so a component whose references were spilled
+         * costs this lane one buffered read rather than the whole component.
          */
-        private void writeCluster(List<PageRef> refs) throws IOException {
+        private void writeCluster(PartPlan.Cluster cluster) throws IOException {
             PageRowMerger merger = new PageRowMerger(comparator);
-            int next = 0;
-            long reserved = 0;
-            try {
-                PageBlock first = read(refs.get(next));
-                reserved = decodedBudget.reserve(first);
-                merger.add(refs.get(next).segmentId(), first, reserved);
-                reserved = 0;
-                next++;
+            try (ClusterRefs.Cursor refs = cluster.refs().open()) {
+                admit(merger, refs.next());
                 while (merger.hasNext()) {
-                    while (next < refs.size()
-                            && KeyBytes.compareUnsigned(
-                                    refs.get(next).minKey(), merger.nextKey()) <= 0) {
-                        PageRef ref = refs.get(next++);
-                        PageBlock page = read(ref);
-                        long pageBytes = decodedBudget.reserve(page);
-                        try {
-                            merger.add(ref.segmentId(), page, pageBytes);
-                            pageBytes = 0;
-                        } finally {
-                            decodedBudget.release(pageBytes);
-                        }
+                    PageRef candidate;
+                    while ((candidate = refs.peek()) != null && KeyBytes.compareUnsigned(
+                            candidate.minKey(), merger.nextKey()) <= 0) {
+                        admit(merger, refs.next());
                     }
                     write(merger.next());
                     decodedBudget.release(merger.releasedBytes());
                 }
-                if (next != refs.size()) {
+                if (refs.peek() != null) {
                     // The router closes a transitive range component before dispatch. Keep this
                     // check because silently dropping a future ref would defeat cardinality only
                     // after an expensive full encode and could publish misordered output if counts
@@ -392,8 +443,37 @@ final class PartEncoders implements AutoCloseable {
                     throw new IllegalStateException("cluster refs were not fully consumed");
                 }
             } finally {
-                decodedBudget.release(reserved);
                 decodedBudget.release(merger.releaseAllBytes());
+                releaseClusterRefs(cluster);
+            }
+        }
+
+        /**
+         * Reserve one page in retained-byte units before handing it to the row heap. The
+         * reservation is released here only when admission itself fails; once the heap owns the
+         * page, exhaustion or the caller's drain releases it.
+         */
+        private void admit(PageRowMerger merger, PageRef ref) throws IOException {
+            PageBlock page = read(ref);
+            long pageBytes = decodedBudget.reserve(page);
+            try {
+                merger.add(ref.segmentId(), page, pageBytes);
+                pageBytes = 0;
+            } finally {
+                decodedBudget.release(pageBytes);
+            }
+        }
+
+        /**
+         * Release a spilled component's staging references as soon as its part no longer needs
+         * them. A discard fault joins the relay because leaked staging is a real resource fault,
+         * not a reason to report the part as successfully encoded.
+         */
+        private void releaseClusterRefs(PartPlan.Cluster cluster) {
+            try {
+                cluster.discard();
+            } catch (IOException discardFailure) {
+                failure.record(discardFailure);
             }
         }
 
@@ -406,7 +486,7 @@ final class PartEncoders implements AutoCloseable {
             entryGuard.accept(entry);
             writer.write(entry);
             if (++progressRows >= CascadeReducer.PROGRESS_BATCH_ROWS) {
-                progressCallback.accept(progressRows);
+                reportProgress(progressRows);
                 progressRows = 0;
             }
         }
@@ -414,7 +494,7 @@ final class PartEncoders implements AutoCloseable {
         /** Report the final sub-rung remainder only after its part is durably closed. */
         private void flushProgress() {
             if (progressRows > 0) {
-                progressCallback.accept(progressRows);
+                reportProgress(progressRows);
                 progressRows = 0;
             }
         }

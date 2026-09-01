@@ -37,9 +37,13 @@ final class FinalizationPlanner {
         this.softFdLimitSupplier = softFdLimitSupplier;
     }
 
-    /** Clamp cascade inputs while reserving descriptors for the requested output writers. */
+    /**
+     * Clamp cascade inputs while reserving descriptors for the requested output writers, lowering
+     * that reservation as far as a single writer before refusing a merge the narrower output would
+     * complete.
+     */
     int pipelineFanIn(PageRunCatalog catalog, int encoderCount)
-            throws MergeMemoryExhaustedException {
+            throws CascadeCapacityExhaustedException {
         if (encoderCount < 1) {
             throw new IllegalArgumentException("pipeline encoder count must be positive");
         }
@@ -137,13 +141,24 @@ final class FinalizationPlanner {
         return saturatedAdd(fixedBytes, clusterBytes) <= config.mergeBudgetBytes();
     }
 
+    /**
+     * The residency that does not scale with cluster width: header-cursor references, every plan
+     * reference wave the pipeline can hold at once, one transient positional read body per encoder,
+     * and one open writer per encoder.
+     *
+     * <p>Two of those waves belong to the router, not one. {@code MergeRouter#route} closes a whole
+     * overlap component before offering it, so the component's references and the references already
+     * accumulated in the current part are live simultaneously; each is capped at {@code planRefs}.
+     * The remaining {@code (QUEUE_DEPTH + 1)} waves per encoder are the queued and executing plans.
+     */
     private long fixedBytes(int encoders, long cursorRefs, int refBytes,
             long readPageBytes, long planRefs) {
         long retainedPlanRefs = saturatedMultiply(planRefs,
-                saturatedAdd(1L, saturatedMultiply(PartEncoders.QUEUE_DEPTH + 1L, encoders)));
+                saturatedAdd(2L, saturatedMultiply(PartEncoders.QUEUE_DEPTH + 1L, encoders)));
         long routerBytes = saturatedMultiply(
                 saturatedAdd(cursorRefs, retainedPlanRefs), refBytes);
-        long writers = saturatedMultiply(encoders, PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
+        long writers = saturatedMultiply(encoders,
+                PartEncoders.writerHeapEstimateBytes(config.finalRowGroupBytes()));
         long reads = saturatedMultiply(encoders, readPageBytes);
         return saturatedAdd(saturatedAdd(routerBytes, writers), reads);
     }
@@ -181,13 +196,36 @@ final class FinalizationPlanner {
     }
 
     private int runtimeFanIn(PageRunCatalog catalog, int outputWriters)
-            throws MergeMemoryExhaustedException {
+            throws CascadeCapacityExhaustedException {
         int staticFanIn = config.effectiveFanIn();
         int softFdLimit = softFdLimitSupplier.getAsInt();
         int recordSizedFanIn = recordSizedFanIn(catalog);
-        int headroom = saturatedHeadroom(outputWriters);
+        int writers = feasibleWriterReservation(outputWriters, staticFanIn, softFdLimit,
+                recordSizedFanIn);
+        int headroom = saturatedHeadroom(writers);
         int clamped = FileDescriptorBudget.clampedFanIn(staticFanIn, softFdLimit,
                 headroom, recordSizedFanIn);
+        int segments = catalog.descriptors().size();
+        if (clamped < 2) {
+            if (segments >= 2) {
+                metrics.recordStealReason("SORT", "merge_fanin_floor_exhausted");
+                throw new CascadeCapacityExhaustedException(
+                        "cascade cannot open the minimum two streams under the current budget: "
+                                + "capacity=" + clamped + ", segments=" + segments
+                                + ", soft_fd_limit=" + softFdLimit
+                                + ", record_sized_fan_in=" + recordSizedFanIn
+                                + ", reserved_writers=" + writers);
+            }
+            // A single source segment never opens a cascade group (reduceToFanIn's size > fanIn
+            // guard skips it), so an unusable width here can never actually be exercised — but
+            // CascadeReducer's own fanIn >= 2 constructor invariant must still be satisfied.
+            clamped = 2;
+        } else if (writers < outputWriters) {
+            metrics.recordStealReason("SORT", "merge_fanin_writer_reservation_degraded");
+            log.debug("sort_merge_fanin_writer_reservation_degraded requested_writers={} "
+                            + "reserved_writers={} clamped_fan_in={} soft_fd_limit={} segments={}",
+                    outputWriters, writers, clamped, softFdLimit, segments);
+        }
         if (clamped < staticFanIn) {
             int fdBound = FileDescriptorBudget.fdBoundedFanIn(softFdLimit, headroom);
             metrics.recordStealReason("SORT", "merge_fanin_clamped");
@@ -199,11 +237,31 @@ final class FinalizationPlanner {
             }
             log.debug("sort_merge_fanin_clamped static_fan_in={} fd_bound={} "
                             + "record_sized_fan_in={} clamped_fan_in={} soft_fd_limit={} segments={}",
-                    staticFanIn, fdBound, recordSizedFanIn, clamped, softFdLimit,
-                    catalog.descriptors().size());
+                    staticFanIn, fdBound, recordSizedFanIn, clamped, softFdLimit, segments);
         }
-        warnIfCascadePredicted(catalog.descriptors().size(), clamped);
+        warnIfCascadePredicted(segments, clamped);
         return clamped;
+    }
+
+    /**
+     * The largest output-writer reservation that still leaves a usable two-stream cascade width, or
+     * {@code 1} when no reservation does. The requested encoder count is a ceiling rather than a
+     * reservation the cascade must honor — {@link #pipelineParallelism} admits the lanes that
+     * actually run, from the survivors this pass leaves — so under a tight descriptor budget the
+     * inputs get the descriptors back instead of the merge being refused for output width nothing
+     * has committed to yet. Fan-in is non-increasing in the reservation, so walking down returns the
+     * largest feasible count; returning {@code 1} when none is feasible makes the refusal above
+     * report capacity at the minimum any output needs.
+     */
+    private int feasibleWriterReservation(int requestedWriters, int staticFanIn, int softFdLimit,
+            int recordSizedFanIn) {
+        for (int writers = requestedWriters; writers > 1; writers--) {
+            if (FileDescriptorBudget.clampedFanIn(staticFanIn, softFdLimit,
+                    saturatedHeadroom(writers), recordSizedFanIn) >= 2) {
+                return writers;
+            }
+        }
+        return 1;
     }
 
     private static int saturatedHeadroom(int outputWriters) {
@@ -223,10 +281,14 @@ final class FinalizationPlanner {
                 segments, effectiveFanIn, predictedPasses);
     }
 
+    /**
+     * The record-size-bounded fan-in ceiling, honestly reported: {@code 0} or {@code 1} means even
+     * the minimum two-stream cascade width does not fit, not an artificially floored {@code 2}.
+     */
     private int recordSizedFanIn(PageRunCatalog catalog) {
         long perStreamPrice = Math.max(config.mergePerStreamBytes(), catalog.maxRecordLen());
         long bound = config.mergeBudgetBytes() / Math.max(1L, perStreamPrice);
-        return (int) Math.min(Integer.MAX_VALUE, Math.max(2L, bound));
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, bound));
     }
 
     private static int predictedPasses(int segments, int effectiveFanIn) {

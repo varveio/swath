@@ -766,6 +766,29 @@ one object's versions may span pages, but always rejects
 `previous.maxKey > next.minKey`. The writer enforces the rule before durability and every
 sequential or routing reader enforces it again.
 
+### Staging authority
+
+Every destructive staging or publication phase is gated on a captured physical identity rather than
+a pathname. `StagingReconciliation` records `BasicFileAttributes.fileKey()` for the staging
+directory, for the output directory, and for each original segment, rejects two names that resolve
+to one inode, and rechecks the directory key before each sweep, delete, or rename. A staging
+directory replaced mid-run is therefore refused instead of swept.
+
+That makes a file-key-reporting filesystem a hard requirement of the sorted path, not a preference.
+A provider that reports no file key is refused during preflight, before anything is deleted or
+published:
+
+```text
+cannot establish physical identity for sort staging directory because the filesystem did not provide a file key: <path>
+```
+
+`sort staging segment` and `sort output directory` produce the same message for their own subject.
+The JDK's default provider supplies a device/inode key for ordinary local mounts on Linux and
+macOS; alternative `FileSystemProvider` implementations, including object-store providers, commonly
+do not. There is no fallback and none is planned: an identity check weak enough to accept a null
+file key could not distinguish the directory swath validated from one substituted afterwards, and
+the operation it guards is deletion.
+
 ### Finalization contract
 
 `SortFinalizer` converts the complete sealed catalog into one globally sorted unpublished Parquet
@@ -773,7 +796,9 @@ part set:
 
 1. `CascadeReducer` reduces an over-wide catalog through bounded page-run cascade passes.
    `CascadePageMerger` streams a page whole when its stored maximum is below every successor
-   minimum and uses `PageRowMerger` only for a transitive overlap component.
+   minimum and uses `PageRowMerger` only for a transitive overlap component. Each intermediate is
+   written under a temporary name and renamed onto its disposable `merge-*.pageseg` name only after
+   it is durable, so an interrupted pass leaves no file a later pass could mistake for complete.
 2. `PageRunHeaderStreams` scan the surviving segments sequentially, emitting bounded
    `PageRef` streams while verifying frame tiling, page order, and declared totals.
 3. `MergeRouter` consumes every reference exactly once and assigns complete, contiguous
@@ -797,13 +822,20 @@ The resulting parts satisfy all of these guarantees:
   `swath.sort.mode`, and `swath.sort.format_version`.
 - Source-tail rows, router rows, and footer-closed writer rows must agree exactly before any final
   name is installed.
+- Part geometry is reproducible. The same staged catalog, `final-file-bytes`, and admitted
+  reference cap yield the same part count, boundary keys, per-part row counts, and part bytes
+  regardless of encoder count or encoder completion order. The cap is itself heap-admitted, so a
+  `merge-budget-bytes` too small for the requested encoders lowers it and can move boundaries;
+  compare part sets only across runs that admitted the same cap.
 
 `final-file-bytes` is a soft encoded-size target, not a hard split point. `PartSizer` estimates
 a logical target from uncompressed PageBlock payload bytes. It dispatches one conservative warm-up
-plan, waits for that part's durable Parquet size, and uses the cumulative observed
-encoded-to-logical ratio for later plans. A roll occurs only before a complete page or overlap
-component and only when the adjacent raw keys differ. The heap-admitted reference cap can also
-close a plan before the byte target.
+plan, waits for that part's durable Parquet size, and sizes every later plan from the
+encoded-to-logical ratio that one part measured. Later completions are deliberately not folded in:
+the frozen ratio is what makes geometry reproducible, and the accepted cost is that a warm-up part
+that misrepresents the corpus biases every later part the same way. A roll occurs only before a
+complete page or overlap component and only when the adjacent raw keys differ. The heap-admitted
+reference cap can also close a plan before the byte target.
 
 Encoders close and fsync temporary Parquet parts independently. The assembler exposes none of them
 to publication until every encoder has quiesced and the ordered set has passed its checks.
@@ -832,10 +864,13 @@ Final encoder admission uses the three exact per-descriptor maxima stored in the
   cache; and
 - `maxKeyLength` prices both key arrays retained by each `PageRef`.
 
-The fixed reference population covers every segment cursor and its two-slot queue, the router head,
-the bounded shared plan queue, and one executing plan per encoder. Each encoder also prices one
+The fixed reference population covers every segment cursor and its two-slot queue, both reference
+waves the router holds at once — the part it is accumulating and the overlap component it closes
+beside it — the bounded shared plan queue, and one executing plan per encoder. Each encoder also prices one
 writer, one transient body read, and one retained decoded page. The plan limit starts no higher than
-16,384 references and may be lowered to 256 so this population fits. The remaining merge budget is
+16,384 references and may be lowered to 256 so this population fits. A single transitive overlap
+component may legally exceed that limit; its references spill to a staging file, so the priced
+population still bounds retained references. The remaining merge budget is
 divided into per-encoder decoded-page guards.
 
 Descriptor admission reserves one shared positional-read channel per surviving segment and one
@@ -859,10 +894,12 @@ the durable-file readback path. A mismatch refuses publication.
 lanes. Bounded queue operations poll it at fixed intervals so a failed peer cannot leave another
 stage blocked forever. On failure or cancellation, `SortFinalizer` interrupts and joins every owned
 thread, discards any open writer, and closes every shared segment channel before rethrowing. It does
-not mutate staging during failure handling. `SortedDatasetCoordinator` exclusively sweeps disposable
-finalization temporaries after the failure escapes; any direct caller of `SortFinalizer.prepare`
-owns that cleanup obligation. The initiating checked, runtime, error, or cancellation type remains
-primary; cleanup failures are suppressed by the coordinator.
+not mutate staging during failure handling. `SortedDatasetCoordinator` exclusively sweeps every
+disposable staging namespace after the failure escapes — cascade intermediates and their temporary
+names as well as final-part temporaries, the same set kickoff sweeps — so a failed attempt leaves
+nothing for the startup disk guard to charge against its own retry; any direct caller of
+`SortFinalizer.prepare` owns that cleanup obligation. The initiating checked, runtime, error, or
+cancellation type remains primary; cleanup failures are suppressed by the coordinator.
 
 Before publication commits, checkpoint-owned original segments and the previously published
 generation remain untouched. Resume therefore reruns cascade and finalization from those original
@@ -992,14 +1029,14 @@ than an under-priced allocation.
 | `swath.sort.segment-entries` | secondary cap alongside `segment-bytes` | backstop entry-count cap on a sealed buffer |
 | `swath.sort.heap-fraction` | `0.08` | the adaptive ratio `segment-bytes` derives from `Runtime.maxMemory()`; raise only after measurement, never unattended |
 | `swath.sort.buffers` | 2 | in-flight sealed buffers (fill buffer while the sealed buffer encodes off-thread); **must be `>= 2`**: `SpillLane` bounds live sealed buffers to exactly `buffers` (fill + `buffers - 1` off-thread); `buffers=1` would either deadlock (0 off-thread slots to hand a sealed buffer to) or, if floored instead, silently allow 2 live buffers while claiming a cap of 1 — `SortConfig` rejects `buffers < 2` outright (`IllegalArgumentException`), consistent with every other knob's validation in that immutable snapshot |
-| `swath.sort.fan-in` | 10000 | merge fan-in `F` (§6); open page-run segment readers never exceed `F` per pass. The pass width actually used is clamped at runtime by (a) the **fd budget** — `min(fan-in, usable-fds)` derived from `ulimit -n` with headroom — and (b) the **per-open-stream capacity plan**, `effectiveFanIn = min(fan-in, max(2, merge-budget-bytes / merge-per-stream-bytes))`. `fan-in` alone is a correctness/fd ceiling, not a memory promise; raise `ulimit -n` (below) so the fd clamp does not force a cascade |
+| `swath.sort.fan-in` | 10000 | merge fan-in `F` (§6); open page-run segment readers never exceed `F` per pass. The pass width actually used is clamped at runtime by (a) the **fd budget** — `min(fan-in, usable-fds)` derived from `ulimit -n` with headroom — and (b) the **per-open-stream capacity plan**, `effectiveFanIn = min(fan-in, max(2, merge-budget-bytes / merge-per-stream-bytes))`. `fan-in` alone is a correctness/fd ceiling, not a memory promise; raise `ulimit -n` (below) so the fd clamp does not force a cascade. The runtime fd/record-sized capacity itself is reported honestly — `0` or `1` means even a two-stream cascade does not fit — so a two-or-more-segment merge that lands there even at the minimum one-writer output reservation refuses resumably (`SORT.merge_fanin_floor_exhausted`) before any reader opens, rather than silently opening a cascade group it cannot sustain. A single source segment never opens a cascade group, so this never engages for it |
 | `swath.sort.segment-codec` | `ZSTD1` | payload compression for page-run STAGING segments — `NONE` \| `LZ4` \| `ZSTD1`. Trades staging-disk ratio for pack/merge CPU: `LZ4` is faster; `ZSTD1` (default) is smaller on disk; `NONE` skips compression. Governs staging only, never the final Parquet output |
-| `swath.sort.merge-per-stream-bytes` | ≈64 KiB configured floor (`DEFAULT_MERGE_PER_STREAM_BYTES`) | cascade planning price for one open page-run stream. Runtime fan-in uses `max(configured floor, largest persisted maxRecordLen)` and file-descriptor headroom while reserving the requested final writers. Final encoder admission separately prices the fixed tail's decoded-payload and key maxima (§6). |
-| `swath.sort.final-file-bytes` | 1 GiB | soft roll target for multi-file sorted output. `PartSizer` calibrates logical PageBlock payload against completed Parquet bytes. A roll occurs only before a complete page or transitive overlap component and only between distinct raw keys; the heap-admitted reference cap can roll earlier. Parts remain strictly key-disjoint and densely named. |
-| `swath.sort.final-row-group-bytes` | ≈4–8 MB | the served file's seek granularity (row-group size) |
+| `swath.sort.merge-per-stream-bytes` | ≈64 KiB configured floor (`DEFAULT_MERGE_PER_STREAM_BYTES`) | cascade planning price for one open page-run stream. Runtime fan-in uses `max(configured floor, largest persisted maxRecordLen)` and file-descriptor headroom while reserving the requested final writers; that writer reservation is lowered as far as a single writer before a merge is refused, since encoder admission settles the lanes that actually run afterwards (`SORT.merge_fanin_writer_reservation_degraded`). Final encoder admission separately prices the fixed tail's decoded-payload and key maxima (§6). |
+| `swath.sort.final-file-bytes` | 1 GiB | soft roll target for multi-file sorted output. `PartSizer` calibrates logical PageBlock payload against the first completed Parquet part and keeps that ratio for the rest of the merge, so geometry is reproducible at any encoder count. A roll occurs only before a complete page or transitive overlap component and only between distinct raw keys; the heap-admitted reference cap can roll earlier. Parts remain strictly key-disjoint and densely named. |
+| `swath.sort.final-row-group-bytes` | ≈4–8 MB | the served file's seek granularity (row-group size); also prices each admitted encoder's writer-heap reservation (`max(measured 13 MiB floor, row-group bytes + a fixed working-buffer allowance)`), so a larger configured row group admits fewer parallel encoders under the same `merge-budget-bytes` instead of under-pricing a bigger writer |
 | `swath.sort.final-page-rows` | 1024 | the served file's seek granularity WITHIN a row group: the cap on a data page's rows. A page is Parquet's smallest addressable unit — the page index prunes pages, never rows, and every encoding decodes strictly forward — so this is the floor on what a bounded key-range read decodes per column, however few rows it wanted. Parquet's own default caps a page at 20,000 rows and 1 MB, and the byte cap only binds on columns wide enough to reach it, so every narrow column sat at 20,000. Governs FINAL Parquet only; custom page-run staging has no Parquet pages or row groups. Not to be confused with the 1 MB data-page BYTE cap, which two independent gates (2026-07-04 P1/P4) measured dead in both directions |
 | `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | capacity for bounded cursor/router/queued/executing-plan references, one transient record-body read, one dictionary-safe retained page, and one writer per encoder. Admission may reduce the plan-reference cap and encoder count; if the one-encoder floor does not fit, finalization refuses resumably before opening shared channels or writers. Cascade fan-in uses the same budget with `merge-per-stream-bytes`. |
-| `--tune sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | configured maximum pipeline encoder count; `1` is the explicit single-encoder choice. Both the CLI tune and core configuration enforce `1..16`. The tune is resume-free because final parts remain disposable staging files until the complete manifest barrier. Admission reserves shared input channels and one writer descriptor per encoder, prices scanner/frontier and router/queued/executing-plan references at the catalog's exact key-length bound, one transient body read, one dictionary-safe retained page, and an 8 MiB writer per encoder, and divides its retained-byte cluster budget across admitted lanes. It may lower the runtime plan cap before lowering encoder count. Clamps record `SORT.pipeline_encoders_fd_clamped` or `SORT.pipeline_encoders_heap_clamped`; a missing writer floor records `SORT.pipeline_encoders_fd_floor_exhausted`. |
+| `--tune sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | configured maximum pipeline encoder count; `1` is the explicit single-encoder choice. Both the CLI tune and core configuration enforce `1..16`. The tune is resume-free because final parts remain disposable staging files until the complete manifest barrier. Admission reserves shared input channels and one writer descriptor per encoder, prices scanner/frontier and router/queued/executing-plan references at the catalog's exact key-length bound, one transient body read, one dictionary-safe retained page, and a writer per encoder priced from `final-row-group-bytes` (above), and divides its retained-byte cluster budget across admitted lanes. It may lower the runtime plan cap before lowering encoder count. Clamps record `SORT.pipeline_encoders_fd_clamped` or `SORT.pipeline_encoders_heap_clamped`; a missing writer floor records `SORT.pipeline_encoders_fd_floor_exhausted`. |
 | `ulimit -n` (OS, not a swath knob) | raise to ~65536 for single-pass | with fan-in 10000, a single merge pass opens up to ~`min(segments, fan-in)` page-run readers at once; a low `ulimit -n` forces the fd clamp to shrink `effectiveFanIn` and **degrade to a multi-pass cascade**. Raise the soft limit (`ulimit -n 65536`, or the launcher does it) for single-pass merges on large buckets |
 | `--checkpoint` | `auto` (co-located at `<dir>/.swath/checkpoint.sqlite` for a managed Parquet directory; ephemeral for stdout), deleted on clean completion | FILE kind and TSV/JSONL directories accept only `none`; `none` ⇒ in-memory worklist and **no resume**. An explicit path is valid only with a Parquet directory, but the public `swath resume` command opens the managed co-located layout, not an arbitrary SQLite path. |
 

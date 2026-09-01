@@ -34,9 +34,10 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Algorithmic owner for admitting staged runs and preparing a complete unpublished sorted part set.
- * Cascade width conservatively reserves requested output descriptors, but encoder admission occurs
- * only after cascade because survivor count and page maxima are the resources the final pass
- * actually owns.
+ * Cascade width conservatively reserves descriptors for the requested output writers — giving them
+ * back one at a time rather than refusing a merge a narrower output would complete — but encoder
+ * admission occurs only after cascade because survivor count and page maxima are the resources the
+ * final pass actually owns.
  *
  * <p>The calling thread is the assembler. It waits for dense ordinals, joins every encoder, closes
  * all shared channels, and proves strict raw-byte adjacency plus exact cardinality before returning.
@@ -101,7 +102,7 @@ public final class SortFinalizer {
         PageRunWriter segmentWriter = new PageRunWriter(
                 run.comparator(), run.hook(), metrics, config.segmentCodec(), run.orderingMode());
         PageRunCascadeStore io = new PageRunCascadeStore(run, segmentWriter, request.stagingDir(),
-                request.ownedInputs(), "merge-");
+                request.ownedInputs());
         CascadeReducer<Path> cascade = new CascadeReducer<>(run.comparator(),
                 planner.pipelineFanIn(sourceCatalog, encoderCount),
                 io, run.hook(), metrics);
@@ -130,7 +131,7 @@ public final class SortFinalizer {
             request.onFinalPassStarting().onFinalPassStarting(true);
             MergeRouter.Result routed = new MergeRouter(
                     cursors, encoders::submit, sizer, metrics, failure,
-                    encoders::awaitFirstCompletion, plan.planRefLimit())
+                    encoders::awaitFirstCompletion, plan.planRefLimit(), request.stagingDir())
                     .route(pipelineCatalog.descriptors().size());
             if (routed.refs() != pipelineCatalog.totalRecords()) {
                 throw new IllegalStateException("pipeline reference count mismatch: planned="
@@ -346,7 +347,21 @@ public final class SortFinalizer {
         }
     }
 
-    /** Invocation state for preparation only; it carries no publication destination or committer. */
+    /**
+     * Invocation state for preparation only; it carries no publication destination or committer.
+     *
+     * <p>{@code progressCallback} is invoked serially — never concurrently, even though both the
+     * cascade reducer and multiple encoder lanes report into it — with a non-negative increment of
+     * completed merge work each call, batched in 1,000-row batches plus each stage's final
+     * remainder. Treat it like a counter increment (production wires it into exactly that): the
+     * running sum of every value observed is monotonically non-decreasing.
+     *
+     * <p>It counts work, not output cardinality. A row is reported once per intermediate cascade
+     * pass that rewrites it and once more when it is encoded into a final part, so the total may
+     * exceed the number of rows prepared — five rows reduced over two cascade passes report fifteen
+     * units, not five. Consumers must read the values as progress increments and never as a
+     * row-count oracle.
+     */
     public record Request(
             Admission admission,
             Path stagingDir,

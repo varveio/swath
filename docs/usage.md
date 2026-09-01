@@ -164,12 +164,18 @@ swath list s3://my-bucket/ \
   -o sorted/
 ```
 
-Sorted output has three important constraints:
+Sorted output has four important constraints:
 
 1. It requires a managed Parquet directory and a durable checkpoint.
 2. It writes compressed page-run segments under `_staging/`, then finalizes them through a
    header-scan, reference-router, and encoder pipeline.
 3. Staging and final output coexist during finalization, so disk usage scales with captured data.
+4. It requires a local filesystem whose Java provider reports file keys. swath captures the
+   physical identity of the output and `_staging/` directories before it deletes or renames
+   anything, so a run on a provider that reports none — object-store and other non-default
+   `FileSystemProvider` implementations — fails during preflight with
+   `cannot establish physical identity ... because the filesystem did not provide a file key`
+   rather than sweeping a directory it can only identify by pathname.
 
 At finalization, bounded header cursors scan the durable segments, one router assigns complete
 ordered part plans, and an admitted pool of encoders reads those plans positionally. The default
@@ -177,8 +183,9 @@ maximum encoder count is derived from available processors and capped at eight. 
 file-descriptor checks may lower it. `--tune sort.merge-parallelism=1` selects one encoder but
 uses the same routing and publication path.
 
-Part count is independent of encoder count. `final-file-bytes` is a soft target calibrated from
-completed Parquet parts; rolls happen only between complete staging pages or overlap components,
+Part count is independent of encoder count: the same input and configuration produce the same parts
+whether one encoder or eight ran. `final-file-bytes` is a soft target calibrated from the first
+completed Parquet part; rolls happen only between complete staging pages or overlap components,
 and an equal-key group is never split. A bounded reference cap can create an earlier roll.
 
 swath checks free space before and during sorted listing. Finalization has no separate free-space
