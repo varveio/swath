@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 /** Post-publish ownership policy for original listing page-run staging segments. */
 public enum StagingRetention {
@@ -32,7 +32,9 @@ public enum StagingRetention {
         return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
             case "on" -> RETAIN_ORIGINALS;
             case "off" -> DELETE_AFTER_PUBLISH;
-            default -> throw new IllegalArgumentException(property + " must be on or off, got " + value);
+            default -> throw new IllegalArgumentException(
+                    property + " must be on or off, got " + value);
         };
     }
+
 }

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,12 +13,27 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPart;
+import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortTestSupport;
+import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
 import org.junit.jupiter.api.Test;
@@ -26,7 +41,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Characterization pins for one- and multi-encoder pipeline publication, captured at the
- * {@link SortTransform} boundary so a change to finalization cannot silently alter observable
+ * {@link SortedDatasetCoordinator} boundary so a change to finalization cannot silently alter observable
  * output.
  *
  * <p><b>The pinned invariant: both encoder shapes stamp identically.</b> Whichever shape produced the output,
@@ -35,7 +50,8 @@ import org.junit.jupiter.api.io.TempDir;
  * "served-file footer stamp"). That symmetry is what lets {@code merge-parallelism} be a performance
  * knob rather than a change to what the output means.
  *
- * <p>Both loops also share one progress-feed cadence — batched at {@link KWayMerge#PROGRESS_BATCH_ROWS},
+ * <p>Both loops also share one progress-feed cadence — batched at the finalization progress batch
+ * size,
  * a full batch each time the counter reaches it and a remainder flush at the end — pinned here for the
  * one-encoder path as an exact ordered sequence; the multi-encoder path drains concurrently, so
  * only its total (every row accounted for) is a deterministic observable (see that test).
@@ -61,7 +77,7 @@ class SortRollPublishStampCharacterizationTest {
         SortConfig config = SortConfigs.base().withFinalFileBytes(1L);
         List<Long> progress = new ArrayList<>();
         List<FinalPart> published = new ArrayList<>();
-        SortTransformResult result = stampedTransform(config)
+        SortedDatasetResult result = stampedTransform(config)
                 .transform(staging, dirs.output, dirs.staging,
                         (parts, ignoredRows) -> published.addAll(parts), progress::add,
                         FinalPassListener.NO_OP);
@@ -123,9 +139,9 @@ class SortRollPublishStampCharacterizationTest {
 
         SortConfig config = SortConfigs.base()
                 .withFinalFileBytes(1L).withMergeParallelism(3).withMergeBudgetBytes(64L << 20);
-        List<Long> progress = new ArrayList<>();
-        SortTransformResult result = stampedTransform(config)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, progress::add,
+        Queue<Long> progress = new ConcurrentLinkedQueue<>();
+        SortedDatasetResult result = stampedTransform(config)
+                .transform(staging, dirs.output, dirs.staging, SortedDatasetCommitter.NO_OP, progress::add,
                         FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(9);
@@ -159,7 +175,7 @@ class SortRollPublishStampCharacterizationTest {
     }
 
     /**
-     * The serial progress feed is batched at {@link KWayMerge#PROGRESS_BATCH_ROWS} (1000): a full batch
+     * The serial progress feed is batched at 1000 rows: a full batch
      * each time the counter reaches it, then a remainder flush. A single-pass merge (fan-in ≫ segment
      * count, no cascade) of 2500 rows into one file therefore emits exactly {@code 1000, 1000, 500}. The
      * multi-encoder loop shares this cadence, but concurrent emissions interleave nondeterministically,
@@ -180,8 +196,8 @@ class SortRollPublishStampCharacterizationTest {
         // base(): fan-in 512 ≫ 2 segments and an unbounded budget ⇒ a single merge pass (no cascade),
         // and a single output file ⇒ the whole 2500-row stream drains through one encoder.
         List<Long> batches = new ArrayList<>();
-        SortTransformResult result = transform(SortConfigs.base())
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, batches::add,
+        SortedDatasetResult result = transform(SortConfigs.base())
+                .transform(staging, dirs.output, dirs.staging, SortedDatasetCommitter.NO_OP, batches::add,
                         FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(1);
@@ -192,16 +208,16 @@ class SortRollPublishStampCharacterizationTest {
 
     // --- helpers ---
 
-    private SortTransform transform(SortConfig config) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+    private SortedDatasetCoordinator transform(SortConfig config) {
+        return new SortedDatasetCoordinator(new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
-    private SortTransform stampedTransform(SortConfig config) {
+    private SortedDatasetCoordinator stampedTransform(SortConfig config) {
         SortedFileWriterFactory stamped = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+        return new SortedDatasetCoordinator(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stamped,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }

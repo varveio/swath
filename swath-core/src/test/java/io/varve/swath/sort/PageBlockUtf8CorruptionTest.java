@@ -11,6 +11,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -40,8 +43,8 @@ class PageBlockUtf8CorruptionTest {
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
 
-        assertThatThrownBy(() -> new SortTransform(run).transform(
-                List.of(segment), output, staging, PublishListener.NO_OP,
+        assertThatThrownBy(() -> new SortedDatasetCoordinator(run).transform(
+                List.of(segment), output, staging, SortedDatasetCommitter.NO_OP,
                 ignored -> { }, FinalPassListener.NO_OP))
                 .isInstanceOfSatisfying(SegmentCorruptionException.class, failure -> {
                     assertThat(failure.errorClass())

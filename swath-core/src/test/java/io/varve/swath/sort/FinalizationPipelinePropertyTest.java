@@ -15,12 +15,18 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
+import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
 import net.jqwik.api.ForAll;
@@ -70,9 +76,9 @@ class FinalizationPipelinePropertyTest {
                 segmentCount, bandCount, rowsPerPage, style, overlapShape, seed);
         Path root = Files.createTempDirectory("pipeline-pagerun-");
         try {
-            SortTransformResult oneEncoder = run(
+            SortedDatasetResult oneEncoder = run(
                     scenario, 1, root, "one", finalFileBytes);
-            SortTransformResult parallel = run(
+            SortedDatasetResult parallel = run(
                     scenario, encoders, root, "parallel", finalFileBytes);
 
             List<ListEntry> expected = scenario.allEntries();
@@ -105,11 +111,19 @@ class FinalizationPipelinePropertyTest {
                         });
             }
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTree(root);
         }
     }
 
-    private SortTransformResult run(Scenario scenario, int encoders, Path root,
+    private static void deleteTree(Path root) throws IOException {
+        try (var paths = Files.walk(root)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
+    }
+
+    private SortedDatasetResult run(Scenario scenario, int encoders, Path root,
             String name, long finalFileBytes) throws IOException {
         Path output = Files.createDirectories(root.resolve(name));
         Path staging = Files.createDirectories(output.resolve("_staging"));
@@ -123,8 +137,8 @@ class FinalizationPipelinePropertyTest {
         SortRun run = new SortRun(config, comparator, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, writerFactory,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        return new SortTransform(run).transform(segments, output, staging,
-                PublishListener.NO_OP, ignored -> { }, FinalPassListener.NO_OP);
+        return new SortedDatasetCoordinator(run).transform(segments, output, staging,
+                SortedDatasetCommitter.NO_OP, ignored -> { }, FinalPassListener.NO_OP);
     }
 
     private Scenario build(int segmentCount, int bandCount, int rowsPerPage,

@@ -12,6 +12,12 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ParquetParts;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
+import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.output.sorted.StagingReconciliation;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,7 +30,7 @@ import java.util.List;
  * swath capture (a directory of {@code *.parquet} parts, or a single part file) into a stamped,
  * globally sorted Parquet output — one file, or a range-disjoint {@code part-NNNNN.parquet} roll when
  * {@code final-file-bytes} is set — by driving the same staging-segment → {@link KWayMerge} →
- * {@link SortTransform} pipeline the {@code --sort} listing path uses. This is the only class the
+ * {@link SortedDatasetCoordinator} pipeline the {@code --sort} listing path uses. This is the only class the
  * replay module's {@code io.varve.swath.replay.fixture} package needs to call — it takes and returns
  * only {@link Path}s and library records, so no parquet/hadoop type ever needs to appear on the
  * replay module's <b>compile</b> classpath.
@@ -49,12 +55,12 @@ import java.util.List;
  *
  * <p><b>Crash-safe and idempotent by re-run (like {@code --sort}'s own publish).</b> Each final file
  * is written to {@code part-NNNNN.parquet.tmp} in the staging dir, then atomically renamed into
- * {@code outputDir} in key order by {@link SortTransform}, which sweeps stale {@code .tmp}s at the
+ * {@code outputDir} in key order by {@link SortedDatasetCoordinator}, which sweeps stale {@code .tmp}s at the
  * start and abandoned {@code part-*} finals only after the complete replacement is closed. A
  * crash mid-publish can leave tmp files, or — for a multi-file roll — a prefix of renamed finals
  * alongside the still-unrenamed tmps; a re-run clears disposable tmp work first, regenerates the
  * replacement, then clears stale finals immediately before publication. This engine passes
- * {@link PublishListener#NO_OP}, so there is no manifest commit point over
+ * {@link SortedDatasetCommitter#NO_OP}, so there is no manifest commit point over
  * the roll — each per-file rename is atomic, the multi-file dataset as a whole is not. This engine's own
  * staging directory ({@link #STAGING_DIR_NAME}, a fixed name under {@code outputDir}) is wiped at
  * the START of every call for the same reason: unlike the checkpoint-tracked {@code --sort}
@@ -101,7 +107,7 @@ public final class CaptureSorter {
      * directory convention so callers can point this at anything the replay server already accepts
      * as a fixture.
      */
-    public SortTransformResult sort(Path captureDir, Path outputDir) throws IOException {
+    public SortedDatasetResult sort(Path captureDir, Path outputDir) throws IOException {
         List<Path> parts = ParquetParts.resolve(captureDir);
         if (parts.isEmpty()) {
             throw new IllegalArgumentException("no *.parquet files found in " + captureDir);
@@ -110,20 +116,20 @@ public final class CaptureSorter {
     }
 
     /** As {@link #sort(Path, Path)}, with the input parts already resolved by the caller. */
-    public SortTransformResult sort(List<Path> inputParts, Path outputDir) throws IOException {
+    public SortedDatasetResult sort(List<Path> inputParts, Path outputDir) throws IOException {
         Files.createDirectories(outputDir);
         Path stagingDir = outputDir.resolve(STAGING_DIR_NAME);
-        Sweeps.deleteTree(stagingDir);
+        StagingReconciliation.discardStagingTree(stagingDir);
         Files.createDirectories(stagingDir);
 
         Comparator<ListEntry> comparator = new ListEntryComparator();
         List<Path> segments = stageSegments(inputParts, stagingDir, comparator);
 
-        SortTransform transform = new SortTransform(
+        SortedDatasetCoordinator transform = new SortedDatasetCoordinator(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.REJECT,
                         metrics, finalWriterDelegate, SortRun.PROCESS_SOFT_FD_LIMIT,
                         StaleFinalSweep.OWN_PARTS_ONLY));
-        return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP,
+        return transform.transform(segments, outputDir, stagingDir, SortedDatasetCommitter.NO_OP,
                 ignored -> metrics.markProgress(), FinalPassListener.NO_OP);
     }
 

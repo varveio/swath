@@ -9,6 +9,7 @@ import io.varve.swath.concurrent.Scope;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.PackedPage;
+import io.varve.swath.output.sorted.StagingNames;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;

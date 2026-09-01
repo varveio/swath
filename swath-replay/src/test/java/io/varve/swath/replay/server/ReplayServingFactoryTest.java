@@ -11,6 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.S3ListRequest;
@@ -23,7 +24,6 @@ import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
-import io.varve.swath.sort.SortTransformResult;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -266,7 +266,7 @@ class ReplayServingFactoryTest {
         Path capture = Files.createDirectories(dir.resolve("cap-" + System.nanoTime()));
         writeUnsortedPart(capture.resolve("part-0.parquet"), keys);
         Path out = Files.createDirectories(dir.resolve("out-" + System.nanoTime()));
-        SortTransformResult result = new CaptureSorter(SortConfig.fromSystemProperties()).sort(capture, out);
+        SortedDatasetResult result = new CaptureSorter(SortConfig.fromSystemProperties()).sort(capture, out);
         return result.finalFiles().getFirst();
     }
 
@@ -280,7 +280,7 @@ class ReplayServingFactoryTest {
         Path capture = Files.createDirectories(dir.resolve("cap-" + System.nanoTime()));
         writeUnsortedPart(capture.resolve("part-0.parquet"), keys.toArray(String[]::new));
         SortConfig rolling = SortConfigs.rolledPerEntry();
-        SortTransformResult result = new CaptureSorter(rolling).sort(capture, outputDir);
+        SortedDatasetResult result = new CaptureSorter(rolling).sort(capture, outputDir);
         assertThat(result.finalFiles()).hasSize(keys.size());
     }
 
@@ -310,7 +310,7 @@ class ReplayServingFactoryTest {
             writer.write(objectEntry("a7"));
         }
         Path out = Files.createDirectories(dir.resolve("mixed-out-" + System.nanoTime()));
-        SortTransformResult result = new CaptureSorter(SortConfig.fromSystemProperties()).sort(capture, out);
+        SortedDatasetResult result = new CaptureSorter(SortConfig.fromSystemProperties()).sort(capture, out);
         return result.finalFiles().getFirst();
     }
 

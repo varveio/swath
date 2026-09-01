@@ -24,19 +24,19 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
-/** Shared fixtures for the {@code io.varve.swath.sort} unit tests (all in-package, so package-private types are reachable). */
-final class SortTestSupport {
+/** Shared fixtures for sort tests, with narrow public helpers used by {@code output.sorted} tests. */
+public final class SortTestSupport {
 
     private SortTestSupport() {
     }
 
-    static ObjectEntry object(String key) {
+    public static ObjectEntry object(String key) {
         return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L, null, null, null,
                 false, null, null, null, null);
     }
 
     /** Write pre-sorted entries in the production page-run staging format. */
-    static Path writePageRun(Path path, List<ListEntry> sorted, Comparator<ListEntry> comparator)
+    public static Path writePageRun(Path path, List<ListEntry> sorted, Comparator<ListEntry> comparator)
             throws IOException {
         PageRunSegmentWriter writer =
                 new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
@@ -47,7 +47,7 @@ final class SortTestSupport {
     }
 
     /** Write one single-row listing page per ordinal, including the production type-2 index. */
-    static Path writePages(Path path, int pages, int keyOffset) throws IOException {
+    public static Path writePages(Path path, int pages, int keyOffset) throws IOException {
         List<List<ListEntry>> generated = new ArrayList<>(pages);
         for (int page = 0; page < pages; page++) {
             generated.add(List.of(object(String.format("k%05d", keyOffset + page))));
@@ -56,7 +56,7 @@ final class SortTestSupport {
     }
 
     /** Write caller-supplied sorted listing pages, including the production type-2 index. */
-    static Path writePages(Path path, List<List<ListEntry>> pages) throws IOException {
+    public static Path writePages(Path path, List<List<ListEntry>> pages) throws IOException {
         return writePages(path, pages, SortMode.OBJECTS);
     }
 
@@ -288,7 +288,7 @@ final class SortTestSupport {
     }
 
     /** Counts recordStealReason calls per {@code outcome.reason}. */
-    static final class CountingMetrics implements SortMetrics {
+    public static final class CountingMetrics implements SortMetrics {
         final Map<String, Integer> counts = new ConcurrentHashMap<>();
         final LongAdder progress = new LongAdder();
         final LongAdder pipelinePagesForwarded = new LongAdder();
@@ -320,7 +320,7 @@ final class SortTestSupport {
             pipelineDecodedPageBytesPeak.getAndAccumulate(bytes, Math::max);
         }
 
-        int count(String key) {
+        public int count(String key) {
             return counts.getOrDefault(key, 0);
         }
     }

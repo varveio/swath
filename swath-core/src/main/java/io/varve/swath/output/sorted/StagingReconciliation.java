@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -102,6 +102,17 @@ public final class StagingReconciliation {
         return new StagingReconciliation(null, Set.of());
     }
 
+    /** Delete one sorter-owned staging tree after validating its physical directory authority. */
+    public static void discardStagingTree(Path stagingDir) throws IOException {
+        if (!Files.exists(stagingDir, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        StagingReconciliation owned = fromPaths(stagingDir, List.of());
+        owned.reconcile(stagingDir);
+        owned.requireOwnedStagingAuthority(stagingDir);
+        Files.delete(stagingDir);
+    }
+
     /**
      * Return the path-backed originals in their caller-supplied order, after lexical aliases have
      * been collapsed to the validated absolute staging authority. Only {@link #fromPaths} creates
@@ -172,7 +183,7 @@ public final class StagingReconciliation {
     }
 
     /** Revalidate the retained staging directory immediately before a destructive phase. */
-    void requireOwnedStagingAuthority(Path stagingDir) throws IOException {
+    public void requireOwnedStagingAuthority(Path stagingDir) throws IOException {
         if (ownedStagingAuthority == null) {
             throw new IOException("checkpoint-name reconciliation has no owned staging authority");
         }
@@ -190,7 +201,7 @@ public final class StagingReconciliation {
     }
 
     /** Delete one validated immediate-child working file, never an original input. */
-    void deleteDisposable(Path path) throws IOException {
+    public void deleteDisposable(Path path) throws IOException {
         if (ownedStagingAuthority == null) {
             throw new IOException("checkpoint-name reconciliation has no owned staging authority");
         }
@@ -208,7 +219,7 @@ public final class StagingReconciliation {
     }
 
     /** Sweep one owned working namespace after revalidating its directory authority. */
-    void sweepDisposables(String glob) throws IOException {
+    public void sweepDisposables(String glob) throws IOException {
         if (ownedStagingAuthority == null) {
             throw new IOException("checkpoint-name reconciliation has no owned staging authority");
         }

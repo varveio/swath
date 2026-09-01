@@ -5,6 +5,8 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.StagingRetention;
 import java.util.function.UnaryOperator;
 
 /**
@@ -280,7 +282,7 @@ public final class SortConfig {
         String keepStagingProp = lookup.apply(KEEP_STAGING_PROPERTY);
         StagingRetention stagingRetention = keepStagingProp == null
                 ? DEFAULT.stagingRetention()
-                : StagingRetention.fromProperty(KEEP_STAGING_PROPERTY, keepStagingProp);
+                : parseStagingRetention(KEEP_STAGING_PROPERTY, keepStagingProp);
         return new SortConfig(
                 new StagingBuffering(segmentBytes, segmentEntries, heapFraction, buffers, segmentCodec),
                 new Merge(fanIn, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes),
@@ -368,6 +370,15 @@ public final class SortConfig {
         }
     }
 
+    private static StagingRetention parseStagingRetention(String property, String value) {
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "on" -> StagingRetention.RETAIN_ORIGINALS;
+            case "off" -> StagingRetention.DELETE_AFTER_PUBLISH;
+            default -> throw new IllegalArgumentException(
+                    property + " must be on or off, got " + value);
+        };
+    }
+
     /**
      * The <b>static</b> budget-bounded merge fan-in: {@code min(fanIn,
      * max(2, mergeBudgetBytes / mergePerStreamBytes))}. {@link KWayMerge} opens at most this many streams
@@ -379,7 +390,7 @@ public final class SortConfig {
      *
      * <p>The denominator is {@code mergePerStreamBytes} (a page-run packed-page estimate).
      * This is the <em>static</em> config-level bound; the actual merge additionally applies a
-     * <em>runtime</em> clamp at merge entry ({@link SortTransform}) against the process fd limit and the
+     * <em>runtime</em> clamp at merge entry ({@link SortedDatasetCoordinator}) against the process fd limit and the
      * largest per-segment encoded {@code maxRecordLen}, the decoded-page maximum, and the runtime
      * aggregate decoded-page guard.
      *

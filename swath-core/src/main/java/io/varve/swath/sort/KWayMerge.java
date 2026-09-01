@@ -6,6 +6,7 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -28,7 +29,7 @@ import org.slf4j.LoggerFactory;
  * without a row heap and uses {@link PageRowMerger} only for overlapping page clusters.
  *
  * <p><b>Merge-phase memory + fd bound (I11).</b> {@code fanIn} here is expected to already be the
- * RUNTIME-clamped fan-in {@link SortTransform} computes — the MIN of the static
+ * RUNTIME-clamped fan-in {@link SortedDatasetCoordinator} computes — the MIN of the static
  * {@link SortConfig#effectiveFanIn()} budget derived from {@link SortConfig#mergePerStreamBytes()},
  * the fd clamp ({@link MergeFdBudget}), and the per-segment encoded-record refinement. Active merge
  * state remains bounded by configured segment/fan-in knobs rather than total object count. Passing the raw {@code
@@ -42,7 +43,7 @@ import org.slf4j.LoggerFactory;
  * delete an original the moment a pass folds it in: the checkpoint's {@code finalizedParts} still
  * points at it, and a crash mid-cascade must be able to redo the sort from those still-valid
  * segments (SORT-RESUME-2's cascade variant). Originals and any surviving intermediate are instead
- * reclaimed by the caller only after a successful publish ({@link SortTransform} already tracks and
+ * reclaimed by the caller only after a successful publish ({@link SortedDatasetCoordinator} already tracks and
  * deletes both). See contracts.md §6 ("Cascade-scale resume semantics") for the full durability
  * boundary and the accepted ~2× transient staging footprint this policy trades for
  * crash-recoverability.
@@ -66,7 +67,7 @@ final class KWayMerge<S> {
      * §3.2: rows drained out of an intermediate cascade pass are reported to a merge's
      * progress callback in batches of this size (never per-row — hot-path overhead on a
      * billion-row cascade), the same batching finalization uses for the final
-     * streaming pass. Shared here (rather than duplicated in {@link SortTransform}) so both passes
+     * streaming pass. Shared here (rather than duplicated in {@link SortedDatasetCoordinator}) so both passes
      * advance {@code swath.progress.units} at the same granularity.
      */
     static final long PROGRESS_BATCH_ROWS = 1_000L;

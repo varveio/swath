@@ -98,7 +98,14 @@ public final class SortBenchCorpus {
     /** Best-effort removal of a measurement temporary tree. */
     public static void deleteTree(Path root) {
         try {
-            Sweeps.deleteTree(root);
+            if (!Files.exists(root)) {
+                return;
+            }
+            try (var paths = Files.walk(root)) {
+                for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.deleteIfExists(path);
+                }
+            }
         } catch (IOException ignored) {
             // Best-effort cleanup of a measurement temporary tree.
         }

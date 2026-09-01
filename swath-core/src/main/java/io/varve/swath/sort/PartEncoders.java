@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.sorted.StagingNames;
 import java.io.IOException;
 import java.nio.channels.AsynchronousCloseException;
 import java.nio.file.Files;

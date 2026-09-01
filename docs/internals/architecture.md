@@ -127,11 +127,13 @@ with its own strict seal-order durability protocol; any periodic writeback there
 the shared cadence policy, admitted only by measurement, not a reason to route page-run bytes
 through the Parquet writer abstraction.
 
-The sorted merge keeps one public façade, `SortTransform(SortRun)`. `PageRunCatalog` validates
-segment names, headers, fixed tails, checkpoint format identity, and the exact maxima used by
-resource admission. `MergePlanner` owns cascade fan-in and encoder heap/descriptor admission.
-`Finalization` then owns cascade, routing, encoding, and assembly as one failure domain, with
-`FinalizationFailure` relaying the first asynchronous failure.
+The sorted merge keeps one public façade, `SortedDatasetCoordinator(SortRun)`. The coordinator
+orders source-name admission, publication-side filesystem authority capture, full source preflight,
+working-file sweep, preparation, and publication behind one outer failure boundary.
+`PageRunCatalog` validates segment headers, fixed tails, checkpoint format identity, and the exact
+maxima used by resource admission. `MergePlanner` owns cascade fan-in and encoder heap/descriptor
+admission. `SortFinalizer` owns cascade, routing, encoding, dense assembly, cardinality, and raw-byte
+adjacency, with `FinalizationFailure` relaying the first asynchronous failure.
 
 When the catalog exceeds admitted fan-in, `CascadePageMerger` streams whole ordered pages and sends
 only transitive overlap components through `PageRowMerger`, producing a smaller survivor catalog.
@@ -139,15 +141,18 @@ only transitive overlap components through `PageRowMerger`, producing a smaller 
 reference order and calibrated part boundaries, `PartSizer` converts the encoded-size target into
 logical page-payload targets, and `PartEncoders` positionally read complete plans from one shared
 bounded queue. Encoder identity and completion order are immaterial: dense plan ordinals determine
-footer stamps, final filenames, and the sequence handed to `DatasetPublisher`.
+footer stamps, final filenames, and the sequence handed to `SortedDatasetPublisher`.
 
-`DatasetPublisher` owns temporary-part adjacency and cardinality checks, stale-final replacement,
-rename/fsync/listener ordering, and staging completion. It accepts only the complete set of
-footer-closed parts after every finalization stage has quiesced.
+`SortFinalizer.prepare` returns `PreparedSortedParts` only after every encoder has quiesced and the
+complete dense ordinal set has passed cardinality and adjacency checks. The value carries durable
+temporary paths, ordered part facts, cardinalities, algorithm counters, and authority for disposable
+intermediates; it carries no final name or consumer publication state. `SortedDatasetPublisher`
+accepts only that complete value and owns final-name assignment, stale-final replacement,
+rename/fsync/committer ordering, and staging completion.
 
-`DatasetPublisher` deliberately stops at the listener seam—`ListRunner` remains the owner of
+`SortedDatasetPublisher` deliberately stops at the committer seam—`ListRunner` remains the owner of
 consumer `manifest.json`, state, symlink, and last-written `_SUCCESS`. After that listener returns,
-`DatasetPublisher` owns only disposable-intermediate and staging reconciliation. A failure in that
+`SortedDatasetPublisher` owns only disposable-intermediate and staging reconciliation. A failure in that
 suffix is typed as committed-publication cleanup pending; the runtime records PUBLISHED and retains
 the completed transform facts for the unwound summary. PUBLISHED re-entry revalidates identity plus
 `_SUCCESS` before cleanup, so retries clean without LIST work.

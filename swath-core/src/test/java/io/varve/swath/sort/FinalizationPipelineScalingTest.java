@@ -7,6 +7,10 @@ package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -53,12 +57,12 @@ final class FinalizationPipelineScalingTest {
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
                 () -> -1, StaleFinalSweep.OWN_PARTS_ONLY);
         long started = System.nanoTime();
-        SortTransformResult result = new SortTransform(run).transform(
-                inputs, output, staging, PublishListener.NO_OP, ignored -> { },
+        SortedDatasetResult result = new SortedDatasetCoordinator(run).transform(
+                inputs, output, staging, SortedDatasetCommitter.NO_OP, ignored -> { },
                 FinalPassListener.NO_OP);
         return new TimedArm(result, System.nanoTime() - started);
     }
 
-    private record TimedArm(SortTransformResult result, long nanos) {
+    private record TimedArm(SortedDatasetResult result, long nanos) {
     }
 }

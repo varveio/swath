@@ -6,6 +6,10 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,7 +25,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 /**
  * THROWAWAY measurement harness (NOT
  * {@link ParallelMergeBenchmark}): profiles ONLY the single-threaded ({@code R=1})
- * {@link SortTransform#transform} merge phase with JFR (an embedded {@link Recording}, "profile"
+ * {@link SortedDatasetCoordinator#transform} merge phase with JFR (an embedded {@link Recording}, "profile"
  * settings, started immediately before and stopped immediately after the {@code transform()} call
  * so the dump excludes corpus generation/staging-copy noise), to attribute merge-phase CPU across
  * Parquet decode (read), the k-way heap merge/compare, Parquet encode (write), and allocation/GC.
@@ -103,8 +107,8 @@ class MergeCpuProfileHarness {
             SortConfig config = SortConfig.DEFAULT.withMergeParallelism(1);
             SortMetrics metrics = SortMetrics.NO_OP;
             SortedFileWriterFactory writerFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
-            SortTransform transform =
-                    new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
+            SortedDatasetCoordinator transform =
+                    new SortedDatasetCoordinator(new SortRun(config, CMP, DuplicateHook.NO_OP,
                             EqualKeyPolicy.ALLOW, metrics, writerFactory,
                             SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
@@ -114,9 +118,9 @@ class MergeCpuProfileHarness {
             long cpuStartNanos = SortBenchCorpus.processCpuTimeNanos();
             long wallStartNanos = System.nanoTime();
             recording.start();
-            SortTransformResult result;
+            SortedDatasetResult result;
             try {
-                result = transform.transform(stagingSegments, output, staging, PublishListener.NO_OP,
+                result = transform.transform(stagingSegments, output, staging, SortedDatasetCommitter.NO_OP,
                         units -> { }, FinalPassListener.NO_OP);
             } finally {
                 recording.stop();

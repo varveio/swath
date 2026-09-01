@@ -14,6 +14,11 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
+import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -256,7 +261,7 @@ final class FinalizationPipelineTest {
     @Test
     void disjointSingleRowPagesUseWholePageForwarding(@TempDir Path root) throws IOException {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        SortTransformResult result = run(root,
+        SortedDatasetResult result = run(root,
                 List.of(List.of("a", "c"), List.of("b", "d")), Long.MAX_VALUE, metrics);
 
         assertThat(keys(result.finalFiles())).containsExactly("a", "b", "c", "d");
@@ -269,7 +274,7 @@ final class FinalizationPipelineTest {
     void fullOverlapSingleRowPagesMergeAndNeverSplitEqualRawKeys(@TempDir Path root)
             throws IOException {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        SortTransformResult result = run(root,
+        SortedDatasetResult result = run(root,
                 List.of(List.of("a", "b", "c"), List.of("a", "b", "c")), 1, metrics);
 
         assertThat(keys(result.finalFiles())).containsExactly("a", "a", "b", "b", "c", "c");
@@ -290,7 +295,7 @@ final class FinalizationPipelineTest {
         List<List<String>> segments = java.util.stream.IntStream.range(0, 65)
                 .mapToObj(ignored -> List.of("same-key")).toList();
 
-        SortTransformResult result = run(root, segments, Long.MAX_VALUE, metrics);
+        SortedDatasetResult result = run(root, segments, Long.MAX_VALUE, metrics);
 
         assertThat(keys(result.finalFiles())).hasSize(65).containsOnly("same-key");
         assertThat(metrics.pipelineClusterPages.sum()).isEqualTo(65);
@@ -325,7 +330,7 @@ final class FinalizationPipelineTest {
         assertThatThrownBy(() -> eager.reserve(PageBlock.deserialize(sample.serialize())))
                 .isInstanceOf(MergeMemoryExhaustedException.class);
 
-        SortTransformResult result = runPages(root, segments, Long.MAX_VALUE,
+        SortedDatasetResult result = runPages(root, segments, Long.MAX_VALUE,
                 metrics, SortedFileWriterFactory.DEFAULT, 10_000, mergeBudget,
                 PageCodec.NONE, 1);
 
@@ -341,7 +346,7 @@ final class FinalizationPipelineTest {
                 List.of("a"), List.of("b"), List.of("c"), List.of("d"), List.of("e"));
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
 
-        SortTransformResult result = run(root, segments, Long.MAX_VALUE, metrics,
+        SortedDatasetResult result = run(root, segments, Long.MAX_VALUE, metrics,
                 SortedFileWriterFactory.DEFAULT, 2, 64L << 20);
 
         assertThat(result.cascadedPasses()).isEqualTo(2);
@@ -365,7 +370,7 @@ final class FinalizationPipelineTest {
                 List.of(List.of(SortTestSupport.object("q"))));
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
 
-        SortTransformResult result = runPages(root, segments, Long.MAX_VALUE, metrics,
+        SortedDatasetResult result = runPages(root, segments, Long.MAX_VALUE, metrics,
                 SortedFileWriterFactory.DEFAULT, 2, 64L << 20, PageCodec.LZ4, 2);
 
         assertThat(result.cascadedPasses()).isEqualTo(2);
@@ -380,7 +385,7 @@ final class FinalizationPipelineTest {
         List<List<List<ListEntry>>> pages = List.of(
                 List.of(List.of(SortTestSupport.object("a"))));
 
-        SortTransformResult result = runPages(root, pages, Long.MAX_VALUE, metrics,
+        SortedDatasetResult result = runPages(root, pages, Long.MAX_VALUE, metrics,
                 SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20);
 
         assertThat(result.finalizationParallelism()).isEqualTo(4);
@@ -574,7 +579,7 @@ final class FinalizationPipelineTest {
         }
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
 
-        SortTransformResult result = runPages(root, List.of(segment), Long.MAX_VALUE,
+        SortedDatasetResult result = runPages(root, List.of(segment), Long.MAX_VALUE,
                 metrics, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
                 PageCodec.NONE, 1);
 
@@ -617,7 +622,7 @@ final class FinalizationPipelineTest {
             pages.add(entries);
         }
 
-        SortTransformResult result = runPages(root, List.of(pages), targetBytes,
+        SortedDatasetResult result = runPages(root, List.of(pages), targetBytes,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
                 PageCodec.LZ4, 1);
 
@@ -653,7 +658,7 @@ final class FinalizationPipelineTest {
                 List.of(List.of(SortTestSupport.object("a"))),
                 List.of(List.of(SortTestSupport.object("b"))));
 
-        SortTransformResult result = runPages(root, segmentPages, 1, SortMetrics.NO_OP,
+        SortedDatasetResult result = runPages(root, segmentPages, 1, SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20);
 
         assertThat(result.finalFiles()).hasSize(2);
@@ -706,7 +711,7 @@ final class FinalizationPipelineTest {
                 List.of(SortTestSupport.object("d")),
                 List.of(SortTestSupport.object("e")),
                 List.of(SortTestSupport.object("f"))));
-        SortTransformResult result = runPages(root, pages, 1,
+        SortedDatasetResult result = runPages(root, pages, 1,
                 SortMetrics.NO_OP, reordered, 10_000, 64L << 20,
                 PageCodec.NONE, 2);
 
@@ -728,10 +733,10 @@ final class FinalizationPipelineTest {
             }
             pages.add(segmentPages);
         }
-        SortTransformResult serial = runPages(root.resolve("serial"), pages, 4_096,
+        SortedDatasetResult serial = runPages(root.resolve("serial"), pages, 4_096,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
                 PageCodec.NONE, 1, PartSizer.Target.fixedRows(160));
-        SortTransformResult concurrent = runPages(root.resolve("concurrent"), pages, 4_096,
+        SortedDatasetResult concurrent = runPages(root.resolve("concurrent"), pages, 4_096,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
                 PageCodec.NONE, 4, PartSizer.Target.fixedRows(160));
 
@@ -752,7 +757,7 @@ final class FinalizationPipelineTest {
         }
         List<Long> progress = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-        SortTransformResult result = runPages(root, List.of(List.of(rows)), Long.MAX_VALUE,
+        SortedDatasetResult result = runPages(root, List.of(List.of(rows)), Long.MAX_VALUE,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
                 PageCodec.NONE, 1, progress::add);
 
@@ -808,7 +813,7 @@ final class FinalizationPipelineTest {
             keys.add(rows);
         }
 
-        SortTransformResult result = run(root, keys, 2_048, SortMetrics.NO_OP, measuring);
+        SortedDatasetResult result = run(root, keys, 2_048, SortMetrics.NO_OP, measuring);
 
         assertThat(result.finalizationParallelism()).isEqualTo(4);
         assertThat(peak.get()).isLessThanOrEqualTo(baseline + segments + 4 + 16);
@@ -892,18 +897,18 @@ final class FinalizationPipelineTest {
         assertNoPublishedOrTemporaryFiles(root);
     }
 
-    private SortTransformResult run(Path root, List<List<String>> segmentKeys,
+    private SortedDatasetResult run(Path root, List<List<String>> segmentKeys,
             long finalFileBytes, SortMetrics metrics) throws IOException {
         return run(root, segmentKeys, finalFileBytes, metrics, SortedFileWriterFactory.DEFAULT);
     }
 
-    private SortTransformResult run(Path root, List<List<String>> segmentKeys,
+    private SortedDatasetResult run(Path root, List<List<String>> segmentKeys,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory)
             throws IOException {
         return run(root, segmentKeys, finalFileBytes, metrics, writerFactory, 10_000, 64L << 20);
     }
 
-    private SortTransformResult run(Path root, List<List<String>> segmentKeys,
+    private SortedDatasetResult run(Path root, List<List<String>> segmentKeys,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes) throws IOException {
         List<List<List<ListEntry>>> segmentPages = segmentKeys.stream()
@@ -914,14 +919,14 @@ final class FinalizationPipelineTest {
                 mergeBudgetBytes);
     }
 
-    private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
+    private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes) throws IOException {
         return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
                 mergeBudgetBytes, PageCodec.NONE);
     }
 
-    private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
+    private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes, PageCodec codec)
             throws IOException {
@@ -929,7 +934,7 @@ final class FinalizationPipelineTest {
                 mergeBudgetBytes, codec, 4);
     }
 
-    private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
+    private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes, PageCodec codec,
             int encoderCount) throws IOException {
@@ -938,7 +943,7 @@ final class FinalizationPipelineTest {
                 ignored -> { });
     }
 
-    private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
+    private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes, PageCodec codec,
             int encoderCount, PartSizer.Target partTarget) throws IOException {
@@ -946,7 +951,7 @@ final class FinalizationPipelineTest {
                 mergeBudgetBytes, codec, encoderCount, partTarget, ignored -> { });
     }
 
-    private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
+    private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes, PageCodec codec,
             int encoderCount, LongConsumer progressCallback) throws IOException {
@@ -955,7 +960,7 @@ final class FinalizationPipelineTest {
                 progressCallback);
     }
 
-    private SortTransformResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
+    private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes, PageCodec codec,
             int encoderCount, PartSizer.Target partTarget, LongConsumer progressCallback)
@@ -976,11 +981,11 @@ final class FinalizationPipelineTest {
         SortRun run = new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 metrics, writerFactory,
                 () -> -1, StaleFinalSweep.OWN_PARTS_ONLY, partTarget);
-        return new SortTransform(run).transform(segments, output, staging, PublishListener.NO_OP,
+        return new SortedDatasetCoordinator(run).transform(segments, output, staging, SortedDatasetCommitter.NO_OP,
                 progressCallback, FinalPassListener.NO_OP);
     }
 
-    private SortTransformResult runPaths(Path root, List<Path> segments, long finalFileBytes,
+    private SortedDatasetResult runPaths(Path root, List<Path> segments, long finalFileBytes,
             SortMetrics metrics, SortedFileWriterFactory writerFactory, int encoderCount)
             throws IOException {
         SortConfig config = SortConfigs.base()
@@ -989,8 +994,8 @@ final class FinalizationPipelineTest {
                 .withFinalFileBytes(finalFileBytes);
         SortRun run = new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 metrics, writerFactory, () -> -1, StaleFinalSweep.OWN_PARTS_ONLY);
-        return new SortTransform(run).transform(segments, root.resolve("data"),
-                root.resolve("_staging"), PublishListener.NO_OP, ignored -> { },
+        return new SortedDatasetCoordinator(run).transform(segments, root.resolve("data"),
+                root.resolve("_staging"), SortedDatasetCommitter.NO_OP, ignored -> { },
                 FinalPassListener.NO_OP);
     }
 

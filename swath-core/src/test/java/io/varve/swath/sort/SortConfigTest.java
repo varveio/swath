@@ -8,6 +8,7 @@ package io.varve.swath.sort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.output.sorted.StagingRetention;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -33,7 +34,7 @@ class SortConfigTest {
         assertThat(config.heapFraction()).isEqualTo(0.08);
         assertThat(config.buffers()).isEqualTo(2);
         // A high fan-in default keeps a billion-scale run single-pass, runtime-clamped by the fd
-        // limit / page size in SortTransform.
+        // limit / page size in SortedDatasetCoordinator.
         assertThat(config.fanIn()).isEqualTo(10000);
         // Rolls the sorted output into ~1 GiB parts by default.
         assertThat(config.finalFileBytes()).isEqualTo(1L << 30);

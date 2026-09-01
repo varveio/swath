@@ -7,9 +7,9 @@ package io.varve.swath.output.parquet.sorted;
 
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.dataset.DatasetDataSyncMetrics;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortTransform;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
@@ -20,7 +20,7 @@ import java.nio.file.Path;
  * {@link SortedParquetWriter} carrying the same {@link SortConfig} and {@link SortMode} — the
  * mode is fixed per {@code --sort} run ({@code --all-versions} known once at CLI parse time),
  * not per file. Callers pass this in place of
- * {@link SortedFileWriterFactory#DEFAULT} when constructing {@link SortTransform} for a real run;
+ * {@link SortedFileWriterFactory#DEFAULT} when constructing {@link SortedDatasetCoordinator} for a real run;
  * {@code DEFAULT} remains the plain, unstamped path used by tests.
  */
 public final class SortedParquetWriterFactory implements SortedFileWriterFactory {

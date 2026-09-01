@@ -15,6 +15,9 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
+import io.varve.swath.output.sorted.StagingNames;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,7 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * {@link CaptureSorter} — the sort-fixture engine: legacy/unsorted capture parts in, one stamped
  * globally-sorted Parquet file out, via the same staging-segment/{@link KWayMerge}/
- * {@link SortTransform} pipeline {@code --sort} uses. Covers §0.5 (raw-key fail-fast in the final
+ * {@link SortedDatasetCoordinator} pipeline {@code --sort} uses. Covers §0.5 (raw-key fail-fast in the final
  * drain, including across a chunk boundary), §0.6 (versioned fail-fast), the atomic tmp-then-rename
  * publish, and the fixed staging dir getting wiped on the next call after a simulated crash.
  */
@@ -48,7 +51,7 @@ class CaptureSorterTest {
         writePart(captureDir, "part-w1-00000.parquet", objects("a", "d", "c"));
 
         CaptureSorter sorter = new CaptureSorter(config(Map.of()));
-        SortTransformResult result = sorter.sort(captureDir, outputDir);
+        SortedDatasetResult result = sorter.sort(captureDir, outputDir);
 
         assertThat(result.finalFiles()).hasSize(1);
         assertThat(result.totalRows()).isEqualTo(6);
@@ -69,7 +72,7 @@ class CaptureSorterTest {
         writePart(root, "legacy.parquet", objects("c", "a", "b"));
         Path outputDir = Files.createDirectories(root.resolve("out"));
 
-        SortTransformResult result = new CaptureSorter(config(Map.of())).sort(capture, outputDir);
+        SortedDatasetResult result = new CaptureSorter(config(Map.of())).sort(capture, outputDir);
 
         assertThat(keysOf(result.finalFiles().get(0))).containsExactly("a", "b", "c");
     }
@@ -91,7 +94,7 @@ class CaptureSorterTest {
         SortConfig config = SortConfigs.base()
                 .withSegmentEntries(1_500)
                 .withMergeParallelism(4);
-        SortTransformResult result = new CaptureSorter(config, metrics).sort(captureDir, outputDir);
+        SortedDatasetResult result = new CaptureSorter(config, metrics).sort(captureDir, outputDir);
 
         assertThat(result.totalRows()).isEqualTo(6_000);
         assertThat(keysOf(result.finalFiles().getFirst())).containsExactly(
@@ -138,7 +141,7 @@ class CaptureSorterTest {
         writePart(captureDir, "part-0.parquet", objects("e", "d", "c", "b", "a"));
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
 
-        SortTransformResult result = new CaptureSorter(
+        SortedDatasetResult result = new CaptureSorter(
                 SortConfigs.base().withSegmentEntries(2), metrics)
                 .sort(captureDir, outputDir);
 
@@ -243,7 +246,7 @@ class CaptureSorterTest {
         // A clean re-run owns and removes the failed attempt's tmp/staging state before publishing.
         Path cleanCapture = Files.createDirectories(root.resolve("clean-capture"));
         writePart(cleanCapture, "part-0.parquet", objects("a", "b"));
-        SortTransformResult clean = new CaptureSorter(rollEveryRow).sort(cleanCapture, outputDir);
+        SortedDatasetResult clean = new CaptureSorter(rollEveryRow).sort(cleanCapture, outputDir);
         assertThat(clean.finalFiles()).hasSize(2);
         assertThat(Files.exists(stagingDir)).isFalse();
     }
@@ -276,7 +279,7 @@ class CaptureSorterTest {
 
         SortConfig rollEveryRow = SortConfigs.rolledPerEntry().withSegmentEntries(1);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        SortTransformResult result = new CaptureSorter(rollEveryRow, metrics).sort(captureDir, outputDir);
+        SortedDatasetResult result = new CaptureSorter(rollEveryRow, metrics).sort(captureDir, outputDir);
 
         assertThat(result.finalFiles()).hasSize(4);
         assertThat(metrics.count("SORT.equal_key_rejected")).isZero();
@@ -297,7 +300,7 @@ class CaptureSorterTest {
         rows.add(new CommonPrefixEntry(KeyBytes.ofUtf8("a2/")));
         writePart(captureDir, "part-0.parquet", rows);
 
-        SortTransformResult result = new CaptureSorter(config(Map.of())).sort(captureDir, outputDir);
+        SortedDatasetResult result = new CaptureSorter(config(Map.of())).sort(captureDir, outputDir);
 
         assertThat(result.totalRows()).isEqualTo(3);
         assertThat(keysOf(result.finalFiles().get(0))).containsExactly("a1", "a2/", "a3");
@@ -341,7 +344,7 @@ class CaptureSorterTest {
         Path stagingDir = Files.createDirectories(outputDir.resolve(CaptureSorter.STAGING_DIR_NAME));
         Path staleSegment = Files.createFile(stagingDir.resolve("fixture-0.parquet"));
 
-        SortTransformResult result = new CaptureSorter(config(Map.of())).sort(captureDir, outputDir);
+        SortedDatasetResult result = new CaptureSorter(config(Map.of())).sort(captureDir, outputDir);
 
         assertThat(Files.exists(staleTmp)).isFalse();
         assertThat(Files.exists(staleSegment)).isFalse();
@@ -355,7 +358,7 @@ class CaptureSorterTest {
         Path outputDir = Files.createDirectories(root.resolve("out"));
         writePart(captureDir, "part-0.parquet", List.of());
 
-        SortTransformResult result = new CaptureSorter(config(Map.of())).sort(captureDir, outputDir);
+        SortedDatasetResult result = new CaptureSorter(config(Map.of())).sort(captureDir, outputDir);
 
         assertThat(result.totalRows()).isEqualTo(0);
         assertThat(result.finalFiles()).hasSize(1);
@@ -375,7 +378,7 @@ class CaptureSorterTest {
     /**
      * {@link CaptureSorter}'s {@code outputDir} has
      * NO identity-verified ownership guard (unlike {@code --sort}'s own listing/merge-reentry path,
-     * which is gated by {@code ListCommand#isPublishedByThisRun}) — so {@link SortTransform}'s
+     * which is gated by {@code ListCommand#isPublishedByThisRun}) — so {@link SortedDatasetCoordinator}'s
      * stale-finals sweep must stay scoped to THIS engine's own {@code part-*.parquet} naming, never a
      * blanket {@code *.parquet} glob. A user-supplied {@code --output} dir may already hold unrelated
      * content (here, {@code foo.parquet}) that this engine never created and never read into staging
@@ -393,7 +396,7 @@ class CaptureSorterTest {
         Path foreign = outputDir.resolve("foo.parquet");
         byte[] foreignBytesBefore = Files.readAllBytes(foreign);
 
-        SortTransformResult result = new CaptureSorter(config(Map.of())).sort(captureDir, outputDir);
+        SortedDatasetResult result = new CaptureSorter(config(Map.of())).sort(captureDir, outputDir);
 
         assertThat(Files.exists(foreign))
                 .as("unrelated foo.parquet already in outputDir must survive the sort").isTrue();

@@ -9,6 +9,11 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
+import io.varve.swath.output.sorted.SortedDatasetCommitter;
+import io.varve.swath.output.sorted.SortedDatasetCoordinator;
+import io.varve.swath.output.sorted.SortedDatasetResult;
+import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.output.sorted.StaleFinalSweep;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -42,7 +47,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 /**
  * MEASUREMENT harness for the concurrent finalization pipeline. It runs the ACTUAL production
- * merge path — {@link SortTransform#transform}
+ * merge path — {@link SortedDatasetCoordinator#transform}
  * with {@link SortedParquetWriterFactory} over live-format page-run staging segments produced through
  * the same {@link SortBuffer} seal and {@link PageRunSegmentWriter#flush} seam as listing. After one
  * untimed full-transform warm-up, measured encoder counts are interleaved with one-encoder
@@ -419,7 +424,7 @@ class ParallelMergeBenchmark {
                 .withMergeParallelism(spec.parallelism());
         ThreadSafeMetrics metrics = new ThreadSafeMetrics();
         SortedFileWriterFactory writerFactory = writerProvider.create(config);
-        SortTransform transform = new SortTransform(
+        SortedDatasetCoordinator transform = new SortedDatasetCoordinator(
                 new SortRun(config, CMP, DuplicateHook.NO_OP,
                         EqualKeyPolicy.ALLOW, metrics, writerFactory,
                         SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
@@ -439,9 +444,9 @@ class ParallelMergeBenchmark {
         long wallStartNanos = System.nanoTime();
         long wallEndNanos;
         long cpuEndNanos;
-        SortTransformResult result;
+        SortedDatasetResult result;
         try {
-            result = transform.transform(stagingSegments, output, staging, PublishListener.NO_OP,
+            result = transform.transform(stagingSegments, output, staging, SortedDatasetCommitter.NO_OP,
                     units -> { }, FinalPassListener.NO_OP);
         } finally {
             wallEndNanos = System.nanoTime();
@@ -495,7 +500,7 @@ class ParallelMergeBenchmark {
         ar.logicalOutputFingerprint = outputValidation.orderedFingerprint();
         ar.multisetDigest = outputValidation.multisetDigest();
         if (result.totalRows() != outputValidation.rows()) {
-            throw new IOException("SortTransform row count disagrees with validated output");
+            throw new IOException("SortedDatasetCoordinator row count disagrees with validated output");
         }
         ar.inputSegments = stagingSegments.size();
         ar.actualEncoders = result.finalizationParallelism();

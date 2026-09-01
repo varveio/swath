@@ -109,7 +109,7 @@ public final class FixtureMetrics implements SortMetrics {
 
     /**
      * How many {@code SORT.segment_flushed} engagements this instance has recorded — {@code
-     * sort-fixture}'s summary line reads this back since {@code io.varve.swath.sort.SortTransformResult}
+     * sort-fixture}'s summary line reads this back since {@code io.varve.swath.output.sorted.SortedDatasetResult}
      * doesn't carry a segment count itself (only the final published file(s) and merge-pass counts).
      * {@code 0} if {@link #recordStealReason} was never wired (e.g. {@code SortMetrics.NO_OP} still in
      * use) or no segment was ever flushed.

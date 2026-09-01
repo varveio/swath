@@ -8,6 +8,7 @@ package io.varve.swath.sort;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.sorted.StagingNames;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

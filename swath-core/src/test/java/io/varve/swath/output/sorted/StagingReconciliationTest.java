@@ -3,11 +3,18 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -49,6 +56,10 @@ class StagingReconciliationTest {
 
         assertThatThrownBy(() -> StagingReconciliation.fromPaths(
                 stagingLink, List.of(stagingLink.resolve(segment.getFileName()))))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("sort staging directory")
+                .hasMessageContaining("symbolic link");
+        assertThatThrownBy(() -> StagingReconciliation.discardStagingTree(stagingLink))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("sort staging directory")
                 .hasMessageContaining("symbolic link");
@@ -144,7 +155,7 @@ class StagingReconciliationTest {
         StagingReconciliation.DirectoryAuthority outputAuthority =
                 StagingReconciliation.DirectoryAuthority.capture(
                         output, "sort output directory");
-        DatasetPublisher publisher = publisher((step, ignored) -> {
+        SortedDatasetPublisher publisher = publisher((step, ignored) -> {
             if (step == PublicationStep.AFTER_WORKING_SWEEP) {
                 Files.move(staging, root.resolve("old-staging"));
                 Files.createSymbolicLink(staging, outside);
@@ -199,16 +210,16 @@ class StagingReconciliationTest {
         assertThat(reconciliation.ownedPaths()).containsExactly(segment, fixture);
     }
 
-    private static DatasetPublisher publisher() {
+    private static SortedDatasetPublisher publisher() {
         return publisher(PublicationStepHook.NO_OP);
     }
 
-    private static DatasetPublisher publisher(PublicationStepHook hook) {
+    private static SortedDatasetPublisher publisher(PublicationStepHook hook) {
         SortRun run = new SortRun(
                 SortConfigs.base(), new ListEntryComparator(), DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        return new DatasetPublisher(
+        return new SortedDatasetPublisher(
                 run, hook, LoggerFactory.getLogger(StagingReconciliationTest.class));
     }
 

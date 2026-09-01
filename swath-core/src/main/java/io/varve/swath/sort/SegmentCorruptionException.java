@@ -14,7 +14,7 @@ import java.nio.file.Path;
  * the corruption classes an operator must be able to triage post-hoc from {@code summary.json} alone,
  * without grepping stderr.
  *
- * <p><b>How the class reaches {@code summary.json}.</b> {@code SortTransform} wraps any merge-time
+ * <p><b>How the class reaches {@code summary.json}.</b> {@code SortedDatasetCoordinator} wraps any merge-time
  * {@link IOException} into an {@code OutputException} and the run unwinds without {@code complete()}, so
  * the sidecar's terminal write is the one the {@code JsonRunSummaryWriter#close} path produces — a
  * {@code StopReason.CRASH} whose {@code error_class} is null unless the cause chain carries this type.

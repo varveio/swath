@@ -5,7 +5,7 @@
  */
 package io.varve.swath.output.parquet;
 
-import io.varve.swath.sort.StagingReconciliation;
+import io.varve.swath.output.sorted.StagingReconciliation;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
