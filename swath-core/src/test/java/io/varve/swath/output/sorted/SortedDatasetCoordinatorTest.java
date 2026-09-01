@@ -576,9 +576,12 @@ class SortedDatasetCoordinatorTest {
         for (int i = 0; i < keys.length; i++) {
             staging.add(writeSegment(dirs.staging, "seg-" + i + ".parquet", objects(keys[i])));
         }
+        // The same budget also prices final encoder admission (one writer, sized from
+        // final-row-group-bytes), so it must clear that floor too; keep the 3:1 ratio of
+        // merge-budget-bytes to merge-per-stream-bytes so effectiveFanIn() still lands on 3.
         SortConfig tinyBudget = SortConfigs.base()
-                .withMergePerStreamBytes(4L << 20)
-                .withMergeBudgetBytes(12L << 20);
+                .withMergePerStreamBytes(8L << 20)
+                .withMergeBudgetBytes(24L << 20);
         assertThat(tinyBudget.effectiveFanIn()).isEqualTo(3);
 
         SortedDatasetResult result = transform(tinyBudget)
@@ -677,9 +680,12 @@ class SortedDatasetCoordinatorTest {
         for (int i = 0; i < keys.length; i++) {
             staging.add(writeSegment(dirs.staging, "seg-" + i + ".parquet", objects(keys[i])));
         }
+        // The same budget also prices final encoder admission (one writer, sized from
+        // final-row-group-bytes), so it must clear that floor too; keep the 3:1 ratio of
+        // merge-budget-bytes to merge-per-stream-bytes so effectiveFanIn() still lands on 3.
         SortConfig tinyBudget = SortConfigs.base()
-                .withMergePerStreamBytes(4L << 20)
-                .withMergeBudgetBytes(12L << 20);
+                .withMergePerStreamBytes(8L << 20)
+                .withMergeBudgetBytes(24L << 20);
         assertThat(tinyBudget.effectiveFanIn()).isEqualTo(3);
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();

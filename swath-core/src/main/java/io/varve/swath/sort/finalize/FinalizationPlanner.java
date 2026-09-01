@@ -143,7 +143,8 @@ final class FinalizationPlanner {
                 saturatedAdd(1L, saturatedMultiply(PartEncoders.QUEUE_DEPTH + 1L, encoders)));
         long routerBytes = saturatedMultiply(
                 saturatedAdd(cursorRefs, retainedPlanRefs), refBytes);
-        long writers = saturatedMultiply(encoders, PartEncoders.WRITER_HEAP_ESTIMATE_BYTES);
+        long writers = saturatedMultiply(encoders,
+                PartEncoders.writerHeapEstimateBytes(config.finalRowGroupBytes()));
         long reads = saturatedMultiply(encoders, readPageBytes);
         return saturatedAdd(saturatedAdd(routerBytes, writers), reads);
     }

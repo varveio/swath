@@ -57,6 +57,8 @@ import java.util.function.LongConsumer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 final class FinalizationPipelineTest {
     private final ListEntryComparator comparator = new ListEntryComparator();
@@ -307,7 +309,8 @@ final class FinalizationPipelineTest {
         long retainedRefs = (100L * (PageRunHeaderStreams.QUEUE_DEPTH + 2L)
                 + 100L * (PartEncoders.QUEUE_DEPTH + 2L))
                 * PageRef.retainedBytes(SpillTestFixtures.serialize(sample).length);
-        long mergeBudget = PartEncoders.WRITER_HEAP_ESTIMATE_BYTES + retainedRefs
+        long mergeBudget = PartEncoders.writerHeapEstimateBytes(SortConfig.DEFAULT.finalRowGroupBytes())
+                + retainedRefs
                 + SpillTestFixtures.serialize(sample).length + 3L * plannedPageBytes - 1L;
 
         DecodedPageBudget eager = new DecodedPageBudget(3L * pageBytes - 1L,
@@ -402,7 +405,7 @@ final class FinalizationPipelineTest {
                 * (1L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
         long routerBytes = routerRefs * PageRef.retainedBytes(catalog.maxKeyLength());
         long perEncoder = readPageBytes + retainedPageBytes
-                + PartEncoders.WRITER_HEAP_ESTIMATE_BYTES;
+                + PartEncoders.writerHeapEstimateBytes(base.finalRowGroupBytes());
         FinalizationPlanner heapPlanner = new FinalizationPlanner(
                 base.withMergeBudgetBytes(routerBytes + 2 * perEncoder),
                 SortMetrics.NO_OP, () -> -1);
@@ -418,6 +421,39 @@ final class FinalizationPipelineTest {
                 .isInstanceOf(MergeMemoryExhaustedException.class)
                 .hasMessageContaining("minimum pipeline lane does not fit");
         assertThat(metrics.count("SORT.pipeline_encoder_heap_floor_exhausted")).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {8L << 20, 32L << 20, 64L << 20, 128L << 20})
+    void writerHeapEstimateScalesEncoderAdmissionWithConfiguredRowGroupSize(
+            long finalRowGroupBytes, @TempDir Path root) throws IOException {
+        Path segment = SortTestSupport.writePages(
+                root.resolve("row-group-admission" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("a"))));
+        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        SortConfig base = SortConfigs.base().withFinalRowGroupBytes(finalRowGroupBytes);
+
+        long readPageBytes = catalog.maxRecordLen();
+        FinalizationPlanner probe = new FinalizationPlanner(
+                base.withMergeBudgetBytes(Long.MAX_VALUE), SortMetrics.NO_OP, () -> -1);
+        long retainedPageBytes = probe.pipelineParallelism(1, catalog).retainedPageBytes();
+        long routerRefs = 4L + catalog.totalRecords()
+                * (1L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
+        long routerBytes = routerRefs * PageRef.retainedBytes(catalog.maxKeyLength());
+        long writerEstimate = PartEncoders.writerHeapEstimateBytes(finalRowGroupBytes);
+        long perEncoder = readPageBytes + retainedPageBytes + writerEstimate;
+
+        // Sized to fit exactly two writers at THIS row-group size's estimate. If admission still
+        // priced writers at the old fixed constant, a 128 MiB row group would leave this budget
+        // large enough to admit all four requested encoders instead of clamping to two.
+        FinalizationPlanner planner = new FinalizationPlanner(
+                base.withMergeBudgetBytes(routerBytes + 2 * perEncoder), SortMetrics.NO_OP, () -> -1);
+
+        FinalizationPlanner.PipelinePlan plan = planner.pipelineParallelism(4, catalog);
+
+        assertThat(plan.encoders()).isEqualTo(2);
+        assertThat(plan.reason()).isEqualTo(FinalizationPlanner.PipelineClampReason.HEAP_CLAMPED);
     }
 
     @Test
@@ -483,12 +519,12 @@ final class FinalizationPipelineTest {
         long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
                 base.maxRawPayloadLength(),
                 catalog.maxRecordLen());
-        long budgetForThree = (cursorRefs + planRefs) * refBytes
-                + budgetedEncoders * (PartEncoders.WRITER_HEAP_ESTIMATE_BYTES
-                + catalog.maxRecordLen() + retainedPageBytes);
         SortConfig config = SortConfigs.base()
-                .withFinalFileBytes(1L << 40)
-                .withMergeBudgetBytes(budgetForThree);
+                .withFinalFileBytes(1L << 40);
+        long budgetForThree = (cursorRefs + planRefs) * refBytes
+                + budgetedEncoders * (PartEncoders.writerHeapEstimateBytes(config.finalRowGroupBytes())
+                + catalog.maxRecordLen() + retainedPageBytes);
+        config = config.withMergeBudgetBytes(budgetForThree);
 
         FinalizationPlanner.PipelinePlan plan = new FinalizationPlanner(
                 config, SortMetrics.NO_OP, () -> -1).pipelineParallelism(4, catalog);

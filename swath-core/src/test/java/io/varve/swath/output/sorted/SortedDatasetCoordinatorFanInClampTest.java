@@ -97,7 +97,9 @@ class SortedDatasetCoordinatorFanInClampTest {
         // A tiny per-stream estimate (8 bytes) makes the STATIC budget bound huge ⇒ static effectiveFanIn
         // == raw fan-in 512; but the EXACT bound from the page trailers (mergeBudget / real packed-page
         // size) is far smaller, so the merge-entry memory clamp — not the fd clamp — reduces the fan-in.
-        long budget = 9L << 20;
+        // The budget must still clear one admitted encoder's writer-heap reservation (priced from
+        // final-row-group-bytes, well under this) so only the fan-in path is under test here.
+        long budget = 64L << 20;
         SortConfig cfg = SortConfigs.base().withFanIn(1_000_000)
                 .withMergeBudgetBytes(budget).withMergePerStreamBytes(8L);
         assertThat(cfg.effectiveFanIn()).isEqualTo(1_000_000);

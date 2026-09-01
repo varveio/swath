@@ -41,8 +41,33 @@ import java.util.function.LongConsumer;
  */
 final class PartEncoders implements AutoCloseable {
     static final int QUEUE_DEPTH = 2;
-    static final long WRITER_HEAP_ESTIMATE_BYTES = 8L << 20;
+
+    /**
+     * Measured lower bound for one open Parquet writer: prior in-repo measurements observed
+     * 8-13&nbsp;MiB for a writer at the default 8&nbsp;MiB row group, so a smaller configured
+     * row group must not be priced below what an idle writer has already been seen to cost.
+     */
+    private static final long MEASURED_WRITER_FLOOR_BYTES = 8L << 20;
+
+    /**
+     * Conservative allowance for column/page/dictionary encoding buffers and footer/metadata state
+     * that a writer holds on top of one buffered row group — not measured precisely, deliberately
+     * generous so admission stays conservative as {@code final-row-group-bytes} grows.
+     */
+    private static final long WRITER_WORKING_OVERHEAD_BYTES = 4L << 20;
+
     private static final long FAILURE_CHECK_MILLIS = 100;
+
+    /**
+     * Per-writer heap reservation for admission planning, scaled to the configured row-group size
+     * so a caller requesting large row groups cannot admit more encoders than the writers can
+     * actually fit in.
+     */
+    static long writerHeapEstimateBytes(long finalRowGroupBytes) {
+        long working = finalRowGroupBytes > Long.MAX_VALUE - WRITER_WORKING_OVERHEAD_BYTES
+                ? Long.MAX_VALUE : finalRowGroupBytes + WRITER_WORKING_OVERHEAD_BYTES;
+        return Math.max(MEASURED_WRITER_FLOOR_BYTES, working);
+    }
 
     /**
      * A footer-closed temporary and its close-gated metadata owner. The writer remains attached so
