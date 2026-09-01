@@ -78,8 +78,9 @@ import java.util.Set;
  * <h2>The {@code delimiter=/} skip-scan</h2>
  * {@link #delimitedRollup} answers a rollup as a series of index hops against the row-group routing
  * index, each hop random-accessing exactly the one row group ({@link SortedParquetRowGroupReader}, in
- * {@code swath-core}) a scan cursor currently lands in — O(entries emitted), never O(subtree). See
- * its own javadoc for the algorithm.
+ * {@code swath-core}) a scan cursor currently lands in. A common-prefix hop decodes only its
+ * page-index landing, not every object in the skipped subtree; bare objects still require their
+ * bounded full-row reads. See its own javadoc for the algorithm.
  */
 public final class SortedParquetStore implements ListingStore {
 
@@ -408,13 +409,14 @@ public final class SortedParquetStore implements ListingStore {
      * time, exactly as S3's own {@code CommonPrefixes} algorithm does — never a scan of every key
      * under the prefix. At each hop, the row-group index ({@link SortedRouting#startRowGroup}, the
      * same binary search {@link #rows} uses) locates the one row group the cursor currently lands in,
-     * and a {@link SortedParquetRowGroupReader.KeyCursor} — opened once per group and kept across every
-     * further hop that lands in the same one — steps forward to the cursor's position. The key cursor
-     * is <em>resumable</em>, not a bulk decode: a row group here can be far larger than the directory a
-     * single hop is chasing, so it decodes only the rows strictly between the previous hop's position
-     * and this one's, rather than the whole group up front. It is opened <em>at the page that can hold
-     * the hop's target</em> rather than at the group's first row, so a hop landing mid-group does not
-     * decode the half that lies behind. Before any of that, a
+     * and a {@link SortedParquetRowGroupReader.KeyCursor} steps forward to the cursor's position.
+     * Adjacent bare-object hops reuse that cursor. A common-prefix successor beyond the current data
+     * page reopens it through the page index even when the target remains in the same physical row
+     * group; otherwise the forward-only cursor would decode the subtree it is meant to skip. A
+     * successor that can still occur on the current page advances the existing cursor, avoiding a
+     * repeated page decode for dense small directories. The page filter prunes only pages whose
+     * maximum is below the target, so a page containing the exact successor or any later qualifying
+     * key remains and is checked row-by-row after landing. Before any of that, a
      * hop first tries a zero-I/O shortcut off the routing index alone (see the loop's own comment): a
      * row group whose first key and successor group's first key already share a common prefix is, by
      * sortedness, entirely that one common prefix — skip it whole, no Parquet read at all. On a bucket
@@ -436,8 +438,9 @@ public final class SortedParquetStore implements ListingStore {
      *       fixture ends the scan.
      * </ul>
      * Stops once {@code limit + 1} entries have been collected (the extra one lets the pager detect
-     * truncation) or the range is exhausted, whichever comes first — the early termination that makes
-     * this O(entries emitted) rather than O(subtree).
+     * truncation) or the range is exhausted, whichever comes first. Work is bounded by routing hops,
+     * at most one page-index landing per common-prefix successor, and the rows decoded for bare
+     * objects — not by the number of objects inside a skipped common prefix.
      */
     private List<DelimitedEntry> skipScan(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
                                           byte[] prefix, int limit, Projection projection,
@@ -454,6 +457,7 @@ public final class SortedParquetStore implements ListingStore {
         Path openFile = null;
         SortedParquetRowGroupReader reader = null;
         int cachedBlockIndex = -1;
+        int pendingPageReseekBlockIndex = -1;
         SortedParquetRowGroupReader.KeyCursor keyCursor = null;
         Deque<SortedParquetRowGroupReader.ObjectRow> lookahead = new ArrayDeque<>();
         try {
@@ -461,6 +465,10 @@ public final class SortedParquetStore implements ListingStore {
             while (out.size() < limit + 1) {
                 int rg = SortedRouting.startRowGroup(index, cursor == null ? null : ByteKey.copyOf(cursor));
                 IndexEntry entry = index.get(rg);
+                if (pendingPageReseekBlockIndex != -1
+                        && pendingPageReseekBlockIndex != entry.rowGroup()) {
+                    pendingPageReseekBlockIndex = -1;
+                }
                 byte[] groupFirstKey = entry.firstKey().toByteArray();
                 if (upper != null && ByteKeys.compareUnsigned(groupFirstKey, upper) >= 0) {
                     break;   // this group starts at/past the upper bound: nothing more in range
@@ -521,15 +529,20 @@ public final class SortedParquetStore implements ListingStore {
                 if (cachedBlockIndex != entry.rowGroup()) {
                     if (keyCursor != null) {
                         stats.close(keyCursor);
+                        keyCursor = null;
                     }
                     // Opened at the page that can hold this hop's target, not at the group's first row,
                     // and carrying no page that can only hold keys at/above the scan's upper bound.
                     keyCursor = reader.openKeyCursor(entry.rowGroup(), cursor, inclusive, upper);
                     cachedBlockIndex = entry.rowGroup();
-                    // A row-group open the zero-I/O shortcut above didn't catch (the group straddles a
-                    // prefix boundary, or is the fixture's last group). Counted so a test can pin the
-                    // skip-scan's cost to O(prefixes emitted) rather than O(keys under the prefix) —
-                    // the very regression this rollup exists to avoid.
+                    if (pendingPageReseekBlockIndex == entry.rowGroup()) {
+                        stats.pageReseeks++;
+                        pendingPageReseekBlockIndex = -1;
+                    }
+                    // A cursor/page-index open the zero-I/O shortcut above didn't catch (the group
+                    // straddles a prefix boundary, or is the fixture's last group). The same physical
+                    // group may be opened again after a common-prefix reseek; decoded-key and reseek
+                    // meters distinguish that page-bounded work from a sequential subtree walk.
                     metrics.recordDelimiterSkipScanRowGroupOpen();
                 }
                 keyCursor.advanceTo(cursor, inclusive);
@@ -564,11 +577,12 @@ public final class SortedParquetStore implements ListingStore {
                             // in that case makes advanceTo decode every skipped key. Reopen through the
                             // page index so the next loop starts at the page that can contain the target.
                             if (keyCursor != null
-                                    && SortedRouting.startRowGroup(index, successorKey) == rg) {
+                                    && SortedRouting.startRowGroup(index, successorKey) == rg
+                                    && !keyCursor.targetMayBeInCurrentPage(cursor)) {
                                 stats.close(keyCursor);
                                 keyCursor = null;
                                 cachedBlockIndex = -1;
-                                stats.pageReseeks++;
+                                pendingPageReseekBlockIndex = entry.rowGroup();
                             }
                         }
                     }

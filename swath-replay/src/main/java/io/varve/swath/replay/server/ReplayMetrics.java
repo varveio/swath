@@ -324,10 +324,9 @@ public final class ReplayMetrics {
     }
 
     /**
-     * Records one row-group open inside {@code SortedParquetStore}'s delimiter skip-scan (a group the
-     * zero-I/O whole-group shortcut couldn't resolve without decoding). A test asserting this stays
-     * bounded by the number of rolled-up prefixes — not by the number of keys under them — is the cost
-     * regression guard for the skip-scan itself.
+     * Records one cursor/page-index open inside {@code SortedParquetStore}'s delimiter skip-scan (a
+     * hop the zero-I/O whole-group shortcut could not resolve). A common-prefix reseek can reopen the
+     * same physical group, so this is an operation count rather than a unique-group cardinality.
      */
     public void recordDelimiterSkipScanRowGroupOpen() {
         delimiterSkipScanRowGroupOpens.increment();

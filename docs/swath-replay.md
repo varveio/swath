@@ -298,10 +298,19 @@ range parameters, result size, and server cost for requests exceeding the thresh
 Negative or unset disables this diagnostic.
 
 `delimiter=/` uses a native skip-scan that advances past each returned common prefix and
-stops at `max-keys`; other delimiter shapes use the ordinary range walk. If a stepped row
-group proves internally disordered, sorted mode returns `500 InternalError` and increments
-`swath.replay.serving.refused{reason=row_group_disorder}`. It never guesses past disorder.
-Re-sort the capture or use DuckDB.
+stops at `max-keys`; other delimiter shapes use the ordinary range walk. A common-prefix successor
+beyond the current data page is reseated through the Parquet page index, so the server decodes the
+landing page rather than every object in the skipped subtree. A successor that can still occur on
+the current page keeps its forward cursor, avoiding a repeated page decode for dense small
+directories. The page filter is conservative: a page containing the successor or any later
+qualifying key remains in the read.
+
+Sorted serving requires a correctly stamped, sorted fixture. Its startup eligibility check proves
+row-group first-key order, not every row's order. Request-time cursors additionally check the rows
+they decode, and a disorder there returns `500 InternalError` and increments
+`swath.replay.serving.refused{reason=row_group_disorder}`. Page-index and routing-index shortcuts
+deliberately leave other rows unread, so this meter is a fail-stop guard on the request path, not an
+exhaustive validation of a malformed fixture. Re-sort a suspect capture or use DuckDB.
 
 See [Serving concurrency](#serving-concurrency---max-concurrent-requests) for
 `--parquet-connections` defaults and sizing guidance; it governs backing-reader capacity
@@ -412,7 +421,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `sortfixture.build.latency`, `sortfixture.output.bytes`, `sort.steal_reason{outcome,reason}`, `sort.progress` | Legacy-fixture sort work, engagement, and progress. |
 | `index.load.latency{source=derived}`, `index.entries` | Sorted routing-index construction. |
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
-| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts`, `delimiter.reader_pool.open.latency` | Rollup vs walk, skip-scan I/O, routing-index-only whole-group engagements, and lazy per-file delimiter-pool first touch (timer count = files opened). |
+| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts`, `delimiter.skipscan.decoded_key_rows`, `delimiter.skipscan.page_reseeks`, `delimiter.reader_pool.open.latency`, `delimiter.reader_pool.readers_opened` | Rollup vs walk; cursor/page-index opens; routing-index-only whole-group engagements; decoded rows and same-group page reseeks per rollup; and lazy per-file delimiter-pool first touch (timer count = files opened, reader summary = handles opened). A physical row group may be opened more than once after reseeks. |
 | `page.read.latency`, `fixture.list.latency` | Post-borrow bounded-page decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
 | `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independent `connections`-wide range and lazy row-group pools per file. One request owns one reader, while concurrent ordinary and delimiter requests can engage both pools. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |

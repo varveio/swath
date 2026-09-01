@@ -523,6 +523,84 @@ class SortedParquetStoreTest {
     }
 
     /**
+     * The opposite geometry from a huge subtree: many one-key directories packed into one data
+     * page. Closing and reopening for every successor would decode a growing suffix of that same
+     * page repeatedly. The hybrid keeps its forward cursor while the page maximum says the target
+     * can still be on the current page. The final limit-ending hop is not counted as a page reseek
+     * because no replacement cursor is opened.
+     */
+    @Test
+    void delimiterDenseSingletonPrefixesStayOnTheirCurrentPage(@TempDir Path dir) throws IOException {
+        int prefixCount = 120;
+        List<String> keys = new ArrayList<>(prefixCount);
+        for (int p = 0; p < prefixCount; p++) {
+            keys.add(String.format("dense-%03d/only", p));
+        }
+        SortConfig oneGroupOnePage = SortConfigs.base()
+                .withFinalRowGroupBytes(64L << 20)
+                .withFinalPageRows(256);
+        Fixture fixture = writeSorted(dir, oneGroupOnePage, keys);
+        assertThat(fixture.index).hasSize(1);
+
+        ReplayMetrics metrics = new ReplayMetrics();
+        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 1)) {
+            assertThat(entryStrings(store.delimitedRollup(
+                    null, true, null, null, slash(), prefixCount - 1, Projection.KEYS_ONLY)))
+                    .isEqualTo(expectedRollup(keys, "", null, true, prefixCount - 1));
+        }
+
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.skipscan.decoded_key_rows").summary().totalAmount())
+                .as("one forward pass of the shared page, not one page decode per prefix")
+                .isLessThanOrEqualTo(prefixCount);
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.skipscan.page_reseeks").summary().totalAmount())
+                .as("no replacement cursor was opened")
+                .isZero();
+    }
+
+    /**
+     * A page index may retain the page immediately before a successor target because that page also
+     * contains the target. Reseeking must scan that landing page rather than mistake page pruning for
+     * an exact row seek: otherwise a bare object exactly equal to {@code successor(P)}, or the first
+     * later prefix after a continuation inside {@code P}, disappears. The independent in-memory
+     * rollup is the oracle for fresh, truncated, and two resume-boundary shapes.
+     */
+    @Test
+    void delimiterPageReseekRetainsSuccessorsAndResumeBoundaries(@TempDir Path dir) throws IOException {
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            keys.add(String.format("root/a/%04d", i));
+        }
+        keys.add("root/a0");   // exactly successor("root/a/")
+        keys.add("root/a1");
+        for (int i = 0; i < 1000; i++) {
+            keys.add(String.format("root/b/%04d", i));
+        }
+        keys.add("root/b0");   // exactly successor("root/b/")
+        keys.add("root/c");
+
+        SortConfig oneGroupManyPages = SortConfigs.base()
+                .withFinalRowGroupBytes(64L << 20)
+                .withFinalPageRows(64);
+        Fixture fixture = writeSorted(dir, oneGroupManyPages, keys);
+        assertThat(fixture.index).hasSize(1);
+
+        ReplayMetrics metrics = new ReplayMetrics();
+        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 1)) {
+            assertRollupMatches(store, keys, "root/", null, true, 1000);
+            assertRollupMatches(store, keys, "root/", null, true, 2);
+            assertRollupMatches(store, keys, "root/", key("root/a/0500"), false, 1000);
+            assertRollupMatches(store, keys, "root/", key("root/a/"), true, 1000);
+        }
+
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.skipscan.page_reseeks").summary().totalAmount())
+                .as("the parity assertions must exercise the same-row-group page reseek")
+                .isGreaterThan(0.0);
+    }
+
+    /**
      * {@code delimitedRollup} honors only the range bounds it is given — like {@link
      * ListingStore#rows}, it never applies prefix semantics itself (see the {@code
      * ListingStore#delimitedRollup} contract). The pager always resolves a null/no-boundary {@code
@@ -814,6 +892,51 @@ class SortedParquetStoreTest {
     }
 
     // --- helpers ---
+
+    /**
+     * Request-time order checking is deliberately limited to decoded rows. Put a local inversion in
+     * a middle page wholly inside {@code a/}; the root rollup is still answer-safe because every row
+     * on that pruned page is below {@code successor("a/")}. This pins the contract opposite the next
+     * test: skipped rows are not exhaustively validated, while a disorder encountered on a landing
+     * page is refused.
+     */
+    @Test
+    void delimiterReseekSafelySkipsDisorderWhollyInsideAnEmittedPrefix(@TempDir Path dir)
+            throws IOException {
+        Path out = Files.createDirectories(dir.resolve("skipped-disorder"));
+        Path file = out.resolve("part-00001.parquet");
+        SortConfig smallPages = SortConfigs.base()
+                .withFinalRowGroupBytes(64L << 20)
+                .withFinalPageRows(16);
+        List<String> written = new ArrayList<>();
+        for (int i = 0; i < 2000; i++) {
+            written.add(String.format("a/%04d", i));
+        }
+        Collections.swap(written, 1000, 1001);   // one middle page; its min/max remain in global order
+        written.add("b/000");
+        written.add("b/001");
+        try (SortedFileWriter writer = new SortedParquetWriter(file, smallPages, SortMode.OBJECTS, 1)) {
+            writer.markFinal();
+            for (String k : written) {
+                writer.write(object(k));
+            }
+        }
+
+        List<Path> files = SortedFixtures.resolveFiles(out);
+        IndexLoadResult loaded = SortedFixtures.loadIndex(files, new FixtureMetrics());
+        List<IndexEntry> index = ((IndexLoadResult.Loaded) loaded).entries();
+        ReplayMetrics metrics = new ReplayMetrics();
+        try (SortedParquetStore store = new SortedParquetStore(files, index, metrics, 1)) {
+            assertThat(entryStrings(store.delimitedRollup(
+                    null, true, null, null, slash(), 1000, Projection.KEYS_ONLY)))
+                    .containsExactly("CP:a/", "CP:b/");
+        }
+
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.skipscan.page_reseeks").summary().totalAmount())
+                .isGreaterThan(0.0);
+        assertThat(metrics.registry().find("swath.replay.serving.refused").counter()).isNull();
+    }
 
     /**
      * A stamped fixture whose rows are not ascending <em>within</em> a row group must fail the

@@ -9,6 +9,7 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -211,7 +212,8 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
             return KeyCursor.exhausted(file, blockIndex);
         }
         OffsetIndex offsets = indexStore.getOffsetIndex(KEY_COLUMN_PATH);
-        return new KeyCursor(this, file, blockIndex, eligible, offsets, rowCount);
+        return new KeyCursor(this, file, blockIndex, eligible, offsets,
+                indexStore.getColumnIndex(KEY_COLUMN_PATH), rowCount);
     }
 
     /**
@@ -398,13 +400,17 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
      * {@link #close()} a cursor it replaces or abandons, or repeated scans retain every visited
      * group's buffers until GC.
      *
-     * <p><b>The ascent of the rows it steps over is checked as it steps</b> ({@link #step()}): a
+     * <p><b>The ascent of the rows it decodes is checked as it steps</b> ({@link #step()}): a
      * skip-scan hop trusts this cursor's position to stand for "the first key at/after the target",
      * and a row group whose rows are not in ascending order makes that reading silently false — the
      * hop then emits a common prefix it has already passed, or skips a subtree it never reached. The
      * sortedness a fixture was admitted on ({@code SortedParquetIndex}/the replay server's index derive)
      * proves the ascent of row-group <em>first</em> keys only, so a group's own rows are proved here,
-     * where they are decoded anyway, and nowhere else. The comparison is the same one
+     * where they are decoded anyway. Page-index pruning and the caller's whole-group shortcut may
+     * deliberately leave other rows unread; this is a request-time guard against a bad position,
+     * not an exhaustive sorted-fixture validation pass. Pruning remains answer-safe because the
+     * Parquet page index can discard a page only when its conservative maximum is below the target;
+     * a page containing a qualifying key is retained and decoded. The comparison is the same one
      * {@link #advanceTo} already makes per stepped row, so it costs a compare and no I/O. The failure
      * is a {@link RowGroupOrderException}, carrying the machine-readable
      * {@link RowGroupOrderException#ROW_GROUP_DISORDER} reason its callers count and classify by.
@@ -425,6 +431,7 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         private final int blockIndex;
         private final RowRanges eligible;
         private final OffsetIndex offsets;
+        private final ColumnIndex keyIndex;
         private final long groupRowCount;
 
         private Window window;
@@ -435,12 +442,13 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         private long decodedRows;
 
         private KeyCursor(SortedParquetRowGroupReader owner, Path file, int blockIndex, RowRanges eligible,
-                          OffsetIndex offsets, long groupRowCount) throws IOException {
+                          OffsetIndex offsets, ColumnIndex keyIndex, long groupRowCount) throws IOException {
             this.owner = owner;
             this.file = file;
             this.blockIndex = blockIndex;
             this.eligible = eligible;
             this.offsets = offsets;
+            this.keyIndex = keyIndex;
             this.groupRowCount = groupRowCount;
             this.nextPage = 0;
             if (!loadNextWindow()) {
@@ -468,6 +476,7 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
             this.blockIndex = blockIndex;
             this.eligible = RowRanges.EMPTY;
             this.offsets = null;
+            this.keyIndex = null;
             this.groupRowCount = 0;
             this.window = null;
             this.windowEnd = 0;
@@ -553,6 +562,52 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         /** Number of key rows this cursor decoded, including its current row. */
         public long decodedRows() {
             return decodedRows;
+        }
+
+        /**
+         * Whether {@code target} can still occur in the physical data page holding the current row.
+         * A conservative page maximum may retain a page unnecessarily, but can never place a real
+         * value below its reported maximum. Therefore {@code false} proves that advancing this
+         * forward cursor would leave the current page and lets the caller profitably reopen through
+         * the page index; {@code true} avoids closing and re-decoding one page for dense, tiny hops.
+         */
+        public boolean targetMayBeInCurrentPage(byte[] target) {
+            if (currentKey == null || target == null || offsets == null || keyIndex == null) {
+                return true;   // no proof of a page jump: retain the safe forward cursor
+            }
+            int page = pageHolding(position);
+            if (page < 0 || page >= keyIndex.getMaxValues().size()
+                    || keyIndex.getNullPages().get(page)) {
+                return true;
+            }
+            return compareUnsigned(keyIndex.getMaxValues().get(page), target) >= 0;
+        }
+
+        /** Physical page whose first-row interval contains {@code row}. */
+        private int pageHolding(long row) {
+            int low = 0;
+            int high = offsets.getPageCount();
+            while (low < high) {
+                int mid = (low + high) >>> 1;
+                if (offsets.getFirstRowIndex(mid) <= row) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            return low - 1;
+        }
+
+        private static int compareUnsigned(ByteBuffer left, byte[] right) {
+            ByteBuffer a = left.duplicate();
+            int shared = Math.min(a.remaining(), right.length);
+            for (int i = 0; i < shared; i++) {
+                int cmp = Integer.compare(Byte.toUnsignedInt(a.get()), Byte.toUnsignedInt(right[i]));
+                if (cmp != 0) {
+                    return cmp;
+                }
+            }
+            return Integer.compare(a.remaining(), right.length - shared);
         }
 
         /**

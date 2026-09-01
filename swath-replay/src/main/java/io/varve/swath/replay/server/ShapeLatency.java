@@ -35,9 +35,9 @@ import java.util.function.BiFunction;
  * {@code max-keys=32} probe and a {@code max-keys=1000} probe identically, hiding exactly the lever
  * an engine-side fanout cap pulls. The per-entry term restores it: fewer prefixes returned, less
  * injected latency. The store's own scan cost cannot stand in for this either — the sorted store's
- * native skip-scan is O(entries emitted) and already respects {@code max-keys}, so it runs in
- * microseconds regardless of what production S3 actually charges for the same shape — so faithful
- * cost modelling belongs here, in injection, on top of a fast baseline.
+ * native skip-scan already respects {@code max-keys} and page-index-skips common-prefix subtrees,
+ * but its local page landings and reader-pool work are not the service time production S3 charged
+ * for the same shape. Faithful cost modelling belongs here, in injection, on top of that baseline.
  *
  * <p>Request classification mirrors {@code ReplayLatencyAdapter} (the test-side bridge): a request
  * carrying a {@code delimiter} is a structure probe (checked first, so a {@code delimiter}'d
