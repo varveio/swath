@@ -479,6 +479,50 @@ class SortedParquetStoreTest {
     }
 
     /**
+     * A common-prefix successor can remain inside one large row group. The resumable cursor must not
+     * walk every key under the prefix in that case: reopening it through the page index is the only
+     * operation that actually skips the subtree. The older row-group-open guard above cannot see this
+     * regression because one cursor can decode the entire group while the open count stays at one.
+     */
+    @Test
+    void delimitedRollupReseeksWithinOneLargeRowGroupInsteadOfDecodingSubtrees(@TempDir Path dir)
+            throws IOException {
+        int prefixCount = 16;
+        int keysPerPrefix = 1000;
+        List<String> keys = new ArrayList<>(prefixCount * keysPerPrefix);
+        for (int p = 0; p < prefixCount; p++) {
+            for (int i = 0; i < keysPerPrefix; i++) {
+                keys.add(String.format("prefix-%03d/obj-%04d", p, i));
+            }
+        }
+        SortConfig oneLargeGroup = SortConfigs.base()
+                .withFinalRowGroupBytes(64L << 20)
+                .withFinalPageRows(64);
+        Fixture fixture = writeSorted(dir, oneLargeGroup, keys);
+        assertThat(fixture.index).hasSize(1);
+
+        ReplayMetrics metrics = new ReplayMetrics();
+        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 1)) {
+            assertThat(entryStrings(store.delimitedRollup(
+                    null, true, null, null, slash(), prefixCount + 1, Projection.KEYS_ONLY)))
+                    .isEqualTo(expectedRollup(keys, "", null, true, prefixCount + 1));
+        }
+
+        var decoded = metrics.registry().find(
+                "swath.replay.delimiter.skipscan.decoded_key_rows").summary();
+        var reseeks = metrics.registry().find(
+                "swath.replay.delimiter.skipscan.page_reseeks").summary();
+        assertThat(decoded.count()).isEqualTo(1L);
+        assertThat(decoded.totalAmount())
+                .as("at most one 64-row page landing per prefix, not %d subtree rows", keys.size())
+                .isLessThanOrEqualTo(prefixCount * 64.0)
+                .isLessThan(keys.size() / 10.0);
+        assertThat(reseeks.totalAmount())
+                .as("every same-row-group successor hop must abandon the sequential cursor")
+                .isEqualTo(prefixCount);
+    }
+
+    /**
      * {@code delimitedRollup} honors only the range bounds it is given — like {@link
      * ListingStore#rows}, it never applies prefix semantics itself (see the {@code
      * ListingStore#delimitedRollup} contract). The pager always resolves a null/no-boundary {@code
@@ -634,6 +678,9 @@ class SortedParquetStoreTest {
         assertThat(registry.find("swath.replay.delimiter.reader_pool.open.latency").timer().count())
                 .as("the lazy fleet opens and is timed exactly once")
                 .isEqualTo(1L);
+        assertThat(registry.find("swath.replay.delimiter.reader_pool.readers_opened").summary().totalAmount())
+                .as("pool-opening cost reports how many footer-bearing readers it created")
+                .isEqualTo(1.0);
         assertThatThrownBy(pool::borrow)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("pool is closed");

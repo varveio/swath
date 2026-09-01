@@ -272,10 +272,12 @@ public final class SortedParquetStore implements ListingStore {
             return null;
         }
         var sample = metrics.startParquetQueryTimer();
+        SkipScanStats stats = new SkipScanStats();
         int entries = 0;
         boolean success = false;
         try {
-            List<DelimitedEntry> out = skipScan(from, fromInclusive, toExclusive, prefix, limit, projection);
+            List<DelimitedEntry> out = skipScan(
+                    from, fromInclusive, toExclusive, prefix, limit, projection, stats);
             entries = out.size();
             success = true;
             return out;
@@ -288,6 +290,7 @@ public final class SortedParquetStore implements ListingStore {
         } catch (IOException e) {
             throw new IllegalStateException("failed to run sorted Parquet delimiter skip-scan", e);
         } finally {
+            metrics.recordDelimiterSkipScanWork(stats.decodedKeyRows, stats.pageReseeks);
             metrics.recordParquetQuery(sample, entries, success);
         }
     }
@@ -384,7 +387,7 @@ public final class SortedParquetStore implements ListingStore {
                         "failed to open a sorted Parquet row-group reader for " + file, e);
             }
             available = creating;
-            metrics.recordDelimiterReaderPoolOpen(sample);
+            metrics.recordDelimiterReaderPoolOpen(sample, size);
         }
 
         synchronized void close() {
@@ -437,7 +440,8 @@ public final class SortedParquetStore implements ListingStore {
      * this O(entries emitted) rather than O(subtree).
      */
     private List<DelimitedEntry> skipScan(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
-                                          byte[] prefix, int limit, Projection projection) throws IOException {
+                                          byte[] prefix, int limit, Projection projection,
+                                          SkipScanStats stats) throws IOException {
         if (index.isEmpty() || limit <= 0) {
             return List.of();
         }
@@ -494,7 +498,7 @@ public final class SortedParquetStore implements ListingStore {
 
                 if (!entry.file().equals(openFile)) {
                     if (keyCursor != null) {
-                        keyCursor.close();   // releases the group's page buffers; file close alone does not
+                        stats.close(keyCursor);   // releases the group's page buffers; file close alone does not
                         keyCursor = null;
                     }
                     if (reader != null) {
@@ -516,7 +520,7 @@ public final class SortedParquetStore implements ListingStore {
                 }
                 if (cachedBlockIndex != entry.rowGroup()) {
                     if (keyCursor != null) {
-                        keyCursor.close();
+                        stats.close(keyCursor);
                     }
                     // Opened at the page that can hold this hop's target, not at the group's first row,
                     // and carrying no page that can only hold keys at/above the scan's upper bound.
@@ -555,6 +559,17 @@ public final class SortedParquetStore implements ListingStore {
                         case Successor.Key(ByteKey successorKey) -> {
                             cursor = successorKey.toByteArray();
                             inclusive = true;
+                            // A successor hop can stay inside the same physical row group even though it
+                            // skips millions of keys under the common prefix. Reusing the forward cursor
+                            // in that case makes advanceTo decode every skipped key. Reopen through the
+                            // page index so the next loop starts at the page that can contain the target.
+                            if (keyCursor != null
+                                    && SortedRouting.startRowGroup(index, successorKey) == rg) {
+                                stats.close(keyCursor);
+                                keyCursor = null;
+                                cachedBlockIndex = -1;
+                                stats.pageReseeks++;
+                            }
                         }
                     }
                 } else {
@@ -567,13 +582,25 @@ public final class SortedParquetStore implements ListingStore {
             }
         } finally {
             if (keyCursor != null) {
-                keyCursor.close();
+                stats.close(keyCursor);
             }
             if (reader != null) {
                 returnGroupReader(openFile, reader);
             }
         }
         return out;
+    }
+
+    /** Per-rollup deterministic work counters, kept request-local so distributions remain meaningful. */
+    private static final class SkipScanStats {
+
+        private long decodedKeyRows;
+        private int pageReseeks;
+
+        private void close(SortedParquetRowGroupReader.KeyCursor cursor) {
+            decodedKeyRows += cursor.decodedRows();
+            cursor.close();
+        }
     }
 
     /** Returns one delimiter reader without letting diagnostics strand the pooled resource. */

@@ -64,7 +64,10 @@ public final class ReplayMetrics {
     private final Counter prefetchWindowEvictions;
     private final Counter delimiterSkipScanRowGroupOpens;
     private final Counter delimiterSkipScanWholeGroupShortcuts;
+    private final DistributionSummary delimiterSkipScanDecodedKeyRows;
+    private final DistributionSummary delimiterSkipScanPageReseeks;
     private final Timer delimiterReaderPoolOpenLatency;
+    private final DistributionSummary delimiterReaderPoolReadersOpened;
     // Micrometer gauges weakly reference their state object. Retain these method-reference objects
     // for the metrics lifetime or a sustained run's next GC turns both live-cache values into NaN.
     private IntSupplier prefetchWindowsGaugeSource;
@@ -127,8 +130,14 @@ public final class ReplayMetrics {
                 .register(registry);
         delimiterSkipScanWholeGroupShortcuts = Counter.builder(
                 "swath.replay.delimiter.skipscan.whole_group_shortcuts").register(registry);
+        delimiterSkipScanDecodedKeyRows = DistributionSummary.builder(
+                "swath.replay.delimiter.skipscan.decoded_key_rows").register(registry);
+        delimiterSkipScanPageReseeks = DistributionSummary.builder(
+                "swath.replay.delimiter.skipscan.page_reseeks").register(registry);
         delimiterReaderPoolOpenLatency = Timer.builder("swath.replay.delimiter.reader_pool.open.latency")
                 .publishPercentiles(0.5, 0.99).register(registry);
+        delimiterReaderPoolReadersOpened = DistributionSummary.builder(
+                "swath.replay.delimiter.reader_pool.readers_opened").register(registry);
         Gauge
                 .builder("swath.replay.parquet.queries.in_flight", parquetQueriesInFlight, AtomicLong::get)
                 .register(registry);
@@ -329,9 +338,16 @@ public final class ReplayMetrics {
         delimiterSkipScanWholeGroupShortcuts.increment();
     }
 
+    /** Records deterministic key-decode and page-reseek work for one native delimiter rollup. */
+    public void recordDelimiterSkipScanWork(long decodedKeyRows, int pageReseeks) {
+        delimiterSkipScanDecodedKeyRows.record(decodedKeyRows);
+        delimiterSkipScanPageReseeks.record(pageReseeks);
+    }
+
     /** Records one file's lazy delimiter-reader fleet opening on its first Parquet-backed rollup. */
-    public void recordDelimiterReaderPoolOpen(Timer.Sample sample) {
+    public void recordDelimiterReaderPoolOpen(Timer.Sample sample, int readersOpened) {
         sample.stop(delimiterReaderPoolOpenLatency);
+        delimiterReaderPoolReadersOpened.record(readersOpened);
     }
 
     /** Records how many rows one window fill asked the delegate for (proves the ramp engages). */

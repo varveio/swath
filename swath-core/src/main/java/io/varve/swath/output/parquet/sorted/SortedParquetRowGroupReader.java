@@ -432,6 +432,7 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         private int nextPage;
         private long position;
         private byte[] currentKey;
+        private long decodedRows;
 
         private KeyCursor(SortedParquetRowGroupReader owner, Path file, int blockIndex, RowRanges eligible,
                           OffsetIndex offsets, long groupRowCount) throws IOException {
@@ -502,6 +503,9 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
             byte[] previousKey = currentKey;
             position++;
             currentKey = readAt(position);
+            if (currentKey != null) {
+                decodedRows++;
+            }
             if (currentKey != null && previousKey != null
                     && KeyBytes.compareUnsigned(previousKey, currentKey) >= 0) {
                 throw RowGroupOrderException.at(file, blockIndex, position,
@@ -544,6 +548,11 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         /** The current row's 0-based position within this row group. Only valid while {@link #hasCurrent()}. */
         public long position() {
             return position;
+        }
+
+        /** Number of key rows this cursor decoded, including its current row. */
+        public long decodedRows() {
+            return decodedRows;
         }
 
         /**
