@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>swath — parallel, resumable S3 listing for very large buckets</title>
+<meta name="description" content="List very large S3 buckets in parallel without knowing the key distribution in advance. Stream object metadata or write crash-resumable Parquet for direct querying.">
+
+<link rel="canonical" href="https://swath.varve.io/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="swath">
+<meta property="og:title" content="swath — parallel, resumable S3 listing for very large buckets">
+<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. An open-source lister that discovers the imbalance mid-run and splits until every worker can help.">
+<meta property="og:url" content="https://swath.varve.io/">
+<meta property="og:image" content="https://swath.varve.io/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23F7F3E8'/%3E%3Crect x='8' y='18' width='6' height='28' fill='%23087361' opacity='.45'/%3E%3Crect x='17' y='18' width='26' height='28' fill='%23C46628'/%3E%3Crect x='46' y='18' width='3' height='28' fill='%23087361' opacity='.45'/%3E%3Crect x='52' y='18' width='4' height='28' fill='%23087361' opacity='.45'/%3E%3C/svg%3E">
+
+<style>
+  :root {
+    color-scheme: light dark;
+    --canvas: #F7F3E8;
+    --canvas-2: #EDE6D7;
+    --surface: #FFFDF7;
+    --ink: #12231D;
+    --muted: #56675F;
+    --quiet: #7B887F;
+    --rule: #D8CEBA;
+    --brand: #087361;
+    --brand-deep: #045143;
+    --brand-soft: #DCEFE8;
+    --signal: #C46628;
+    --signal-soft: #F8E4D2;
+    --shadow: 0 26px 70px rgba(22, 43, 35, 0.16), 0 2px 8px rgba(22, 43, 35, 0.08);
+    --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #0C1512;
+      --canvas-2: #111E1A;
+      --surface: #16231F;
+      --ink: #EDF2EC;
+      --muted: #AAB8B0;
+      --quiet: #84958C;
+      --rule: #2B3E37;
+      --brand: #5ED7BB;
+      --brand-deep: #38B99E;
+      --brand-soft: #173C34;
+      --signal: #F1A564;
+      --signal-soft: #382719;
+      --shadow: 0 26px 70px rgba(0, 0, 0, 0.34), 0 2px 8px rgba(0, 0, 0, 0.24);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    min-width: 20rem;
+    margin: 0;
+    background-color: var(--canvas);
+    background:
+      radial-gradient(circle at 92% 7%, color-mix(in srgb, var(--signal-soft) 76%, transparent) 0, transparent 28rem),
+      radial-gradient(circle at 3% 34%, color-mix(in srgb, var(--brand-soft) 58%, transparent) 0, transparent 32rem),
+      var(--canvas);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 18px;
+    line-height: 1.6;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: inherit; text-underline-offset: 0.2em; }
+  a:focus-visible, button:focus-visible, video:focus-visible {
+    outline: 3px solid var(--signal);
+    outline-offset: 4px;
+  }
+  .page { width: min(100% - 3rem, 74rem); margin: 0 auto; }
+  .mono { font-family: var(--mono); }
+
+  .skip-link {
+    position: absolute;
+    top: -3rem;
+    left: 0.75rem;
+    z-index: 10;
+    padding: 0.55rem 0.9rem;
+    border-radius: 0.6rem;
+    background: var(--brand-deep);
+    color: #FFFDF7;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-decoration: none;
+    transition: top 150ms ease;
+  }
+  .skip-link:focus {
+    top: 0.75rem;
+  }
+
+  .version-line {
+    margin: 0 0 1.4rem;
+    color: var(--quiet);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+  }
+
+  details.transcript {
+    margin-top: 0.6rem;
+  }
+  details.transcript summary {
+    color: var(--brand);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  details.transcript .transcript-body {
+    margin-top: 0.55rem;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--rule);
+    border-radius: 0.7rem;
+    background: var(--canvas);
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.55;
+  }
+  details.transcript pre {
+    margin: 0.4rem 0;
+    padding: 0.5rem 0.6rem;
+    overflow-x: auto;
+    border-radius: 0.5rem;
+    background: var(--surface);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+    padding: 1.4rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .brand {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-decoration: none;
+  }
+  .brand b { color: var(--ink); font-weight: 760; }
+  .topbar nav { display: flex; gap: 1.25rem; }
+  .topbar nav a {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    font-weight: 650;
+    text-decoration: none;
+  }
+  .topbar nav a:hover { color: var(--brand); }
+
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.12fr) minmax(19rem, 0.78fr);
+    align-items: start;
+    gap: clamp(2.5rem, 6vw, 5.5rem);
+    padding: clamp(3.6rem, 8vw, 7rem) 0 clamp(4rem, 8vw, 6.5rem);
+  }
+  .eyebrow, .section-label {
+    margin: 0 0 1rem;
+    color: var(--brand);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 750;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+  h1 {
+    margin: 0 0 0.65rem;
+    font-family: var(--mono);
+    font-size: clamp(4.2rem, 9vw, 7.5rem);
+    font-weight: 660;
+    letter-spacing: -0.075em;
+    line-height: 0.82;
+  }
+  .tagline {
+    max-width: 16ch;
+    margin: 0;
+    font-family: var(--display);
+    font-size: clamp(2.35rem, 4.5vw, 4.2rem);
+    font-weight: 500;
+    letter-spacing: -0.045em;
+    line-height: 1.02;
+  }
+  .lede {
+    max-width: 38rem;
+    margin: 1.65rem 0 0;
+    color: var(--muted);
+    font-size: clamp(1rem, 1.45vw, 1.16rem);
+    line-height: 1.65;
+  }
+  .lede strong { color: var(--ink); font-weight: 680; }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 2rem 0 2.1rem; }
+  .button {
+    display: inline-flex;
+    min-height: 3rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem 1.2rem;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    background: var(--surface);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-decoration: none;
+    transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
+  }
+  .button.primary { border-color: var(--brand-deep); background: var(--brand-deep); color: #FFFDF7; }
+  .button:hover { transform: translateY(-2px); border-color: var(--brand); }
+  .button.primary:hover { background: var(--brand); }
+
+  .fit-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    max-width: 42rem;
+    overflow: hidden;
+    border: 1px solid var(--rule);
+    border-radius: 1rem;
+    background: var(--surface);
+    background: color-mix(in srgb, var(--surface) 65%, transparent);
+  }
+  .fit { padding: 1rem 1.05rem 1.05rem; }
+  .fit + .fit { border-left: 1px solid var(--rule); }
+  .fit .k {
+    display: block;
+    margin-bottom: 0.35rem;
+    color: var(--brand);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 750;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .fit.inventory .k { color: var(--signal); }
+  .fit p { margin: 0; color: var(--muted); font-size: 0.82rem; line-height: 1.5; }
+  .fit-note {
+    max-width: 42rem;
+    margin: 0.75rem 0 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+  }
+
+  figure { margin: 0; }
+  .hero-media {
+    justify-self: end;
+    width: min(100%, 28rem);
+    padding: 0.7rem;
+    border: 1px solid color-mix(in srgb, var(--rule) 75%, transparent);
+    border-radius: 1.45rem;
+    background: var(--surface);
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    box-shadow: var(--shadow);
+  }
+  .media-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.2rem 0.35rem 0.65rem;
+    color: var(--quiet);
+    font-family: var(--mono);
+    font-size: 0.61rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .media-top span:first-child { color: var(--signal); }
+  video { display: block; width: 100%; background: var(--canvas-2); }
+  .hero-media video { aspect-ratio: 4 / 5; border-radius: 0.95rem; object-fit: cover; }
+  figcaption { color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
+  .hero-media figcaption { padding: 0.8rem 0.35rem 0.25rem; }
+  figcaption strong { color: var(--ink); font-weight: 680; }
+  figcaption a { color: var(--brand); font-family: var(--mono); font-size: 0.7rem; font-weight: 700; white-space: nowrap; }
+
+  .guide-feature {
+    display: grid;
+    grid-template-columns: minmax(0, 1.12fr) minmax(17rem, 0.88fr);
+    align-items: center;
+    gap: clamp(2rem, 6vw, 5rem);
+    margin-bottom: 1rem;
+    padding: clamp(1.7rem, 4.5vw, 3.2rem);
+    border: 1px solid var(--rule);
+    border-radius: 1.5rem;
+    background: var(--surface);
+    color: var(--ink);
+    text-decoration: none;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+  .guide-feature:hover {
+    border-color: var(--brand);
+    box-shadow: 0 14px 38px rgba(22, 43, 35, 0.08);
+  }
+  .guide-feature h2 {
+    max-width: 18ch;
+    margin: 0;
+    font-family: var(--display);
+    font-size: clamp(2rem, 4vw, 3.25rem);
+    font-weight: 500;
+    letter-spacing: -0.04em;
+    line-height: 1.05;
+  }
+  .guide-feature .summary {
+    max-width: 37rem;
+    margin: 1rem 0 1.15rem;
+    color: var(--muted);
+    font-size: 0.94rem;
+    line-height: 1.6;
+  }
+  .guide-sketch {
+    padding: 1.15rem;
+    border: 1px solid var(--rule);
+    border-radius: 1rem;
+    background: var(--canvas);
+    font-family: var(--mono);
+  }
+  .sketch-label {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0 0 0.55rem;
+    color: var(--quiet);
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+  .range-row { display: flex; width: 100%; height: 1.4rem; gap: 2px; }
+  .range-row + .sketch-label { margin-top: 1rem; }
+  .range-row span { display: block; min-width: 2px; background: var(--rule); }
+  .range-row.initial span { flex: 1; }
+  .range-row.measured { gap: 0; }
+  .range-row.measured span:first-child { width: 68%; background: var(--signal); }
+  .range-row.measured span:last-child { width: 32%; background: color-mix(in srgb, var(--brand) 36%, var(--rule)); }
+  .range-row.split { gap: 3px; }
+  .range-row.split span { flex: 1; background: var(--brand); }
+  .range-row.split span:nth-child(even) { background: color-mix(in srgb, var(--brand) 62%, var(--surface)); }
+
+  .benefits {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+  }
+  .benefit {
+    min-height: 12rem;
+    padding: clamp(1.5rem, 3vw, 2rem);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--brand);
+    border-radius: 1.15rem;
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .benefit:nth-child(2) { border-top-color: var(--signal); }
+  .benefit h2 { margin: 0 0 0.65rem; font-size: 1.25rem; line-height: 1.2; }
+  .benefit p { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.55; }
+
+  .workflow {
+    display: grid;
+    grid-template-columns: minmax(15rem, 0.72fr) minmax(20rem, 1.28fr);
+    align-items: center;
+    gap: clamp(2.5rem, 7vw, 6rem);
+    margin: clamp(4.5rem, 10vw, 8rem) 0;
+    padding: clamp(1.4rem, 4vw, 3rem);
+    border: 1px solid color-mix(in srgb, var(--signal) 32%, var(--rule));
+    border-radius: 1.75rem;
+    background: var(--signal-soft);
+    background: color-mix(in srgb, var(--signal-soft) 72%, transparent);
+  }
+  .workflow h2 {
+    margin: 0;
+    font-family: var(--display);
+    font-size: clamp(2.25rem, 4.5vw, 3.7rem);
+    font-weight: 500;
+    letter-spacing: -0.04em;
+    line-height: 1.02;
+  }
+  .workflow-copy > p:not(.section-label) { margin: 1.2rem 0; color: var(--muted); font-size: 1rem; }
+  .text-link { color: var(--brand); font-family: var(--mono); font-size: 0.76rem; font-weight: 750; text-decoration: none; }
+  .text-link:hover { text-decoration: underline; }
+  .workflow-media {
+    width: 100%;
+    padding: 0.65rem;
+    border: 1px solid var(--rule);
+    border-radius: 1.3rem;
+    background: var(--surface);
+    box-shadow: 0 16px 50px rgba(22, 43, 35, 0.12);
+  }
+  .workflow-media video { aspect-ratio: 1; border-radius: 0.85rem; object-fit: cover; }
+  .workflow-media figcaption { padding: 0.75rem 0.3rem 0.2rem; }
+
+  footer {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 3rem;
+    padding: 1.8rem 0 2.5rem;
+    border-top: 2px solid var(--ink);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    line-height: 1.7;
+  }
+  footer p { margin: 0; }
+  .colophon { display: flex; align-items: flex-start; justify-content: flex-end; gap: 0.65rem; }
+  .colophon svg { flex: none; width: 1.35rem; height: 1.35rem; margin-top: 0.15rem; }
+
+  @media (max-width: 55rem) {
+    .hero { grid-template-columns: 1fr; }
+    .hero-media { justify-self: start; width: min(100%, 34rem); }
+    .guide-feature { grid-template-columns: 1fr; }
+    .benefits { grid-template-columns: 1fr; }
+    .benefit { min-height: 0; }
+    .workflow { grid-template-columns: 1fr; }
+    .workflow-copy { max-width: 34rem; }
+  }
+
+  @media (max-width: 40rem) {
+    body { font-size: 17px; }
+    .page { width: min(100% - 1.5rem, 74rem); }
+    .topbar { flex-direction: column; align-items: stretch; gap: 0.85rem; }
+    .topbar nav { justify-content: space-between; gap: 0.8rem; }
+    .hero { padding-top: 3rem; }
+    h1 { font-size: clamp(4rem, 24vw, 6rem); }
+    .tagline { font-size: clamp(2.15rem, 11vw, 3.25rem); }
+    .cta { display: grid; grid-template-columns: 1fr; }
+    .fit-grid { grid-template-columns: 1fr; }
+    .fit + .fit { border-top: 1px solid var(--rule); border-left: 0; }
+    .workflow { padding: 1rem; }
+    .workflow-copy { padding: 0.6rem 0.4rem 0; }
+    footer { grid-template-columns: 1fr; gap: 1.25rem; }
+    .colophon { justify-content: flex-start; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .button, .guide-feature { transition: none; }
+    .button:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+<div class="page">
+  <header class="topbar">
+    <a class="brand" href="https://varve.io"><b>VARVE</b> / OPEN SOURCE</a>
+    <nav aria-label="Primary">
+      <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Getting started</a>
+      <a href="field-guide/">How it works</a>
+      <a href="https://github.com/varveio/swath/blob/main/docs/README.md">Docs</a>
+      <a href="https://github.com/varveio/swath">GitHub ↗</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">S3 object listing</p>
+        <h1>swath</h1>
+        <p class="tagline">List very large S3 buckets in parallel, even when you don't know how their keys are distributed.</p>
+        <p class="lede">
+          swath divides S3's ordered keyspace across workers and rebalances it as the
+          listing runs. Stream object metadata as a table, TSV, or JSONL, or write a
+          crash-resumable Parquet dataset for direct querying. Object contents are never
+          read. A live listing is not a point-in-time snapshot of a bucket that changes
+          during the run.
+        </p>
+
+        <div class="cta">
+          <a class="button primary" href="field-guide/">See how swath works →</a>
+          <a class="button" href="https://github.com/varveio/swath#quickstart">Quickstart</a>
+        </div>
+
+        <div class="fit-grid" aria-label="When to use swath">
+          <div class="fit">
+            <span class="k">Use swath when</span>
+            <p>You need an on-demand listing of a very large bucket, no sufficiently current inventory is available, and serial pagination is too slow.</p>
+          </div>
+          <div class="fit inventory">
+            <span class="k">Use existing metadata when</span>
+            <p>A current S3 Inventory or S3 Metadata table already has the fields you need. Querying it is normally cheaper than a live scan.</p>
+          </div>
+        </div>
+        <p class="fit-note">For a small prefix or a one-off task, the AWS CLI or an SDK paginator is usually simpler.</p>
+      </div>
+
+      <figure class="hero-media">
+        <div class="media-top"><span>36-second visualization</span><span>39.7M objects · 68.6s listing wall clock</span></div>
+        <video controls muted playsinline preload="metadata" poster="assets/poster.png"
+          src="assets/swath-noaa-gestofs.mp4" aria-label="36-second rendered visualization of run noaa-gestofs-pds-field-guide-trace">
+          <a href="assets/swath-noaa-gestofs.mp4">Watch the recorded run</a>
+        </video>
+        <figcaption>
+          This is a 36-second rendered visualization of run
+          <code>noaa-gestofs-pds-field-guide-trace</code>; the video's own playback length is not
+          the same clock as the run. The measured listing wall clock for this run was
+          <strong>68.6 seconds</strong> (68,592.2&nbsp;ms). The initial keyspace split created
+          513 ranges. <strong>One contained 68% of the objects.</strong> swath split that range
+          as idle workers requested more work. This is a separate capture from the
+          v0.2.1 recording in the project README (39,585,029 objects) — the two are different
+          runs, not the same numbers rounded differently.
+          <a href="runs/noaa-gestofs-pds/">View the trace and full provenance →</a>
+        </figcaption>
+        <details class="transcript">
+          <summary>Read what this visualization shows</summary>
+          <div class="transcript-body">
+            <p>This video is a rendered visualization (produced by
+            <code>tools/explainer</code> from the run's <code>--trace</code> event log), not a
+            literal terminal recording — there is no on-screen command to transcribe. It plays
+            back the run's seed ranges draining in parallel and splitting as workers steal
+            work, colored by which original seed guess each range descends from.</p>
+            <p>The exact swath version, commit, capture date, and command used to produce this
+            run are <strong>unknown in retained evidence</strong>; only the trace's own recorded
+            figures (objects, ranges, splits, wall clock) survive. See the
+            <a href="runs/noaa-gestofs-pds/">full provenance table</a> for what is and is not
+            known about this capture.</p>
+          </div>
+        </details>
+      </figure>
+    </section>
+
+    <a class="guide-feature" href="field-guide/">
+      <div class="guide-copy">
+        <p class="section-label">How it works · visual field guide</p>
+        <h2>A step-by-step explanation of how swath works</h2>
+        <p class="summary">
+          The guide starts with why a normal S3 listing is serial, then shows how swath
+          assigns key ranges without knowing where the objects are. It walks through safe
+          splitting, work stealing, checkpoints, and the cases where swath is not the
+          right tool.
+        </p>
+        <span class="text-link">Read the field guide →</span>
+      </div>
+      <div class="guide-sketch" aria-hidden="true">
+        <p class="sketch-label"><span>Initial key ranges</span><span>equal guesses</span></p>
+        <div class="range-row initial">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <p class="sketch-label"><span>Objects found</span><span>one range: 68%</span></p>
+        <div class="range-row measured"><span></span><span></span></div>
+        <p class="sketch-label"><span>Busy range after splits</span><span>work redistributed</span></p>
+        <div class="range-row split">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+    </a>
+
+    <section class="benefits" aria-label="Why swath">
+      <article class="benefit">
+        <h2>No partitioning setup</h2>
+        <p>Use the same command for flat, deeply prefixed, or skewed keys. swath divides the ordered keyspace while it lists, without a preliminary crawl or hand-written prefix rules.</p>
+      </article>
+      <article class="benefit">
+        <h2>Checkpoint and resume</h2>
+        <p>Managed Parquet output records committed progress. An interrupted listing resumes from its output directory instead of starting over.</p>
+      </article>
+      <article class="benefit">
+        <h2>Stream or query</h2>
+        <p>Write a table, TSV, JSONL, or Parquet. Query Parquet parts directly with DuckDB; object bodies are not downloaded.</p>
+      </article>
+    </section>
+
+    <section class="workflow">
+      <div class="workflow-copy">
+        <p class="section-label">Command-line workflow</p>
+        <h2>List, resume,<br>and query</h2>
+        <p>
+          This demo interrupts a listing, resumes it from the output directory, and
+          queries the resulting Parquet files directly with DuckDB.
+        </p>
+        <a class="text-link" href="https://github.com/varveio/swath#quickstart">Open the quickstart →</a>
+      </div>
+
+      <figure class="workflow-media">
+        <div class="media-top"><span>36-second CLI demo</span><span>list / resume / DuckDB</span></div>
+        <video controls muted playsinline preload="metadata" poster="assets/swath-cli-demo-poster.png"
+          src="assets/swath-cli-demo.mp4" aria-label="Terminal demo of listing, resuming, and querying with swath 0.2.1">
+          <a href="assets/swath-cli-demo.mp4">Watch the command-line demo</a>
+        </video>
+        <figcaption>
+          A recorded Docker workflow — interrupt, resume, and DuckDB query — captured with
+          swath <strong>0.2.1</strong> (commit <code>505ae26e6019</code>, from the video's own
+          opening <code>swath --version</code> frame). Its own capture date and machine are
+          unknown in retained evidence; the video file was added to this site's git history on
+          2026-08-20 (commit <code>34a6c63</code>), which is a lower bound on when it was
+          published, not a capture date.
+        </figcaption>
+        <details class="transcript">
+          <summary>Read the commands and result shown in the video</summary>
+          <div class="transcript-body">
+            <p>Transcribed from the video's own opening frames (its poster image, which is a
+            still from the recording itself):</p>
+            <pre>swath $ swath --version
+swath 0.2.1
+Built by Varve: https://varve.io
+Source: https://github.com/varveio/swath
+Commit: 505ae26e6019
+Runtime: 25.0.3+9-LTS
+swath $ swath list s3://noaa-gestofs-pds/ \
+    --no-sign-request --region us-east-1 \
+    --concurrency 128 \
+    --format parquet -o /out/noaa-gestofs-pds
+&rarr; writing parquet dataset to /out/noaa-gestofs-pds
+  listing &middot; 4,002 objects &middot; 3,999 keys/s (avg 3,999) &middot; 5 pages</pre>
+            <p>That is the command and the state visible at the video's start; the remainder —
+            interrupting, resuming, and the DuckDB query — plays out in the recording itself and
+            was not separately transcribed here. The command, version, and commit match run
+            <code>noaa-gestofs-pds-2026-08-03-505ae26</code> — the README's recorded full-scale
+            run (39,585,029 objects) — but this video's own final object count was not
+            independently confirmed from retained evidence, so treat it as a related capture
+            sharing that run's identity, not as separately verified proof of its ending numbers.</p>
+          </div>
+        </details>
+      </figure>
+    </section>
+
+  </main>
+
+  <!-- This line must track the release this site is published for; update it in the same
+       change as any release that moves the documented version forward. -->
+  <p class="version-line">Documentation for swath 0.3.1.</p>
+
+  <footer>
+    <p>
+      swath is pre-1.0: <span class="mono">list</span> and <span class="mono">resume</span> ship;
+      general-purpose S3 buckets are supported, and GCS through its XML API is experimental.
+      <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, and
+      native additional backends are roadmap. Flags and output schemas may still change.
+    </p>
+    <div class="colophon">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.2">
+          <path d="M8 15 L32 28 L56 15"/>
+          <path d="M13 24 L32 35 L51 24"/>
+          <path d="M18 33 L32 42 L46 33"/>
+          <path d="M23 42 L32 49 L41 42"/>
+        </g>
+      </svg>
+      <span>Built at <a href="https://varve.io">Varve</a>—a system of record for object storage.</span>
+    </div>
+  </footer>
+</div>
+</body>
+</html>

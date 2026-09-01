@@ -36,7 +36,7 @@ trust helps scope what counts as a vulnerability.
   checkpoint database that swath wrote for a prior run of the same command. Never
   resume from a checkpoint supplied by an untrusted party.
 - **A hostile or compromised endpoint is a considered actor.** Against a
-  malicious `--endpoint-url`, swath bounds pathological listing *behaviour* —
+  malicious `--endpoint-url`, swath bounds pathological listing *behavior* —
   stuck cursors, redirect loops, throttle storms — to a *resumable exit* rather
   than an unbounded hang, and it refuses outright, without retrying, any page
   carrying more entries than the request's `max-keys` bound. It does **not** bound
