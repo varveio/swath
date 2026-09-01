@@ -46,10 +46,10 @@
   and the heap-admitted reference cap — never the encoder count — so the earlier behavior,
   parallelism 8 producing eight parts and parallelism 4 producing four, is gone. A wide
   overlap component or an exhausted reference cap can still roll a part before the byte
-  target. The 256 MiB `min-parallel-staged-bytes` floor that
-  kept small sorted runs serial is gone with it: every sorted run now takes the same path.
-  So is the failure mode where a heavily overlapping keyspace could not be partitioned and
-  collapsed to a single worker.
+  target. The 256 MiB `min-parallel-staged-bytes` floor that kept small sorted runs serial
+  is gone with it, so every sorted run now takes the same path — as is the failure mode
+  where a heavily overlapping keyspace could not be partitioned and collapsed onto a single
+  worker.
 - **Sorted parts are numbered from zero.** The first part is `part-00000.parquet`, not
   `part-00001.parquet`. The footer's `swath.sort.file_index` stays one-based, so
   `part-00000.parquet` carries `file_index=1` and a consumer that derives an index from the
@@ -70,9 +70,9 @@
   corruption failure inside finalization is still fatal; the input has to be dealt with.
   After the committer returns the new dataset is authoritative even if cleanup then fails,
   and a re-entry finishes the cleanup without repeating any listing or merge work. Sorted
-  output also refuses to run on a
-  filesystem whose Java provider reports no file key, because the identity check swath makes
-  before deleting or renaming a directory cannot be weakened safely.
+  output also refuses to run on a filesystem whose Java provider reports no file key, because
+  the identity check swath makes before deleting or renaming a directory cannot be weakened
+  safely.
 - **Sorted staging written by an older version is refused rather than reused.** The page-run
   staging container is now version 4 and there is no legacy read path. A sorted run
   interrupted under 0.2.4 cannot be resumed by 0.3.0: swath refuses the staged segments and
