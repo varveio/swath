@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import io.varve.swath.error.CheckpointException;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.model.ListingMode;
-import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.spill.PageRunFormat;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;

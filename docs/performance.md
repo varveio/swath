@@ -391,7 +391,7 @@ oracle:
 
 ```bash
 ./gradlew :swath-core:test \
-  --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  --tests 'io.varve.swath.sort.finalize.ParallelMergeBenchmark' \
   -Dswath.bench=on -Pperf \
   -Dswath.bench.encoders=1,4,8 \
   -Dswath.bench.staging-dir=/path/to/_staging

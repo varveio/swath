@@ -282,7 +282,7 @@ public final class SortedParquetStore implements ListingStore {
         } catch (RowGroupOrderException e) {
             // Count BEFORE rethrowing: the request fails and no other path can take over, so the
             // exclusion has to survive into the metrics a sweep classifies from (the same discipline
-            // io.varve.swath.sort.PageRunSegmentIo's own pre-throw count keeps).
+            // io.varve.swath.sort.spill.PageRunReader's own pre-throw count keeps).
             metrics.recordServingRefused(e.reason());
             throw e;
         } catch (IOException e) {

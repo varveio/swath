@@ -6,10 +6,10 @@
 package io.varve.swath.output.sorted;
 
 import io.varve.swath.sort.FinalPassListener;
-import io.varve.swath.sort.PageRunFormat;
-import io.varve.swath.sort.PreparedSortedParts;
-import io.varve.swath.sort.SortFinalizer;
 import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.finalize.PreparedSortedParts;
+import io.varve.swath.sort.finalize.SortFinalizer;
+import io.varve.swath.sort.spill.PageRunFormat;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;

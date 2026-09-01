@@ -783,7 +783,7 @@ class SortedParquetStoreTest {
      * <p>The refusal is <b>counted before it is thrown</b>, and the reason is a typed constant, not a
      * phrase in the message: a corpus sweep excluding this capture has to be able to say <em>why</em>
      * from the metrics of a run that ended in an exception, which is the same discipline
-     * {@code io.varve.swath.sort.PageRunSegmentIo}'s own pre-throw count keeps.
+     * {@code io.varve.swath.sort.spill.PageRunReader}'s own pre-throw count keeps.
      */
     @Test
     void delimitedRollupRefusesARowGroupWhoseRowsAreNotAscending(@TempDir Path dir) throws IOException {

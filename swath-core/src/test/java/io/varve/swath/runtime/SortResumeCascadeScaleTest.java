@@ -26,13 +26,13 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
-import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
-import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.stage.SpillLane;
+import io.varve.swath.sort.stage.StagedRunCommitter;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.ParquetReads;
 import java.nio.charset.StandardCharsets;
@@ -57,13 +57,13 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p><b>How the mid-cascade interruption is simulated</b> (a real {@code kill -9} isn't available
  * in-process, per the adversarial-test idiom every other SORT-RESUME test in this suite uses): the listing
- * side is driven to completion through the real checkpoint store — a real {@link SortLane} finalizes
+ * side is driven to completion through the real checkpoint store — a real {@link SpillLane} finalizes
  * every segment via {@code partFinalized} (in seal order), the root node is committed
  * {@code COMPLETED}, and {@link io.varve.swath.checkpoint.CheckpointStore#markOutputComplete} latches
  * {@code durable_cursor}, so {@code loadResumable} reports nothing left to list — exactly the
  * merge-pending resume state {@link ListCommand#runSortedParquet}'s dispatch reads (nodes empty, no
  * manifest). A stale partial {@code merge-N.parquet} — the debris a crash mid-cascade leaves behind,
- * per {@code KWayMerge}'s deletion-policy javadoc — is then planted directly in staging. From there,
+ * per {@code CascadeReducer}'s deletion-policy javadoc — is then planted directly in staging. From there,
  * {@link ListRunner#runSortMergeOnly} is the real production re-entry: it takes no {@link
  * io.varve.swath.output.PageFetcher} at all, so "zero new LIST fetches" holds by construction, not
  * merely by assertion; {@code SORT.merge_redone} is asserted anyway as the production observability
@@ -130,11 +130,11 @@ final class SortResumeCascadeScaleTest {
 
             // Build durable staging segments through the REAL checkpoint store (partFinalized/
             // finalizedParts), at cascade scale — hundreds of segments, not a hand-built list.
-            SegmentSink sink = result -> store.partFinalized(new PartFinalize(run.id(), 0,
+            StagedRunCommitter sink = result -> store.partFinalized(new PartFinalize(run.id(), 0,
                     result.path().getFileName().toString(), result.pageRunFormat(),
                     result.rows(), result.bytes(), result.perNodeMaxKeys().entrySet().stream()
                     .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList()));
-            SortLane lane = new SortLane(cascadeAtScale(), new ListEntryComparator(), DuplicateHook.NO_OP,
+            SpillLane lane = new SpillLane(cascadeAtScale(), new ListEntryComparator(), DuplicateHook.NO_OP,
                     SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir, "seg-" + run.id() + "-x", sink);
             for (List<ListEntry> page : pages(keyspace, PAGE_SIZE)) {
                 lane.admit(nodeId, page);
@@ -157,7 +157,7 @@ final class SortResumeCascadeScaleTest {
 
             // Simulate the mid-cascade crash debris (we cannot literally kill -9 in-process, per the
             // idiom every SORT-RESUME test in this suite uses): a stale partial merge-N.parquet, as a
-            // crashed prior cascade attempt would leave behind (KWayMerge's deletion-policy javadoc).
+            // crashed prior cascade attempt would leave behind (CascadeReducer's deletion-policy javadoc).
             Files.writeString(stagingDir.resolve("merge-0.parquet"),
                     "stale cascade intermediate from a crashed prior attempt");
             Files.writeString(stagingDir.resolve("merge-3.parquet"), "another stale cascade intermediate");

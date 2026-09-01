@@ -21,7 +21,7 @@ public final class DuplicateKeyException extends RuntimeException {
         return ERROR_CLASS;
     }
 
-    static DuplicateKeyException forAdjacentEntries(ListEntry previous, ListEntry entry,
+    public static DuplicateKeyException forAdjacentEntries(ListEntry previous, ListEntry entry,
                                                     Comparator<ListEntry> comparator) {
         String key = entry.key().asString();
         if (comparator.compare(previous, entry) == 0) {

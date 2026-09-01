@@ -401,7 +401,7 @@ public final class LivenessWatchdog implements AutoCloseable {
      * <p>The interrupt rung's one ACHIEVABLE purpose is waking a worker parked in
      * PLATFORM-thread blocking I/O — the {@code parquet-writer-*} ({@link
      * io.varve.swath.output.parquet.ParquetWriterPool}) and {@code *-encoder-*} ({@link
-     * io.varve.swath.sort.SortLane}) lanes ({@link io.varve.swath.concurrent.Scope#ofPlatformThreads})
+     * io.varve.swath.sort.stage.SpillLane SpillLane}) lanes ({@link io.varve.swath.concurrent.Scope#ofPlatformThreads})
      * — since a virtual thread's carrier interrupt does not wake the mounted vthread's native read.
      * Matching {@code ForkJoinPool-} carriers alone would miss those platform
      * lanes and make the rung a no-op for its one job, so both are matched: the {@code ForkJoinPool-}

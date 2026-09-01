@@ -18,6 +18,9 @@ import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.sort.finalize.SortTestSupport;
+import io.varve.swath.sort.spill.PageRunTrailer;
+import io.varve.swath.sort.spill.SpillTestFixtures;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * {@link CaptureSorter} — the sort-fixture engine: legacy/unsorted capture parts in, one stamped
- * globally-sorted Parquet file out, via the same staging-segment/{@link KWayMerge}/
+ * globally-sorted Parquet file out, via the same staging-segment/{@link CascadeReducer}/
  * {@link SortedDatasetCoordinator} pipeline {@code --sort} uses. Covers §0.5 (raw-key fail-fast in the final
  * drain, including across a chunk boundary), §0.6 (versioned fail-fast), the atomic tmp-then-rename
  * publish, and the fixed staging dir getting wiped on the next call after a simulated crash.
@@ -126,11 +129,9 @@ class CaptureSorterTest {
         Path staging = outputDir.resolve(CaptureSorter.STAGING_DIR_NAME);
         Path segment = staging.resolve(StagingNames.fixtureSegment(0));
         assertThat(Files.exists(segment)).isTrue();
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
-            PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
-            assertThat(trailer.totalRecords()).isEqualTo(3);
-            assertThat(trailer.totalEntries()).isEqualTo(2_500);
-        }
+        PageRunTrailer.Trailer trailer = SpillTestFixtures.trailer(segment);
+        assertThat(trailer.totalRecords()).isEqualTo(3);
+        assertThat(trailer.totalEntries()).isEqualTo(2_500);
     }
 
     @Test

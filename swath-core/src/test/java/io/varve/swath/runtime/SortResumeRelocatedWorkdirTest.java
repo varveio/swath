@@ -25,13 +25,13 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
-import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
-import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.stage.SpillLane;
+import io.varve.swath.sort.stage.StagedRunCommitter;
 import io.varve.swath.testkit.CrashResumeOracle;
 import io.varve.swath.testkit.Keyspaces;
 import java.io.IOException;
@@ -172,11 +172,11 @@ final class SortResumeRelocatedWorkdirTest {
         RunMeta run = store.openRun(sortKey(), false, false);
         long nodeId = store.insertNode(NodeSpec.rootRange(run.id()));
 
-        SegmentSink sink = result -> store.partFinalized(new PartFinalize(run.id(), 0,
+        StagedRunCommitter sink = result -> store.partFinalized(new PartFinalize(run.id(), 0,
                 result.path().getFileName().toString(), result.pageRunFormat(),
                 result.rows(), result.bytes(), result.perNodeMaxKeys().entrySet().stream()
                 .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList()));
-        SortLane lane = new SortLane(cascade(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        SpillLane lane = new SpillLane(cascade(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                 SortLaneMeters.NO_OP, stagingDir, "seg-" + run.id() + "-x", sink);
         for (List<ListEntry> page : pages(keyspace, PAGE_SIZE)) {
             lane.admit(nodeId, page);

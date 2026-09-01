@@ -1076,7 +1076,7 @@ public final class RunMetrics {
     }
 
     /**
-     * Fold a live in-flight staging-bytes reading (the {@link io.varve.swath.sort.SortLane}
+     * Fold a live in-flight staging-bytes reading (the {@link io.varve.swath.sort.stage.SpillLane SpillLane}
      * fill buffer plus every sealed-but-unfinalized buffer, {@code SortLaneMeters#stagingBytesLive})
      * into the run's high-water mark ({@code swath.sort.staging.bytes.peak}). Same CAS-max idiom as
      * {@link #incrementInFlight()}'s {@code peakInFlight}.
@@ -1086,7 +1086,7 @@ public final class RunMetrics {
     }
 
     /**
-     * Fold a live {@link io.varve.swath.sort.SortLane} handoff-queue depth reading into the
+     * Fold a live {@link io.varve.swath.sort.stage.SpillLane SpillLane} handoff-queue depth reading into the
      * run's high-water mark ({@code swath.sort.handoff.queue.depth.peak}). An unbounded queue is the
      * prime leak suspect — this should never exceed the configured {@code buffers()-1}
      * bound (the off-thread semaphore already gates entry to the queue).

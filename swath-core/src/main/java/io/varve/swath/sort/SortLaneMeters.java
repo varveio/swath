@@ -5,8 +5,10 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.sort.stage.SpillLane;
+
 /**
- * First-class-meter seam for the {@link SortLane}. Keeps {@code io.varve.swath.sort} free of a
+ * First-class-meter seam for the {@link SpillLane}. Keeps {@code io.varve.swath.sort} free of a
  * Micrometer dependency: the pipeline injects an adapter over the live {@code RunMetrics},
  * and every unit test that constructs a lane without metrics uses {@link #NO_OP}. Null-safe by
  * construction — the default methods do nothing, so the lane's hot path never branches on {@code
@@ -61,7 +63,7 @@ public interface SortLaneMeters {
     }
 
     /**
-     * The {@link SortLane} handoff queue's depth immediately after a seal handed a buffer
+     * The {@link SpillLane} handoff queue's depth immediately after a seal handed a buffer
      * off. Feeds {@code swath.sort.handoff.queue.depth.peak}.
      */
     default void handoffQueueDepth(int depth) {

@@ -18,6 +18,9 @@ import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.output.sorted.StagingReconciliation;
 import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.spill.PageBlock;
+import io.varve.swath.sort.spill.PageRunWriter;
+import io.varve.swath.sort.stage.SpillGate;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,7 +32,7 @@ import java.util.List;
  * The <b>sort-fixture engine</b> (§0.7): turns a legacy/unsorted
  * swath capture (a directory of {@code *.parquet} parts, or a single part file) into a stamped,
  * globally sorted Parquet output — one file, or a range-disjoint {@code part-NNNNN.parquet} roll when
- * {@code final-file-bytes} is set — by driving the same staging-segment → {@link KWayMerge} →
+ * {@code final-file-bytes} is set — by driving the same staging-segment → {@link CascadeReducer} →
  * {@link SortedDatasetCoordinator} pipeline the {@code --sort} listing path uses. This is the only class the
  * replay module's {@code io.varve.swath.replay.fixture} package needs to call — it takes and returns
  * only {@link Path}s and library records, so no parquet/hadoop type ever needs to appear on the
@@ -143,9 +146,9 @@ public final class CaptureSorter {
      */
     private List<Path> stageSegments(List<Path> inputParts, Path stagingDir,
                                      Comparator<ListEntry> comparator) throws IOException {
-        PageRunSegmentWriter segmentWriter =
-                new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, metrics, config.segmentCodec());
-        SegmentGate gate = new SegmentGate(config);
+        PageRunWriter segmentWriter =
+                new PageRunWriter(comparator, DuplicateHook.NO_OP, metrics, config.segmentCodec());
+        SpillGate gate = new SpillGate(config);
         List<Path> segments = new ArrayList<>();
         List<ListEntry> chunk = new ArrayList<>();
         long chunkBytes = 0;
@@ -172,10 +175,10 @@ public final class CaptureSorter {
     }
 
     private Path flushChunk(List<ListEntry> chunk, Comparator<ListEntry> comparator,
-                            PageRunSegmentWriter segmentWriter, Path stagingDir, int seq) throws IOException {
+                            PageRunWriter segmentWriter, Path stagingDir, int seq) throws IOException {
         chunk.sort(comparator);
         Path path = stagingDir.resolve(StagingNames.fixtureSegment(seq));
-        try (SortedCursor cursor = new InMemoryCursor(chunk, comparator, DuplicateHook.NO_OP)) {
+        try (SortedEntryCursor cursor = new InMemoryCursor(chunk, comparator, DuplicateHook.NO_OP)) {
             // Fixture chunks can overlap across their whole key ranges; the pipeline routes their
             // page references by the persisted frame headers.
             segmentWriter.writeFixtureChunk(cursor, path);

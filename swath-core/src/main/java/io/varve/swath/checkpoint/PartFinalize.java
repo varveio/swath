@@ -5,7 +5,7 @@
  */
 package io.varve.swath.checkpoint;
 
-import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.spill.PageRunFormat;
 import java.util.List;
 
 /**

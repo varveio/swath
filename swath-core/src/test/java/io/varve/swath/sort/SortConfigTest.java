@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.output.sorted.StagingRetention;
+import io.varve.swath.sort.spill.PageCompression;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -108,7 +109,7 @@ class SortConfigTest {
                 .withMergeBudgetBytes(8)
                 .withMergeParallelism(9)
                 .withMergePerStreamBytes(10)
-                .withSegmentCodec(PageCodec.NONE)
+                .withSegmentCodec(PageCompression.NONE)
                 .withStagingRetention(StagingRetention.RETAIN_ORIGINALS);
 
         SortConfig equivalent = config.withFanIn(config.fanIn());
@@ -177,7 +178,7 @@ class SortConfigTest {
     }
 
     // ------------------------------------------------------------------
-    // buffers >= 2: SortLane bounds live sealed buffers to buffers() (fill + buffers()-1
+    // buffers >= 2: SpillLane bounds live sealed buffers to buffers() (fill + buffers()-1
     // off-thread); buffers=1 either deadlocks (0 off-thread slots) or, if floored, silently
     // allows 2 live buffers while claiming a cap of 1.
     // ------------------------------------------------------------------
@@ -206,7 +207,7 @@ class SortConfigTest {
     void buffersSyspropOfOneIsRejectedThroughFromProperties() {
         // The swath.sort.buffers=1 sysprop path (not just the direct constructor call):
         // fromProperties eagerly constructs a SortConfig, so an invalid override fails fast here
-        // rather than surfacing later inside SortLane.
+        // rather than surfacing later inside SpillLane.
         assertThatThrownBy(() -> fromProperties(Map.of("buffers", "1")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("buffers");
@@ -259,10 +260,10 @@ class SortConfigTest {
 
     @Test
     void segmentCodecDefaultsToZstd1AndParsesCaseInsensitively() {
-        assertThat(fromProperties(Map.of()).segmentCodec()).isEqualTo(PageCodec.ZSTD1);
-        assertThat(fromProperties(Map.of("segment-codec", "none")).segmentCodec()).isEqualTo(PageCodec.NONE);
-        assertThat(fromProperties(Map.of("segment-codec", "LZ4")).segmentCodec()).isEqualTo(PageCodec.LZ4);
-        assertThat(fromProperties(Map.of("segment-codec", "zstd1")).segmentCodec()).isEqualTo(PageCodec.ZSTD1);
+        assertThat(fromProperties(Map.of()).segmentCodec()).isEqualTo(PageCompression.ZSTD1);
+        assertThat(fromProperties(Map.of("segment-codec", "none")).segmentCodec()).isEqualTo(PageCompression.NONE);
+        assertThat(fromProperties(Map.of("segment-codec", "LZ4")).segmentCodec()).isEqualTo(PageCompression.LZ4);
+        assertThat(fromProperties(Map.of("segment-codec", "zstd1")).segmentCodec()).isEqualTo(PageCompression.ZSTD1);
     }
 
     @Test

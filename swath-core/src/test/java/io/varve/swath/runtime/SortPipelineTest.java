@@ -29,15 +29,15 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
-import io.varve.swath.sort.PageRunFormat;
-import io.varve.swath.sort.SegmentCorruptionException;
-import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
-import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.spill.PageRunCorruptionException;
+import io.varve.swath.sort.spill.PageRunFormat;
+import io.varve.swath.sort.stage.SpillLane;
+import io.varve.swath.sort.stage.StagedRunCommitter;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.ParquetReads;
@@ -160,13 +160,13 @@ final class SortPipelineTest {
             // Simulate a completed listing that crashed before publish: durable staging segments
             // recorded in the checkpoint, no manifest. Build them with the real sort lane (no fetcher).
             List<byte[]> keyspace = Keyspaces.singlePrefixFlat(120);
-            SegmentSink sink = result -> {
+            StagedRunCommitter sink = result -> {
                 List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                         .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
                 store.partFinalized(new PartFinalize(run.id(), 0, result.path().getFileName().toString(),
                         result.pageRunFormat(), result.rows(), result.bytes(), advances));
             };
-            SortLane lane = new SortLane(smallSegments(), new ListEntryComparator(), DuplicateHook.NO_OP,
+            SpillLane lane = new SpillLane(smallSegments(), new ListEntryComparator(), DuplicateHook.NO_OP,
                     SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir, "seg-" + run.id() + "-x", sink);
             for (List<ListEntry> page : pages(keyspace, MAX_KEYS)) {
                 lane.admit(nodeId, page);
@@ -206,14 +206,14 @@ final class SortPipelineTest {
         try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db, ctx.metrics())) {
             RunMeta run = store.openRun(sortKey(), false, false);
             long nodeId = store.insertNode(NodeSpec.rootRange(run.id()));
-            SegmentSink sink = result -> store.partFinalized(new PartFinalize(
+            StagedRunCommitter sink = result -> store.partFinalized(new PartFinalize(
                     run.id(), 0, result.path().getFileName().toString(), PageRunFormat.NAME,
                     PageRunFormat.CURRENT_FORMAT_VERSION,
                     PageRunFormat.ABSENT_EXTENSION,
                     result.rows(), result.bytes(), result.perNodeMaxKeys().entrySet().stream()
                     .map(entry -> new PartFinalize.DurableAdvance(
                             entry.getKey(), entry.getValue())).toList()));
-            SortLane lane = new SortLane(SortConfigs.base(), new ListEntryComparator(),
+            SpillLane lane = new SpillLane(SortConfigs.base(), new ListEntryComparator(),
                     DuplicateHook.NO_OP, SortMetrics.NO_OP, SortLaneMeters.NO_OP,
                     stagingDir, "seg-" + run.id() + "-format", sink);
             lane.admit(nodeId, pages(Keyspaces.singlePrefixFlat(40), MAX_KEYS).getFirst());
@@ -229,8 +229,8 @@ final class SortPipelineTest {
                     ctx, outputDir, stagingDir, store, run.id(), SortConfigs.base(),
                     SortMode.OBJECTS, spec()))
                     .rootCause()
-                    .isInstanceOf(SegmentCorruptionException.class)
-                    .extracting(cause -> ((SegmentCorruptionException) cause).errorClass())
+                    .isInstanceOf(PageRunCorruptionException.class)
+                    .extracting(cause -> ((PageRunCorruptionException) cause).errorClass())
                     .isEqualTo("page_run_format_mismatch");
 
             assertThat(segment).exists();

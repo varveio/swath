@@ -94,7 +94,8 @@ import org.junit.jupiter.api.io.TempDir;
  * keeps that harness cost trivial while leaving the {@code --sort} pipeline itself (the thing under
  * test) driven exactly as production does: single worker (no work-stealing probes to add further
  * mock-scan overhead — this is a memory-corridor test, not a concurrency one; PERF-1 covers stealing)
- * admitting real {@link io.varve.swath.model.PageBatch}es into the real {@link io.varve.swath.sort.SortLane}.
+ * admitting real {@link io.varve.swath.model.PageBatch}es into the real {@link
+ * io.varve.swath.sort.stage.SpillLane SpillLane}.
  *
  * <p><b>Segment gates are set explicitly</b> (not the heap-adaptive default, which would size itself
  * off the test JVM's actual {@code -Xmx} rather than the knob this corridor is measuring) so segment
@@ -127,7 +128,7 @@ final class SortPerfTest {
     // staging segments. The small pinned fan-in makes the cascade genuinely run multiple passes,
     // while the merge budget remains close to the pipeline's minimum encoder-residency floor.
     private static final int MERGE_STRESS_N = 60_000;
-    // == segment-entries, so every admitted PAGE trips the entry cap on its own (SortLane.admit checks
+    // == segment-entries, so every admitted PAGE trips the entry cap on its own (SpillLane.admit checks
     // the trigger once per page, not per key) — a deterministic MERGE_STRESS_N/PAGE_MAX_KEYS segments.
     private static final int MERGE_STRESS_PAGE_MAX_KEYS = 100;
     private static final long MERGE_STRESS_SEGMENT_ENTRIES = 100;         // ⇒ ~600 staging segments

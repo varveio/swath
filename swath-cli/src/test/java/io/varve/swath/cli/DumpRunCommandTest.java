@@ -7,7 +7,7 @@ package io.varve.swath.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.varve.swath.sort.PageRunFixtures;
+import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;

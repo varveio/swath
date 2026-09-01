@@ -5,8 +5,8 @@
  */
 package io.varve.swath.cli;
 
-import io.varve.swath.sort.PageRunSegmentInspector;
-import io.varve.swath.sort.PageRunTrailer;
+import io.varve.swath.sort.spill.PageRunInspector;
+import io.varve.swath.sort.spill.PageRunTrailer;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Path;
@@ -51,9 +51,9 @@ public final class DumpRunCommand implements Callable<Integer>, GlobalOptions.Ca
     @Override
     public Integer call() {
         PrintWriter out = spec.commandLine().getOut();
-        PageRunSegmentInspector.Dump dump;
+        PageRunInspector.Dump dump;
         try {
-            dump = PageRunSegmentInspector.inspect(file);
+            dump = PageRunInspector.inspect(file);
         } catch (IOException e) {
             spec.commandLine().getErr().println("dump-run: " + e.getMessage());
             return 1;
@@ -63,7 +63,7 @@ public final class DumpRunCommand implements Callable<Integer>, GlobalOptions.Ca
         out.printf("header: magic=0x%08x version=%d%n", dump.magic(), dump.formatVersion());
         out.println("records: " + dump.records().size());
         boolean anyFail = false;
-        for (PageRunSegmentInspector.RecordInfo r : dump.records()) {
+        for (PageRunInspector.RecordInfo r : dump.records()) {
             anyFail |= !r.crcOk();
             out.printf("  [%d] min=%s max=%s count=%d codec=%s len=%d crc=%s%n",
                     r.index(), hex(r.minKey()), hex(r.maxKey()), r.count(), r.codec(),

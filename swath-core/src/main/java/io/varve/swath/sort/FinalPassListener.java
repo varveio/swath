@@ -5,10 +5,9 @@
  */
 package io.varve.swath.sort;
 
-import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 
 /**
- * Invoked by {@link SortedDatasetCoordinator} once, when the merge stops folding intermediates and starts
+ * Invoked by {@link io.varve.swath.output.sorted.SortedDatasetCoordinator} once, when the merge stops folding intermediates and starts
  * writing the output it will publish — the seam {@code ListRunner} wires to {@code
  * RunMetrics.startFinalMergePass}, so the {@code swath.phase} gauge reaches {@code WRITING} instead
  * of folding the whole merge+publish into {@code MERGING}. {@link #NO_OP} observes nothing.

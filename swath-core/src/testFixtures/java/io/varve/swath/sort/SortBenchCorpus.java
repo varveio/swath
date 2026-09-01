@@ -41,7 +41,7 @@ public final class SortBenchCorpus {
      * therefore unique and increasing within a segment, while segments interleave across the full
      * keyspace at block granularity.
      */
-    public static SortedCursor generatedCursor(int segment, int numSegments, int blockRows, long totalRows,
+    public static SortedEntryCursor generatedCursor(int segment, int numSegments, int blockRows, long totalRows,
                                                long rowsPerDay, LocalDate base) {
         if (numSegments <= 0) {
             throw new IllegalArgumentException("numSegments must be positive, got " + numSegments);
@@ -111,7 +111,7 @@ public final class SortBenchCorpus {
         }
     }
 
-    private static final class GeneratedCursor implements SortedCursor {
+    private static final class GeneratedCursor implements SortedEntryCursor {
         private final int segment;
         private final int numSegments;
         private final int blockRows;

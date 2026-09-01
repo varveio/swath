@@ -366,7 +366,7 @@ final class LivenessWatchdogTest {
     /**
      * The interrupt rung's ONE achievable purpose is waking a worker parked in
      * platform-thread blocking I/O — the real {@code parquet-writer-*} (ParquetWriterPool) and
-     * {@code *-encoder-*} (SortLane) lanes. Do not narrow the predicate to carriers plus
+     * {@code *-encoder-*} (SpillLane) lanes. Do not narrow the predicate to carriers plus
      * {@code swath-worker}/{@code swath-scan} names: those names do not exist, so the filter would
      * miss the real lanes. It must match the real lanes and still exclude the infra daemons.
      */

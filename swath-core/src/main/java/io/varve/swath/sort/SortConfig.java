@@ -5,8 +5,10 @@
  */
 package io.varve.swath.sort;
 
-import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.StagingRetention;
+import io.varve.swath.sort.spill.PageBlock;
+import io.varve.swath.sort.spill.PageCompression;
+import io.varve.swath.sort.stage.SpillLane;
 import java.util.function.UnaryOperator;
 
 /**
@@ -25,7 +27,7 @@ import java.util.function.UnaryOperator;
  *   <li>{@code segmentEntries} — secondary backstop entry cap on a sealed buffer.</li>
  *   <li>{@code heapFraction} — the adaptive ratio {@code segmentBytes} derives from {@code -Xmx}.</li>
  *   <li>{@code buffers} — in-flight sealed buffers (fill while the sealed buffer encodes off-thread);
- *       consumed by the pipeline. Must be {@code >= 2}: {@link SortLane} bounds
+ *       consumed by the pipeline. Must be {@code >= 2}: {@link SpillLane} bounds
  *       live sealed buffers to exactly {@code buffers()} (fill + {@code buffers() - 1} off-thread), so
  *       {@code buffers=1} would either deadlock (0 off-thread slots) or silently violate that corridor
  *       invariant if floored — rejected outright instead.</li>
@@ -43,7 +45,7 @@ import java.util.function.UnaryOperator;
  *       and the denominator of {@link #effectiveFanIn()}. The default uses 64&nbsp;KiB as a
  *       capacity floor. Runtime planning additionally accounts for encoded and decoded pages.</li>
  *   <li>{@code mergeBudgetBytes} — the merge-phase residency budget: caps how many segment streams
- *       a single {@link KWayMerge} pass may hold open and bounds decoded page state, via
+ *       a single {@link CascadeReducer} pass may hold open and bounds decoded page state, via
  *       {@link #effectiveFanIn()} = {@code min(fanIn, max(2, mergeBudgetBytes / mergePerStreamBytes))}
  *       — keeping planned open-stream capacity a function of the budget, never of segment count
  *       (I11), even when {@code fanIn} alone would allow more streams. Same heap-adaptive shape as
@@ -81,11 +83,11 @@ public final class SortConfig {
 
     /**
      * Default for {@code segmentCodec}: compress-at-pack is ON by default ({@link
-     * PageCodec#ZSTD1}) — staging disk exhaustion ({@code sort_disk_exhausted}) is the primary
+     * PageCompression#ZSTD1}) — staging disk exhaustion ({@code sort_disk_exhausted}) is the primary
      * staging-disk risk, and compressing the page-run PAYLOAD (never the plain header) directly
      * cuts both staging disk and in-flight buffered memory.
      */
-    static final PageCodec DEFAULT_SEGMENT_CODEC = PageCodec.ZSTD1;
+    static final PageCompression DEFAULT_SEGMENT_CODEC = PageCompression.ZSTD1;
 
     /**
      * Default for {@code finalPageRows}: <b>1,024</b> rows per data page in the final, served file.
@@ -163,7 +165,7 @@ public final class SortConfig {
             throw new IllegalArgumentException("heap-fraction must be > 0, got " + heapFraction());
         }
         if (buffers() < 2) {
-            // SortLane's off-thread capacity is buffers()-1 (the fill buffer is the
+            // SpillLane's off-thread capacity is buffers()-1 (the fill buffer is the
             // +1) — buffers=1 would leave 0 off-thread slots (a deadlock, every seal would block
             // forever) unless floored, and any floor would silently violate the documented live<=
             // buffers() corridor invariant (fill + 1 off-thread = 2 live > the requested 1). Rejected
@@ -246,7 +248,7 @@ public final class SortConfig {
         return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes));
     }
 
-    public SortConfig withSegmentCodec(PageCodec segmentCodec) {
+    public SortConfig withSegmentCodec(PageCompression segmentCodec) {
         return copy(new StagingBuffering(segmentBytes(), segmentEntries(), heapFraction(), buffers(), segmentCodec));
     }
 
@@ -276,7 +278,7 @@ public final class SortConfig {
         int mergeParallelism = DEFAULT.mergeParallelism();
         long mergePerStreamBytes = longProp(lookup, "merge-per-stream-bytes", DEFAULT.mergePerStreamBytes());
         String segmentCodecProp = lookup.apply(PREFIX + "segment-codec");
-        PageCodec segmentCodec = segmentCodecProp == null
+        PageCompression segmentCodec = segmentCodecProp == null
                 ? DEFAULT.segmentCodec()
                 : parseSegmentCodec(segmentCodecProp);
         String keepStagingProp = lookup.apply(KEEP_STAGING_PROPERTY);
@@ -354,7 +356,7 @@ public final class SortConfig {
         return merge.perStreamBytes();
     }
 
-    public PageCodec segmentCodec() {
+    public PageCompression segmentCodec() {
         return stagingBuffering.codec();
     }
 
@@ -362,9 +364,9 @@ public final class SortConfig {
         return retention.staging();
     }
 
-    private static PageCodec parseSegmentCodec(String raw) {
+    private static PageCompression parseSegmentCodec(String raw) {
         try {
-            return PageCodec.fromConfigValue(raw);
+            return PageCompression.fromConfigValue(raw);
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("swath.sort.segment-codec: " + e.getMessage(), e);
         }
@@ -381,7 +383,7 @@ public final class SortConfig {
 
     /**
      * The <b>static</b> budget-bounded merge fan-in: {@code min(fanIn,
-     * max(2, mergeBudgetBytes / mergePerStreamBytes))}. {@link KWayMerge} opens at most this many streams
+     * max(2, mergeBudgetBytes / mergePerStreamBytes))}. {@link CascadeReducer} opens at most this many streams
      * per pass, so planned open-stream capacity remains a function of the budget knob, never of how
      * many segments a run happens to produce (I11). This result is only the static config-level
      * advisory; runtime planning additionally prices retained encoded/decoded page state and
@@ -390,7 +392,7 @@ public final class SortConfig {
      *
      * <p>The denominator is {@code mergePerStreamBytes} (a page-run packed-page estimate).
      * This is the <em>static</em> config-level bound; the actual merge additionally applies a
-     * <em>runtime</em> clamp at merge entry ({@link SortedDatasetCoordinator}) against the process fd limit and the
+     * <em>runtime</em> clamp at merge entry ({@link io.varve.swath.output.sorted.SortedDatasetCoordinator}) against the process fd limit and the
      * largest per-segment encoded {@code maxRecordLen}, the decoded-page maximum, and the runtime
      * aggregate decoded-page guard.
      *
@@ -476,7 +478,7 @@ public final class SortConfig {
     }
 
     private record StagingBuffering(long segmentBytes, long segmentEntries, double heapFraction,
-                                    int buffers, PageCodec codec) { }
+                                    int buffers, PageCompression codec) { }
 
     private record Merge(int fanIn, long budgetBytes, int parallelism, long perStreamBytes) { }
 

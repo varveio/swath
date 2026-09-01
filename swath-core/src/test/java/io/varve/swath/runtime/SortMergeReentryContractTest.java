@@ -37,17 +37,17 @@ import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPassListener;
 import io.varve.swath.sort.ListEntryComparator;
-import io.varve.swath.sort.SegmentResult;
-import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
-import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.spill.StagedRun;
+import io.varve.swath.sort.stage.SpillLane;
+import io.varve.swath.sort.stage.StagedRunCommitter;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.ParquetReads;
 import java.io.IOException;
@@ -187,11 +187,11 @@ final class SortMergeReentryContractTest {
             long nodeId = store.insertNode(NodeSpec.rootRange(run.id()));
 
             // Durable staging segments tracked in the checkpoint (a completed listing).
-            SegmentSink sink = result -> store.partFinalized(new PartFinalize(run.id(), 0,
+            StagedRunCommitter sink = result -> store.partFinalized(new PartFinalize(run.id(), 0,
                     result.path().getFileName().toString(), result.pageRunFormat(),
                     result.rows(), result.bytes(), result.perNodeMaxKeys().entrySet().stream()
                     .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList()));
-            SortLane lane = new SortLane(singlePass(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+            SpillLane lane = new SpillLane(singlePass(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                     SortLaneMeters.NO_OP, stagingDir, "seg-" + run.id() + "-x", sink);
             for (List<ListEntry> page : pages(keyspace, 32)) {
                 lane.admit(nodeId, page);
@@ -292,13 +292,13 @@ final class SortMergeReentryContractTest {
 
     /**
      * A crash during a <b>cascaded</b> (multi-pass) merge is recoverable by the production redo path.
-     * Do not let {@link io.varve.swath.sort.KWayMerge#merge} delete original input segments on any
+     * Do not let {@link io.varve.swath.sort.finalize.CascadeReducer#merge CascadeReducer.merge} delete original input segments on any
      * pass: the checkpoint's {@code finalizedParts} names the {@code seg-*.parquet} files, and once a
      * redo can no longer find them it throws {@link java.io.FileNotFoundException} forever.
-     * {@code KWayMerge} deletes <b>only its own intermediates from an earlier pass of the same
+     * {@code CascadeReducer} deletes <b>only its own intermediates from an earlier pass of the same
      * merge</b> — the caller's original input segments are never deleted by the merge itself, at any
      * pass; {@link io.varve.swath.output.sorted.SortedDatasetCoordinator} reclaims originals (and any surviving cascade
-     * intermediate) together, only after a successful publish. See {@code KWayMerge}'s class javadoc
+     * intermediate) together, only after a successful publish. See {@code CascadeReducer}'s class javadoc
      * for the full deletion-policy rationale, including the accepted transient ~2× staging disk cost
      * during an in-flight cascade.
      *
@@ -317,8 +317,8 @@ final class SortMergeReentryContractTest {
                 .withFanIn(2);
 
         List<Path> segments = new ArrayList<>();
-        SortLane lane = new SortLane(cascade, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
-                SortLaneMeters.NO_OP, stagingDir, "seg-c", (SegmentResult r) -> segments.add(r.path()));
+        SpillLane lane = new SpillLane(cascade, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                SortLaneMeters.NO_OP, stagingDir, "seg-c", (StagedRun r) -> segments.add(r.path()));
         for (List<ListEntry> page : pages(keyspace, 24)) {
             lane.admit(1L, page);
         }
@@ -335,7 +335,7 @@ final class SortMergeReentryContractTest {
                 .isInstanceOf(IOException.class);
 
         // Contract: re-running the merge from the checkpoint's (original) segment list must republish
-        // the exact sorted whole — the originals are still on disk (KWayMerge's deletion-policy fix).
+        // the exact sorted whole — the originals are still on disk (CascadeReducer's deletion-policy fix).
         SortedDatasetCoordinator redo = new SortedDatasetCoordinator(new SortRun(cascade, cmp,
                 DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                 new SortedParquetWriterFactoryLocal(cascade, SortMode.OBJECTS),
@@ -355,8 +355,8 @@ final class SortMergeReentryContractTest {
 
     private List<Path> buildStagingSegments(List<byte[]> keyspace, Path stagingDir) throws Exception {
         List<Path> paths = new ArrayList<>();
-        SegmentSink collect = (SegmentResult r) -> paths.add(r.path());
-        SortLane lane = new SortLane(SortConfigs.base()
+        StagedRunCommitter collect = (StagedRun r) -> paths.add(r.path());
+        SpillLane lane = new SpillLane(SortConfigs.base()
                 .withSegmentEntries(32),
                 cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir, "seg-a", collect);
         for (List<ListEntry> page : pages(keyspace, 32)) {

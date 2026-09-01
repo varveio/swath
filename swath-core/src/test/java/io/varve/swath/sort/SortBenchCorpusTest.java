@@ -66,7 +66,7 @@ class SortBenchCorpusTest {
     @Test
     void generatedCursorAcceptsPositiveBlockRows() {
         for (int segment : new int[]{0, 1}) {
-            try (SortedCursor cursor = SortBenchCorpus.generatedCursor(segment, 2, 1, 2, 1,
+            try (SortedEntryCursor cursor = SortBenchCorpus.generatedCursor(segment, 2, 1, 2, 1,
                     LocalDate.of(2026, 1, 1))) {
                 assertThat(cursor.hasNext()).isTrue();
                 assertThat(cursor.next()).isNotNull();

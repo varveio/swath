@@ -22,21 +22,21 @@ import io.varve.swath.pipeline.Failure;
 import io.varve.swath.pipeline.Item;
 import io.varve.swath.pipeline.Msg;
 import io.varve.swath.pipeline.Pipeline;
-import io.varve.swath.sort.SortLane;
+import io.varve.swath.sort.stage.SpillLane;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
  * Output stage for {@code --sort}: admits each {@link PageBatch} into the single ordered
- * {@link SortLane} (keyed by node id, so the lane accumulates per-node max keys for the checkpoint).
+ * {@link SpillLane} (keyed by node id, so the lane accumulates per-node max keys for the checkpoint).
  * Mirrors {@link io.varve.swath.output.dataset.DatasetOutputStage}, but the lane's async encoder is
  * drained by the caller ({@code close()}/{@code abort()}) after the listing quiesces, then the merge
  * step publishes the final sorted file.
  */
 public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
 
-    private final SortLane lane;
+    private final SpillLane lane;
 
     private long objects;
     private long commonPrefixes;
@@ -45,7 +45,7 @@ public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
     /** Allocated only when JVM assertions engage the live-page ordering tripwire. */
     private Map<Long, AcceptedPage> acceptedPages;
 
-    public SortOutputStage(SortLane lane) {
+    public SortOutputStage(SpillLane lane) {
         this.lane = lane;
     }
 

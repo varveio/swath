@@ -324,7 +324,7 @@ JAVA_TOOL_OPTIONS="-Dswath.profile=on \
   -Dswath.profile.jfr=<arm>.jfr \
   -Dswath.bench.staging-dir=<retained-output>/_staging" \
   ./gradlew :swath-core:test \
-  --tests 'io.varve.swath.sort.MergeCpuProfileHarness' -Pperf
+  --tests 'io.varve.swath.sort.finalize.MergeCpuProfileHarness' -Pperf
 ```
 
 ### Timestamp result
@@ -384,7 +384,7 @@ are not enough to change the writer policy. No dictionary default changes in thi
 Before enabling ZSTD's frame content checksum for page-run v4, a JDK 25 / zstd-jni microcheck used
 the raw 44,144-byte front-coded payload produced by packing 1,000 representative object rows. After
 3,000 warmups, 20,000 checksum-on and 20,000 checksum-off level-1 compressions were interleaved in
-alternating order with a fresh compression context per operation, matching `PageCodec` lifecycle.
+alternating order with a fresh compression context per operation, matching `PageCompression` lifecycle.
 
 Checksum-off took 1.687868 seconds and checksum-on took 1.678835 seconds (0.9946×; a −0.45 µs/page
 difference, within noise). Stored output grew from 3,487 to 3,491 bytes per page: the expected four

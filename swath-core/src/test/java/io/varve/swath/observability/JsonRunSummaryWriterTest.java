@@ -533,7 +533,7 @@ final class JsonRunSummaryWriterTest {
      * recordSortMergePasses AFTER transform.transform() returns) — so a mid-merge snapshot of
      * {@code summary.json} is flat and indistinguishable from a wedged run to any external
      * supervisor (log tail / summary.json poller), even though the merge IS actually advancing:
-     * {@code KWayMerge.merge}'s per-pass batched progress callback already feeds
+     * {@code CascadeReducer.merge}'s per-pass batched progress callback already feeds
      * {@code RunMetrics#recordProgress} (wired at ListRunner#sortMergeAndPublish), which bumps the
      * {@code swath.progress.units} counter/tally the SAME counter the internal LivenessWatchdog
      * already trusts as its phase-agnostic forward-progress signal.
@@ -549,7 +549,7 @@ final class JsonRunSummaryWriterTest {
         Path path = dir.resolve("summary.json");
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         // Simulate the merge's final (usually longest) streaming pass: the merge is deep into
-        // real, observable forward progress (recordProgress ticks via KWayMerge's callback) while
+        // real, observable forward progress (recordProgress ticks via CascadeReducer's callback) while
         // segments/passes (both zero here — no segment written during merge, no pass completed
         // yet) stay exactly where they were when the merge started.
         Counter.builder("swath.progress.units").register(registry).increment(4_200_000L);

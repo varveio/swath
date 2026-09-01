@@ -131,13 +131,13 @@ The sorted merge keeps one public façade, `SortedDatasetCoordinator(SortRun)`. 
 orders source-name admission, publication-side filesystem authority capture, full source preflight,
 working-file sweep, preparation, and publication behind one outer failure boundary.
 `PageRunCatalog` validates segment headers, fixed tails, checkpoint format identity, and the exact
-maxima used by resource admission. `MergePlanner` owns cascade fan-in and encoder heap/descriptor
+maxima used by resource admission. `FinalizationPlanner` owns cascade fan-in and encoder heap/descriptor
 admission. `SortFinalizer` owns cascade, routing, encoding, dense assembly, cardinality, and raw-byte
 adjacency, with `FinalizationFailure` relaying the first asynchronous failure.
 
 When the catalog exceeds admitted fan-in, `CascadePageMerger` streams whole ordered pages and sends
 only transitive overlap components through `PageRowMerger`, producing a smaller survivor catalog.
-`SegmentHeaderCursors` then expose bounded header-only reference streams, `MergeRouter` owns global
+`PageRunHeaderStreams` then expose bounded header-only reference streams, `MergeRouter` owns global
 reference order and calibrated part boundaries, `PartSizer` converts the encoded-size target into
 logical page-payload targets, and `PartEncoders` positionally read complete plans from one shared
 bounded queue. Encoder identity and completion order are immaterial: dense plan ordinals determine

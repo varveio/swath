@@ -1682,8 +1682,8 @@ sealed page-run segments
 
 ### Cascade reduction
 
-`MergePlanner` chooses a fan-in that fits the merge budget and file-descriptor headroom while
-reserving the requested output-writer descriptors. If the source catalog is wider, `KWayMerge`
+`FinalizationPlanner` chooses a fan-in that fits the merge budget and file-descriptor headroom while
+reserving the requested output-writer descriptors. If the source catalog is wider, `CascadeReducer`
 writes page-run intermediates until the surviving catalog fits one final pass. Intermediates are
 disposable; a retry starts from the checkpoint-owned sealed segments.
 
@@ -1697,7 +1697,7 @@ are the inputs to final encoder admission.
 
 ### Header scan and reference routing
 
-`SegmentHeaderCursors` starts one sequential cursor per surviving segment. A shared semaphore
+`PageRunHeaderStreams` starts one sequential cursor per surviving segment. A shared semaphore
 limits simultaneous metadata reads to the smaller of the segment count and available processors;
 each segment has a two-item queue. A cursor reads frame prefixes and the PageBlock fields needed for
 routing while skipping stored payload bytes. Before it emits its terminal marker, it verifies page

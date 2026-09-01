@@ -63,7 +63,7 @@ dependencies {
     // docs/internals/build-and-modules.md).
     implementation(libs.parquet.hadoop)
     implementation(libs.zstd.jni)
-    // PageCodec's LZ4 path uses io.airlift.compress.lz4 (pure-Java LZ4) directly —
+    // PageCompression's LZ4 path uses io.airlift.compress.lz4 (pure-Java LZ4) directly —
     // promoted from a transitive dep of parquet-hadoop/hadoop-mapreduce-client-core to a direct
     // one so a future upstream bump can't silently drop/rev it out from under this reference.
     implementation(libs.aircompressor)

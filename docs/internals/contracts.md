@@ -771,10 +771,10 @@ sequential or routing reader enforces it again.
 `SortFinalizer` converts the complete sealed catalog into one globally sorted unpublished Parquet
 part set:
 
-1. `KWayMerge` reduces an over-wide catalog through bounded page-run cascade passes.
+1. `CascadeReducer` reduces an over-wide catalog through bounded page-run cascade passes.
    `CascadePageMerger` streams a page whole when its stored maximum is below every successor
    minimum and uses `PageRowMerger` only for a transitive overlap component.
-2. `SegmentHeaderCursors` scan the surviving segments sequentially, emitting bounded
+2. `PageRunHeaderStreams` scan the surviving segments sequentially, emitting bounded
    `PageRef` streams while verifying frame tiling, page order, and declared totals.
 3. `MergeRouter` consumes every reference exactly once and assigns complete, contiguous
    `PartPlan` values with dense zero-based ordinals.
@@ -991,7 +991,7 @@ than an under-priced allocation.
 | `swath.sort.segment-bytes` | heap-adaptive: ≈8% of `Runtime.maxMemory()` estimated pre-encode bytes, floored at 64 MB | primary segment-flush gate (§6); ~160 MB at `-Xmx2g` ⇒ ~1.3M-row segments, ~5M-row at `-Xmx8g`; bigger heap ⇒ fewer, bigger segments ⇒ single-pass merge as the design point. Active segment buffers are a function of `-Xmx`; retained staging metadata is separately `O(segments)`. |
 | `swath.sort.segment-entries` | secondary cap alongside `segment-bytes` | backstop entry-count cap on a sealed buffer |
 | `swath.sort.heap-fraction` | `0.08` | the adaptive ratio `segment-bytes` derives from `Runtime.maxMemory()`; raise only after measurement, never unattended |
-| `swath.sort.buffers` | 2 | in-flight sealed buffers (fill buffer while the sealed buffer encodes off-thread); **must be `>= 2`**: `SortLane` bounds live sealed buffers to exactly `buffers` (fill + `buffers - 1` off-thread); `buffers=1` would either deadlock (0 off-thread slots to hand a sealed buffer to) or, if floored instead, silently allow 2 live buffers while claiming a cap of 1 — `SortConfig` rejects `buffers < 2` outright (`IllegalArgumentException`), consistent with every other knob's validation in that immutable snapshot |
+| `swath.sort.buffers` | 2 | in-flight sealed buffers (fill buffer while the sealed buffer encodes off-thread); **must be `>= 2`**: `SpillLane` bounds live sealed buffers to exactly `buffers` (fill + `buffers - 1` off-thread); `buffers=1` would either deadlock (0 off-thread slots to hand a sealed buffer to) or, if floored instead, silently allow 2 live buffers while claiming a cap of 1 — `SortConfig` rejects `buffers < 2` outright (`IllegalArgumentException`), consistent with every other knob's validation in that immutable snapshot |
 | `swath.sort.fan-in` | 10000 | merge fan-in `F` (§6); open page-run segment readers never exceed `F` per pass. The pass width actually used is clamped at runtime by (a) the **fd budget** — `min(fan-in, usable-fds)` derived from `ulimit -n` with headroom — and (b) the **per-open-stream capacity plan**, `effectiveFanIn = min(fan-in, max(2, merge-budget-bytes / merge-per-stream-bytes))`. `fan-in` alone is a correctness/fd ceiling, not a memory promise; raise `ulimit -n` (below) so the fd clamp does not force a cascade |
 | `swath.sort.segment-codec` | `ZSTD1` | payload compression for page-run STAGING segments — `NONE` \| `LZ4` \| `ZSTD1`. Trades staging-disk ratio for pack/merge CPU: `LZ4` is faster; `ZSTD1` (default) is smaller on disk; `NONE` skips compression. Governs staging only, never the final Parquet output |
 | `swath.sort.merge-per-stream-bytes` | ≈64 KiB configured floor (`DEFAULT_MERGE_PER_STREAM_BYTES`) | cascade planning price for one open page-run stream. Runtime fan-in uses `max(configured floor, largest persisted maxRecordLen)` and file-descriptor headroom while reserving the requested final writers. Final encoder admission separately prices the fixed tail's decoded-payload and key maxima (§6). |
