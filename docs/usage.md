@@ -272,6 +272,23 @@ listing, so several columns are present but unpopulated today.
 The normative schema is in
 [Contracts](internals/contracts.md#4-parquet-output-schema--canonical-superset--etag-rule).
 
+### Upgrading from 0.2.4
+
+Before 0.3.0 the `key` column carried no logical type, so query engines surfaced it as an
+opaque binary value. The physical bytes, the column statistics, and the sort order are
+unchanged, and existing datasets are not rewritten — only the type a reader reports moves.
+DuckDB and Spark report `VARCHAR`/`string` where they reported `BLOB`/`binary`, and pyarrow
+and pandas yield `str` instead of `bytes`. Drop the conversions that used to be necessary,
+such as `decode(key, 'utf-8')` or `CAST(key AS VARCHAR)` in DuckDB, `CAST(key AS STRING)` in
+Spark, and `.str.decode('utf-8')` in pandas; a comparison against a blob literal such as
+`key = 'prefix/'::BLOB` becomes an ordinary string comparison.
+
+A key whose bytes are not well-formed UTF-8 cannot be represented by this column, so swath
+now fails Parquet publication with a typed output error instead of writing a value a reader
+would misdecode. A live listing cannot produce such a key, so this affects only
+re-publishing or sorting a capture written by an earlier release. See the
+[release notes](ops/dev/RELEASE_NOTES.md).
+
 ## Exit codes
 
 | Code | Meaning |
