@@ -1814,101 +1814,153 @@
 
   <section id="dive-pipeline">
     <details class="dive">
-      <summary>Implementation: the runtime pipeline <span class="hint">— channels, filters, sort, and how output is written</span></summary>
+      <summary>Implementation: the runtime pipeline <span class="hint">— channels, filters, and how each kind of output is written</span></summary>
 
     <div class="col">
       <p>
-        The worklist <em class="term">is</em> the checkpoint table. Each row in SQLite's
-        <span class="mono">listing_node</span> is one unit of work moving
+        The worklist <em class="term">is</em> the checkpoint table. Each row of the
+        checkpoint's listing-node table is one unit of work moving
         <span class="mono">PENDING → IN_PROGRESS → COMPLETED</span>, which is what makes
         resume nearly free and eliminates a whole class of permit-across-join deadlock.
         A fixed pool of virtual threads drains it; termination is by quiescence
         (<span class="mono">outstanding == 0</span>), not by an empty queue — a worker
         may be mid-page and about to spawn a child.
       </p>
+      <p>
+        Downstream of the filters, the three output shapes have genuinely different
+        machinery. A text stream is one-shot. A direct Parquet or text directory dataset is
+        written <em>during</em> the listing by a small bounded pool of writers. Sorted output
+        is different again: workers stage durable page-run segments while they list, and the
+        whole ordering job runs <em>after</em> listing finishes, reading those segments back.
+      </p>
     </div>
 
     <figure>
       <div class="plate-body">
-        <svg viewBox="0 0 760 430" role="img" aria-label="Run flow, top to bottom: S3 returns a page to the fetcher, the range scanner commits it to the SQLite checkpoint before pushing it to a bounded channel; the channel feeds the filter chain and then either the text sinks or the Parquet writer pool, with an optional sort lane branching off the channel.">
-          <!-- S3 -->
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="14" width="260" height="40" rx="2"/></g>
-          <text class="hd" x="380" y="32" text-anchor="middle">Amazon S3 · ListObjectsV2</text>
-          <text class="sm" x="380" y="46" text-anchor="middle">up to 1000 keys, in byte order</text>
+        <svg viewBox="0 0 760 630" role="img" aria-label="Run flow, top to bottom. S3 returns a page to a listing worker; the worker commits it to the durable checkpoint before pushing it to a bounded page channel, which feeds the filters. The filters then branch into three lanes: a one-shot text stream that exits; a dataset lane where a small bounded writer pool writes direct Parquet or a text directory dataset; and a sorted lane where workers stage durable page-run segments, and after listing completes an optional bounded cascade, a header scan, a reference router, and parallel encoders run before publication. Publication writes the final parts, then the manifest, and the success marker last.">
+          <!-- ── source ── -->
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="8" width="260" height="38" rx="2"/></g>
+          <text class="hd" x="380" y="26" text-anchor="middle">Amazon S3 · ListObjectsV2</text>
+          <text class="sm" x="380" y="39" text-anchor="middle">up to 1,000 keys, in byte order</text>
 
-          <line class="s-ink" x1="380" y1="54" x2="380" y2="74" stroke-width="1.3" marker-end="url(#ar)"/>
+          <line class="s-ink" x1="380" y1="46" x2="380" y2="64" stroke-width="1.3" marker-end="url(#ar)"/>
 
-          <!-- fetcher -->
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="76" width="260" height="38" rx="2"/></g>
-          <text class="hd" x="380" y="94" text-anchor="middle">S3PageFetcher</text>
-          <text class="sm" x="380" y="107" text-anchor="middle">the one shipped backend · swath-s3</text>
-
-          <line class="s-ink" x1="380" y1="114" x2="380" y2="134" stroke-width="1.3" marker-end="url(#ar)"/>
-
-          <!-- engine container -->
+          <!-- ── listing engine ── -->
           <g class="s-rule" fill="none" stroke-width="1" stroke-dasharray="3 3">
-            <rect x="236" y="128" width="524" height="82" rx="2"/>
+            <rect x="236" y="58" width="524" height="76" rx="2"/>
           </g>
-          <text class="sm" x="756" y="122" text-anchor="end">WorkStealingScan · N virtual threads</text>
+          <text class="sm" x="756" y="52" text-anchor="end">listing workers — bounded by --concurrency</text>
 
-          <!-- range scanner -->
-          <rect class="f-acc" x="250" y="138" width="260" height="62" rx="2" opacity="0.1"/>
-          <g class="s-acc" fill="none" stroke-width="1.8"><rect x="250" y="138" width="260" height="62" rx="2"/></g>
-          <text class="hd" x="380" y="158" text-anchor="middle">RangeScanner.runRange</text>
-          <text class="sm" x="380" y="174" text-anchor="middle">one worker, one range</text>
-          <text class="sm" x="380" y="189" text-anchor="middle">re-reads hi before every key</text>
+          <rect class="f-acc" x="250" y="66" width="260" height="60" rx="2" opacity="0.1"/>
+          <g class="s-acc" fill="none" stroke-width="1.8"><rect x="250" y="66" width="260" height="60" rx="2"/></g>
+          <text class="hd" x="380" y="86" text-anchor="middle">range scanner</text>
+          <text class="sm" x="380" y="102" text-anchor="middle">one worker, one range</text>
+          <text class="sm" x="380" y="117" text-anchor="middle">re-reads hi before every key</text>
 
-          <!-- thief -->
-          <g class="s-sig" fill="none" stroke-width="1.5"><rect x="546" y="146" width="208" height="46" rx="2"/></g>
-          <text class="hd f-sig" x="650" y="164" text-anchor="middle">Thief / OwnerSelfSplit</text>
-          <text class="sm" x="650" y="179" text-anchor="middle">narrows hi, inserts a child</text>
-          <line class="s-sig" x1="546" y1="169" x2="516" y2="169" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+          <g class="s-sig" fill="none" stroke-width="1.5"><rect x="546" y="74" width="208" height="44" rx="2"/></g>
+          <text class="hd f-sig" x="650" y="92" text-anchor="middle">thief / owner self-split</text>
+          <text class="sm" x="650" y="107" text-anchor="middle">narrows hi, inserts a child</text>
+          <line class="s-sig" x1="546" y1="96" x2="516" y2="96" stroke-width="1.3" marker-end="url(#ar-sig)"/>
 
-          <!-- commit -->
-          <line class="s-ink" x1="380" y1="210" x2="380" y2="234" stroke-width="1.4" marker-end="url(#ar)"/>
-          <text class="hd f-acc" x="392" y="226">① commit</text>
+          <!-- ── commit before emit ── -->
+          <line class="s-ink" x1="380" y1="134" x2="380" y2="156" stroke-width="1.4" marker-end="url(#ar)"/>
+          <text class="hd f-acc" x="392" y="150">① commit</text>
 
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="236" width="260" height="40" rx="2"/></g>
-          <text class="hd" x="380" y="254" text-anchor="middle">SQLite checkpoint</text>
-          <text class="sm" x="380" y="268" text-anchor="middle">one writer thread · WAL · the worklist</text>
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="158" width="260" height="40" rx="2"/></g>
+          <text class="hd" x="380" y="176" text-anchor="middle">durable checkpoint</text>
+          <text class="sm" x="380" y="190" text-anchor="middle">one writer thread · the worklist · cursors</text>
 
-          <line class="s-ink" x1="380" y1="276" x2="380" y2="300" stroke-width="1.4" marker-end="url(#ar)"/>
-          <text class="hd f-acc" x="392" y="292">② then emit</text>
+          <line class="s-ink" x1="380" y1="198" x2="380" y2="220" stroke-width="1.4" marker-end="url(#ar)"/>
+          <text class="hd f-acc" x="392" y="214">② then emit</text>
 
-          <!-- channel -->
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="302" width="260" height="30" rx="2"/></g>
-          <text class="hd" x="380" y="322" text-anchor="middle">bounded Channel of PageBatch</text>
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="222" width="260" height="30" rx="2"/></g>
+          <text class="hd" x="380" y="242" text-anchor="middle">bounded page channel</text>
 
-          <!-- sort lane -->
-          <g class="s-rule" fill="none" stroke-width="1.2" stroke-dasharray="4 3">
-            <rect x="546" y="288" width="214" height="58" rx="2"/>
-            <path d="M510 317 L546 317"/>
-          </g>
-          <text class="sm" x="653" y="306" text-anchor="middle">optional --sort lane</text>
-          <text class="sm" x="653" y="321" text-anchor="middle">segments staged on disk,</text>
-          <text class="sm" x="653" y="336" text-anchor="middle">k-way merged at the end</text>
+          <line class="s-ink" x1="380" y1="252" x2="380" y2="270" stroke-width="1.3" marker-end="url(#ar)"/>
 
-          <line class="s-ink" x1="380" y1="332" x2="380" y2="348" stroke-width="1.2" marker-end="url(#ar)"/>
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="272" width="260" height="38" rx="2"/></g>
+          <text class="hd" x="380" y="290" text-anchor="middle">filters</text>
+          <text class="sm" x="380" y="303" text-anchor="middle">regex · size · mtime · storage class</text>
 
-          <!-- filters -->
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="350" width="260" height="38" rx="2"/></g>
-          <text class="hd" x="380" y="368" text-anchor="middle">FilterChain</text>
-          <text class="sm" x="380" y="381" text-anchor="middle">regex · size · mtime · storage class</text>
-
-          <!-- sinks -->
+          <!-- ── the three-way branch ── -->
           <g class="s-ink" fill="none" stroke-width="1.2" marker-end="url(#ar)">
-            <path d="M300 388 L300 396 L120 396 L120 402"/>
-            <path d="M460 388 L460 396 L620 396 L620 402"/>
+            <path d="M320 310 L320 322 L120 322 L120 344"/>
+            <path d="M380 310 L380 344"/>
+            <path d="M440 310 L440 322 L640 322 L640 344"/>
           </g>
-          <g class="s-ink" fill="none" stroke-width="1.5">
-            <rect x="0" y="404" width="240" height="24" rx="2"/>
-            <rect x="500" y="404" width="260" height="24" rx="2"/>
+
+          <!-- lane 1 · text stream -->
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="10" y="346" width="220" height="50" rx="2"/></g>
+          <text class="hd" x="120" y="366" text-anchor="middle">text stream</text>
+          <text class="sm" x="120" y="381" text-anchor="middle">table · TSV · JSONL, optionally</text>
+          <text class="sm" x="120" y="392" text-anchor="middle">compressed → stdout or one file</text>
+          <text class="sm f-dim" x="120" y="416" text-anchor="middle">one-shot: nothing to publish,</text>
+          <text class="sm f-dim" x="120" y="428" text-anchor="middle">and nothing to resume from</text>
+
+          <!-- lane 2 · dataset writers -->
+          <rect class="f-acc" x="270" y="346" width="220" height="50" rx="2" opacity="0.1"/>
+          <g class="s-acc" fill="none" stroke-width="1.6"><rect x="270" y="346" width="220" height="50" rx="2"/></g>
+          <text class="hd" x="380" y="366" text-anchor="middle">dataset writers</text>
+          <text class="sm" x="380" y="381" text-anchor="middle">direct Parquet, or a TSV/JSONL</text>
+          <text class="sm" x="380" y="392" text-anchor="middle">directory dataset</text>
+          <text class="sm f-dim" x="380" y="416" text-anchor="middle">a small bounded pool — three</text>
+          <text class="sm f-dim" x="380" y="428" text-anchor="middle">writers by default, not one per worker</text>
+
+          <!-- lane 3 · sorted -->
+          <g class="s-sig" fill="none" stroke-width="1.6"><rect x="530" y="346" width="220" height="50" rx="2"/></g>
+          <text class="hd f-sig" x="640" y="366" text-anchor="middle">page-run staging</text>
+          <text class="sm" x="640" y="381" text-anchor="middle">durable segments on local disk,</text>
+          <text class="sm" x="640" y="392" text-anchor="middle">sealed as the listing runs</text>
+
+          <line class="s-sig" x1="640" y1="396" x2="640" y2="424" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+
+          <!-- finalization band -->
+          <line class="s-rule" x1="500" y1="410" x2="760" y2="410" stroke-width="1" stroke-dasharray="4 3"/>
+          <text class="sm" x="504" y="406">↓ --sort only, after listing completes</text>
+
+          <g class="s-sig" fill="none" stroke-width="1.4"><rect x="530" y="426" width="220" height="36" rx="2"/></g>
+          <text class="hd f-sig" x="640" y="443" text-anchor="middle">optional bounded cascade</text>
+          <text class="sm" x="640" y="456" text-anchor="middle">only above the admitted fan-in</text>
+
+          <line class="s-sig" x1="640" y1="462" x2="640" y2="478" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+
+          <g class="s-sig" fill="none" stroke-width="1.4"><rect x="530" y="480" width="220" height="36" rx="2"/></g>
+          <text class="hd f-sig" x="640" y="497" text-anchor="middle">header scan → router</text>
+          <text class="sm" x="640" y="510" text-anchor="middle">one global order, calibrated parts</text>
+
+          <line class="s-sig" x1="640" y1="516" x2="640" y2="532" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+
+          <g class="s-sig" fill="none" stroke-width="1.4"><rect x="530" y="534" width="220" height="36" rx="2"/></g>
+          <text class="hd f-sig" x="640" y="551" text-anchor="middle">parallel encoders</text>
+          <text class="sm" x="640" y="564" text-anchor="middle">dense ordinals fix names and order</text>
+
+          <!-- ── publication ── -->
+          <g class="s-ink" fill="none" stroke-width="1.2" marker-end="url(#ar)">
+            <path d="M310 396 L310 406 L244 406 L244 578 L290 578 L290 588"/>
+            <path d="M640 570 L640 578 L560 578 L560 588"/>
           </g>
-          <text class="sm" x="120" y="420" text-anchor="middle">JSONL · TSV · table → stdout</text>
-          <text class="sm" x="630" y="420" text-anchor="middle">ParquetWriterPool → parts + manifest</text>
+          <rect class="f-panel" x="270" y="590" width="480" height="34" rx="2"/>
+          <g class="s-ink" fill="none" stroke-width="1.8"><rect x="270" y="590" width="480" height="34" rx="2"/></g>
+          <text class="hd" x="510" y="605" text-anchor="middle">publication</text>
+          <text class="sm" x="510" y="618" text-anchor="middle">final parts, then the manifest — _SUCCESS is written last</text>
         </svg>
       </div>
-      <figcaption><b>Plate 7</b> The run has two deliberately different concurrency shapes: a small static pipeline of siblings under a structured-concurrency scope, and the listing engine, which is a worklist — that is what caps threads at N regardless of how wide the range tree grows.</figcaption>
+      <figcaption>
+        <b>Plate 7</b> Listing workers are not output writers. <span class="mono">--concurrency</span>
+        bounds the first pool only; direct Parquet and text directory datasets are written by a
+        separate, much smaller bounded writer pool, and sorted output adds a third bounded pool of
+        encoders that runs after listing has finished. Text directory datasets can use several
+        writers but are still not resumable. Sorted output finalizes from durable page-run staging,
+        so an interrupted sorted run resumes from the sealed segments rather than re-listing.
+        Every dataset ends the same way: parts, then the manifest, then
+        <span class="mono">_SUCCESS</span> last.
+      </figcaption>
+      <p class="src">
+        Detail and current constants:
+        <a href="https://github.com/varveio/swath/blob/main/docs/usage.md#sorted-output"><span class="mono">docs/usage.md#sorted-output</span></a> ·
+        <a href="https://github.com/varveio/swath/blob/main/docs/performance.md#the-sorted-merge"><span class="mono">docs/performance.md</span></a> ·
+        <a href="https://github.com/varveio/swath/blob/main/docs/internals/architecture.md"><span class="mono">docs/internals/architecture.md</span></a>
+      </p>
     </figure>
   
     </details>
@@ -1984,14 +2036,18 @@
     <div class="col">
       <p>
         Six Gradle modules, all edges pointing one way. Only <span class="mono">swath-cli</span>
-        ships: the uber-jar is built over its runtime classpath, so a module reaches a
-        released artifact if and only if the CLI depends on it.
+        is part of the main swath product artifacts: the uber-jar is built over its runtime
+        classpath and the Docker image copies exactly that jar, so a module reaches those
+        artifacts if and only if the CLI depends on it. That is not the same as "never
+        released" — <span class="mono">swath-replay</span> is packaged and released separately,
+        as its own distribution and container image, on the repository's shared version cadence.
+        <span class="mono">swath-sim</span> is on neither runtime path.
       </p>
     </div>
 
     <figure>
       <div class="plate-body">
-        <svg viewBox="0 0 760 336" role="img" aria-label="Module graph: swath-model is a leaf; swath-core depends on it; swath-s3 and swath-replay depend on core; swath-cli is the product binary; swath-replay is a separately released contributor toolkit and swath-sim a development tool.">
+        <svg viewBox="0 0 760 336" role="img" aria-label="Module graph: swath-model is a leaf; swath-core depends on it; swath-s3 and swath-replay depend on core; swath-cli is the supported product binary; swath-replay is a separately released contributor toolkit with its own container image; swath-sim depends on replay and core and is a non-release development tool.">
           <!-- model -->
           <g class="s-ink" fill="none" stroke-width="1.6"><rect x="250" y="10" width="260" height="44" rx="2"/></g>
           <text class="hd" x="380" y="29" text-anchor="middle">swath-model</text>
@@ -2025,8 +2081,8 @@
           <text class="sm" x="250" y="207" text-anchor="middle">S3PageFetcher · the AWS SDK lives here</text>
 
           <!-- replay server -->
-          <g class="s-ink" fill="none" stroke-width="1.6" stroke-dasharray="4 3"><rect x="410" y="174" width="280" height="42" rx="2"/></g>
-          <text class="hd" x="550" y="192" text-anchor="middle">swath-replay</text>
+          <g class="s-sig" fill="none" stroke-width="1.6"><rect x="410" y="174" width="280" height="42" rx="2"/></g>
+          <text class="hd f-sig" x="550" y="192" text-anchor="middle">swath-replay</text>
           <text class="sm" x="550" y="207" text-anchor="middle">the real engine vs a fake S3</text>
 
           <g class="s-ink" fill="none" stroke-width="1.3" marker-end="url(#ar)">
@@ -2042,7 +2098,7 @@
           <rect class="f-acc" x="110" y="246" width="280" height="50" rx="2" opacity="0.12"/>
           <g class="s-acc" fill="none" stroke-width="2"><rect x="110" y="246" width="280" height="50" rx="2"/></g>
           <text class="hd" x="250" y="268" text-anchor="middle">swath-cli</text>
-          <text class="sm" x="250" y="284" text-anchor="middle">the only shipped artifact</text>
+          <text class="sm" x="250" y="284" text-anchor="middle">the supported product binary</text>
 
           <!-- sim -->
           <g class="s-ink" fill="none" stroke-width="1.6" stroke-dasharray="4 3"><rect x="410" y="246" width="280" height="50" rx="2"/></g>
@@ -2051,7 +2107,7 @@
           <text class="sm" x="550" y="290" text-anchor="middle">store, in virtual time</text>
 
           <line class="s-rule" x1="0" y1="316" x2="760" y2="316" stroke-width="1"/>
-          <text class="sm" x="0" y="330">solid outline = on the shipped path   ·   dashed = development and analysis tools, never released</text>
+          <text class="sm" x="0" y="330">green = the main product artifacts   ·   ochre = separately released contributor toolkit   ·   dashed = non-release dev tool</text>
         </svg>
       </div>
       <figcaption><b>Plate 10</b> The dependency rules do real work: core stays AWS-free so a future GCS backend doesn't drag the S3 SDK, and terminal-free so an embedding application gets progress events without inheriting swath's opinions about stderr.</figcaption>
@@ -2060,7 +2116,7 @@
     <div class="tbl-scroll">
       <table>
         <thead>
-          <tr><th>Module</th><th>Holds</th><th>Ships</th></tr>
+          <tr><th>Module</th><th>Holds</th><th>Distribution</th></tr>
         </thead>
         <tbody>
           <tr>
@@ -2070,28 +2126,28 @@
           </tr>
           <tr>
             <td class="k"><b>swath-core</b></td>
-            <td>Everything that isn't a backend or a front end: the <code>WorkStealingScan</code> engine and its policy seam, the SQLite checkpoint, the Parquet writer pool and external merge sort, filters, the pipeline, metrics.</td>
+            <td>Everything that isn't a backend or a front end: the work-stealing engine and its policy seam, the SQLite checkpoint, the output layer including the bounded Parquet writer pool and the sorted-finalization pipeline, filters, the pipeline, metrics.</td>
             <td class="k">via CLI</td>
           </tr>
           <tr>
             <td class="k"><b>swath-s3</b></td>
-            <td>The one shipped backend. <code>S3PageFetcher</code>, client construction, fault classification, bearer-token auth. Siblings like <span class="mono">swath-gcs</span> would sit beside it.</td>
+            <td>The supported backend. <code>S3PageFetcher</code>, client construction, fault classification, bearer-token auth. Siblings like <span class="mono">swath-gcs</span> would sit beside it.</td>
             <td class="k">via CLI</td>
           </tr>
           <tr>
             <td class="k"><b>swath-cli</b></td>
             <td>The <span class="mono">swath</span> binary: Picocli commands, option groups, exit codes, the stderr progress display and terminal detection.</td>
-            <td class="k">yes</td>
+            <td class="k">the product</td>
           </tr>
           <tr>
             <td class="k"><b>swath-replay</b></td>
-            <td>Serves swath's own Parquet fixtures back as a fake S3 <code>ListObjectsV2</code> endpoint, so the real engine can be exercised end-to-end over HTTP with injected latency shapes.</td>
-            <td class="k">no</td>
+            <td>The replay toolkit: serves swath's own Parquet fixtures back as a fake S3 <code>ListObjectsV2</code> endpoint, so the real engine can be exercised end-to-end over HTTP with injected latency shapes. A contributor tool, not part of the <span class="mono">swath</span> CLI and not needed for a normal listing. Its wire behavior is conformance-tested; its diagnostics and launcher settings are a deliberately unstable development surface. <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay.md">docs/swath-replay.md</a></td>
+            <td class="k">separate release + container image</td>
           </tr>
           <tr>
             <td class="k">swath-sim</td>
             <td>A discrete-event simulator that runs the real split/steal policies against a ground-truth store in virtual time. Answers "what would a different policy have done here?" thousands of times without paying a socket.</td>
-            <td class="k">no</td>
+            <td class="k">non-release dev tool</td>
           </tr>
         </tbody>
       </table>
