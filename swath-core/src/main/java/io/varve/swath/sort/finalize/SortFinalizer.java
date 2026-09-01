@@ -34,9 +34,10 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Algorithmic owner for admitting staged runs and preparing a complete unpublished sorted part set.
- * Cascade width conservatively reserves requested output descriptors, but encoder admission occurs
- * only after cascade because survivor count and page maxima are the resources the final pass
- * actually owns.
+ * Cascade width conservatively reserves descriptors for the requested output writers — giving them
+ * back one at a time rather than refusing a merge a narrower output would complete — but encoder
+ * admission occurs only after cascade because survivor count and page maxima are the resources the
+ * final pass actually owns.
  *
  * <p>The calling thread is the assembler. It waits for dense ordinals, joins every encoder, closes
  * all shared channels, and proves strict raw-byte adjacency plus exact cardinality before returning.

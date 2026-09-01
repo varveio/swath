@@ -860,28 +860,43 @@ final class FinalizationPipelineTest {
     }
 
     @Test
-    void cascadeFanInRefusesBeforeOpeningReadersWhenCapacityCannotFitTwoStreams(@TempDir Path root)
+    void cascadeFanInGivesDescriptorsBackToTheInputsRatherThanRefusingTheMerge(@TempDir Path root)
             throws IOException {
-        Path segA = SortTestSupport.writePages(root.resolve("fanin-a" + StagingNames.PAGE_RUN_SUFFIX),
-                List.of(List.of(SortTestSupport.object("a"))));
-        Path segB = SortTestSupport.writePages(root.resolve("fanin-b" + StagingNames.PAGE_RUN_SUFFIX),
-                List.of(List.of(SortTestSupport.object("b"))));
-        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segA, segB),
-                path -> PageRunReader.open(path, SortMetrics.NO_OP));
-        SortConfig config = SortConfigs.base()
-                .withFanIn(100)
-                .withMergeBudgetBytes(64L << 20)
-                .withMergePerStreamBytes(1);
+        PageRunCatalog catalog = twoSegmentCatalog(root, "degrade");
+        SortConfig config = tightFanInConfig();
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        // headroom for encoderCount=4 is FD_HEADROOM + 3, so a soft limit of FD_HEADROOM + 4
-        // leaves an fd-bounded capacity of 1 — below the two-stream minimum a cascade needs.
+        // headroom for four reserved writers is FD_HEADROOM + 3, so a soft limit of FD_HEADROOM + 4
+        // leaves an fd-bounded capacity of 1. The requested encoder count is only a ceiling, so
+        // lowering the reservation buys back the second input stream and the merge runs.
         FinalizationPlanner planner = new FinalizationPlanner(config, metrics,
                 () -> FileDescriptorBudget.FD_HEADROOM + 4);
 
+        assertThat(planner.pipelineFanIn(catalog, 4)).isEqualTo(2);
+
+        assertThat(metrics.count("SORT.merge_fanin_writer_reservation_degraded")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_fanin_floor_exhausted")).isZero();
+        // Two segments at fan-in two need no cascade pass at all, and admission independently
+        // settles the lanes that actually run against the same descriptor budget.
+        assertThat(planner.pipelineParallelism(4, catalog).encoders()).isEqualTo(2);
+    }
+
+    @Test
+    void cascadeFanInRefusesBeforeOpeningReadersWhenCapacityCannotFitTwoStreams(@TempDir Path root)
+            throws IOException {
+        PageRunCatalog catalog = twoSegmentCatalog(root, "fanin");
+        SortConfig config = tightFanInConfig();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        // Below the boundary above: even the minimum one-writer reservation (headroom exactly
+        // FD_HEADROOM) leaves an fd-bounded capacity of 1, so no reservation makes this run.
+        FinalizationPlanner planner = new FinalizationPlanner(config, metrics,
+                () -> FileDescriptorBudget.FD_HEADROOM + 1);
+
         assertThatThrownBy(() -> planner.pipelineFanIn(catalog, 4))
                 .isInstanceOf(CascadeCapacityExhaustedException.class)
-                .hasMessageContaining("cascade cannot open the minimum two streams");
+                .hasMessageContaining("cascade cannot open the minimum two streams")
+                .hasMessageContaining("reserved_writers=1");
         assertThat(metrics.count("SORT.merge_fanin_floor_exhausted")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_fanin_writer_reservation_degraded")).isZero();
     }
 
     @Test
@@ -892,16 +907,31 @@ final class FinalizationPipelineTest {
                 List.of(List.of(SortTestSupport.object("a"))));
         PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
                 path -> PageRunReader.open(path, SortMetrics.NO_OP));
-        SortConfig config = SortConfigs.base()
+        FinalizationPlanner planner = new FinalizationPlanner(tightFanInConfig(), SortMetrics.NO_OP,
+                () -> FileDescriptorBudget.FD_HEADROOM + 1);
+
+        // A single source segment never opens a cascade group, so the same exhausted budget that
+        // refuses a two-segment catalog above must not refuse here.
+        assertThat(planner.pipelineFanIn(catalog, 4)).isEqualTo(2);
+    }
+
+    /** Fan-in bounded by descriptors alone: neither the static setting nor record size binds. */
+    private static SortConfig tightFanInConfig() {
+        return SortConfigs.base()
                 .withFanIn(100)
                 .withMergeBudgetBytes(64L << 20)
                 .withMergePerStreamBytes(1);
-        FinalizationPlanner planner = new FinalizationPlanner(config, SortMetrics.NO_OP,
-                () -> FileDescriptorBudget.FD_HEADROOM + 4);
+    }
 
-        // A single source segment never opens a cascade group, so the same starved budget that
-        // refuses a two-segment catalog above must not refuse here.
-        assertThat(planner.pipelineFanIn(catalog, 4)).isEqualTo(2);
+    private static PageRunCatalog twoSegmentCatalog(Path root, String prefix) throws IOException {
+        Path segA = SortTestSupport.writePages(
+                root.resolve(prefix + "-a" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("a"))));
+        Path segB = SortTestSupport.writePages(
+                root.resolve(prefix + "-b" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("b"))));
+        return PageRunCatalog.preflight(List.of(segA, segB),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
     }
 
     @Test
