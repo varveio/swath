@@ -25,18 +25,16 @@ final class PageRunCascadeStore implements CascadeReducer.SegmentIo<Path> {
     private final PageRunWriter segmentWriter;
     private final Path stagingDir;
     private final StagingReconciliation stagingAuthority;
-    private final String intermediatePrefix;
     private final int maxRawPayloadLength;
     private final List<Path> intermediates = new ArrayList<>();
     private int sequence;
 
     PageRunCascadeStore(SortRun run, PageRunWriter segmentWriter, Path stagingDir,
-            StagingReconciliation stagingAuthority, String intermediatePrefix) {
+            StagingReconciliation stagingAuthority) {
         this.run = run;
         this.segmentWriter = segmentWriter;
         this.stagingDir = stagingDir;
         this.stagingAuthority = stagingAuthority;
-        this.intermediatePrefix = intermediatePrefix;
         maxRawPayloadLength = (int) Math.min(
                 PageBlock.MAX_RAW_PAYLOAD_BYTES, run.config().mergeBudgetBytes());
     }
@@ -65,12 +63,20 @@ final class PageRunCascadeStore implements CascadeReducer.SegmentIo<Path> {
         return available;
     }
 
+    /**
+     * Write under the temporary name and commit only once the segment is durable, so a failed pass
+     * leaves nothing a later pass, a resume, or the disk pre-check could mistake for a finished
+     * intermediate. Both names live in the disposable cascade namespace the caller sweeps.
+     */
     @Override
     public Path writeIntermediate(SortedEntryCursor sorted) throws IOException {
-        Path destination = stagingDir.resolve(
-                StagingNames.cascadeIntermediate(intermediatePrefix, sequence++));
+        int ordinal = sequence++;
+        Path temporary = stagingDir.resolve(StagingNames.cascadeIntermediateTmp(ordinal));
+        Path destination = stagingDir.resolve(StagingNames.cascadeIntermediate(ordinal));
         stagingAuthority.requireOwnedStagingAuthority(stagingDir);
-        segmentWriter.writeIntermediate(sorted, destination, maxRawPayloadLength);
+        segmentWriter.writeIntermediate(sorted, temporary, maxRawPayloadLength);
+        stagingAuthority.requireOwnedStagingAuthority(stagingDir);
+        PageRunWriter.commit(temporary, destination);
         intermediates.add(destination);
         return destination;
     }

@@ -78,11 +78,7 @@ final class SortedDatasetPublisher {
         outputAuthority.requireSame(outputDir);
         StagingReconciliation.sweepFinalTemporaries(stagingDir);
         StagingReconciliation.sweepFinalTemporaries(outputDir);
-        ownedInputs.sweepDisposables(StagingNames.CASCADE_PAGE_RUN_GLOB);
-        ownedInputs.sweepDisposables(StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
-        ownedInputs.sweepDisposables(StagingNames.LEGACY_RANGE_TMP_GLOB);
-        ownedInputs.sweepDisposables(StagingNames.LEGACY_RANGE_PROOF_TMP_GLOB);
-        ownedInputs.sweepDisposables(StagingNames.PIPELINE_TMP_GLOB);
+        ownedInputs.sweepDisposableWorkingFiles();
         publicationStep(PublicationStep.AFTER_WORKING_SWEEP);
         ownedInputs.requireOwnedStagingAuthority(stagingDir);
         outputAuthority.requireSame(outputDir);

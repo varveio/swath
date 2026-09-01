@@ -234,6 +234,17 @@ public final class StagingReconciliation {
         }
     }
 
+    /**
+     * Sweep every sorter-owned disposable staging namespace. Callers must first guarantee that no
+     * cascade or finalization writer is still live, because a namespace member is removed whether or
+     * not the attempt that created it finished.
+     */
+    public void sweepDisposableWorkingFiles() throws IOException {
+        for (String glob : StagingNames.DISPOSABLE_STAGING_GLOBS) {
+            sweepDisposables(glob);
+        }
+    }
+
     /** Sweep the sorter-owned final temporary namespace through its canonical glob. */
     public static void sweepFinalTemporaries(Path dir) throws IOException {
         Sweeps.sweep(dir, ignored -> { }, StagingNames.FINAL_TMP_GLOB);
@@ -264,7 +275,7 @@ public final class StagingReconciliation {
                 || !name.endsWith(StagingNames.PAGE_RUN_SUFFIX)) {
             throw new IOException("unsafe retained sort staging segment name: " + name);
         }
-        if (name.startsWith("merge-")) {
+        if (name.startsWith(StagingNames.CASCADE_PREFIX)) {
             throw new IOException("sort staging segment name collides with the disposable cascade "
                     + "namespace: " + name);
         }

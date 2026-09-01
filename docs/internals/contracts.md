@@ -773,7 +773,9 @@ part set:
 
 1. `CascadeReducer` reduces an over-wide catalog through bounded page-run cascade passes.
    `CascadePageMerger` streams a page whole when its stored maximum is below every successor
-   minimum and uses `PageRowMerger` only for a transitive overlap component.
+   minimum and uses `PageRowMerger` only for a transitive overlap component. Each intermediate is
+   written under a temporary name and renamed onto its disposable `merge-*.pageseg` name only after
+   it is durable, so an interrupted pass leaves no file a later pass could mistake for complete.
 2. `PageRunHeaderStreams` scan the surviving segments sequentially, emitting bounded
    `PageRef` streams while verifying frame tiling, page order, and declared totals.
 3. `MergeRouter` consumes every reference exactly once and assigns complete, contiguous
@@ -859,10 +861,12 @@ the durable-file readback path. A mismatch refuses publication.
 lanes. Bounded queue operations poll it at fixed intervals so a failed peer cannot leave another
 stage blocked forever. On failure or cancellation, `SortFinalizer` interrupts and joins every owned
 thread, discards any open writer, and closes every shared segment channel before rethrowing. It does
-not mutate staging during failure handling. `SortedDatasetCoordinator` exclusively sweeps disposable
-finalization temporaries after the failure escapes; any direct caller of `SortFinalizer.prepare`
-owns that cleanup obligation. The initiating checked, runtime, error, or cancellation type remains
-primary; cleanup failures are suppressed by the coordinator.
+not mutate staging during failure handling. `SortedDatasetCoordinator` exclusively sweeps every
+disposable staging namespace after the failure escapes — cascade intermediates and their temporary
+names as well as final-part temporaries, the same set kickoff sweeps — so a failed attempt leaves
+nothing for the startup disk guard to charge against its own retry; any direct caller of
+`SortFinalizer.prepare` owns that cleanup obligation. The initiating checked, runtime, error, or
+cancellation type remains primary; cleanup failures are suppressed by the coordinator.
 
 Before publication commits, checkpoint-owned original segments and the previously published
 generation remain untouched. Resume therefore reruns cascade and finalization from those original

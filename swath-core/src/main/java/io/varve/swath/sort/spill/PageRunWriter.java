@@ -11,8 +11,10 @@ import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortedEntryCursor;
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -189,6 +191,22 @@ public final class PageRunWriter {
     public long writeIntermediate(SortedEntryCursor sorted, Path path, int maxRawPayloadBytes)
             throws IOException {
         return writeSorted(sorted, path, PageRunKind.CASCADE_INTERMEDIATE, maxRawPayloadBytes);
+    }
+
+    /**
+     * Rename a finished page-run file onto its durable name and make that name durable. Writers that
+     * publish into a namespace a later pass or a resume treats as complete must write under a
+     * temporary name and commit here, so an interrupted write never leaves a fully named file whose
+     * missing trailer is the only evidence it is unusable.
+     */
+    public static void commit(Path temporary, Path destination) throws IOException {
+        try {
+            Files.move(temporary, destination,
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+        }
+        Durability.directory(destination.getParent());
     }
 
     /** Write one locally sorted fixture chunk without retaining an unused boundary sample. */

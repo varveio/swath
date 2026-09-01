@@ -101,7 +101,7 @@ public final class SortFinalizer {
         PageRunWriter segmentWriter = new PageRunWriter(
                 run.comparator(), run.hook(), metrics, config.segmentCodec(), run.orderingMode());
         PageRunCascadeStore io = new PageRunCascadeStore(run, segmentWriter, request.stagingDir(),
-                request.ownedInputs(), "merge-");
+                request.ownedInputs());
         CascadeReducer<Path> cascade = new CascadeReducer<>(run.comparator(),
                 planner.pipelineFanIn(sourceCatalog, encoderCount),
                 io, run.hook(), metrics);

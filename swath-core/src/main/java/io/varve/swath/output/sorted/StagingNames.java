@@ -5,6 +5,8 @@
  */
 package io.varve.swath.output.sorted;
 
+import java.util.List;
+
 /** The single source of sort staging/output names and ownership globs. */
 public final class StagingNames {
 
@@ -12,17 +14,34 @@ public final class StagingNames {
     static final String PARQUET_SUFFIX = ".parquet";
     static final String TMP_SUFFIX = ".tmp";
 
+    /** Names a staging entry the cascade owns exclusively; no original input may claim it. */
+    static final String CASCADE_PREFIX = "merge-";
+
     static final String FINAL_TMP_GLOB = "part-*.parquet.tmp";
     public static final String PIPELINE_TMP_GLOB = "pipeline-*.parquet.tmp";
     static final String OWN_FINAL_GLOB = "part-*.parquet";
     static final String ALL_PARQUET_GLOB = "*.parquet";
-    static final String CASCADE_PAGE_RUN_GLOB = "merge-*.pageseg";
+    static final String CASCADE_PAGE_RUN_GLOB = CASCADE_PREFIX + "*" + PAGE_RUN_SUFFIX;
+    static final String CASCADE_PAGE_RUN_TMP_GLOB = CASCADE_PAGE_RUN_GLOB + TMP_SUFFIX;
     /** Retained for resume tests and older attempts that planted Parquet cascade debris. */
-    static final String LEGACY_CASCADE_PARQUET_GLOB = "merge-*.parquet";
+    static final String LEGACY_CASCADE_PARQUET_GLOB = CASCADE_PREFIX + "*" + PARQUET_SUFFIX;
     /** Retained only to sweep disposable files left by pre-pipeline finalization attempts. */
     static final String LEGACY_RANGE_TMP_GLOB = "prange-*.parquet.tmp";
     /** Retained only to sweep proof debris left by pre-pipeline finalization attempts. */
     static final String LEGACY_RANGE_PROOF_TMP_GLOB = "prange-proof*.tmp";
+
+    /**
+     * Every sorter-owned disposable staging namespace a finalization attempt can populate. Kickoff
+     * and pre-publication failure cleanup both sweep this exact set, so neither can drift into
+     * leaving a namespace behind for the other to find.
+     */
+    static final List<String> DISPOSABLE_STAGING_GLOBS = List.of(
+            CASCADE_PAGE_RUN_GLOB,
+            CASCADE_PAGE_RUN_TMP_GLOB,
+            LEGACY_CASCADE_PARQUET_GLOB,
+            LEGACY_RANGE_TMP_GLOB,
+            LEGACY_RANGE_PROOF_TMP_GLOB,
+            PIPELINE_TMP_GLOB);
 
     private StagingNames() {
     }
@@ -39,8 +58,13 @@ public final class StagingNames {
         return String.format("pipeline-%05d", ordinal) + PARQUET_SUFFIX + TMP_SUFFIX;
     }
 
-    public static String cascadeIntermediate(String prefix, int sequence) {
-        return prefix + sequence + PAGE_RUN_SUFFIX;
+    public static String cascadeIntermediate(int sequence) {
+        return CASCADE_PREFIX + sequence + PAGE_RUN_SUFFIX;
+    }
+
+    /** The name an unfinished cascade intermediate wears until its durable rename commits it. */
+    public static String cascadeIntermediateTmp(int sequence) {
+        return cascadeIntermediate(sequence) + TMP_SUFFIX;
     }
 
     public static String fixtureSegment(int sequence) {
