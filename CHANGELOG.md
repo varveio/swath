@@ -14,35 +14,43 @@ Notable changes per release. The full human summary for the current release is i
   type change from BLOB to VARCHAR and may need to update blob comparisons, casts, or functions.
 - Parquet output now rejects malformed UTF-8 key bytes with a typed output error. Legacy captures
   containing non-UTF-8 keys remain readable, but they can no longer be re-published as Parquet or
-  used as input for `--sort` output. A live listing cannot produce such a key.
+  sorted into a new dataset by `swath-replay sort-fixture`. A `swath list` run, with or without
+  `--sort`, cannot produce such a key.
 - Sorted output finalizes through a single reference-routed pipeline: page-run staging, catalog
   validation with heap and file-descriptor admission, a bounded cascade, header-only segment scans,
   one router assigning complete part plans with dense ordinals, and admitted parallel encoders. Part
   geometry is reproducible across encoder counts, and a budget too small for the work refuses
-  resumably before any reader or writer opens. The range-parallel finalization layer is gone.
+  resumably before the pass it cannot run opens its channels or writers. The range-parallel
+  finalization layer is gone.
 - Sorted-merge parallelism moved from `-Dswath.sort.merge-parallelism` to
   `--tune sort.merge-parallelism` and now caps final encoders rather than splitting the keyspace
-  into contiguous ranges. Part count no longer follows parallelism, and the 256 MiB
-  `min-parallel-staged-bytes` floor that kept small sorted runs serial is gone. The
-  `swath.sort.merge-boundary-policy` and `swath.sort.segment-row-group-bytes` properties are
-  removed with their mechanisms, and `swath.sort.final-row-group-bytes` now also prices encoder
-  heap admission.
+  into contiguous ranges. Part count follows the data, `final-file-bytes`, and the heap-admitted
+  reference cap rather than parallelism. The `swath.sort.min-parallel-staged-bytes` floor that kept
+  small sorted runs serial and the `swath.sort.segment-row-group-bytes` property are removed with
+  their mechanisms; `swath.sort.final-row-group-bytes` now also prices encoder heap admission; and
+  the new `swath.sort.final-page-rows` sets the final file's page granularity.
 - Sorted finalization is separated from dataset publication, with a distinct publisher and
-  committer; a pre-publication failure leaves the sealed listing resumable and sweeps only
-  disposable staging.
+  committer. Until the committer returns, the previously published dataset and all
+  checkpoint-owned staging are untouched, so an interruption, a crash, or a capacity refusal
+  before publication is resumable and only disposable staging is swept. A deterministic
+  finalization failure remains fatal.
 - The page-run staging container is version 4 with no legacy read path. A sorted run interrupted
   under 0.2.4 cannot be resumed by 0.3.0 and must be restarted. Published datasets are unaffected.
 - Sorted parts are numbered from zero (`part-00000.parquet`). The footer's `swath.sort.file_index`
-  stays one-based.
+  stays one-based. Final sorted files now pin their physical layout — 1,024-row data pages, an
+  8 KiB dictionary page, and 1,024-byte column-index truncation — instead of taking the Parquet
+  library's defaults.
 - `ZSTD1` is the default staging segment codec for sorted output, holding about 29% less staging
   disk than `LZ4` on the measured corpus.
 - The `_swath_summary.json` `sort` block gained the finalization pipeline's evidence, dropped
   `merge_boundaries_ms`, and pins `buffer_sort_fallbacks` to `0`. The
   `swath.sort.merge.range.latency` and `swath.sort.merge.boundaries.latency` meters are replaced
-  by the `swath.sort.pipeline.*` family. `schema_version` remains `2`.
+  by the `swath.sort.pipeline.*` family. `schema_version` remains `2`; every other report change
+  this release is additive.
 - The supported CLI surface is documented in `docs/cli.md` and enforced by a coverage test.
   `--engine-toggle` and `dump-run` are hidden, and `--tune help` declares each key as stable,
-  experimental, or diagnostic. No visible flag changed behavior.
+  experimental, or diagnostic. The stabilization itself renamed and hid nothing that was
+  supported and changed no option's behavior.
 - `--tune parquet.writers` accepts 2 through 64; counts above 4 are admitted against available
   heap.
 - Dataset manifests are published only at completion, publication ownership is centralized, and
@@ -56,8 +64,9 @@ Notable changes per release. The full human summary for the current release is i
 
 ### Added
 
-- TSV and JSONL output can use gzip or Zstandard compression and can publish bounded multi-writer
-  directory datasets with manifests and `_SUCCESS` markers.
+- `--compression` applies gzip or Zstandard to table, TSV, and JSONL output, to a stream or a
+  file. TSV and JSONL can additionally publish bounded multi-writer directory datasets with
+  manifests and `_SUCCESS` markers.
 - `--format discard` runs the listing pipeline without materializing rows, for separating
   object-store cost from output cost.
 - `--writeback-size` periodically forces already-emitted bytes for open dataset parts and sorted

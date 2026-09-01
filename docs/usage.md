@@ -278,10 +278,15 @@ Before 0.3.0 the `key` column carried no logical type, so query engines surfaced
 opaque binary value. The physical bytes, the column statistics, and the sort order are
 unchanged, and existing datasets are not rewritten — only the type a reader reports moves.
 DuckDB and Spark report `VARCHAR`/`string` where they reported `BLOB`/`binary`, and pyarrow
-and pandas yield `str` instead of `bytes`. Drop the conversions that used to be necessary,
-such as `decode(key, 'utf-8')` or `CAST(key AS VARCHAR)` in DuckDB, `CAST(key AS STRING)` in
-Spark, and `.str.decode('utf-8')` in pandas; a comparison against a blob literal such as
-`key = 'prefix/'::BLOB` becomes an ordinary string comparison.
+and pandas yield `str` instead of `bytes`. Drop the decodes that used to be necessary —
+`decode(key, 'utf-8')` in DuckDB, `CAST(key AS STRING)` in Spark, `.str.decode('utf-8')` in
+pandas — and a comparison against a blob literal such as `key = 'prefix/'::BLOB` becomes an
+ordinary string comparison.
+
+One conversion is not a simple deletion. `CAST(key AS VARCHAR)` in DuckDB rendered a blob's
+non-ASCII bytes as escapes, so a key of `café` read back as `caf\xC3\xA9`. The column now
+returns `café` directly. Drop the cast, but check any query, join, or stored value that
+depended on the escaped form.
 
 A key whose bytes are not well-formed UTF-8 cannot be represented by this column, so swath
 now fails Parquet publication with a typed output error instead of writing a value a reader

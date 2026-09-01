@@ -112,6 +112,12 @@ The schema is additive within a major version: tolerate unknown fields and do no
 on field order. Dedicated `*_ms` fields use milliseconds. Generic percentile gauges in
 `meters` use Micrometer's base unit of seconds.
 
+Before 1.0, the `sort` block is the one exception. Its fields measure the finalization
+mechanism, so replacing that mechanism retires the fields that described the old one: 0.3.0
+removed `merge_boundaries_ms` and left `buffer_sort_fallbacks` at a constant `0` without
+changing `schema_version`. Read the `sort` block defensively across an upgrade; every other
+block is additive as described above.
+
 For page-run staging, the `sort` block exposes the header-scan, router, and encoder work directly.
 Whole-page and overlap-component counters show routing shape; service timers show where the
 pipeline waited; the decoded-page high-water mark shows retained merge state. Cascade activity is
