@@ -44,14 +44,14 @@ All edges point one way (no cross-module cycles). The `engine`↔`runtime` packa
 
 ## The modules
 
-| Module | Gradle type | Contains | Depends on | v0.1 release status |
+| Module | Gradle type | Contains | Depends on | Distribution/support status |
 |---|---|---|---|---|
 | **`swath-model`** | `java-library` | The `io.varve.swath.model` package — a true leaf (imports no other internal package): `KeyBytes`, sealed `ListEntry`, `PageBatch`, `ByteMidpoint`. testFixtures: `ScalarSafety`. | — | internal; not published or supported |
 | **`swath-core`** | `java-library` | The internal core implementation: `engine`, `runtime`, `output` (incl. `output.parquet`), `sort`, `checkpoint`, `filter`, `pipeline`, `observability`, `error`, `concurrent`, and the **store abstraction** (`store/*` except `store/s3`). **No AWS SDK, no picocli.** testFixtures: `testkit` (MockPageFetcher, Keyspaces, EngineHarness…). Owns the JMH bench source set. | `api` → swath-model | internal; not published or supported |
 | **`swath-s3`** | `java-library` | The S3 backend: `io.varve.swath.store.s3` (`S3PageFetcher`, `S3ClientFactory`, `S3Config`) + the AWS SDK. testFixtures: `LocalStackSupport`. Future `swath-gcs`/`swath-azure` sit beside it. | `api` → swath-core | internal; not published or supported |
 | **`swath-cli`** | `application` | The `swath` binary: the `io.varve.swath.cli` package (`App`, `ListCommand`, `ResumeCommand`, …). `mainClass = io.varve.swath.cli.App`, `applicationName = swath`. | `impl` → swath-core, swath-s3 | binary/dist |
 | **`swath-replay`** | `application` | The listing replay server + `sort-fixture` + conformance harness (`io.varve.swath.replay`). Serves swath Parquet fixtures as a fake S3 `ListObjectsV2` endpoint. testFixtures: `testkit` (`ObjectEntries`, `ParquetFixtures`, `FakeListingStore`). | `impl` → swath-core | separate dev-tool distribution and container image |
-| **`swath-sim`** | `java-library` | The policy simulator (`io.varve.swath.sim`): the ground-truth **store** (`sim.store` — fixture-backed implementations of the replay module's `ListingStore` seam), the discrete-event **kernel** (`sim.kernel` — virtual clock, event queue, scheduler, seeded draw streams), the **models** (`sim.model` — latency, client cost, engine budgets), a synthetic load **driver** (`sim.driver`), and the real-policy **executor** (`sim.executor` — seed, owner-split, thief, pacing, and the simulator's AIMD port). The driver exercises store/kernel arithmetic without split/steal policy; the executor runs those policies against the modelled store in virtual time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay; `impl` → swath-core | ❌ (dev/analysis tool) |
+| **`swath-sim`** | `java-library` | The policy simulator (`io.varve.swath.sim`): the ground-truth **store** (`sim.store` — fixture-backed implementations of the replay module's `ListingStore` seam), the discrete-event **kernel** (`sim.kernel` — virtual clock, event queue, scheduler, seeded draw streams), the **models** (`sim.model` — latency, client cost, engine budgets), a synthetic load **driver** (`sim.driver`), and the real-policy **executor** (`sim.executor` — seed, owner-split, thief, pacing, and the simulator's AIMD port). The driver exercises store/kernel arithmetic without split/steal policy; the executor runs those policies against the modeled store in virtual time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay; `impl` → swath-core | ❌ (dev/analysis tool) |
 
 Only `swath-cli` ships in the main `swath` artifacts. The uber-jar is `:swath-cli:shadowJar` over swath-cli's own
 `runtimeClasspath`, and the Docker image copies exactly that jar, so a module reaches a shipped
@@ -59,7 +59,7 @@ artifact **iff `swath-cli` depends on it**. `swath-replay` is published separate
 own install distribution and container image; `swath-sim` is not on either runtime path (and
 is a `java-library`, so it has no dist of its own).
 
-v0.1 is CLI-only. No Java module is published to Maven Central and no Java
+The distributed product is CLI-only. No Java module is published to Maven Central and no Java
 package, class, interface, SPI, source shape, or binary ABI is a supported API.
 The `java-library` plugin and Gradle `api` edges below describe only this
 repository's compile-classpath structure. `swath-cli` ships as a binary/dist;
