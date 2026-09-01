@@ -665,6 +665,43 @@
   }
   .result dd.hot { color: var(--signal); }
 
+  /* ─────────────────────────────────────────────────────────
+     SKIP LINK + 30-SECOND SUMMARY
+     ───────────────────────────────────────────────────────── */
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    background: var(--accent);
+    color: var(--paper);
+    padding: 0.6rem 1rem;
+    border-radius: 0 0 2px 0;
+    text-decoration: none;
+    z-index: 10;
+  }
+  .skip-link:focus { left: 0; }
+
+  .summary {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    background: var(--paper-2);
+    border-radius: 2px;
+    padding: 1.1rem 1.3rem 1.2rem;
+    margin: 2.8rem 0 0;
+    max-width: 46rem;
+  }
+  .summary h2 {
+    font-size: 0.9rem;
+    letter-spacing: 0.02em;
+    max-width: none;
+    margin: 0 0 0.75rem;
+  }
+  .summary ol { margin: 0; padding-left: 1.35rem; font-size: 0.95rem; line-height: 1.55; }
+  .summary li { margin-bottom: 0.45em; }
+  .summary li:last-child { margin-bottom: 0; }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
@@ -713,11 +750,18 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main">Skip to main content</a>
+
 <div class="wrap">
 
   <header class="mast">
     <div class="eyebrow"><a href="https://varve.io">Varve</a> · <a href="https://swath.varve.io" class="mono">swath</a> · field guide to the engine</div>
-    <h1 class="hero-q">How do you divide 39.7 million files among 128 workers when S3 will not tell you where they are?</h1>
+    <h1 class="hero-q">How do you divide 39.7 million S3 objects among 128 listing workers when you cannot see how their keys are distributed?</h1>
+    <p class="prov-note" style="margin-top:-0.4rem;">
+      The 128 belongs to the recorded run on this page, which set that as its ceiling.
+      <span class="mono">--concurrency</span> is an adaptive ceiling rather than a required
+      setting, and its current default is 64.
+    </p>
     <p class="whatis">
       <strong>swath</strong> is an open-source command-line tool that lists very large S3 buckets
       in parallel. It can stream a table, TSV, or JSONL — compressed, if you want — or write a
@@ -743,9 +787,10 @@
       <div><dt>Wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="how it was measured">&#8224;</a></dd></div>
     </dl>
     <p class="prov-note">
-      <a href="#timings">&#8224; One recorded run</a>, from a dedicated cloud host at
-      <span class="mono">--concurrency 128</span>. A wall clock is a property of the machine and
-      the network; the distribution figures below are properties of the bucket.
+      <a href="#timings">&#8224; One recorded run</a> — <span class="mono">noaa-gestofs-field-guide-trace</span>,
+      from a dedicated cloud host at <span class="mono">--concurrency 128</span>. A wall clock is
+      a property of the machine and the network; the skew below is a property of this capture of
+      the bucket.
     </p>
 
     <div class="cta">
@@ -760,6 +805,7 @@
         <div>
           <h3>The story · ~7 min</h3>
           <ol>
+            <li><a href="#terms">Keyspace and range, in one paragraph</a></li>
             <li><a href="#reveal">513 guesses, and the one that mattered</a></li>
             <li><a href="#how">A miniature model of the mechanism</a></li>
             <li><a href="#constraint">The constraint everything follows from</a></li>
@@ -785,6 +831,44 @@
       </div>
     </details>
   </header>
+
+  <main id="main">
+
+  <div class="summary">
+    <h2>Five things to remember</h2>
+    <ol>
+      <li>S3 returns object keys in one global order, one page of up to 1,000 keys at a time.</li>
+      <li>swath lets different listing workers scan non-overlapping key ranges in parallel.</li>
+      <li>It does not need to know the distribution in advance; idle workers split the unscanned
+        remainder of busy ranges.</li>
+      <li>Managed Parquet output can resume from durable progress after an interruption.</li>
+      <li>The result is the complete result of a live listing — not a point-in-time snapshot of a
+        bucket that changes during the run.</li>
+    </ol>
+  </div>
+
+  <section id="terms" style="padding-top:2.4rem;">
+    <div class="col">
+      <p>
+        Two words first, because the rest of the page leans on them. Every S3 object has a
+        <em class="term">key</em> — the byte sequence used as its name — and S3 lists those keys
+        in one global order. This guide calls that ordered set the
+        <em class="term">keyspace</em>. A <em class="term">range</em> is a non-overlapping slice
+        of that order, assigned to one listing worker. If it helps to think of objects as the
+        files stored in the bucket, the keyspace is the single sorted list of all their names.
+      </p>
+    </div>
+
+    <div class="note">
+      <span class="lbl">Want to run it before reading the internals?</span>
+      <p>
+        Run the small anonymous NOAA example in
+        <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Getting started</a>. It needs Docker but no
+        AWS account, and it finishes in seconds — the full-bucket run further down this page is
+        a different proposition, worth tens of thousands of LIST requests.
+      </p>
+    </div>
+  </section>
 
   <!-- ══════════════════════════════════════════════════════ -->
   <section id="reveal">
@@ -1720,9 +1804,25 @@
     </div>
     <div class="col">
       <p>
-        This is the run Plate 1 was drawn from: <span class="mono">s3://noaa-gestofs-pds</span>,
-        a public NOAA forecast archive, listed cold with no inventory and no prior knowledge of
-        its shape. The single heaviest seed was split 2,155 times over the course of the run —
+        The measured example on this page is run
+        <span class="mono">noaa-gestofs-field-guide-trace</span>, captured against
+        <span class="mono">s3://noaa-gestofs-pds/</span> — a public NOAA forecast archive in
+        <span class="mono">us-east-1</span> — listed cold, with no inventory and no prior
+        knowledge of its shape, from a dedicated US-East cloud host at a different provider,
+        so the path to S3 crossed networks. It used a listing-concurrency ceiling of 128. The
+        swath version, commit, capture date, machine type, and exact command are
+        <em>unknown in the retained evidence</em>; they are marked unknown here rather than
+        inferred.
+      </p>
+      <p>
+        This is not the recording embedded in the repository README. That is a separate capture
+        of the same bucket, made with swath v0.2.1, which returned 39,585,029 objects — a live
+        bucket changes between runs, so the two are identified separately. The interactive trace
+        linked at the end of this section is this capture, not that one.
+      </p>
+      <p>
+        Plate 1 was drawn from this run. The single heaviest seed was split 2,155 times over the
+        course of it —
         mostly by its own worker shedding work ahead of its cursor, since only 195 of the run's
         2,399 splits were taken by thieves. Owner-side splitting is what refilled the worklist;
         idle workers claiming those shed ranges is what emptied it again.
@@ -1743,16 +1843,15 @@
     </div>
 
     <div class="note stop" id="timings">
-      <span class="lbl">&#8224; The timings still need re-measuring</span>
+      <span class="lbl">&#8224; What these clocks measure</span>
       <p>
-        This run was executed from a dedicated US-East cloud host — a different provider than
-        the bucket's, so the path to S3 crossed networks — at
-        <span class="mono">--concurrency 128</span>.
-        <strong>1m 09s is still one recorded run, not a benchmark</strong> — no competing
-        listers were measured alongside it, and instance type, network and the day's S3
-        behavior all move it. The speedup percentage is a ratio of busy to idle worker-time
-        <em>within</em> this run: useful for diagnosing the steal path, not comparable across
-        machines or concurrency settings.
+        <strong>1m 09s is the measured listing wall clock</strong> — 68,592 ms — for this one
+        recorded run, and it is not a benchmark: no competing listers were measured alongside
+        it, and instance type, network, and the day's S3 behavior all move it. The replay
+        animation on the trace page runs for 36 seconds; that is a playback length chosen for
+        viewing, not a measurement of anything. The speedup percentage is a ratio of busy to
+        idle worker-time <em>within</em> this run: useful for diagnosing the steal path, not
+        comparable across machines or concurrency settings.
       </p>
       <p style="margin-top:0.8em;">
         In this capture the bucket state was highly skewed: one of 513 initial ranges held
@@ -1782,7 +1881,7 @@
     <div class="cta" style="margin-top:1.6rem;">
       <a class="primary" href="https://swath.varve.io/runs/noaa-gestofs-pds/">Open the full trace report</a>
       <a href="https://github.com/varveio/swath">View the source</a>
-      <a href="https://github.com/varveio/swath#quickstart">Install swath</a>
+      <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Get started</a>
       <a href="#dives">Read the deep dives</a>
     </div>
 
@@ -1809,6 +1908,14 @@
         Everything above is the argument. Everything below is the implementation behind it —
         collapsed, because you do not need any of it to understand what swath does or to
         decide whether it is useful to you. Open what you want to audit.
+      </p>
+      <p>
+        One clarification before you do. In this guide, <em class="term">worker</em> means a
+        listing worker issuing ordered S3 page requests. Output writers and
+        sorted-finalization encoders are separate bounded pools and do not scale one-for-one
+        with <span class="mono">--concurrency</span>: a run at
+        <span class="mono">--concurrency 128</span> does not have 128 Parquet writers or 128
+        sort encoders.
       </p>
     </div>
   </section>
@@ -2237,6 +2344,8 @@
   
     </details>
   </section>
+
+  </main>
 
   <footer>
     Built from the swath internals pack — <span class="mono">docs/internals/overview.md</span>,
