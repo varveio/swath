@@ -16,6 +16,41 @@ virtual-host routing, version listing, or API other than path-style `ListObjects
 
 For an investigation workflow, see [Replay troubleshooting](replay-troubleshooting.md).
 
+A `--trace` decision trace and a replay fixture are different artifacts: a trace explains
+why the engine made a specific split or pivot decision during a run, while a replay
+fixture is captured Parquet listing data that `swath-replay` serves back as an
+S3-shaped source. A trace is not something `swath-replay` consumes, and a fixture does
+not carry engine decisions. See [Metrics and observability](metrics-and-observability.md)
+for how the two artifacts relate.
+
+## Quick path
+
+Capture a fixture, sort it if needed, serve it, query it, and collect its metrics:
+
+```bash
+swath list s3://digitalcorpora --region us-west-2 --no-sign-request \
+  --format parquet -o /tmp/swath-replay-example/capture --restart --concurrency 16
+
+swath-replay sort-fixture \
+  --capture /tmp/swath-replay-example/capture/data \
+  --output /tmp/swath-replay-example/sorted
+
+swath-replay serve --fixture /tmp/swath-replay-example/sorted \
+  --bucket digitalcorpora --host 127.0.0.1 --port 19090 \
+  --serving-mode sorted --metrics-port 19192 &
+SERVER_PID=$!
+
+# Wait for the index build to finish before sending requests.
+until curl -sf http://127.0.0.1:19192/healthz >/dev/null; do sleep 0.5; done
+
+curl 'http://127.0.0.1:19090/digitalcorpora?list-type=2&max-keys=10&encoding-type=url'
+curl -s http://127.0.0.1:19192/metrics | jq .
+
+kill "$SERVER_PID"
+```
+
+Each step is explained in detail below.
+
 ## Build
 
 ```bash
@@ -138,10 +173,12 @@ Jetty's implicit 200-thread default. It defaults to 512 and is reported as
 `max_concurrent_requests=` at startup. Set it at or above the widest client fan-out so
 connector queueing is not mistaken for backend latency.
 
-`--parquet-connections 0` uses the selected store's own reader default:
-`max(8, min(32, cores))` for sorted serving and `min(4, cores)` for DuckDB.
-Size this for concurrent decode work, not total requests: readers are returned before
-injected sleep. Each sorted slot holds an open reader and decoded footer per file, so
+`--parquet-connections N` controls the selected serving mode's backing-reader capacity.
+With `0`, sorted mode uses `max(8, min(32, available processors))`, while DuckDB mode
+uses `min(4, available processors)`. Size it for concurrent decode work rather than
+total HTTP requests; `--max-concurrent-requests` is the separate request-admission
+ceiling. Readers are returned before injected sleep. Each sorted slot holds an open
+reader and decoded footer per file, so
 very large pools can waste file descriptors and heap. Sorted mode eagerly opens the range-reader
 pool per file (`connections × files` readers). Its independent row-group pool opens lazily, one
 file at a time, only when a native `delimiter=/` skip-scan cannot answer from routing-index bounds;
@@ -266,9 +303,9 @@ group proves internally disordered, sorted mode returns `500 InternalError` and 
 `swath.replay.serving.refused{reason=row_group_disorder}`. It never guesses past disorder.
 Re-sort the capture or use DuckDB.
 
-`--parquet-connections N` controls the DuckDB pool; `0` chooses `min(4, CPUs)`. Connections
-divide available threads, so raising the pool trades per-query resources for request
-parallelism.
+See [Serving concurrency](#serving-concurrency---max-concurrent-requests) for
+`--parquet-connections` defaults and sizing guidance; it governs backing-reader capacity
+for both serving modes, not only DuckDB.
 
 ## Fault-latency injection (`--inject-latency`)
 
