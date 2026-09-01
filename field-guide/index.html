@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <title>swath — a field guide to parallel S3 listing</title>
-<meta name="description" content="How swath divides an S3 keyspace it cannot see: blind range guesses, work stealing that corrects them mid-sweep, and crash-safe Parquet output.">
+<meta name="description" content="How swath divides an S3 keyspace it cannot see: blind range guesses, work stealing that corrects them mid-sweep, and resumable managed Parquet output.">
 
 <!-- Publication URLs — this is the one place to change them.
      Live site: https://swath.varve.io (GitHub Pages, gh-pages branch of varveio/swath) -->
@@ -13,7 +13,7 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="swath">
 <meta property="og:title" content="How swath maps an S3 bucket it cannot see">
-<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to crash-safe Parquet.">
+<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to resumable managed Parquet.">
 <meta property="og:url" content="https://swath.varve.io/field-guide/">
 <meta property="og:image" content="https://swath.varve.io/card.png">
 <meta property="og:image:width" content="1200">
@@ -665,6 +665,43 @@
   }
   .result dd.hot { color: var(--signal); }
 
+  /* ─────────────────────────────────────────────────────────
+     SKIP LINK + 30-SECOND SUMMARY
+     ───────────────────────────────────────────────────────── */
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    background: var(--accent);
+    color: var(--paper);
+    padding: 0.6rem 1rem;
+    border-radius: 0 0 2px 0;
+    text-decoration: none;
+    z-index: 10;
+  }
+  .skip-link:focus { left: 0; }
+
+  .summary {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    background: var(--paper-2);
+    border-radius: 2px;
+    padding: 1.1rem 1.3rem 1.2rem;
+    margin: 2.8rem 0 0;
+    max-width: 46rem;
+  }
+  .summary h2 {
+    font-size: 0.9rem;
+    letter-spacing: 0.02em;
+    max-width: none;
+    margin: 0 0 0.75rem;
+  }
+  .summary ol { margin: 0; padding-left: 1.35rem; font-size: 0.95rem; line-height: 1.55; }
+  .summary li { margin-bottom: 0.45em; }
+  .summary li:last-child { margin-bottom: 0; }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
@@ -713,36 +750,47 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main">Skip to main content</a>
+
 <div class="wrap">
 
   <header class="mast">
     <div class="eyebrow"><a href="https://varve.io">Varve</a> · <a href="https://swath.varve.io" class="mono">swath</a> · field guide to the engine</div>
-    <h1 class="hero-q">How do you divide 39.7 million files among 128 workers when S3 will not tell you where they are?</h1>
+    <h1 class="hero-q">How do you divide 39.7 million S3 objects among 128 listing workers when you cannot see how their keys are distributed?</h1>
+    <p class="prov-note" style="margin-top:-0.4rem;">
+      The 128 belongs to the recorded run on this page, which set that as its ceiling.
+      <span class="mono">--concurrency</span> is an adaptive ceiling rather than a required
+      setting, and its current default is 64.
+    </p>
     <p class="whatis">
       <strong>swath</strong> is an open-source command-line tool that lists very large S3 buckets
-      in parallel and writes the result to Parquet you can resume after a crash. It is for anyone
-      who has waited on a bucket too big to enumerate one page at a time, and has no usable
-      Inventory report to fall back on. This page is how it works.
+      in parallel. It can stream a table, TSV, or JSONL — compressed, if you want — or write a
+      managed Parquet dataset you can resume after a crash. It is for anyone who has waited on a
+      bucket too big to enumerate one page at a time, and has no usable Inventory report to fall
+      back on. This page is how it works.
     </p>
     <p class="standfirst" style="margin-bottom:0;">
-      swath guessed <strong>513 adjacent ranges</strong> and started listing. One of those
-      guesses secretly held <strong>68% of the entire bucket</strong> — 1,281× the median guess,
-      and nothing could have revealed that in advance. The engine discovered the imbalance
-      while running, split that one range apart until every worker could help, and finished the
-      bucket. The name is the method: adjacent swaths, no gaps, no overlap.
+      S3 returns object keys in order but never reveals how they are distributed. swath
+      assigns <strong>non-overlapping key ranges</strong> to listing workers, watches where the
+      objects actually turn out to be, and splits the unscanned remainder of busy ranges so idle
+      workers can help. In the recorded run below it opened with 513 adjacent ranges; one of them
+      held <strong>68% of the bucket</strong>, and nothing could have revealed that in advance.
+      This guide explains that range model, the durability boundary, and where parallelism stops
+      helping. The name is the method: adjacent swaths, no gaps, no overlap.
     </p>
 
     <dl class="metrics">
       <div><dt>Objects listed</dt><dd>39,651,850</dd></div>
       <div><dt>Initial guesses</dt><dd>513</dd></div>
       <div><dt>In one guess</dt><dd class="hot">68.0%</dd></div>
-      <div><dt>Workers</dt><dd>128</dd></div>
-      <div><dt>Wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="how it was measured">&#8224;</a></dd></div>
+      <div><dt>Listing workers</dt><dd>128</dd></div>
+      <div><dt>Listing wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="how it was measured">&#8224;</a></dd></div>
     </dl>
     <p class="prov-note">
-      <a href="#timings">&#8224; One recorded run</a>, from a dedicated cloud host at
-      <span class="mono">--concurrency 128</span>. A wall clock is a property of the machine and
-      the network; the distribution figures below are properties of the bucket.
+      <a href="#timings">&#8224; One recorded run</a> — <span class="mono">noaa-gestofs-pds-field-guide-trace</span>,
+      from a dedicated cloud host at <span class="mono">--concurrency 128</span>. A wall clock is
+      a property of the machine and the network; the skew below is a property of this capture of
+      the bucket.
     </p>
 
     <div class="cta">
@@ -757,6 +805,7 @@
         <div>
           <h3>The story · ~7 min</h3>
           <ol>
+            <li><a href="#terms">Keyspace and range, in one paragraph</a></li>
             <li><a href="#reveal">513 guesses, and the one that mattered</a></li>
             <li><a href="#how">A miniature model of the mechanism</a></li>
             <li><a href="#constraint">The constraint everything follows from</a></li>
@@ -766,7 +815,7 @@
             <li><a href="#laws">What the engine learned from real buckets</a></li>
             <li><a href="#durability">Commit before emit, and the two cursors</a></li>
             <li><a href="#proof">How the guarantees are enforced</a></li>
-            <li><a href="#limits">Where it honestly cannot win</a></li>
+            <li><a href="#limits">Where parallelism stops helping</a></li>
             <li><a href="#run">The actual 39.7M run</a></li>
           </ol>
         </div>
@@ -783,6 +832,44 @@
     </details>
   </header>
 
+  <main id="main">
+
+  <div class="summary">
+    <h2>Five things to remember</h2>
+    <ol>
+      <li>S3 returns object keys in one global order, one page of up to 1,000 keys at a time.</li>
+      <li>swath lets different listing workers scan non-overlapping key ranges in parallel.</li>
+      <li>It does not need to know the distribution in advance; idle workers split the unscanned
+        remainder of busy ranges.</li>
+      <li>Managed Parquet output can resume from durable progress after an interruption.</li>
+      <li>The result is the complete result of a live listing — not a point-in-time snapshot of a
+        bucket that changes during the run.</li>
+    </ol>
+  </div>
+
+  <section id="terms" style="padding-top:2.4rem;">
+    <div class="col">
+      <p>
+        Two words first, because the rest of the page leans on them. Every S3 object has a
+        <em class="term">key</em> — the byte sequence used as its name — and S3 lists those keys
+        in one global order. This guide calls that ordered set the
+        <em class="term">keyspace</em>. A <em class="term">range</em> is a non-overlapping slice
+        of that order, assigned to one listing worker. If it helps to think of objects as the
+        files stored in the bucket, the keyspace is the single sorted list of all their names.
+      </p>
+    </div>
+
+    <div class="note">
+      <span class="lbl">Want to run it before reading the internals?</span>
+      <p>
+        Run the small anonymous NOAA example in
+        <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Getting started</a>. It needs Docker but no
+        AWS account, and it finishes in seconds — the full-bucket run further down this page is
+        a different proposition, worth tens of thousands of LIST requests.
+      </p>
+    </div>
+  </section>
+
   <!-- ══════════════════════════════════════════════════════ -->
   <section id="reveal">
     <div class="sec-head">
@@ -794,14 +881,16 @@
         Before it lists anything, swath has to cut the keyspace into pieces. It has no
         distribution to cut against, so it does what any blind partitioner does: one
         <span class="mono">delimiter=/</span> probe for the top-level directories, then
-        ranges cut along the boundaries it returns — capped at four per worker and evenly
-        subsampled — each implicitly assumed to hold about as much as the next.
+        ranges cut along the boundaries it returns — capped at
+        <span class="mono">min(1000, 4 × workers)</span> and evenly subsampled — each
+        implicitly assumed to hold about as much as the next. At 128 workers that cap is 512
+        cut points, which is where the 513 comes from.
         For this bucket that came to 513 ranges and an expectation of
-        <strong>0.195% of the files in each</strong>.
+        <strong>0.195% of the objects in each</strong>.
       </p>
       <p>
         Below is that assumption on top, and what the run actually measured underneath.
-        Same 513 seeds, same order, same colour. Only the widths differ.
+        Same 513 seeds, same order, same color. Only the widths differ.
       </p>
     </div>
 
@@ -827,7 +916,7 @@
           <text class="sm" x="740" y="176" text-anchor="end">measured, same 513 seeds, same order</text>
           <path class="f-dim" opacity=".38" d="M40.0 188h0.5v34h-0.5zM40.0 188h0.5v34h-0.5zM40.1 188h34.6v34h-34.6zM550.4 188h0.5v34h-0.5zM550.6 188h0.5v34h-0.5zM550.9 188h0.5v34h-0.5zM551.3 188h0.5v34h-0.5zM551.7 188h0.5v34h-0.5zM552.0 188h0.5v34h-0.5zM552.4 188h0.5v34h-0.5zM552.8 188h0.5v34h-0.5zM553.0 188h0.5v34h-0.5zM553.4 188h0.5v34h-0.5zM553.8 188h0.5v34h-0.5zM554.1 188h0.5v34h-0.5zM554.5 188h0.5v34h-0.5zM554.9 188h0.5v34h-0.5zM555.2 188h0.5v34h-0.5zM555.6 188h0.5v34h-0.5zM556.0 188h0.5v34h-0.5zM556.3 188h0.5v34h-0.5zM556.6 188h0.5v34h-0.5zM557.0 188h0.5v34h-0.5zM557.3 188h0.5v34h-0.5zM557.7 188h0.5v34h-0.5zM558.1 188h0.5v34h-0.5zM558.4 188h0.5v34h-0.5zM558.8 188h0.5v34h-0.5zM559.2 188h0.5v34h-0.5zM559.5 188h0.5v34h-0.5zM559.9 188h0.5v34h-0.5zM560.3 188h0.5v34h-0.5zM560.6 188h0.5v34h-0.5zM560.9 188h0.5v34h-0.5zM561.3 188h0.5v34h-0.5zM561.7 188h0.5v34h-0.5zM562.0 188h0.5v34h-0.5zM562.4 188h0.5v34h-0.5zM562.8 188h0.5v34h-0.5zM563.1 188h0.5v34h-0.5zM563.5 188h0.5v34h-0.5zM563.9 188h0.5v34h-0.5zM564.1 188h0.5v34h-0.5zM564.5 188h0.5v34h-0.5zM564.9 188h0.5v34h-0.5zM565.2 188h0.5v34h-0.5zM565.6 188h0.5v34h-0.5zM566.0 188h0.5v34h-0.5zM566.3 188h0.5v34h-0.5zM566.7 188h0.5v34h-0.5zM567.1 188h0.5v34h-0.5zM567.4 188h0.5v34h-0.5zM567.8 188h0.5v34h-0.5zM568.1 188h0.5v34h-0.5zM568.4 188h0.5v34h-0.5zM568.8 188h0.5v34h-0.5zM569.2 188h0.5v34h-0.5zM569.5 188h0.5v34h-0.5zM569.9 188h0.5v34h-0.5zM570.3 188h0.5v34h-0.5zM570.7 188h0.5v34h-0.5zM571.0 188h0.5v34h-0.5zM571.4 188h0.5v34h-0.5zM571.7 188h0.5v34h-0.5zM572.0 188h0.5v34h-0.5zM572.3 188h0.5v34h-0.5zM572.7 188h0.5v34h-0.5zM573.0 188h0.5v34h-0.5zM573.4 188h0.5v34h-0.5zM573.8 188h0.5v34h-0.5zM574.1 188h0.5v34h-0.5zM574.5 188h0.5v34h-0.5zM574.9 188h0.5v34h-0.5zM575.2 188h0.5v34h-0.5zM575.5 188h0.5v34h-0.5zM575.9 188h0.5v34h-0.5zM576.3 188h0.5v34h-0.5zM576.6 188h0.5v34h-0.5zM577.0 188h0.5v34h-0.5zM577.4 188h0.5v34h-0.5zM577.7 188h0.5v34h-0.5zM578.1 188h0.5v34h-0.5zM578.5 188h0.5v34h-0.5zM578.8 188h0.5v34h-0.5zM579.1 188h0.5v34h-0.5zM579.5 188h0.5v34h-0.5zM579.9 188h0.5v34h-0.5zM580.2 188h0.5v34h-0.5zM580.6 188h0.5v34h-0.5zM581.0 188h0.5v34h-0.5zM581.3 188h0.5v34h-0.5zM581.7 188h0.5v34h-0.5zM582.1 188h0.5v34h-0.5zM582.4 188h0.5v34h-0.5zM582.7 188h0.5v34h-0.5zM583.1 188h0.5v34h-0.5zM583.4 188h0.5v34h-0.5zM583.8 188h0.5v34h-0.5zM584.2 188h0.5v34h-0.5zM584.6 188h0.5v34h-0.5zM584.9 188h0.5v34h-0.5zM585.3 188h0.5v34h-0.5zM585.7 188h0.5v34h-0.5zM586.0 188h0.5v34h-0.5zM586.4 188h0.5v34h-0.5zM586.7 188h0.5v34h-0.5zM587.0 188h0.5v34h-0.5zM587.4 188h0.5v34h-0.5zM587.8 188h0.5v34h-0.5zM588.2 188h0.5v34h-0.5zM588.5 188h0.5v34h-0.5zM588.9 188h0.5v34h-0.5zM589.3 188h0.5v34h-0.5zM589.6 188h0.5v34h-0.5zM590.0 188h0.5v34h-0.5zM590.3 188h0.5v34h-0.5zM590.6 188h0.5v34h-0.5zM591.0 188h0.5v34h-0.5zM591.4 188h0.5v34h-0.5zM591.7 188h0.5v34h-0.5zM592.1 188h0.5v34h-0.5zM592.5 188h0.5v34h-0.5zM592.9 188h0.5v34h-0.5zM593.2 188h0.5v34h-0.5zM593.6 188h0.5v34h-0.5zM594.0 188h0.5v34h-0.5zM594.2 188h0.5v34h-0.5zM594.6 188h0.5v34h-0.5zM595.0 188h0.5v34h-0.5zM595.3 188h0.5v34h-0.5zM595.7 188h0.5v34h-0.5zM596.1 188h0.5v34h-0.5zM596.4 188h0.5v34h-0.5zM596.8 188h0.5v34h-0.5zM597.2 188h0.5v34h-0.5zM597.6 188h0.5v34h-0.5zM597.8 188h0.5v34h-0.5zM598.2 188h0.5v34h-0.5zM598.6 188h0.5v34h-0.5zM598.9 188h0.5v34h-0.5zM599.3 188h0.5v34h-0.5zM599.7 188h0.5v34h-0.5zM600.0 188h0.5v34h-0.5zM600.4 188h0.5v34h-0.5zM600.8 188h0.5v34h-0.5zM601.2 188h0.5v34h-0.5zM601.5 188h0.5v34h-0.5zM601.8 188h0.5v34h-0.5zM602.2 188h0.5v34h-0.5zM602.5 188h0.5v34h-0.5zM602.9 188h0.5v34h-0.5zM603.3 188h0.5v34h-0.5zM603.6 188h0.5v34h-0.5zM604.0 188h0.5v34h-0.5zM604.4 188h0.5v34h-0.5zM604.7 188h0.5v34h-0.5zM605.1 188h0.5v34h-0.5zM605.4 188h0.5v34h-0.5zM605.8 188h0.5v34h-0.5zM606.1 188h0.5v34h-0.5zM606.5 188h0.5v34h-0.5zM606.9 188h0.5v34h-0.5zM607.2 188h0.5v34h-0.5zM607.6 188h0.5v34h-0.5zM608.0 188h0.5v34h-0.5zM608.3 188h0.5v34h-0.5zM608.7 188h0.5v34h-0.5zM609.0 188h0.5v34h-0.5zM609.4 188h0.5v34h-0.5zM609.7 188h0.5v34h-0.5zM610.1 188h0.5v34h-0.5zM610.5 188h0.5v34h-0.5zM610.8 188h0.5v34h-0.5zM611.2 188h0.5v34h-0.5zM611.6 188h0.5v34h-0.5zM611.9 188h0.5v34h-0.5zM612.3 188h0.5v34h-0.5zM612.7 188h0.5v34h-0.5zM613.0 188h0.5v34h-0.5zM613.3 188h0.5v34h-0.5zM613.7 188h0.5v34h-0.5zM614.1 188h0.5v34h-0.5zM614.4 188h0.5v34h-0.5zM614.8 188h0.5v34h-0.5zM615.2 188h0.5v34h-0.5zM615.5 188h0.5v34h-0.5zM615.9 188h0.5v34h-0.5zM616.3 188h0.5v34h-0.5zM616.6 188h0.5v34h-0.5zM616.9 188h0.5v34h-0.5zM617.3 188h0.5v34h-0.5zM617.7 188h0.5v34h-0.5zM618.0 188h0.5v34h-0.5zM618.4 188h0.5v34h-0.5zM618.8 188h0.5v34h-0.5zM618.9 188h0.5v34h-0.5zM619.3 188h0.5v34h-0.5zM619.7 188h0.5v34h-0.5zM620.0 188h0.5v34h-0.5zM620.3 188h0.5v34h-0.5zM620.7 188h0.5v34h-0.5zM621.1 188h0.5v34h-0.5zM621.4 188h0.5v34h-0.5zM621.8 188h0.5v34h-0.5zM622.2 188h0.5v34h-0.5zM622.5 188h0.5v34h-0.5zM622.9 188h0.5v34h-0.5zM623.3 188h0.5v34h-0.5zM623.7 188h0.5v34h-0.5zM623.9 188h0.5v34h-0.5zM624.3 188h0.5v34h-0.5zM624.7 188h0.5v34h-0.5zM625.0 188h0.5v34h-0.5zM625.4 188h0.5v34h-0.5zM625.8 188h0.5v34h-0.5zM626.2 188h0.5v34h-0.5zM626.5 188h0.5v34h-0.5zM626.9 188h0.5v34h-0.5zM627.3 188h0.5v34h-0.5zM627.6 188h0.5v34h-0.5zM627.9 188h0.5v34h-0.5zM628.3 188h0.5v34h-0.5zM628.7 188h0.5v34h-0.5zM629.0 188h0.5v34h-0.5zM629.4 188h0.5v34h-0.5zM629.8 188h0.5v34h-0.5zM630.2 188h0.5v34h-0.5zM630.5 188h0.5v34h-0.5zM630.9 188h0.5v34h-0.5zM631.3 188h0.5v34h-0.5zM631.5 188h0.5v34h-0.5zM631.9 188h0.5v34h-0.5zM632.3 188h0.5v34h-0.5zM632.7 188h0.5v34h-0.5zM633.0 188h0.5v34h-0.5zM633.4 188h0.5v34h-0.5zM633.8 188h0.5v34h-0.5zM634.1 188h0.5v34h-0.5zM634.5 188h0.5v34h-0.5zM634.9 188h0.5v34h-0.5zM635.2 188h0.5v34h-0.5zM635.5 188h0.5v34h-0.5zM635.9 188h0.5v34h-0.5zM636.3 188h0.5v34h-0.5zM636.6 188h0.5v34h-0.5zM637.0 188h0.5v34h-0.5zM637.4 188h0.5v34h-0.5zM637.8 188h0.5v34h-0.5zM638.1 188h0.5v34h-0.5zM638.5 188h0.5v34h-0.5zM638.9 188h0.5v34h-0.5zM639.2 188h0.5v34h-0.5zM639.5 188h0.5v34h-0.5zM639.9 188h0.5v34h-0.5zM640.3 188h0.5v34h-0.5zM640.6 188h0.5v34h-0.5zM641.0 188h0.5v34h-0.5zM641.4 188h0.5v34h-0.5zM641.8 188h0.5v34h-0.5zM642.1 188h0.5v34h-0.5zM642.5 188h0.5v34h-0.5zM642.8 188h0.5v34h-0.5zM643.1 188h0.5v34h-0.5zM643.5 188h0.5v34h-0.5zM643.9 188h0.5v34h-0.5zM644.3 188h0.5v34h-0.5zM644.6 188h0.5v34h-0.5zM645.0 188h0.5v34h-0.5zM645.4 188h0.5v34h-0.5zM645.7 188h0.5v34h-0.5zM646.1 188h0.5v34h-0.5zM646.5 188h0.5v34h-0.5zM646.8 188h0.5v34h-0.5zM647.1 188h0.5v34h-0.5zM647.5 188h0.5v34h-0.5zM647.9 188h0.5v34h-0.5zM648.2 188h0.5v34h-0.5zM648.6 188h0.5v34h-0.5zM649.0 188h0.5v34h-0.5zM649.4 188h0.5v34h-0.5zM649.7 188h0.5v34h-0.5zM650.1 188h0.5v34h-0.5zM650.4 188h0.5v34h-0.5zM650.8 188h0.5v34h-0.5zM651.1 188h0.5v34h-0.5zM651.5 188h0.5v34h-0.5zM651.9 188h0.5v34h-0.5zM652.2 188h0.5v34h-0.5zM652.6 188h0.5v34h-0.5zM653.0 188h0.5v34h-0.5zM653.3 188h0.5v34h-0.5zM653.7 188h0.5v34h-0.5zM654.1 188h0.5v34h-0.5zM654.4 188h0.5v34h-0.5zM654.7 188h0.5v34h-0.5zM655.1 188h0.5v34h-0.5zM655.5 188h0.5v34h-0.5zM655.9 188h0.5v34h-0.5zM656.2 188h0.5v34h-0.5zM656.6 188h0.5v34h-0.5zM657.0 188h0.5v34h-0.5zM657.3 188h0.5v34h-0.5zM657.7 188h0.5v34h-0.5zM658.0 188h0.5v34h-0.5zM658.4 188h0.5v34h-0.5zM658.7 188h0.5v34h-0.5zM659.1 188h0.5v34h-0.5zM659.5 188h0.5v34h-0.5zM659.8 188h0.5v34h-0.5zM660.2 188h0.5v34h-0.5zM660.6 188h0.5v34h-0.5zM661.0 188h0.5v34h-0.5zM661.3 188h0.5v34h-0.5zM661.6 188h0.5v34h-0.5zM662.0 188h0.5v34h-0.5zM662.4 188h0.5v34h-0.5zM662.7 188h0.5v34h-0.5zM663.1 188h0.5v34h-0.5zM663.5 188h0.5v34h-0.5zM663.8 188h0.5v34h-0.5zM664.2 188h0.5v34h-0.5zM664.6 188h0.5v34h-0.5zM664.9 188h0.5v34h-0.5zM665.3 188h0.5v34h-0.5zM665.6 188h0.5v34h-0.5zM666.0 188h0.5v34h-0.5zM666.3 188h0.5v34h-0.5zM666.7 188h0.5v34h-0.5zM667.1 188h0.5v34h-0.5zM667.5 188h0.5v34h-0.5zM667.8 188h0.5v34h-0.5zM668.2 188h0.5v34h-0.5zM668.6 188h0.5v34h-0.5zM668.9 188h0.5v34h-0.5zM669.2 188h0.5v34h-0.5zM669.6 188h0.5v34h-0.5zM670.0 188h0.5v34h-0.5zM670.3 188h0.5v34h-0.5zM670.7 188h0.5v34h-0.5zM671.1 188h0.5v34h-0.5zM671.4 188h0.5v34h-0.5zM671.8 188h0.5v34h-0.5zM672.2 188h0.5v34h-0.5zM672.6 188h0.5v34h-0.5zM672.9 188h0.5v34h-0.5zM673.2 188h0.5v34h-0.5zM673.6 188h0.5v34h-0.5zM674.0 188h0.5v34h-0.5zM674.3 188h0.5v34h-0.5zM674.7 188h0.5v34h-0.5zM675.1 188h0.5v34h-0.5zM675.4 188h0.5v34h-0.5zM675.8 188h0.5v34h-0.5zM676.2 188h0.5v34h-0.5zM676.6 188h0.5v34h-0.5zM676.8 188h0.5v34h-0.5zM677.2 188h0.5v34h-0.5zM677.6 188h0.5v34h-0.5zM677.9 188h0.5v34h-0.5zM678.3 188h0.5v34h-0.5zM678.7 188h0.5v34h-0.5zM679.1 188h0.5v34h-0.5zM679.4 188h0.5v34h-0.5zM679.8 188h0.5v34h-0.5zM680.2 188h0.5v34h-0.5zM680.5 188h0.5v34h-0.5zM680.8 188h0.5v34h-0.5zM681.2 188h0.5v34h-0.5zM681.6 188h0.5v34h-0.5zM681.9 188h0.5v34h-0.5zM682.3 188h0.5v34h-0.5zM682.7 188h0.5v34h-0.5zM683.1 188h0.5v34h-0.5zM683.4 188h0.5v34h-0.5zM683.8 188h0.5v34h-0.5zM684.2 188h0.5v34h-0.5zM684.4 188h0.5v34h-0.5zM684.8 188h0.5v34h-0.5zM685.2 188h0.5v34h-0.5zM685.6 188h0.5v34h-0.5zM685.9 188h0.5v34h-0.5zM686.3 188h0.5v34h-0.5zM686.7 188h0.5v34h-0.5zM687.0 188h0.5v34h-0.5zM687.4 188h0.5v34h-0.5zM687.8 188h0.5v34h-0.5zM688.1 188h0.5v34h-0.5zM688.4 188h0.5v34h-0.5zM688.8 188h0.5v34h-0.5zM689.2 188h0.5v34h-0.5zM689.6 188h0.5v34h-0.5zM689.9 188h0.5v34h-0.5zM690.3 188h0.5v34h-0.5zM690.7 188h0.5v34h-0.5zM691.0 188h0.5v34h-0.5zM691.4 188h0.5v34h-0.5zM691.8 188h0.5v34h-0.5zM692.1 188h0.5v34h-0.5zM692.4 188h0.5v34h-0.5zM692.8 188h0.5v34h-0.5zM693.2 188h0.5v34h-0.5zM693.5 188h0.5v34h-0.5zM693.9 188h0.5v34h-0.5zM694.3 188h0.5v34h-0.5zM694.7 188h0.5v34h-0.5zM695.0 188h0.5v34h-0.5zM695.4 188h0.5v34h-0.5zM695.7 188h0.5v34h-0.5zM696.1 188h0.5v34h-0.5zM696.4 188h0.5v34h-0.5zM696.8 188h0.5v34h-0.5zM697.2 188h0.5v34h-0.5zM697.5 188h0.5v34h-0.5zM697.9 188h0.5v34h-0.5zM698.3 188h0.5v34h-0.5zM698.7 188h0.5v34h-0.5zM699.0 188h0.5v34h-0.5zM699.4 188h0.5v34h-0.5zM699.7 188h0.5v34h-0.5zM700.0 188h0.5v34h-0.5zM700.4 188h0.5v34h-0.5zM700.8 188h0.5v34h-0.5zM701.2 188h0.5v34h-0.5zM701.5 188h0.5v34h-0.5zM701.9 188h0.5v34h-0.5zM702.3 188h0.5v34h-0.5zM702.6 188h0.5v34h-0.5zM703.0 188h0.5v34h-0.5zM703.3 188h0.5v34h-0.5zM703.7 188h0.5v34h-0.5zM704.0 188h0.5v34h-0.5zM704.4 188h0.5v34h-0.5zM704.8 188h0.5v34h-0.5zM705.2 188h0.5v34h-0.5zM705.5 188h0.5v34h-0.5zM705.9 188h0.5v34h-0.5zM706.3 188h0.5v34h-0.5zM706.6 188h0.5v34h-0.5zM707.0 188h0.5v34h-0.5zM707.3 188h0.5v34h-0.5zM707.7 188h0.5v34h-0.5zM708.0 188h0.5v34h-0.5zM708.4 188h0.5v34h-0.5zM708.8 188h0.5v34h-0.5zM709.1 188h0.5v34h-0.5zM709.5 188h0.5v34h-0.5zM709.9 188h0.5v34h-0.5zM710.3 188h0.5v34h-0.5zM710.6 188h0.5v34h-0.5zM710.9 188h0.5v34h-0.5zM711.3 188h0.5v34h-0.5zM711.7 188h0.5v34h-0.5zM712.0 188h0.5v34h-0.5zM712.4 188h0.5v34h-0.5zM712.8 188h0.5v34h-0.5zM713.1 188h0.5v34h-0.5zM713.5 188h0.5v34h-0.5zM713.9 188h0.5v34h-0.5zM714.3 188h0.5v34h-0.5zM714.5 188h0.5v34h-0.5zM714.9 188h0.5v34h-0.5zM715.3 188h0.5v34h-0.5zM715.6 188h0.5v34h-0.5zM716.0 188h0.5v34h-0.5zM716.4 188h0.5v34h-0.5zM716.8 188h0.5v34h-0.5zM717.1 188h0.5v34h-0.5zM717.5 188h0.5v34h-0.5zM717.9 188h0.5v34h-0.5zM718.2 188h0.5v34h-0.5zM718.5 188h0.5v34h-0.5zM718.9 188h0.5v34h-0.5zM719.3 188h0.5v34h-0.5zM719.6 188h0.5v34h-0.5zM720.0 188h0.5v34h-0.5zM720.4 188h0.5v34h-0.5zM720.8 188h0.5v34h-0.5zM721.1 188h0.5v34h-0.5zM721.5 188h0.5v34h-0.5zM721.9 188h0.5v34h-0.5zM722.1 188h0.5v34h-0.5zM722.5 188h0.5v34h-0.5zM722.9 188h0.5v34h-0.5zM723.3 188h0.5v34h-0.5zM723.6 188h0.5v34h-0.5zM724.0 188h0.5v34h-0.5zM724.4 188h0.5v34h-0.5zM724.7 188h0.5v34h-0.5zM725.1 188h0.5v34h-0.5zM725.5 188h0.5v34h-0.5zM725.9 188h0.5v34h-0.5zM726.1 188h0.5v34h-0.5zM726.5 188h0.5v34h-0.5zM726.9 188h0.5v34h-0.5zM727.3 188h0.5v34h-0.5zM727.6 188h0.5v34h-0.5zM728.0 188h0.5v34h-0.5zM728.4 188h0.5v34h-0.5zM728.7 188h0.5v34h-0.5zM729.1 188h0.5v34h-0.5zM729.5 188h0.5v34h-0.5zM729.8 188h0.5v34h-0.5zM730.1 188h0.5v34h-0.5zM730.5 188h0.5v34h-0.5zM730.9 188h0.5v34h-0.5zM731.2 188h0.5v34h-0.5zM731.6 188h0.5v34h-0.5zM732.0 188h0.5v34h-0.5zM732.4 188h0.5v34h-0.5zM732.7 188h0.5v34h-0.5zM733.1 188h0.5v34h-0.5zM733.5 188h6.5v34h-6.5z"/>
           <rect x="74.7" y="188" width="475.7" height="34" class="f-sig"/>
-          <text class="sm" x="313" y="209" text-anchor="middle" style="fill:var(--paper)">26,946,179 files — 68.0%</text>
+          <text class="sm" x="313" y="209" text-anchor="middle" style="fill:var(--paper)">26,946,179 objects — 68.0%</text>
           <text class="sm" x="738" y="240" text-anchor="end">↑ the other 512 guesses, together 32%</text>
         
           <line x1="40" y1="262" x2="740" y2="262" class="s-rule"/>
@@ -878,8 +967,8 @@
           same <em>kinds of decisions</em> in the same order — seed, drain, estimate, split,
           claim, finish — at a speed and scale you can watch, not the engine's actual
           policies. Its counters are not measurements of anything.
-          For measured behaviour, Plate 1 above and
-          <a href="#run">the recorded 39.7-million-file run</a> below are the real thing.
+          For measured behavior, Plate 1 above and
+          <a href="#run">the recorded 39.7-million-object run</a> below are the real thing.
         </p>
       </div>
       <p>
@@ -1215,6 +1304,7 @@
         in one atomic transaction, so the very first durable state is already a valid
         tiling of the keyspace.
       </p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#8-seeding-the-hybrid"><span class="mono">docs/internals/algorithms.md §8</span></a></p>
     </div>
   </section>
 
@@ -1253,26 +1343,26 @@
           <circle cx="26" cy="176" r="5" class="f-ink"/>
 
           <text class="hd" x="48" y="28">Estimate where half the remaining work is</text>
-          <text class="sm" x="560" y="28">from mass already seen · 0 requests</text>
+          <text class="sm" x="756" y="28" text-anchor="end">from mass already seen · 0 requests</text>
 
           <text class="hd" x="48" y="66">Ask S3 for one key past that boundary</text>
-          <text class="sm" x="560" y="66">max_keys=1 · 1 request</text>
+          <text class="sm" x="756" y="66" text-anchor="end">max_keys=1 · 1 request</text>
 
           <text class="hd" x="48" y="104">If a key comes back, split there</text>
-          <text class="sm" x="560" y="104">the common case · done</text>
+          <text class="sm" x="756" y="104" text-anchor="end">the common case · done</text>
 
           <text class="hd f-sig" x="48" y="142">If nothing does, climb to harder evidence</text>
-          <text class="sm" x="560" y="142">directory structure, observed density</text>
+          <text class="sm" x="756" y="142" text-anchor="end">directory structure, observed density</text>
 
           <text class="hd" x="48" y="180">Re-validate against the moving owner, then commit</text>
-          <text class="sm" x="560" y="180">one guarded transaction</text>
+          <text class="sm" x="756" y="180" text-anchor="end">one guarded transaction</text>
 
           <line x1="0" y1="204" x2="760" y2="204" class="s-rule"/>
           <text class="sm" x="0" y="224">The cheapest question first, and every rung after it fires only on evidence that the last one failed.</text>
         </svg>
       </div>
       <figcaption><b>Plate 6</b> A steal, at the level you need to follow the argument. The thief picks the victim with the largest estimated remaining work, places a pivot from observed mass, and spends exactly one request to find out whether it guessed somewhere real.</figcaption>
-      <p class="src">Source: <span class="mono">docs/internals/algorithms.md</span> · invariants I2–I4 in <span class="mono">contracts.md</span></p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#3-stealing--demand-driven-rebalancing"><span class="mono">algorithms.md §3</span></a> · invariants I2–I4 in <a href="https://github.com/varveio/swath/blob/main/docs/internals/contracts.md"><span class="mono">contracts.md</span></a></p>
     </figure>
 
     <div class="col">
@@ -1283,8 +1373,8 @@
         advances a full page per round trip and passes the pivot. So the range's own
         owner places a pivot far ahead of its cursor and commits the split at page-commit
         time, gated to fire only while live work has fallen below the worker count. The
-        mechanism is global; the trigger is local and demand-driven. That distinction is
-        one of the project's two stated design laws.
+        mechanism is global; the trigger is local and demand-driven — design law L2 in
+        <a href="https://github.com/varveio/swath/blob/main/docs/internals/overview.md"><span class="mono">docs/internals/overview.md</span></a>.
       </p>
     </div>
 
@@ -1522,6 +1612,17 @@
       <figcaption><b>Plate 8</b> Invariants I1, I5 and I6. A part's rows are durable if and only if the part is finalized, so the recovery rule is mechanical: keep every finalized part, throw away the tail, re-list the gap.</figcaption>
     </figure>
 
+    <div class="col">
+      <p>
+        Which of those you get depends on where you send the output. swath can stream a table,
+        TSV, or JSONL, and text output may be gzip- or Zstandard-compressed; it can also write
+        TSV/JSONL directory datasets or a managed Parquet dataset. In 0.3.0, durable resume is a
+        managed-Parquet feature, and globally sorted Parquet is an opt-in finalization path on
+        top of it. The full decision table lives in
+        <a href="https://github.com/varveio/swath/blob/main/docs/usage.md#choose-an-output">docs/usage.md</a>; the short version:
+      </p>
+    </div>
+
     <div class="tbl-scroll">
       <table>
         <thead>
@@ -1529,16 +1630,20 @@
         </thead>
         <tbody>
           <tr>
-            <td class="k"><b>managed Parquet directory</b></td>
-            <td>Exactly-once durable dataset. Resumable with <code>swath resume out/</code>. Only the bounded non-durable tail is re-listed.</td>
+            <td class="k"><b>managed Parquet directory</b><br><span class="mono">-o out/</span></td>
+            <td>The resumable output. Finalized parts are retained exactly once; an unfinished tail may be re-listed from the last durable cursor. Resume with <code>swath resume out/</code>.</td>
           </tr>
           <tr>
             <td class="k">stdout / text file</td>
-            <td>One-shot, non-resumable. Commit-before-emit means an interrupted run can be missing an in-flight page — at-most-once, stated plainly rather than hidden.</td>
+            <td>One-shot and non-resumable. Because a page commits before it is emitted, an interrupted stream can omit a page the checkpoint already recorded.</td>
           </tr>
           <tr>
-            <td class="k">single-file Parquet</td>
-            <td>Non-resumable; requires <code>--checkpoint none</code>.</td>
+            <td class="k">TSV / JSONL directory dataset</td>
+            <td>Several background writers, and <span class="mono">_SUCCESS</span> written last — but not resumable in 0.3.0, and it requires <code>--checkpoint none</code>.</td>
+          </tr>
+          <tr>
+            <td class="k">a path ending <span class="mono">.parquet</span></td>
+            <td>Not what it looks like. In the current pre-1.0 compatibility behavior this spelling selects a <b>legacy one-writer, non-resumable directory layout under a file-looking path</b>; it does <em>not</em> create one physical Parquet file. Use a directory path such as <span class="mono">out/</span> instead.</td>
           </tr>
         </tbody>
       </table>
@@ -1546,21 +1651,26 @@
 
     <div class="col">
       <p>
-        Resuming is gated on <span class="mono">args_hash</span> — a hash of the run's
-        <em>scope</em> (scheme, endpoint, bucket, prefix, recursion, versioning). Output
-        format and filters are deliberately excluded, because they don't change
-        <em>what gets listed</em>. Resume against a mismatched scope is refused;
-        <code>--restart</code> discards the old run.
+        A resumable run stores several related identities.
+        <span class="mono">args_hash</span> identifies the listing <em>scope</em>. The filter
+        specification and the output/run identity are persisted separately.
+        <code>swath resume</code> refuses a change to any identity field, because combining
+        different targets, filters, or output contracts would produce an incoherent dataset;
+        operational settings the CLI documents as free or restorable may be restored or
+        re-supplied. <code>--restart</code> discards an unfinished checkpoint instead.
+        The full rules are in
+        <a href="https://github.com/varveio/swath/blob/main/docs/usage.md#checkpoint-and-resume">docs/usage.md</a>.
       </p>
     </div>
 
     <div class="note stop">
-      <span class="lbl">What "exactly once" does and does not claim</span>
+      <span class="lbl">What the durability guarantee covers</span>
       <p>
-        Exactly-once here is a statement about <strong>swath's own parallelization and
-        recovery</strong>, and nothing else. No row is lost or duplicated because of the
-        range protocol, a split, a crash, or a resume — that is what the invariants above
-        buy you.
+        It covers <strong>swath's own publication protocol</strong>, and nothing else. For a
+        managed Parquet dataset a finalized part is durable: swath retains it across an
+        interruption and never republishes it as a duplicate part, removes the unfinished
+        part, and may re-list the tail after the last durable cursor.
+        <span class="mono">_SUCCESS</span> is written only after complete publication.
       </p>
       <p style="margin-top:0.8em;">
         It is <strong>not</strong> a point-in-time snapshot of the bucket. A listing takes
@@ -1586,8 +1696,8 @@
         catch its violation. This is that machinery.
       </p>
       <p>
-        The invariants are written law, not folklore: each carries a number
-        (<em class="term">I1–I12</em>) in the repository’s design pack, and the
+        Each invariant carries a number (<em class="term">I1–I12</em>) in the repository’s
+        <a href="https://github.com/varveio/swath/blob/main/docs/internals/contracts.md"><span class="mono">contracts.md</span></a>, and the
         contribution rules require that a high-risk unit’s adversarial test — the
         one trying to break no-gap/no-overlap, or resume-after-crash — is authored
         or reviewed independently of the code’s author. The test that wants the code
@@ -1611,7 +1721,7 @@
           without touching S3. The server’s own fidelity is itself tested by diffing
           its responses against recorded real-S3 traffic, page for page.</li>
         <li><b>A deterministic simulator.</b> The real split/steal decision code runs
-          against a modelled store in virtual time — same seed, byte-identical run —
+          against a modeled store in virtual time — same seed, byte-identical run —
           so a policy pathology found once can be replayed exactly, thousands of
           times, while it is being fixed.</li>
         <li><b>An independent reader.</b> Parquet output is verified with DuckDB — a
@@ -1624,7 +1734,7 @@
         code path, so the invariants are exercised by every run and every test, not
         only the checkpointed ones.
       </p>
-      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/ops/dev/TESTING.md"><span class="mono">docs/ops/dev/TESTING.md</span></a> · <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay-server.md"><span class="mono">docs/swath-replay-server.md</span></a></p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/ops/dev/TESTING.md"><span class="mono">docs/ops/dev/TESTING.md</span></a> · <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay.md"><span class="mono">docs/swath-replay.md</span></a></p>
     </div>
   </section>
 
@@ -1632,7 +1742,7 @@
   <section id="limits">
     <div class="sec-head">
       <span class="eyebrow">§8</span>
-      <h2>Where it honestly cannot win</h2>
+      <h2>Where parallelism stops helping</h2>
     </div>
     <div class="col">
       <p>
@@ -1665,11 +1775,14 @@
         to a precomputed listing to make its own numbers look better.
       </p>
       <p style="margin-top:0.8em;">
-        The cost is legible and worth knowing before you start: one LIST request per 1000
-        keys. A billion-key bucket is roughly a million requests — on the order of $5 at a
-        $0.005-per-1000 reference rate, before probe and retry overhead, and before egress
-        if you run it outside the bucket's region. Every run reports its actual
-        <span class="mono">cost.api_calls</span>.
+        The cost is legible and worth knowing before you start. A full page returns up to
+        1,000 keys, so the request floor is roughly <span class="mono">objects ÷ 1,000</span>:
+        a billion-key bucket is on the order of a million LIST requests. Probes, retries,
+        sparse pages, and any re-listed unfinished tail add to that, as does egress if you run
+        outside the bucket's region. For a bill, take
+        <span class="mono">cost.api_calls</span> from the run's JSON report and multiply by your
+        provider's current LIST price — do not treat any price printed in a guide as evergreen.
+        <a href="https://github.com/varveio/swath/blob/main/docs/operating.md#request-cost">Request cost</a> has the formula.
       </p>
     </div>
 
@@ -1678,7 +1791,7 @@
       <p>
         <code>--concurrency</code> is a <strong>ceiling, not a target</strong>. swath backs
         off when an endpoint shows genuine stress and recovers gradually afterwards, so the
-        run can finish slower than you asked for and that is the intended behaviour. The
+        run can finish slower than you asked for and that is the intended behavior. The
         control loop, and the reason retries are counted separately from throttles, are in
         <a href="#dive-aimd">the concurrency deep dive</a>.
       </p>
@@ -1693,9 +1806,26 @@
     </div>
     <div class="col">
       <p>
-        This is the run Plate 1 was drawn from: <span class="mono">s3://noaa-gestofs-pds</span>,
-        a public NOAA forecast archive, listed cold with no inventory and no prior knowledge of
-        its shape. The single heaviest seed was split 2,155 times over the course of the run —
+        The measured example on this page is the capture identified as
+        <span class="mono">noaa-gestofs-pds-field-guide-trace</span> — a label assigned to this
+        artifact, not one recorded at capture time. It ran against
+        <span class="mono">s3://noaa-gestofs-pds/</span> — a public NOAA forecast archive in
+        <span class="mono">us-east-1</span> — listed cold, with no inventory and no prior
+        knowledge of its shape, from a dedicated US-East cloud host at a different provider,
+        so the path to S3 crossed networks. It used a listing-concurrency ceiling of 128. The
+        swath version, commit, capture date, machine type, and exact command are
+        <em>unknown in the retained evidence</em>; they are marked unknown here rather than
+        inferred.
+      </p>
+      <p>
+        This is not the recording embedded in the repository README. That is a separate capture
+        of the same bucket, made with swath v0.2.1, which returned 39,585,029 objects — a live
+        bucket changes between runs, so the two are identified separately. The interactive trace
+        linked at the end of this section is this capture, not that one.
+      </p>
+      <p>
+        Plate 1 was drawn from this run. The single heaviest seed was split 2,155 times over the
+        course of it —
         mostly by its own worker shedding work ahead of its cursor, since only 195 of the run's
         2,399 splits were taken by thieves. Owner-side splitting is what refilled the worklist;
         idle workers claiming those shed ranges is what emptied it again.
@@ -1710,51 +1840,52 @@
         <div><dt>Splits in that lineage</dt><dd>2,155</dd></div>
         <div><dt>Ranges completed</dt><dd>2,912</dd></div>
         <div><dt>Ranges failed</dt><dd>0</dd></div>
-        <div><dt>Wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="provisional">&#8224;</a></dd></div>
-        <div><dt>Of perfect speedup</dt><dd>57.3%<a class="prov" href="#timings" title="provisional">&#8224;</a></dd></div>
+        <div><dt>Listing wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="what this clock measures">&#8224;</a></dd></div>
+        <div><dt>Busy worker-time</dt><dd>57.3%<a class="prov" href="#timings" title="what this clock measures">&#8224;</a></dd></div>
       </dl>
     </div>
 
     <div class="note stop" id="timings">
-      <span class="lbl">&#8224; The timings still need re-measuring</span>
+      <span class="lbl">&#8224; What these clocks measure</span>
       <p>
-        This run was executed from a dedicated US-East cloud host — a different provider than
-        the bucket's, so the path to S3 crossed networks — at
-        <span class="mono">--concurrency 128</span>.
-        <strong>1m 09s is still one recorded run, not a benchmark</strong> — no competing
-        listers were measured alongside it, and instance type, network and the day's S3
-        behaviour all move it. The speedup percentage is a ratio of busy to idle worker-time
-        <em>within</em> this run: useful for diagnosing the steal path, not comparable across
-        machines or concurrency settings.
+        <strong>1m 09s is the measured listing wall clock</strong> — 68,592 ms — for this one
+        recorded run, and it is not a benchmark: no competing listers were measured alongside
+        it, and instance type, network, and the day's S3 behavior all move it. The replay
+        animation on the trace page runs for 36 seconds; that is a playback length chosen for
+        viewing, not a measurement of anything. The speedup percentage is a ratio of busy to
+        idle worker-time <em>within</em> this run: useful for diagnosing the steal path, not
+        comparable across machines or concurrency settings.
       </p>
       <p style="margin-top:0.8em;">
-        What does <em>not</em> depend on the machine is the shape this page argues from:
-        39,651,850 objects across 513 seeds, with 68.0% of them behind one of them. That is a
-        property of the bucket, and any run over the same contents will find it. The split and
-        range counts are not in that category — 2,155 splits and 2,912 completed ranges are
-        facts about <em>this</em> trace. Scheduling, timing, endpoint behaviour and any writes
-        to the bucket will move them.
+        In this capture the bucket state was highly skewed: one of 513 initial ranges held
+        68.0% of the 39,651,850 objects returned. That skew is the durable observation, and it
+        is an observation about <em>this identified capture</em> — not a promise that every run
+        produces the same partition tree. A rerun against a bucket that has changed, a different
+        swath version, or a different seed configuration can produce different range and split
+        counts. The same goes for everything downstream of it: 2,155 splits and 2,912 completed
+        ranges are facts about this trace, and scheduling, timing, endpoint behavior, and writes
+        to the bucket all move them.
       </p>
     </div>
 
     <div class="col">
       <p>
-        The last number is the honest one, and it went the wrong way. Perfect speedup here
-        would have been 39 seconds — 5,030 busy worker-seconds spread evenly across 128
-        workers. It took 69.
-        The missing 30 seconds are 3,750 worker-seconds spent idle — worker time not spent
-        listing. Some of it is the partition still being corrected; startup, request latency,
-        more workers than there is splittable work, and the unsplittable tail all contribute
-        too, and this figure does not separate them. What it does say plainly is that at 128
-        workers a large share of the fleet was waiting rather than listing. That gap is a known
-        lead, not a mystery, and it is being tracked.
+        In this run the measured wall clock was 69 seconds. Dividing the 5,030 recorded busy
+        worker-seconds evenly across 128 workers gives a 39-second idealized lower bound for
+        this run's own work accounting. The 30-second gap is the run's 3,750
+        recorded idle worker-seconds — worker time not spent listing. Startup, request latency,
+        stretches with less splittable work than workers, and the final unsplittable tail all
+        contribute to that idle time; the figure does not separate them. At 128
+        workers, a large share of the fleet was waiting rather than listing. That is a
+        diagnostic of this run — a lead being tracked — not a portable efficiency score or a
+        benchmark result.
       </p>
     </div>
 
     <div class="cta" style="margin-top:1.6rem;">
       <a class="primary" href="https://swath.varve.io/runs/noaa-gestofs-pds/">Open the full trace report</a>
       <a href="https://github.com/varveio/swath">View the source</a>
-      <a href="https://github.com/varveio/swath#quickstart">Install swath</a>
+      <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Get started</a>
       <a href="#dives">Read the deep dives</a>
     </div>
 
@@ -1782,106 +1913,166 @@
         collapsed, because you do not need any of it to understand what swath does or to
         decide whether it is useful to you. Open what you want to audit.
       </p>
+      <p>
+        One clarification before you do. In this guide, <em class="term">worker</em> means a
+        listing worker issuing ordered S3 page requests. Output writers and
+        sorted-finalization encoders are separate bounded pools and do not scale one-for-one
+        with <span class="mono">--concurrency</span>: a run at
+        <span class="mono">--concurrency 128</span> does not have 128 Parquet writers or 128
+        sort encoders.
+      </p>
     </div>
   </section>
 
   <section id="dive-pipeline">
     <details class="dive">
-      <summary>Implementation: the runtime pipeline <span class="hint">— channels, filters, sort, and how output is written</span></summary>
+      <summary>Implementation: the runtime pipeline <span class="hint">— channels, filters, and how each kind of output is written</span></summary>
 
     <div class="col">
       <p>
-        The worklist <em class="term">is</em> the checkpoint table. Each row in SQLite's
-        <span class="mono">listing_node</span> is one unit of work moving
+        The worklist <em class="term">is</em> the checkpoint table. Each row of the
+        checkpoint's listing-node table is one unit of work moving
         <span class="mono">PENDING → IN_PROGRESS → COMPLETED</span>, which is what makes
         resume nearly free and eliminates a whole class of permit-across-join deadlock.
         A fixed pool of virtual threads drains it; termination is by quiescence
         (<span class="mono">outstanding == 0</span>), not by an empty queue — a worker
         may be mid-page and about to spawn a child.
       </p>
+      <p>
+        Downstream of the filters, the three output shapes have genuinely different
+        machinery. A text stream is one-shot. A direct Parquet or text directory dataset is
+        written <em>during</em> the listing by a small bounded pool of writers. Sorted output
+        is different again: workers stage durable page-run segments while they list, and the
+        whole ordering job runs <em>after</em> listing finishes, reading those segments back.
+      </p>
     </div>
 
     <figure>
       <div class="plate-body">
-        <svg viewBox="0 0 760 430" role="img" aria-label="Run flow, top to bottom: S3 returns a page to the fetcher, the range scanner commits it to the SQLite checkpoint before pushing it to a bounded channel; the channel feeds the filter chain and then either the text sinks or the Parquet writer pool, with an optional sort lane branching off the channel.">
-          <!-- S3 -->
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="14" width="260" height="40" rx="2"/></g>
-          <text class="hd" x="380" y="32" text-anchor="middle">Amazon S3 · ListObjectsV2</text>
-          <text class="sm" x="380" y="46" text-anchor="middle">up to 1000 keys, in byte order</text>
+        <svg viewBox="0 0 760 630" role="img" aria-label="Run flow, top to bottom. S3 returns a page to a listing worker; the worker commits it to the durable checkpoint before pushing it to a bounded page channel, which feeds the filters. The filters then branch into three lanes: a one-shot text stream that exits; a dataset lane where a small bounded writer pool writes direct Parquet or a text directory dataset; and a sorted lane where workers stage durable page-run segments, and after listing completes an optional bounded cascade, a header scan, a reference router, and parallel encoders run before publication. Publication writes the final parts, then the manifest, and the success marker last.">
+          <!-- ── source ── -->
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="8" width="260" height="38" rx="2"/></g>
+          <text class="hd" x="380" y="26" text-anchor="middle">Amazon S3 · ListObjectsV2</text>
+          <text class="sm" x="380" y="39" text-anchor="middle">up to 1,000 keys, in byte order</text>
 
-          <line class="s-ink" x1="380" y1="54" x2="380" y2="74" stroke-width="1.3" marker-end="url(#ar)"/>
+          <line class="s-ink" x1="380" y1="46" x2="380" y2="64" stroke-width="1.3" marker-end="url(#ar)"/>
 
-          <!-- fetcher -->
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="76" width="260" height="38" rx="2"/></g>
-          <text class="hd" x="380" y="94" text-anchor="middle">S3PageFetcher</text>
-          <text class="sm" x="380" y="107" text-anchor="middle">the one shipped backend · swath-s3</text>
-
-          <line class="s-ink" x1="380" y1="114" x2="380" y2="134" stroke-width="1.3" marker-end="url(#ar)"/>
-
-          <!-- engine container -->
+          <!-- ── listing engine ── -->
           <g class="s-rule" fill="none" stroke-width="1" stroke-dasharray="3 3">
-            <rect x="236" y="128" width="524" height="82" rx="2"/>
+            <rect x="236" y="58" width="524" height="76" rx="2"/>
           </g>
-          <text class="sm" x="756" y="122" text-anchor="end">WorkStealingScan · N virtual threads</text>
+          <text class="sm" x="0" y="52">listing workers — bounded by --concurrency</text>
 
-          <!-- range scanner -->
-          <rect class="f-acc" x="250" y="138" width="260" height="62" rx="2" opacity="0.1"/>
-          <g class="s-acc" fill="none" stroke-width="1.8"><rect x="250" y="138" width="260" height="62" rx="2"/></g>
-          <text class="hd" x="380" y="158" text-anchor="middle">RangeScanner.runRange</text>
-          <text class="sm" x="380" y="174" text-anchor="middle">one worker, one range</text>
-          <text class="sm" x="380" y="189" text-anchor="middle">re-reads hi before every key</text>
+          <rect class="f-acc" x="250" y="66" width="260" height="60" rx="2" opacity="0.1"/>
+          <g class="s-acc" fill="none" stroke-width="1.8"><rect x="250" y="66" width="260" height="60" rx="2"/></g>
+          <text class="hd" x="380" y="86" text-anchor="middle">range scanner</text>
+          <text class="sm" x="380" y="102" text-anchor="middle">one worker, one range</text>
+          <text class="sm" x="380" y="117" text-anchor="middle">re-reads hi before every key</text>
 
-          <!-- thief -->
-          <g class="s-sig" fill="none" stroke-width="1.5"><rect x="546" y="146" width="208" height="46" rx="2"/></g>
-          <text class="hd f-sig" x="650" y="164" text-anchor="middle">Thief / OwnerSelfSplit</text>
-          <text class="sm" x="650" y="179" text-anchor="middle">narrows hi, inserts a child</text>
-          <line class="s-sig" x1="546" y1="169" x2="516" y2="169" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+          <g class="s-sig" fill="none" stroke-width="1.5"><rect x="546" y="74" width="208" height="44" rx="2"/></g>
+          <text class="hd f-sig" x="650" y="92" text-anchor="middle">thief / owner self-split</text>
+          <text class="sm" x="650" y="107" text-anchor="middle">narrows hi, inserts a child</text>
+          <line class="s-sig" x1="546" y1="96" x2="516" y2="96" stroke-width="1.3" marker-end="url(#ar-sig)"/>
 
-          <!-- commit -->
-          <line class="s-ink" x1="380" y1="210" x2="380" y2="234" stroke-width="1.4" marker-end="url(#ar)"/>
-          <text class="hd f-acc" x="392" y="226">① commit</text>
+          <!-- ── commit before emit ── -->
+          <line class="s-ink" x1="380" y1="134" x2="380" y2="156" stroke-width="1.4" marker-end="url(#ar)"/>
+          <text class="hd f-acc" x="392" y="150">① commit</text>
 
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="236" width="260" height="40" rx="2"/></g>
-          <text class="hd" x="380" y="254" text-anchor="middle">SQLite checkpoint</text>
-          <text class="sm" x="380" y="268" text-anchor="middle">one writer thread · WAL · the worklist</text>
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="158" width="260" height="40" rx="2"/></g>
+          <text class="hd" x="380" y="176" text-anchor="middle">durable checkpoint</text>
+          <text class="sm" x="380" y="190" text-anchor="middle">one writer thread · the worklist · cursors</text>
 
-          <line class="s-ink" x1="380" y1="276" x2="380" y2="300" stroke-width="1.4" marker-end="url(#ar)"/>
-          <text class="hd f-acc" x="392" y="292">② then emit</text>
+          <line class="s-ink" x1="380" y1="198" x2="380" y2="220" stroke-width="1.4" marker-end="url(#ar)"/>
+          <text class="hd f-acc" x="392" y="214">② then emit</text>
 
-          <!-- channel -->
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="302" width="260" height="30" rx="2"/></g>
-          <text class="hd" x="380" y="322" text-anchor="middle">bounded Channel of PageBatch</text>
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="222" width="260" height="30" rx="2"/></g>
+          <text class="hd" x="380" y="242" text-anchor="middle">bounded page channel</text>
 
-          <!-- sort lane -->
-          <g class="s-rule" fill="none" stroke-width="1.2" stroke-dasharray="4 3">
-            <rect x="546" y="288" width="214" height="58" rx="2"/>
-            <path d="M510 317 L546 317"/>
-          </g>
-          <text class="sm" x="653" y="306" text-anchor="middle">optional --sort lane</text>
-          <text class="sm" x="653" y="321" text-anchor="middle">segments staged on disk,</text>
-          <text class="sm" x="653" y="336" text-anchor="middle">k-way merged at the end</text>
+          <line class="s-ink" x1="380" y1="252" x2="380" y2="270" stroke-width="1.3" marker-end="url(#ar)"/>
 
-          <line class="s-ink" x1="380" y1="332" x2="380" y2="348" stroke-width="1.2" marker-end="url(#ar)"/>
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="272" width="260" height="38" rx="2"/></g>
+          <text class="hd" x="380" y="290" text-anchor="middle">filters</text>
+          <text class="sm" x="380" y="303" text-anchor="middle">regex · size · mtime · storage class</text>
 
-          <!-- filters -->
-          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="350" width="260" height="38" rx="2"/></g>
-          <text class="hd" x="380" y="368" text-anchor="middle">FilterChain</text>
-          <text class="sm" x="380" y="381" text-anchor="middle">regex · size · mtime · storage class</text>
-
-          <!-- sinks -->
+          <!-- ── the three-way branch ── -->
           <g class="s-ink" fill="none" stroke-width="1.2" marker-end="url(#ar)">
-            <path d="M300 388 L300 396 L120 396 L120 402"/>
-            <path d="M460 388 L460 396 L620 396 L620 402"/>
+            <path d="M320 310 L320 322 L120 322 L120 344"/>
+            <path d="M380 310 L380 344"/>
+            <path d="M440 310 L440 322 L640 322 L640 344"/>
           </g>
-          <g class="s-ink" fill="none" stroke-width="1.5">
-            <rect x="0" y="404" width="240" height="24" rx="2"/>
-            <rect x="500" y="404" width="260" height="24" rx="2"/>
+
+          <!-- lane 1 · text stream -->
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="10" y="346" width="220" height="50" rx="2"/></g>
+          <text class="hd" x="120" y="366" text-anchor="middle">text stream</text>
+          <text class="sm" x="120" y="381" text-anchor="middle">table · TSV · JSONL, optionally</text>
+          <text class="sm" x="120" y="392" text-anchor="middle">compressed → stdout or one file</text>
+          <text class="sm f-dim" x="120" y="416" text-anchor="middle">one-shot: nothing to publish,</text>
+          <text class="sm f-dim" x="120" y="428" text-anchor="middle">and nothing to resume from</text>
+
+          <!-- lane 2 · dataset writers -->
+          <rect class="f-acc" x="270" y="346" width="220" height="50" rx="2" opacity="0.1"/>
+          <g class="s-acc" fill="none" stroke-width="1.6"><rect x="270" y="346" width="220" height="50" rx="2"/></g>
+          <text class="hd" x="380" y="366" text-anchor="middle">dataset writers</text>
+          <text class="sm" x="380" y="381" text-anchor="middle">direct Parquet, or a TSV/JSONL</text>
+          <text class="sm" x="380" y="392" text-anchor="middle">directory dataset</text>
+          <text class="sm f-dim" x="380" y="416" text-anchor="middle">a small bounded pool — three</text>
+          <text class="sm f-dim" x="380" y="428" text-anchor="middle">writers by default, not one per worker</text>
+
+          <!-- lane 3 · sorted -->
+          <g class="s-sig" fill="none" stroke-width="1.6"><rect x="530" y="346" width="220" height="50" rx="2"/></g>
+          <text class="hd f-sig" x="640" y="366" text-anchor="middle">page-run staging</text>
+          <text class="sm" x="640" y="381" text-anchor="middle">durable segments on local disk,</text>
+          <text class="sm" x="640" y="392" text-anchor="middle">sealed as the listing runs</text>
+
+          <!-- finalization band -->
+          <text class="sm f-sig" x="640" y="409" text-anchor="middle">--sort only · after listing completes</text>
+          <line class="s-rule" x1="500" y1="416" x2="760" y2="416" stroke-width="1" stroke-dasharray="4 3"/>
+          <line class="s-sig" x1="640" y1="418" x2="640" y2="428" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+
+          <g class="s-sig" fill="none" stroke-width="1.4"><rect x="530" y="430" width="220" height="36" rx="2"/></g>
+          <text class="hd f-sig" x="640" y="447" text-anchor="middle">optional bounded cascade</text>
+          <text class="sm" x="640" y="460" text-anchor="middle">only above the admitted fan-in</text>
+
+          <line class="s-sig" x1="640" y1="466" x2="640" y2="482" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+
+          <g class="s-sig" fill="none" stroke-width="1.4"><rect x="530" y="484" width="220" height="36" rx="2"/></g>
+          <text class="hd f-sig" x="640" y="501" text-anchor="middle">header scan → router</text>
+          <text class="sm" x="640" y="514" text-anchor="middle">one global order, calibrated parts</text>
+
+          <line class="s-sig" x1="640" y1="520" x2="640" y2="536" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+
+          <g class="s-sig" fill="none" stroke-width="1.4"><rect x="530" y="538" width="220" height="36" rx="2"/></g>
+          <text class="hd f-sig" x="640" y="555" text-anchor="middle">parallel encoders</text>
+          <text class="sm" x="640" y="568" text-anchor="middle">dense ordinals fix names and order</text>
+
+          <!-- ── publication ── -->
+          <g class="s-ink" fill="none" stroke-width="1.2" marker-end="url(#ar)">
+            <path d="M310 396 L310 406 L244 406 L244 578 L290 578 L290 588"/>
+            <path d="M640 574 L640 580 L560 580 L560 588"/>
           </g>
-          <text class="sm" x="120" y="420" text-anchor="middle">JSONL · TSV · table → stdout</text>
-          <text class="sm" x="630" y="420" text-anchor="middle">ParquetWriterPool → parts + manifest</text>
+          <rect class="f-panel" x="270" y="590" width="480" height="34" rx="2"/>
+          <g class="s-ink" fill="none" stroke-width="1.8"><rect x="270" y="590" width="480" height="34" rx="2"/></g>
+          <text class="hd" x="510" y="605" text-anchor="middle">publication</text>
+          <text class="sm" x="510" y="618" text-anchor="middle">final parts, then the manifest — _SUCCESS is written last</text>
         </svg>
       </div>
-      <figcaption><b>Plate 7</b> The run has two deliberately different concurrency shapes: a small static pipeline of siblings under a structured-concurrency scope, and the listing engine, which is a worklist — that is what caps threads at N regardless of how wide the range tree grows.</figcaption>
+      <figcaption>
+        <b>Plate 7</b> Listing workers are not output writers. <span class="mono">--concurrency</span>
+        bounds the first pool only; direct Parquet and text directory datasets are written by a
+        separate, much smaller bounded writer pool, and sorted output adds a third bounded pool of
+        encoders that runs after listing has finished. Text directory datasets can use several
+        writers but are still not resumable. Sorted output finalizes from durable page-run staging,
+        so an interrupted sorted run reuses its checkpoint-tracked sealed segments; any
+        unfinished listing tail is still re-listed from the durable cursor.
+        Every dataset ends the same way: parts, then the manifest, then
+        <span class="mono">_SUCCESS</span> last.
+      </figcaption>
+      <p class="src">
+        Detail and current constants:
+        <a href="https://github.com/varveio/swath/blob/main/docs/usage.md#sorted-output"><span class="mono">docs/usage.md#sorted-output</span></a> ·
+        <a href="https://github.com/varveio/swath/blob/main/docs/performance.md#the-sorted-merge"><span class="mono">docs/performance.md</span></a> ·
+        <a href="https://github.com/varveio/swath/blob/main/docs/internals/architecture.md"><span class="mono">docs/internals/architecture.md</span></a>
+      </p>
     </figure>
   
     </details>
@@ -1893,10 +2084,23 @@
 
     <div class="col">
       <p>
-        <code>--concurrency</code> (default 64) sets a <em>ceiling</em>. The live target
-        <span class="mono">T</span> starts at a slow-start floor and moves by AIMD:
-        multiply down by 0.7 on a real 503 or <span class="mono">Retry-After</span>, add
-        one after roughly ten clean seconds, never below one.
+        <code>--concurrency</code> (default 64) sets a <em>ceiling</em>, and the live target
+        <span class="mono">T</span> moves underneath it. It starts at
+        <span class="mono">min(4, --concurrency)</span> and doubles through a handful of paced
+        steps while the endpoint stays clean; the run's first congestion signal latches that
+        growth down to a cautious additive step for the rest of the run. A real 503 or
+        <span class="mono">Retry-After</span> multiplies <span class="mono">T</span> down by 0.7
+        and pauses new steals. The floor is one, so at least one listing slot stays admitted.
+      </p>
+      <p>
+        Two further rungs exist and neither of them lowers <span class="mono">T</span>: a
+        growth freeze that suppresses the increase step entirely while worker timeouts are
+        high, and a latency valve that admits only a paced increase while successful-attempt
+        latency is inflated against its own rolling minimum. A separate, starvation-gated shed
+        does cut <span class="mono">T</span> harder, but only when timeouts are high
+        <em>and</em> the run has stopped making progress. The current multipliers, windows,
+        and gate thresholds are in
+        <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#5-adaptive-concurrency-aimd">algorithms.md §5</a>.
       </p>
       <p>
         The subtlety is what feeds it. The AWS SDK's own retry is turned
@@ -1907,14 +2111,18 @@
       </p>
       <p>
         On a healthy endpoint the decrease path never fires — <span class="mono">T</span>
-        ramps to the ceiling and stays. A clean run's speed comes from the engine, not
-        from adaptivity.
+        ramps to the ceiling and stays. Adaptive concurrency is a safety control, not the
+        source of parallelism: seeding and splitting decide whether useful work exists at all,
+        and AIMD only limits how much of it may call the store at once. It is a reactive
+        backpressure controller, not an online throughput optimizer — it will not search back
+        down to a lower <span class="mono">T</span> just because a lower one would deliver the
+        same keys per second more cheaply.
       </p>
     </div>
 
     <figure>
       <div class="plate-body">
-        <svg viewBox="0 0 760 170" role="img" aria-label="Sawtooth plot of the concurrency target over time: it ramps up by one per clean window, drops to seventy percent on each 503, and never falls below one.">
+        <svg viewBox="0 0 760 186" role="img" aria-label="Sawtooth plot of the concurrency target over time: it ramps up while the endpoint stays clean, drops to seventy percent of its value on each 503, and never falls below one. The plot is simplified and omits the growth-freeze and shed rungs.">
           <g class="s-rule" stroke-width="1">
             <line x1="46" y1="20" x2="46" y2="132"/>
             <line x1="46" y1="132" x2="740" y2="132"/>
@@ -1939,12 +2147,14 @@
           <text class="sm f-alert" x="470" y="26" text-anchor="middle">503</text>
           <text class="sm f-alert" x="660" y="20" text-anchor="middle">503</text>
 
-          <text class="sm f-acc" x="180" y="94">+1 per clean ~10s window</text>
+          <text class="sm f-acc" x="180" y="94">grows while the endpoint stays clean</text>
           <text class="sm f-alert" x="344" y="98">×0.7 on stress</text>
-          <text class="sm" x="46" y="164">Workers above the new T finish their current page, then park. The floor is 1 — the run always makes forward progress.</text>
+          <text class="sm" x="46" y="164">Workers above the new T finish their current page, then park. The floor is 1 — one listing slot stays admitted.</text>
+          <text class="sm" x="46" y="178">Simplified: the freeze and shed rungs that also act on T are not drawn. See algorithms.md §5.</text>
         </svg>
       </div>
-      <figcaption><b>Plate 9</b> AIMD on the concurrency target. It exists to degrade gracefully against a hostile or throttling endpoint and recover afterwards — not as a tuning knob for throughput.</figcaption>
+      <figcaption><b>Plate 9</b> AIMD on the concurrency target, simplified to its two load-bearing moves. It exists to degrade gracefully against a hostile or throttling endpoint and recover afterwards — not as a tuning knob for throughput.</figcaption>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#5-adaptive-concurrency-aimd"><span class="mono">docs/internals/algorithms.md §5</span></a></p>
     </figure>
   
     </details>
@@ -1957,14 +2167,18 @@
     <div class="col">
       <p>
         Six Gradle modules, all edges pointing one way. Only <span class="mono">swath-cli</span>
-        ships: the uber-jar is built over its runtime classpath, so a module reaches a
-        released artifact if and only if the CLI depends on it.
+        is part of the main swath product artifacts: the uber-jar is built over its runtime
+        classpath and the Docker image copies exactly that jar, so a module reaches those
+        artifacts if and only if the CLI depends on it. That is not the same as "never
+        released" — <span class="mono">swath-replay</span> is packaged and released separately,
+        as its own distribution and container image, on the repository's shared version cadence.
+        <span class="mono">swath-sim</span> is on neither runtime path.
       </p>
     </div>
 
     <figure>
       <div class="plate-body">
-        <svg viewBox="0 0 760 336" role="img" aria-label="Module graph: swath-model is a leaf; swath-core depends on it; swath-s3 and swath-replay-server depend on core; swath-cli depends on core and s3 and is the only shipped module; swath-sim depends on replay-server and core and is a development tool.">
+        <svg viewBox="0 0 760 336" role="img" aria-label="Module graph: swath-model is a leaf; swath-core depends on it; swath-s3 and swath-replay depend on core; swath-cli is the supported product binary; swath-replay is a separately released contributor toolkit with its own container image; swath-sim depends on replay and core and is a non-release development tool.">
           <!-- model -->
           <g class="s-ink" fill="none" stroke-width="1.6"><rect x="250" y="10" width="260" height="44" rx="2"/></g>
           <text class="hd" x="380" y="29" text-anchor="middle">swath-model</text>
@@ -1998,8 +2212,8 @@
           <text class="sm" x="250" y="207" text-anchor="middle">S3PageFetcher · the AWS SDK lives here</text>
 
           <!-- replay server -->
-          <g class="s-ink" fill="none" stroke-width="1.6" stroke-dasharray="4 3"><rect x="410" y="174" width="280" height="42" rx="2"/></g>
-          <text class="hd" x="550" y="192" text-anchor="middle">swath-replay-server</text>
+          <g class="s-sig" fill="none" stroke-width="1.6"><rect x="410" y="174" width="280" height="42" rx="2"/></g>
+          <text class="hd f-sig" x="550" y="192" text-anchor="middle">swath-replay</text>
           <text class="sm" x="550" y="207" text-anchor="middle">the real engine vs a fake S3</text>
 
           <g class="s-ink" fill="none" stroke-width="1.3" marker-end="url(#ar)">
@@ -2015,16 +2229,16 @@
           <rect class="f-acc" x="110" y="246" width="280" height="50" rx="2" opacity="0.12"/>
           <g class="s-acc" fill="none" stroke-width="2"><rect x="110" y="246" width="280" height="50" rx="2"/></g>
           <text class="hd" x="250" y="268" text-anchor="middle">swath-cli</text>
-          <text class="sm" x="250" y="284" text-anchor="middle">the only shipped artifact</text>
+          <text class="sm" x="250" y="284" text-anchor="middle">the supported product binary</text>
 
           <!-- sim -->
           <g class="s-ink" fill="none" stroke-width="1.6" stroke-dasharray="4 3"><rect x="410" y="246" width="280" height="50" rx="2"/></g>
           <text class="hd" x="550" y="266" text-anchor="middle">swath-sim</text>
-          <text class="sm" x="550" y="278" text-anchor="middle">real policies vs a modelled</text>
+          <text class="sm" x="550" y="278" text-anchor="middle">real policies vs a modeled</text>
           <text class="sm" x="550" y="290" text-anchor="middle">store, in virtual time</text>
 
           <line class="s-rule" x1="0" y1="316" x2="760" y2="316" stroke-width="1"/>
-          <text class="sm" x="0" y="330">solid outline = on the shipped path   ·   dashed = development and analysis tools, never released</text>
+          <text class="sm" x="0" y="330">green = the main product artifacts   ·   ochre = separately released contributor toolkit   ·   dashed = non-release dev tool</text>
         </svg>
       </div>
       <figcaption><b>Plate 10</b> The dependency rules do real work: core stays AWS-free so a future GCS backend doesn't drag the S3 SDK, and terminal-free so an embedding application gets progress events without inheriting swath's opinions about stderr.</figcaption>
@@ -2033,7 +2247,7 @@
     <div class="tbl-scroll">
       <table>
         <thead>
-          <tr><th>Module</th><th>Holds</th><th>Ships</th></tr>
+          <tr><th>Module</th><th>Holds</th><th>Distribution</th></tr>
         </thead>
         <tbody>
           <tr>
@@ -2043,28 +2257,28 @@
           </tr>
           <tr>
             <td class="k"><b>swath-core</b></td>
-            <td>Everything that isn't a backend or a front end: the <code>WorkStealingScan</code> engine and its policy seam, the SQLite checkpoint, the Parquet writer pool and external merge sort, filters, the pipeline, metrics.</td>
+            <td>Everything that isn't a backend or a front end: the work-stealing engine and its policy seam, the SQLite checkpoint, the output layer including the bounded Parquet writer pool and the sorted-finalization pipeline, filters, the pipeline, metrics.</td>
             <td class="k">via CLI</td>
           </tr>
           <tr>
             <td class="k"><b>swath-s3</b></td>
-            <td>The one shipped backend. <code>S3PageFetcher</code>, client construction, fault classification, bearer-token auth. Siblings like <span class="mono">swath-gcs</span> would sit beside it.</td>
+            <td>The supported backend. <code>S3PageFetcher</code>, client construction, fault classification, bearer-token auth. Siblings like <span class="mono">swath-gcs</span> would sit beside it.</td>
             <td class="k">via CLI</td>
           </tr>
           <tr>
             <td class="k"><b>swath-cli</b></td>
             <td>The <span class="mono">swath</span> binary: Picocli commands, option groups, exit codes, the stderr progress display and terminal detection.</td>
-            <td class="k">yes</td>
+            <td class="k">the product</td>
           </tr>
           <tr>
-            <td class="k">swath-replay-server</td>
-            <td>Serves swath's own Parquet fixtures back as a fake S3 <code>ListObjectsV2</code> endpoint, so the real engine can be exercised end-to-end over HTTP with injected latency shapes.</td>
-            <td class="k">no</td>
+            <td class="k"><b>swath-replay</b></td>
+            <td>The replay toolkit: serves swath's own Parquet fixtures back as a fake S3 <code>ListObjectsV2</code> endpoint, so the real engine can be exercised end-to-end over HTTP with injected latency shapes. A contributor tool, not part of the <span class="mono">swath</span> CLI and not needed for a normal listing. Its wire behavior is conformance-tested; its diagnostics and launcher settings are a deliberately unstable development surface. <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay.md">docs/swath-replay.md</a></td>
+            <td class="k">separate release + container image</td>
           </tr>
           <tr>
             <td class="k">swath-sim</td>
             <td>A discrete-event simulator that runs the real split/steal policies against a ground-truth store in virtual time. Answers "what would a different policy have done here?" thousands of times without paying a socket.</td>
-            <td class="k">no</td>
+            <td class="k">non-release dev tool</td>
           </tr>
         </tbody>
       </table>
@@ -2135,15 +2349,21 @@
     </details>
   </section>
 
+  </main>
+
   <footer>
     Built from the swath internals pack — <span class="mono">docs/internals/overview.md</span>,
     <span class="mono">architecture.md</span>, <span class="mono">algorithms.md</span>,
     <span class="mono">contracts.md</span>, and <span class="mono">build-and-modules.md</span> —
     which are re-derived from the shipped code. Where this page and the source disagree, the
     source wins.<br>
+    This guide describes swath 0.3.0.
     swath is pre-1.0: <span class="mono">list</span> and <span class="mono">resume</span> ship;
-    <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, and
-    stores beyond S3 are roadmap. Flags and output schemas may still change.
+    current-object listing from general-purpose AWS S3 buckets is supported, and GCS through its
+    XML API is experimental S3-compatible interoperability rather than a native backend.
+    <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, delete
+    markers, and native additional backends are roadmap. Flags and output schemas may still
+    change.
     <div class="colophon">
       <svg viewBox="0 0 64 64" aria-hidden="true">
         <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.2">
