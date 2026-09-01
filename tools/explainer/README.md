@@ -51,7 +51,7 @@ uv run tools/explainer/explainer.py run.trace.jsonl -o run.html
 Open `run.html`. One file, no CDN, no external images, safe from `file://`, light and dark.
 
 ```text
-explainer.py TRACE.jsonl [-o OUT.html] [--title NAME] [--anonymize]
+explainer.py TRACE.jsonl [-o OUT.html] [--title NAME] [--anonymize] [--run-facts FACTS.json]
                              [--video [--video-style strip|map]]
 explainer.py --self-test              # 29 checks, no inputs needed
 ```
@@ -60,6 +60,7 @@ explainer.py --self-test              # 29 checks, no inputs needed
 |---|---|
 | `--title` | Page heading. Defaults to the trace file's stem. |
 | `--anonymize` | Withhold every key name — positions and counts only. Use when the picture has to travel further than the trace does. |
+| `--run-facts` | Path to a `swath-public-run-v1` JSON provenance record for this specific run (run ID, swath version/commit, capture date, target, client, command, clocks). Rendered as a visible provenance table, embedded verbatim as `<script type="application/json" id="swath-run-facts">`, and used for a static `<noscript>` summary. Report only; a trace carries no such facts on its own, so any field the record omits reads "unknown in retained evidence" rather than being inferred. Ignored with `--video`. |
 | `--video` | Emit a 1080×1350 capture page instead of the report (see below). |
 | `--video-style` | `strip` (default) or `map`. Two different arguments about the same run. |
 

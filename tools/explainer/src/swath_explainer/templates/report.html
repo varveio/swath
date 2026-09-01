@@ -103,6 +103,18 @@
 <div class="wrap">
   <h1 id="title">swath run trace</h1>
   <div class="sub" id="subtitle"></div>
+
+  <noscript><!--__STATIC_SUMMARY__--></noscript>
+  <script type="application/json" id="swath-run-facts">/*__FACTS__*/null</script>
+
+  <div class="card" id="provenance-panel">
+    <h3>Provenance</h3>
+    <table><tbody id="run-facts-table"></tbody></table>
+    <p class="cap">Fields absent from the retained run-facts record read "unknown in retained
+    evidence" rather than being inferred. The machine-readable copy is in
+    <code>#swath-run-facts</code>.</p>
+  </div>
+
   <dl class="tiles" id="tiles"></dl>
   <div id="findings"></div>
 
@@ -240,6 +252,32 @@
   document.getElementById("subtitle").textContent =
     [fmt(meta.totalKeys)+" objects", fmt(meta.pagesSeen)+" committed pages",
      meta.workers+" workers", secs(meta.durationMs)].join("  ·  ");
+
+  // ---- provenance table, from the optional run-facts record ---------------
+  var FACTS = /*__FACTS__*/null;
+  var FACTS_FIELDS = [
+    ["Run ID","run_id"],["swath version","swath.version"],["swath commit","swath.commit"],
+    ["Captured at","captured_at"],["Source URI","target.uri"],["S3 region","target.region"],
+    ["Client provider / region","client.region"],["Machine","client.machine_type"],
+    ["Output mode","output.format"],["Command","command"],
+    ["Listing wall clock","clocks.listing_wall_label"],
+    ["Visualization playback length","clocks.video_playback_label"],
+    ["API attempts","result.api_attempts"],["Initial ranges","result.initial_ranges"],
+    ["Splits","result.splits"],["Completed ranges","result.completed_ranges"],
+    ["Source report","artifacts.summary"],["Raw trace","artifacts.raw_trace"]];
+  function dig(obj, path){ var parts=path.split("."), n=obj;
+    for (var i=0;i<parts.length;i++){
+      if (!n || typeof n!=="object" || n[parts[i]]===undefined || n[parts[i]]===null) return null;
+      n=n[parts[i]]; }
+    return n; }
+  var factsTable=document.getElementById("run-facts-table");
+  FACTS_FIELDS.forEach(function(f){
+    var v=dig(FACTS, f[1]), tr=el("tr");
+    tr.appendChild(el("td","k",f[0]));
+    tr.appendChild(el("td",null, v===null ? "unknown in retained evidence" :
+      (typeof v==="number" ? v.toLocaleString("en-US") : String(v))));
+    factsTable.appendChild(tr);
+  });
 
   var tw=document.getElementById("tiles");
   [["Objects",fmt(meta.totalKeys)],["Wall time",secs(meta.durationMs)],
@@ -534,7 +572,7 @@
       ctx.globalAlpha=1; }
   }
   var lt=document.getElementById("live-tiles");
-  var liveDd=[["Objects"],["Requests"],["Live ranges"],["Busy"],["Splits"],["Steals"]].map(function(d){
+  var liveDd=[["Objects"],["Committed pages"],["Live ranges"],["Busy"],["Splits"],["Steals"]].map(function(d){
     var w=el("div"); w.appendChild(el("dt",null,d[0]));
     var dd=el("dd",null,"0"); w.appendChild(dd); lt.appendChild(w); return dd; });
   var scrub=document.getElementById("scrub"), playBtn=document.getElementById("play");
