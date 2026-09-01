@@ -188,9 +188,9 @@ final class PartEncoders implements AutoCloseable {
      * Deliver one lane's batched row count to the external callback, serialized so at most one lane
      * is ever inside {@code progressCallback.accept} at a time. Every lane keeps its own hot-path
      * batch counter (unsynchronized, see {@link Lane#progressRows}); only the handoff to the
-     * caller-supplied callback — which {@link SortFinalizer.Request} makes no concurrency promise
-     * about, and which production wires straight into a metrics counter increment — is serialized
-     * here. {@link #progressTally} is the internal running total this serializes against; it is not
+     * caller-supplied callback — which production wires straight into a metrics counter increment —
+     * is serialized here, which is what lets {@link SortFinalizer.Request} promise serial
+     * invocation. {@link #progressTally} is the internal running total this serializes against; it is not
      * itself passed to the callback so an existing delta/increment-style consumer keeps working
      * unchanged.
      */

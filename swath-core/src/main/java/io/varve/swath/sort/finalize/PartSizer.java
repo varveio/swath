@@ -110,7 +110,10 @@ public final class PartSizer {
         return Math.max(1L, (long) Math.ceil(target));
     }
 
-    /** Convert the encoded-byte target through the cumulative observed compression ratio. */
+    /**
+     * Convert the encoded-byte target through the compression ratio frozen from the first completed
+     * part, or the no-compression assumption until one completes.
+     */
     synchronized long calibratedLogicalTarget() {
         double ratio = encodedBytes > 0 && logicalBytes > 0
                 ? (double) encodedBytes / logicalBytes
