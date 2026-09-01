@@ -5,6 +5,23 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+## 0.3.1 — 2026-09-01
+
+### Changed
+
+- The `swath-replay` sorted `delimiter=/` skip-scan reopens its key cursor through the Parquet
+  page index when a common-prefix successor provably lies beyond the current data page, instead of
+  decoding every key in the skipped subtree; a successor that can still occur on the current page
+  keeps the forward cursor. Responses are byte-identical; wide directory probes over skewed
+  fixtures drop from hundreds of milliseconds to tens.
+- Replay meters gained `swath.replay.delimiter.skipscan.decoded_key_rows`, `.page_reseeks`, and
+  `swath.replay.delimiter.reader_pool.readers_opened`; `.skipscan.row_group_opens` now counts
+  cursor opens as operations, since a reseek can reopen the same physical row group.
+- Sorted-serving documentation now states the order-checking scope explicitly: request-time
+  cursors verify the rows they decode and refuse on disorder, while page-index and routing-index
+  shortcuts deliberately leave other rows unread. The behavior is unchanged.
+- The `swath` CLI is unchanged in this release.
+
 ## 0.3.0 — 2026-09-01
 
 ### Changed
