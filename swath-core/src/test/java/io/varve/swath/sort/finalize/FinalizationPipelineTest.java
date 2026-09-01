@@ -402,7 +402,7 @@ final class FinalizationPipelineTest {
         long readPageBytes = catalog.maxRecordLen();
         long retainedPageBytes = fdPlanner.pipelineParallelism(1, catalog).retainedPageBytes();
         long routerRefs = 4L + catalog.totalRecords()
-                * (1L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
+                * (2L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
         long routerBytes = routerRefs * PageRef.retainedBytes(catalog.maxKeyLength());
         long perEncoder = readPageBytes + retainedPageBytes
                 + PartEncoders.writerHeapEstimateBytes(base.finalRowGroupBytes());
@@ -439,7 +439,7 @@ final class FinalizationPipelineTest {
                 base.withMergeBudgetBytes(Long.MAX_VALUE), SortMetrics.NO_OP, () -> -1);
         long retainedPageBytes = probe.pipelineParallelism(1, catalog).retainedPageBytes();
         long routerRefs = 4L + catalog.totalRecords()
-                * (1L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
+                * (2L + 2L * (PartEncoders.QUEUE_DEPTH + 1L));
         long routerBytes = routerRefs * PageRef.retainedBytes(catalog.maxKeyLength());
         long writerEstimate = PartEncoders.writerHeapEstimateBytes(finalRowGroupBytes);
         long perEncoder = readPageBytes + retainedPageBytes + writerEstimate;
@@ -525,7 +525,7 @@ final class FinalizationPipelineTest {
         int budgetedEncoders = 3;
         long cursorRefs = (long) segments * (PageRunHeaderStreams.QUEUE_DEPTH + 2L);
         long planRefs = (long) FinalizationPlanner.MAX_PIPELINE_PLAN_REFS
-                * (1L + budgetedEncoders * (PartEncoders.QUEUE_DEPTH + 1L));
+                * (2L + budgetedEncoders * (PartEncoders.QUEUE_DEPTH + 1L));
         long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
                 base.maxRawPayloadLength(),
                 catalog.maxRecordLen());
@@ -545,6 +545,61 @@ final class FinalizationPipelineTest {
         assertThat(plan.reason()).isEqualTo(FinalizationPlanner.PipelineClampReason.NONE);
         assertThat(plan.planRefLimit()).isLessThan(FinalizationPlanner.MAX_PIPELINE_PLAN_REFS);
         assertThat(plan.clusterBudgetBytes()).isGreaterThanOrEqualTo(retainedPageBytes);
+    }
+
+    /**
+     * The router can hold two full reference waves at once: {@code route} closes an entire overlap
+     * component before offering it, so a part that has already accumulated the cap's worth of
+     * disjoint references is still live while the component beside it collects up to the same cap.
+     * Admission must price both, otherwise a run at the 1,024-byte key ceiling under-reserves a
+     * whole wave. A budget sized to exactly the two-wave price admits the full cap; one wave less
+     * cannot.
+     */
+    @Test
+    void admissionPricesBothRouterReferenceWaves(@TempDir Path root) throws IOException {
+        String maximumKey = "m" + "x".repeat(1_023);
+        Path segment = SortTestSupport.writePages(
+                root.resolve("router-waves" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object(maximumKey))));
+        PageRunCatalog physical = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        PageRunDescriptor base = physical.descriptors().getFirst();
+        PageRunCatalog catalog = SpillTestFixtures.catalog(List.of(new PageRunDescriptor(
+                base.path(), base.fileSize(), base.trailerStart(),
+                new PageRunTrailer.Trailer(1_000_000, 1_000_000, base.trailer().maxRecordLen(),
+                        base.maxRawPayloadLength(), base.maxKeyLength()),
+                base.maxRawPayloadLength(), base.maxKeyLength(), base.physicalFormat(),
+                base.headerBytes(), base.orderingMode())));
+        int cap = FinalizationPlanner.MAX_PIPELINE_PLAN_REFS;
+        int refBytes = PageRef.retainedBytes(catalog.maxKeyLength());
+        long cursorRefs = (long) catalog.descriptors().size()
+                * (PageRunHeaderStreams.QUEUE_DEPTH + 2L);
+        // Two router waves — the current part and the overlap component beside it — plus the
+        // queued and executing plans of the single encoder.
+        long waves = 2L + (PartEncoders.QUEUE_DEPTH + 1L);
+        SortConfig config = SortConfigs.base().withFinalFileBytes(1L << 40);
+        long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
+                base.maxRawPayloadLength(), catalog.maxRecordLen());
+        long exactFit = (cursorRefs + cap * waves) * refBytes
+                + PartEncoders.writerHeapEstimateBytes(config.finalRowGroupBytes())
+                + catalog.maxRecordLen() + retainedPageBytes;
+
+        FinalizationPlanner.PipelinePlan fits = new FinalizationPlanner(
+                config.withMergeBudgetBytes(exactFit), SortMetrics.NO_OP, () -> -1)
+                .pipelineParallelism(1, catalog);
+        FinalizationPlanner.PipelinePlan short1 = new FinalizationPlanner(
+                config.withMergeBudgetBytes(exactFit - (long) cap * refBytes),
+                SortMetrics.NO_OP, () -> -1)
+                .pipelineParallelism(1, catalog);
+
+        assertThat(fits.encoders()).isEqualTo(1);
+        assertThat(fits.reason()).isEqualTo(FinalizationPlanner.PipelineClampReason.NONE);
+        assertThat(fits.planRefLimit())
+                .as("the two-wave price is not an over-reservation: the full cap still fits")
+                .isEqualTo(cap);
+        assertThat(short1.planRefLimit())
+                .as("a budget one router wave short cannot carry the full cap")
+                .isLessThan(cap);
     }
 
     @Test

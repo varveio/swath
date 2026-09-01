@@ -141,10 +141,20 @@ final class FinalizationPlanner {
         return saturatedAdd(fixedBytes, clusterBytes) <= config.mergeBudgetBytes();
     }
 
+    /**
+     * The residency that does not scale with cluster width: header-cursor references, every plan
+     * reference wave the pipeline can hold at once, one transient positional read body per encoder,
+     * and one open writer per encoder.
+     *
+     * <p>Two of those waves belong to the router, not one. {@code MergeRouter#route} closes a whole
+     * overlap component before offering it, so the component's references and the references already
+     * accumulated in the current part are live simultaneously; each is capped at {@code planRefs}.
+     * The remaining {@code (QUEUE_DEPTH + 1)} waves per encoder are the queued and executing plans.
+     */
     private long fixedBytes(int encoders, long cursorRefs, int refBytes,
             long readPageBytes, long planRefs) {
         long retainedPlanRefs = saturatedMultiply(planRefs,
-                saturatedAdd(1L, saturatedMultiply(PartEncoders.QUEUE_DEPTH + 1L, encoders)));
+                saturatedAdd(2L, saturatedMultiply(PartEncoders.QUEUE_DEPTH + 1L, encoders)));
         long routerBytes = saturatedMultiply(
                 saturatedAdd(cursorRefs, retainedPlanRefs), refBytes);
         long writers = saturatedMultiply(encoders,

@@ -864,8 +864,9 @@ Final encoder admission uses the three exact per-descriptor maxima stored in the
   cache; and
 - `maxKeyLength` prices both key arrays retained by each `PageRef`.
 
-The fixed reference population covers every segment cursor and its two-slot queue, the router head,
-the bounded shared plan queue, and one executing plan per encoder. Each encoder also prices one
+The fixed reference population covers every segment cursor and its two-slot queue, both reference
+waves the router holds at once — the part it is accumulating and the overlap component it closes
+beside it — the bounded shared plan queue, and one executing plan per encoder. Each encoder also prices one
 writer, one transient body read, and one retained decoded page. The plan limit starts no higher than
 16,384 references and may be lowered to 256 so this population fits. A single transitive overlap
 component may legally exceed that limit; its references spill to a staging file, so the priced
