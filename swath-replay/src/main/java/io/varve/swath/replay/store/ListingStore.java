@@ -26,9 +26,10 @@ import java.util.List;
  * override {@code delimitedRollup} to answer the whole rollup as a native skip-scan instead — hopping
  * the cursor from prefix to successor prefix against its own routing index, touching no more than one
  * row group per hop and none at all for a row group provably inside one common prefix ({@link
- * SortedParquetStore}'s implementation is the current example: O(entries emitted), never
- * O(subtree objects), and it respects {@code max-keys} rather than rolling up the whole tree
- * regardless of it). This deliberately lifts delimiter semantics below the seam for that one shape; it
+ * SortedParquetStore}'s implementation is the current example: at most one page-index landing per emitted
+ * common-prefix successor rather than a decode of its subtree objects, and it respects
+ * {@code max-keys} rather than rolling up the whole tree regardless of it). This deliberately lifts
+ * delimiter semantics below the seam for that one shape; it
  * is gated to the {@code /} delimiter and MUST return byte-identical results to the pager's range
  * walk, which the sorted-vs-DuckDB differential suite enforces (the DuckDB oracle does not override
  * it, so it stays the range-based reference). Default: decline, and the pager walks ranges as before.

@@ -393,3 +393,78 @@ same host, so the measured checksum delta was below 0.2% of pack time. This is a
 check, not a general ZSTD throughput claim. Page-run v4 therefore enables the checksum and pins its
 verification with a checksum-only corruption test; the outer CRC32C continues to cover the plain
 PageBlock header and the `NONE`/`LZ4` payload cases.
+
+---
+
+## 2026-09-01 — replay delimiter page reseek on AWS Public Blockchain
+
+This local isolation check diagnosed and then re-ran the sorted-Parquet replay server's native
+`delimiter=/` path. A common-prefix successor that remained in one physical row group kept a
+forward key cursor, so `advanceTo` decoded every key in the subtree it was meant to skip. The change
+reopens through the Parquet page index when the successor is beyond the cursor's current data page;
+same-page successors keep the cursor to avoid repeated page decodes for dense small directories.
+
+### Fixture and command
+
+- **Baseline:** `11d49b02d25572074e9ed65102e4e9627c52e0cf`.
+- **Candidate:** PR #194 head after the page-aware hybrid (exact commit recorded by the PR).
+- **Host:** 4 physical / 8 logical CPUs, 15 GiB RAM; OpenJDK 25.0.4+7, `-Xmx4g`.
+- **Fixture:** four sorted Parquet parts, 143,008,674 rows, 2.96 GiB, manifest SHA-256
+  `f4a839f23a1be94047491339dfd1ae5dd40d075c5a7c2eac1e07156dd985d4b0`.
+- **Cache state:** filesystem cache was warm from fixture inspection. “Cold” below means a fresh
+  server and fresh reader pools, not cold storage.
+- **Injection:** off. Prefetch: off. Both arms used eight Parquet readers and at most eight benchmark
+  requests in flight; `max-concurrent-requests=64` left the store's eight-reader pool as admission.
+
+From each arm's worktree, after `./gradlew :swath-replay:installDist`:
+
+```bash
+/home/sagi_varve_io/.jdks/jdk-25.0.4+7/bin/java \
+  -Xmx4g -Dswath.replay.prefetch.enabled=false \
+  -cp 'swath-replay/build/install/swath-replay/lib/*' \
+  io.varve.swath.replay.server.ReplayServerApp serve \
+  --fixture /home/sagi_varve_io/work/replay-fixtures/aws-public-blockchain-current-eba31d9 \
+  --bucket aws-public-blockchain --host 127.0.0.1 --port 19091 --metrics-port 19193 \
+  --serving-mode sorted --parquet-connections 8 --max-concurrent-requests 64
+```
+
+The client first issued one cold `ledgers/pubnet` request. It then obtained a real continuation
+token from a `max-keys=4` request. For every table row it sent eight concurrent warmups, followed by
+16 measured requests in two eight-request waves. Percentiles are nearest-rank over those 16 values.
+Every request used `list-type=2&delimiter=/`; ordinary rows used `max-keys=32`, while the continuation
+row used the captured token and `max-keys=4`.
+
+### Results
+
+| Shape / prefix | baseline mean / p99 ms | candidate mean / p99 ms | bytes | response SHA-256 |
+| --- | ---: | ---: | ---: | --- |
+| root | 28.808 / 48.320 | 6.237 / 8.880 | 1,300 | `5d6d6014ccad75fa2ee06876a326860a7a4d63c89f660ef8616de97bd4f829f6` |
+| `v1.0/` | 24.086 / 33.813 | 11.334 / 17.953 | 679 | `56b5595f3bcd53591c81e2f0998b94d29428775f34612d6a9432cf55888f0abd` |
+| `v1.0/btc/` | 12.716 / 25.208 | 5.128 / 9.315 | 420 | `342ad23796c5d54b3d5ec533097327ce4c9aed55caecc27f84c3889c6476e826` |
+| `v1.0/btc/blocks/` | 3.068 / 5.972 | 10.250 / 18.375 | 3,007 | `1286b23bd5c9efb652e4dd3f9e35ed4126cedff60c953a6a13c0ee3ce7c443bb` |
+| `v1.0/btc/blocks/date=2009-01-03/` (leaf) | 6.182 / 9.254 | 8.430 / 13.134 | 685 | `662f9d9b0ac2db36622faa14c74a0d900037876ebfa1b601d737f02437a9f5ca` |
+| `v1.1/` | 7.804 / 12.911 | 8.606 / 15.039 | 866 | `e1116fbb496b7baf9c215f7b47ceae1151b303685ad935dad9e709c59aef2e92` |
+| `v1.1/stellar/` | 2.189 / 2.894 | 3.468 / 5.715 | 428 | `982e4232ead8dd94598459209a8828d7664ae55c4ae9f2f3d0782e44cb994736` |
+| `v1.1/stellar/ledgers/` | 3.775 / 6.751 | 3.364 / 5.906 | 451 | `4ea55e5513c9117741be7fd7a7d7460f889bb8582d3dd7dabd1ef8183b653322` |
+| `v1.1/stellar/ledgers/pubnet/` | 428.979 / 537.214 | 19.724 / 32.684 | 4,033 | `1c5130167bbb9c4fab62b9ec717b1f4a49b86c9dcf6aae03fb0fc2ff14a2af73` |
+| same, continuation after page 1 | 63.555 / 79.441 | 6.975 / 11.778 | 967 | `745efc985c20d8502f1178de0221a7536cdab90ba1f7bc508dd30f9f22ab33a5` |
+| `v1.1/stellar/ledgers/testnet/` | 7.760 / 12.200 | 6.611 / 10.739 | 972 | `30d330a535d28efc839876fe4f7eecfad287cb0ef75bccae5b7b274e3a0202c9` |
+| `v1.1/stellar/parquet/pubnet/` | 3.211 / 5.124 | 4.079 / 7.268 | 382 | `9c57526d5bb8dee3065ca61245bff947fb1793bbd908ae1aa0ab096d77ccba79` |
+| `v1.1/stellar/parquet/testnet/` | 2.270 / 3.007 | 4.123 / 7.436 | 384 | `8aabe29f50c37e0ee66eca7cf41ce768892f0c39735b55e4c682c07eb19e2d4d` |
+| `v1.1/stellar/parquet/pubnet/v1/` | 102.525 / 113.010 | 14.425 / 23.732 | 3,522 | `a9d0087b7c591e128122f98b593bc50eff0263fe1af62bac905fe5bf1ba91299` |
+
+The byte count and SHA-256 in each row were identical between baseline and candidate.
+
+The cold `ledgers/pubnet` request moved from 694.677 ms to 425.623 ms with the same 4,033-byte
+response and hash. Its remaining cost includes synchronous opening of eight delimiter readers plus
+first-use page/index warming; this change does not redesign that pool. Across the measured candidate
+process, 338 delimiter rollups decoded 1,275,506 key rows and performed 1,659 actual page-index
+reseeks; peak acquired readers was eight.
+
+The three high-subtree shapes improved 7.1–21.8× in mean latency, and the pubnet continuation
+improved 9.1×. Several already-cheap shapes moved by 1–7 ms in either direction under concurrent
+local scheduling, including a 7.2 ms increase for `btc/blocks`; this R=1 corpus is not evidence of a
+small-shape regression or improvement. Unit coverage therefore carries the dense-small-directory
+claim directly: one large row group with 120 singleton prefixes on a shared page is decoded once
+with zero replacement-cursor reseeks. This is a local implementation-path check, not a production
+S3 latency model or a portable throughput claim.
