@@ -13,6 +13,7 @@ import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
@@ -59,10 +60,10 @@ import org.apache.parquet.schema.Type;
  * lands in the same group. A forward cursor instead decodes only the rows between the last position
  * and the next, whichever hop asks; parquet's page-level decompression is itself lazy per read, so a
  * cursor that never revisits an earlier row also never re-pays for a page already stepped past.
- * {@link #objectRange} is the bounded full-row tier used when the cursor lands on bare objects; it
- * reuses this reader's per-row-group page index after priming it under the maximal object projection,
- * and decodes only the answer's pages. {@link #rows} remains the explicit whole-row-group tier for
- * callers that genuinely need every object row.
+ * {@link #objectRange} is the bounded full-row tier for standalone callers and decodes only the
+ * answer's pages. It opens a separate object-projected file reader lazily, so a caller that only uses
+ * the key tiers never loads listing-column indexes. {@link #rows} uses that same lazy object reader
+ * and remains the explicit whole-row-group tier for callers that genuinely need every object row.
  *
  * <p>{@link #forEachKey} is the third shape: <b>every</b> key of one row group, in order, handed to a
  * visitor. A caller that is going to consume the whole group anyway (the simulator's decode-once
@@ -82,11 +83,11 @@ import org.apache.parquet.schema.Type;
  * {@code verifyNoParquetOrHadoopOnCompileClasspath}), the same seam {@link SortedParquetIndex} already
  * keeps for the routing-index derive.
  *
- * <p>Column projection is set on the shared {@link ParquetFileReader} immediately before each read
- * (never once at construction), so {@link #openKeyCursor}, {@link #objectRange}, and {@link #rows}
- * can freely interleave against the same open file handle, each paying for only its own columns. Not
- * thread-safe — a caller serving concurrent requests must not share one instance across threads
- * (mirrors {@link ParquetEntryReader}).
+ * <p>The key and object tiers use separate {@link ParquetFileReader}s because parquet-java's column
+ * index cache is fixed by the projection active on first access. The key reader therefore remains
+ * genuinely key-only, while the lazy object reader primes its own cache under the maximal listing
+ * projection. Not thread-safe — a caller serving concurrent requests must not share one instance
+ * across threads (mirrors {@link ParquetEntryReader}).
  */
 public final class SortedParquetRowGroupReader implements AutoCloseable {
 
@@ -134,7 +135,8 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
     private static final Set<ColumnPath> KEY_COLUMN = Set.of(KEY_COLUMN_PATH);
 
     private final Path file;
-    private final ParquetFileReader reader;
+    private final ParquetFileReader keyReader;
+    private ParquetFileReader objectReader;
     private final List<org.apache.parquet.hadoop.metadata.BlockMetaData> blocks;
     private final ColumnIOFactory columnIoFactory = new ColumnIOFactory();
     private final String createdBy;
@@ -149,13 +151,24 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
     private final MessageColumnIO objectRangeColumnIoWithOwner;
     private final MessageType objectRangeSchemaWithoutOwner;
     private final MessageColumnIO objectRangeColumnIoWithoutOwner;
+    private final BitSet loadedKeyIndexes = new BitSet();
+    private final KeyIndexListener keyIndexListener;
 
     public SortedParquetRowGroupReader(Path file) throws IOException {
+        this(file, (elapsedNanos, firstLoad) -> { });
+    }
+
+    /**
+     * As {@link #SortedParquetRowGroupReader(Path)}, reporting each key-index lookup as a first load
+     * or reader-local cache reuse. The listener keeps replay instrumentation out of this core module.
+     */
+    public SortedParquetRowGroupReader(Path file, KeyIndexListener keyIndexListener) throws IOException {
         this.file = file;
-        this.reader = ParquetFileReader.open(new LocalInputFile(file));
-        this.createdBy = reader.getFooter().getFileMetaData().getCreatedBy();
-        this.blocks = List.copyOf(reader.getFooter().getBlocks());
-        MessageType full = reader.getFooter().getFileMetaData().getSchema();
+        this.keyIndexListener = java.util.Objects.requireNonNull(keyIndexListener, "keyIndexListener");
+        this.keyReader = ParquetFileReader.open(new LocalInputFile(file));
+        this.createdBy = keyReader.getFooter().getFileMetaData().getCreatedBy();
+        this.blocks = List.copyOf(keyReader.getFooter().getBlocks());
+        MessageType full = keyReader.getFooter().getFileMetaData().getSchema();
         this.keySchema = project(full, KEY_FIELD);
         this.keyColumnIo = columnIoFactory.getColumnIO(keySchema);
         this.keyColumn = keySchema.getColumns().getFirst();
@@ -201,7 +214,7 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
     public KeyCursor openKeyCursor(int blockIndex, byte[] from, boolean inclusive, byte[] toExclusive)
             throws IOException {
         long rowCount = blocks.get(blockIndex).getRowCount();
-        ColumnIndexStore indexStore = columnIndexStore(blockIndex, keySchema);
+        ColumnIndexStore indexStore = keyColumnIndexStore(blockIndex);
         requirePagesAscend(indexStore, file, blockIndex);
         RowRanges eligible = from == null && toExclusive == null
                 ? RowRanges.createSingle(rowCount)
@@ -221,12 +234,10 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
      * full-row companion to {@link #openKeyCursor(int, byte[], boolean, byte[])} for a delimiter
      * skip-scan that lands on bare objects.
      *
-     * <p>The important part is ownership: the caller already holds this reader for its key cursor, and
-     * the row group's {@link ColumnIndexStore} was primed under the maximal object projection before
-     * that cursor narrowed the reader to its key column. Borrowing a separate range reader rebuilt the
-     * same column/offset indexes once per pooled slot before the first bare-object batch could be
-     * returned. Reusing this reader leaves concurrency bounded by the delimiter-reader lease and
-     * retains the exact same page-bounded read as {@link SortedParquetRangeReader}.
+     * <p>This standalone API remains correct after the key tier became genuinely key-only by owning a
+     * second, lazily opened object reader. Replay serving delegates its bare-object batches to its
+     * existing {@link SortedParquetRangeReader} pool instead, so delimiter readers normally never open
+     * this second handle.
      */
     public List<ObjectRow> objectRange(int blockIndex, byte[] from, boolean fromInclusive,
                                        byte[] toExclusive, int limit, boolean includeOwner) throws IOException {
@@ -236,7 +247,8 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         MessageType schema = includeOwner ? objectRangeSchemaWithOwner : objectRangeSchemaWithoutOwner;
         MessageColumnIO columnIo = includeOwner
                 ? objectRangeColumnIoWithOwner : objectRangeColumnIoWithoutOwner;
-        ColumnIndexStore indexStore = columnIndexStore(blockIndex, schema);
+        ParquetFileReader reader = objectReader();
+        ColumnIndexStore indexStore = objectColumnIndexStore(reader, blockIndex, schema);
         requirePagesAscend(indexStore, file, blockIndex);
         RowRanges ranges = ColumnIndexFilter.calculateRowRanges(
                 FilterCompat.get(SortedParquetRangeReader.predicate(from, fromInclusive, toExclusive)),
@@ -246,35 +258,39 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         }
         RowRanges wanted = SortedParquetRangeReader.firstRowsOf(ranges, indexStore, limit);
         List<ObjectRow> out = new ArrayList<>(Math.min(limit, 1024));
-        readObjectsInto(out, blockIndex, wanted, from, fromInclusive, toExclusive,
+        readObjectsInto(out, reader, blockIndex, wanted, from, fromInclusive, toExclusive,
                 limit, schema, columnIo, includeOwner);
         if (out.size() < limit && wanted.rowCount() < ranges.rowCount()) {
             // Eligibility promises pure OBJECT groups, so this is only a correctness backstop if
             // that promise ever slips: widen to every page the key predicate retained.
             out.clear();
-            readObjectsInto(out, blockIndex, ranges, from, fromInclusive, toExclusive,
+            readObjectsInto(out, reader, blockIndex, ranges, from, fromInclusive, toExclusive,
                     limit, schema, columnIo, includeOwner);
         }
         return out;
     }
 
-    /**
-     * Returns the row group's cached page indexes, selecting {@code requestedSchema} for the data read.
-     *
-     * <p>{@link ParquetFileReader} builds that cache only for the requested paths active on first
-     * access and never invalidates it when the projection changes. A key cursor that created the cache
-     * under {@link #keySchema} would therefore leave later object reads without offset indexes for
-     * their value columns. Always prime under the maximal projection before narrowing the real read;
-     * this reads footer indexes only, never data pages.
-     */
-    private ColumnIndexStore columnIndexStore(int blockIndex, MessageType requestedSchema) {
+    /** Loads or reuses this key reader's row-group index under the key-only projection. */
+    private ColumnIndexStore keyColumnIndexStore(int blockIndex) {
+        boolean firstLoad = !loadedKeyIndexes.get(blockIndex);
+        long startedNanos = System.nanoTime();
+        keyReader.setRequestedSchema(keySchema);
+        ColumnIndexStore indexStore = keyReader.getColumnIndexStore(blockIndex);
+        loadedKeyIndexes.set(blockIndex);
+        keyIndexListener.record(System.nanoTime() - startedNanos, firstLoad);
+        return indexStore;
+    }
+
+    private ColumnIndexStore objectColumnIndexStore(
+            ParquetFileReader reader, int blockIndex, MessageType requestedSchema) {
         reader.setRequestedSchema(objectRangeSchemaWithOwner);
         ColumnIndexStore indexStore = reader.getColumnIndexStore(blockIndex);
         reader.setRequestedSchema(requestedSchema);
         return indexStore;
     }
 
-    private void readObjectsInto(List<ObjectRow> out, int blockIndex, RowRanges ranges, byte[] from,
+    private void readObjectsInto(List<ObjectRow> out, ParquetFileReader reader, int blockIndex,
+                                 RowRanges ranges, byte[] from,
                                  boolean fromInclusive, byte[] toExclusive, int limit,
                                  MessageType schema, MessageColumnIO columnIo, boolean includeOwner)
             throws IOException {
@@ -324,10 +340,10 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
         if (pages.isEmpty()) {
             return null;
         }
-        reader.setRequestedSchema(keySchema);
+        keyReader.setRequestedSchema(keySchema);
         RowRanges window = RowRanges.create(rowCount,
                 pages.stream().mapToInt(Integer::intValue).iterator(), offsets);
-        PageReadStore store = reader.readFilteredRowGroup(blockIndex, window);
+        PageReadStore store = keyReader.readFilteredRowGroup(blockIndex, window);
         try {
             RecordReader<Group> rowReader =
                     keyColumnIo.getRecordReader(store, new GroupRecordConverter(keySchema));
@@ -657,8 +673,8 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
      * @return the number of keys visited, i.e. the row group's row count
      */
     public long forEachKey(int blockIndex, KeyVisitor visitor) throws IOException {
-        reader.setRequestedSchema(keySchema);
-        try (PageReadStore pages = reader.readRowGroup(blockIndex)) {
+        keyReader.setRequestedSchema(keySchema);
+        try (PageReadStore pages = keyReader.readRowGroup(blockIndex)) {
             ColumnReadStoreImpl columns = new ColumnReadStoreImpl(pages,
                     new GroupRecordConverter(keySchema).getRootConverter(), keySchema, createdBy);
             ColumnReader column = columns.getColumnReader(keyColumn);
@@ -680,6 +696,7 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
     public List<ObjectRow> rows(int blockIndex, boolean includeOwner) throws IOException {
         MessageType schema = includeOwner ? objectSchemaWithOwner : objectSchemaWithoutOwner;
         MessageColumnIO columnIo = includeOwner ? objectColumnIoWithOwner : objectColumnIoWithoutOwner;
+        ParquetFileReader reader = objectReader();
         reader.setRequestedSchema(schema);
         // The rows are fully materialized before returning, so the page store (and its buffers —
         // released by close(), not by closing the file reader) is done the moment this method is.
@@ -697,7 +714,46 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
-        reader.close();
+        IOException failure = null;
+        try {
+            keyReader.close();
+        } catch (IOException e) {
+            failure = e;
+        }
+        if (objectReader != null) {
+            try {
+                objectReader.close();
+            } catch (IOException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    private ParquetFileReader objectReader() throws IOException {
+        if (objectReader == null) {
+            objectReader = ParquetFileReader.open(new LocalInputFile(file));
+        }
+        return objectReader;
+    }
+
+    /** Package-private diagnostic used to pin that the key tiers never open the object handle. */
+    boolean objectReaderInitialized() {
+        return objectReader != null;
+    }
+
+    /** Receives one reader-local key-column index lookup. */
+    @FunctionalInterface
+    public interface KeyIndexListener {
+
+        /** {@code firstLoad} is true only for the first successful lookup of this reader and row group. */
+        void record(long elapsedNanos, boolean firstLoad);
     }
 
     /**

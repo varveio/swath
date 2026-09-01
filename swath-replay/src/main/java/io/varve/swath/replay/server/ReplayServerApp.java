@@ -68,9 +68,10 @@ public final class ReplayServerApp implements Callable<Integer> {
         long startedNanos = System.nanoTime();
         try (ReplayServer server = injected == null
                 ? new ReplayServer(options.host, options.port, bucket, fixture, options.parquetConnections,
-                        options.servingMode, options.maxConcurrentRequests)
+                        options.delimiterConnections, options.servingMode, options.maxConcurrentRequests)
                 : new ReplayServer(options.host, options.port, bucket, fixture, options.parquetConnections,
-                        options.servingMode, injected, options.maxConcurrentRequests)) {
+                        options.delimiterConnections, options.servingMode, injected,
+                        options.maxConcurrentRequests)) {
             server.start();
             // Opened after the fixture is served, so a reader that can reach /metrics knows the
             // index derive is already done and the numbers it reads are serving numbers.
@@ -78,10 +79,12 @@ public final class ReplayServerApp implements Callable<Integer> {
                     : MetricsEndpoint.start(options.host, options.metricsPort, server.metrics().registry(),
                             server.resolvedServingMode().toString(), startedNanos)) {
                 System.err.printf("swath_replay endpoint=http://%s:%d bucket=%s fixture=%s "
-                                + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s "
+                                + "serving_mode=%s parquet_connections=%d delimiter_connections=%d "
+                                + "inject_latency=%s latency_scale=%s "
                                 + "metrics_endpoint=%s max_concurrent_requests=%d%n",
                         options.host, server.port(), bucket, fixture.toAbsolutePath(),
                         server.resolvedServingMode(), server.resolvedParquetConnections(),
+                        server.resolvedDelimiterConnections(),
                         injected == null ? "off" : options.injectLatency, options.latencyScale,
                         metrics == null ? "off" : metricsEndpoint(options.host, metrics.port()),
                         options.maxConcurrentRequests);

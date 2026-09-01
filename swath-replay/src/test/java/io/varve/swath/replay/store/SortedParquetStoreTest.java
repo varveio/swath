@@ -44,6 +44,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.parquet.schema.MessageType;
@@ -391,23 +392,101 @@ class SortedParquetStoreTest {
     }
 
     @Test
-    void delimiterBareObjectReusesItsOwnedRowGroupReader(@TempDir Path dir) throws IOException {
+    void commonPrefixOnlyRollupNeverInitializesAnObjectReader(@TempDir Path dir) throws IOException {
+        ReplayMetrics metrics = new ReplayMetrics();
+        Fixture fixture = writeSorted(dir, manySmallGroups(), "a/one", "b/two", "c/three");
+
+        try (SortedParquetStore store = new SortedParquetStore(
+                fixture.files, fixture.index, metrics, 1, 1)) {
+            assertThat(entryStrings(store.delimitedRollup(
+                    null, true, null, null, slash(), 1000, Projection.KEYS_ONLY)))
+                    .containsExactly("CP:a/", "CP:b/", "CP:c/");
+        }
+
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.object_lookahead.delegations").counter().count()).isZero();
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.range_reader_pool.wait.latency").timer().count()).isZero();
+        assertThat(metrics.registry().find("swath.replay.page.read.latency").timer().count()).isZero();
+        assertThat(metrics.registry().find("swath.replay.delimiter.key_index.latency")
+                .tag("state", "first_load").timer().count()).isPositive();
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.in_flight").gauge().value()).isZero();
+    }
+
+    @Test
+    void delimiterBareObjectDelegatesToRangeReaderAndReleasesBothLeases(@TempDir Path dir)
+            throws IOException {
         ReplayMetrics metrics = new ReplayMetrics();
         Fixture fixture = writeSorted(dir, manySmallGroups(), "bare-1", "bare-2", "dir/child");
 
-        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 1)) {
-            assertThat(entryStrings(store.delimitedRollup(
-                    null, true, null, null, slash(), 1000, Projection.KEYS_ONLY)))
+        try (SortedParquetStore store = new SortedParquetStore(
+                fixture.files, fixture.index, metrics, 1, 1)) {
+            List<ListingStore.DelimitedEntry> result = store.delimitedRollup(
+                    null, true, null, null, slash(), 1000, Projection.KEYS_ONLY);
+            assertThat(entryStrings(result))
                     .containsExactly("OBJ:bare-1", "OBJ:bare-2", "CP:dir/");
+            assertThat(result.stream().filter(entry -> entry.object() != null).map(ListingStore.DelimitedEntry::object))
+                    .extracting(ListedObject::etag, ListedObject::storageClass,
+                            ListedObject::ownerId, ListedObject::checksumAlgorithm)
+                    .containsExactly(
+                            org.assertj.core.groups.Tuple.tuple("etag", "STANDARD", null, "CRC32"),
+                            org.assertj.core.groups.Tuple.tuple("etag", "STANDARD", null, "CRC32"));
         }
 
         assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value())
-                .as("the bare-object batch reuses the delimiter reader instead of borrowing a second reader")
-                .isEqualTo(1.0);
+                .as("the bare-object batch simultaneously owns one delimiter and one range reader")
+                .isEqualTo(2.0);
         assertThat(metrics.registry().find("swath.replay.parquet.queries.in_flight").gauge().value()).isZero();
         assertThat(metrics.registry().find("swath.replay.page.read.latency").timer().count())
                 .as("the full-row page decode remains sampled; the outer query times the skip-scan")
                 .isEqualTo(1L);
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.range_reader_pool.wait.latency").timer().count()).isEqualTo(1L);
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.object_lookahead.delegations").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void saturatedDelimiterFleetMakesBoundedProgressThroughOneRangeReader(@TempDir Path dir)
+            throws Exception {
+        int delimiterReaders = 4;
+        List<String> bare = keys(5_000);
+        Fixture fixture = writeSorted(dir, SortConfigs.pagesOf(64), bare);
+        ReplayMetrics metrics = new ReplayMetrics();
+
+        try (SortedParquetStore store = new SortedParquetStore(
+                     fixture.files, fixture.index, metrics, 1, delimiterReaders);
+             var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            CountDownLatch start = new CountDownLatch(1);
+            var futures = java.util.stream.IntStream.range(0, delimiterReaders)
+                    .mapToObj(i -> executor.submit(() -> {
+                        start.await();
+                        return store.delimitedRollup(
+                                null, true, null, null, slash(), 1000, Projection.KEYS_ONLY);
+                    }))
+                    .toList();
+            start.countDown();
+
+            for (var future : futures) {
+                assertThat(entryStrings(future.get(30, TimeUnit.SECONDS)))
+                        .containsExactlyElementsOf(bare.subList(0, 1001).stream()
+                                .map(key -> "OBJ:" + key).toList());
+            }
+        }
+
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.object_lookahead.delegations").counter().count())
+                .isEqualTo(delimiterReaders);
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.range_reader_pool.wait.latency").timer().count())
+                .isEqualTo(delimiterReaders);
+        assertThat(metrics.registry().find(
+                "swath.replay.delimiter.reader_pool.wait.latency").timer().count())
+                .isEqualTo(delimiterReaders);
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value())
+                .as("all delimiter leases remain occupied while the one-way range dependency progresses")
+                .isEqualTo(delimiterReaders + 1.0);
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.in_flight").gauge().value()).isZero();
     }
 
     /**

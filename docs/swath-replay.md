@@ -180,14 +180,19 @@ total HTTP requests; `--max-concurrent-requests` is the separate request-admissi
 ceiling. Readers are returned before injected sleep. Each sorted slot holds an open
 reader and decoded footer per file, so
 very large pools can waste file descriptors and heap. Sorted mode eagerly opens the range-reader
-pool per file (`connections × files` readers). Its independent row-group pool opens lazily, one
-file at a time, only when a native `delimiter=/` skip-scan cannot answer from routing-index bounds;
-the conservative fully engaged resident bound remains `2 × connections × files`. An ordinary range
-fill uses only the range pool. An engaged skip-scan uses one row-group reader, including when it
-materializes a bare object: the bounded full-row read reuses the cursor's reader and the row-group
-page index that reader primed under its maximal object projection. Concurrent ordinary and delimiter
-requests can still engage both independent pools. The first delimiter-pool engagement for each file
-is visible through `delimiter.reader_pool.open.latency`.
+pool per file (`parquet connections × files` readers).
+
+`--delimiter-connections N` independently controls the lazy key-only reader fleet used by native
+`delimiter=/` skip-scans. Its `0` default resolves to the sorted store's same
+`max(8, min(32, available processors))` rule even when `--parquet-connections` is explicit, so a wide
+worker fleet does not silently multiply delimiter footers and reader-local key-index caches. The
+delimiter pool opens one file at a time only when routing-index bounds cannot answer a hop. The
+conservative fully engaged reader bound is `(parquet connections + delimiter connections) × files`.
+An ordinary range fill uses only the range pool. A skip-scan owns one key-only delimiter reader; an
+uncommon bare-object lookahead temporarily borrows the range pool for its full-row batch while still
+holding that delimiter lease. Range reads never acquire delimiter readers, so this nesting has no
+pool cycle. The pool-wait, key-index first-load/reuse, and delegation meters below expose the
+resulting latency and engagement directly.
 
 ### Resource sizing for sorted serving
 
@@ -409,8 +414,8 @@ throughput. Multiple modes walk the same fixture and report ratios. Keep startup
 separate from walk time, and client round-trip latency separate from the store-level
 `page.read.latency` backing-decode signal. In sorted mode that timer counts bounded page decodes,
 not HTTP pages: cache hits and routing-index-only delimiter hops add no sample, while a delimiter
-request adds a sample only when it materializes a bare object through its already-owned row-group
-reader. The key-cursor work remains in `parquet.query.latency`.
+request adds a sample only when it delegates a bare-object batch to the range-reader pool. The
+key-cursor work remains in `parquet.query.latency`.
 
 ## Metrics and tuning
 
@@ -421,9 +426,10 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `sortfixture.build.latency`, `sortfixture.output.bytes`, `sort.steal_reason{outcome,reason}`, `sort.progress` | Legacy-fixture sort work, engagement, and progress. |
 | `index.load.latency{source=derived}`, `index.entries` | Sorted routing-index construction. |
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
-| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts`, `delimiter.skipscan.decoded_key_rows`, `delimiter.skipscan.page_reseeks`, `delimiter.reader_pool.open.latency`, `delimiter.reader_pool.readers_opened` | Rollup vs walk; cursor/page-index opens; routing-index-only whole-group engagements; decoded rows and same-group page reseeks per rollup; and lazy per-file delimiter-pool first touch (timer count = files opened, reader summary = handles opened). A physical row group may be opened more than once after reseeks. |
+| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts`, `delimiter.skipscan.decoded_key_rows`, `delimiter.skipscan.page_reseeks`, `delimiter.reader_pool.open.latency`, `delimiter.reader_pool.readers_opened`, `delimiter.reader_pool.wait.latency` | Rollup vs walk; cursor/page-index opens; routing-index-only whole-group engagements; decoded rows and same-group page reseeks per rollup; lazy per-file delimiter-pool first touch; and complete successful delimiter-reader acquisition wait. A physical row group may be opened more than once after reseeks. |
+| `delimiter.key_index.latency{state}`, `delimiter.object_lookahead.delegations`, `delimiter.range_reader_pool.wait.latency` | Key-only index lookup time split into `first_load` and reader-local `reuse`; bare-object batches delegated to the ordinary range pool; and the range-pool wait those batches incurred. |
 | `page.read.latency`, `fixture.list.latency` | Post-borrow bounded-page decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
-| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independent `connections`-wide range and lazy row-group pools per file. One request owns one reader, while concurrent ordinary and delimiter requests can engage both pools. |
+| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independently sized range and lazy delimiter pools per file. A bare-object delimiter batch briefly owns one reader from each. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |

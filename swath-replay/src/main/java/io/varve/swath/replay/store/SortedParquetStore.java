@@ -90,7 +90,7 @@ public final class SortedParquetStore implements ListingStore {
     private final Map<Path, LazyGroupReaderPool> groupReaders;
 
     public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
-        this(files, index, metrics, defaultConnectionCount());
+        this(files, index, metrics, defaultConnectionCount(), defaultDelimiterConnectionCount());
     }
 
     /**
@@ -99,18 +99,34 @@ public final class SortedParquetStore implements ListingStore {
      * @param index          the derived {@code (file, rowGroup, firstKey, rowCount)} routing index,
      *                       globally ascending by first key (its sanity was checked at load)
      * @param metrics        records {@code swath.replay.page.read.latency} per read
-     * @param connectionCount pooled Parquet readers per file (== the natural request-concurrency
-     *                        bound); see {@link #defaultConnectionCount()}
+     * @param connectionCount pooled range and delimiter readers per file; retained for callers that
+     *                        deliberately want the former single-width behavior
      */
     public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics,
                               int connectionCount) {
+        this(files, index, metrics, connectionCount, connectionCount);
+    }
+
+    /**
+     * Opens independent ordinary-range and delimiter reader fleets.
+     *
+     * @param rangeConnectionCount pooled range readers per file
+     * @param delimiterConnectionCount lazy delimiter readers per file
+     */
+    public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics,
+                              int rangeConnectionCount, int delimiterConnectionCount) {
         this.index = List.copyOf(index);
         validateIndexWithinFiles(this.index, files);
         this.metrics = metrics;
-        if (connectionCount < 1) {
-            throw new IllegalArgumentException("reader count must be at least 1, got " + connectionCount);
+        if (rangeConnectionCount < 1) {
+            throw new IllegalArgumentException(
+                    "range reader count must be at least 1, got " + rangeConnectionCount);
         }
-        Map<Path, SortedParquetRangeReader> openedRangeReaders = openRangeReaders(files, connectionCount,
+        if (delimiterConnectionCount < 1) {
+            throw new IllegalArgumentException(
+                    "delimiter reader count must be at least 1, got " + delimiterConnectionCount);
+        }
+        Map<Path, SortedParquetRangeReader> openedRangeReaders = openRangeReaders(files, rangeConnectionCount,
                 metrics::parquetReaderAcquired, elapsedNanos -> {
                     try {
                         metrics.recordPageRead(elapsedNanos);
@@ -118,7 +134,7 @@ public final class SortedParquetStore implements ListingStore {
                         metrics.parquetReaderReleased();
                     }
                 });
-        this.groupReaders = groupReaderPools(files, connectionCount, metrics);
+        this.groupReaders = groupReaderPools(files, delimiterConnectionCount, metrics);
         this.rangeReaders = openedRangeReaders;
     }
 
@@ -137,6 +153,11 @@ public final class SortedParquetStore implements ListingStore {
      */
     public static int defaultConnectionCount() {
         return Math.max(8, Math.min(32, Runtime.getRuntime().availableProcessors()));
+    }
+
+    /** Default delimiter readers per file, resolved independently from the ordinary range width. */
+    public static int defaultDelimiterConnectionCount() {
+        return defaultConnectionCount();
     }
 
     @Override
@@ -238,7 +259,15 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     private SortedParquetRowGroupReader borrowGroupReader(Path file) {
-        return pool(file).borrow();
+        var sample = metrics.startTimer();
+        SortedParquetRowGroupReader reader = pool(file).borrow();
+        try {
+            metrics.recordDelimiterReaderPoolWait(sample);
+            return reader;
+        } catch (RuntimeException | Error e) {
+            pool(file).release(reader);
+            throw e;
+        }
     }
 
     private static Map<Path, SortedParquetRangeReader> openRangeReaders(
@@ -380,7 +409,7 @@ public final class SortedParquetStore implements ListingStore {
             var sample = metrics.startTimer();
             try {
                 for (int i = 0; i < size; i++) {
-                    creating.addLast(new SortedParquetRowGroupReader(file));
+                    creating.addLast(new SortedParquetRowGroupReader(file, metrics::recordDelimiterKeyIndex));
                 }
             } catch (IOException | RuntimeException e) {
                 creating.forEach(SortedParquetStore::closeQuietly);
@@ -430,8 +459,9 @@ public final class SortedParquetStore implements ListingStore {
      *       this, since every later cursor is already past the previous entry) and jump the cursor to
      *       {@link ByteKeys#successor}{@code (P)} inclusive, past {@code P}'s whole subtree in one hop.
      *   <li>No {@code /} after the prefix → a bare object directly under it. The only hop that pays
-     *       for the full row rather than just the key column, read through the pooled row-group
-     *       reader the cursor already owns, a run of rows at a time ({@link #objectAt}).
+     *       for the full row rather than just the key column, delegated to the pooled range reader a
+     *       run of rows at a time ({@link #objectAt}). The delimiter lease remains held, but range
+     *       reads never acquire a delimiter reader, so the pool acquisition graph has no cycle.
      *       Advance the cursor past this exact key (exclusive) and continue.
      *   <li>The cursor lands past every key in its row group (a gap — {@code successor(P)} is rarely an
      *       actual key) → jump straight to the next group's first key; the last group exhausting the
@@ -588,7 +618,7 @@ public final class SortedParquetStore implements ListingStore {
                     }
                 } else {
                     out.add(new DelimitedEntry(null, toListedObject(objectAt(
-                            lookahead, reader, entry, key, upper,
+                            lookahead, entry, key, upper,
                             limit + 1 - out.size(), projection.owner()))));
                     cursor = key;
                     inclusive = false;
@@ -627,8 +657,8 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     /**
-     * The full row at {@code key} — every listing column — read through the pooled row-group reader
-     * the delimiter cursor already owns, <b>a run of rows at a time</b>.
+     * The full row at {@code key} — every listing column — delegated to the ordinary pooled range
+     * reader, <b>a run of rows at a time</b>.
      *
      * <p>A bare object is one hop, and hops are what the scan is O(). Reading one row per hop is
      * correct and, on a directory that is mostly bare objects, a thousand separate page-index seeks
@@ -639,19 +669,15 @@ public final class SortedParquetStore implements ListingStore {
      * successor at any hop, and a row buffered before the jump must not be served after it. A miss
      * refills, so the buffer is a saving and never a source of truth.
      */
-    private SortedParquetRowGroupReader.ObjectRow objectAt(Deque<SortedParquetRowGroupReader.ObjectRow> lookahead,
-                                                    SortedParquetRowGroupReader reader, IndexEntry entry,
-                                                    byte[] key, byte[] upper, int want,
-                                                    boolean includeOwner) throws IOException {
+    private SortedParquetRowGroupReader.ObjectRow objectAt(
+            Deque<SortedParquetRowGroupReader.ObjectRow> lookahead, IndexEntry entry,
+            byte[] key, byte[] upper, int want, boolean includeOwner) throws IOException {
         if (lookahead.isEmpty() || !Arrays.equals(lookahead.peek().keyUnsafe(), key)) {
             lookahead.clear();
-            var sample = metrics.startTimer();
-            try {
-                lookahead.addAll(reader.objectRange(
-                        entry.rowGroup(), key, true, upper, Math.max(1, want), includeOwner));
-            } finally {
-                metrics.recordPageRead(sample);
-            }
+            metrics.recordDelimiterObjectLookaheadDelegation();
+            lookahead.addAll(rangeReader(entry.file()).range(
+                    entry.rowGroup(), key, true, upper, Math.max(1, want), includeOwner,
+                    metrics::recordDelimiterRangeReaderPoolWait));
         }
         SortedParquetRowGroupReader.ObjectRow row = lookahead.poll();
         if (row != null && Arrays.equals(row.keyUnsafe(), key)) {

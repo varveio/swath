@@ -366,6 +366,34 @@ class ReplayServingFactoryTest {
 
         try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", sorted, 3, ServingMode.SORTED)) {
             assertThat(server.resolvedParquetConnections()).isEqualTo(3);
+            assertThat(server.resolvedDelimiterConnections())
+                    .isEqualTo(SortedParquetStore.defaultDelimiterConnectionCount());
+        }
+    }
+
+    @Test
+    void explicitParquetWidthDoesNotWidenTheDelimiterFleet(@TempDir Path dir) throws Exception {
+        Path sorted = sortedFixture(dir, "b", "a", "c");
+
+        ReplayServingFactory.Result result = ReplayServingFactory.open(sorted, ServingMode.SORTED, 128, 0);
+        try {
+            assertThat(result.parquetConnections()).isEqualTo(128);
+            assertThat(result.delimiterConnections())
+                    .isEqualTo(SortedParquetStore.defaultDelimiterConnectionCount())
+                    .isLessThan(128);
+        } finally {
+            result.fixture().close();
+        }
+    }
+
+    @Test
+    void explicitDelimiterWidthIsReportedIndependently(@TempDir Path dir) throws Exception {
+        Path sorted = sortedFixture(dir, "b", "a", "c");
+
+        try (ReplayServer server = new ReplayServer(
+                "127.0.0.1", 0, "bucket", sorted, 3, 2, ServingMode.SORTED, 8)) {
+            assertThat(server.resolvedParquetConnections()).isEqualTo(3);
+            assertThat(server.resolvedDelimiterConnections()).isEqualTo(2);
         }
     }
 }

@@ -23,6 +23,7 @@ public final class ReplayServer implements AutoCloseable {
     private final ReplayMetrics metrics;
     private final ServingMode resolvedMode;
     private final int resolvedParquetConnections;
+    private final int resolvedDelimiterConnections;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public ReplayServer(String host, int port, String bucket, Path fixture) {
@@ -43,6 +44,13 @@ public final class ReplayServer implements AutoCloseable {
                         ServingMode mode, int maxConcurrentRequests) {
         this(host, port, bucket, fixture, parquetConnections, mode, (req, result) -> Duration.ZERO,
                 maxConcurrentRequests);
+    }
+
+    /** As above, with an independently configured sorted delimiter-reader width. */
+    public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,
+                        int delimiterConnections, ServingMode mode, int maxConcurrentRequests) {
+        this(host, port, bucket, fixture, parquetConnections, delimiterConnections, mode,
+                (req, result) -> Duration.ZERO, maxConcurrentRequests);
     }
 
     /**
@@ -69,15 +77,25 @@ public final class ReplayServer implements AutoCloseable {
     public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,
                         ServingMode mode, BiFunction<S3ListRequest, S3ListResult, Duration> latency,
                         int maxConcurrentRequests) {
-        this(host, port, bucket, openValidated(fixture, mode, parquetConnections, maxConcurrentRequests), latency,
-                maxConcurrentRequests);
+        this(host, port, bucket, fixture, parquetConnections, 0, mode, latency, maxConcurrentRequests);
+    }
+
+    /** As above, with an independently configured sorted delimiter-reader width. */
+    public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,
+                        int delimiterConnections, ServingMode mode,
+                        BiFunction<S3ListRequest, S3ListResult, Duration> latency,
+                        int maxConcurrentRequests) {
+        this(host, port, bucket,
+                openValidated(fixture, mode, parquetConnections, delimiterConnections, maxConcurrentRequests),
+                latency, maxConcurrentRequests);
     }
 
     private static ReplayServingFactory.Result openValidated(Path fixture, ServingMode mode,
                                                                int parquetConnections,
+                                                               int delimiterConnections,
                                                                int maxConcurrentRequests) {
         validateMaxConcurrentRequests(maxConcurrentRequests);
-        return ReplayServingFactory.open(fixture, mode, parquetConnections);
+        return ReplayServingFactory.open(fixture, mode, parquetConnections, delimiterConnections);
     }
 
     static void validateMaxConcurrentRequests(int maxConcurrentRequests) {
@@ -99,8 +117,8 @@ public final class ReplayServer implements AutoCloseable {
                  BiFunction<S3ListRequest, S3ListResult, Duration> latency,
                  int maxConcurrentRequests) {
         this(host, port, bucket, fixture.fixture(), fixture.fixture(), fixture.metrics(),
-                fixture.parquetConnections(), fixture.requestAdmissionLimit(), fixture.resolvedMode(), latency,
-                maxConcurrentRequests);
+                fixture.parquetConnections(), fixture.delimiterConnections(), fixture.requestAdmissionLimit(),
+                fixture.resolvedMode(), latency, maxConcurrentRequests);
     }
 
     // Package-private (not private) so tests can exercise close()'s idempotency/suppression
@@ -121,13 +139,13 @@ public final class ReplayServer implements AutoCloseable {
     ReplayServer(String host, int port, String bucket, ListingFixture fixture,
                           ReplayServerFixtureConfig config) {
         this(host, port, bucket, fixture, config.ownedFixture(), new ReplayMetrics(),
-                config.maxConcurrentReads(), config.maxConcurrentReads(), ServingMode.DUCKDB, config.latency(),
-                DEFAULT_MAX_CONCURRENT_REQUESTS);
+                config.maxConcurrentReads(), 0, config.maxConcurrentReads(), ServingMode.DUCKDB,
+                config.latency(), DEFAULT_MAX_CONCURRENT_REQUESTS);
     }
 
     private ReplayServer(String host, int port, String bucket, ListingFixture fixture,
                           AutoCloseable ownedFixture, ReplayMetrics metrics, int parquetConnections,
-                          int requestAdmissionLimit,
+                          int delimiterConnections, int requestAdmissionLimit,
                           ServingMode resolvedMode, BiFunction<S3ListRequest, S3ListResult, Duration> latency,
                           int maxConcurrentRequests) {
         validateMaxConcurrentRequests(maxConcurrentRequests);
@@ -138,6 +156,7 @@ public final class ReplayServer implements AutoCloseable {
         this.metrics = metrics;
         this.resolvedMode = resolvedMode;
         this.resolvedParquetConnections = parquetConnections;
+        this.resolvedDelimiterConnections = delimiterConnections;
         ServerConnector connector = new ServerConnector(server);
         connector.setHost(host);
         connector.setPort(port);
@@ -160,6 +179,11 @@ public final class ReplayServer implements AutoCloseable {
      */
     public int resolvedParquetConnections() {
         return resolvedParquetConnections;
+    }
+
+    /** The sorted delimiter-reader width, or zero when the resolved serving mode is DuckDB. */
+    public int resolvedDelimiterConnections() {
+        return resolvedDelimiterConnections;
     }
 
     public void start() throws Exception {

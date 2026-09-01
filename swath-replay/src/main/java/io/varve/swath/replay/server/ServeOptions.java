@@ -29,6 +29,11 @@ final class ServeOptions {
                     + "concurrency. 0 uses the store's default.")
     int parquetConnections;
 
+    @Option(names = "--delimiter-connections", defaultValue = "0",
+            description = "Concurrent delimiter readers in sorted mode, independent of "
+                    + "--parquet-connections. 0 uses the sorted store's CPU-bounded default (8 to 32).")
+    int delimiterConnections;
+
     @Option(names = "--serving-mode", defaultValue = "sorted",
             description = "How to serve the fixture: sorted (the default -- require a stamped, "
                     + "objects-mode, strictly-sorted fixture and fail by name otherwise), or duckdb "

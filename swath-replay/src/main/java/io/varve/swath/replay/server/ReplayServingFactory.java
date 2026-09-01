@@ -47,7 +47,7 @@ public final class ReplayServingFactory {
 
     /** The resolved fixture plus the concrete path chosen and the metrics that back it. */
     public record Result(ListingFixture fixture, ServingMode resolvedMode, ReplayMetrics metrics,
-                         int parquetConnections, int requestAdmissionLimit) {
+                         int parquetConnections, int delimiterConnections, int requestAdmissionLimit) {
     }
 
     /**
@@ -59,6 +59,12 @@ public final class ReplayServingFactory {
      * @throws IllegalArgumentException in {@code sorted} mode when the fixture is not sorted-eligible
      */
     public static Result open(Path fixturePath, ServingMode mode, int parquetConnections) {
+        return open(fixturePath, mode, parquetConnections, 0);
+    }
+
+    /** As {@link #open(Path, ServingMode, int)}, with an independently resolved delimiter width. */
+    public static Result open(Path fixturePath, ServingMode mode, int parquetConnections,
+                              int delimiterConnections) {
         MeterRegistry registry = new SimpleMeterRegistry();
         FixtureMetrics fixtureMetrics = new FixtureMetrics(registry);
         List<Path> files = resolveFiles(fixturePath);
@@ -70,7 +76,7 @@ public final class ReplayServingFactory {
                 // decline here isn't a "fallback" and must not bump that counter.
                 SortedEligibility.Result eligibility = SortedEligibility.decide(files, fixtureMetrics, false);
                 if (eligibility instanceof SortedEligibility.Result.Eligible eligible) {
-                    yield sorted(files, eligible.index(), parquetConnections, registry);
+                    yield sorted(files, eligible.index(), parquetConnections, delimiterConnections, registry);
                 }
                 String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
                 throw new IllegalArgumentException(
@@ -85,22 +91,24 @@ public final class ReplayServingFactory {
         ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
         DuckDbListingStore store = new DuckDbListingStore(fixturePath, metrics, connections);
         ListObjectsV2Pager pager = new ListObjectsV2Pager(store, metrics);
-        return new Result(pager, ServingMode.DUCKDB, metrics, connections, connections);
+        return new Result(pager, ServingMode.DUCKDB, metrics, connections, 0, connections);
     }
 
     private static Result sorted(List<Path> files, List<IndexEntry> index, int parquetConnections,
-                                 MeterRegistry registry) {
+                                 int delimiterConnections, MeterRegistry registry) {
         int connections = parquetConnections > 0 ? parquetConnections : SortedParquetStore.defaultConnectionCount();
+        int delimiters = delimiterConnections > 0
+                ? delimiterConnections : SortedParquetStore.defaultDelimiterConnectionCount();
         ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
         WindowedListingStore.Config prefetch = WindowedListingStore.Config.fromSystemProperties();
         ListingStore store;
         if (prefetch.enabled()) {
-            SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections);
+            SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections, delimiters);
             store = new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
             log.info("replay_serving sorted prefetch ENABLED (window_rows={} max_windows={}) for {}",
                     prefetch.windowRows(), prefetch.maxWindows(), files);
         } else {
-            store = new SortedParquetStore(files, index, metrics, connections);
+            store = new SortedParquetStore(files, index, metrics, connections, delimiters);
             log.info("replay_serving sorted prefetch DISABLED (bare store) for {}", files);
         }
         ListObjectsV2Pager pager = new ListObjectsV2Pager(store, metrics);
@@ -109,7 +117,7 @@ public final class ReplayServingFactory {
         // recognize continuations or serve hits, allowing breadth-first cold traffic to churn the
         // bounded cache. Let every request reach the cache; only backing reads consume connections.
         int requestAdmissionLimit = prefetch.enabled() ? 0 : connections;
-        return new Result(pager, ServingMode.SORTED, metrics, connections, requestAdmissionLimit);
+        return new Result(pager, ServingMode.SORTED, metrics, connections, delimiters, requestAdmissionLimit);
     }
 
     private static List<Path> resolveFiles(Path fixturePath) {

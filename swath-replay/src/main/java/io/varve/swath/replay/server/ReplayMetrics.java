@@ -68,6 +68,10 @@ public final class ReplayMetrics {
     private final DistributionSummary delimiterSkipScanPageReseeks;
     private final Timer delimiterReaderPoolOpenLatency;
     private final DistributionSummary delimiterReaderPoolReadersOpened;
+    private final Timer delimiterReaderPoolWaitLatency;
+    private final Timer delimiterRangeReaderPoolWaitLatency;
+    private final Map<Boolean, Timer> delimiterKeyIndexLatency;
+    private final Counter delimiterObjectLookaheadDelegations;
     // Micrometer gauges weakly reference their state object. Retain these method-reference objects
     // for the metrics lifetime or a sustained run's next GC turns both live-cache values into NaN.
     private IntSupplier prefetchWindowsGaugeSource;
@@ -138,6 +142,18 @@ public final class ReplayMetrics {
                 .publishPercentiles(0.5, 0.99).register(registry);
         delimiterReaderPoolReadersOpened = DistributionSummary.builder(
                 "swath.replay.delimiter.reader_pool.readers_opened").register(registry);
+        delimiterReaderPoolWaitLatency = Timer.builder("swath.replay.delimiter.reader_pool.wait.latency")
+                .publishPercentiles(0.5, 0.99).register(registry);
+        delimiterRangeReaderPoolWaitLatency = Timer.builder(
+                "swath.replay.delimiter.range_reader_pool.wait.latency")
+                .publishPercentiles(0.5, 0.99).register(registry);
+        delimiterKeyIndexLatency = Map.of(
+                true, Timer.builder("swath.replay.delimiter.key_index.latency")
+                        .tag("state", "first_load").publishPercentiles(0.5, 0.99).register(registry),
+                false, Timer.builder("swath.replay.delimiter.key_index.latency")
+                        .tag("state", "reuse").publishPercentiles(0.5, 0.99).register(registry));
+        delimiterObjectLookaheadDelegations = Counter.builder(
+                "swath.replay.delimiter.object_lookahead.delegations").register(registry);
         Gauge
                 .builder("swath.replay.parquet.queries.in_flight", parquetQueriesInFlight, AtomicLong::get)
                 .register(registry);
@@ -347,6 +363,26 @@ public final class ReplayMetrics {
     public void recordDelimiterReaderPoolOpen(Timer.Sample sample, int readersOpened) {
         sample.stop(delimiterReaderPoolOpenLatency);
         delimiterReaderPoolReadersOpened.record(readersOpened);
+    }
+
+    /** Records one successful delimiter-reader acquisition, including lazy fleet construction. */
+    public void recordDelimiterReaderPoolWait(Timer.Sample sample) {
+        sample.stop(delimiterReaderPoolWaitLatency);
+    }
+
+    /** Records how long a delimiter bare-object batch waited for the ordinary range-reader pool. */
+    public void recordDelimiterRangeReaderPoolWait(long elapsedNanos) {
+        delimiterRangeReaderPoolWaitLatency.record(elapsedNanos, TimeUnit.NANOSECONDS);
+    }
+
+    /** Records a key-index lookup on one delimiter reader, split by first load vs cache reuse. */
+    public void recordDelimiterKeyIndex(long elapsedNanos, boolean firstLoad) {
+        delimiterKeyIndexLatency.get(firstLoad).record(elapsedNanos, TimeUnit.NANOSECONDS);
+    }
+
+    /** Records one bare-object lookahead refill delegated to the ordinary range-reader pool. */
+    public void recordDelimiterObjectLookaheadDelegation() {
+        delimiterObjectLookaheadDelegations.increment();
     }
 
     /** Records how many rows one window fill asked the delegate for (proves the ramp engages). */

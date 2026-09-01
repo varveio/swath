@@ -156,6 +156,17 @@ public final class SortedParquetRangeReader implements AutoCloseable {
      */
     public List<ObjectRow> range(int startRowGroup, byte[] from, boolean fromInclusive, byte[] toExclusive,
                                  int limit, boolean includeOwner) throws IOException {
+        return range(startRowGroup, from, fromInclusive, toExclusive, limit, includeOwner, null);
+    }
+
+    /**
+     * As {@link #range(int, byte[], boolean, byte[], int, boolean)}, reporting the reader-pool wait
+     * separately from post-borrow decode service. This lets a delimiter caller distinguish waiting
+     * behind ordinary pages from the bounded full-row read itself.
+     */
+    public List<ObjectRow> range(int startRowGroup, byte[] from, boolean fromInclusive, byte[] toExclusive,
+                                 int limit, boolean includeOwner, LongConsumer poolWaitRecorder)
+            throws IOException {
         if (limit <= 0 || startRowGroup >= blocks.size()) {
             return List.of();
         }
@@ -163,10 +174,14 @@ public final class SortedParquetRangeReader implements AutoCloseable {
         MessageColumnIO columnIo = includeOwner ? columnIoWithOwner : columnIoWithoutOwner;
         FilterCompat.Filter filter = FilterCompat.get(predicate(from, fromInclusive, toExclusive));
         List<ObjectRow> out = new ArrayList<>(Math.min(limit, 1024));
+        long waitStartedNanos = poolWaitRecorder == null ? 0L : nanoClock.getAsLong();
         ParquetFileReader reader = borrow();
         boolean acquisitionRecorded = false;
         long readStartedNanos = 0L;
         try {
+            if (poolWaitRecorder != null) {
+                poolWaitRecorder.accept(nanoClock.getAsLong() - waitStartedNanos);
+            }
             readerAcquired.run();
             acquisitionRecorded = true;
             readStartedNanos = nanoClock.getAsLong();

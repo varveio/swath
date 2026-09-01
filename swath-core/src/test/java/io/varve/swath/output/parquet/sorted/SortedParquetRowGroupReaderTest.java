@@ -121,6 +121,37 @@ class SortedParquetRowGroupReaderTest {
         }
     }
 
+    @Test
+    void keyOnlyTiersNeverInitializeTheLazyObjectReader(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(path, config(Map.of()), SortMode.OBJECTS, 1)) {
+            writer.write(object("a/one"));
+            writer.write(object("b/two"));
+        }
+
+        List<Boolean> firstLoads = new ArrayList<>();
+        try (SortedParquetRowGroupReader reader =
+                     new SortedParquetRowGroupReader(path, (elapsed, first) -> firstLoads.add(first))) {
+            try (SortedParquetRowGroupReader.KeyCursor ignored =
+                         reader.openKeyCursor(0, bytes("a"), true, null)) {
+                assertThat(reader.objectReaderInitialized()).isFalse();
+            }
+            try (SortedParquetRowGroupReader.KeyCursor ignored =
+                         reader.openKeyCursor(0, bytes("b"), true, null)) {
+                assertThat(reader.objectReaderInitialized()).isFalse();
+            }
+            List<byte[]> keys = new ArrayList<>();
+            reader.forEachKey(0, keys::add);
+            assertThat(reader.objectReaderInitialized()).isFalse();
+            assertThat(firstLoads).containsExactly(true, false);
+
+            assertThat(reader.objectRange(0, bytes("a/one"), true, null, 1, false))
+                    .extracting(row -> utf8(row.key()))
+                    .containsExactly("a/one");
+            assertThat(reader.objectReaderInitialized()).isTrue();
+        }
+    }
+
     /**
      * A key cursor is forward-only and stops as soon as it reaches the target — {@link
      * SortedParquetRowGroupReader.KeyCursor#advanceTo} must land exactly on the first row at/after the target

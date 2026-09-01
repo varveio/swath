@@ -54,5 +54,17 @@ class ServeLatencyScaleOptionTest {
         parser(cmd).parseArgs("--fixture", "f", "--bucket", "b");
 
         assertThat(cmd.serveOptions.latencyScale).isEqualTo(ShapeLatency.UNSCALED);
+        assertThat(cmd.serveOptions.delimiterConnections).isZero();
+    }
+
+    @Test
+    void delimiterConnectionsIsSharedByServeAndTopLevelForms() {
+        ReplayServerApp.ServeCommand cmd = new ReplayServerApp.ServeCommand();
+        parser(cmd).parseArgs("--fixture", "f", "--bucket", "b", "--delimiter-connections", "16");
+        assertThat(cmd.serveOptions.delimiterConnections).isEqualTo(16);
+
+        ReplayServerApp app = new ReplayServerApp();
+        parser(app).parseArgs("--fixture", "f", "--bucket", "b", "--delimiter-connections", "32");
+        assertThat(app.serveOptions.delimiterConnections).isEqualTo(32);
     }
 }

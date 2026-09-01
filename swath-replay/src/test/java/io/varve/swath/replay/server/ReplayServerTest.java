@@ -213,7 +213,7 @@ class ReplayServerTest {
         ColdBacklogFixture fixture = new ColdBacklogFixture(connections, 4);
         ReplayMetrics metrics = new ReplayMetrics();
         ReplayServingFactory.Result result = new ReplayServingFactory.Result(
-                fixture, ServingMode.SORTED, metrics, connections, 0);
+                fixture, ServingMode.SORTED, metrics, connections, 0, 0);
 
         try (ReplayServer server = new ReplayServer(
                 "127.0.0.1", 0, "bucket", result, (request, page) -> Duration.ZERO, 8)) {
