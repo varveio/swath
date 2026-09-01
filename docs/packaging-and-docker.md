@@ -286,8 +286,21 @@ Each release image carries the same release-cadence tags:
 
 | Tag | Meaning | Mutable? |
 |---|---|---|
-| `<version>` (e.g. `0.1.0`) | The release tag's canonical Gradle version | Intended immutable |
+| `<version>` (e.g. `0.3.0`) | The release tag's canonical Gradle version | Intended immutable |
+| `<major>.<minor>` (e.g. `0.3`) | Newest patch of that minor line | Moves |
 | `latest` | Most recently published release | Moves |
+| `<major>` (e.g. `1`) | Newest release of that major line. **Not published while the version is `0.x`** — a bare `0` would imply a stability contract 0.x disclaims | Moves |
+
+A pre-release (`X.Y.Z-rc.N`) publishes its own immutable tag and nothing else:
+
+| Tag | Meaning | Mutable? |
+|---|---|---|
+| `<version>-rc.<n>` (e.g. `0.4.0-rc.1`) | The pre-release tag's canonical Gradle version | Intended immutable |
+
+No `latest`, no rolling `<major>.<minor>`, no bare `<major>`, and the GitHub release is
+marked as a pre-release — so a rehearsal cannot move a tag that a consumer of the last
+real release is following. `.github/workflows/release.yml` classifies the tag once and
+every downstream step reads that classification.
 
 The replay image shares the repository's canonical Gradle version and release cadence but is
 not a GitHub release archive or part of the CLI image. The uber-jar ships as a versioned release asset, `swath-<version>.jar` (the build
