@@ -111,6 +111,11 @@ tasks.named<Test>("test") {
     // registry. Without this, Gradle only tracks compiled classes/resources as inputs, so a
     // docs-only edit leaves the task UP-TO-DATE and the doc/code parity check silently never runs.
     inputs.file(rootProject.file("docs/configuration.md")).withPathSensitivity(PathSensitivity.RELATIVE)
+    // PublicRunFactsTest compares the published run records with the prose that quotes them, for
+    // the same reason: an edit to either side has to be able to fail the check.
+    inputs.dir(rootProject.file("site/data/runs")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.file("README.md")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.file("docs/full-scale-demo.md")).withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {

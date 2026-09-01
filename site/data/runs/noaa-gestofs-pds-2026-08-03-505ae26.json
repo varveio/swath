@@ -1,0 +1,185 @@
+{
+  "schema_version": "swath-public-run-v1",
+  "run_id": "noaa-gestofs-pds-2026-08-03-505ae26",
+  "title": "README full-scale recording of s3://noaa-gestofs-pds/",
+  "provenance_status": "partial",
+  "swath": {
+    "version": "0.2.1",
+    "commit": "505ae26e6019",
+    "runtime": "25.0.3+9-LTS"
+  },
+  "captured_at": "2026-08-03",
+  "captured_at_precision": "date",
+  "captured_at_bounds": {
+    "earliest": "2026-08-03T12:29:20Z",
+    "latest": "2026-08-03T12:51:46Z",
+    "basis": "No timestamp was recorded for this capture. The date is derived from two bounds, not read from a clock. The recording's own DuckDB query over the produced dataset reports the newest listed object as last_modified 2026-08-03 12:29:20+00, so the listing was still running at or after that instant; the recording assets were committed to this repository at 2026-08-03T12:51:46Z, so it had finished by then. Both bounds fall on the same UTC date, which is why `captured_at` carries date precision and no time of day."
+  },
+  "target": {
+    "uri": "s3://noaa-gestofs-pds/",
+    "provider": "AWS S3",
+    "region": null,
+    "region_source": "Not recorded. The recorded command passed `--region us-east-1`, which is the client's configured region and is kept under `config.region`; no bucket-location response is retained, so the bucket's own region is not established by this capture."
+  },
+  "client": {
+    "provider": null,
+    "region": null,
+    "machine_type": null,
+    "cpu": null,
+    "memory_bytes": null,
+    "published_description": null
+  },
+  "command": {
+    "list": "swath list s3://noaa-gestofs-pds/ --no-sign-request --region us-east-1 --concurrency 128 --format parquet -o /out/noaa-gestofs-pds",
+    "resume": "swath resume /out/noaa-gestofs-pds"
+  },
+  "output": {
+    "format": "parquet",
+    "destination_kind": "managed Parquet dataset directory",
+    "destination_kind_source": "The recording's `ls -R` of the output directory shows `_SUCCESS`, `_swath_summary.json`, `manifest.json`, `symlink.txt`, and a `data/` directory of Parquet parts.",
+    "sorted": false,
+    "sorted_source": "The configured output mode, not a verified property of the published parts: the recorded command passes no `--sort` flag, and globally sorted output is opt-in."
+  },
+  "config": {
+    "concurrency_ceiling": 128,
+    "concurrency_ceiling_source": "The `--concurrency 128` flag is visible in the recorded command.",
+    "region": "us-east-1"
+  },
+  "clocks": {
+    "listing_wall": {
+      "ms": null,
+      "display": null,
+      "measures": "Not recorded. No single whole-capture listing clock exists in retained evidence; the capture is two invocations, each of which printed its own elapsed time under `invocations`."
+    },
+    "invocation_wall": {
+      "ms": null,
+      "display": null,
+      "measures": "Recorded per invocation rather than once for the capture. See `invocations[].elapsed_display`."
+    },
+    "trace_event_span": {
+      "ms": null,
+      "display": null,
+      "measures": "Not available. No `--trace` file was retained for this recording, and none is referenced by it."
+    },
+    "video_playback": {
+      "ms": null,
+      "display": null,
+      "measures": "Not recorded. The terminal screen capture's playback length is a property of the recording, not of the listing, and is stated nowhere in retained evidence."
+    }
+  },
+  "result": {
+    "objects": 39585029,
+    "objects_measures": "Objects in the published managed Parquet dataset, counted with DuckDB over `data/*.parquet` inside the recording itself. The resume invocation's summary printed the same total.",
+    "api_calls": null,
+    "api_calls_measures": "No whole-capture attempt count is established. The resume invocation printed 41,582 API calls and the interrupted first attempt printed 635; the recording does not say whether the larger figure already includes the smaller. Both are under `invocations`. swath's `cost.api_calls` counts `ListObjectsV2` attempts including probes and retries, per docs/operating.md.",
+    "api_calls_per_1k_objects": null,
+    "committed_pages": null,
+    "committed_pages_measures": "Not recorded. The recording reports API attempts, not committed listing pages.",
+    "pages_per_1k_objects": null,
+    "initial_ranges": null,
+    "empty_initial_ranges": null,
+    "splits": null,
+    "owner_splits": null,
+    "uniform_pivot_splits": null,
+    "claimed_ranges": null,
+    "completed_ranges": null,
+    "failed_ranges": null,
+    "listing_workers_observed": null,
+    "listing_workers_measures": "Not recorded. The recording shows the configured ceiling, not the number of workers that ran.",
+    "peak_live_ranges": null,
+    "heaviest_initial_range": null,
+    "median_initial_range_objects": null,
+    "parquet_parts": null,
+    "parquet_bytes": null,
+    "peak_rss_bytes": null,
+    "listed_object_bytes_display": "1.2 PiB",
+    "earliest_object_last_modified": "2021-01-05T20:24:05Z",
+    "latest_object_last_modified": "2026-08-03T12:29:20Z",
+    "listed_object_measures": "Properties of the objects the dataset describes, read from the recording's DuckDB query over the published parts: the summed `size` column and the range of the `last_modified` column. They describe bucket contents, not swath's own output or timing.",
+    "scope_note": "Output volume, memory, throughput, cost estimate, and fault counters are printed by an invocation's run summary. Whether each covers the whole capture or only that invocation is not stated in retained evidence, so they are kept under `invocations` rather than promoted here."
+  },
+  "invocations": [
+    {
+      "role": "initial",
+      "command": "swath list s3://noaa-gestofs-pds/ --no-sign-request --region us-east-1 --concurrency 128 --format parquet -o /out/noaa-gestofs-pds",
+      "outcome": "INCOMPLETE (signal)",
+      "elapsed_display": "3.6s",
+      "elapsed_measures": "Elapsed time printed by this invocation's run summary. Only the rounded terminal display is retained.",
+      "objects": 573741,
+      "api_calls": 635,
+      "api_calls_per_1k_objects_display": "1.11",
+      "keys_per_second": 161250,
+      "avg_in_flight_display": "19.16",
+      "peak_in_flight": 68,
+      "throttled": null,
+      "retried": null,
+      "errors": null,
+      "parquet_parts": null,
+      "parquet_bytes_display": null,
+      "peak_rss_display": "1.3 GB",
+      "estimated_list_cost_display": "~$0.003 (est. @ $0.005/1k LIST)",
+      "counter_scope": null,
+      "counter_scope_measures": "These are the values this invocation's run summary printed. swath may carry run figures forward across a resume, and the recording does not say which of these cover only this invocation."
+    },
+    {
+      "role": "resume",
+      "command": "swath resume /out/noaa-gestofs-pds",
+      "outcome": "complete",
+      "elapsed_display": "1m36s",
+      "elapsed_measures": "Elapsed time printed by this invocation's run summary, on the line that also reports the 39,585,029-object total. Only the rounded terminal display is retained.",
+      "objects": 39585029,
+      "api_calls": 41582,
+      "api_calls_per_1k_objects_display": "1.05",
+      "keys_per_second": 410223,
+      "avg_in_flight_display": "47.70",
+      "peak_in_flight": 64,
+      "throttled": 0,
+      "retried": 1,
+      "errors": 0,
+      "parquet_parts": 22,
+      "parquet_bytes_display": "790.0 MB",
+      "peak_rss_display": "1.7 GB",
+      "estimated_list_cost_display": "~$0.208 (est. @ $0.005/1k LIST)",
+      "counter_scope": null,
+      "counter_scope_measures": "These are the values this invocation's run summary printed. swath may carry run figures forward across a resume, and the recording does not say which of these cover only this invocation."
+    }
+  ],
+  "analysis": null,
+  "trace_model": null,
+  "artifacts": {
+    "summary": null,
+    "raw_trace": null,
+    "interactive_trace": null,
+    "video": [
+      {
+        "path": "docs/assets/swath-demo-v0.2.1.mp4",
+        "url": null,
+        "source": "This repository at commit e6447ff",
+        "sha256": "b0a0d1b5b0e97a6501a1ee36ae45d11d333f8b910cef124881f5c89d9bfaee8f",
+        "association": "The terminal recording of this capture."
+      },
+      {
+        "path": "docs/assets/swath-demo-v0.2.1.gif",
+        "url": null,
+        "source": "This repository at commit e6447ff",
+        "sha256": "9cf58c7e2a6a813aa2ca480da4aabd0b1b68dac1f5eb3965786bf2e5e51bd0a5",
+        "association": "The same recording as an animated image, embedded in README.md."
+      }
+    ]
+  },
+  "evidence": [
+    "Unless a field's own `_source` or `_measures` names another origin, every value above is read from the terminal recording committed as docs/assets/swath-demo-v0.2.1.gif and docs/assets/swath-demo-v0.2.1.mp4 (commit e6447ff, 2026-08-03).",
+    "The recording opens with `swath --version`, which prints `swath 0.2.1`, `Commit: 505ae26e6019`, and `Runtime: 25.0.3+9-LTS`. Repository tag v0.2.1 is 505ae26e6019dbf712e4d2ec9462521a53cee9d2, dated 2026-08-03.",
+    "The recording shows the full `swath list` command, an interruption, `swath resume`, both run summaries, an `ls -R` of the output directory listing 22 `part-*.parquet` files under `data/`, and a DuckDB count over the dataset."
+  ],
+  "notes": [
+    "Unknown fields were not present in retained evidence and must not be inferred.",
+    "Values are as a run summary printed them. Integer counters were printed in full; rates and ratios that swath rounds for display, and sizes and durations printed only in rounded units, are kept as `_display` strings so no precision is invented.",
+    "`clocks` is a map of named clocks. Each entry says what it measures, and carries a numeric `ms` only where the source recorded one; `display` is the value as it was shown.",
+    "This capture is not the capture behind the interactive run trace at https://swath.varve.io/runs/noaa-gestofs-pds/. See run noaa-gestofs-pds-field-guide-trace.",
+    "No `_swath_summary.json` or `--trace` file was retained for this capture, so exact byte counts, exact durations, range and split counts, and per-worker detail cannot be recovered.",
+    "The client machine, its provider, and its region are not recorded anywhere in retained evidence for this capture.",
+    "Documentation before this record stated `790.8 MB` of Parquet. The recording's own summary line reads `22 files · 790.0 MB written`; 790.8 is not supported by retained evidence.",
+    "Documentation before this record also attributed 513 initial ranges and a 68% heaviest range to this capture. Those figures come from the separate trace capture and are not stated anywhere in this recording."
+  ]
+}
