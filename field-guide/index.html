@@ -1218,6 +1218,7 @@
         in one atomic transaction, so the very first durable state is already a valid
         tiling of the keyspace.
       </p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#8-seeding-the-hybrid"><span class="mono">docs/internals/algorithms.md §8</span></a></p>
     </div>
   </section>
 
@@ -1275,7 +1276,7 @@
         </svg>
       </div>
       <figcaption><b>Plate 6</b> A steal, at the level you need to follow the argument. The thief picks the victim with the largest estimated remaining work, places a pivot from observed mass, and spends exactly one request to find out whether it guessed somewhere real.</figcaption>
-      <p class="src">Source: <span class="mono">docs/internals/algorithms.md</span> · invariants I2–I4 in <span class="mono">contracts.md</span></p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#3-stealing--demand-driven-rebalancing"><span class="mono">algorithms.md §3</span></a> · invariants I2–I4 in <a href="https://github.com/varveio/swath/blob/main/docs/internals/contracts.md"><span class="mono">contracts.md</span></a></p>
     </figure>
 
     <div class="col">
@@ -1972,10 +1973,23 @@
 
     <div class="col">
       <p>
-        <code>--concurrency</code> (default 64) sets a <em>ceiling</em>. The live target
-        <span class="mono">T</span> starts at a slow-start floor and moves by AIMD:
-        multiply down by 0.7 on a real 503 or <span class="mono">Retry-After</span>, add
-        one after roughly ten clean seconds, never below one.
+        <code>--concurrency</code> (default 64) sets a <em>ceiling</em>, and the live target
+        <span class="mono">T</span> moves underneath it. It starts well below the ceiling and
+        doubles through a handful of paced steps while the endpoint stays clean; the run's first
+        congestion signal latches that growth down to a cautious additive step for the rest of the
+        run. A real 503 or <span class="mono">Retry-After</span> multiplies
+        <span class="mono">T</span> down by 0.7 and pauses new steals. It never falls below one,
+        so the run always makes forward progress.
+      </p>
+      <p>
+        Two further rungs exist and neither of them lowers <span class="mono">T</span>: a
+        growth freeze that suppresses the increase step entirely while worker timeouts are
+        high, and a latency valve that admits only a paced increase while successful-attempt
+        latency is inflated against its own rolling minimum. A separate, starvation-gated shed
+        does cut <span class="mono">T</span> harder, but only when timeouts are high
+        <em>and</em> the run has stopped making progress. The current multipliers, windows,
+        and gate thresholds are in
+        <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#5-adaptive-concurrency-aimd">algorithms.md §5</a>.
       </p>
       <p>
         The subtlety is what feeds it. The AWS SDK's own retry is turned
@@ -1986,14 +2000,18 @@
       </p>
       <p>
         On a healthy endpoint the decrease path never fires — <span class="mono">T</span>
-        ramps to the ceiling and stays. A clean run's speed comes from the engine, not
-        from adaptivity.
+        ramps to the ceiling and stays. Adaptive concurrency is a safety control, not the
+        source of parallelism: seeding and splitting decide whether useful work exists at all,
+        and AIMD only limits how much of it may call the store at once. It is a reactive
+        backpressure controller, not an online throughput optimizer — it will not search back
+        down to a lower <span class="mono">T</span> just because a lower one would deliver the
+        same keys per second more cheaply.
       </p>
     </div>
 
     <figure>
       <div class="plate-body">
-        <svg viewBox="0 0 760 170" role="img" aria-label="Sawtooth plot of the concurrency target over time: it ramps up by one per clean window, drops to seventy percent on each 503, and never falls below one.">
+        <svg viewBox="0 0 760 186" role="img" aria-label="Sawtooth plot of the concurrency target over time: it ramps up while the endpoint stays clean, drops to seventy percent of its value on each 503, and never falls below one. The plot is simplified and omits the growth-freeze and shed rungs.">
           <g class="s-rule" stroke-width="1">
             <line x1="46" y1="20" x2="46" y2="132"/>
             <line x1="46" y1="132" x2="740" y2="132"/>
@@ -2018,12 +2036,14 @@
           <text class="sm f-alert" x="470" y="26" text-anchor="middle">503</text>
           <text class="sm f-alert" x="660" y="20" text-anchor="middle">503</text>
 
-          <text class="sm f-acc" x="180" y="94">+1 per clean ~10s window</text>
+          <text class="sm f-acc" x="180" y="94">grows while the endpoint stays clean</text>
           <text class="sm f-alert" x="344" y="98">×0.7 on stress</text>
           <text class="sm" x="46" y="164">Workers above the new T finish their current page, then park. The floor is 1 — the run always makes forward progress.</text>
+          <text class="sm" x="46" y="178">Simplified: the freeze and shed rungs that also act on T are not drawn. See algorithms.md §5.</text>
         </svg>
       </div>
-      <figcaption><b>Plate 9</b> AIMD on the concurrency target. It exists to degrade gracefully against a hostile or throttling endpoint and recover afterwards — not as a tuning knob for throughput.</figcaption>
+      <figcaption><b>Plate 9</b> AIMD on the concurrency target, simplified to its two load-bearing moves. It exists to degrade gracefully against a hostile or throttling endpoint and recover afterwards — not as a tuning knob for throughput.</figcaption>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#5-adaptive-concurrency-aimd"><span class="mono">docs/internals/algorithms.md §5</span></a></p>
     </figure>
   
     </details>
