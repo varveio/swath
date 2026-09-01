@@ -7,23 +7,22 @@
   annotated `STRING`. Physical `BINARY` storage, the byte-exact key bytes, column
   statistics, and sort order are unchanged, and existing datasets are not rewritten — only
   the type a reader reports moves. DuckDB and Spark report `VARCHAR`/`string` where they
-  reported `BLOB`/`binary`; pyarrow and pandas yield `str` instead of `bytes`. Drop the
-  conversions that used to be necessary: `decode(key, 'utf-8')` or `CAST(key AS VARCHAR)`
-  in DuckDB, `CAST(key AS STRING)` in Spark, and `.str.decode('utf-8')` in pandas. A
-  comparison against a blob literal such as `key = 'prefix/'::BLOB` becomes an ordinary
-  string comparison. The schema and a short upgrade note are in
-  [Using swath](../../usage.md#parquet-schema).
+  reported `BLOB`/`binary`; pyarrow and pandas yield `str` instead of `bytes`. Any query
+  that decoded, cast, or compared `key` as a blob needs revisiting. The upgrade recipe —
+  which conversions to drop, and where a cast quietly changes results for non-ASCII keys —
+  is with the schema it belongs to, in
+  [Upgrading from 0.2.4](../../usage.md#upgrading-from-024).
 - **Keys that are not well-formed UTF-8 are rejected for Parquet publication.** A key whose
   bytes cannot be represented by the new `STRING` column fails the run with a typed output
   error naming a bounded hex prefix of the offending key, rather than writing a value a
   reader would misdecode. This does not affect a live listing: keys arrive from the S3
-  client already decoded, and swath encodes them back to UTF-8, so a live `swath list` run
-  cannot produce a key this guard rejects. What it does affect is re-publishing an existing
-  capture — `swath-replay sort-fixture` and the capture-sorting path read raw key bytes from
-  a Parquet capture without validating them. A capture written before this release that
-  holds a non-UTF-8 key stays readable, and `swath-replay` serves legacy binary-key, current
-  string-key, and mixed dataset directories; but that capture can no longer be re-published
-  as Parquet or sorted into one. Table, TSV, and JSONL output are unchanged.
+  client already decoded, and swath encodes them back to UTF-8, so a `swath list` run —
+  with or without `--sort` — cannot produce a key this guard rejects. The one path that can
+  is `swath-replay sort-fixture`, which reads raw key bytes out of an existing Parquet
+  capture without validating them and sorts them into a new dataset. A capture written
+  before this release that holds a non-UTF-8 key stays readable, and `swath-replay` serves
+  legacy binary-key, current string-key, and mixed dataset directories; but that capture can
+  no longer be re-published as Parquet. Table, TSV, and JSONL output are unchanged.
 - **Sorted output finalizes through one reference-routed pipeline.** `--sort` no longer
   carries a second, range-parallel finalization layer. A sorted run stages compressed
   page-run segments under `_staging/` while it lists. At finalization a bounded cascade
@@ -34,17 +33,20 @@
   completion order — owns final order, so part geometry no longer depends on how many
   encoders ran: the same staged catalog, `final-file-bytes`, and admitted reference cap
   produce the same part count, boundary keys, row counts, and part bytes at one encoder or
-  at eight. Admission is priced against real heap and file-descriptor budgets before any
-  reader or writer opens, and a budget that cannot fit the work refuses resumably instead of
-  failing part-way through. Global ordering, adjacent-part disjointness, and equal-key
+  at eight. Admission is priced against real heap and file-descriptor budgets, and a budget
+  too small to run refuses resumably rather than failing part-way: the cascade floor refuses
+  before a cascade group opens, and the one-encoder floor before the final pass opens its
+  shared channels or writers. Global ordering, adjacent-part disjointness, and equal-key
   atomicity are unchanged; a raw-key group stays in one part even when that part exceeds
   `final-file-bytes`.
 - **Sorted-merge parallelism means something different, and no longer decides how many parts
   you get.** The knob moved from `-Dswath.sort.merge-parallelism` to
   `--tune sort.merge-parallelism`, and it now caps final encoders instead of splitting the
-  keyspace into that many contiguous ranges. Part count follows the data and
-  `final-file-bytes` alone, so the earlier behavior — parallelism 8 producing eight parts,
-  parallelism 4 producing four — is gone. The 256 MiB `min-parallel-staged-bytes` floor that
+  keyspace into that many contiguous ranges. Part count follows the data, `final-file-bytes`,
+  and the heap-admitted reference cap — never the encoder count — so the earlier behavior,
+  parallelism 8 producing eight parts and parallelism 4 producing four, is gone. A wide
+  overlap component or an exhausted reference cap can still roll a part before the byte
+  target. The 256 MiB `min-parallel-staged-bytes` floor that
   kept small sorted runs serial is gone with it: every sorted run now takes the same path.
   So is the failure mode where a heavily overlapping keyspace could not be partitioned and
   collapsed to a single worker.
@@ -52,15 +54,23 @@
   `part-00001.parquet`. The footer's `swath.sort.file_index` stays one-based, so
   `part-00000.parquet` carries `file_index=1` and a consumer that derives an index from the
   filename sees a one-position shift. Sorted part bytes will also not match a 0.2.4 run over
-  the same bucket: the staging codec default and the calibrated part sizer both move part
-  boundaries, and the `key` annotation changes footer bytes. Row content and global order
-  are unaffected.
+  the same bucket. The staging codec default and the calibrated part sizer move part
+  boundaries; the `key` annotation changes footer bytes; and the physical layout of a final
+  sorted part is now pinned rather than left to the Parquet library's defaults — data pages
+  cap at 1,024 rows (`swath.sort.final-page-rows`), the dictionary page is 8 KiB, and column
+  index bounds are truncated at 1,024 bytes so a full-length S3 key still prunes to a single
+  page. Row content and global order are unaffected.
 - **Sorted finalization is separated from dataset publication.** Finalization now produces a
   validated, unpublished part set; a separate publisher owns the staging and output
   directories, final names, and the sweep; and a separate committer writes `manifest.json`,
-  `.swath-state.json`, `symlink.txt`, and finally `_SUCCESS`. A pre-publication failure
-  leaves the sealed listing resumable and removes only disposable staging, so an interrupted
-  finalization can be retried without manual cleanup. Sorted output also refuses to run on a
+  `.swath-state.json`, `symlink.txt`, and finally `_SUCCESS`. Until the committer returns,
+  the previously published dataset and every checkpoint-owned staging segment are untouched,
+  and only disposable staging is swept — so an interruption, a crash, or a capacity refusal
+  before publication is resumable and needs no manual cleanup. A deterministic I/O or
+  corruption failure inside finalization is still fatal; the input has to be dealt with.
+  After the committer returns the new dataset is authoritative even if cleanup then fails,
+  and a re-entry finishes the cleanup without repeating any listing or merge work. Sorted
+  output also refuses to run on a
   filesystem whose Java provider reports no file key, because the identity check swath makes
   before deleting or renaming a directory cannot be weakened safely.
 - **Sorted staging written by an older version is refused rather than reused.** The page-run
@@ -75,12 +85,16 @@
   visible as the single typed door to expert keys, and `--tune help` now declares each key
   as stable, experimental, or diagnostic. `--tune sort.keep-staging=on` is new and
   diagnostic: it retains the checkpoint-tracked staging segments after a successful sorted
-  publish. No visible flag changed behavior. Four sorted-output JVM properties are gone,
-  and a script still passing one will be ignored silently: `swath.sort.merge-parallelism`
-  and `swath.sort.merge-boundary-policy`, both superseded by `--tune`; and
-  `swath.sort.min-parallel-staged-bytes` and `swath.sort.segment-row-group-bytes`, whose
-  mechanisms no longer exist. `swath.sort.final-row-group-bytes` now also prices encoder
-  heap admission, so raising it admits fewer parallel encoders.
+  publish. Stabilizing the surface renamed and hid nothing that was supported and changed no
+  option's behavior — the behavior changes in this release, described elsewhere in these
+  notes, came from the work the options drive.
+- **Three sorted-output JVM properties are gone.** A script still passing one is ignored
+  silently. `swath.sort.merge-parallelism` moved to `--tune sort.merge-parallelism`;
+  `swath.sort.min-parallel-staged-bytes` and `swath.sort.segment-row-group-bytes` went with
+  the mechanisms they configured. `swath.sort.final-row-group-bytes` survives but now also
+  prices encoder heap admission, so raising it admits fewer parallel encoders under the same
+  merge budget, and lowering it below the default buys nothing. The new
+  `swath.sort.final-page-rows` sets the final file's within-row-group seek granularity.
 - **Failure paths that used to be quiet now fail fast and say why.** A fresh run whose seed
   request cannot reach the endpoint at all — a wrong `--endpoint-url`, an unresolvable
   host — fails on the first attempt with `seed_endpoint_unreachable` instead of spending the
@@ -89,18 +103,20 @@
   fsync is probed once per filesystem at startup and now degrades to a no-op only for
   filesystems on an explicit allowlist; a permission or I/O failure anywhere else is fatal
   rather than silently skipped.
-- **Compressed and partitioned text output.** TSV and JSONL can use gzip or Zstandard, and
-  can publish bounded multi-writer directory datasets with manifests and `_SUCCESS`
-  completion markers. Text outputs remain one-shot and non-resumable.
+- **Compressed and partitioned text output.** `--compression` applies gzip or Zstandard to
+  table, TSV, and JSONL output, whether it goes to a stream or a file. Separately, TSV and
+  JSONL can publish bounded multi-writer directory datasets with manifests and `_SUCCESS`
+  completion markers; the table format has no directory-dataset form. Text outputs remain
+  one-shot and non-resumable.
 - **A diagnostic discard sink.** `--format discard --checkpoint none --report run.json`
   runs the normal listing pipeline without materializing listing rows, making it easier to
   separate object-store/listing cost from output cost.
 - **Resource-aware dataset writers.** Direct Parquet and partitioned text output share a
   bounded writer-pool model with a process-wide queue budget. `--tune parquet.writers` now
   accepts 2 through 64 rather than 2 through 4, because anything above 4 is admitted against
-  available heap instead of guessed at; the pool serves direct Parquet output, not `--sort`.
-  Run reports expose aggregate saturation, sticky-lane head-of-line blocking, per-lane work,
-  finalization, and publication evidence.
+  available heap instead of guessed at; 2 through 4 remains the tested range, and the pool
+  serves direct Parquet output, not `--sort`. Run reports expose aggregate saturation,
+  sticky-lane head-of-line blocking, per-lane work, finalization, and publication evidence.
 - **Safer dataset publication.** Manifests are published at completion rather than during an
   incomplete run. Part digests are computed while writing, publication ownership is
   centralized, and shutdown and failure paths have stronger liveness and cleanup coverage.
@@ -127,7 +143,8 @@
   taken away: the `sort.merge_boundaries_ms` field is gone, and `sort.buffer_sort_fallbacks`
   is kept only for compatibility and is always `0`. The OTLP meters
   `swath.sort.merge.range.latency` and `swath.sort.merge.boundaries.latency` are replaced by
-  the `swath.sort.pipeline.*` family. Nothing outside the `sort` block changed, and
+  the `swath.sort.pipeline.*` family. Everything else the report gained this release is
+  additive — a `dataset_writer` block, more `trajectory` series, and richer meter summaries.
   `schema_version` remains `2`.
 - **`swath-replay` is a published toolkit.** The replay module and container have a stable
   name, release packaging, and runtime attestation. Replay now honors S3 continuation-token
@@ -161,7 +178,7 @@
   not a throughput envelope; `docs/performance.md` states plainly that no publishable
   production scaling result exists yet for this pipeline.
 - PR #169 then made the pipeline the only mechanism and deleted the range layer —
-  157 files, +2,267 / −19,652 lines — replacing it with a property test over random
+  154 files, +2,201 / −19,586 lines — replacing it with a property test over random
   multi-page segments, overlap shapes, and `final-file-bytes` targets that checks an
   independently sorted fingerprint oracle plus dense-ordinal and cross-part disjointness
   assertions.
@@ -260,10 +277,11 @@
 - Existing managed Parquet consumers should continue to wait for `_SUCCESS` and read all
   parts listed by the manifest or a `data/*.parquet` glob.
 - Automation should parse `_swath_summary.json` rather than terminal prose. The report is
-  otherwise additive within its current major schema, but 0.3.0 is an exception inside the
-  `sort` block: it drops `merge_boundaries_ms`, pins `buffer_sort_fallbacks` to `0`, and
-  retires two `swath.sort.merge.*` OTLP meters while `schema_version` stays `2`. A consumer
-  that reads those specific sort fields needs updating; every other block is additive.
+  additive within its current major schema everywhere except the `sort` block, whose fields
+  measure the finalization mechanism and were retired with it: 0.3.0 drops
+  `merge_boundaries_ms`, pins `buffer_sort_fallbacks` to `0`, and retires two
+  `swath.sort.merge.*` OTLP meters while `schema_version` stays `2`. That pre-1.0 carve-out
+  is now recorded in [Metrics and observability](../../metrics-and-observability.md).
 - Re-run performance comparisons after upgrading. Streaming response handling, text
   encoding, writer-pool admission, writeback, and the rewritten sorted finalization can move
   the bottleneck even when listing semantics are unchanged.
