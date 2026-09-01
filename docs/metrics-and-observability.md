@@ -4,14 +4,23 @@ This is the operator reference for a run that needs monitoring or diagnosis. A f
 listing needs no telemetry setup; use [Getting started](getting-started.md) and keep the
 default terminal progress display.
 
-swath exposes the same run through four progressively deeper surfaces:
+swath exposes the same run through five progressively deeper surfaces:
 
 | Need | Use |
 | --- | --- |
 | Watch a terminal run | the progress display, or `-v` structured progress logs |
 | Compare completed runs | `_swath_summary.json` or `--report PATH` |
 | Feed dashboards and alerts | OTLP metrics via `--metrics-endpoint` |
-| Reproduce an engine decision | `--trace PATH`, then `swath-replay` |
+| Explain a specific engine decision | `--trace PATH` and the trace schema / decision-trace tooling |
+| Reproduce a bucket shape or listing workload | capture a Parquet fixture and serve it with `swath-replay` |
+
+A decision trace and a replay fixture are related but distinct artifacts from the same
+run: the trace is a JSON Lines record of why the engine split, stole, or pivoted at a
+specific moment, while a fixture is captured Parquet listing data that `swath-replay`
+serves back as an S3-shaped source for other tests. An investigation can retain both
+from one run — the trace to explain the decision, the Parquet capture to reproduce the
+bucket shape that triggered it. `swath-replay` does not consume a decision trace, and a
+trace does not carry object rows.
 
 Logs always go to stderr; listing data can therefore stream safely on stdout. Use `-v`,
 `-vv`, or `-vvv` for INFO, DEBUG, or TRACE logs. `-q` selects ERROR and `-qq` disables
@@ -124,7 +133,7 @@ listing, `MERGE_ONLY_PAGE_RUN` is a checkpoint-authorized zero-LIST merge re-ent
 `PUBLISHED_REENTRY` is a checkpoint-authorized no-op resume that found this run already published
 (so it ran neither listing nor merge). It is independent of the retained `merge_only_resume`
 compatibility marker. `sort-fixture` has no run summary artifact; its existing stdout result line
-is labelled `arm=SORT_FIXTURE` instead.
+is labeled `arm=SORT_FIXTURE` instead.
 
 The `sort` block decomposes terminal work into `finalize_ms`, `finalize_close_ms`,
 `local_publication_ms`, `finalize_parallelism`, and `manifest_*` fields. `finalize_ms` is wall
@@ -282,6 +291,20 @@ pivots, so handle them like bucket metadata.
 Use a trace when aggregate counters show *that* a path engaged but you need to know *where*
 or *why*. The format and event guarantees are specified in
 [metrics internals](internals/metrics-internals.md#7-run-trace-format).
+
+A single run can produce several related artifacts, each answering a different question:
+
+```text
+run
+├── _swath_summary.json   result/config/metrics
+├── --trace JSONL         decision events and pivots
+└── Parquet capture       rows that swath-replay can serve
+```
+
+The summary and trace describe the run itself; a Parquet capture from the same run
+becomes an input to [`swath-replay`](swath-replay.md) only after a separate capture step
+(`--format parquet`), and only the capture — not the trace — is something `swath-replay`
+serves back as a listing source.
 
 ## 8. Replay meters
 
