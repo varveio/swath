@@ -211,3 +211,14 @@ or another snapshotting mechanism when point-in-time semantics are required.
 6. Retain `_swath_summary.json` with the result. It can contain target URIs, filters,
    slow-range bounds, and key samples, so redact it before sharing outside the bucket's
    trust boundary.
+
+## Filing a support request
+
+Include these four things so an issue or investigation does not stall on missing facts:
+
+- the output of `swath --version` (version, commit, and Java runtime);
+- `_swath_summary.json` from the run, with bucket names, keys, and other sensitive
+  fields redacted;
+- the target object-store provider and region; and
+- the output mode used (`--format`: `auto`, `table`, `tsv`, `jsonl`, `parquet`, or the
+  diagnostic `discard`, and whether `--sort` was set).

@@ -202,3 +202,6 @@ swath list --tune help
 The stable exit-code table and output contracts are in
 [Using swath](usage.md#exit-codes). Progress, report, and metric fields are in
 [Metrics and observability](metrics-and-observability.md).
+
+If none of the above resolves it, see
+[Filing a support request](operating.md#filing-a-support-request) for what to include.
