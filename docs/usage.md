@@ -177,8 +177,9 @@ maximum encoder count is derived from available processors and capped at eight. 
 file-descriptor checks may lower it. `--tune sort.merge-parallelism=1` selects one encoder but
 uses the same routing and publication path.
 
-Part count is independent of encoder count. `final-file-bytes` is a soft target calibrated from
-completed Parquet parts; rolls happen only between complete staging pages or overlap components,
+Part count is independent of encoder count: the same input and configuration produce the same parts
+whether one encoder or eight ran. `final-file-bytes` is a soft target calibrated from the first
+completed Parquet part; rolls happen only between complete staging pages or overlap components,
 and an equal-key group is never split. A bounded reference cap can create an earlier roll.
 
 swath checks free space before and during sorted listing. Finalization has no separate free-space

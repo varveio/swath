@@ -21,10 +21,11 @@ import java.util.function.Consumer;
  * cluster item for an encoder to decode and merge. Every consumed ref moves into exactly one plan.
  * Plans contain coordinates rather than bodies so the router can expose independent parts to a
  * shared encoder pool without retaining decoded part-sized buffers. For calibrated byte sizing it
- * exposes exactly one initial plan, waits for its durable size, and only then routes the remaining
- * plans; this bounds calibration lag to the intentionally conservative warm-up part. Heap admission
- * may lower the usual 16,384-reference cap, which bounds both an ordinary plan and the references
- * this router keeps in heap while closing an overlap component.
+ * exposes exactly one initial plan, waits for its durable size, and routes every remaining plan
+ * against that single measurement, so boundaries follow the input and configuration rather than
+ * encoder completion timing. Heap admission may lower the usual 16,384-reference cap, which bounds
+ * both an ordinary plan and the references this router keeps in heap while closing an overlap
+ * component.
  */
 final class MergeRouter {
     /** Independent counts used to reconcile header refs, source rows, and completed parts. */

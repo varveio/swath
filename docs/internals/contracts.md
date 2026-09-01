@@ -799,13 +799,20 @@ The resulting parts satisfy all of these guarantees:
   `swath.sort.mode`, and `swath.sort.format_version`.
 - Source-tail rows, router rows, and footer-closed writer rows must agree exactly before any final
   name is installed.
+- Part geometry is reproducible. The same staged catalog, `final-file-bytes`, and admitted
+  reference cap yield the same part count, boundary keys, per-part row counts, and part bytes
+  regardless of encoder count or encoder completion order. The cap is itself heap-admitted, so a
+  `merge-budget-bytes` too small for the requested encoders lowers it and can move boundaries;
+  compare part sets only across runs that admitted the same cap.
 
 `final-file-bytes` is a soft encoded-size target, not a hard split point. `PartSizer` estimates
 a logical target from uncompressed PageBlock payload bytes. It dispatches one conservative warm-up
-plan, waits for that part's durable Parquet size, and uses the cumulative observed
-encoded-to-logical ratio for later plans. A roll occurs only before a complete page or overlap
-component and only when the adjacent raw keys differ. The heap-admitted reference cap can also
-close a plan before the byte target.
+plan, waits for that part's durable Parquet size, and sizes every later plan from the
+encoded-to-logical ratio that one part measured. Later completions are deliberately not folded in:
+the frozen ratio is what makes geometry reproducible, and the accepted cost is that a warm-up part
+that misrepresents the corpus biases every later part the same way. A roll occurs only before a
+complete page or overlap component and only when the adjacent raw keys differ. The heap-admitted
+reference cap can also close a plan before the byte target.
 
 Encoders close and fsync temporary Parquet parts independently. The assembler exposes none of them
 to publication until every encoder has quiesced and the ordered set has passed its checks.

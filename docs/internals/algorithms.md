@@ -1712,10 +1712,12 @@ as one cluster item; splitting such a component could interleave rows between fi
 
 The router is the sole part-boundary owner. `PartSizer` targets
 `swath.sort.final-file-bytes` using uncompressed page-payload bytes. The first plan assumes a
-1:1 encoded-to-logical ratio, and routing waits for that part to close durably before using the
-cumulative observed Parquet ratio for later plans. A boundary is considered only between complete
-page or cluster items and never between equal raw keys. Footer overhead makes very small targets
-noisy.
+1:1 encoded-to-logical ratio, and routing waits for that part to close durably before using its
+observed Parquet ratio for every later plan. That single frozen measurement keeps boundaries
+independent of encoder count and completion timing; a warm-up part that misrepresents the corpus
+biases the whole merge rather than being corrected later. A boundary is considered only between
+complete page or cluster items and never between equal raw keys. Footer overhead makes very small
+targets noisy.
 
 A plan normally carries at most 16,384 references. Heap admission may lower that cap to as few as
 256. Reaching the effective cap can close a plan before its byte target. A transitive cluster that
