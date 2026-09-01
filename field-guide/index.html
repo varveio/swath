@@ -766,7 +766,7 @@
             <li><a href="#laws">What the engine learned from real buckets</a></li>
             <li><a href="#durability">Commit before emit, and the two cursors</a></li>
             <li><a href="#proof">How the guarantees are enforced</a></li>
-            <li><a href="#limits">Where it honestly cannot win</a></li>
+            <li><a href="#limits">Where parallelism stops helping</a></li>
             <li><a href="#run">The actual 39.7M run</a></li>
           </ol>
         </div>
@@ -797,11 +797,11 @@
         ranges cut along the boundaries it returns — capped at four per worker and evenly
         subsampled — each implicitly assumed to hold about as much as the next.
         For this bucket that came to 513 ranges and an expectation of
-        <strong>0.195% of the files in each</strong>.
+        <strong>0.195% of the objects in each</strong>.
       </p>
       <p>
         Below is that assumption on top, and what the run actually measured underneath.
-        Same 513 seeds, same order, same colour. Only the widths differ.
+        Same 513 seeds, same order, same color. Only the widths differ.
       </p>
     </div>
 
@@ -827,7 +827,7 @@
           <text class="sm" x="740" y="176" text-anchor="end">measured, same 513 seeds, same order</text>
           <path class="f-dim" opacity=".38" d="M40.0 188h0.5v34h-0.5zM40.0 188h0.5v34h-0.5zM40.1 188h34.6v34h-34.6zM550.4 188h0.5v34h-0.5zM550.6 188h0.5v34h-0.5zM550.9 188h0.5v34h-0.5zM551.3 188h0.5v34h-0.5zM551.7 188h0.5v34h-0.5zM552.0 188h0.5v34h-0.5zM552.4 188h0.5v34h-0.5zM552.8 188h0.5v34h-0.5zM553.0 188h0.5v34h-0.5zM553.4 188h0.5v34h-0.5zM553.8 188h0.5v34h-0.5zM554.1 188h0.5v34h-0.5zM554.5 188h0.5v34h-0.5zM554.9 188h0.5v34h-0.5zM555.2 188h0.5v34h-0.5zM555.6 188h0.5v34h-0.5zM556.0 188h0.5v34h-0.5zM556.3 188h0.5v34h-0.5zM556.6 188h0.5v34h-0.5zM557.0 188h0.5v34h-0.5zM557.3 188h0.5v34h-0.5zM557.7 188h0.5v34h-0.5zM558.1 188h0.5v34h-0.5zM558.4 188h0.5v34h-0.5zM558.8 188h0.5v34h-0.5zM559.2 188h0.5v34h-0.5zM559.5 188h0.5v34h-0.5zM559.9 188h0.5v34h-0.5zM560.3 188h0.5v34h-0.5zM560.6 188h0.5v34h-0.5zM560.9 188h0.5v34h-0.5zM561.3 188h0.5v34h-0.5zM561.7 188h0.5v34h-0.5zM562.0 188h0.5v34h-0.5zM562.4 188h0.5v34h-0.5zM562.8 188h0.5v34h-0.5zM563.1 188h0.5v34h-0.5zM563.5 188h0.5v34h-0.5zM563.9 188h0.5v34h-0.5zM564.1 188h0.5v34h-0.5zM564.5 188h0.5v34h-0.5zM564.9 188h0.5v34h-0.5zM565.2 188h0.5v34h-0.5zM565.6 188h0.5v34h-0.5zM566.0 188h0.5v34h-0.5zM566.3 188h0.5v34h-0.5zM566.7 188h0.5v34h-0.5zM567.1 188h0.5v34h-0.5zM567.4 188h0.5v34h-0.5zM567.8 188h0.5v34h-0.5zM568.1 188h0.5v34h-0.5zM568.4 188h0.5v34h-0.5zM568.8 188h0.5v34h-0.5zM569.2 188h0.5v34h-0.5zM569.5 188h0.5v34h-0.5zM569.9 188h0.5v34h-0.5zM570.3 188h0.5v34h-0.5zM570.7 188h0.5v34h-0.5zM571.0 188h0.5v34h-0.5zM571.4 188h0.5v34h-0.5zM571.7 188h0.5v34h-0.5zM572.0 188h0.5v34h-0.5zM572.3 188h0.5v34h-0.5zM572.7 188h0.5v34h-0.5zM573.0 188h0.5v34h-0.5zM573.4 188h0.5v34h-0.5zM573.8 188h0.5v34h-0.5zM574.1 188h0.5v34h-0.5zM574.5 188h0.5v34h-0.5zM574.9 188h0.5v34h-0.5zM575.2 188h0.5v34h-0.5zM575.5 188h0.5v34h-0.5zM575.9 188h0.5v34h-0.5zM576.3 188h0.5v34h-0.5zM576.6 188h0.5v34h-0.5zM577.0 188h0.5v34h-0.5zM577.4 188h0.5v34h-0.5zM577.7 188h0.5v34h-0.5zM578.1 188h0.5v34h-0.5zM578.5 188h0.5v34h-0.5zM578.8 188h0.5v34h-0.5zM579.1 188h0.5v34h-0.5zM579.5 188h0.5v34h-0.5zM579.9 188h0.5v34h-0.5zM580.2 188h0.5v34h-0.5zM580.6 188h0.5v34h-0.5zM581.0 188h0.5v34h-0.5zM581.3 188h0.5v34h-0.5zM581.7 188h0.5v34h-0.5zM582.1 188h0.5v34h-0.5zM582.4 188h0.5v34h-0.5zM582.7 188h0.5v34h-0.5zM583.1 188h0.5v34h-0.5zM583.4 188h0.5v34h-0.5zM583.8 188h0.5v34h-0.5zM584.2 188h0.5v34h-0.5zM584.6 188h0.5v34h-0.5zM584.9 188h0.5v34h-0.5zM585.3 188h0.5v34h-0.5zM585.7 188h0.5v34h-0.5zM586.0 188h0.5v34h-0.5zM586.4 188h0.5v34h-0.5zM586.7 188h0.5v34h-0.5zM587.0 188h0.5v34h-0.5zM587.4 188h0.5v34h-0.5zM587.8 188h0.5v34h-0.5zM588.2 188h0.5v34h-0.5zM588.5 188h0.5v34h-0.5zM588.9 188h0.5v34h-0.5zM589.3 188h0.5v34h-0.5zM589.6 188h0.5v34h-0.5zM590.0 188h0.5v34h-0.5zM590.3 188h0.5v34h-0.5zM590.6 188h0.5v34h-0.5zM591.0 188h0.5v34h-0.5zM591.4 188h0.5v34h-0.5zM591.7 188h0.5v34h-0.5zM592.1 188h0.5v34h-0.5zM592.5 188h0.5v34h-0.5zM592.9 188h0.5v34h-0.5zM593.2 188h0.5v34h-0.5zM593.6 188h0.5v34h-0.5zM594.0 188h0.5v34h-0.5zM594.2 188h0.5v34h-0.5zM594.6 188h0.5v34h-0.5zM595.0 188h0.5v34h-0.5zM595.3 188h0.5v34h-0.5zM595.7 188h0.5v34h-0.5zM596.1 188h0.5v34h-0.5zM596.4 188h0.5v34h-0.5zM596.8 188h0.5v34h-0.5zM597.2 188h0.5v34h-0.5zM597.6 188h0.5v34h-0.5zM597.8 188h0.5v34h-0.5zM598.2 188h0.5v34h-0.5zM598.6 188h0.5v34h-0.5zM598.9 188h0.5v34h-0.5zM599.3 188h0.5v34h-0.5zM599.7 188h0.5v34h-0.5zM600.0 188h0.5v34h-0.5zM600.4 188h0.5v34h-0.5zM600.8 188h0.5v34h-0.5zM601.2 188h0.5v34h-0.5zM601.5 188h0.5v34h-0.5zM601.8 188h0.5v34h-0.5zM602.2 188h0.5v34h-0.5zM602.5 188h0.5v34h-0.5zM602.9 188h0.5v34h-0.5zM603.3 188h0.5v34h-0.5zM603.6 188h0.5v34h-0.5zM604.0 188h0.5v34h-0.5zM604.4 188h0.5v34h-0.5zM604.7 188h0.5v34h-0.5zM605.1 188h0.5v34h-0.5zM605.4 188h0.5v34h-0.5zM605.8 188h0.5v34h-0.5zM606.1 188h0.5v34h-0.5zM606.5 188h0.5v34h-0.5zM606.9 188h0.5v34h-0.5zM607.2 188h0.5v34h-0.5zM607.6 188h0.5v34h-0.5zM608.0 188h0.5v34h-0.5zM608.3 188h0.5v34h-0.5zM608.7 188h0.5v34h-0.5zM609.0 188h0.5v34h-0.5zM609.4 188h0.5v34h-0.5zM609.7 188h0.5v34h-0.5zM610.1 188h0.5v34h-0.5zM610.5 188h0.5v34h-0.5zM610.8 188h0.5v34h-0.5zM611.2 188h0.5v34h-0.5zM611.6 188h0.5v34h-0.5zM611.9 188h0.5v34h-0.5zM612.3 188h0.5v34h-0.5zM612.7 188h0.5v34h-0.5zM613.0 188h0.5v34h-0.5zM613.3 188h0.5v34h-0.5zM613.7 188h0.5v34h-0.5zM614.1 188h0.5v34h-0.5zM614.4 188h0.5v34h-0.5zM614.8 188h0.5v34h-0.5zM615.2 188h0.5v34h-0.5zM615.5 188h0.5v34h-0.5zM615.9 188h0.5v34h-0.5zM616.3 188h0.5v34h-0.5zM616.6 188h0.5v34h-0.5zM616.9 188h0.5v34h-0.5zM617.3 188h0.5v34h-0.5zM617.7 188h0.5v34h-0.5zM618.0 188h0.5v34h-0.5zM618.4 188h0.5v34h-0.5zM618.8 188h0.5v34h-0.5zM618.9 188h0.5v34h-0.5zM619.3 188h0.5v34h-0.5zM619.7 188h0.5v34h-0.5zM620.0 188h0.5v34h-0.5zM620.3 188h0.5v34h-0.5zM620.7 188h0.5v34h-0.5zM621.1 188h0.5v34h-0.5zM621.4 188h0.5v34h-0.5zM621.8 188h0.5v34h-0.5zM622.2 188h0.5v34h-0.5zM622.5 188h0.5v34h-0.5zM622.9 188h0.5v34h-0.5zM623.3 188h0.5v34h-0.5zM623.7 188h0.5v34h-0.5zM623.9 188h0.5v34h-0.5zM624.3 188h0.5v34h-0.5zM624.7 188h0.5v34h-0.5zM625.0 188h0.5v34h-0.5zM625.4 188h0.5v34h-0.5zM625.8 188h0.5v34h-0.5zM626.2 188h0.5v34h-0.5zM626.5 188h0.5v34h-0.5zM626.9 188h0.5v34h-0.5zM627.3 188h0.5v34h-0.5zM627.6 188h0.5v34h-0.5zM627.9 188h0.5v34h-0.5zM628.3 188h0.5v34h-0.5zM628.7 188h0.5v34h-0.5zM629.0 188h0.5v34h-0.5zM629.4 188h0.5v34h-0.5zM629.8 188h0.5v34h-0.5zM630.2 188h0.5v34h-0.5zM630.5 188h0.5v34h-0.5zM630.9 188h0.5v34h-0.5zM631.3 188h0.5v34h-0.5zM631.5 188h0.5v34h-0.5zM631.9 188h0.5v34h-0.5zM632.3 188h0.5v34h-0.5zM632.7 188h0.5v34h-0.5zM633.0 188h0.5v34h-0.5zM633.4 188h0.5v34h-0.5zM633.8 188h0.5v34h-0.5zM634.1 188h0.5v34h-0.5zM634.5 188h0.5v34h-0.5zM634.9 188h0.5v34h-0.5zM635.2 188h0.5v34h-0.5zM635.5 188h0.5v34h-0.5zM635.9 188h0.5v34h-0.5zM636.3 188h0.5v34h-0.5zM636.6 188h0.5v34h-0.5zM637.0 188h0.5v34h-0.5zM637.4 188h0.5v34h-0.5zM637.8 188h0.5v34h-0.5zM638.1 188h0.5v34h-0.5zM638.5 188h0.5v34h-0.5zM638.9 188h0.5v34h-0.5zM639.2 188h0.5v34h-0.5zM639.5 188h0.5v34h-0.5zM639.9 188h0.5v34h-0.5zM640.3 188h0.5v34h-0.5zM640.6 188h0.5v34h-0.5zM641.0 188h0.5v34h-0.5zM641.4 188h0.5v34h-0.5zM641.8 188h0.5v34h-0.5zM642.1 188h0.5v34h-0.5zM642.5 188h0.5v34h-0.5zM642.8 188h0.5v34h-0.5zM643.1 188h0.5v34h-0.5zM643.5 188h0.5v34h-0.5zM643.9 188h0.5v34h-0.5zM644.3 188h0.5v34h-0.5zM644.6 188h0.5v34h-0.5zM645.0 188h0.5v34h-0.5zM645.4 188h0.5v34h-0.5zM645.7 188h0.5v34h-0.5zM646.1 188h0.5v34h-0.5zM646.5 188h0.5v34h-0.5zM646.8 188h0.5v34h-0.5zM647.1 188h0.5v34h-0.5zM647.5 188h0.5v34h-0.5zM647.9 188h0.5v34h-0.5zM648.2 188h0.5v34h-0.5zM648.6 188h0.5v34h-0.5zM649.0 188h0.5v34h-0.5zM649.4 188h0.5v34h-0.5zM649.7 188h0.5v34h-0.5zM650.1 188h0.5v34h-0.5zM650.4 188h0.5v34h-0.5zM650.8 188h0.5v34h-0.5zM651.1 188h0.5v34h-0.5zM651.5 188h0.5v34h-0.5zM651.9 188h0.5v34h-0.5zM652.2 188h0.5v34h-0.5zM652.6 188h0.5v34h-0.5zM653.0 188h0.5v34h-0.5zM653.3 188h0.5v34h-0.5zM653.7 188h0.5v34h-0.5zM654.1 188h0.5v34h-0.5zM654.4 188h0.5v34h-0.5zM654.7 188h0.5v34h-0.5zM655.1 188h0.5v34h-0.5zM655.5 188h0.5v34h-0.5zM655.9 188h0.5v34h-0.5zM656.2 188h0.5v34h-0.5zM656.6 188h0.5v34h-0.5zM657.0 188h0.5v34h-0.5zM657.3 188h0.5v34h-0.5zM657.7 188h0.5v34h-0.5zM658.0 188h0.5v34h-0.5zM658.4 188h0.5v34h-0.5zM658.7 188h0.5v34h-0.5zM659.1 188h0.5v34h-0.5zM659.5 188h0.5v34h-0.5zM659.8 188h0.5v34h-0.5zM660.2 188h0.5v34h-0.5zM660.6 188h0.5v34h-0.5zM661.0 188h0.5v34h-0.5zM661.3 188h0.5v34h-0.5zM661.6 188h0.5v34h-0.5zM662.0 188h0.5v34h-0.5zM662.4 188h0.5v34h-0.5zM662.7 188h0.5v34h-0.5zM663.1 188h0.5v34h-0.5zM663.5 188h0.5v34h-0.5zM663.8 188h0.5v34h-0.5zM664.2 188h0.5v34h-0.5zM664.6 188h0.5v34h-0.5zM664.9 188h0.5v34h-0.5zM665.3 188h0.5v34h-0.5zM665.6 188h0.5v34h-0.5zM666.0 188h0.5v34h-0.5zM666.3 188h0.5v34h-0.5zM666.7 188h0.5v34h-0.5zM667.1 188h0.5v34h-0.5zM667.5 188h0.5v34h-0.5zM667.8 188h0.5v34h-0.5zM668.2 188h0.5v34h-0.5zM668.6 188h0.5v34h-0.5zM668.9 188h0.5v34h-0.5zM669.2 188h0.5v34h-0.5zM669.6 188h0.5v34h-0.5zM670.0 188h0.5v34h-0.5zM670.3 188h0.5v34h-0.5zM670.7 188h0.5v34h-0.5zM671.1 188h0.5v34h-0.5zM671.4 188h0.5v34h-0.5zM671.8 188h0.5v34h-0.5zM672.2 188h0.5v34h-0.5zM672.6 188h0.5v34h-0.5zM672.9 188h0.5v34h-0.5zM673.2 188h0.5v34h-0.5zM673.6 188h0.5v34h-0.5zM674.0 188h0.5v34h-0.5zM674.3 188h0.5v34h-0.5zM674.7 188h0.5v34h-0.5zM675.1 188h0.5v34h-0.5zM675.4 188h0.5v34h-0.5zM675.8 188h0.5v34h-0.5zM676.2 188h0.5v34h-0.5zM676.6 188h0.5v34h-0.5zM676.8 188h0.5v34h-0.5zM677.2 188h0.5v34h-0.5zM677.6 188h0.5v34h-0.5zM677.9 188h0.5v34h-0.5zM678.3 188h0.5v34h-0.5zM678.7 188h0.5v34h-0.5zM679.1 188h0.5v34h-0.5zM679.4 188h0.5v34h-0.5zM679.8 188h0.5v34h-0.5zM680.2 188h0.5v34h-0.5zM680.5 188h0.5v34h-0.5zM680.8 188h0.5v34h-0.5zM681.2 188h0.5v34h-0.5zM681.6 188h0.5v34h-0.5zM681.9 188h0.5v34h-0.5zM682.3 188h0.5v34h-0.5zM682.7 188h0.5v34h-0.5zM683.1 188h0.5v34h-0.5zM683.4 188h0.5v34h-0.5zM683.8 188h0.5v34h-0.5zM684.2 188h0.5v34h-0.5zM684.4 188h0.5v34h-0.5zM684.8 188h0.5v34h-0.5zM685.2 188h0.5v34h-0.5zM685.6 188h0.5v34h-0.5zM685.9 188h0.5v34h-0.5zM686.3 188h0.5v34h-0.5zM686.7 188h0.5v34h-0.5zM687.0 188h0.5v34h-0.5zM687.4 188h0.5v34h-0.5zM687.8 188h0.5v34h-0.5zM688.1 188h0.5v34h-0.5zM688.4 188h0.5v34h-0.5zM688.8 188h0.5v34h-0.5zM689.2 188h0.5v34h-0.5zM689.6 188h0.5v34h-0.5zM689.9 188h0.5v34h-0.5zM690.3 188h0.5v34h-0.5zM690.7 188h0.5v34h-0.5zM691.0 188h0.5v34h-0.5zM691.4 188h0.5v34h-0.5zM691.8 188h0.5v34h-0.5zM692.1 188h0.5v34h-0.5zM692.4 188h0.5v34h-0.5zM692.8 188h0.5v34h-0.5zM693.2 188h0.5v34h-0.5zM693.5 188h0.5v34h-0.5zM693.9 188h0.5v34h-0.5zM694.3 188h0.5v34h-0.5zM694.7 188h0.5v34h-0.5zM695.0 188h0.5v34h-0.5zM695.4 188h0.5v34h-0.5zM695.7 188h0.5v34h-0.5zM696.1 188h0.5v34h-0.5zM696.4 188h0.5v34h-0.5zM696.8 188h0.5v34h-0.5zM697.2 188h0.5v34h-0.5zM697.5 188h0.5v34h-0.5zM697.9 188h0.5v34h-0.5zM698.3 188h0.5v34h-0.5zM698.7 188h0.5v34h-0.5zM699.0 188h0.5v34h-0.5zM699.4 188h0.5v34h-0.5zM699.7 188h0.5v34h-0.5zM700.0 188h0.5v34h-0.5zM700.4 188h0.5v34h-0.5zM700.8 188h0.5v34h-0.5zM701.2 188h0.5v34h-0.5zM701.5 188h0.5v34h-0.5zM701.9 188h0.5v34h-0.5zM702.3 188h0.5v34h-0.5zM702.6 188h0.5v34h-0.5zM703.0 188h0.5v34h-0.5zM703.3 188h0.5v34h-0.5zM703.7 188h0.5v34h-0.5zM704.0 188h0.5v34h-0.5zM704.4 188h0.5v34h-0.5zM704.8 188h0.5v34h-0.5zM705.2 188h0.5v34h-0.5zM705.5 188h0.5v34h-0.5zM705.9 188h0.5v34h-0.5zM706.3 188h0.5v34h-0.5zM706.6 188h0.5v34h-0.5zM707.0 188h0.5v34h-0.5zM707.3 188h0.5v34h-0.5zM707.7 188h0.5v34h-0.5zM708.0 188h0.5v34h-0.5zM708.4 188h0.5v34h-0.5zM708.8 188h0.5v34h-0.5zM709.1 188h0.5v34h-0.5zM709.5 188h0.5v34h-0.5zM709.9 188h0.5v34h-0.5zM710.3 188h0.5v34h-0.5zM710.6 188h0.5v34h-0.5zM710.9 188h0.5v34h-0.5zM711.3 188h0.5v34h-0.5zM711.7 188h0.5v34h-0.5zM712.0 188h0.5v34h-0.5zM712.4 188h0.5v34h-0.5zM712.8 188h0.5v34h-0.5zM713.1 188h0.5v34h-0.5zM713.5 188h0.5v34h-0.5zM713.9 188h0.5v34h-0.5zM714.3 188h0.5v34h-0.5zM714.5 188h0.5v34h-0.5zM714.9 188h0.5v34h-0.5zM715.3 188h0.5v34h-0.5zM715.6 188h0.5v34h-0.5zM716.0 188h0.5v34h-0.5zM716.4 188h0.5v34h-0.5zM716.8 188h0.5v34h-0.5zM717.1 188h0.5v34h-0.5zM717.5 188h0.5v34h-0.5zM717.9 188h0.5v34h-0.5zM718.2 188h0.5v34h-0.5zM718.5 188h0.5v34h-0.5zM718.9 188h0.5v34h-0.5zM719.3 188h0.5v34h-0.5zM719.6 188h0.5v34h-0.5zM720.0 188h0.5v34h-0.5zM720.4 188h0.5v34h-0.5zM720.8 188h0.5v34h-0.5zM721.1 188h0.5v34h-0.5zM721.5 188h0.5v34h-0.5zM721.9 188h0.5v34h-0.5zM722.1 188h0.5v34h-0.5zM722.5 188h0.5v34h-0.5zM722.9 188h0.5v34h-0.5zM723.3 188h0.5v34h-0.5zM723.6 188h0.5v34h-0.5zM724.0 188h0.5v34h-0.5zM724.4 188h0.5v34h-0.5zM724.7 188h0.5v34h-0.5zM725.1 188h0.5v34h-0.5zM725.5 188h0.5v34h-0.5zM725.9 188h0.5v34h-0.5zM726.1 188h0.5v34h-0.5zM726.5 188h0.5v34h-0.5zM726.9 188h0.5v34h-0.5zM727.3 188h0.5v34h-0.5zM727.6 188h0.5v34h-0.5zM728.0 188h0.5v34h-0.5zM728.4 188h0.5v34h-0.5zM728.7 188h0.5v34h-0.5zM729.1 188h0.5v34h-0.5zM729.5 188h0.5v34h-0.5zM729.8 188h0.5v34h-0.5zM730.1 188h0.5v34h-0.5zM730.5 188h0.5v34h-0.5zM730.9 188h0.5v34h-0.5zM731.2 188h0.5v34h-0.5zM731.6 188h0.5v34h-0.5zM732.0 188h0.5v34h-0.5zM732.4 188h0.5v34h-0.5zM732.7 188h0.5v34h-0.5zM733.1 188h0.5v34h-0.5zM733.5 188h6.5v34h-6.5z"/>
           <rect x="74.7" y="188" width="475.7" height="34" class="f-sig"/>
-          <text class="sm" x="313" y="209" text-anchor="middle" style="fill:var(--paper)">26,946,179 files — 68.0%</text>
+          <text class="sm" x="313" y="209" text-anchor="middle" style="fill:var(--paper)">26,946,179 objects — 68.0%</text>
           <text class="sm" x="738" y="240" text-anchor="end">↑ the other 512 guesses, together 32%</text>
         
           <line x1="40" y1="262" x2="740" y2="262" class="s-rule"/>
@@ -878,8 +878,8 @@
           same <em>kinds of decisions</em> in the same order — seed, drain, estimate, split,
           claim, finish — at a speed and scale you can watch, not the engine's actual
           policies. Its counters are not measurements of anything.
-          For measured behaviour, Plate 1 above and
-          <a href="#run">the recorded 39.7-million-file run</a> below are the real thing.
+          For measured behavior, Plate 1 above and
+          <a href="#run">the recorded 39.7-million-object run</a> below are the real thing.
         </p>
       </div>
       <p>
@@ -1283,8 +1283,8 @@
         advances a full page per round trip and passes the pivot. So the range's own
         owner places a pivot far ahead of its cursor and commits the split at page-commit
         time, gated to fire only while live work has fallen below the worker count. The
-        mechanism is global; the trigger is local and demand-driven. That distinction is
-        one of the project's two stated design laws.
+        mechanism is global; the trigger is local and demand-driven — design law L2 in
+        <a href="https://github.com/varveio/swath/blob/main/docs/internals/overview.md"><span class="mono">docs/internals/overview.md</span></a>.
       </p>
     </div>
 
@@ -1586,8 +1586,8 @@
         catch its violation. This is that machinery.
       </p>
       <p>
-        The invariants are written law, not folklore: each carries a number
-        (<em class="term">I1–I12</em>) in the repository’s design pack, and the
+        Each invariant carries a number (<em class="term">I1–I12</em>) in the repository’s
+        <a href="https://github.com/varveio/swath/blob/main/docs/internals/contracts.md"><span class="mono">contracts.md</span></a>, and the
         contribution rules require that a high-risk unit’s adversarial test — the
         one trying to break no-gap/no-overlap, or resume-after-crash — is authored
         or reviewed independently of the code’s author. The test that wants the code
@@ -1611,7 +1611,7 @@
           without touching S3. The server’s own fidelity is itself tested by diffing
           its responses against recorded real-S3 traffic, page for page.</li>
         <li><b>A deterministic simulator.</b> The real split/steal decision code runs
-          against a modelled store in virtual time — same seed, byte-identical run —
+          against a modeled store in virtual time — same seed, byte-identical run —
           so a policy pathology found once can be replayed exactly, thousands of
           times, while it is being fixed.</li>
         <li><b>An independent reader.</b> Parquet output is verified with DuckDB — a
@@ -1624,7 +1624,7 @@
         code path, so the invariants are exercised by every run and every test, not
         only the checkpointed ones.
       </p>
-      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/ops/dev/TESTING.md"><span class="mono">docs/ops/dev/TESTING.md</span></a> · <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay-server.md"><span class="mono">docs/swath-replay-server.md</span></a></p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/ops/dev/TESTING.md"><span class="mono">docs/ops/dev/TESTING.md</span></a> · <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay.md"><span class="mono">docs/swath-replay.md</span></a></p>
     </div>
   </section>
 
@@ -1632,7 +1632,7 @@
   <section id="limits">
     <div class="sec-head">
       <span class="eyebrow">§8</span>
-      <h2>Where it honestly cannot win</h2>
+      <h2>Where parallelism stops helping</h2>
     </div>
     <div class="col">
       <p>
@@ -1678,7 +1678,7 @@
       <p>
         <code>--concurrency</code> is a <strong>ceiling, not a target</strong>. swath backs
         off when an endpoint shows genuine stress and recovers gradually afterwards, so the
-        run can finish slower than you asked for and that is the intended behaviour. The
+        run can finish slower than you asked for and that is the intended behavior. The
         control loop, and the reason retries are counted separately from throttles, are in
         <a href="#dive-aimd">the concurrency deep dive</a>.
       </p>
@@ -1723,7 +1723,7 @@
         <span class="mono">--concurrency 128</span>.
         <strong>1m 09s is still one recorded run, not a benchmark</strong> — no competing
         listers were measured alongside it, and instance type, network and the day's S3
-        behaviour all move it. The speedup percentage is a ratio of busy to idle worker-time
+        behavior all move it. The speedup percentage is a ratio of busy to idle worker-time
         <em>within</em> this run: useful for diagnosing the steal path, not comparable across
         machines or concurrency settings.
       </p>
@@ -1732,7 +1732,7 @@
         39,651,850 objects across 513 seeds, with 68.0% of them behind one of them. That is a
         property of the bucket, and any run over the same contents will find it. The split and
         range counts are not in that category — 2,155 splits and 2,912 completed ranges are
-        facts about <em>this</em> trace. Scheduling, timing, endpoint behaviour and any writes
+        facts about <em>this</em> trace. Scheduling, timing, endpoint behavior and any writes
         to the bucket will move them.
       </p>
     </div>
@@ -1964,7 +1964,7 @@
 
     <figure>
       <div class="plate-body">
-        <svg viewBox="0 0 760 336" role="img" aria-label="Module graph: swath-model is a leaf; swath-core depends on it; swath-s3 and swath-replay-server depend on core; swath-cli depends on core and s3 and is the only shipped module; swath-sim depends on replay-server and core and is a development tool.">
+        <svg viewBox="0 0 760 336" role="img" aria-label="Module graph: swath-model is a leaf; swath-core depends on it; swath-s3 and swath-replay depend on core; swath-cli is the product binary; swath-replay is a separately released contributor toolkit and swath-sim a development tool.">
           <!-- model -->
           <g class="s-ink" fill="none" stroke-width="1.6"><rect x="250" y="10" width="260" height="44" rx="2"/></g>
           <text class="hd" x="380" y="29" text-anchor="middle">swath-model</text>
@@ -1999,7 +1999,7 @@
 
           <!-- replay server -->
           <g class="s-ink" fill="none" stroke-width="1.6" stroke-dasharray="4 3"><rect x="410" y="174" width="280" height="42" rx="2"/></g>
-          <text class="hd" x="550" y="192" text-anchor="middle">swath-replay-server</text>
+          <text class="hd" x="550" y="192" text-anchor="middle">swath-replay</text>
           <text class="sm" x="550" y="207" text-anchor="middle">the real engine vs a fake S3</text>
 
           <g class="s-ink" fill="none" stroke-width="1.3" marker-end="url(#ar)">
@@ -2020,7 +2020,7 @@
           <!-- sim -->
           <g class="s-ink" fill="none" stroke-width="1.6" stroke-dasharray="4 3"><rect x="410" y="246" width="280" height="50" rx="2"/></g>
           <text class="hd" x="550" y="266" text-anchor="middle">swath-sim</text>
-          <text class="sm" x="550" y="278" text-anchor="middle">real policies vs a modelled</text>
+          <text class="sm" x="550" y="278" text-anchor="middle">real policies vs a modeled</text>
           <text class="sm" x="550" y="290" text-anchor="middle">store, in virtual time</text>
 
           <line class="s-rule" x1="0" y1="316" x2="760" y2="316" stroke-width="1"/>
@@ -2057,7 +2057,7 @@
             <td class="k">yes</td>
           </tr>
           <tr>
-            <td class="k">swath-replay-server</td>
+            <td class="k"><b>swath-replay</b></td>
             <td>Serves swath's own Parquet fixtures back as a fake S3 <code>ListObjectsV2</code> endpoint, so the real engine can be exercised end-to-end over HTTP with injected latency shapes.</td>
             <td class="k">no</td>
           </tr>
