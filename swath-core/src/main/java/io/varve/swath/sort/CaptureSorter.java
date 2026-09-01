@@ -10,6 +10,8 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ParquetParts;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -127,7 +129,7 @@ public final class CaptureSorter {
 
     /**
      * Stream every input part's entries via the low-level, one-row-group-at-a-time {@link
-     * SegmentReader}, since a plain unsorted swath part shares the canonical schema, scanning for a
+     * ParquetEntryReader}, since a plain unsorted swath part shares the canonical schema, scanning for a
      * version_id as they go
      * (§0.6), and chunk them into locally-sorted staging segments gated by the same
      * {@link SortConfig#segmentBytes()}/{@link SortConfig#segmentEntries()} knobs the listing-time
@@ -143,7 +145,7 @@ public final class CaptureSorter {
         long chunkBytes = 0;
         int seq = 0;
         for (Path part : inputParts) {
-            try (SegmentReader reader = new SegmentReader(part)) {
+            try (ParquetEntryReader reader = new ParquetEntryReader(part)) {
                 while (reader.hasNext()) {
                     ListEntry e = reader.next();
                     checkNotVersioned(e);

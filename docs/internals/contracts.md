@@ -498,7 +498,7 @@ its checkpoint/publication state.
   (sorted or not); `minKey`/`maxKey` (plain UTF-8 key text, **not**
   base64/hex) are present only when `sorted`, and are each file's TRUE first/
   last key (never derived from Parquet footer min/max statistics, for the
-  same truncation reason as `SortedFileIndex`) — the publisher verifies the corresponding retained
+  same truncation reason as `SortedParquetIndex`) — the publisher verifies the corresponding retained
   raw-byte bounds before renaming, and a consumer holding valid UTF-8 keys can verify
   `files[i].maxKey < files[i+1].minKey` (unsigned byte, strict) across the
   whole dataset without opening a single Parquet file. Final rolling preserves that strictness by

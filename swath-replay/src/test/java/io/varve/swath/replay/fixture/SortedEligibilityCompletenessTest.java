@@ -7,15 +7,15 @@ package io.varve.swath.replay.fixture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortStamp;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
  * {@link SortedEligibility#multiFileCompletenessViolation} — the pure completeness math,
- * exercised directly over fabricated {@link SortStamp}s so every edge case (complete set, truncated
+ * exercised directly over fabricated {@link SortedParquetStamp}s so every edge case (complete set, truncated
  * tail from a crashed publish, missing middle file, duplicate/out-of-range index) is a fast in-memory
  * check, no parquet I/O.
  */
@@ -28,7 +28,7 @@ class SortedEligibilityCompletenessTest {
     @Test
     void aCompleteSingleFileSetIsFine() {
         List<Path> files = List.of(F1);
-        List<SortStamp> stamps = List.of(stamp(1, true));
+        List<SortedParquetStamp> stamps = List.of(stamp(1, true));
 
         assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNull();
     }
@@ -36,7 +36,7 @@ class SortedEligibilityCompletenessTest {
     @Test
     void aCompleteThreeFileSetIsFine() {
         List<Path> files = List.of(F1, F2, F3);
-        List<SortStamp> stamps = List.of(stamp(1, false), stamp(2, false), stamp(3, true));
+        List<SortedParquetStamp> stamps = List.of(stamp(1, false), stamp(2, false), stamp(3, true));
 
         assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNull();
     }
@@ -49,7 +49,7 @@ class SortedEligibilityCompletenessTest {
     @Test
     void aTruncatedTailFromACrashedPublishIsFlagged() {
         List<Path> files = List.of(F1, F2);
-        List<SortStamp> stamps = List.of(stamp(1, false), stamp(2, false));   // neither is final
+        List<SortedParquetStamp> stamps = List.of(stamp(1, false), stamp(2, false));   // neither is final
 
         assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
@@ -59,7 +59,7 @@ class SortedEligibilityCompletenessTest {
         // Files 1 and 3 present (2 deleted); each file's OWN embedded index is unaffected by the
         // deletion, so the observed set is {1, 3} against n=2 — index 3 is out of range for n=2.
         List<Path> files = List.of(F1, F3);
-        List<SortStamp> stamps = List.of(stamp(1, false), stamp(3, true));
+        List<SortedParquetStamp> stamps = List.of(stamp(1, false), stamp(3, true));
 
         assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
@@ -67,7 +67,7 @@ class SortedEligibilityCompletenessTest {
     @Test
     void aDuplicateIndexIsFlagged() {
         List<Path> files = List.of(F1, F2);
-        List<SortStamp> stamps = List.of(stamp(1, false), stamp(1, true));   // both claim index 1
+        List<SortedParquetStamp> stamps = List.of(stamp(1, false), stamp(1, true));   // both claim index 1
 
         assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
@@ -75,7 +75,7 @@ class SortedEligibilityCompletenessTest {
     @Test
     void moreThanOneFinalFlagIsFlaggedEvenIfIndicesAreContiguous() {
         List<Path> files = List.of(F1, F2);
-        List<SortStamp> stamps = List.of(stamp(1, true), stamp(2, true));   // two finals
+        List<SortedParquetStamp> stamps = List.of(stamp(1, true), stamp(2, true));   // two finals
 
         assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
@@ -83,12 +83,12 @@ class SortedEligibilityCompletenessTest {
     @Test
     void aFinalFlagOnTheWrongIndexIsFlagged() {
         List<Path> files = List.of(F1, F2);
-        List<SortStamp> stamps = List.of(stamp(1, true), stamp(2, false));   // final on 1, not max index 2
+        List<SortedParquetStamp> stamps = List.of(stamp(1, true), stamp(2, false));   // final on 1, not max index 2
 
         assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
 
-    private static SortStamp stamp(int fileIndex, boolean fileFinal) {
-        return new SortStamp("order", SortMode.OBJECTS, 1, fileIndex, fileFinal);
+    private static SortedParquetStamp stamp(int fileIndex, boolean fileFinal) {
+        return new SortedParquetStamp("order", SortMode.OBJECTS, 1, fileIndex, fileFinal);
     }
 }

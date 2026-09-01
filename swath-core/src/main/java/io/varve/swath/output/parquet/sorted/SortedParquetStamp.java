@@ -3,8 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
+import io.varve.swath.sort.SortMode;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
@@ -34,11 +35,11 @@ import org.apache.parquet.io.LocalInputFile;
  *                  SortedParquetWriter#FILE_FINAL_VALUE}); {@code false} when absent (the key is never
  *                  written {@code "false"} — absence IS the negative case)
  */
-public record SortStamp(String order, SortMode mode, int formatVersion, int fileIndex, boolean fileFinal) {
+public record SortedParquetStamp(String order, SortMode mode, int formatVersion, int fileIndex, boolean fileFinal) {
 
     private static final int SUPPORTED_FORMAT_VERSION = Integer.parseInt(SortedParquetWriter.FORMAT_VERSION_VALUE);
 
-    public static Optional<SortStamp> read(Path file) throws IOException {
+    public static Optional<SortedParquetStamp> read(Path file) throws IOException {
         try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
             return fromKeyValueMetaData(reader.getFooter().getFileMetaData().getKeyValueMetaData());
         }
@@ -57,7 +58,7 @@ public record SortStamp(String order, SortMode mode, int formatVersion, int file
     }
 
     /** Package-visible for unit tests that synthesize footer KV maps directly. */
-    static Optional<SortStamp> fromKeyValueMetaData(Map<String, String> kv) {
+    static Optional<SortedParquetStamp> fromKeyValueMetaData(Map<String, String> kv) {
         String order = kv.get(SortedParquetWriter.ORDER_KEY);
         if (!SortedParquetWriter.ORDER_VALUE.equals(order)) {
             return Optional.empty();
@@ -72,7 +73,7 @@ public record SortStamp(String order, SortMode mode, int formatVersion, int file
         }
         Integer fileIndex = parseInt(kv.get(SortedParquetWriter.FILE_INDEX_KEY));
         boolean fileFinal = SortedParquetWriter.FILE_FINAL_VALUE.equals(kv.get(SortedParquetWriter.FILE_FINAL_KEY));
-        return Optional.of(new SortStamp(order, mode.get(), formatVersion, fileIndex == null ? 1 : fileIndex, fileFinal));
+        return Optional.of(new SortedParquetStamp(order, mode.get(), formatVersion, fileIndex == null ? 1 : fileIndex, fileFinal));
     }
 
     private static Integer parseInt(String s) {

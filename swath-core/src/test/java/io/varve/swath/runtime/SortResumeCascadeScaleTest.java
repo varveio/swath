@@ -23,6 +23,7 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.DatasetLayout;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.SegmentSink;
@@ -32,7 +33,6 @@ import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortStamp;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.ParquetReads;
 import java.nio.charset.StandardCharsets;
@@ -185,7 +185,7 @@ final class SortResumeCascadeScaleTest {
             assertThat(outKeys)
                     .as("complete + globally sorted, byte-exact vs the keyspace ground truth (no gap/overlap)")
                     .containsExactlyElementsOf(expected);
-            assertThat(SortStamp.read(finalFile)).isPresent();
+            assertThat(SortedParquetStamp.read(finalFile)).isPresent();
 
             // Publish completed; staging (including the stale planted debris) fully cleaned up.
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);

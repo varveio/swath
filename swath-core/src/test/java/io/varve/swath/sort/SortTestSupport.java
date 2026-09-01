@@ -8,6 +8,7 @@ package io.varve.swath.sort;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -79,7 +80,7 @@ final class SortTestSupport {
         return path;
     }
 
-    /** Write canonical Parquet input for tests of CaptureSorter/SegmentReader, not internal staging. */
+    /** Write canonical Parquet input for tests of CaptureSorter/ParquetEntryReader, not internal staging. */
     static Path writeCanonicalParquet(Path path, List<ListEntry> entries) throws IOException {
         try (SortedFileWriter writer =
                      new SortedParquetWriter(path, SortConfigs.base(), SortMode.VERSIONS, 1)) {

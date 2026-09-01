@@ -8,6 +8,9 @@ package io.varve.swath.sim.store;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListObjectsV2Pager;
 import io.varve.swath.replay.protocol.ListedObject;
@@ -19,12 +22,9 @@ import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
-import io.varve.swath.sort.RowGroupOrderException;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortedFileIndex;
 import io.varve.swath.sort.SortedFileWriter;
-import io.varve.swath.sort.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -175,7 +175,7 @@ class UnsortedFixtureGuardTest {
                 writer.write(ObjectEntries.bare(String.format("%08d", rows - i) + "x".repeat(190)));
             }
         }
-        assertThat(SortedFileIndex.rowGroupSpans(soleFile(fixture))).hasSizeGreaterThan(1);
+        assertThat(SortedParquetIndex.rowGroupSpans(soleFile(fixture))).hasSizeGreaterThan(1);
 
         assertThatThrownBy(() -> SimStoreFactory.open(fixture, SimStoreBackend.STREAMING))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -184,7 +184,7 @@ class UnsortedFixtureGuardTest {
 
     /**
      * The windowed tier's <b>guarded</b> half. Its {@code delimiter=/} skip-scan reads the fixture in
-     * its physical order through {@code SortedRowGroupReader.KeyCursor}, so it sees the disorder and
+     * its physical order through {@code SortedParquetRowGroupReader.KeyCursor}, so it sees the disorder and
      * refuses — with the same typed reason the streaming tier raises, counted on the replay module's
      * side of the seam because that is the store doing the reading. The simulator reaches this path on
      * every structure probe a split issues, so it is not an exotic corner of the tier.

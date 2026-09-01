@@ -53,6 +53,9 @@ import io.varve.swath.output.parquet.ParquetWriterPool;
 import io.varve.swath.output.parquet.ParquetWriterPoolConfig;
 import io.varve.swath.output.parquet.PartInfo;
 import io.varve.swath.output.parquet.PartListener;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import io.varve.swath.output.text.TextWriterPool;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.pipeline.Pipeline;
@@ -80,11 +83,8 @@ import io.varve.swath.sort.SortPagePacker;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortTransform;
 import io.varve.swath.sort.SortTransformResult;
-import io.varve.swath.sort.SortedFileIndex;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
-import io.varve.swath.sort.SortedParquetWriter;
-import io.varve.swath.sort.SortedParquetWriterFactory;
 import io.varve.swath.sort.StagingReconciliation;
 import io.varve.swath.sort.StaleFinalSweep;
 import io.varve.swath.store.ListPage;
@@ -1231,7 +1231,7 @@ public final class ListRunner {
                             f, metrics, FINALIZE_PROGRESS_BYTE_STRIDE, cancellationCheck);
                     metrics.recordSortManifestMd5(bytes, System.nanoTime() - md5Start);
                     long boundsStart = System.nanoTime();
-                    SortedFileIndex.Bounds bounds = SortedFileIndex.bounds(f, cancellationCheck);
+                    SortedParquetIndex.Bounds bounds = SortedParquetIndex.bounds(f, cancellationCheck);
                     metrics.recordSortManifestBounds(bounds.rowCount(), bytes,
                             System.nanoTime() - boundsStart);
                     metadata = new FinalPartMetadata(bounds.rowCount(), bytes, md5,

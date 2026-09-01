@@ -9,6 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.S3ListRequest;
@@ -20,10 +22,8 @@ import io.varve.swath.sort.CaptureSorter;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortStamp;
 import io.varve.swath.sort.SortTransformResult;
 import io.varve.swath.sort.SortedFileWriter;
-import io.varve.swath.sort.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -90,7 +90,7 @@ class ReplayServingFactoryEligibilityScanTest {
                 middle, SortConfig.fromSystemProperties(), SortMode.VERSIONS, 2)) {
             writer.write(objectEntry("m"));
         }
-        assertThat(SortStamp.read(middle)).hasValueSatisfying(s -> assertThat(s.mode()).isEqualTo(SortMode.VERSIONS));
+        assertThat(SortedParquetStamp.read(middle)).hasValueSatisfying(s -> assertThat(s.mode()).isEqualTo(SortMode.VERSIONS));
 
         assertThatThrownBy(() -> ReplayServingFactory.open(fixtureDir, ServingMode.SORTED, 1))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -116,7 +116,7 @@ class ReplayServingFactoryEligibilityScanTest {
         List<Path> files = SortedFixtures.resolveFiles(fixtureDir);
         assertThat(files).hasSize(4);
         Path middle = files.get(1);   // file_index=2 of 4 — a genuine middle position, not first/last
-        assertThat(SortStamp.read(middle)).hasValueSatisfying(s -> {
+        assertThat(SortedParquetStamp.read(middle)).hasValueSatisfying(s -> {
             assertThat(s.fileIndex()).isEqualTo(2);
             assertThat(s.fileFinal()).isFalse();
         });

@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

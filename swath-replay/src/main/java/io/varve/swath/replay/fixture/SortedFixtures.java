@@ -7,10 +7,10 @@ package io.varve.swath.replay.fixture;
 
 import io.micrometer.core.instrument.Timer;
 import io.varve.swath.output.parquet.ParquetParts;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex.RowGroupKey;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.replay.protocol.ByteKey;
-import io.varve.swath.sort.SortStamp;
-import io.varve.swath.sort.SortedFileIndex;
-import io.varve.swath.sort.SortedFileIndex.RowGroupKey;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -21,7 +21,7 @@ import java.util.Optional;
  * Sortedness detection + in-memory index load/derive for the replay server's sorted-serving path:
  * the only place {@code io.varve.swath.replay} touches the
  * root {@code io.varve.swath.sort} API for this concern, so no parquet/hadoop type ever needs to appear
- * on this module's compile classpath — everything here traffics in {@link Path}s, {@link SortStamp}
+ * on this module's compile classpath — everything here traffics in {@link Path}s, {@link SortedParquetStamp}
  * (a plain record), and this package's own {@link ByteKey}-keyed {@link IndexEntry}.
  *
  * <p>Multi-file aware throughout: a sorted fixture may be one file or a {@code final-file-bytes}
@@ -75,10 +75,10 @@ public final class SortedFixtures {
 
     /**
      * Reads {@code file}'s footer sortedness stamp, if any recognized one is present —
-     * {@link SortStamp#read} already treats a corrupt/foreign/future stamp as "not stamped".
+     * {@link SortedParquetStamp#read} already treats a corrupt/foreign/future stamp as "not stamped".
      */
-    public static Optional<SortStamp> detect(Path file) throws IOException {
-        return SortStamp.read(file);
+    public static Optional<SortedParquetStamp> detect(Path file) throws IOException {
+        return SortedParquetStamp.read(file);
     }
 
     /**
@@ -95,9 +95,9 @@ public final class SortedFixtures {
      * One row group's derived routing entry: which file, its actual first key, and its row count.
      *
      * @param rowGroup {@code file}'s <b>physical</b> row-group block index — the ordinal
-     *                 {@link io.varve.swath.sort.SortedFileIndex.RowGroupSpan#blockIndex} names and
-     *                 {@link io.varve.swath.sort.SortedRowGroupReader#openKeyCursor}/{@link
-     *                 io.varve.swath.sort.SortedRowGroupReader#rows} take directly. Plain range routing
+     *                 {@link io.varve.swath.output.parquet.sorted.SortedParquetIndex.RowGroupSpan#blockIndex} names and
+     *                 {@link io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader#openKeyCursor}/{@link
+     *                 io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader#rows} take directly. Plain range routing
      *                 ({@code SortedRouting}) never reads it — only the {@code delimiter=/} skip-scan
      *                 ({@code SortedParquetStore#delimitedRollup}) does, to random-access the exact row
      *                 group a scan cursor lands in without decoding the groups before it.
@@ -136,17 +136,17 @@ public final class SortedFixtures {
     /**
      * Derives {@code (file, rowGroup, firstKey, rowCount)} for every row group across every file in
      * {@code files} (already in key order, {@link #resolveFiles}), via the root {@link
-     * SortedFileIndex#firstKeysPerRowGroup} — the {@code firstKey}/{@code rowCount} pair never comes
+     * SortedParquetIndex#firstKeysPerRowGroup} — the {@code firstKey}/{@code rowCount} pair never comes
      * from Parquet footer stats. {@code rowGroup} (the physical block index) comes from a second,
-     * equally cheap footer-only pass, {@link SortedFileIndex#rowGroupSpans}: both derive from the same
+     * equally cheap footer-only pass, {@link SortedParquetIndex#rowGroupSpans}: both derive from the same
      * physical row-group sequence with the same empty-group skip, so the two lists stay positionally
-     * aligned entry-for-entry — a per-file invariant {@link SortedFileIndex} itself is tested against
+     * aligned entry-for-entry — a per-file invariant {@link SortedParquetIndex} itself is tested against
      * ({@code rowGroupSpansCarryPhysicalBlockIndicesAndTrueFirstKeys}), not re-verified here. Two
      * eligibility checks gate
      * a {@link IndexLoadResult.Loaded} result, evaluated per row group in file/row-group order (the
      * first failure wins): {@link #MIXED_ROW_TYPES} — the one place this method legitimately consults
      * footer stats despite the no-footer-stats rule above, a narrow, deliberate exception (see
-     * {@code SortedFileIndex#isPureObjectRowType} for why it is sound) — and {@link #SANITY_FAILED},
+     * {@code SortedParquetIndex#isPureObjectRowType} for why it is sound) — and {@link #SANITY_FAILED},
      * whose ascending check spans file boundaries and so also catches cross-file duplicate keys. See
      * {@code swath-replay.md}'s "sort-fixture / sorted-serving meters" table for what each
      * reason means and when it fires.
@@ -163,8 +163,8 @@ public final class SortedFixtures {
         List<IndexEntry> entries = new ArrayList<>();
         ByteKey previous = null;
         for (Path file : files) {
-            List<RowGroupKey> rowGroups = SortedFileIndex.firstKeysPerRowGroup(file);
-            List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(file);
+            List<RowGroupKey> rowGroups = SortedParquetIndex.firstKeysPerRowGroup(file);
+            List<SortedParquetIndex.RowGroupSpan> spans = SortedParquetIndex.rowGroupSpans(file);
             for (int i = 0; i < rowGroups.size(); i++) {
                 RowGroupKey rg = rowGroups.get(i);
                 if (!rg.pureObjectRowType()) {

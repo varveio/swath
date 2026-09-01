@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -15,6 +15,12 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.dataset.PeriodicDataSync;
+import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,14 +35,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@link SortedParquetWriter} footer stamp (all five keys, round-trip via {@link SortStamp}),
+ * {@link SortedParquetWriter} footer stamp (all five keys, round-trip via {@link SortedParquetStamp}),
  * {@link SortedFileWriterFactory#DEFAULT} (the unstamped default path) staying unstamped, and the
  * {@code final-row-group-bytes} knob actually producing multiple row groups.
  */
 class SortedParquetWriterTest {
 
     private static SortConfig config(Map<String, String> overrides) {
-        return SortConfig.fromProperties(key -> overrides.get(key.substring("swath.sort.".length())));
+        SortConfig config = SortConfigs.base();
+        String rowGroupBytes = overrides.get("final-row-group-bytes");
+        return rowGroupBytes == null ? config : config.withFinalRowGroupBytes(Long.parseLong(rowGroupBytes));
     }
 
     @Test
@@ -67,7 +75,7 @@ class SortedParquetWriterTest {
     }
 
     @Test
-    void writesAllThreeStampKeysAndSortStampReadsThemBack(@TempDir Path dir) throws IOException {
+    void writesAllThreeStampKeysAndSortedParquetStampReadsThemBack(@TempDir Path dir) throws IOException {
         Path path = dir.resolve("part-00001.parquet");
         try (SortedFileWriter writer = new SortedParquetWriter(path, config(Map.of()), SortMode.VERSIONS, 1)) {
             writer.write(object("a"));
@@ -79,7 +87,7 @@ class SortedParquetWriterTest {
         assertThat(kv).containsEntry(SortedParquetWriter.MODE_KEY, "versions");
         assertThat(kv).containsEntry(SortedParquetWriter.FORMAT_VERSION_KEY, "1");
 
-        Optional<SortStamp> stamp = SortStamp.read(path);
+        Optional<SortedParquetStamp> stamp = SortedParquetStamp.read(path);
         assertThat(stamp).isPresent();
         assertThat(stamp.get().order()).isEqualTo(SortedParquetWriter.ORDER_VALUE);
         assertThat(stamp.get().mode()).isEqualTo(SortMode.VERSIONS);
@@ -94,8 +102,8 @@ class SortedParquetWriterTest {
             writer.write(object("a"));
         }
 
-        assertThat(SortStamp.read(path))
-                .contains(new SortStamp(SortedParquetWriter.ORDER_VALUE, SortMode.OBJECTS, 1, 1, false));
+        assertThat(SortedParquetStamp.read(path))
+                .contains(new SortedParquetStamp(SortedParquetWriter.ORDER_VALUE, SortMode.OBJECTS, 1, 1, false));
     }
 
     /**
@@ -114,7 +122,7 @@ class SortedParquetWriterTest {
         Map<String, String> notFinalKv = footerKv(notFinal);
         assertThat(notFinalKv).containsEntry(SortedParquetWriter.FILE_INDEX_KEY, "2");
         assertThat(notFinalKv).doesNotContainKey(SortedParquetWriter.FILE_FINAL_KEY);
-        assertThat(SortStamp.read(notFinal)).hasValueSatisfying(s -> {
+        assertThat(SortedParquetStamp.read(notFinal)).hasValueSatisfying(s -> {
             assertThat(s.fileIndex()).isEqualTo(2);
             assertThat(s.fileFinal()).isFalse();
         });
@@ -127,7 +135,7 @@ class SortedParquetWriterTest {
         Map<String, String> lastKv = footerKv(last);
         assertThat(lastKv).containsEntry(SortedParquetWriter.FILE_INDEX_KEY, "3");
         assertThat(lastKv).containsEntry(SortedParquetWriter.FILE_FINAL_KEY, SortedParquetWriter.FILE_FINAL_VALUE);
-        assertThat(SortStamp.read(last)).hasValueSatisfying(s -> {
+        assertThat(SortedParquetStamp.read(last)).hasValueSatisfying(s -> {
             assertThat(s.fileIndex()).isEqualTo(3);
             assertThat(s.fileFinal()).isTrue();
         });
@@ -140,7 +148,7 @@ class SortedParquetWriterTest {
             writer.write(object("a"));
         }
 
-        assertThat(SortStamp.read(path)).isEmpty();
+        assertThat(SortedParquetStamp.read(path)).isEmpty();
     }
 
     @Test
@@ -162,7 +170,7 @@ class SortedParquetWriterTest {
                 SortedParquetWriter.ORDER_KEY, "some_other_order",
                 SortedParquetWriter.MODE_KEY, "objects",
                 SortedParquetWriter.FORMAT_VERSION_KEY, "1");
-        assertThat(SortStamp.fromKeyValueMetaData(kv)).isEmpty();
+        assertThat(SortedParquetStamp.fromKeyValueMetaData(kv)).isEmpty();
     }
 
     @Test
@@ -170,7 +178,7 @@ class SortedParquetWriterTest {
         Map<String, String> kv = Map.of(
                 SortedParquetWriter.MODE_KEY, "objects",
                 SortedParquetWriter.FORMAT_VERSION_KEY, "1");
-        assertThat(SortStamp.fromKeyValueMetaData(kv)).isEmpty();
+        assertThat(SortedParquetStamp.fromKeyValueMetaData(kv)).isEmpty();
     }
 
     @Test
@@ -179,7 +187,7 @@ class SortedParquetWriterTest {
                 SortedParquetWriter.ORDER_KEY, SortedParquetWriter.ORDER_VALUE,
                 SortedParquetWriter.MODE_KEY, "not_a_mode",
                 SortedParquetWriter.FORMAT_VERSION_KEY, "1");
-        assertThat(SortStamp.fromKeyValueMetaData(kv)).isEmpty();
+        assertThat(SortedParquetStamp.fromKeyValueMetaData(kv)).isEmpty();
     }
 
     @Test
@@ -188,7 +196,7 @@ class SortedParquetWriterTest {
                 SortedParquetWriter.ORDER_KEY, SortedParquetWriter.ORDER_VALUE,
                 SortedParquetWriter.MODE_KEY, "objects",
                 SortedParquetWriter.FORMAT_VERSION_KEY, "not_a_number");
-        assertThat(SortStamp.fromKeyValueMetaData(kv)).isEmpty();
+        assertThat(SortedParquetStamp.fromKeyValueMetaData(kv)).isEmpty();
     }
 
     @Test
@@ -265,7 +273,7 @@ class SortedParquetWriterTest {
         assertThat(registry.get("swath.steal_reason")
                 .tags("outcome", "OUTPUT", "reason", "data_sync_sorted_parquet")
                 .counter().count()).isEqualTo(1.0);
-        assertThat(SortStamp.read(path)).hasValueSatisfying(stamp -> {
+        assertThat(SortedParquetStamp.read(path)).hasValueSatisfying(stamp -> {
             assertThat(stamp.fileIndex()).isEqualTo(1);
             assertThat(stamp.fileFinal()).isTrue();
         });

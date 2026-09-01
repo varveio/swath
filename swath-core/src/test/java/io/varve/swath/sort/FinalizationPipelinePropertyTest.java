@@ -12,6 +12,9 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -94,7 +97,7 @@ class FinalizationPipelinePropertyTest {
                 assertThat(parallel.finalFiles().get(i).getFileName().toString())
                         .isEqualTo(String.format("part-%05d.parquet", i));
                 int ordinal = i;
-                assertThat(SortStamp.read(parallel.finalFiles().get(i)))
+                assertThat(SortedParquetStamp.read(parallel.finalFiles().get(i)))
                         .hasValueSatisfying(stamp -> {
                             assertThat(stamp.fileIndex()).isEqualTo(ordinal + 1);
                             assertThat(stamp.fileFinal())
@@ -215,7 +218,7 @@ class FinalizationPipelinePropertyTest {
     private List<ListEntry> readAll(List<Path> files) throws IOException {
         List<ListEntry> rows = new ArrayList<>();
         for (Path file : files) {
-            try (SegmentReader reader = new SegmentReader(file)) {
+            try (ParquetEntryReader reader = new ParquetEntryReader(file)) {
                 while (reader.hasNext()) {
                     rows.add(reader.next());
                 }

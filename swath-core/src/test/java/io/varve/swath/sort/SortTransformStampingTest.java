@@ -10,6 +10,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -61,7 +63,7 @@ class SortTransformStampingTest {
         assertThat(result.finalFiles()).hasSize(1);
         Path finalFile = result.finalFiles().get(0);
 
-        Optional<SortStamp> stamp = SortStamp.read(finalFile);
+        Optional<SortedParquetStamp> stamp = SortedParquetStamp.read(finalFile);
         assertThat(stamp).isPresent();
         assertThat(stamp.get().mode()).isEqualTo(SortMode.OBJECTS);
 

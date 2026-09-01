@@ -10,7 +10,8 @@ import java.util.Optional;
 /**
  * Whether a sorted output file may contain multiple rows per key — the {@code --all-versions}
  * knob the caller already knows at final-file-write time (§0.6). Stamped verbatim into the
- * footer via {@link SortedParquetWriter#MODE_KEY}, read back by {@link SortStamp}.
+ * footer via {@link io.varve.swath.output.parquet.sorted.SortedParquetWriter#MODE_KEY}, read back by
+ * {@link io.varve.swath.output.parquet.sorted.SortedParquetStamp}.
  */
 public enum SortMode {
 

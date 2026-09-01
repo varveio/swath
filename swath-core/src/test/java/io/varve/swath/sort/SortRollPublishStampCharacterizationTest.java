@@ -10,6 +10,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -233,7 +236,7 @@ class SortRollPublishStampCharacterizationTest {
     private List<String> keys(List<Path> files) throws IOException {
         List<String> out = new ArrayList<>();
         for (Path f : files) {
-            try (SegmentReader r = new SegmentReader(f)) {
+            try (ParquetEntryReader r = new ParquetEntryReader(f)) {
                 while (r.hasNext()) {
                     out.add(r.next().key().asString());
                 }

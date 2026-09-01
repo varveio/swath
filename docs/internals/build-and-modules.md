@@ -95,14 +95,13 @@ a non-release developer tool.
     This edge is deliberate and stays as-is: the `ListingStore`/`ListObjectsV2Pager` seam the
     simulator reuses lives in `swath-replay` today, and extracting it into a shared module
     is a separate refactor (see the roadmap below), not a precondition for depending on it.
-- **§0.7 compile-classpath purity** — `swath-replay`'s *main* code must not import any
-  `org.apache.parquet`/`org.apache.hadoop` type; parquet reaches it only *transitively at runtime*
-  via `implementation(project(":swath-core"))`. Enforced by the module's
-  `verifyNoParquetOrHadoopOnCompileClasspath` task, wired into `:swath-replay:check`.
-  **`swath-sim` holds the same line by the same mechanism** — its streaming tier drives
-  `io.varve.swath.sort.SortedRowGroupReader`, which traffics only in `byte[]`/`long`/`String`, over
-  an `implementation(project(":swath-core"))` edge — but relies on that edge's scope alone; it has
-  no guard task of its own yet.
+- **§0.7 compile-classpath purity** — `swath-cli`, `swath-replay`, and `swath-sim` must keep
+  Parquet/Hadoop out of main code. The shared `swath.java-conventions` opt-in installs both
+  `verifyNoParquetOrHadoopOnCompileClasspath` and
+  `verifyNoParquetOrHadoopSourceImports` on each module and wires both into `check`.
+  `swath-sim`'s streaming tier drives
+  `io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader`, which traffics only in
+  `byte[]`/`long`/`String`, over an `implementation(project(":swath-core"))` edge.
 - **A module declares every dependency it directly uses**, even one that would also arrive
   transitively. `jackson-databind` on `swath-cli` tests is the necessity case: it reaches
   `swath-core` only transitively via `parquet-hadoop`, `implementation`-scoped there, so it never

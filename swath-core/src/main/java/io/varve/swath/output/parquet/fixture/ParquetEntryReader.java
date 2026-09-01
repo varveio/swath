@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.fixture;
 
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
@@ -33,7 +33,7 @@ import org.apache.parquet.schema.MessageType;
  * <p>The next record is pre-loaded so {@link #hasNext()} stays non-throwing; {@link #next()} performs
  * the read that advances to the following record and may fail.
  */
-final class SegmentReader implements AutoCloseable {
+public final class ParquetEntryReader implements AutoCloseable {
 
     private final ParquetFileReader reader;
     private final MessageColumnIO columnIo;
@@ -43,18 +43,18 @@ final class SegmentReader implements AutoCloseable {
     private long rowsLeftInGroup;
     private ListEntry head;
 
-    SegmentReader(Path path) throws IOException {
+    public ParquetEntryReader(Path path) throws IOException {
         this.reader = ParquetFileReader.open(new LocalInputFile(path));
         this.schema = reader.getFooter().getFileMetaData().getSchema();
         this.columnIo = new ColumnIOFactory().getColumnIO(schema);
         this.head = readNext();
     }
 
-    boolean hasNext() {
+    public boolean hasNext() {
         return head != null;
     }
 
-    ListEntry next() throws IOException {
+    public ListEntry next() throws IOException {
         ListEntry current = head;
         head = readNext();
         return current;

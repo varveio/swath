@@ -67,7 +67,7 @@ dependencies {
     // promoted from a transitive dep of parquet-hadoop/hadoop-mapreduce-client-core to a direct
     // one so a future upstream bump can't silently drop/rev it out from under this reference.
     implementation(libs.aircompressor)
-    // Reading Parquet back (SegmentReader / the sort merge phase, and the planned derive API) needs
+    // Reading Parquet back (ParquetEntryReader / the sort merge phase, and the planned derive API) needs
     // parquet-hadoop's read path, which resolves org.apache.hadoop.mapreduce FileInputFormat at
     // runtime. The sort read path is main-scope (all parquet-touching code lives in swath-core,
     // per the compile-classpath-purity guard above), so this is a runtime dependency, not test-only.

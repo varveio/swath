@@ -5,13 +5,13 @@
  */
 package io.varve.swath.replay.server;
 
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
 import io.varve.swath.replay.protocol.ListObjectsV2RequestParser;
 import io.varve.swath.replay.protocol.ListingFixture;
 import io.varve.swath.replay.protocol.S3Error;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3Xml;
-import io.varve.swath.sort.RowGroupOrderException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;

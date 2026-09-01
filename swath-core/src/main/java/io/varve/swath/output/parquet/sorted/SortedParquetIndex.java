@@ -3,8 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -41,18 +42,18 @@ import org.apache.parquet.schema.MessageType;
  * <p><b>Efficient by construction, never a whole-file scan.</b> {@link ParquetFileReader} is
  * pointed at a {@link ParquetFileReader#setRequestedSchema projected} schema containing only the
  * {@code key} column, so each row group costs exactly one short read of that row group's key
- * column chunk — the same low-level, one-row-group-at-a-time pattern {@link SegmentReader} uses,
+ * column chunk — the same low-level, one-row-group-at-a-time pattern {@link ParquetEntryReader} uses,
  * minus the other columns. Only the first decoded record of each row group is consulted; the rest
  * of that row group's key-column data is left unread once the next {@code readNextRowGroup()} call
  * advances past it.
  */
-public final class SortedFileIndex {
+public final class SortedParquetIndex {
 
     private static final String KEY_FIELD = "key";
     private static final String ROW_TYPE_FIELD = "row_type";
     private static final ColumnPath ROW_TYPE_PATH = ColumnPath.get(ROW_TYPE_FIELD);
     private static final byte[] OBJECT_ROW_TYPE_BYTES = "OBJECT".getBytes(StandardCharsets.UTF_8);
-    private SortedFileIndex() {
+    private SortedParquetIndex() {
     }
 
     /**

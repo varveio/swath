@@ -48,7 +48,7 @@ dependencies {
     // returns a PartWriter, ObjectEntries an ObjectEntry), so consumers need them on the compile
     // classpath -- hence `api`. parquet-hadoop is a direct compile-time need of ParquetFixtures
     // (ParquetSchema.canonical() is MessageType-typed) and stays out of the MAIN compile classpath,
-    // which verifyNoParquetOrHadoopOnCompileClasspath below still guards.
+    // which the shared purity guard still protects.
     testFixturesApi(project(":swath-core"))
     testFixturesImplementation(libs.parquet.hadoop)
 
@@ -173,36 +173,7 @@ listOf("installDist", "distZip", "distTar").forEach { taskName ->
     }
 }
 
-// Mechanically enforce the compile-classpath boundary: no io.varve.swath.replay source may import
-// an org.apache.parquet/org.apache.hadoop type, because swath-core's parquet-hadoop/
-// hadoop dependency reaches this module only via the `implementation(project(":swath-core"))` edge
-// above, which by design lands those artifacts on this module's RUNTIME classpath but never its
-// COMPILE classpath. A future accidental `api(...)` (or a new direct dependency) on either group here
-// would silently widen that surface — this task catches it at build time instead of relying on code review.
-val verifyNoParquetOrHadoopOnCompileClasspath by tasks.registering {
-    group = "verification"
-    description = "Fails if org.apache.parquet/org.apache.hadoop artifacts reach the main compile classpath."
-    val compileClasspath = configurations.named("compileClasspath")
-    inputs.files(compileClasspath)
-    doLast {
-        val offenders = compileClasspath.get().resolvedConfiguration.resolvedArtifacts
-                .map { it.moduleVersion.id }
-                .filter { it.group == "org.apache.parquet" || it.group == "org.apache.hadoop" }
-                .map { "${it.group}:${it.name}:${it.version}" }
-                .distinct()
-                .sorted()
-        if (offenders.isNotEmpty()) {
-            throw GradleException(
-                    "swath-replay's main COMPILE classpath must never carry " +
-                    "org.apache.parquet/org.apache.hadoop artifacts (no io.varve.swath.replay " +
-                    "source may import a parquet/hadoop type; those live only on the RUNTIME classpath " +
-                    "via swath-core's own main-scope dependency). Found: " + offenders.joinToString(", "))
-        }
-    }
-}
-
 tasks.named("check") {
-    dependsOn(verifyNoParquetOrHadoopOnCompileClasspath)
     dependsOn(rootProject.tasks.named("verifyReplayThirdPartyNotices"))
 }
 

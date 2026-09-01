@@ -31,8 +31,9 @@ dependencies {
     implementation(libs.micrometer.core)
     implementation(libs.slf4j.api)
     // The streaming tier decodes a sorted fixture's row groups through swath-core's
-    // io.varve.swath.sort.SortedRowGroupReader. `implementation`, not `api`: that reader traffics only
-    // in byte[]/long/String, so no io.varve.swath.sim type exposes it and, exactly as for
+    // io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader. `implementation`, not
+    // `api`: that reader traffics only in byte[]/long/String, so no io.varve.swath.sim type exposes
+    // it and, exactly as for
     // swath-replay, swath-core's own parquet-hadoop/hadoop deps stay off this module's compile
     // classpath -- no io.varve.swath.sim source may import an org.apache.parquet type.
     implementation(project(":swath-core"))

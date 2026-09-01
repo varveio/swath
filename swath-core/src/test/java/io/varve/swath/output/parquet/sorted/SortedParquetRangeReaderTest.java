@@ -3,12 +3,15 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.parquet.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedFileWriter;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
@@ -27,7 +30,7 @@ import org.apache.parquet.io.LocalInputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-class SortedRangeReaderTest {
+class SortedParquetRangeReaderTest {
 
     @Test
     void servedColumnIndexPrunesLongPrefixesThroughTheS3KeyLimit(@TempDir Path dir) throws Exception {
@@ -50,7 +53,7 @@ class SortedRangeReaderTest {
         try (ParquetFileReader parquet = ParquetFileReader.open(new LocalInputFile(file))) {
             parquet.setRequestedSchema(parquet.getFooter().getFileMetaData().getSchema());
             RowRanges selected = ColumnIndexFilter.calculateRowRanges(
-                    FilterCompat.get(SortedRangeReader.predicate(from, true, toExclusive)),
+                    FilterCompat.get(SortedParquetRangeReader.predicate(from, true, toExclusive)),
                     parquet.getColumnIndexStore(0),
                     Set.of(ColumnPath.get("key")),
                     parquet.getFooter().getBlocks().getFirst().getRowCount());
@@ -61,7 +64,7 @@ class SortedRangeReaderTest {
                     .isEqualTo(100);
         }
 
-        try (SortedRangeReader reader = new SortedRangeReader(file, 1)) {
+        try (SortedParquetRangeReader reader = new SortedParquetRangeReader(file, 1)) {
             assertThat(reader.range(0, from, true, toExclusive, 10, false))
                     .singleElement()
                     .satisfies(row -> assertThat(row.key()).isEqualTo(from));
@@ -77,7 +80,7 @@ class SortedRangeReaderTest {
             }
         }
 
-        try (SortedRangeReader reader = new SortedRangeReader(file, 1)) {
+        try (SortedParquetRangeReader reader = new SortedParquetRangeReader(file, 1)) {
             byte[] lower = KeyBytes.ofUtf8("key-02000").raw();
             assertThat(reader.range(0, lower, true, null, 10, false))
                     .hasSize(10)
@@ -110,7 +113,7 @@ class SortedRangeReaderTest {
         AtomicLong nanoClock = new AtomicLong(100L);
         AtomicInteger secondClockReads = new AtomicInteger();
 
-        try (SortedRangeReader reader = new SortedRangeReader(file, 1, () -> {
+        try (SortedParquetRangeReader reader = new SortedParquetRangeReader(file, 1, () -> {
             if ("first".equals(caller.get())) {
                 firstAcquired.countDown();
                 await(releaseFirst);

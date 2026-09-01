@@ -13,6 +13,7 @@ import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -1015,7 +1016,7 @@ final class FinalizationPipelineTest {
     private static List<String> keys(List<Path> files) throws IOException {
         List<String> keys = new ArrayList<>();
         for (Path file : files) {
-            try (SegmentReader reader = new SegmentReader(file)) {
+            try (ParquetEntryReader reader = new ParquetEntryReader(file)) {
                 while (reader.hasNext()) {
                     keys.add(reader.next().key().asString());
                 }

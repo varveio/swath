@@ -7,6 +7,8 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.Manifest;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -480,7 +482,7 @@ class ParallelMergeBenchmark {
         ar.partRows = new ArrayList<>();
         for (Path file : result.finalFiles()) {
             long partRows = 0;
-            try (SegmentReader reader = new SegmentReader(file)) {
+            try (ParquetEntryReader reader = new ParquetEntryReader(file)) {
                 while (reader.hasNext()) {
                     reader.next();
                     partRows++;
@@ -858,7 +860,7 @@ class ParallelMergeBenchmark {
     private static final class MultiFileStream implements AutoCloseable {
         private final List<Path> files;
         private int idx = -1;
-        private SegmentReader current;
+        private ParquetEntryReader current;
 
         MultiFileStream(List<Path> files) throws IOException {
             this.files = files;
@@ -875,7 +877,7 @@ class ParallelMergeBenchmark {
                 if (idx >= files.size()) {
                     return;
                 }
-                current = new SegmentReader(files.get(idx));
+                current = new ParquetEntryReader(files.get(idx));
             }
         }
 

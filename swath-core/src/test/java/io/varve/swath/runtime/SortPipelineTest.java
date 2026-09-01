@@ -26,6 +26,7 @@ import io.varve.swath.model.ListingMode;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.parquet.DatasetLayout;
+import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.PageRunFormat;
@@ -37,7 +38,6 @@ import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
-import io.varve.swath.sort.SortStamp;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.ParquetReads;
@@ -108,7 +108,7 @@ final class SortPipelineTest {
             List<String> keys = ParquetReads.keys(finalFile);
             assertThat(keys).containsExactlyElementsOf(expectedSorted(keyspace));
             assertThat(keys).isSorted();
-            assertThat(SortStamp.read(finalFile)).hasValueSatisfying(s ->
+            assertThat(SortedParquetStamp.read(finalFile)).hasValueSatisfying(s ->
                     assertThat(s.mode()).isEqualTo(SortMode.OBJECTS));
 
             // Manifest published (LAST) referencing only the final file — never a staging segment.
@@ -187,7 +187,7 @@ final class SortPipelineTest {
 
             Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
             assertThat(ParquetReads.keys(finalFile)).containsExactlyElementsOf(expectedSorted(keyspace));
-            assertThat(SortStamp.read(finalFile)).isPresent();
+            assertThat(SortedParquetStamp.read(finalFile)).isPresent();
             assertThat(Files.readString(DatasetLayout.of(outputDir).manifest())).contains("part-00000.parquet");
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);
             assertThat(counter(ctx, "swath.steal_reason", "SORT", "merge_redone")).isEqualTo(1.0);

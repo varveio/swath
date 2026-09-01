@@ -6,14 +6,14 @@
 package io.varve.swath.sim.store;
 
 import io.micrometer.core.instrument.Timer;
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.store.SortedRouting;
-import io.varve.swath.sort.RowGroupOrderException;
-import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
@@ -30,7 +30,7 @@ import java.util.Map;
  * revisited.
  *
  * <p>A single lock protects both the access-ordered resident LRU and its single-threaded
- * {@link SortedRowGroupReader}s. A block is charged as key bytes plus {@code (rowCount + 1)}
+ * {@link SortedParquetRowGroupReader}s. A block is charged as key bytes plus {@code (rowCount + 1)}
  * eight-byte offsets and is evicted promptly on crossing {@code maxResidentBytes}. The budget
  * bounds settled residency; a fault can transiently add its decoded block and staging space before
  * eviction. A row group larger than the budget fails rather than being immediately evicted and
@@ -46,7 +46,7 @@ public final class StreamingListingStore implements ListingStore {
     private final long maxResidentBytes;
 
     private final Object lock = new Object();
-    private final Map<Path, SortedRowGroupReader> readers = new HashMap<>();
+    private final Map<Path, SortedParquetRowGroupReader> readers = new HashMap<>();
     private final LinkedHashMap<Integer, KeyBlock> resident = new LinkedHashMap<>(16, 0.75f, true);
     private long residentBytes;
     private long peakResidentBytes;
@@ -117,7 +117,7 @@ public final class StreamingListingStore implements ListingStore {
             resident.clear();
             residentBytes = 0;
             RuntimeException failure = null;
-            for (SortedRowGroupReader reader : readers.values()) {
+            for (SortedParquetRowGroupReader reader : readers.values()) {
                 try {
                     reader.close();
                 } catch (IOException | RuntimeException e) {
@@ -219,10 +219,10 @@ public final class StreamingListingStore implements ListingStore {
     }
 
     /** Returns the retained decoder for {@code file}; called under {@link #lock}. */
-    private SortedRowGroupReader reader(Path file) {
+    private SortedParquetRowGroupReader reader(Path file) {
         return readers.computeIfAbsent(file, f -> {
             try {
-                return new SortedRowGroupReader(f);
+                return new SortedParquetRowGroupReader(f);
             } catch (IOException e) {
                 throw new UncheckedIOException("failed to open " + f + " for streaming decode", e);
             }

@@ -12,6 +12,7 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.Manifest;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -260,7 +261,7 @@ final class SortPublicationCrashMatrixTest {
     private static List<String> keys(List<Path> parts) throws IOException {
         List<String> keys = new ArrayList<>();
         for (Path part : parts) {
-            try (SegmentReader reader = new SegmentReader(part)) {
+            try (ParquetEntryReader reader = new ParquetEntryReader(part)) {
                 while (reader.hasNext()) {
                     keys.add(reader.next().key().asString());
                 }

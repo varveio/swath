@@ -12,6 +12,7 @@ import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -808,7 +809,7 @@ class SortTransformTest {
     private List<String> keys(List<Path> files) throws IOException {
         List<String> out = new ArrayList<>();
         for (Path f : files) {
-            try (SegmentReader r = new SegmentReader(f)) {
+            try (ParquetEntryReader r = new ParquetEntryReader(f)) {
                 while (r.hasNext()) {
                     out.add(r.next().key().asString());
                 }

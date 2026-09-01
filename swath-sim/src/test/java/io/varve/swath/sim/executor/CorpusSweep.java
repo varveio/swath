@@ -8,14 +8,14 @@ package io.varve.swath.sim.executor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.sim.store.IneligibleFixtureException;
 import io.varve.swath.sim.store.SimStoreBackend;
 import io.varve.swath.sim.store.SimStoreConfig;
 import io.varve.swath.sim.store.SimStoreFactory;
-import io.varve.swath.sort.RowGroupOrderException;
-import io.varve.swath.sort.SortedFileIndex;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -61,7 +61,7 @@ import java.util.stream.Stream;
  * corpus directory outlives the tier that was staged into it: a leftover fixture an order of magnitude
  * larger than the rest would be swept at the fallback fleet, for hours, and its rows would not be
  * comparable with anything. Reading it costs one footer per part and no decode
- * ({@link SortedFileIndex#rowCount}).
+ * ({@link SortedParquetIndex#rowCount}).
  *
  * <h2>Three choices that decide what the numbers mean</h2>
  * <ol>
@@ -302,7 +302,7 @@ final class CorpusSweep {
             }
             long rows = 0;
             for (Path part : parts) {
-                rows += SortedFileIndex.rowCount(part);
+                rows += SortedParquetIndex.rowCount(part);
             }
             if (rows > ceiling) {
                 skipped.add(new Skipped(name, OVER_KEY_CEILING, rows + " rows above the " + ceiling

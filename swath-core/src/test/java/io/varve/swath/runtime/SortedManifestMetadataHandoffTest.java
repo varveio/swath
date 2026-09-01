@@ -16,12 +16,12 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.parquet.DatasetLayout;
+import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortedFileWriter;
-import io.varve.swath.sort.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -49,7 +49,7 @@ class SortedManifestMetadataHandoffTest {
                         "alpha", "omega", 23, 17, 10);
 
         // The path deliberately does not exist. Publication can succeed only if the new-part path
-        // performs neither Files.size/MD5 nor SortedFileIndex.bounds after durable close.
+        // performs neither Files.size/MD5 nor SortedParquetIndex.bounds after durable close.
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ListRunner.writeSortedManifest(root, "bucket", "args", 7,
                 List.of(new FinalPart(absent, Optional.of(metadata))),

@@ -5,8 +5,8 @@
  */
 package io.varve.swath.sim.store;
 
+import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
 import io.varve.swath.replay.protocol.ByteKeys;
-import io.varve.swath.sort.RowGroupOrderException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
