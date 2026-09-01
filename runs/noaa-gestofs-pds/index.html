@@ -67,6 +67,9 @@
           padding:1rem 1.15rem; margin:1.1rem 0; overflow-x:auto; }
   .card h3 { font-family:var(--mono); font-size:.68rem; letter-spacing:.13em;
              text-transform:uppercase; color:var(--ink3); margin:0 0 .6rem; font-weight:600; }
+  details.card > summary { font-family:var(--mono); font-size:.68rem; letter-spacing:.13em;
+             text-transform:uppercase; color:var(--ink3); font-weight:600; cursor:pointer; }
+  details.card[open] > summary { margin-bottom:.6rem; }
   canvas { display:block; width:100%; }
   .row { display:grid; grid-template-columns:minmax(8rem,17rem) 1fr auto; gap:.7rem;
          align-items:center; font-family:var(--mono); font-size:.74rem; padding:.2rem 0; }
@@ -146,38 +149,6 @@
 
   <script type="application/json" id="swath-run-facts">{"schema_version": "swath-public-run-v1", "run_id": "noaa-gestofs-pds-field-guide-trace", "title": "Field-guide interactive trace of s3://noaa-gestofs-pds/", "provenance_status": "partial", "swath": {"version": null, "commit": null, "runtime": null}, "captured_at": null, "captured_at_precision": null, "captured_at_bounds": {"earliest": null, "latest": "2026-08-05T12:16:17Z", "basis": "Nothing in retained evidence dates this capture. The upper bound is publication metadata: the generated report page was first committed to the project's website branch at that time (gh-pages commit db4c5fd), so the capture preceded it by an unknown interval."}, "target": {"uri": "s3://noaa-gestofs-pds/", "provider": "AWS S3", "region": null, "region_source": "Not recorded. This capture retains no command, no region setting, and no bucket-location response. Other pages in this repository document `--region us-east-1` for this bucket, but that is not evidence about this run."}, "client": {"provider": null, "region": null, "machine_type": null, "cpu": null, "memory_bytes": null, "published_description": "The published field guide describes this run as executed from a dedicated US-East cloud host on a different provider than the bucket's. That prose is the only retained description; it names neither provider, region, nor instance type."}, "command": {"list": null, "resume": null}, "output": {"format": null, "destination_kind": null, "destination_kind_source": null, "sorted": null, "sorted_source": null}, "config": {"concurrency_ceiling": 128, "concurrency_ceiling_source": "Stated as `--concurrency 128` on the published field guide. The trace independently shows 128 distinct listing workers, which is consistent with that ceiling but does not by itself record the configured value.", "region": null}, "clocks": {"listing_wall": {"ms": null, "display": null, "measures": "Not recorded. No run summary was retained for this capture, so no listing wall clock from swath itself is available."}, "invocation_wall": {"ms": null, "display": null, "measures": "Not recorded. No run summary was retained, and the retained evidence does not say how many invocations this capture took."}, "trace_event_span": {"ms": 68592.2, "display": "1m 09s", "measures": "Elapsed time between the first and the last event of the `--trace` JSONL this capture was generated from, computed by tools/explainer and rounded to 0.1 ms when the report was generated. The trace file itself was not retained; only this computed span survives. The published field guide and trace page present it as the run's wall clock."}, "video_playback": {"ms": null, "display": "36-second replay", "measures": "Playback length of the generated replay video, as labeled on the project homepage. It is a property of the visualization, not a listing clock, and no exact length is recorded."}}, "result": {"objects": 39651850, "objects_measures": "Sum of the `keys` field over the `page_committed` events of the trace, computed when the report was generated.", "api_calls": null, "api_calls_measures": "Not recorded. The trace does not carry the run's `ListObjectsV2` attempt count, and the generated report says so explicitly. Committed pages below are a different metric: they exclude probes and retries.", "api_calls_per_1k_objects": null, "committed_pages": 41420, "committed_pages_measures": "Count of `page_committed` events in the trace.", "pages_per_1k_objects": 1.045, "initial_ranges": 513, "empty_initial_ranges": 0, "splits": 2399, "owner_splits": 2204, "uniform_pivot_splits": 23, "claimed_ranges": 2912, "completed_ranges": 2912, "failed_ranges": 0, "listing_workers_observed": 128, "listing_workers_measures": "Distinct worker ids observed in the trace.", "peak_live_ranges": 128, "heaviest_initial_range": {"objects": 26946179, "share_percent": 68.0, "splits_in_lineage": 2155, "lower_bound": "_para3/", "upper_bound": "_test/"}, "median_initial_range_objects": 21024, "parquet_parts": null, "parquet_bytes": null, "peak_rss_bytes": null, "listed_object_bytes_display": null, "earliest_object_last_modified": null, "latest_object_last_modified": null, "listed_object_measures": "Not recorded. A decision trace carries range and page events, not the size or age of the objects behind them.", "scope_note": "Every figure here is derived from trace events. Nothing in retained evidence describes this capture's output, memory, or request cost."}, "invocations": null, "analysis": {"busy_worker_seconds": 5030.0, "ideal_seconds": 39.3, "idle_worker_seconds": 3749.8, "share_of_perfect_speedup_percent": 57.3, "measures": "Busy worker-time is the sum of the durations of the trace's range-ownership segments. Ideal seconds is that total divided by the 128 observed workers. The percentage is ideal seconds over the trace event span. All four are generator-rounded for display. This is a diagnostic of this capture's own work accounting, not a portable efficiency score."}, "trace_model": {"events": 89230, "unparsable_lines_skipped": 0, "page_events_plotted": 10611, "replay_downsample_keep_every": 5, "cdf_points": 40561, "anonymized": false, "measures": "What the generator read and what the visualization draws. Trace events, committed listing pages, and plotted replay events are three different counts: the animation plots 10,611 of the 41,420 page events, while every figure in this record uses all of them."}, "artifacts": {"summary": null, "raw_trace": null, "interactive_trace": {"url": "https://swath.varve.io/runs/noaa-gestofs-pds/", "source": "gh-pages runs/noaa-gestofs-pds/index.html at commit ac66e15", "sha256": "46c61d4bfa153feb6a5943e196a774e854579a46d16fc88029b186d8a6fc7bd4"}, "video": [{"path": null, "url": "https://swath.varve.io/assets/swath-noaa-gestofs.mp4", "source": "gh-pages assets/swath-noaa-gestofs.mp4 at commit 2755ee3", "sha256": "e707ea4f38a6a644e2b72d469fb529ce889bed88cf51781c80f40c885055d282", "association": "A replay video of this capture. The trace report and a first version of this video were published together in gh-pages commit db4c5fd; the digest recorded here is the re-rendered video from commit 2755ee3, which replaced it. The project homepage labels it with this capture's figures. The frames were not re-derived from the trace file."}]}, "evidence": ["Unless a field's own `_source` or `_measures` names another origin, every value above is read from the model embedded in the generated report page at https://swath.varve.io/runs/noaa-gestofs-pds/, which tools/explainer computed from the run's `--trace` JSONL at generation time.", "The `--concurrency 128` value and the client description come from prose published on https://swath.varve.io/field-guide/.", "The report page states its own limits: probe and retry requests are not in the committed-page figure, and the run summary's api_calls is the count of actual requests."], "notes": ["Unknown fields were not present in retained evidence and must not be inferred.", "Values are as the report generator computed and rounded them for display; they carry that precision rather than exact underlying values.", "`clocks` is a map of named clocks. Each entry says what it measures, and carries a numeric `ms` only where the source recorded one; `display` is the value as it was shown.", "This capture is not the capture behind the README recording. See run noaa-gestofs-pds-2026-08-03-505ae26, which listed 39,585,029 objects; the two totals differ by 66,821 objects.", "The trace JSONL itself was not retained anywhere. Only the generated report page, which embeds a reduced model of it, survives.", "swath version, commit, capture date, command, output mode, and client machine are unknown for this capture.", "Committed listing pages must never be compared with the other capture's `ListObjectsV2` attempt count as if they were the same metric."]}</script>
 
-  <div class="card" id="provenance-panel">
-    <h3>Provenance</h3>
-    <table><tbody id="run-facts-table"></tbody></table>
-    <p class="cap">Fields absent from the retained run-facts record read "unknown in retained
-    evidence" rather than being inferred. The machine-readable copy is in
-    <code>#swath-run-facts</code>. This capture is distinct from the swath v0.2.1 README
-    recording (39,585,029 objects) &mdash; the two are separate runs, not the same numbers
-    rounded differently.</p>
-  </div>
-
-  <div class="card" id="range-summary-panel">
-    <h3>Top ranges, splits, and timeline (nonvisual summary)</h3>
-    <table>
-      <thead><tr><th>Seed range</th><th style="text-align:right">Objects</th><th style="text-align:right">Splits</th><th style="text-align:right">Workers involved</th></tr></thead>
-      <tbody>
-        <tr><td class="k">_para3/ &rarr; _test/</td><td class="n">26,946,179 (68.0%)</td><td class="n">2,155</td><td class="n">128</td></tr>
-        <tr><td class="k">_hindcast_archive/ &rarr; _para3/</td><td class="n">1,961,089 (4.9%)</td><td class="n">153</td><td class="n">85</td></tr>
-        <tr><td class="k">stofs_2d_glo.20260527/ &rarr; (open frontier)</td><td class="n">369,519 (0.9%)</td><td class="n">34</td><td class="n">29</td></tr>
-        <tr><td class="k">stofs_2d_glo.20240611/ &rarr; stofs_2d_glo.20240615/</td><td class="n">21,056 (0.1%)</td><td class="n">0</td><td class="n">1</td></tr>
-        <tr><td class="k">stofs_2d_glo.20240615/ &rarr; stofs_2d_glo.20240619/</td><td class="n">21,056 (0.1%)</td><td class="n">0</td><td class="n">1</td></tr>
-      </tbody>
-    </table>
-    <p class="cap">Split counts: 2,399 total splits committed &mdash; 2,204 owner-side (a
-    range's own worker carving ahead of its cursor) and 195 taken by idle thieves; 23 used the
-    plain byte midpoint and 2,376 placed their pivot from observed evidence. Timeline
-    milestones (elapsed listing-wall-clock time from the run's start): first split committed at
-    12,615.8&nbsp;ms (~12.6s) elapsed; first steal attempt at 12,718.9&nbsp;ms (~12.7s) elapsed;
-    all 128 workers were live by 21.2&nbsp;ms elapsed. The owner-split gate was consulted 38,474
-    times and refused 94.3% of the time. Derived once from this run's embedded data; see the
-    interactive sections below for the full figures.</p>
-  </div>
-
   <dl class="tiles" id="tiles"></dl>
   <div id="findings"></div>
 
@@ -246,14 +217,14 @@
     <div class="col">
       <p>Horizontal is the keyspace weighted by objects — <b class="hl">equal width means an equal
       number of objects</b> — and vertical is time running downward. Each rectangle is one range
-      over the slice it owned and the time it owned it, coloured by which original seed guess it
+      over the slice it owned and the time it owned it, colored by which original seed guess it
       descends from. Because width is objects, a rectangle's <em>area</em> is roughly the work it
       did.</p>
       <p><b>Wide and short</b> is a big slice eaten fast. <b>A tall thin column</b> is a serial
       tail — a dense region that could not be divided, outliving everything around it.</p>
     </div>
     <div class="card">
-      <canvas id="static" role="img" aria-label="Keyspace over time: each range drawn as a rectangle whose width is the share of objects it owned and whose height is how long it owned them, coloured by seed lineage."></canvas>
+      <canvas id="static" role="img" aria-label="Keyspace over time: each range drawn as a rectangle whose width is the share of objects it owned and whose height is how long it owned them, colored by seed lineage."></canvas>
       <div class="key" id="static-key"></div>
       <p class="cap" id="static-cap"></p>
     </div>
@@ -280,6 +251,42 @@
     <div class="sec-head"><span class="eyebrow">§6</span><h2>The ledger</h2></div>
     <div class="col"><p id="ledger-lede"></p></div>
   </div>
+
+  <div class="sec">
+    <div class="sec-head"><span class="eyebrow">&sect;7</span><h2>Run record</h2></div>
+  </div>
+  <details class="card" id="provenance-panel">
+    <summary>Provenance</summary>
+    <table><tbody id="run-facts-table"></tbody></table>
+    <p class="cap">Fields absent from the retained run-facts record read "unknown in retained
+    evidence" rather than being inferred. The machine-readable copy is in
+    <code>#swath-run-facts</code>. This capture is distinct from the swath v0.2.1 README
+    recording (39,585,029 objects) &mdash; the two are separate runs, not the same numbers
+    rounded differently.</p>
+  </details>
+
+  <details class="card" id="range-summary-panel">
+    <summary>Top ranges, splits, and timeline (nonvisual summary)</summary>
+    <table>
+      <thead><tr><th>Seed range</th><th style="text-align:right">Objects</th><th style="text-align:right">Splits</th><th style="text-align:right">Workers involved</th></tr></thead>
+      <tbody>
+        <tr><td class="k">_para3/ &rarr; _test/</td><td class="n">26,946,179 (68.0%)</td><td class="n">2,155</td><td class="n">128</td></tr>
+        <tr><td class="k">_hindcast_archive/ &rarr; _para3/</td><td class="n">1,961,089 (4.9%)</td><td class="n">153</td><td class="n">85</td></tr>
+        <tr><td class="k">stofs_2d_glo.20260527/ &rarr; (open frontier)</td><td class="n">369,519 (0.9%)</td><td class="n">34</td><td class="n">29</td></tr>
+        <tr><td class="k">stofs_2d_glo.20240611/ &rarr; stofs_2d_glo.20240615/</td><td class="n">21,056 (0.1%)</td><td class="n">0</td><td class="n">1</td></tr>
+        <tr><td class="k">stofs_2d_glo.20240615/ &rarr; stofs_2d_glo.20240619/</td><td class="n">21,056 (0.1%)</td><td class="n">0</td><td class="n">1</td></tr>
+      </tbody>
+    </table>
+    <p class="cap">Split counts: 2,399 total splits committed &mdash; 2,204 owner-side (a
+    range's own worker carving ahead of its cursor) and 195 taken by idle thieves; 23 used the
+    plain byte midpoint and 2,376 placed their pivot from observed evidence. Timeline
+    milestones (elapsed listing-wall-clock time from the run's start): first split committed at
+    12,615.8&nbsp;ms (~12.6s) elapsed; first steal attempt at 12,718.9&nbsp;ms (~12.7s) elapsed;
+    all 128 workers were live by 21.2&nbsp;ms elapsed. The owner-split gate was consulted 38,474
+    times and refused 94.3% of the time. Derived once from this run's embedded data; see the
+    interactive sections below for the full figures.</p>
+  </details>
+
 
   <footer id="provenance"></footer>
 <div id="site-links">listed by <a href="https://github.com/varveio/swath">swath</a> · how the algorithm works: <a href="https://swath.varve.io/field-guide/">the field guide</a></div>
@@ -579,7 +586,7 @@
   rest.appendChild(rw); rest.appendChild(document.createTextNode("all other seed lineages"));
   ky.appendChild(rest);
   document.getElementById("static-cap").textContent =
-    fmt(M.segments.length)+" range-lifetimes drawn, coloured by seed lineage; ochre dots are split "+
+    fmt(M.segments.length)+" range-lifetimes drawn, colored by seed lineage; ochre dots are split "+
     "pivots. Horizontal position is the share of objects below a key, measured from this run's "+
     fmt(meta.cdfPoints)+" page commits — so equal width is equal objects, and byte distance is "+
     "NOT preserved.";
@@ -705,7 +712,7 @@
     "finding above uses all of them");
   if(meta.anonymized) prov.push("ANONYMIZED — key names withheld");
   prov.push("Two stated aggregation choices: the horizontal axis is the measured key-mass CDF "+
-            "(equal width = equal objects, not equal bytes), and colour is seed lineage, not worker");
+            "(equal width = equal objects, not equal bytes), and color is seed lineage, not worker");
   prov.push("Where this page and the trace disagree, the trace wins — see the provenance "+
             "table above for run identity and what is not retained");
   document.getElementById("provenance").textContent=prov.join(". ")+".";
