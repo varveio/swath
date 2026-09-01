@@ -82,6 +82,64 @@
   .page { width: min(100% - 3rem, 74rem); margin: 0 auto; }
   .mono { font-family: var(--mono); }
 
+  .skip-link {
+    position: absolute;
+    top: -3rem;
+    left: 0.75rem;
+    z-index: 10;
+    padding: 0.55rem 0.9rem;
+    border-radius: 0.6rem;
+    background: var(--brand-deep);
+    color: #FFFDF7;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-decoration: none;
+    transition: top 150ms ease;
+  }
+  .skip-link:focus {
+    top: 0.75rem;
+  }
+
+  .version-line {
+    margin: 0 0 1.4rem;
+    color: var(--quiet);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+  }
+
+  details.transcript {
+    margin-top: 0.6rem;
+  }
+  details.transcript summary {
+    color: var(--brand);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  details.transcript .transcript-body {
+    margin-top: 0.55rem;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--rule);
+    border-radius: 0.7rem;
+    background: var(--canvas);
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.55;
+  }
+  details.transcript pre {
+    margin: 0.4rem 0;
+    padding: 0.5rem 0.6rem;
+    overflow-x: auto;
+    border-radius: 0.5rem;
+    background: var(--surface);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   .topbar {
     display: flex;
     align-items: center;
@@ -401,17 +459,19 @@
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to main content</a>
 <div class="page">
   <header class="topbar">
     <a class="brand" href="https://varve.io"><b>VARVE</b> / OPEN SOURCE</a>
     <nav aria-label="Primary">
-      <a href="field-guide/">Field guide</a>
-      <a href="https://github.com/varveio/swath#quickstart">Quickstart</a>
+      <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Getting started</a>
+      <a href="field-guide/">How it works</a>
+      <a href="https://github.com/varveio/swath/blob/main/docs/README.md">Docs</a>
       <a href="https://github.com/varveio/swath">GitHub ↗</a>
     </nav>
   </header>
 
-  <main>
+  <main id="main">
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow">S3 object listing</p>
@@ -444,16 +504,37 @@
       </div>
 
       <figure class="hero-media">
-        <div class="media-top"><span>36-second replay</span><span>39.7M objects · 1m 09s run</span></div>
+        <div class="media-top"><span>36-second visualization</span><span>39.7M objects · 68.6s listing wall clock</span></div>
         <video controls muted playsinline preload="metadata" poster="assets/poster.png"
-          src="assets/swath-noaa-gestofs.mp4" aria-label="Animated replay of a swath listing run">
+          src="assets/swath-noaa-gestofs.mp4" aria-label="36-second rendered visualization of run noaa-gestofs-pds-field-guide-trace">
           <a href="assets/swath-noaa-gestofs.mp4">Watch the recorded run</a>
         </video>
         <figcaption>
-          The initial keyspace split created 513 ranges. <strong>One contained 68% of the
-          objects.</strong> swath split that range as idle workers requested more work.
-          <a href="runs/noaa-gestofs-pds/">View the trace →</a>
+          This is a 36-second rendered visualization of run
+          <code>noaa-gestofs-pds-field-guide-trace</code>; the video's own playback length is not
+          the same clock as the run. The measured listing wall clock for this run was
+          <strong>68.6 seconds</strong> (68,592.2&nbsp;ms). The initial keyspace split created
+          513 ranges. <strong>One contained 68% of the objects.</strong> swath split that range
+          as idle workers requested more work. This is a separate capture from the
+          v0.2.1 recording in the project README (39,585,029 objects) — the two are different
+          runs, not the same numbers rounded differently.
+          <a href="runs/noaa-gestofs-pds/">View the trace and full provenance →</a>
         </figcaption>
+        <details class="transcript">
+          <summary>Read what this visualization shows</summary>
+          <div class="transcript-body">
+            <p>This video is a rendered visualization (produced by
+            <code>tools/explainer</code> from the run's <code>--trace</code> event log), not a
+            literal terminal recording — there is no on-screen command to transcribe. It plays
+            back the run's seed ranges draining in parallel and splitting as workers steal
+            work, colored by which original seed guess each range descends from.</p>
+            <p>The exact swath version, commit, capture date, and command used to produce this
+            run are <strong>unknown in retained evidence</strong>; only the trace's own recorded
+            figures (objects, ranges, splits, wall clock) survive. See the
+            <a href="runs/noaa-gestofs-pds/">full provenance table</a> for what is and is not
+            known about this capture.</p>
+          </div>
+        </details>
       </figure>
     </section>
 
@@ -513,14 +594,51 @@
       <figure class="workflow-media">
         <div class="media-top"><span>36-second CLI demo</span><span>list / resume / DuckDB</span></div>
         <video controls muted playsinline preload="metadata" poster="assets/swath-cli-demo-poster.png"
-          src="assets/swath-cli-demo.mp4" aria-label="Terminal demo of listing, resuming, and querying with swath">
+          src="assets/swath-cli-demo.mp4" aria-label="Terminal demo of listing, resuming, and querying with swath 0.2.1">
           <a href="assets/swath-cli-demo.mp4">Watch the command-line demo</a>
         </video>
-        <figcaption>The current Docker workflow, from the first listing to a queryable Parquet result.</figcaption>
+        <figcaption>
+          A recorded Docker workflow — interrupt, resume, and DuckDB query — captured with
+          swath <strong>0.2.1</strong> (commit <code>505ae26e6019</code>, from the video's own
+          opening <code>swath --version</code> frame). Its own capture date and machine are
+          unknown in retained evidence; the video file was added to this site's git history on
+          2026-08-20 (commit <code>34a6c63</code>), which is a lower bound on when it was
+          published, not a capture date.
+        </figcaption>
+        <details class="transcript">
+          <summary>Read the commands and result shown in the video</summary>
+          <div class="transcript-body">
+            <p>Transcribed from the video's own opening frames (its poster image, which is a
+            still from the recording itself):</p>
+            <pre>swath $ swath --version
+swath 0.2.1
+Built by Varve: https://varve.io
+Source: https://github.com/varveio/swath
+Commit: 505ae26e6019
+Runtime: 25.0.3+9-LTS
+swath $ swath list s3://noaa-gestofs-pds/ \
+    --no-sign-request --region us-east-1 \
+    --concurrency 128 \
+    --format parquet -o /out/noaa-gestofs-pds
+&rarr; writing parquet dataset to /out/noaa-gestofs-pds
+  listing &middot; 4,002 objects &middot; 3,999 keys/s (avg 3,999) &middot; 5 pages</pre>
+            <p>That is the command and the state visible at the video's start; the remainder —
+            interrupting, resuming, and the DuckDB query — plays out in the recording itself and
+            was not separately transcribed here. The command, version, and commit match run
+            <code>noaa-gestofs-pds-2026-08-03-505ae26</code> — the README's recorded full-scale
+            run (39,585,029 objects) — but this video's own final object count was not
+            independently confirmed from retained evidence, so treat it as a related capture
+            sharing that run's identity, not as separately verified proof of its ending numbers.</p>
+          </div>
+        </details>
       </figure>
     </section>
 
   </main>
+
+  <!-- This line must track the release this site is published for; update it in the same
+       change as any release that moves the documented version forward. -->
+  <p class="version-line">Documentation for swath 0.3.0.</p>
 
   <footer>
     <p>

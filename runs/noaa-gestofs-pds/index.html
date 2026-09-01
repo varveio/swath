@@ -109,6 +109,73 @@
 <div class="wrap">
   <h1 id="title">swath run trace</h1>
   <div class="sub" id="subtitle"></div>
+  <p class="sub" id="run-id-line">Run <code>noaa-gestofs-pds-field-guide-trace</code></p>
+
+  <noscript>
+    <p>Run <code>noaa-gestofs-pds-field-guide-trace</code> &mdash; 39,651,850 objects, 41,420
+    committed listing pages, 128 workers, over 68,592.2&nbsp;ms (68.6s) measured listing wall
+    clock (elapsed time from the trace's first to last event). The heaviest of 513 seed ranges
+    held 68.0% of the objects; the run committed 2,399 splits (2,204 owner-side).</p>
+    <table>
+      <tbody>
+        <tr><td>Run ID</td><td>noaa-gestofs-pds-field-guide-trace</td></tr>
+        <tr><td>swath version</td><td>unknown in retained evidence</td></tr>
+        <tr><td>swath commit</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Captured at</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Source URI</td><td>s3://noaa-gestofs-pds/</td></tr>
+        <tr><td>S3 region</td><td>us-east-1</td></tr>
+        <tr><td>Client provider</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Client region</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Machine</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Output mode</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Command</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Listing wall clock</td><td>68.6s (68,592.2 ms) measured listing wall clock</td></tr>
+        <tr><td>Visualization playback length</td><td>in-page replay: ~30s at 1&times;, accelerated; homepage video: separate 36s rendered capture</td></tr>
+        <tr><td>Objects</td><td>39,651,850</td></tr>
+        <tr><td>API attempts</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Initial ranges</td><td>513</td></tr>
+        <tr><td>Splits</td><td>2,399</td></tr>
+        <tr><td>Completed ranges</td><td>2,912</td></tr>
+        <tr><td>Source report</td><td>unknown in retained evidence</td></tr>
+        <tr><td>Raw trace</td><td>unknown in retained evidence</td></tr>
+      </tbody>
+    </table>
+  </noscript>
+
+  <script type="application/json" id="swath-run-facts">{"schema_version":"swath-public-run-v1","run_id":"noaa-gestofs-pds-field-guide-trace","provenance_status":"partial","swath":{"version":null,"commit":null},"captured_at":null,"target":{"uri":"s3:\/\/noaa-gestofs-pds\/","provider":"AWS S3","region":"us-east-1"},"client":{"provider":null,"region":null,"machine_type":null,"cpu":null,"memory_bytes":null},"command":null,"output":{"format":null,"destination_kind":null,"sorted":null},"config":{"concurrency_ceiling":128},"clocks":{"listing_wall_ms":68592.2,"listing_wall_label":"68.6s (68,592.2 ms) measured listing wall clock, elapsed from the trace's first to last event","video_playback_ms":null,"video_playback_label":"in-page replay: ~30s at 1x, accelerated from the measured wall clock; the homepage hero video is a separate 36s rendered capture of this run"},"result":{"objects":39651850,"api_attempts":null,"committed_pages":41420,"initial_ranges":513,"splits":2399,"completed_ranges":2912,"failed_ranges":0},"artifacts":{"summary":null,"raw_trace":null,"interactive_trace":"\/runs\/noaa-gestofs-pds\/","video":"\/assets\/swath-noaa-gestofs.mp4"},"notes":["Unknown fields were not present in retained evidence and must not be inferred.","This capture is distinct from the swath v0.2.1 README recording (39,585,029 objects, 41,582 ListObjectsV2 calls); do not conflate the two.","committed_pages (41,420) is the trace's page-commit count, not the same metric as API attempts."]}</script>
+
+  <div class="card" id="provenance-panel">
+    <h3>Provenance</h3>
+    <table><tbody id="run-facts-table"></tbody></table>
+    <p class="cap">Fields absent from the retained run-facts record read "unknown in retained
+    evidence" rather than being inferred. The machine-readable copy is in
+    <code>#swath-run-facts</code>. This capture is distinct from the swath v0.2.1 README
+    recording (39,585,029 objects) &mdash; the two are separate runs, not the same numbers
+    rounded differently.</p>
+  </div>
+
+  <div class="card" id="range-summary-panel">
+    <h3>Top ranges, splits, and timeline (nonvisual summary)</h3>
+    <table>
+      <thead><tr><th>Seed range</th><th style="text-align:right">Objects</th><th style="text-align:right">Splits</th><th style="text-align:right">Workers involved</th></tr></thead>
+      <tbody>
+        <tr><td class="k">_para3/ &rarr; _test/</td><td class="n">26,946,179 (68.0%)</td><td class="n">2,155</td><td class="n">128</td></tr>
+        <tr><td class="k">_hindcast_archive/ &rarr; _para3/</td><td class="n">1,961,089 (4.9%)</td><td class="n">153</td><td class="n">85</td></tr>
+        <tr><td class="k">stofs_2d_glo.20260527/ &rarr; (open frontier)</td><td class="n">369,519 (0.9%)</td><td class="n">34</td><td class="n">29</td></tr>
+        <tr><td class="k">stofs_2d_glo.20240611/ &rarr; stofs_2d_glo.20240615/</td><td class="n">21,056 (0.1%)</td><td class="n">0</td><td class="n">1</td></tr>
+        <tr><td class="k">stofs_2d_glo.20240615/ &rarr; stofs_2d_glo.20240619/</td><td class="n">21,056 (0.1%)</td><td class="n">0</td><td class="n">1</td></tr>
+      </tbody>
+    </table>
+    <p class="cap">Split counts: 2,399 total splits committed &mdash; 2,204 owner-side (a
+    range's own worker carving ahead of its cursor) and 195 taken by idle thieves; 23 used the
+    plain byte midpoint and 2,376 placed their pivot from observed evidence. Timeline
+    milestones (elapsed listing-wall-clock time from the run's start): first split committed at
+    12,615.8&nbsp;ms (~12.6s) elapsed; first steal attempt at 12,718.9&nbsp;ms (~12.7s) elapsed;
+    all 128 workers were live by 21.2&nbsp;ms elapsed. The owner-split gate was consulted 38,474
+    times and refused 94.3% of the time. Derived once from this run's embedded data; see the
+    interactive sections below for the full figures.</p>
+  </div>
+
   <dl class="tiles" id="tiles"></dl>
   <div id="findings"></div>
 
@@ -248,6 +315,36 @@
     [fmt(meta.totalKeys)+" objects", fmt(meta.pagesSeen)+" committed pages",
      meta.workers+" workers", secs(meta.durationMs)].join("  ·  ");
 
+  // ---- provenance table, from the embedded run-facts record ---------------
+  var FACTS = null;
+  try { FACTS = JSON.parse(document.getElementById("swath-run-facts").textContent); } catch (e) {}
+  var FACTS_FIELDS = [
+    ["Run ID","run_id"],["swath version","swath.version"],["swath commit","swath.commit"],
+    ["Captured at","captured_at"],["Source URI","target.uri"],["S3 region","target.region"],
+    ["Client provider","client.provider"],["Client region","client.region"],
+    ["Machine","client.machine_type"],
+    ["Output mode","output.format"],["Command","command"],
+    ["Listing wall clock","clocks.listing_wall_label"],
+    ["Visualization playback length","clocks.video_playback_label"],
+    ["Objects","result.objects"],["API attempts","result.api_attempts"],
+    ["Initial ranges","result.initial_ranges"],["Splits","result.splits"],
+    ["Completed ranges","result.completed_ranges"],
+    ["Source report","artifacts.summary"],["Raw trace","artifacts.raw_trace"]];
+  function dig(obj, path){ var parts=path.split("."), n=obj;
+    for (var i=0;i<parts.length;i++){
+      if (!n || typeof n!=="object" || n[parts[i]]===undefined || n[parts[i]]===null) return null;
+      n=n[parts[i]]; }
+    return n; }
+  var factsTable=document.getElementById("run-facts-table");
+  if (factsTable) {
+    FACTS_FIELDS.forEach(function(f){
+      var v=dig(FACTS, f[1]), tr=el("tr");
+      tr.appendChild(el("td","k",f[0]));
+      tr.appendChild(el("td",null, v===null ? "unknown in retained evidence" :
+        (typeof v==="number" ? v.toLocaleString("en-US") : String(v))));
+      factsTable.appendChild(tr);
+    });
+  }
   var tw=document.getElementById("tiles");
   [["Objects",fmt(meta.totalKeys)],["Wall time",secs(meta.durationMs)],
    ["Committed pages",fmt(meta.pagesSeen)],
@@ -541,7 +638,7 @@
       ctx.globalAlpha=1; }
   }
   var lt=document.getElementById("live-tiles");
-  var liveDd=[["Objects"],["Requests"],["Live ranges"],["Busy"],["Splits"],["Steals"]].map(function(d){
+  var liveDd=[["Objects"],["Committed pages"],["Live ranges"],["Busy"],["Splits"],["Steals"]].map(function(d){
     var w=el("div"); w.appendChild(el("dt",null,d[0]));
     var dd=el("dd",null,"0"); w.appendChild(dd); lt.appendChild(w); return dd; });
   var scrub=document.getElementById("scrub"), playBtn=document.getElementById("play");
@@ -605,7 +702,8 @@
   if(meta.anonymized) prov.push("ANONYMIZED — key names withheld");
   prov.push("Two stated aggregation choices: the horizontal axis is the measured key-mass CDF "+
             "(equal width = equal objects, not equal bytes), and colour is seed lineage, not worker");
-  prov.push("Where this page and the trace disagree, the trace wins");
+  prov.push("Where this page and the trace disagree, the trace wins — see the provenance "+
+            "table above for run identity and what is not retained");
   document.getElementById("provenance").textContent=prov.join(". ")+".";
 
   window.addEventListener("resize",function(){ resize(); draw(); drawStatic(); drawRate(); });
