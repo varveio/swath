@@ -60,7 +60,7 @@ explainer.py --self-test              # 29 checks, no inputs needed
 |---|---|
 | `--title` | Page heading. Defaults to the trace file's stem. |
 | `--anonymize` | Withhold every key name — positions and counts only. Use when the picture has to travel further than the trace does. |
-| `--run-facts` | Path to a `swath-public-run-v1` JSON provenance record for this specific run (run ID, swath version/commit, capture date, target, client, command, clocks). Rendered as a visible provenance table, embedded verbatim as `<script type="application/json" id="swath-run-facts">`, and used for a static `<noscript>` summary. Report only; a trace carries no such facts on its own, so any field the record omits reads "unknown in retained evidence" rather than being inferred. Ignored with `--video`. |
+| `--run-facts` | Path to a `swath-public-run-v1` JSON provenance record for this specific run (run ID, swath version/commit, capture date, target, client, command, clocks). Rendered as a visible provenance table, embedded as machine-readable JSON in `<script type="application/json" id="swath-run-facts">` (reserialized compactly — every value is preserved, not the source file's exact bytes), and used for a static `<noscript>` summary. Report only; a trace carries no such facts on its own, so any field the record omits reads "unknown in retained evidence" rather than being inferred. Not read at all with `--video`. |
 | `--video` | Emit a 1080×1350 capture page instead of the report (see below). |
 | `--video-style` | `strip` (default) or `map`. Two different arguments about the same run. |
 

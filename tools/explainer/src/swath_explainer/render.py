@@ -19,12 +19,14 @@ FACTS_FIELDS = [
     ("Captured at", "captured_at"),
     ("Source URI", "target.uri"),
     ("S3 region", "target.region"),
-    ("Client provider / region", "client.region"),
+    ("Client provider", "client.provider"),
+    ("Client region", "client.region"),
     ("Machine", "client.machine_type"),
     ("Output mode", "output.format"),
     ("Command", "command"),
     ("Listing wall clock", "clocks.listing_wall_label"),
     ("Visualization playback length", "clocks.video_playback_label"),
+    ("Objects", "result.objects"),
     ("API attempts", "result.api_attempts"),
     ("Initial ranges", "result.initial_ranges"),
     ("Splits", "result.splits"),
@@ -91,7 +93,7 @@ def _static_summary(model, facts):
         for label, path in FACTS_FIELDS)
     return (
         "<p>Run <code>%s</code> &mdash; %s objects, %s committed listing pages, %d workers, "
-        "%.1fs recorded trace duration.</p>\n"
+        "%.1fs measured listing wall clock (from the trace's first to last event).</p>\n"
         "<table><tbody>%s</tbody></table>"
         % (_html_escape(str(run_id)) if run_id else UNKNOWN,
            "{:,}".format(meta["totalKeys"]), "{:,}".format(meta["pagesSeen"]),
@@ -105,8 +107,9 @@ def render_report(model, facts=None):
     swath version/commit, capture date, target, client, command, and clocks for the specific
     run this trace represents. Pass it with ``--run-facts PATH`` on the CLI. It is rendered
     as a visible provenance table, embedded as machine-readable JSON
-    (``#swath-run-facts``), and used for a static ``<noscript>`` summary. Any field the
-    record omits is shown as "unknown in retained evidence", never guessed.
+    (``#swath-run-facts`` — reserialized compactly, so byte-for-byte formatting is not
+    preserved, but every value is), and used for a static ``<noscript>`` summary. Any field
+    the record omits is shown as "unknown in retained evidence", never guessed.
     """
     page = _load("report.html")
     page = page.replace(_STATIC_SUMMARY_PLACEHOLDER, _static_summary(model, facts))

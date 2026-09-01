@@ -258,11 +258,13 @@
   var FACTS_FIELDS = [
     ["Run ID","run_id"],["swath version","swath.version"],["swath commit","swath.commit"],
     ["Captured at","captured_at"],["Source URI","target.uri"],["S3 region","target.region"],
-    ["Client provider / region","client.region"],["Machine","client.machine_type"],
+    ["Client provider","client.provider"],["Client region","client.region"],
+    ["Machine","client.machine_type"],
     ["Output mode","output.format"],["Command","command"],
     ["Listing wall clock","clocks.listing_wall_label"],
     ["Visualization playback length","clocks.video_playback_label"],
-    ["API attempts","result.api_attempts"],["Initial ranges","result.initial_ranges"],
+    ["Objects","result.objects"],["API attempts","result.api_attempts"],
+    ["Initial ranges","result.initial_ranges"],
     ["Splits","result.splits"],["Completed ranges","result.completed_ranges"],
     ["Source report","artifacts.summary"],["Raw trace","artifacts.raw_trace"]];
   function dig(obj, path){ var parts=path.split("."), n=obj;

@@ -37,8 +37,8 @@ def main(argv=None):
     parser.add_argument("--run-facts", type=Path,
                         help="path to a swath-public-run-v1 JSON provenance record for this "
                              "run (run ID, version/commit, capture date, target, client, "
-                             "command); rendered as a visible table and embedded verbatim. "
-                             "Report only; ignored with --video")
+                             "command); rendered as a visible table and embedded as "
+                             "machine-readable JSON. Report only; not read at all with --video")
     parser.add_argument("--self-test", action="store_true", help="run internal checks and exit")
     args = parser.parse_args(argv)
 
@@ -61,7 +61,7 @@ def main(argv=None):
               "v%d; fields may be missing" % (sorted(unknown), SCHEMA_VERSION), file=sys.stderr)
 
     facts = None
-    if args.run_facts:
+    if args.run_facts and not args.video:
         facts = json.loads(args.run_facts.read_text(encoding="utf-8"))
 
     model = build_model(events, skipped, args.title or args.trace.stem, args.anonymize)
