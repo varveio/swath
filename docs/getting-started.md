@@ -4,7 +4,7 @@ This guide gets from a Docker image to a small queryable Parquet inventory. The 
 example lists one historical day from NOAA's `noaa-gestofs-pds` bucket, so it is a quick
 functional check rather than the 39.6-million-object demonstration shown in the README.
 
-The commands below are written against swath **0.3.0**. Match your installed version with
+The commands below are written against swath **0.3.1**. Match your installed version with
 [step 1](#1-check-the-cli), and adjust the image tag if you are running a different
 release.
 
@@ -30,11 +30,11 @@ directly.
 ## 1. Check the CLI
 
 ```bash
-docker run --rm ghcr.io/varveio/swath:0.3.0 --version
+docker run --rm ghcr.io/varveio/swath:0.3.1 --version
 ```
 
 This prints the swath version and exits without contacting object storage. The examples
-below pin the `0.3.0` release tag; for reproducible automation, prefer the immutable
+below pin the `0.3.1` release tag; for reproducible automation, prefer the immutable
 digest published with that release instead of a mutable tag.
 
 ## 2. Stream a few public rows
@@ -43,7 +43,7 @@ The following command lists one historical NOAA day and stops after the downstre
 `head` process has read five rows:
 
 ```bash
-docker run --rm ghcr.io/varveio/swath:0.3.0 \
+docker run --rm ghcr.io/varveio/swath:0.3.1 \
   list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
   --no-sign-request --region us-east-1 \
   --format tsv |
@@ -74,7 +74,7 @@ Create a host directory, mount it into the container, and write the listing bene
 mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:0.3.0 \
+  ghcr.io/varveio/swath:0.3.1 \
   list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
   --no-sign-request --region us-east-1 \
   --format parquet -o /out/stofs-20230113
@@ -137,7 +137,7 @@ The output directory is the public resume handle:
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:0.3.0 \
+  ghcr.io/varveio/swath:0.3.1 \
   resume /out/stofs-20230113
 ```
 
@@ -168,7 +168,7 @@ mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/out:/out" \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION \
-  ghcr.io/varveio/swath:0.3.0 \
+  ghcr.io/varveio/swath:0.3.1 \
   list s3://my-bucket/prefix/ \
   --region us-east-1 \
   --format parquet -o /out/my-inventory

@@ -17,8 +17,8 @@ After installation, continue with [Getting started](getting-started.md).
 ## Docker
 
 ```bash
-docker pull ghcr.io/varveio/swath:0.3.0
-docker run --rm ghcr.io/varveio/swath:0.3.0 --version
+docker pull ghcr.io/varveio/swath:0.3.1
+docker run --rm ghcr.io/varveio/swath:0.3.1 --version
 ```
 
 `--version` prints the swath version and commit; use its output for support requests and
@@ -79,7 +79,7 @@ Docker-free contributor loop and opt-in test tiers, see
 
 `--version` prints the version, commit, and Java runtime without contacting object
 storage, using the invocation shown for your install path above: `docker run --rm
-ghcr.io/varveio/swath:0.3.0 --version`, `java -jar swath-X.Y.Z.jar --version`, or plain
+ghcr.io/varveio/swath:0.3.1 --version`, `java -jar swath-X.Y.Z.jar --version`, or plain
 `swath --version` once a launcher is on `PATH`. Include this output when filing a
 support request or reproduction report.
 
