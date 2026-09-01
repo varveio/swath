@@ -239,6 +239,7 @@ public final class RunMetrics {
     private final Counter sortPipelinePagesForwarded;
     private final Counter sortPipelineClusterPages;
     private final Counter sortPipelineClusterRows;
+    private final AtomicLong sortPipelineClusterRefsPeak = new AtomicLong();
     private final Timer sortPipelineRouterWait;
     private final Timer sortPipelineHeaderScan;
     private final Timer sortPipelinePlanQueueWait;
@@ -593,6 +594,9 @@ public final class RunMetrics {
         Gauge.builder("swath.sort.pipeline.decoded_page_bytes.peak",
                         sortPipelineDecodedPageBytesPeak, AtomicLong::get)
                 .baseUnit("bytes").register(registry);
+        Gauge.builder("swath.sort.pipeline.cluster_refs.peak",
+                        sortPipelineClusterRefsPeak, AtomicLong::get)
+                .register(registry);
         Gauge.builder("swath.sort.pipeline.parts_open", sortPipelinePartsOpen,
                         current -> current.get().get())
                 .register(registry);
@@ -1128,9 +1132,15 @@ public final class RunMetrics {
         sortPipelinePagesForwarded.increment(Math.max(0L, pages));
     }
 
+    /**
+     * Fold one routed overlap component into the cluster totals and the widest-component
+     * high-water mark ({@code swath.sort.pipeline.cluster_refs.peak}) — the signal that says how
+     * far past the plan reference cap an indivisible component actually reached.
+     */
     public void recordSortPipelineCluster(long pages, long rows) {
         sortPipelineClusterPages.increment(Math.max(0L, pages));
         sortPipelineClusterRows.increment(Math.max(0L, rows));
+        sortPipelineClusterRefsPeak.getAndAccumulate(Math.max(0L, pages), Math::max);
     }
 
     public void recordSortPipelineRouterWait(long nanos) {

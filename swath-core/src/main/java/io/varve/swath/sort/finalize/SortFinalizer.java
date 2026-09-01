@@ -130,7 +130,7 @@ public final class SortFinalizer {
             request.onFinalPassStarting().onFinalPassStarting(true);
             MergeRouter.Result routed = new MergeRouter(
                     cursors, encoders::submit, sizer, metrics, failure,
-                    encoders::awaitFirstCompletion, plan.planRefLimit())
+                    encoders::awaitFirstCompletion, plan.planRefLimit(), request.stagingDir())
                     .route(pipelineCatalog.descriptors().size());
             if (routed.refs() != pipelineCatalog.totalRecords()) {
                 throw new IllegalStateException("pipeline reference count mismatch: planned="

@@ -312,7 +312,8 @@ Encoder count and output-part count are independent. `final-file-bytes` is a sof
 The router first builds one conservative plan, waits for its completed Parquet size, and calibrates
 later plans from the cumulative encoded-to-logical ratio. It rolls only between complete pages or
 transitive overlap components and never divides an equal-key group. The admitted
-256–16,384-reference plan cap can create an earlier roll.
+256–16,384-reference plan cap can create an earlier roll, and an overlap component wider than
+that cap takes a part of its own after spilling its page references to staging.
 
 When the segment catalog exceeds admitted cascade fan-in, `CascadePageMerger` writes bounded
 page-run intermediates first. A whole-page cascade decision avoids the row heap; overlapping page

@@ -40,6 +40,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -572,6 +573,227 @@ final class FinalizationPipelineTest {
         assertThat(result.finalFiles()).hasSize(2);
         assertThat(metrics.count("SORT.pipeline_plan_ref_capped")).isEqualTo(1);
         assertThat(keys(result.finalFiles())).hasSize(pages);
+    }
+
+    @Test
+    void overlapComponentWiderThanTheReferenceCapKeepsItsExactOrderInOnePart(@TempDir Path root)
+            throws IOException {
+        List<String> componentKeys = componentKeys();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        SortedDatasetResult result = runPages(root, oversizedComponent(), Long.MAX_VALUE,
+                metrics, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
+                PageCompression.NONE, 4);
+
+        assertThat(metrics.count("SORT.pipeline_cluster_spilled")).isEqualTo(1);
+        assertThat(metrics.pipelineClusterPages.sum())
+                .isEqualTo(FinalizationPlanner.MAX_PIPELINE_PLAN_REFS + 1L);
+        assertThat(result.totalRows()).isEqualTo(componentKeys.size() + 2L);
+        // The component is indivisible, so it takes a part of its own and caps the part after it.
+        assertThat(result.finalFiles()).hasSize(2);
+        assertThat(keys(List.of(result.finalFiles().getFirst())))
+                .containsExactlyElementsOf(componentKeys);
+        assertThat(keys(List.of(result.finalFiles().getLast())))
+                .containsExactly("zzz-0", "zzz-1");
+        assertNoClusterReferenceSpills(root);
+    }
+
+    @Test
+    void routingAnOversizedComponentRetainsNoneOfItsReferences(@TempDir Path root)
+            throws IOException {
+        int heapLimit = 64;
+        int narrowPages = 400;
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        List<List<ListEntry>> broad = List.of(
+                List.of(SortTestSupport.object("a"), SortTestSupport.object("zz")));
+        List<List<ListEntry>> narrow = new ArrayList<>(narrowPages);
+        for (int page = 0; page < narrowPages; page++) {
+            narrow.add(List.of(SortTestSupport.object(String.format("b%05d", page))));
+        }
+        List<PageRunReader> channels = List.of(
+                PageRunReader.open(SortTestSupport.writePages(
+                        staging.resolve("broad" + StagingNames.PAGE_RUN_SUFFIX), broad),
+                        SortMetrics.NO_OP),
+                PageRunReader.open(SortTestSupport.writePages(
+                        staging.resolve("narrow" + StagingNames.PAGE_RUN_SUFFIX), narrow),
+                        SortMetrics.NO_OP));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        List<PartPlan> plans = new ArrayList<>();
+        FinalizationFailure failure = new FinalizationFailure();
+        MergeRouter.Result routed;
+        try (PageRunHeaderStreams cursors = new PageRunHeaderStreams(channels,
+                PageRunHeaderStreams.planned(channels.size()), metrics, failure)) {
+            routed = new MergeRouter(cursors, plans::add,
+                    new PartSizer(PartSizer.Target.calibrated(), Long.MAX_VALUE), metrics,
+                    failure, () -> { }, heapLimit, staging)
+                    .route(channels.size());
+        } finally {
+            for (PageRunReader channel : channels) {
+                channel.close();
+            }
+        }
+
+        assertThat(routed.refs()).isEqualTo(narrowPages + 1L);
+        assertThat(metrics.count("SORT.pipeline_cluster_spilled")).isEqualTo(1);
+        assertThat(plans).hasSize(1);
+        PartPlan.Cluster cluster = (PartPlan.Cluster) plans.getFirst().items().getFirst();
+        assertThat(cluster.refCount()).isEqualTo(narrowPages + 1L);
+        // The dispatched plan holds a staging coordinate rather than one PageRef per page, so the
+        // queued reference wave stays priced by the cap however wide the component grows.
+        assertThat(cluster.refs()).isInstanceOf(ClusterRefs.Spilled.class);
+        Path spill = ((ClusterRefs.Spilled) cluster.refs()).file();
+        assertThat(spill).exists().hasParent(staging);
+        List<String> spilledMinimums = new ArrayList<>();
+        try (ClusterRefs.Cursor refs = cluster.refs().open()) {
+            while (refs.peek() != null) {
+                spilledMinimums.add(new String(refs.next().minKey(), StandardCharsets.UTF_8));
+            }
+        }
+        assertThat(spilledMinimums).hasSize(narrowPages + 1)
+                .startsWith("a", "b00000").endsWith("b00399");
+        cluster.discard();
+        assertThat(spill).doesNotExist();
+    }
+
+    @Test
+    void clusterReferenceCollectionPromotesExactlyAtTheHeapLimit(@TempDir Path root)
+            throws IOException {
+        List<PageRef> refs = new ArrayList<>();
+        for (int page = 0; page < 5; page++) {
+            refs.add(new PageRef(0, page, 64L + page, 32, ("k" + page).getBytes(StandardCharsets.UTF_8),
+                    ("k" + page).getBytes(StandardCharsets.UTF_8), 1, 16));
+        }
+
+        try (ClusterRefs.Builder atLimit = new ClusterRefs.Builder(4, root, 0)) {
+            for (PageRef ref : refs.subList(0, 4)) {
+                atLimit.add(ref);
+            }
+            assertThat(atLimit.spilled()).isFalse();
+            assertThat(atLimit.build()).isInstanceOf(ClusterRefs.Heap.class);
+        }
+
+        ClusterRefs promoted;
+        try (ClusterRefs.Builder builder = new ClusterRefs.Builder(4, root, 1)) {
+            for (PageRef ref : refs) {
+                builder.add(ref);
+            }
+            assertThat(builder.spilled()).isTrue();
+            promoted = builder.build();
+        }
+        assertThat(promoted).isEqualTo(new ClusterRefs.Spilled(
+                root.resolve(StagingNames.clusterRefsTmp(1)), 5));
+        List<PageRef> replayed = new ArrayList<>();
+        try (ClusterRefs.Cursor cursor = promoted.open()) {
+            while (cursor.peek() != null) {
+                replayed.add(cursor.next());
+            }
+        }
+        assertThat(replayed).usingRecursiveFieldByFieldElementComparator()
+                .containsExactlyElementsOf(refs);
+        promoted.discard();
+        assertThat(root.resolve(StagingNames.clusterRefsTmp(1))).doesNotExist();
+    }
+
+    @Test
+    void partialClusterCollectionLeavesNoSpillBehind(@TempDir Path root) throws IOException {
+        PageRef ref = new PageRef(0, 0, 64L, 32, "k".getBytes(StandardCharsets.UTF_8),
+                "k".getBytes(StandardCharsets.UTF_8), 1, 16);
+        Path spill = root.resolve(StagingNames.clusterRefsTmp(7));
+
+        try (ClusterRefs.Builder builder = new ClusterRefs.Builder(1, root, 7)) {
+            builder.add(ref);
+            builder.add(ref);
+            assertThat(spill).exists();
+        }
+
+        assertThat(spill).doesNotExist();
+    }
+
+    @Test
+    void cancellingAnOversizedComponentReleasesItsSpilledReferences(@TempDir Path root)
+            throws Exception {
+        CountDownLatch componentEncoderStarted = new CountDownLatch(1);
+        CountDownLatch blockWriter = new CountDownLatch(1);
+        SortedFileWriterFactory blocking = (path, index) ->
+                new SortTestSupport.DelegatingSortedFileWriter(
+                        SortedFileWriterFactory.DEFAULT.create(path, index)) {
+                    @Override
+                    public void write(ListEntry entry) throws IOException {
+                        if (index != 1) {
+                            super.write(entry);
+                            return;
+                        }
+                        componentEncoderStarted.countDown();
+                        try {
+                            blockWriter.await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException("pipeline encoder interrupted", e);
+                        }
+                        super.write(entry);
+                    }
+                };
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread caller = Thread.ofPlatform().start(() -> {
+            try {
+                runPages(root, oversizedComponent(), Long.MAX_VALUE, SortMetrics.NO_OP, blocking,
+                        10_000, 64L << 20, PageCompression.NONE, 1);
+            } catch (Throwable thrown) {
+                failure.set(thrown);
+            }
+        });
+
+        try {
+            assertThat(componentEncoderStarted.await(60, TimeUnit.SECONDS)).isTrue();
+            assertThat(clusterReferenceSpills(root)).isNotEmpty();
+            caller.interrupt();
+            assertThat(caller.join(Duration.ofSeconds(60))).isTrue();
+        } finally {
+            blockWriter.countDown();
+        }
+        assertThat(failure.get()).isInstanceOf(IOException.class)
+                .hasMessageContaining("sort merge interrupted");
+        assertNoPublishedOrTemporaryFiles(root);
+        assertNoClusterReferenceSpills(root);
+    }
+
+    /**
+     * One broad page overlapping every page of a second run: a legal set of sorted runs whose
+     * transitive component is wider than the hard plan reference cap, plus two pages above it.
+     */
+    private static List<List<List<ListEntry>>> oversizedComponent() {
+        List<List<ListEntry>> broad = new ArrayList<>();
+        broad.add(List.of(SortTestSupport.object("a"), SortTestSupport.object("zz")));
+        broad.add(List.of(SortTestSupport.object("zzz-0")));
+        broad.add(List.of(SortTestSupport.object("zzz-1")));
+        List<List<ListEntry>> narrow = new ArrayList<>();
+        for (int page = 0; page < FinalizationPlanner.MAX_PIPELINE_PLAN_REFS; page++) {
+            narrow.add(List.of(SortTestSupport.object(String.format("b%05d", page))));
+        }
+        return List.of(broad, narrow);
+    }
+
+    /** The exact row order {@link #oversizedComponent()}'s single component must produce. */
+    private static List<String> componentKeys() {
+        List<String> keys = new ArrayList<>();
+        keys.add("a");
+        for (int page = 0; page < FinalizationPlanner.MAX_PIPELINE_PLAN_REFS; page++) {
+            keys.add(String.format("b%05d", page));
+        }
+        keys.add("zz");
+        return keys;
+    }
+
+    private static List<Path> clusterReferenceSpills(Path root) throws IOException {
+        try (var files = Files.walk(root)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".pagerefs.tmp"))
+                    .toList();
+        }
+    }
+
+    private static void assertNoClusterReferenceSpills(Path root) throws IOException {
+        assertThat(clusterReferenceSpills(root)).isEmpty();
     }
 
     @Test

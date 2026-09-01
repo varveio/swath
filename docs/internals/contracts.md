@@ -837,7 +837,9 @@ Final encoder admission uses the three exact per-descriptor maxima stored in the
 The fixed reference population covers every segment cursor and its two-slot queue, the router head,
 the bounded shared plan queue, and one executing plan per encoder. Each encoder also prices one
 writer, one transient body read, and one retained decoded page. The plan limit starts no higher than
-16,384 references and may be lowered to 256 so this population fits. The remaining merge budget is
+16,384 references and may be lowered to 256 so this population fits. A single transitive overlap
+component may legally exceed that limit; its references spill to a staging file, so the priced
+population still bounds retained references. The remaining merge budget is
 divided into per-encoder decoded-page guards.
 
 Descriptor admission reserves one shared positional-read channel per surviving segment and one

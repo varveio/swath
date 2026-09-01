@@ -1718,9 +1718,12 @@ page or cluster items and never between equal raw keys. Footer overhead makes ve
 noisy.
 
 A plan normally carries at most 16,384 references. Heap admission may lower that cap to as few as
-256. Reaching the effective cap can close a plan before its byte target; a transitive cluster that
-alone exceeds the cap is refused resumably. Every plan receives a dense zero-based merge ordinal
-before it enters the encoder queue.
+256. Reaching the effective cap can close a plan before its byte target. A transitive cluster that
+alone exceeds the cap is indivisible rather than invalid: the router appends its references to a
+staging reference file, so routing heap stays bounded by the cap, and the component takes an
+output part of its own. Only coordinates are spilled; the encoder still admits pages one at a time
+under its decoded-page budget, and the file is removed as soon as that part no longer needs it.
+Every plan receives a dense zero-based merge ordinal before it enters the encoder queue.
 
 ### Part encoding and assembly
 

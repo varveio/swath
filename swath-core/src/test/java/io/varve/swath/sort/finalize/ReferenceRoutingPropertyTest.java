@@ -62,11 +62,15 @@ final class ReferenceRoutingPropertyTest {
                     PageRunHeaderStreams.planned(channels.size()), SortMetrics.NO_OP, failure)) {
                 MergeRouter.Result result = new MergeRouter(
                         cursors, plans::add, sizer, SortMetrics.NO_OP, failure, () -> { },
-                        FinalizationPlanner.MAX_PIPELINE_PLAN_REFS)
+                        FinalizationPlanner.MAX_PIPELINE_PLAN_REFS, root)
                         .route(channels.size());
 
-                List<PageRef> routed = plans.stream().flatMap(plan -> plan.items().stream())
-                        .flatMap(item -> item.refs().stream()).toList();
+                List<PageRef> routed = new ArrayList<>();
+                for (PartPlan plan : plans) {
+                    for (PartPlan.Item item : plan.items()) {
+                        collect(item, routed);
+                    }
+                }
                 HashSet<String> identities = new HashSet<>();
                 for (PageRef ref : routed) {
                     assertThat(identities.add(ref.segmentId() + ":" + ref.ordinal())).isTrue();
@@ -92,6 +96,19 @@ final class ReferenceRoutingPropertyTest {
                         // Best-effort cleanup must not mask a property failure.
                     }
                 });
+            }
+        }
+    }
+
+    private static void collect(PartPlan.Item item, List<PageRef> into) throws IOException {
+        switch (item) {
+            case PartPlan.Page page -> into.add(page.ref());
+            case PartPlan.Cluster cluster -> {
+                try (ClusterRefs.Cursor refs = cluster.refs().open()) {
+                    while (refs.peek() != null) {
+                        into.add(refs.next());
+                    }
+                }
             }
         }
     }

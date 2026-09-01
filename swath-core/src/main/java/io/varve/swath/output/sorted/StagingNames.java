@@ -16,6 +16,9 @@ public final class StagingNames {
 
     /** Names a staging entry the cascade owns exclusively; no original input may claim it. */
     static final String CASCADE_PREFIX = "merge-";
+    /** Names the router's spilled page references for one oversized overlap component. */
+    static final String CLUSTER_REFS_PREFIX = "cluster-";
+    static final String CLUSTER_REFS_SUFFIX = ".pagerefs";
 
     static final String FINAL_TMP_GLOB = "part-*.parquet.tmp";
     public static final String PIPELINE_TMP_GLOB = "pipeline-*.parquet.tmp";
@@ -23,6 +26,8 @@ public final class StagingNames {
     static final String ALL_PARQUET_GLOB = "*.parquet";
     static final String CASCADE_PAGE_RUN_GLOB = CASCADE_PREFIX + "*" + PAGE_RUN_SUFFIX;
     static final String CASCADE_PAGE_RUN_TMP_GLOB = CASCADE_PAGE_RUN_GLOB + TMP_SUFFIX;
+    public static final String CLUSTER_REFS_TMP_GLOB =
+            CLUSTER_REFS_PREFIX + "*" + CLUSTER_REFS_SUFFIX + TMP_SUFFIX;
     /** Retained for resume tests and older attempts that planted Parquet cascade debris. */
     static final String LEGACY_CASCADE_PARQUET_GLOB = CASCADE_PREFIX + "*" + PARQUET_SUFFIX;
     /** Retained only to sweep disposable files left by pre-pipeline finalization attempts. */
@@ -41,6 +46,7 @@ public final class StagingNames {
             LEGACY_CASCADE_PARQUET_GLOB,
             LEGACY_RANGE_TMP_GLOB,
             LEGACY_RANGE_PROOF_TMP_GLOB,
+            CLUSTER_REFS_TMP_GLOB,
             PIPELINE_TMP_GLOB);
 
     private StagingNames() {
@@ -65,6 +71,12 @@ public final class StagingNames {
     /** The name an unfinished cascade intermediate wears until its durable rename commits it. */
     public static String cascadeIntermediateTmp(int sequence) {
         return cascadeIntermediate(sequence) + TMP_SUFFIX;
+    }
+
+    /** The name one oversized overlap component's spilled page references wear while routing. */
+    public static String clusterRefsTmp(int sequence) {
+        return String.format(CLUSTER_REFS_PREFIX + "%05d", sequence)
+                + CLUSTER_REFS_SUFFIX + TMP_SUFFIX;
     }
 
     public static String fixtureSegment(int sequence) {
