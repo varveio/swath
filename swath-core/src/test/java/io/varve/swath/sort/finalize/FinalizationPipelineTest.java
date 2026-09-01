@@ -10,9 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import io.varve.swath.model.ByteMidpoint;
-import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.sorted.SortedDatasetCommitter;
 import io.varve.swath.output.sorted.SortedDatasetCoordinator;
@@ -31,13 +29,13 @@ import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.sort.spill.PageBlock;
-import io.varve.swath.sort.spill.PageBlockCodec;
-import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageCompression;
 import io.varve.swath.sort.spill.PageRef;
 import io.varve.swath.sort.spill.PageRunCatalog;
-import io.varve.swath.sort.spill.PageRunSegmentDescriptor;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunDescriptor;
+import io.varve.swath.sort.spill.PageRunReader;
 import io.varve.swath.sort.spill.PageRunTrailer;
+import io.varve.swath.sort.spill.SpillTestFixtures;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -64,7 +62,7 @@ final class FinalizationPipelineTest {
 
     @Test
     void headerCursorAndPlanQueuesUseTheReferenceRoutingDepths() {
-        assertThat(SegmentHeaderCursors.QUEUE_DEPTH).isEqualTo(2);
+        assertThat(PageRunHeaderStreams.QUEUE_DEPTH).isEqualTo(2);
         assertThat(PartEncoders.QUEUE_DEPTH).isEqualTo(2);
     }
 
@@ -83,7 +81,7 @@ final class FinalizationPipelineTest {
 
     @Test
     void decodedPageBudgetReleasesAnExhaustedPageBeforeAdmittingItsSuccessor() throws IOException {
-        PageBlock page = PageBlock.pack(List.of(SortTestSupport.object("key")), comparator);
+        PageBlock page = PageBlock.pack(List.of(SortTestSupport.object("key")), comparator, PageCompression.NONE);
         DecodedPageBudget sizing = new DecodedPageBudget(Long.MAX_VALUE, SortMetrics.NO_OP);
         long pageBytes = sizing.reserve(page);
         DecodedPageBudget budget = new DecodedPageBudget(pageBytes, SortMetrics.NO_OP);
@@ -99,45 +97,14 @@ final class FinalizationPipelineTest {
     void retainedPagePlanningUnitCoversTheRuntimeGuard() {
         PageBlock packed = PageBlock.pack(List.of(
                 SortTestSupport.object("repeated-prefix/alpha"),
-                SortTestSupport.object("repeated-prefix/bravo")), comparator, PageCodec.LZ4);
-        byte[] record = packed.serialize();
-        PageBlock persisted = PageBlock.deserialize(record);
+                SortTestSupport.object("repeated-prefix/bravo")), comparator, PageCompression.LZ4);
+        byte[] record = SpillTestFixtures.serialize(packed);
+        PageBlock persisted = SpillTestFixtures.deserialize(record);
 
         long retainedUpper = DecodedPageBudget.retainedPageUpperBound(
                 persisted.rawPayloadLength(), record.length);
 
         assertThat(DecodedPageBudget.retainedBytes(persisted)).isLessThanOrEqualTo(retainedUpper);
-    }
-
-    @Test
-    void retainedPagePlanningUnitCoversMaximumDictionaryCardinality(@TempDir Path root)
-            throws IOException {
-        List<ListEntry> entries = new ArrayList<>(PageBlock.DICT_CAP);
-        for (int value = 0; value < PageBlock.DICT_CAP; value++) {
-            String suffix = String.format("-%02d", value);
-            entries.add(new ObjectEntry(KeyBytes.ofUtf8("key" + suffix), 1L, 0L,
-                    null, "storage" + suffix, null, false, "owner" + suffix,
-                    "display" + suffix, "algorithm" + suffix, "type" + suffix));
-        }
-        PageBlock persisted = PageBlock.deserialize(
-                PageBlock.pack(entries, comparator, PageCodec.LZ4).serialize());
-        Path segment = SortTestSupport.writePages(
-                root.resolve("max-dictionaries" + StagingNames.PAGE_RUN_SUFFIX),
-                List.of(entries), SortMode.OBJECTS, PageCodec.LZ4);
-        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
-        MergePlanner.PipelinePlan plan = new MergePlanner(
-                SortConfigs.base().withMergeBudgetBytes(64L << 20),
-                SortMetrics.NO_OP, () -> -1).pipelineParallelism(1, catalog);
-
-        for (int column = 0; column < PageBlockCodec.DICT_COLUMN_COUNT; column++) {
-            assertThat(persisted.dictionarySize(column)).isEqualTo(PageBlock.DICT_CAP);
-        }
-        DecodedPageBudget budget = new DecodedPageBudget(
-                plan.retainedPageBytes(), SortMetrics.NO_OP);
-
-        assertThat(budget.reserve(persisted))
-                .isEqualTo(DecodedPageBudget.retainedBytes(persisted));
     }
 
     @Test
@@ -148,7 +115,7 @@ final class FinalizationPipelineTest {
             for (int row = 0; row < count; row++) {
                 rows.add(SortTestSupport.object(String.format("key-%02d", row)));
             }
-            PageBlock candidate = PageBlock.pack(rows, comparator);
+            PageBlock candidate = PageBlock.pack(rows, comparator, PageCompression.NONE);
             if (candidate.rawPayloadLength() % candidate.count() != 0) {
                 page = candidate;
                 break;
@@ -182,12 +149,12 @@ final class FinalizationPipelineTest {
             segments.add(SortTestSupport.writePages(
                     staging.resolve("seg-" + segment + StagingNames.PAGE_RUN_SUFFIX), pages));
         }
-        List<PageRunSegmentIo> channels = new ArrayList<>();
+        List<PageRunReader> channels = new ArrayList<>();
         for (Path segment : segments) {
-            channels.add(PageRunSegmentIo.open(segment, SortMetrics.NO_OP));
+            channels.add(PageRunReader.open(segment, SortMetrics.NO_OP));
         }
         CountDownLatch firstCursorAtBlockedHandoff = new CountDownLatch(1);
-        SegmentHeaderCursors.Hook schedule = new SegmentHeaderCursors.Hook() {
+        PageRunHeaderStreams.Hook schedule = new PageRunHeaderStreams.Hook() {
             @Override
             public void beforePermitAcquire(int segment, long page) throws InterruptedException {
                 if (segment == 1 && page == 0
@@ -203,17 +170,17 @@ final class FinalizationPipelineTest {
                 }
             }
         };
-        SegmentHeaderCursors.Settings settings = new SegmentHeaderCursors.Settings(
+        PageRunHeaderStreams.Settings settings = new PageRunHeaderStreams.Settings(
                 1, 1, schedule);
 
         assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
             FinalizationFailure failure = new FinalizationFailure();
-            try (SegmentHeaderCursors cursors = new SegmentHeaderCursors(
+            try (PageRunHeaderStreams cursors = new PageRunHeaderStreams(
                     channels, settings, SortMetrics.NO_OP, failure)) {
                 assertThat(cursors.next(1)).isNotNull();
             }
         });
-        for (PageRunSegmentIo channel : channels) {
+        for (PageRunReader channel : channels) {
             channel.close();
         }
     }
@@ -224,8 +191,8 @@ final class FinalizationPipelineTest {
                 root.resolve("truncated" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(List.of(SortTestSupport.object("a")),
                         List.of(SortTestSupport.object("c"))));
-        PageRunSegmentIo.RoutingPage first;
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
+        PageRunReader.RoutingPage first;
+        try (PageRunReader io = PageRunReader.open(segment, SortMetrics.NO_OP)) {
             first = io.nextRoutingPage();
         }
         try (FileChannel channel = FileChannel.open(segment, StandardOpenOption.WRITE)) {
@@ -235,7 +202,7 @@ final class FinalizationPipelineTest {
         }
 
         assertThatThrownBy(() -> {
-            try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
+            try (PageRunReader io = PageRunReader.open(segment, SortMetrics.NO_OP)) {
                 while (io.nextRoutingPage() != null) {
                     // Header pass must reject before an encoder is started.
                 }
@@ -253,23 +220,23 @@ final class FinalizationPipelineTest {
         Path donor = SortTestSupport.writePages(
                 root.resolve("donor" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(List.of(SortTestSupport.object("0"))));
-        PageRunSegmentIo.RoutingPage targetSecond;
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(target, SortMetrics.NO_OP)) {
+        PageRunReader.RoutingPage targetSecond;
+        try (PageRunReader io = PageRunReader.open(target, SortMetrics.NO_OP)) {
             io.nextRoutingPage();
             targetSecond = io.nextRoutingPage();
         }
         ByteBuffer donorFrame;
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(donor, SortMetrics.NO_OP)) {
-            PageRunSegmentIo.RoutingPage page = io.nextRoutingPage();
+        try (PageRunReader io = PageRunReader.open(donor, SortMetrics.NO_OP)) {
+            PageRunReader.RoutingPage page = io.nextRoutingPage();
             assertThat(page.framedLen()).isEqualTo(targetSecond.framedLen());
-            donorFrame = io.readAt(page.offset(), page.framedLen());
+            donorFrame = SpillTestFixtures.readFrame(donor, page.offset(), page.framedLen());
         }
         try (FileChannel channel = FileChannel.open(target, StandardOpenOption.WRITE)) {
             channel.write(donorFrame, targetSecond.offset());
         }
 
         assertThatThrownBy(() -> {
-            try (PageRunSegmentIo io = PageRunSegmentIo.open(target, SortMetrics.NO_OP)) {
+            try (PageRunReader io = PageRunReader.open(target, SortMetrics.NO_OP)) {
                 io.nextRoutingPage();
                 io.nextRoutingPage();
             }
@@ -331,27 +298,27 @@ final class FinalizationPipelineTest {
                     SortTestSupport.object(String.format("k%04d", 2 * page + 3)));
             segments.add(List.of(entries));
         }
-        PageBlock sample = PageBlock.pack(segments.getFirst().getFirst(), comparator);
+        PageBlock sample = PageBlock.pack(segments.getFirst().getFirst(), comparator, PageCompression.NONE);
         long pageBytes = DecodedPageBudget.retainedBytes(
-                PageBlock.deserialize(sample.serialize()));
+                SpillTestFixtures.deserialize(SpillTestFixtures.serialize(sample)));
         long plannedPageBytes = DecodedPageBudget.retainedPageUpperBound(
-                sample.rawPayloadLength(), sample.serialize().length);
-        long retainedRefs = (100L * (SegmentHeaderCursors.QUEUE_DEPTH + 2L)
+                sample.rawPayloadLength(), SpillTestFixtures.serialize(sample).length);
+        long retainedRefs = (100L * (PageRunHeaderStreams.QUEUE_DEPTH + 2L)
                 + 100L * (PartEncoders.QUEUE_DEPTH + 2L))
-                * PageRef.retainedBytes(sample.serialize().length);
+                * PageRef.retainedBytes(SpillTestFixtures.serialize(sample).length);
         long mergeBudget = PartEncoders.WRITER_HEAP_ESTIMATE_BYTES + retainedRefs
-                + sample.serialize().length + 3L * plannedPageBytes - 1L;
+                + SpillTestFixtures.serialize(sample).length + 3L * plannedPageBytes - 1L;
 
         DecodedPageBudget eager = new DecodedPageBudget(3L * pageBytes - 1L,
                 SortMetrics.NO_OP);
-        eager.reserve(PageBlock.deserialize(sample.serialize()));
-        eager.reserve(PageBlock.deserialize(sample.serialize()));
-        assertThatThrownBy(() -> eager.reserve(PageBlock.deserialize(sample.serialize())))
+        eager.reserve(SpillTestFixtures.deserialize(SpillTestFixtures.serialize(sample)));
+        eager.reserve(SpillTestFixtures.deserialize(SpillTestFixtures.serialize(sample)));
+        assertThatThrownBy(() -> eager.reserve(SpillTestFixtures.deserialize(SpillTestFixtures.serialize(sample))))
                 .isInstanceOf(MergeMemoryExhaustedException.class);
 
         SortedDatasetResult result = runPages(root, segments, Long.MAX_VALUE,
                 metrics, SortedFileWriterFactory.DEFAULT, 10_000, mergeBudget,
-                PageCodec.NONE, 1);
+                PageCompression.NONE, 1);
 
         assertThat(result.totalRows()).isEqualTo(200);
         assertThat(metrics.pipelineDecodedPageBytesPeak.get())
@@ -390,7 +357,7 @@ final class FinalizationPipelineTest {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
 
         SortedDatasetResult result = runPages(root, segments, Long.MAX_VALUE, metrics,
-                SortedFileWriterFactory.DEFAULT, 2, 64L << 20, PageCodec.LZ4, 2);
+                SortedFileWriterFactory.DEFAULT, 2, 64L << 20, PageCompression.LZ4, 2);
 
         assertThat(result.cascadedPasses()).isEqualTo(2);
         assertThat(keys(result.finalFiles())).containsExactly(
@@ -419,14 +386,14 @@ final class FinalizationPipelineTest {
                 root.resolve("admission" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(List.of(SortTestSupport.object("a"))));
         PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
         SortConfig base = SortConfigs.base().withMergeBudgetBytes(64L << 20);
-        MergePlanner fdPlanner = new MergePlanner(base, SortMetrics.NO_OP,
-                () -> MergeFdBudget.FD_HEADROOM + catalog.descriptors().size() + 2);
+        FinalizationPlanner fdPlanner = new FinalizationPlanner(base, SortMetrics.NO_OP,
+                () -> FileDescriptorBudget.FD_HEADROOM + catalog.descriptors().size() + 2);
         assertThat(fdPlanner.pipelineParallelism(4, catalog))
-                .extracting(MergePlanner.PipelinePlan::encoders,
-                        MergePlanner.PipelinePlan::reason)
-                .containsExactly(2, MergePlanner.PipelineClampReason.FD_CLAMPED);
+                .extracting(FinalizationPlanner.PipelinePlan::encoders,
+                        FinalizationPlanner.PipelinePlan::reason)
+                .containsExactly(2, FinalizationPlanner.PipelineClampReason.FD_CLAMPED);
 
         long readPageBytes = catalog.maxRecordLen();
         long retainedPageBytes = fdPlanner.pipelineParallelism(1, catalog).retainedPageBytes();
@@ -435,16 +402,16 @@ final class FinalizationPipelineTest {
         long routerBytes = routerRefs * PageRef.retainedBytes(catalog.maxKeyLength());
         long perEncoder = readPageBytes + retainedPageBytes
                 + PartEncoders.WRITER_HEAP_ESTIMATE_BYTES;
-        MergePlanner heapPlanner = new MergePlanner(
+        FinalizationPlanner heapPlanner = new FinalizationPlanner(
                 base.withMergeBudgetBytes(routerBytes + 2 * perEncoder),
                 SortMetrics.NO_OP, () -> -1);
         assertThat(heapPlanner.pipelineParallelism(4, catalog))
-                .extracting(MergePlanner.PipelinePlan::encoders,
-                        MergePlanner.PipelinePlan::reason)
-                .containsExactly(2, MergePlanner.PipelineClampReason.HEAP_CLAMPED);
+                .extracting(FinalizationPlanner.PipelinePlan::encoders,
+                        FinalizationPlanner.PipelinePlan::reason)
+                .containsExactly(2, FinalizationPlanner.PipelineClampReason.HEAP_CLAMPED);
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        MergePlanner refusingPlanner = new MergePlanner(
+        FinalizationPlanner refusingPlanner = new FinalizationPlanner(
                 base.withMergeBudgetBytes(1), metrics, () -> -1);
         assertThatThrownBy(() -> refusingPlanner.pipelineParallelism(1, catalog))
                 .isInstanceOf(MergeMemoryExhaustedException.class)
@@ -458,14 +425,14 @@ final class FinalizationPipelineTest {
                 root.resolve("large-catalog" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(List.of(SortTestSupport.object("a"))));
         PageRunCatalog physical = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
-        PageRunSegmentDescriptor base = physical.descriptors().getFirst();
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        PageRunDescriptor base = physical.descriptors().getFirst();
         PageRunTrailer.Trailer largeTrailer = new PageRunTrailer.Trailer(
                 1_000_000, 1_000_000,
                 base.trailer().maxRecordLen(), base.maxRawPayloadLength(),
                 base.maxKeyLength());
-        PageRunCatalog large = PageRunCatalog.fromDescriptors(List.of(
-                new PageRunSegmentDescriptor(base.path(), base.fileSize(), base.trailerStart(),
+        PageRunCatalog large = SpillTestFixtures.catalog(List.of(
+                new PageRunDescriptor(base.path(), base.fileSize(), base.trailerStart(),
                         largeTrailer, base.maxRawPayloadLength(), base.maxKeyLength(),
                         base.physicalFormat(), base.headerBytes(),
                         base.orderingMode())));
@@ -473,11 +440,11 @@ final class FinalizationPipelineTest {
                 .withFinalFileBytes(64L << 20)
                 .withMergeBudgetBytes(256L << 20);
 
-        MergePlanner planner = new MergePlanner(config, SortMetrics.NO_OP, () -> -1);
-        MergePlanner.PipelinePlan plan = planner.pipelineParallelism(4, large);
+        FinalizationPlanner planner = new FinalizationPlanner(config, SortMetrics.NO_OP, () -> -1);
+        FinalizationPlanner.PipelinePlan plan = planner.pipelineParallelism(4, large);
 
         assertThat(planner.pipelinePlanRefs(large))
-                .isEqualTo(MergePlanner.MAX_PIPELINE_PLAN_REFS);
+                .isEqualTo(FinalizationPlanner.MAX_PIPELINE_PLAN_REFS);
         assertThat(plan.encoders()).isEqualTo(4);
     }
 
@@ -491,26 +458,26 @@ final class FinalizationPipelineTest {
                         List.of(SortTestSupport.object(maximumKey)),
                         List.of(SortTestSupport.object("z"))));
         PageRunCatalog physical = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
-        PageRunSegmentDescriptor base = physical.descriptors().getFirst();
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        PageRunDescriptor base = physical.descriptors().getFirst();
         int segments = 8;
-        List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(segments);
+        List<PageRunDescriptor> descriptors = new ArrayList<>(segments);
         for (int index = 0; index < segments; index++) {
             PageRunTrailer.Trailer trailer = new PageRunTrailer.Trailer(
                     1_000_000, 1_000_000,
                     base.trailer().maxRecordLen(), base.maxRawPayloadLength(),
                     base.maxKeyLength());
-            descriptors.add(new PageRunSegmentDescriptor(
+            descriptors.add(new PageRunDescriptor(
                     root.resolve("synthetic-" + index + StagingNames.PAGE_RUN_SUFFIX),
                     base.fileSize(), base.trailerStart(), trailer,
                     base.maxRawPayloadLength(), base.maxKeyLength(), base.physicalFormat(),
                     base.headerBytes(), base.orderingMode()));
         }
-        PageRunCatalog catalog = PageRunCatalog.fromDescriptors(descriptors);
+        PageRunCatalog catalog = SpillTestFixtures.catalog(descriptors);
         int refBytes = PageRef.retainedBytes(maximumKey.length());
         int budgetedEncoders = 3;
-        long cursorRefs = (long) segments * (SegmentHeaderCursors.QUEUE_DEPTH + 2L);
-        long planRefs = (long) MergePlanner.MAX_PIPELINE_PLAN_REFS
+        long cursorRefs = (long) segments * (PageRunHeaderStreams.QUEUE_DEPTH + 2L);
+        long planRefs = (long) FinalizationPlanner.MAX_PIPELINE_PLAN_REFS
                 * (1L + budgetedEncoders * (PartEncoders.QUEUE_DEPTH + 1L));
         long retainedPageBytes = DecodedPageBudget.retainedPageUpperBound(
                 base.maxRawPayloadLength(),
@@ -522,14 +489,14 @@ final class FinalizationPipelineTest {
                 .withFinalFileBytes(1L << 40)
                 .withMergeBudgetBytes(budgetForThree);
 
-        MergePlanner.PipelinePlan plan = new MergePlanner(
+        FinalizationPlanner.PipelinePlan plan = new FinalizationPlanner(
                 config, SortMetrics.NO_OP, () -> -1).pipelineParallelism(4, catalog);
 
         assertThat(catalog.maxKeyLength()).isEqualTo(ByteMidpoint.MAX_KEY_LEN);
         assertThat(plan.refBytes()).isEqualTo(refBytes).isGreaterThan(200);
         assertThat(plan.encoders()).isEqualTo(4);
-        assertThat(plan.reason()).isEqualTo(MergePlanner.PipelineClampReason.NONE);
-        assertThat(plan.planRefLimit()).isLessThan(MergePlanner.MAX_PIPELINE_PLAN_REFS);
+        assertThat(plan.reason()).isEqualTo(FinalizationPlanner.PipelineClampReason.NONE);
+        assertThat(plan.planRefLimit()).isLessThan(FinalizationPlanner.MAX_PIPELINE_PLAN_REFS);
         assertThat(plan.clusterBudgetBytes()).isGreaterThanOrEqualTo(retainedPageBytes);
     }
 
@@ -541,30 +508,30 @@ final class FinalizationPipelineTest {
                 root.resolve("medium-key" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(List.of(SortTestSupport.object(key))));
         PageRunCatalog physical = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
-        PageRunSegmentDescriptor base = physical.descriptors().getFirst();
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        PageRunDescriptor base = physical.descriptors().getFirst();
         PageRunTrailer.Trailer largeTrailer = new PageRunTrailer.Trailer(
                 1_000_000, 1_000_000,
                 base.trailer().maxRecordLen(), base.maxRawPayloadLength(),
                 base.maxKeyLength());
-        PageRunCatalog catalog = PageRunCatalog.fromDescriptors(List.of(
-                new PageRunSegmentDescriptor(base.path(), base.fileSize(), base.trailerStart(),
+        PageRunCatalog catalog = SpillTestFixtures.catalog(List.of(
+                new PageRunDescriptor(base.path(), base.fileSize(), base.trailerStart(),
                         largeTrailer, base.maxRawPayloadLength(), base.maxKeyLength(),
                         base.physicalFormat(), base.headerBytes(),
                         base.orderingMode())));
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        MergePlanner planner = new MergePlanner(SortConfigs.base()
+        FinalizationPlanner planner = new FinalizationPlanner(SortConfigs.base()
                 .withFinalFileBytes(Long.MAX_VALUE)
                 .withMergeBudgetBytes(32L << 20), metrics, () -> -1);
 
-        MergePlanner.PipelinePlan plan = planner.pipelineParallelism(1, catalog);
+        FinalizationPlanner.PipelinePlan plan = planner.pipelineParallelism(1, catalog);
 
         assertThat(planner.pipelinePlanRefs(catalog))
-                .isEqualTo(MergePlanner.MAX_PIPELINE_PLAN_REFS);
+                .isEqualTo(FinalizationPlanner.MAX_PIPELINE_PLAN_REFS);
         assertThat(plan.encoders()).isEqualTo(1);
         assertThat(plan.planRefLimit())
-                .isBetween(MergePlanner.MIN_PIPELINE_PLAN_REFS,
-                        MergePlanner.MAX_PIPELINE_PLAN_REFS - 1);
+                .isBetween(FinalizationPlanner.MIN_PIPELINE_PLAN_REFS,
+                        FinalizationPlanner.MAX_PIPELINE_PLAN_REFS - 1);
         assertThat(metrics.count("SORT.pipeline_plan_ref_capped")).isEqualTo(1);
     }
 
@@ -574,10 +541,10 @@ final class FinalizationPipelineTest {
                 root.resolve("fd-floor" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(List.of(SortTestSupport.object("a"))));
         PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        int softLimit = MergeFdBudget.FD_HEADROOM + catalog.descriptors().size();
-        MergePlanner planner = new MergePlanner(
+        int softLimit = FileDescriptorBudget.FD_HEADROOM + catalog.descriptors().size();
+        FinalizationPlanner planner = new FinalizationPlanner(
                 SortConfigs.base().withMergeBudgetBytes(64L << 20), metrics, () -> softLimit);
 
         assertThatThrownBy(() -> planner.pipelineParallelism(4, catalog))
@@ -591,7 +558,7 @@ final class FinalizationPipelineTest {
     @Test
     void unboundedByteTargetClosesPlansAtTheReferenceCap(@TempDir Path root)
             throws IOException {
-        int pages = MergePlanner.MAX_PIPELINE_PLAN_REFS + 1;
+        int pages = FinalizationPlanner.MAX_PIPELINE_PLAN_REFS + 1;
         List<List<ListEntry>> segment = new ArrayList<>(pages);
         for (int page = 0; page < pages; page++) {
             segment.add(List.of(SortTestSupport.object(String.format("key-%05d", page))));
@@ -600,7 +567,7 @@ final class FinalizationPipelineTest {
 
         SortedDatasetResult result = runPages(root, List.of(segment), Long.MAX_VALUE,
                 metrics, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
-                PageCodec.NONE, 1);
+                PageCompression.NONE, 1);
 
         assertThat(result.finalFiles()).hasSize(2);
         assertThat(metrics.count("SORT.pipeline_plan_ref_capped")).isEqualTo(1);
@@ -613,13 +580,13 @@ final class FinalizationPipelineTest {
                 root.resolve("fanin" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(List.of(SortTestSupport.object("a"))));
         PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
         SortConfig config = SortConfigs.base()
                 .withFanIn(100)
                 .withMergeBudgetBytes(64L << 20)
                 .withMergePerStreamBytes(1);
-        MergePlanner planner = new MergePlanner(config, SortMetrics.NO_OP,
-                () -> MergeFdBudget.FD_HEADROOM + 5);
+        FinalizationPlanner planner = new FinalizationPlanner(config, SortMetrics.NO_OP,
+                () -> FileDescriptorBudget.FD_HEADROOM + 5);
 
         assertThat(planner.pipelineFanIn(catalog, 4)).isEqualTo(2);
     }
@@ -643,7 +610,7 @@ final class FinalizationPipelineTest {
 
         SortedDatasetResult result = runPages(root, List.of(pages), targetBytes,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
-                PageCodec.LZ4, 1);
+                PageCompression.LZ4, 1);
 
         assertThat(result.finalFiles()).hasSizeGreaterThanOrEqualTo(8);
         long tolerance = Math.round(targetBytes * 0.35);
@@ -732,7 +699,7 @@ final class FinalizationPipelineTest {
                 List.of(SortTestSupport.object("f"))));
         SortedDatasetResult result = runPages(root, pages, 1,
                 SortMetrics.NO_OP, reordered, 10_000, 64L << 20,
-                PageCodec.NONE, 2);
+                PageCompression.NONE, 2);
 
         List<Integer> observed = List.copyOf(closeOrder);
         assertThat(observed.indexOf(4)).isLessThan(observed.indexOf(2));
@@ -754,10 +721,10 @@ final class FinalizationPipelineTest {
         }
         SortedDatasetResult serial = runPages(root.resolve("serial"), pages, 4_096,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
-                PageCodec.NONE, 1, PartSizer.Target.fixedRows(160));
+                PageCompression.NONE, 1, PartSizer.Target.fixedRows(160));
         SortedDatasetResult concurrent = runPages(root.resolve("concurrent"), pages, 4_096,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
-                PageCodec.NONE, 4, PartSizer.Target.fixedRows(160));
+                PageCompression.NONE, 4, PartSizer.Target.fixedRows(160));
 
         assertThat(concurrent.finalFiles()).hasSameSizeAs(serial.finalFiles());
         for (int part = 0; part < serial.finalFiles().size(); part++) {
@@ -778,7 +745,7 @@ final class FinalizationPipelineTest {
 
         SortedDatasetResult result = runPages(root, List.of(List.of(rows)), Long.MAX_VALUE,
                 SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
-                PageCodec.NONE, 1, progress::add);
+                PageCompression.NONE, 1, progress::add);
 
         assertThat(result.totalRows()).isEqualTo(2_500);
         assertThat(progress).containsExactly(1_000L, 1_000L, 500L);
@@ -791,8 +758,8 @@ final class FinalizationPipelineTest {
         Path segment = SortTestSupport.writePages(
                 staging.resolve("crc" + StagingNames.PAGE_RUN_SUFFIX),
                 List.of(List.of(SortTestSupport.object("a"), SortTestSupport.object("b"))));
-        PageRunSegmentIo.RoutingPage page;
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
+        PageRunReader.RoutingPage page;
+        try (PageRunReader io = PageRunReader.open(segment, SortMetrics.NO_OP)) {
             page = io.nextRoutingPage();
         }
         long corruptOffset = page.offset() + page.framedLen() - 1L;
@@ -942,12 +909,12 @@ final class FinalizationPipelineTest {
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
             int fanIn, long mergeBudgetBytes) throws IOException {
         return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
-                mergeBudgetBytes, PageCodec.NONE);
+                mergeBudgetBytes, PageCompression.NONE);
     }
 
     private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
-            int fanIn, long mergeBudgetBytes, PageCodec codec)
+            int fanIn, long mergeBudgetBytes, PageCompression codec)
             throws IOException {
         return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
                 mergeBudgetBytes, codec, 4);
@@ -955,7 +922,7 @@ final class FinalizationPipelineTest {
 
     private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
-            int fanIn, long mergeBudgetBytes, PageCodec codec,
+            int fanIn, long mergeBudgetBytes, PageCompression codec,
             int encoderCount) throws IOException {
         return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
                 mergeBudgetBytes, codec, encoderCount, PartSizer.Target.calibrated(),
@@ -964,7 +931,7 @@ final class FinalizationPipelineTest {
 
     private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
-            int fanIn, long mergeBudgetBytes, PageCodec codec,
+            int fanIn, long mergeBudgetBytes, PageCompression codec,
             int encoderCount, PartSizer.Target partTarget) throws IOException {
         return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
                 mergeBudgetBytes, codec, encoderCount, partTarget, ignored -> { });
@@ -972,7 +939,7 @@ final class FinalizationPipelineTest {
 
     private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
-            int fanIn, long mergeBudgetBytes, PageCodec codec,
+            int fanIn, long mergeBudgetBytes, PageCompression codec,
             int encoderCount, LongConsumer progressCallback) throws IOException {
         return runPages(root, segmentPages, finalFileBytes, metrics, writerFactory, fanIn,
                 mergeBudgetBytes, codec, encoderCount, PartSizer.Target.calibrated(),
@@ -981,7 +948,7 @@ final class FinalizationPipelineTest {
 
     private SortedDatasetResult runPages(Path root, List<List<List<ListEntry>>> segmentPages,
             long finalFileBytes, SortMetrics metrics, SortedFileWriterFactory writerFactory,
-            int fanIn, long mergeBudgetBytes, PageCodec codec,
+            int fanIn, long mergeBudgetBytes, PageCompression codec,
             int encoderCount, PartSizer.Target partTarget, LongConsumer progressCallback)
             throws IOException {
         Path output = Files.createDirectories(root.resolve("data"));

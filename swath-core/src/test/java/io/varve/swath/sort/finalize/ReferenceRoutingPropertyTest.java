@@ -12,7 +12,7 @@ import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.spill.PageRef;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,7 +31,7 @@ final class ReferenceRoutingPropertyTest {
     void everyReferenceAppearsInExactlyOnePlan(@ForAll long seed) throws IOException {
         Random random = new Random(seed);
         Path root = Files.createTempDirectory("reference-routing-");
-        List<PageRunSegmentIo> channels = new ArrayList<>();
+        List<PageRunReader> channels = new ArrayList<>();
         try {
             int segmentCount = 1 + random.nextInt(6);
             long expectedRefs = 0;
@@ -51,18 +51,18 @@ final class ReferenceRoutingPropertyTest {
                 }
                 Path path = SortTestSupport.writePages(
                         root.resolve("seg-" + segment + StagingNames.PAGE_RUN_SUFFIX), contents);
-                channels.add(PageRunSegmentIo.open(path, SortMetrics.NO_OP));
+                channels.add(PageRunReader.open(path, SortMetrics.NO_OP));
                 expectedRefs += pages;
             }
             FinalizationFailure failure = new FinalizationFailure();
             List<PartPlan> plans = new ArrayList<>();
             PartSizer sizer = new PartSizer(
                     PartSizer.Target.fixedRows(1 + random.nextInt(20)), Long.MAX_VALUE);
-            try (SegmentHeaderCursors cursors = new SegmentHeaderCursors(channels,
-                    SegmentHeaderCursors.planned(channels.size()), SortMetrics.NO_OP, failure)) {
+            try (PageRunHeaderStreams cursors = new PageRunHeaderStreams(channels,
+                    PageRunHeaderStreams.planned(channels.size()), SortMetrics.NO_OP, failure)) {
                 MergeRouter.Result result = new MergeRouter(
                         cursors, plans::add, sizer, SortMetrics.NO_OP, failure, () -> { },
-                        MergePlanner.MAX_PIPELINE_PLAN_REFS)
+                        FinalizationPlanner.MAX_PIPELINE_PLAN_REFS)
                         .route(channels.size());
 
                 List<PageRef> routed = plans.stream().flatMap(plan -> plan.items().stream())
@@ -81,7 +81,7 @@ final class ReferenceRoutingPropertyTest {
                         .allMatch(plan -> !plan.mergeEnd());
             }
         } finally {
-            for (PageRunSegmentIo channel : channels) {
+            for (PageRunReader channel : channels) {
                 channel.close();
             }
             try (var paths = Files.walk(root)) {

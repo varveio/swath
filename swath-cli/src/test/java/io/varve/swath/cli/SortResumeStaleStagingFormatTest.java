@@ -23,7 +23,7 @@ import io.varve.swath.model.ListingMode;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.runtime.ListRunner;
-import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.spill.PageRunFormat;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;

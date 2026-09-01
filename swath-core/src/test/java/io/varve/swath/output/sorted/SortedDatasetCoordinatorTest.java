@@ -24,21 +24,19 @@ import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
-import io.varve.swath.sort.finalize.SortFinalizer;
 import io.varve.swath.sort.finalize.SortTestSupport;
 import io.varve.swath.sort.spill.PageRunCatalog;
+import io.varve.swath.sort.spill.PageRunCorruptionException;
+import io.varve.swath.sort.spill.PageRunDescriptor;
 import io.varve.swath.sort.spill.PageRunRawFixtures;
-import io.varve.swath.sort.spill.PageRunSegmentDescriptor;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
-import io.varve.swath.sort.spill.PageRunSegmentWriter;
-import io.varve.swath.sort.spill.SegmentCorruptionException;
+import io.varve.swath.sort.spill.PageRunReader;
+import io.varve.swath.sort.spill.SpillTestFixtures;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -318,44 +316,20 @@ class SortedDatasetCoordinatorTest {
     }
 
     @Test
-    void finalizerAdmissionRejectsNormalizedAliasInputsBeforeOpening(@TempDir Path root)
-            throws IOException {
-        Path staging = Files.createDirectories(root.resolve("_staging"));
-        Path segment = writeSegment(staging, "seg-0.parquet", objects("a"));
-        Path alias = staging.resolve(".").resolve(segment.getFileName());
-        AtomicInteger opens = new AtomicInteger();
-
-        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        SortFinalizer finalizer = new SortFinalizer(run, path -> {
-            opens.incrementAndGet();
-            return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-        });
-
-        assertThatThrownBy(() -> finalizer.admit(List.of(segment, alias), java.util.Map.of()))
-                .isInstanceOf(IOException.class)
-                .hasMessageContaining("duplicate page-run catalog path");
-
-        assertThat(opens).hasValue(0);
-        assertThat(segment).exists();
-    }
-
-    @Test
     void catalogDescriptorAssemblyRejectsNormalizedAliasesInsteadOfKeepingTheFirst(
             @TempDir Path root) throws IOException {
         Path staging = Files.createDirectories(root.resolve("_staging"));
         Path segment = writeSegment(staging, "seg-0.parquet", objects("a"));
-        PageRunSegmentDescriptor descriptor = PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP))
+        PageRunDescriptor descriptor = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP))
                 .descriptors().getFirst();
         Path alias = staging.resolve(".").resolve(segment.getFileName());
-        PageRunSegmentDescriptor duplicate = new PageRunSegmentDescriptor(alias,
+        PageRunDescriptor duplicate = new PageRunDescriptor(alias,
                 descriptor.fileSize(), descriptor.trailerStart(), descriptor.trailer(),
                 descriptor.maxRawPayloadLength(), descriptor.maxKeyLength(),
                 descriptor.physicalFormat(), descriptor.headerBytes(), descriptor.orderingMode());
 
-        assertThatThrownBy(() -> PageRunCatalog.fromDescriptors(List.of(descriptor, duplicate)))
+        assertThatThrownBy(() -> SpillTestFixtures.catalog(List.of(descriptor, duplicate)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("duplicate page-run catalog path");
     }
@@ -391,10 +365,6 @@ class SortedDatasetCoordinatorTest {
 
         assertThat(priorFinal).hasContent("prior");
         assertThat(segment).exists();
-        assertThatThrownBy(() -> SortFinalizer.requireExactCardinality(3, 1, 1))
-                .isInstanceOf(IOException.class)
-                .hasMessageContaining("source_rows=3")
-                .hasMessageContaining("drained_rows=1");
     }
 
     @Test
@@ -512,7 +482,7 @@ class SortedDatasetCoordinatorTest {
         Dirs dirs = dirs(root);
         Path corrupt = writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b"));
         byte[] segmentBytes = Files.readAllBytes(corrupt);
-        segmentBytes[PageRunSegmentWriter.HEADER_BYTES + 8] ^= 0x01;
+        segmentBytes[SpillTestFixtures.pageRunHeaderBytes() + 8] ^= 0x01;
         Files.write(corrupt, segmentBytes);
         Path priorFinal = dirs.output.resolve("part-00000.parquet");
         byte[] priorContents = "prior published output".getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -521,7 +491,7 @@ class SortedDatasetCoordinatorTest {
         assertThatThrownBy(() -> transform(SortConfigs.base())
                 .transform(List.of(corrupt), dirs.output, dirs.staging, SortedDatasetCommitter.NO_OP,
                         units -> { }, FinalPassListener.NO_OP))
-                .isInstanceOf(SegmentCorruptionException.class)
+                .isInstanceOf(PageRunCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_body_corruption");
 
         assertThat(Files.readAllBytes(priorFinal))
@@ -535,7 +505,7 @@ class SortedDatasetCoordinatorTest {
         Dirs dirs = dirs(root);
         Path corrupt = writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b"));
         byte[] segmentBytes = Files.readAllBytes(corrupt);
-        int frameOffset = PageRunSegmentWriter.HEADER_BYTES;
+        int frameOffset = SpillTestFixtures.pageRunHeaderBytes();
         int bodyLength = ByteBuffer.wrap(segmentBytes, frameOffset, 4).getInt();
         int bodyOffset = frameOffset + 8;
         ByteBuffer body = ByteBuffer.wrap(segmentBytes, bodyOffset, bodyLength).slice();
@@ -558,7 +528,7 @@ class SortedDatasetCoordinatorTest {
                 .transform(List.of(corrupt), dirs.output, dirs.staging,
                         (parts, rows) -> published.add(parts), units -> { },
                         FinalPassListener.NO_OP))
-                .isInstanceOf(SegmentCorruptionException.class)
+                .isInstanceOf(PageRunCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_body_corruption");
 
         assertThat(published).isEmpty();
@@ -581,7 +551,7 @@ class SortedDatasetCoordinatorTest {
                 .transform(List.of(corrupt), dirs.output, dirs.staging,
                         (parts, rows) -> published.add(parts), units -> { },
                         FinalPassListener.NO_OP))
-                .isInstanceOf(SegmentCorruptionException.class)
+                .isInstanceOf(PageRunCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_body_corruption")
                 .hasStackTraceContaining("decoded row order regressed inside persisted page");
 

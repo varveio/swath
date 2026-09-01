@@ -24,10 +24,10 @@ import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortRun;
-import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedEntryCursor;
 import io.varve.swath.sort.SortedFileWriterFactory;
-import io.varve.swath.sort.spill.PageCodec;
-import io.varve.swath.sort.spill.PageRunSegmentWriter;
+import io.varve.swath.sort.spill.PageCompression;
+import io.varve.swath.sort.spill.PageRunWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -192,8 +192,8 @@ class SortMergeLiveProgressTest {
     }
 
     private List<Path> stage(Path dir) throws IOException {
-        PageRunSegmentWriter writer =
-                new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
+        PageRunWriter writer =
+                new PageRunWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE);
         List<Path> out = new ArrayList<>();
         for (int s = 0; s < SEGMENTS; s++) {
             List<ListEntry> rows = new ArrayList<>();
@@ -201,7 +201,7 @@ class SortMergeLiveProgressTest {
                 rows.add(object(String.format("k%05d", i * SEGMENTS + s)));
             }
             Path path = dir.resolve("seg-" + s + ".pageseg");
-            try (SortedCursor cursor = SortTestSupport.cursor(rows, cmp, DuplicateHook.NO_OP)) {
+            try (SortedEntryCursor cursor = SortTestSupport.cursor(rows)) {
                 writer.writeIntermediate(cursor, path);
             }
             out.add(path);

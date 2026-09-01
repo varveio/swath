@@ -39,7 +39,7 @@ import org.junit.jupiter.params.provider.EnumSource;
  * identical {@link PageBlock#firstKey()}, {@link PageBlock#lastKey()}, {@link PageBlock#count()},
  * {@link PageBlock#orderedUnderFullComparator()}, and decode the same entry sequence via {@link
  * PageBlock#cursor()} as the original — over adversarial key shapes, dict-overflow, all five dict
- * columns, and both ordered and out-of-order pages, for EVERY {@link PageCodec} (NONE/LZ4/ZSTD1: the
+ * columns, and both ordered and out-of-order pages, for EVERY {@link PageCompression} (NONE/LZ4/ZSTD1: the
  * payload compression is transparent to every one of these invariants). Admission-packed disorder
  * remains decodable for writer repair, while the same disorder is rejected after deserialization
  * because a persisted PageRun page must be internally ordered.
@@ -49,10 +49,10 @@ class PageBlockSerdeTest {
     private static final ListEntryComparator CMP = new ListEntryComparator();
 
     private static void assertRoundTrips(List<ListEntry> in) {
-        assertRoundTrips(in, PageCodec.NONE);
+        assertRoundTrips(in, PageCompression.NONE);
     }
 
-    private static void assertRoundTrips(List<ListEntry> in, PageCodec codec) {
+    private static void assertRoundTrips(List<ListEntry> in, PageCompression codec) {
         PageBlock original = PageBlock.pack(in, CMP, codec);
         assertThat(original.orderedUnderFullComparator())
                 .as("persisted PageRun round-trip inputs must already be ordered")
@@ -154,6 +154,24 @@ class PageBlockSerdeTest {
     }
 
     @Test
+    void maximumDictionariesRetainEveryValueInEachColumn() {
+        List<ListEntry> entries = new ArrayList<>(PageBlock.DICT_CAP);
+        for (int value = 0; value < PageBlock.DICT_CAP; value++) {
+            String suffix = String.format("-%02d", value);
+            entries.add(new ObjectEntry(KeyBytes.ofUtf8("key" + suffix), 1L, 0L,
+                    null, "storage" + suffix, null, false, "owner" + suffix,
+                    "display" + suffix, "algorithm" + suffix, "type" + suffix));
+        }
+
+        PageBlock persisted = PageBlock.deserialize(
+                PageBlock.pack(entries, CMP, PageCompression.LZ4).serialize());
+
+        for (int column = 0; column < PageBlockFormat.DICT_COLUMN_COUNT; column++) {
+            assertThat(persisted.dictionariesUnsafe().size(column)).isEqualTo(PageBlock.DICT_CAP);
+        }
+    }
+
+    @Test
     void roundTripsAllFiveDictColumnsAtLowCardinality() {
         List<ListEntry> in = List.of(
                 new ObjectEntry(KeyBytes.ofUtf8("a"), 1L, 0L, null, "STANDARD", null, false,
@@ -202,12 +220,12 @@ class PageBlockSerdeTest {
     }
 
     @ParameterizedTest
-    @EnumSource(PageCodec.class)
-    void persistedBlockRetainsOneBodyAndPayloadSliceWithoutCopy(PageCodec codec) {
+    @EnumSource(PageCompression.class)
+    void persistedBlockRetainsOneBodyAndPayloadSliceWithoutCopy(PageCompression codec) {
         List<ListEntry> rows = List.of(object("aaa"), object("mmm"), object("zzz"));
         byte[] body = PageBlock.pack(rows, CMP, codec).serialize();
-        PageBlockCodec.Header header = PageBlockCodec.parseHeader(body);
-        PageBlock persisted = PageBlockCodec.deserialize(body, header, Path.of("owned.pageseg"));
+        PageBlockFormat.Header header = PageBlockFormat.parseHeader(body);
+        PageBlock persisted = PageBlockFormat.deserialize(body, header, Path.of("owned.pageseg"));
 
         assertThat(persisted.payloadOwnerUnsafe())
                 .as("the CRC-validated record body is the persisted block's payload owner")
@@ -224,25 +242,25 @@ class PageBlockSerdeTest {
 
     @Test
     void decodedPageOwnsBodyAcrossFrontierAdvanceAndClose(@TempDir Path dir) throws IOException {
-        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(configWithCodec(PageCodec.NONE), CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(configWithCodec(PageCompression.NONE), CMP);
         buffer.admit(1L, List.of(object("alpha"), object("bravo")));
         buffer.admit(1L, List.of(object("charlie"), object("delta")));
         Path path = dir.resolve("owned-lifetime.pageseg");
-        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+        new PageRunWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
 
         PageBlock first;
         PageBlock second;
         byte[] firstOwner;
-        try (PageRunSegmentIo reader = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
-            PageRunSegmentIo.Page firstRecord = reader.nextPage();
+        try (PageRunReader reader = PageRunReader.open(path, SortMetrics.NO_OP)) {
+            PageRunReader.Page firstRecord = reader.nextPage();
             firstOwner = firstRecord.body();
-            PageBlockCodec.Header firstHeader = firstRecord.header();
+            PageBlockFormat.Header firstHeader = firstRecord.header();
             first = firstRecord.decode(path);
             assertThat(first.payloadOwnerUnsafe()).isSameAs(firstOwner);
             assertThat(first.parsedHeaderUnsafe()).isSameAs(firstHeader);
 
-            PageRunSegmentIo.Page secondRecord = reader.nextPage();
+            PageRunReader.Page secondRecord = reader.nextPage();
             assertThat(secondRecord.body())
                     .as("each frame owns a distinct immutable body")
                     .isNotSameAs(firstOwner);
@@ -256,12 +274,12 @@ class PageBlockSerdeTest {
 
     @Test
     void malformedStoredPayloadLengthIsRejectedBeforeABlockCanOwnTheBody() {
-        byte[] body = PageBlock.pack(List.of(object("only")), CMP, PageCodec.NONE).serialize();
+        byte[] body = PageBlock.pack(List.of(object("only")), CMP, PageCompression.NONE).serialize();
         int payloadLengthOffset = PageRunRawFixtures.pageHeaderLayout(body).storedLengthOffset();
         ByteBuffer.wrap(body).putInt(payloadLengthOffset,
                 ByteBuffer.wrap(body).getInt(payloadLengthOffset) - 1);
 
-        assertThatThrownBy(() -> PageBlockCodec.parseHeader(body))
+        assertThatThrownBy(() -> PageBlockFormat.parseHeader(body))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("does not equal remaining body bytes");
     }
@@ -283,7 +301,7 @@ class PageBlockSerdeTest {
                 new PayloadMutation("raw string past payload", payload -> payload[22] = 0x7f));
 
         for (PayloadMutation mutation : mutations) {
-            byte[] body = PageBlock.pack(List.of(object("a")), CMP, PageCodec.NONE).serialize();
+            byte[] body = PageBlock.pack(List.of(object("a")), CMP, PageCompression.NONE).serialize();
             int payloadOffset = PageRunRawFixtures.pageHeaderLayout(body).payloadOffset();
             byte[] payload = Arrays.copyOfRange(body, payloadOffset, body.length);
             mutation.mutator().accept(payload);
@@ -303,15 +321,15 @@ class PageBlockSerdeTest {
         int keyLength = io.varve.swath.model.ByteMidpoint.MAX_KEY_LEN + 1;
         byte[] encodedSuffixLength = unsignedVarint(keyLength);
         byte[] payload = new byte[1 + 1 + encodedSuffixLength.length + keyLength];
-        payload[0] = PageBlockCodec.TAG_COMMON_PREFIX;
+        payload[0] = PageBlockFormat.TAG_COMMON_PREFIX;
         payload[1] = 0;
         System.arraycopy(encodedSuffixLength, 0, payload, 2, encodedSuffixLength.length);
-        String[][] dicts = new String[PageBlockCodec.DICT_COLUMN_COUNT][];
+        String[][] dicts = new String[PageBlockFormat.DICT_COLUMN_COUNT][];
         for (int i = 0; i < dicts.length; i++) {
             dicts[i] = new String[0];
         }
-        PageBlock malformed = new PageBlock(payload, payload.length, PageCodec.NONE, dicts,
-                new boolean[PageBlockCodec.DICT_COLUMN_COUNT], 1, new byte[0], new byte[0],
+        PageBlock malformed = new PageBlock(payload, payload.length, PageCompression.NONE, dicts,
+                new boolean[PageBlockFormat.DICT_COLUMN_COUNT], 1, new byte[0], new byte[0],
                 null, null, payload.length, true, Path.of("overlong-row-key.pageseg"));
 
         assertThatThrownBy(() -> malformed.cursor().next())
@@ -323,12 +341,12 @@ class PageBlockSerdeTest {
 
     @Test
     void headerRejectsDecodedPayloadClaimsAboveTheHardCeilingBeforeDecompression() {
-        byte[] body = PageBlock.pack(List.of(object("a")), CMP, PageCodec.LZ4).serialize();
+        byte[] body = PageBlock.pack(List.of(object("a")), CMP, PageCompression.LZ4).serialize();
         ByteBuffer.wrap(body).putInt(
                 PageRunRawFixtures.pageHeaderLayout(body).rawLengthOffset(),
                 PageBlock.MAX_RAW_PAYLOAD_BYTES + 1);
 
-        assertThatThrownBy(() -> PageBlockCodec.parseHeader(body))
+        assertThatThrownBy(() -> PageBlockFormat.parseHeader(body))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside 1.." + PageBlock.MAX_RAW_PAYLOAD_BYTES);
     }
@@ -375,21 +393,21 @@ class PageBlockSerdeTest {
     }
 
     @ParameterizedTest
-    @EnumSource(PageCodec.class)
-    void roundTripsAdversarialShapesUnderEveryCodec(PageCodec codec) {
+    @EnumSource(PageCompression.class)
+    void roundTripsAdversarialShapesUnderEveryCodec(PageCompression codec) {
         for (List<ListEntry> shape : adversarialShapes()) {
             assertRoundTrips(shape, codec);
         }
     }
 
     @ParameterizedTest
-    @EnumSource(PageCodec.class)
-    void routingAndFullHeaderParsersAgreeOnSerializedFixtures(PageCodec codec)
+    @EnumSource(PageCompression.class)
+    void routingAndFullHeaderParsersAgreeOnSerializedFixtures(PageCompression codec)
             throws IOException {
         for (List<ListEntry> shape : adversarialShapes()) {
             byte[] body = PageBlock.pack(shape, CMP, codec).serialize();
-            PageBlockCodec.Header full = PageBlockCodec.parseHeader(body);
-            PageBlockCodec.RoutingHeader routing = PageBlockCodec.parseRoutingHeader(
+            PageBlockFormat.Header full = PageBlockFormat.parseHeader(body);
+            PageBlockFormat.RoutingHeader routing = PageBlockFormat.parseRoutingHeader(
                     body.length, (position, bytes) -> ByteBuffer.wrap(body, position, bytes).slice());
 
             assertThat(routing.minKey()).containsExactly(full.minKey());
@@ -400,8 +418,8 @@ class PageBlockSerdeTest {
     }
 
     @ParameterizedTest
-    @EnumSource(PageCodec.class)
-    void corruptRawPayloadLengthFailsFastOnDecodeForEveryCodec(PageCodec codec) {
+    @EnumSource(PageCompression.class)
+    void corruptRawPayloadLengthFailsFastOnDecodeForEveryCodec(PageCompression codec) {
         List<ListEntry> in = List.of(object("aaa"), object("mmm"), object("zzz"));
         PageBlock block = PageBlock.pack(in, CMP, codec);
         byte[] record = block.serialize();
@@ -418,15 +436,15 @@ class PageBlockSerdeTest {
     @Test
     void zstdContentChecksumRejectsPayloadCorruptionInsideThePageBody() {
         byte[] body = PageBlock.pack(
-                List.of(object("aaa"), object("mmm"), object("zzz")), CMP, PageCodec.ZSTD1)
+                List.of(object("aaa"), object("mmm"), object("zzz")), CMP, PageCompression.ZSTD1)
                 .serialize();
-        PageBlockCodec.Header header = PageBlockCodec.parseHeader(body);
+        PageBlockFormat.Header header = PageBlockFormat.parseHeader(body);
 
         // ZSTD appends its four-byte content checksum to the frame. Corrupt only that checksum;
         // the PageBlock header remains structurally valid, proving decompression verifies it.
         body[body.length - 1] ^= 1;
 
-        PageBlock corrupted = PageBlockCodec.deserialize(body, header, Path.of("checksum.pageseg"));
+        PageBlock corrupted = PageBlockFormat.deserialize(body, header, Path.of("checksum.pageseg"));
         Throwable failure = catchThrowable(corrupted::cursor);
         assertThat(failure)
                 .isInstanceOf(java.io.UncheckedIOException.class)
@@ -440,22 +458,22 @@ class PageBlockSerdeTest {
 
     @Test
     void segmentIoReadsMinMaxOfLz4CompressedPagesWithoutDecompressing(@TempDir Path dir) throws IOException {
-        SortConfig config = configWithCodec(PageCodec.LZ4);
+        SortConfig config = configWithCodec(PageCompression.LZ4);
         PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("alpha"), object("bravo")));
         buffer.admit(1L, List.of(object("charlie"), object("delta")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
 
         Path path = dir.resolve("lz4.pgr");
-        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE).flush(sealed, path);
+        new PageRunWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE).flush(sealed, path);
 
-        try (PageRunSegmentIo reader = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
-            PageRunSegmentIo.Page first = reader.nextPage();
+        try (PageRunReader reader = PageRunReader.open(path, SortMetrics.NO_OP)) {
+            PageRunReader.Page first = reader.nextPage();
             assertThat(new String(first.header().minKey(), StandardCharsets.UTF_8)).isEqualTo("alpha");
             assertThat(new String(first.header().maxKey(), StandardCharsets.UTF_8)).isEqualTo("bravo");
             assertThat(first.header().count()).isEqualTo(2);
 
-            PageRunSegmentIo.Page second = reader.nextPage();
+            PageRunReader.Page second = reader.nextPage();
             assertThat(new String(second.header().minKey(), StandardCharsets.UTF_8)).isEqualTo("charlie");
             assertThat(new String(second.header().maxKey(), StandardCharsets.UTF_8)).isEqualTo("delta");
 
@@ -479,7 +497,7 @@ class PageBlockSerdeTest {
         return Arrays.copyOf(encoded, length);
     }
 
-    private static SortConfig configWithCodec(PageCodec codec) {
+    private static SortConfig configWithCodec(PageCompression codec) {
         return SortConfigs.base().withSegmentCodec(codec);
     }
 

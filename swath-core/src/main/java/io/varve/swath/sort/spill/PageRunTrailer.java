@@ -22,13 +22,13 @@ public final class PageRunTrailer {
 
     /** Open {@code path}, validate it, and read its fixed trailer. */
     static Trailer read(Path path) throws IOException {
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
+        try (PageRunReader io = PageRunReader.open(path, SortMetrics.NO_OP)) {
             return read(io);
         }
     }
 
     /** Read the trailer metadata retained by an already-open segment. */
-    public static Trailer read(PageRunSegmentIo io) {
+    static Trailer read(PageRunReader io) {
         return new Trailer(io.totalRecords, io.totalEntries, io.maxRecordLen,
                 io.persistedMaxRawPayloadLength, io.persistedMaxKeyLength);
     }

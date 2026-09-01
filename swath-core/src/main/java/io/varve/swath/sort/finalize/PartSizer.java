@@ -36,7 +36,7 @@ public final class PartSizer {
             return new Target(Policy.CALIBRATED_BYTES, 0);
         }
 
-        public static Target fixedRows(long rows) {
+        static Target fixedRows(long rows) {
             return new Target(Policy.FIXED_ROWS, rows);
         }
     }

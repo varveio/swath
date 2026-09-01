@@ -19,24 +19,24 @@ import java.util.Set;
 /** One immutable kickoff catalog of validated page-run inputs and primitive metadata. */
 public final class PageRunCatalog {
 
-    private final List<PageRunSegmentDescriptor> descriptors;
+    private final List<PageRunDescriptor> descriptors;
     private final List<Path> paths;
-    private final Map<Path, PageRunSegmentDescriptor> byPath;
+    private final Map<Path, PageRunDescriptor> byPath;
     private final long maxRecordLen;
     private final int maxKeyLength;
     private final long totalRecords;
     private final long totalEntries;
 
-    private PageRunCatalog(List<PageRunSegmentDescriptor> descriptors) {
+    private PageRunCatalog(List<PageRunDescriptor> descriptors) {
         this.descriptors = List.copyOf(descriptors);
         List<Path> orderedPaths = new ArrayList<>(descriptors.size());
-        Map<Path, PageRunSegmentDescriptor> indexed = new LinkedHashMap<>();
+        Map<Path, PageRunDescriptor> indexed = new LinkedHashMap<>();
         Set<Path> identities = new LinkedHashSet<>();
         long maximum = -1;
         int maximumKey = 0;
         long records = 0;
         long entries = 0;
-        for (PageRunSegmentDescriptor descriptor : descriptors) {
+        for (PageRunDescriptor descriptor : descriptors) {
             Path identity = normalizedIdentity(descriptor.path());
             if (!identities.add(identity)) {
                 throw new IllegalArgumentException("duplicate page-run catalog path: " + identity);
@@ -78,21 +78,21 @@ public final class PageRunCatalog {
             Map<Path, PageRunFormat> expectedFormats, SortMetrics metrics) throws IOException {
         List<Path> normalizedPaths = requireUniqueNormalizedPaths(paths);
         Map<Path, PageRunFormat> normalizedExpected = normalizeExpectedFormats(expectedFormats);
-        List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(normalizedPaths.size());
+        List<PageRunDescriptor> descriptors = new ArrayList<>(normalizedPaths.size());
         for (Path path : normalizedPaths) {
             PageRunFormat expected = normalizedExpected.get(path);
-            try (PageRunSegmentIo io = opener.open(path)) {
+            try (PageRunReader io = opener.open(path)) {
                 PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
                 PageRunFormat physical = new PageRunFormat(
                         Short.toUnsignedInt(io.formatVersion()), PageRunFormat.ABSENT_EXTENSION);
                 if (expected != null && !expected.equals(physical)) {
                     metrics.recordStealReason("SORT", "page_run_format_mismatch");
-                    throw new SegmentCorruptionException(path,
-                            SegmentCorruptionException.PAGE_RUN_FORMAT_MISMATCH,
+                    throw new PageRunCorruptionException(path,
+                            PageRunCorruptionException.PAGE_RUN_FORMAT_MISMATCH,
                             "checkpoint format metadata disagrees with physical segment: recorded="
                                     + expected + ", physical=" + physical);
                 }
-                descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
+                descriptors.add(new PageRunDescriptor(path, io.fileSize, io.trailerStart,
                         trailer, trailer.maxRawPayloadLength(), trailer.maxKeyLength(),
                         physical, io.headerBytes, io.orderingMode()));
             }
@@ -129,11 +129,11 @@ public final class PageRunCatalog {
         return path.toAbsolutePath().normalize();
     }
 
-    public static PageRunCatalog fromDescriptors(List<PageRunSegmentDescriptor> descriptors) {
+    static PageRunCatalog fromDescriptors(List<PageRunDescriptor> descriptors) {
         return new PageRunCatalog(descriptors);
     }
 
-    public List<PageRunSegmentDescriptor> descriptors() {
+    public List<PageRunDescriptor> descriptors() {
         return descriptors;
     }
 
@@ -141,7 +141,7 @@ public final class PageRunCatalog {
         return paths;
     }
 
-    Map<Path, PageRunSegmentDescriptor> byPath() {
+    Map<Path, PageRunDescriptor> byPath() {
         return byPath;
     }
 
@@ -163,6 +163,6 @@ public final class PageRunCatalog {
 
     @FunctionalInterface
     public interface Opener {
-        PageRunSegmentIo open(Path path) throws IOException;
+        PageRunReader open(Path path) throws IOException;
     }
 }

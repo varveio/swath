@@ -27,10 +27,35 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class SortFinalizerPreparationTest {
+
+    @Test
+    void admissionRejectsNormalizedAliasInputsBeforeOpening(@TempDir Path root) throws IOException {
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        ListEntryComparator comparator = new ListEntryComparator();
+        Path segment = SortTestSupport.writePageRun(
+                staging.resolve("seg-0.pageseg"), List.of(SortTestSupport.object("a")), comparator);
+        Path alias = staging.resolve(".").resolve(segment.getFileName());
+        AtomicInteger opens = new AtomicInteger();
+        SortRun run = new SortRun(SortConfigs.base(), comparator, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+        SortFinalizer finalizer = new SortFinalizer(run, path -> {
+            opens.incrementAndGet();
+            return io.varve.swath.sort.spill.PageRunReader.open(path, SortMetrics.NO_OP);
+        });
+
+        assertThatThrownBy(() -> finalizer.admit(List.of(segment, alias), Map.of()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("duplicate page-run catalog path");
+
+        assertThat(opens).hasValue(0);
+        assertThat(segment).exists();
+    }
 
     @Test
     void prepareReturnsACompleteUnpublishedSetWithoutTouchingSourcesOrPriorGeneration(

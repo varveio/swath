@@ -17,6 +17,7 @@ import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPassListener;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortRun;
@@ -27,7 +28,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
@@ -59,8 +59,7 @@ class SortedDatasetCoordinatorStampingTest {
         Path seg0 = writeSegment(staging, "seg-0.parquet", a);
         Path seg1 = writeSegment(staging, "seg-1.parquet", b);
 
-        SortConfig config = SortConfig.fromProperties(
-                key -> Map.of("final-row-group-bytes", "4096").get(key.substring("swath.sort.".length())));
+        SortConfig config = SortConfigs.base().withFinalRowGroupBytes(4096);
         SortedParquetWriterFactory stampedFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         SortedDatasetCoordinator transform = new SortedDatasetCoordinator(new SortRun(config, cmp, DuplicateHook.NO_OP,
                 EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stampedFactory,

@@ -3,12 +3,24 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedEntryCursor;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.spill.PageBlock;
+import io.varve.swath.sort.spill.PageCompression;
+import io.varve.swath.sort.spill.PageRunWriter;
+import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -38,12 +50,16 @@ public final class SortTestSupport {
     /** Write pre-sorted entries in the production page-run staging format. */
     public static Path writePageRun(Path path, List<ListEntry> sorted, Comparator<ListEntry> comparator)
             throws IOException {
-        PageRunSegmentWriter writer =
-                new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
-        try (SortedCursor cursor = new InMemoryCursor(sorted, comparator, DuplicateHook.NO_OP)) {
+        PageRunWriter writer =
+                new PageRunWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCompression.NONE);
+        try (SortedEntryCursor cursor = new ListCursor(sorted)) {
             writer.writeIntermediate(cursor, path);
         }
         return path;
+    }
+
+    public static SortedEntryCursor cursor(List<ListEntry> entries) {
+        return new ListCursor(entries);
     }
 
     /** Write one single-row listing page per ordinal, including the production type-2 index. */
@@ -56,32 +72,27 @@ public final class SortTestSupport {
     }
 
     /** Write caller-supplied sorted listing pages, including the production type-2 index. */
-    public static Path writePages(Path path, List<List<ListEntry>> pages) throws IOException {
+    public static Path writePages(Path path, List<? extends List<? extends ListEntry>> pages)
+            throws IOException {
         return writePages(path, pages, SortMode.OBJECTS);
     }
 
     /** Write caller-supplied sorted listing pages with an explicit persisted ordering mode. */
-    static Path writePages(Path path, List<List<ListEntry>> pages, SortMode orderingMode)
+    public static Path writePages(Path path, List<? extends List<? extends ListEntry>> pages,
+            SortMode orderingMode)
             throws IOException {
-        return writePages(path, pages, orderingMode, PageCodec.NONE);
+        return writePages(path, pages, orderingMode, PageCompression.NONE);
     }
 
     /** Write caller-supplied indexed pages with an explicit payload codec. */
-    static Path writePages(Path path, List<List<ListEntry>> pages, SortMode orderingMode,
-            PageCodec codec) throws IOException {
-        ListEntryComparator comparator = new ListEntryComparator();
-        SortBuffer buffer = new SortBuffer(SortConfigs.base().withSegmentCodec(codec), comparator);
-        for (int page = 0; page < pages.size(); page++) {
-            buffer.admit(page, pages.get(page));
-        }
-        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, codec,
-                orderingMode)
-                .flush(buffer.seal(SealTrigger.DRAIN), path);
-        return path;
+    public static Path writePages(Path path, List<? extends List<? extends ListEntry>> pages,
+            SortMode orderingMode,
+            PageCompression codec) throws IOException {
+        return PageRunFixtures.writePages(path, pages, orderingMode, codec);
     }
 
     /** Write canonical Parquet input for tests of CaptureSorter/ParquetEntryReader, not internal staging. */
-    static Path writeCanonicalParquet(Path path, List<ListEntry> entries) throws IOException {
+    public static Path writeCanonicalParquet(Path path, List<ListEntry> entries) throws IOException {
         try (SortedFileWriter writer =
                      new SortedParquetWriter(path, SortConfigs.base(), SortMode.VERSIONS, 1)) {
             for (ListEntry entry : entries) {
@@ -92,7 +103,7 @@ public final class SortTestSupport {
     }
 
     /** Drain a cursor, closing it. */
-    static List<ListEntry> drain(SortedCursor cursor) {
+    public static List<ListEntry> drain(SortedEntryCursor cursor) {
         List<ListEntry> out = new ArrayList<>();
         try (cursor) {
             while (cursor.hasNext()) {
@@ -103,17 +114,17 @@ public final class SortTestSupport {
     }
 
     /** Write the complete buffer even when the channel performs a short write. */
-    static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
+    public static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
         while (buffer.hasRemaining()) {
             channel.write(buffer);
         }
     }
 
     /** Delegates every {@link SortedFileWriter} method unless a focused test overrides it. */
-    abstract static class DelegatingSortedFileWriter implements SortedFileWriter {
+    public abstract static class DelegatingSortedFileWriter implements SortedFileWriter {
         private final SortedFileWriter delegate;
 
-        DelegatingSortedFileWriter(SortedFileWriter delegate) {
+        public DelegatingSortedFileWriter(SortedFileWriter delegate) {
             this.delegate = delegate;
         }
 
@@ -158,10 +169,10 @@ public final class SortTestSupport {
     }
 
     /**
-     * In-memory {@link KWayMerge.SegmentIo} keyed by an int handle — lets the cascade be exercised
+     * In-memory {@link CascadeReducer.SegmentIo} keyed by an int handle — lets the cascade be exercised
      * without writing Parquet. Intermediates are drained into fresh lists.
      */
-    static final class InMemorySegments implements KWayMerge.SegmentIo<Integer> {
+    static final class InMemorySegments implements CascadeReducer.SegmentIo<Integer> {
         private final Map<Integer, List<ListEntry>> store = new HashMap<>();
         private final AtomicInteger seq = new AtomicInteger();
 
@@ -180,12 +191,12 @@ public final class SortTestSupport {
         }
 
         @Override
-        public KWayMerge.PageStream openPages(Integer segment) {
+        public CascadeReducer.PageStream openPages(Integer segment) {
             return new ListPageStream(store.get(segment), () -> { });
         }
 
         @Override
-        public Integer writeIntermediate(SortedCursor sorted) {
+        public Integer writeIntermediate(SortedEntryCursor sorted) {
             List<ListEntry> buf = new ArrayList<>();
             while (sorted.hasNext()) {
                 buf.add(sorted.next());
@@ -199,14 +210,36 @@ public final class SortTestSupport {
         }
     }
 
+    private static final class ListCursor implements SortedEntryCursor {
+        private final java.util.Iterator<ListEntry> entries;
+
+        ListCursor(List<ListEntry> entries) {
+            this.entries = entries.iterator();
+        }
+
+        @Override
+        public boolean hasNext() {
+            return entries.hasNext();
+        }
+
+        @Override
+        public ListEntry next() {
+            return entries.next();
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
     /**
      * Wraps an {@link InMemorySegments} store, tracking the high-water mark of concurrently-open
-     * page streams across an entire {@link KWayMerge#merge} call — the "SegmentIo open-count"
-     * assertion point for the merge-memory-budget bound (I11): {@link KWayMerge}
+     * page streams across an entire {@link CascadeReducer#merge} call — the "SegmentIo open-count"
+     * assertion point for the merge-memory-budget bound (I11): {@link CascadeReducer}
      * must never hold more streams open at once than the caller's {@code fanIn} constructor arg
      * allows.
      */
-    static final class PeakTrackingSegments implements KWayMerge.SegmentIo<Integer> {
+    static final class PeakTrackingSegments implements CascadeReducer.SegmentIo<Integer> {
         private final InMemorySegments delegate = new InMemorySegments();
         private int live;
         private int peak;
@@ -221,14 +254,14 @@ public final class SortTestSupport {
         }
 
         @Override
-        public KWayMerge.PageStream openPages(Integer segment) {
+        public CascadeReducer.PageStream openPages(Integer segment) {
             live++;
             peak = Math.max(peak, live);
             return new ListPageStream(delegate.store.get(segment), () -> live--);
         }
 
         @Override
-        public Integer writeIntermediate(SortedCursor sorted) throws IOException {
+        public Integer writeIntermediate(SortedEntryCursor sorted) throws IOException {
             return delegate.writeIntermediate(sorted);
         }
 
@@ -239,7 +272,7 @@ public final class SortTestSupport {
     }
 
     /** One in-memory page used to exercise the production page-only cascade in unit tests. */
-    private static final class ListPageStream implements KWayMerge.PageStream {
+    private static final class ListPageStream implements CascadeReducer.PageStream {
         private final PageBlock page;
         private final Runnable onClose;
         private boolean available = true;
@@ -248,7 +281,7 @@ public final class SortTestSupport {
         ListPageStream(List<ListEntry> entries, Runnable onClose) {
             page = entries.isEmpty()
                     ? null
-                    : PageBlock.pack(entries, new ListEntryComparator(), PageCodec.NONE);
+                    : PageBlock.pack(entries, new ListEntryComparator(), PageCompression.NONE);
             available = page != null;
             this.onClose = onClose;
         }
@@ -260,12 +293,12 @@ public final class SortTestSupport {
 
         @Override
         public byte[] minKey() {
-            return page.firstKeyUnsafe();
+            return page.firstKey();
         }
 
         @Override
         public byte[] maxKey() {
-            return page.lastKeyUnsafe();
+            return page.lastKey();
         }
 
         @Override

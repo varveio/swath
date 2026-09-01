@@ -16,10 +16,10 @@ import io.varve.swath.sort.SortOrderException;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.spill.PageRunCatalog;
+import io.varve.swath.sort.spill.PageRunDescriptor;
 import io.varve.swath.sort.spill.PageRunFormat;
-import io.varve.swath.sort.spill.PageRunSegmentDescriptor;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
-import io.varve.swath.sort.spill.PageRunSegmentWriter;
+import io.varve.swath.sort.spill.PageRunReader;
+import io.varve.swath.sort.spill.PageRunWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,12 +48,12 @@ public final class SortFinalizer {
     private static final Logger log = LoggerFactory.getLogger(SortFinalizer.class);
 
     private final SortRun run;
-    private final MergePlanner planner;
+    private final FinalizationPlanner planner;
     private final PageRunCatalog.Opener catalogOpener;
 
     /** Build one finalizer from the complete immutable run policy. */
     public SortFinalizer(SortRun run) {
-        this(run, path -> PageRunSegmentIo.open(path, run.metrics()));
+        this(run, path -> PageRunReader.open(path, run.metrics()));
     }
 
     /** Reject unsupported source naming before publication authority interprets the paths. */
@@ -61,9 +61,9 @@ public final class SortFinalizer {
         PageRunCatalog.requirePageRunNames(stagingSegments);
     }
 
-    public SortFinalizer(SortRun run, PageRunCatalog.Opener catalogOpener) {
+    SortFinalizer(SortRun run, PageRunCatalog.Opener catalogOpener) {
         this.run = run;
-        this.planner = new MergePlanner(run);
+        this.planner = new FinalizationPlanner(run);
         this.catalogOpener = catalogOpener;
     }
 
@@ -98,11 +98,11 @@ public final class SortFinalizer {
         SortMetrics metrics = run.metrics();
         metrics.recordStealReason("SORT", "finalization_pipeline");
 
-        PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(
+        PageRunWriter segmentWriter = new PageRunWriter(
                 run.comparator(), run.hook(), metrics, config.segmentCodec(), run.orderingMode());
-        PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, request.stagingDir(),
+        PageRunCascadeStore io = new PageRunCascadeStore(run, segmentWriter, request.stagingDir(),
                 request.ownedInputs(), "merge-");
-        KWayMerge<Path> cascade = new KWayMerge<>(run.comparator(),
+        CascadeReducer<Path> cascade = new CascadeReducer<>(run.comparator(),
                 planner.pipelineFanIn(sourceCatalog, encoderCount),
                 io, run.hook(), metrics);
         List<Path> survivors = cascade.reduceToFanIn(
@@ -111,19 +111,19 @@ public final class SortFinalizer {
         PageRunCatalog pipelineCatalog = survivors.equals(sourceCatalog.paths())
                 ? sourceCatalog
                 : PageRunCatalog.preflight(survivors,
-                        path -> PageRunSegmentIo.open(path, metrics));
-        MergePlanner.PipelinePlan plan = planner.pipelineParallelism(encoderCount, pipelineCatalog);
+                        path -> PageRunReader.open(path, metrics));
+        FinalizationPlanner.PipelinePlan plan = planner.pipelineParallelism(encoderCount, pipelineCatalog);
         recordEncoderClamp(encoderCount, plan, pipelineCatalog);
         int effectiveEncoders = plan.encoders();
         FinalizationFailure failure = new FinalizationFailure();
         PartSizer sizer = new PartSizer(run.partTarget(), config.finalFileBytes());
-        List<PageRunSegmentIo> channels = List.of();
-        SegmentHeaderCursors cursors = null;
+        List<PageRunReader> channels = List.of();
+        PageRunHeaderStreams cursors = null;
         PartEncoders encoders = null;
         try {
             channels = openChannels(pipelineCatalog, metrics);
-            cursors = new SegmentHeaderCursors(channels,
-                    SegmentHeaderCursors.planned(channels.size()), metrics, failure);
+            cursors = new PageRunHeaderStreams(channels,
+                    PageRunHeaderStreams.planned(channels.size()), metrics, failure);
             encoders = new PartEncoders(effectiveEncoders, channels, plan.clusterBudgetBytes(),
                     request.stagingDir(), run.finalWriterFactory(), run.comparator(), run.hook(),
                     run.equalKeyPolicy(), metrics, failure, sizer, request.progressCallback());
@@ -251,7 +251,7 @@ public final class SortFinalizer {
     }
 
     /** Refuse a prepared value unless source, router, and durable part counts agree exactly. */
-    public static void requireExactCardinality(
+    static void requireExactCardinality(
             long sourceRows, long routedRows, long finalPartRows) throws IOException {
         requireExactCardinality(sourceRows, routedRows, finalPartRows, SortMetrics.NO_OP);
     }
@@ -267,12 +267,12 @@ public final class SortFinalizer {
         }
     }
 
-    private static List<PageRunSegmentIo> openChannels(PageRunCatalog catalog,
+    private static List<PageRunReader> openChannels(PageRunCatalog catalog,
             SortMetrics metrics) throws IOException {
-        List<PageRunSegmentIo> channels = new ArrayList<>(catalog.descriptors().size());
+        List<PageRunReader> channels = new ArrayList<>(catalog.descriptors().size());
         try {
-            for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
-                channels.add(PageRunSegmentIo.open(
+            for (PageRunDescriptor descriptor : catalog.descriptors()) {
+                channels.add(PageRunReader.open(
                         descriptor.path(), metrics, descriptor.maxRawPayloadLength()));
             }
             return List.copyOf(channels);
@@ -295,9 +295,9 @@ public final class SortFinalizer {
         }
     }
 
-    private static void closeChannels(List<PageRunSegmentIo> channels) throws IOException {
+    private static void closeChannels(List<PageRunReader> channels) throws IOException {
         IOException failure = null;
-        for (PageRunSegmentIo channel : channels) {
+        for (PageRunReader channel : channels) {
             try {
                 channel.close();
             } catch (IOException closeFailure) {
@@ -318,7 +318,7 @@ public final class SortFinalizer {
                 ? failure.getCause() : failure;
     }
 
-    private void recordEncoderClamp(int requested, MergePlanner.PipelinePlan plan,
+    private void recordEncoderClamp(int requested, FinalizationPlanner.PipelinePlan plan,
             PageRunCatalog catalog) {
         switch (plan.reason()) {
             case NONE -> {

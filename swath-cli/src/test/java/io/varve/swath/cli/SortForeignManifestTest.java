@@ -26,12 +26,12 @@ import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
-import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
-import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.stage.SpillLane;
+import io.varve.swath.sort.stage.StagedRunCommitter;
 import io.varve.swath.testkit.ParquetReads;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -90,15 +90,15 @@ final class SortForeignManifestTest {
 
             // Real durable staging segments (this run's actual, correct content) tracked in the
             // checkpoint — a genuinely completed listing waiting on the merge.
-            SegmentSink sink = result -> {
+            StagedRunCommitter sink = result -> {
                 List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                         .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
-                // Record the typed format the real SortLane encoder emitted, so the checkpoint's
+                // Record the typed format the real SpillLane encoder emitted, so the checkpoint's
                 // staging identity cannot diverge from these page-run bytes.
                 store.partFinalized(new PartFinalize(run.id(), 0, result.path().getFileName().toString(),
                         result.pageRunFormat(), result.rows(), result.bytes(), advances));
             };
-            SortLane lane = new SortLane(sortConfig(), new ListEntryComparator(),
+            SpillLane lane = new SpillLane(sortConfig(), new ListEntryComparator(),
                     DuplicateHook.NO_OP, SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir,
                     "seg-" + run.id(), sink);
             lane.admit(node, objects(expectedKeys));

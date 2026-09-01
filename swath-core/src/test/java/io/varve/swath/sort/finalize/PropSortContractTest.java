@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -18,14 +18,21 @@ import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
 import io.varve.swath.output.parquet.sorted.SortedParquetIndex.RowGroupKey;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
-import io.varve.swath.sort.SortTestSupport.InMemorySegments;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedEntryCursor;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.finalize.SortTestSupport.InMemorySegments;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
 import net.jqwik.api.Arbitraries;
 import net.jqwik.api.Arbitrary;
@@ -53,7 +60,7 @@ import org.apache.parquet.schema.MessageType;
  * contract, not the implementation:
  *
  * <ul>
- *   <li><b>PROP-SORT-1</b> — (i) {@link KWayMerge} over an arbitrary partition of an arbitrary
+ *   <li><b>PROP-SORT-1</b> — (i) {@link CascadeReducer} over an arbitrary partition of an arbitrary
  *       sorted list reproduces the sorted whole (completeness + order); (ii) {@link
  *       ListEntryComparator} obeys the §0.3 total-preorder laws (reflexivity, sign-antisymmetry,
  *       transitivity, equivalence-transitivity, totality) across mixed subtypes incl. null
@@ -69,7 +76,7 @@ import org.apache.parquet.schema.MessageType;
  *       true first row, which derive must still return correctly.</li>
  * </ul>
  *
- * <p>In-package so the package-private merge/segment seams ({@link KWayMerge},
+ * <p>In-package so the package-private merge/segment seams ({@link CascadeReducer},
  * {@link ParquetEntryReader}, {@link InMemorySegments}) are reachable. Try budgets are kept modest on the
  * Parquet-writing properties so the default suite stays fast.
  */
@@ -93,7 +100,7 @@ class PropSortContractTest {
         whole.sort(CMP);
 
         // Partition it into `segments` sub-lists, iterating in sorted order so every part is itself
-        // sorted (a valid KWayMerge input) — an arbitrary assignment of each element to a segment.
+        // sorted (a valid CascadeReducer input) — an arbitrary assignment of each element to a segment.
         Random r = new Random(partitionSeed);
         List<List<ListEntry>> parts = new ArrayList<>();
         for (int i = 0; i < segments; i++) {
@@ -109,7 +116,7 @@ class PropSortContractTest {
             handles.add(io.add(part));
         }
 
-        KWayMerge<Integer> merge = new KWayMerge<>(CMP, fanIn, io, DuplicateHook.NO_OP, SortMetrics.NO_OP);
+        CascadeReducer<Integer> merge = new CascadeReducer<>(CMP, fanIn, io, DuplicateHook.NO_OP, SortMetrics.NO_OP);
         List<ListEntry> merged = drain(merge.merge(handles));
 
         assertThat(merged).as("completeness: every entry survives the merge").hasSameSizeAs(whole);
@@ -170,7 +177,7 @@ class PropSortContractTest {
 
         InMemorySegments io = new InMemorySegments();
         int handle = io.add(sorted);
-        KWayMerge<Integer> merge = new KWayMerge<>(CMP, 4, io, DuplicateHook.NO_OP, SortMetrics.NO_OP);
+        CascadeReducer<Integer> merge = new CascadeReducer<>(CMP, 4, io, DuplicateHook.NO_OP, SortMetrics.NO_OP);
         List<ListEntry> out = drain(merge.merge(List.of(handle)));
 
         assertThat(out).as("no user entry dropped, stable input order preserved within a segment")
@@ -396,7 +403,7 @@ class PropSortContractTest {
         return e;
     }
 
-    private static List<ListEntry> drain(SortedCursor cursor) {
+    private static List<ListEntry> drain(SortedEntryCursor cursor) {
         List<ListEntry> out = new ArrayList<>();
         try (cursor) {
             while (cursor.hasNext()) {
@@ -434,8 +441,7 @@ class PropSortContractTest {
     }
 
     private static SortConfig configWithRowGroupBytes(long rowGroupBytes) {
-        Map<String, String> overrides = Map.of("final-row-group-bytes", Long.toString(rowGroupBytes));
-        return SortConfig.fromProperties(k -> overrides.get(k.substring("swath.sort.".length())));
+        return SortConfigs.base().withFinalRowGroupBytes(rowGroupBytes);
     }
 
     private static ObjectEntry object(byte[] key) {

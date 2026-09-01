@@ -28,11 +28,11 @@ import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortBenchCorpus;
-import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.spill.PageRunFormat;
-import io.varve.swath.sort.spill.PageRunSegmentWriter;
+import io.varve.swath.sort.spill.SpillTestFixtures;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -156,7 +156,7 @@ class ParallelMergeBenchmarkTest {
             throws Exception {
         Retained corrupt = completedRetained(root.resolve("corrupt"), "hash", "seg");
         byte[] bytes = Files.readAllBytes(corrupt.segment());
-        bytes[PageRunSegmentWriter.HEADER_BYTES + 8] ^= 0x7F;
+        bytes[SpillTestFixtures.pageRunHeaderBytes() + 8] ^= 0x7F;
         Files.write(corrupt.segment(), bytes);
         assertThatThrownBy(() -> external(corrupt.staging()))
                 .isInstanceOf(IOException.class)
@@ -352,7 +352,7 @@ class ParallelMergeBenchmarkTest {
                 .withMessageContaining("generated corpus contains no page-run inputs");
         Path segment = writeSegment(staging, "seg-generated-0.pageseg");
         byte[] bytes = Files.readAllBytes(segment);
-        bytes[PageRunSegmentWriter.HEADER_BYTES + 8] ^= 0x7F;
+        bytes[SpillTestFixtures.pageRunHeaderBytes() + 8] ^= 0x7F;
         Files.write(segment, bytes);
         assertThatThrownBy(() -> ParallelMergeBenchmark.snapshotCatalog(
                 "generated", staging, List.of(segment)))
@@ -554,7 +554,7 @@ class ParallelMergeBenchmarkTest {
 
     private static Path writeParquet(Path path, List<ListEntry> entries) throws IOException {
         try (SortedFileWriter writer = new SortedParquetWriter(
-                path, SortConfig.fromProperties(ignored -> null), SortMode.VERSIONS, 1)) {
+                path, SortConfigs.base(), SortMode.VERSIONS, 1)) {
             for (ListEntry entry : entries) {
                 writer.write(entry);
             }

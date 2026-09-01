@@ -12,8 +12,9 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.spill.PageBlockCursor;
-import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunReader;
 import io.varve.swath.sort.spill.PageRunTrailer;
+import io.varve.swath.sort.spill.SpillTestFixtures;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -48,16 +49,13 @@ final class BenchmarkRowOracle {
             if (java.nio.file.Files.size(input.path()) != input.expectedBytes()) {
                 throw new IOException("catalog bytes disagree with page-run segment: " + input.path());
             }
-            PageRunTrailer.Trailer trailer;
-            try (PageRunSegmentIo io = PageRunSegmentIo.open(input.path(), SortMetrics.NO_OP)) {
-                trailer = PageRunTrailer.read(io);
-            }
+            PageRunTrailer.Trailer trailer = SpillTestFixtures.trailer(input.path());
             if (trailer.totalEntries() != input.expectedRows()) {
                 throw new IOException("checkpoint rows disagree with page-run trailer: " + input.path());
             }
             long segmentRows = 0;
-            try (PageRunSegmentIo io = PageRunSegmentIo.open(input.path(), SortMetrics.NO_OP)) {
-                PageRunSegmentIo.Page page;
+            try (PageRunReader io = PageRunReader.open(input.path(), SortMetrics.NO_OP)) {
+                PageRunReader.Page page;
                 while ((page = io.nextPage()) != null) {
                     PageBlockCursor cursor = page.decode(input.path()).cursor();
                     while (cursor.hasNext()) {

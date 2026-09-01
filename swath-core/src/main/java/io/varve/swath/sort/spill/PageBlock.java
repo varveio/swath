@@ -13,7 +13,7 @@ import java.util.List;
 
 /**
  * Compact immutable per-page model. Entries are packed at admission into one front-coded payload;
- * {@link PageBlockCodec} owns its byte layout and {@link PageBlockCursor} decodes it sequentially.
+ * {@link PageBlockFormat} owns its byte layout and {@link PageBlockCursor} decodes it sequentially.
  * The block stores no per-row index and stays close to the logical byte size rather than retaining
  * parsed {@link ListEntry} objects.
  *
@@ -23,7 +23,7 @@ import java.util.List;
  * at pack time; record headers remain uncompressed for decode-free frontier reads.
  * A persisted block retains the one CRC-validated record-body array read from disk and addresses
  * its stored payload by offset/length. Header parsing never copies that payload. For {@link
- * PageCodec#NONE}, cursors read the slice in place; compressed codecs allocate only the required
+ * PageCompression#NONE}, cursors read the slice in place; compressed codecs allocate only the required
  * decompressed payload.
  *
  * <p>{@link #pack} also records whether entries are non-decreasing under the full comparator and
@@ -37,7 +37,7 @@ public final class PageBlock {
     static final int ENTRY_OVERHEAD_BYTES = 64;
 
     /** Maximum distinct values retained by one dictionary-eligible column. */
-    public static final int DICT_CAP = 64;
+    static final int DICT_CAP = 64;
 
     /** Hard allocation ceiling for one decoded S3 page payload read from an internal segment. */
     public static final int MAX_RAW_PAYLOAD_BYTES = 256 * 1024 * 1024;
@@ -47,7 +47,7 @@ public final class PageBlock {
     private final int payloadOffset;
     private final int payloadLength;
     private final int rawPayloadLength;
-    private final PageCodec codec;
+    private final PageCompression codec;
     private byte[] decodedPayloadCache;
     private final PageBlockDictionaries dictionaries;
     private final boolean[] useDict;
@@ -61,9 +61,9 @@ public final class PageBlock {
     /** Non-null only for a persisted page, so cursor-time decode faults retain typed path context. */
     private final Path sourcePath;
     /** The one header parse that produced a persisted block; null for admission-packed blocks. */
-    private final PageBlockCodec.Header parsedHeader;
+    private final PageBlockFormat.Header parsedHeader;
 
-    PageBlock(byte[] storedPayload, int rawPayloadLength, PageCodec codec, String[][] dicts,
+    PageBlock(byte[] storedPayload, int rawPayloadLength, PageCompression codec, String[][] dicts,
               boolean[] useDict, int count, byte[] firstKeyBytes, byte[] lastKeyBytes,
               ListEntry firstEntry, ListEntry lastEntry, long estimatedBytes,
               boolean orderedUnderFullComparator, Path sourcePath) {
@@ -86,7 +86,7 @@ public final class PageBlock {
     }
 
     /** Persisted-page constructor: retains the one owned record body and its parsed payload slice. */
-    PageBlock(PageBlockCodec.Header header, byte[] recordBody,
+    PageBlock(PageBlockFormat.Header header, byte[] recordBody,
               ListEntry firstEntry, ListEntry lastEntry, Path sourcePath) {
         this.payloadOwner = recordBody;
         this.payloadOffset = header.payloadOffset();
@@ -107,8 +107,8 @@ public final class PageBlock {
     }
 
     /** Pack a page without payload compression. */
-    public static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator) {
-        return pack(entries, comparator, PageCodec.NONE);
+    static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator) {
+        return pack(entries, comparator, PageCompression.NONE);
     }
 
     /**
@@ -116,12 +116,12 @@ public final class PageBlock {
      * Front coding compares each key only with its immediate predecessor and therefore makes no
      * sorted-input assumption.
      */
-    public static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec) {
+    public static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCompression codec) {
         return pack(entries, comparator, codec, MAX_RAW_PAYLOAD_BYTES);
     }
 
     /** Pack while refusing to grow the raw payload beyond a merge-planned page residency limit. */
-    static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec,
+    static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCompression codec,
                           int maxRawPayloadBytes) {
         return PageBlockPacker.pack(entries, comparator, codec, maxRawPayloadBytes);
     }
@@ -182,7 +182,7 @@ public final class PageBlock {
         return count;
     }
 
-    public PageCodec codec() {
+    public PageCompression codec() {
         return codec;
     }
 
@@ -207,7 +207,7 @@ public final class PageBlock {
     /** A fresh sequential decoder, lazily decompressing this block's payload once. */
     public PageBlockCursor cursor() {
         try {
-            if (codec == PageCodec.NONE) {
+            if (codec == PageCompression.NONE) {
                 if (payloadLength != rawPayloadLength) {
                     throw new IllegalStateException(
                             "PageBlock NONE codec length mismatch: expected " + rawPayloadLength
@@ -222,21 +222,21 @@ public final class PageBlock {
         }
     }
 
-    public byte[] serialize() {
-        return PageBlockCodec.serialize(this);
+    byte[] serialize() {
+        return PageBlockFormat.serialize(this);
     }
 
     /**
      * Parse a persisted body and transfer its immutable ownership to the returned block. Package
      * callers must not mutate {@code record} afterwards.
      */
-    public static PageBlock deserialize(byte[] record) {
-        return PageBlockCodec.deserialize(record, null);
+    static PageBlock deserialize(byte[] record) {
+        return PageBlockFormat.deserialize(record, null);
     }
 
     /** As {@link #deserialize(byte[])}, retaining typed corruption path context. */
     static PageBlock deserialize(byte[] record, Path sourcePath) {
-        return PageBlockCodec.deserialize(record, sourcePath);
+        return PageBlockFormat.deserialize(record, sourcePath);
     }
 
     byte[] payloadOwnerUnsafe() {
@@ -251,7 +251,7 @@ public final class PageBlock {
         return payloadLength;
     }
 
-    PageBlockCodec.Header parsedHeaderUnsafe() {
+    PageBlockFormat.Header parsedHeaderUnsafe() {
         return parsedHeader;
     }
 
@@ -278,10 +278,6 @@ public final class PageBlock {
     }
 
     /** Number of distinct values retained for one dictionary-eligible column. */
-    public int dictionarySize(int column) {
-        return dictionaries.size(column);
-    }
-
     PageBlockDictionaries dictionariesUnsafe() {
         return dictionaries;
     }
@@ -308,8 +304,8 @@ public final class PageBlock {
         if (sourcePath == null || cause instanceof UncheckedIOException) {
             return cause;
         }
-        return new UncheckedIOException(new SegmentCorruptionException(sourcePath,
-                SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+        return new UncheckedIOException(new PageRunCorruptionException(sourcePath,
+                PageRunCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                 "decoded page does not match its structural metadata", cause));
     }
 
