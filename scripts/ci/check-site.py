@@ -234,6 +234,21 @@ def quoted_figures(runs: dict[str, dict]) -> tuple[list[tuple[str, str, int, str
 
 
 # --------------------------------------------------------------------------------------
+# Release-channel rules
+# --------------------------------------------------------------------------------------
+# Sentences in which a page declares which swath it documents. Every one of them, on every
+# page, must name the version in site/data/channel.json -- otherwise the homepage and the
+# field guide can drift a release apart from each other, which is how this started.
+VERSION_DECLARATIONS = [
+    re.compile(r"Documentation for swath ([\w.+-]+)\.(?=\s|$)"),
+    re.compile(r"This guide describes swath ([\w.+-]+)\.(?=\s|$)"),
+]
+
+# The page that must always carry one, so the declaration cannot simply be deleted.
+VERSION_DECLARATION_REQUIRED_ON = "index.html"
+
+
+# --------------------------------------------------------------------------------------
 # Accessibility rules
 # --------------------------------------------------------------------------------------
 # Generated report pages are exempt from the landmark/skip-link rule: they are rendered by
@@ -582,17 +597,20 @@ def check_channel(site: Path, pages: list[Page], repo: Path) -> list[str]:
     if not isinstance(version, str) or not version:
         return failures + ["data/channel.json: version must be a non-empty string"]
 
-    home = next((p for p in pages if p.rel == "index.html"), None)
-    if home is None:
-        return failures + ["index.html is missing from the site tree"]
+    required = next((p for p in pages if p.rel == VERSION_DECLARATION_REQUIRED_ON), None)
+    if required is None:
+        return failures + [f"{VERSION_DECLARATION_REQUIRED_ON} is missing from the site tree"]
 
-    declared = re.findall(r"Documentation for swath ([^.\s<]+(?:\.[^.\s<]+)*)\.", home.text)
-    if not declared:
-        failures.append("index.html: no 'Documentation for swath <version>.' line")
-    for shown in declared:
-        if shown != version:
+    for page in pages:
+        declared = [m for pattern in VERSION_DECLARATIONS
+                    for m in pattern.findall(page.visible)]
+        if page is required and not declared:
             failures.append(
-                f"index.html: shows swath {shown} but data/channel.json declares {version}")
+                f"{page.rel}: no line declaring which swath version the site documents")
+        for shown in declared:
+            if shown != version:
+                failures.append(
+                    f"{page.rel}: declares swath {shown} but data/channel.json says {version}")
 
     if name == "release":
         released = newest_released_version(repo)
