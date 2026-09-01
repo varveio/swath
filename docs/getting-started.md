@@ -4,6 +4,10 @@ This guide gets from a Docker image to a small queryable Parquet inventory. The 
 example lists one historical day from NOAA's `noaa-gestofs-pds` bucket, so it is a quick
 functional check rather than the 39.6-million-object demonstration shown in the README.
 
+The commands below are written against swath **0.3.0**. Match your installed version with
+[step 1](#1-check-the-cli), and adjust the image tag if you are running a different
+release.
+
 swath reads object metadata only. It never downloads or modifies object contents. A run is
 a live listing, not a point-in-time snapshot of a bucket that changes while the scan is in
 progress.
@@ -26,13 +30,12 @@ directly.
 ## 1. Check the CLI
 
 ```bash
-docker run --rm ghcr.io/varveio/swath:latest --version
+docker run --rm ghcr.io/varveio/swath:0.3.0 --version
 ```
 
-This prints the swath version and exits without contacting object storage.
-
-For reproducible automation, replace `latest` with a release tag or the immutable digest
-published with that release.
+This prints the swath version and exits without contacting object storage. The examples
+below pin the `0.3.0` release tag; for reproducible automation, prefer the immutable
+digest published with that release instead of a mutable tag.
 
 ## 2. Stream a few public rows
 
@@ -40,7 +43,7 @@ The following command lists one historical NOAA day and stops after the downstre
 `head` process has read five rows:
 
 ```bash
-docker run --rm ghcr.io/varveio/swath:latest \
+docker run --rm ghcr.io/varveio/swath:0.3.0 \
   list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
   --no-sign-request --region us-east-1 \
   --format tsv |
@@ -49,6 +52,16 @@ docker run --rm ghcr.io/varveio/swath:latest \
 
 The command is anonymous and needs no AWS credentials. Closing the pipe is treated as a
 successful downstream stop, not as a failed listing.
+
+Output is tab-separated, one object per line: `key`, `size`, `last_modified`, `etag`,
+`storage_class`, and `row_type`. The shape looks like this (illustrative; your exact
+keys, sizes, and timestamps will differ):
+
+```text
+key	size	last_modified	etag	storage_class	row_type
+stofs_2d_glo.20230113/stofs_2d_glo.t00z.fields.cwl.nc	123456789	2023-01-13T02:00:00Z	a1b2c3d4e5f6	STANDARD	OBJECT
+stofs_2d_glo.20230113/stofs_2d_glo.t00z.points.cwl.nc	12345678	2023-01-13T02:05:00Z	f6e5d4c3b2a1	STANDARD	OBJECT
+```
 
 If this exact public command fails, follow the reported network, region, or Docker symptom
 in [Troubleshooting and FAQ](faq.md). Do not add credentials to the public example.
@@ -61,7 +74,7 @@ Create a host directory, mount it into the container, and write the listing bene
 mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest \
+  ghcr.io/varveio/swath:0.3.0 \
   list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
   --no-sign-request --region us-east-1 \
   --format parquet -o /out/stofs-20230113
@@ -124,7 +137,7 @@ The output directory is the public resume handle:
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest \
+  ghcr.io/varveio/swath:0.3.0 \
   resume /out/stofs-20230113
 ```
 
@@ -133,8 +146,11 @@ successfully.
 
 To observe real recovery, use the optional
 [full-scale demonstration](full-scale-demo.md), stop it with Ctrl+C, and pass the same
-output directory to `resume`. swath retains finalized Parquet parts, discards an
-unfinished part, and continues after the last durable cursor.
+output directory to `resume`. That demonstration lists the entire `noaa-gestofs-pds`
+bucket and makes tens of thousands of `ListObjectsV2` requests; it is a capability
+demonstration, not an installation test, so do not run it just to confirm swath works.
+swath retains finalized Parquet parts, discards an unfinished part, and continues after
+the last durable cursor.
 
 Do not edit the checkpoint or move an interrupted managed dataset. To replace a completed
 dataset deliberately, start a new listing with `--overwrite`.
@@ -152,7 +168,7 @@ mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD/out:/out" \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION \
-  ghcr.io/varveio/swath:latest \
+  ghcr.io/varveio/swath:0.3.0 \
   list s3://my-bucket/prefix/ \
   --region us-east-1 \
   --format parquet -o /out/my-inventory
