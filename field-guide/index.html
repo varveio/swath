@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <title>swath — a field guide to parallel S3 listing</title>
-<meta name="description" content="How swath divides an S3 keyspace it cannot see: blind range guesses, work stealing that corrects them mid-sweep, and crash-safe Parquet output.">
+<meta name="description" content="How swath divides an S3 keyspace it cannot see: blind range guesses, work stealing that corrects them mid-sweep, and resumable managed Parquet output.">
 
 <!-- Publication URLs — this is the one place to change them.
      Live site: https://swath.varve.io (GitHub Pages, gh-pages branch of varveio/swath) -->
@@ -13,7 +13,7 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="swath">
 <meta property="og:title" content="How swath maps an S3 bucket it cannot see">
-<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to crash-safe Parquet.">
+<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to resumable managed Parquet.">
 <meta property="og:url" content="https://swath.varve.io/field-guide/">
 <meta property="og:image" content="https://swath.varve.io/card.png">
 <meta property="og:image:width" content="1200">
@@ -881,8 +881,10 @@
         Before it lists anything, swath has to cut the keyspace into pieces. It has no
         distribution to cut against, so it does what any blind partitioner does: one
         <span class="mono">delimiter=/</span> probe for the top-level directories, then
-        ranges cut along the boundaries it returns — capped at four per worker and evenly
-        subsampled — each implicitly assumed to hold about as much as the next.
+        ranges cut along the boundaries it returns — capped at
+        <span class="mono">min(1000, 4 × workers)</span> and evenly subsampled — each
+        implicitly assumed to hold about as much as the next. At 128 workers that cap is 512
+        cut points, which is where the 513 comes from.
         For this bucket that came to 513 ranges and an expectation of
         <strong>0.195% of the objects in each</strong>.
       </p>
@@ -1341,19 +1343,19 @@
           <circle cx="26" cy="176" r="5" class="f-ink"/>
 
           <text class="hd" x="48" y="28">Estimate where half the remaining work is</text>
-          <text class="sm" x="560" y="28">from mass already seen · 0 requests</text>
+          <text class="sm" x="756" y="28" text-anchor="end">from mass already seen · 0 requests</text>
 
           <text class="hd" x="48" y="66">Ask S3 for one key past that boundary</text>
-          <text class="sm" x="560" y="66">max_keys=1 · 1 request</text>
+          <text class="sm" x="756" y="66" text-anchor="end">max_keys=1 · 1 request</text>
 
           <text class="hd" x="48" y="104">If a key comes back, split there</text>
-          <text class="sm" x="560" y="104">the common case · done</text>
+          <text class="sm" x="756" y="104" text-anchor="end">the common case · done</text>
 
           <text class="hd f-sig" x="48" y="142">If nothing does, climb to harder evidence</text>
-          <text class="sm" x="560" y="142">directory structure, observed density</text>
+          <text class="sm" x="756" y="142" text-anchor="end">directory structure, observed density</text>
 
           <text class="hd" x="48" y="180">Re-validate against the moving owner, then commit</text>
-          <text class="sm" x="560" y="180">one guarded transaction</text>
+          <text class="sm" x="756" y="180" text-anchor="end">one guarded transaction</text>
 
           <line x1="0" y1="204" x2="760" y2="204" class="s-rule"/>
           <text class="sm" x="0" y="224">The cheapest question first, and every rung after it fires only on evidence that the last one failed.</text>
@@ -1804,8 +1806,9 @@
     </div>
     <div class="col">
       <p>
-        The measured example on this page is run
-        <span class="mono">noaa-gestofs-field-guide-trace</span>, captured against
+        The measured example on this page is the capture identified here as
+        <span class="mono">noaa-gestofs-field-guide-trace</span> — a label assigned to this
+        artifact, not one recorded at capture time. It ran against
         <span class="mono">s3://noaa-gestofs-pds/</span> — a public NOAA forecast archive in
         <span class="mono">us-east-1</span> — listed cold, with no inventory and no prior
         knowledge of its shape, from a dedicated US-East cloud host at a different provider,
@@ -1869,9 +1872,10 @@
       <p>
         In this run the measured wall clock was 69 seconds. Dividing the 5,030 recorded busy
         worker-seconds evenly across 128 workers gives a 39-second idealized lower bound for
-        this run's own work accounting. The 30-second gap corresponds to 3,750 recorded idle
-        worker-seconds plus startup, request latency, stretches with less splittable work than
-        workers, and the final unsplittable tail; the figure does not separate them. At 128
+        this run's own work accounting. The 30-second gap is the run's 3,750
+        recorded idle worker-seconds — worker time not spent listing. Startup, request latency,
+        stretches with less splittable work than workers, and the final unsplittable tail all
+        contribute to that idle time; the figure does not separate them. At 128
         workers, a large share of the fleet was waiting rather than listing. That is a
         diagnostic of this run — a lead being tracked — not a portable efficiency score or a
         benchmark result.
@@ -2058,7 +2062,8 @@
         separate, much smaller bounded writer pool, and sorted output adds a third bounded pool of
         encoders that runs after listing has finished. Text directory datasets can use several
         writers but are still not resumable. Sorted output finalizes from durable page-run staging,
-        so an interrupted sorted run resumes from the sealed segments rather than re-listing.
+        so an interrupted sorted run reuses its checkpoint-tracked sealed segments; any
+        unfinished listing tail is still re-listed from the durable cursor.
         Every dataset ends the same way: parts, then the manifest, then
         <span class="mono">_SUCCESS</span> last.
       </figcaption>
@@ -2080,12 +2085,12 @@
     <div class="col">
       <p>
         <code>--concurrency</code> (default 64) sets a <em>ceiling</em>, and the live target
-        <span class="mono">T</span> moves underneath it. It starts well below the ceiling and
-        doubles through a handful of paced steps while the endpoint stays clean; the run's first
-        congestion signal latches that growth down to a cautious additive step for the rest of the
-        run. A real 503 or <span class="mono">Retry-After</span> multiplies
-        <span class="mono">T</span> down by 0.7 and pauses new steals. It never falls below one,
-        so the run always makes forward progress.
+        <span class="mono">T</span> moves underneath it. It starts at
+        <span class="mono">min(4, --concurrency)</span> and doubles through a handful of paced
+        steps while the endpoint stays clean; the run's first congestion signal latches that
+        growth down to a cautious additive step for the rest of the run. A real 503 or
+        <span class="mono">Retry-After</span> multiplies <span class="mono">T</span> down by 0.7
+        and pauses new steals. The floor is one, so at least one listing slot stays admitted.
       </p>
       <p>
         Two further rungs exist and neither of them lowers <span class="mono">T</span>: a
@@ -2144,7 +2149,7 @@
 
           <text class="sm f-acc" x="180" y="94">grows while the endpoint stays clean</text>
           <text class="sm f-alert" x="344" y="98">×0.7 on stress</text>
-          <text class="sm" x="46" y="164">Workers above the new T finish their current page, then park. The floor is 1 — the run always makes forward progress.</text>
+          <text class="sm" x="46" y="164">Workers above the new T finish their current page, then park. The floor is 1 — one listing slot stays admitted.</text>
           <text class="sm" x="46" y="178">Simplified: the freeze and shed rungs that also act on T are not drawn. See algorithms.md §5.</text>
         </svg>
       </div>
