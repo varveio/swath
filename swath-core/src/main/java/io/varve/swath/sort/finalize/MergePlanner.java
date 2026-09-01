@@ -3,8 +3,14 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.spill.PageRef;
+import io.varve.swath.sort.spill.PageRunCatalog;
+import io.varve.swath.sort.spill.PageRunSegmentDescriptor;
 import java.util.function.IntSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -3,9 +3,13 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortedCursor;
 import java.util.Comparator;
 
 /** Reports adjacent comparator-equal rows from one merged cursor without changing multiplicity. */

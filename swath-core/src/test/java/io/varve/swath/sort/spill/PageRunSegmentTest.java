@@ -3,9 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
-import static io.varve.swath.sort.SortTestSupport.object;
+import static io.varve.swath.sort.finalize.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -14,6 +14,17 @@ import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortLaneMeters;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.finalize.SortTestSupport;
+import io.varve.swath.sort.stage.PageRunFixtures;
+import io.varve.swath.sort.stage.SortLane;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -48,7 +59,7 @@ class PageRunSegmentTest {
 
     @Test
     void roundTripsSealedBufferInSortedOrder(@TempDir Path dir) throws IOException {
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("a"), object("b")));
         buffer.admit(1L, List.of(object("c"), object("d")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
@@ -63,7 +74,7 @@ class PageRunSegmentTest {
 
     @Test
     void trailerCarriesExactAggregateTotals(@TempDir Path dir) throws IOException {
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("alpha"), object("bravo")));
         buffer.admit(2L, List.of(object("yankee"), object("zulu")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
@@ -79,7 +90,7 @@ class PageRunSegmentTest {
 
     @Test
     void nestedOverlappingPagesAreRejectedAtSealBeforeCompletion(@TempDir Path dir) {
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("a"), object("z")));
         buffer.admit(2L, List.of(object("b"), object("c")));
         Path path = dir.resolve("nested.pageseg");
@@ -304,7 +315,7 @@ class PageRunSegmentTest {
         ObjectEntry second = objectWithSize("a", 1L);
         assertThat(CMP.compare(first, second)).as("precondition: payload is not an ordering field").isZero();
 
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(first, second, object("c")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
         assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isTrue();
@@ -321,7 +332,7 @@ class PageRunSegmentTest {
 
     @Test
     void byteGateFlushRemainsObservable(@TempDir Path dir) throws IOException {
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("a"), object("b")));
         SealedBuffer sealed = buffer.seal(SealTrigger.BYTE_GATE);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
@@ -337,13 +348,13 @@ class PageRunSegmentTest {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         PageRunSegmentWriter writer =
                 new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, metrics, PageCodec.NONE);
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("a")));
 
         writer.flush(buffer.seal(SealTrigger.DRAIN), dir.resolve("listing.pageseg"));
         assertThat(metrics.count("SORT.segment_flushed")).isEqualTo(1);
 
-        try (SortedCursor cascade = new InMemoryCursor(
+            try (SortedCursor cascade = SortTestSupport.cursor(
                 List.of(object("b")), CMP, DuplicateHook.NO_OP)) {
             writer.writeIntermediate(cascade, dir.resolve("cascade.pageseg"));
         }
@@ -351,7 +362,7 @@ class PageRunSegmentTest {
                 .as("cascade intermediates retain their existing separate accounting")
                 .isEqualTo(1);
 
-        try (SortedCursor fixture = new InMemoryCursor(
+            try (SortedCursor fixture = SortTestSupport.cursor(
                 List.of(object("c")), CMP, DuplicateHook.NO_OP)) {
             writer.writeFixtureChunk(fixture, dir.resolve("fixture.pageseg"));
         }
@@ -361,7 +372,7 @@ class PageRunSegmentTest {
     @Test
     void listingFlushReportsThenRejectsAnEqualPageBoundary(@TempDir Path dir) {
         AtomicInteger duplicates = new AtomicInteger();
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("a"), object("b")));
         buffer.admit(2L, List.of(object("b"), object("c")));
 
@@ -383,7 +394,7 @@ class PageRunSegmentTest {
         // PageBlock.pack(entries, comparator) overload — it silently discards whatever codec the page
         // was originally admitted with.
         SortConfig zstdConfig = configWithCodec(PageCodec.ZSTD1);
-        SortBuffer buffer = new SortBuffer(zstdConfig, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(zstdConfig, CMP);
         buffer.admit(1L, List.of(version("k", "v2"), version("k", "v1"), object("z")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
         assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isFalse();   // precondition: forces the re-pack path
@@ -401,7 +412,7 @@ class PageRunSegmentTest {
     @Test
     void outOfOrderPageReSortWithNoneConfiguredCodecStillWritesNone(@TempDir Path dir) throws IOException {
         SortConfig noneConfig = configWithCodec(PageCodec.NONE);
-        SortBuffer buffer = new SortBuffer(noneConfig, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(noneConfig, CMP);
         buffer.admit(1L, List.of(version("k", "v2"), version("k", "v1"), object("z")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
         assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isFalse();   // precondition: forces the re-pack path
@@ -423,7 +434,7 @@ class PageRunSegmentTest {
             sorted.add(object(String.format("k%06d", i)));
         }
         Path path = dir.resolve("intermediate.pgr");
-        try (SortedCursor cursor = new InMemoryCursor(sorted, CMP, DuplicateHook.NO_OP)) {
+        try (SortedCursor cursor = SortTestSupport.cursor(sorted, CMP, DuplicateHook.NO_OP)) {
             new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.ZSTD1)
                     .writeIntermediate(cursor, path);
         }
@@ -441,7 +452,7 @@ class PageRunSegmentTest {
             sorted.add(object(String.format("k%06d", i)));
         }
         Path path = dir.resolve("intermediate.pgr");
-        try (SortedCursor cursor = new InMemoryCursor(sorted, CMP, DuplicateHook.NO_OP)) {
+        try (SortedCursor cursor = SortTestSupport.cursor(sorted, CMP, DuplicateHook.NO_OP)) {
             new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
                     .writeIntermediate(cursor, path);
         }
@@ -459,7 +470,7 @@ class PageRunSegmentTest {
     void multiNodeDisjointRangesEmitPagesInMinKeyOrder(@TempDir Path dir) throws IOException {
         // Node runs admitted with node 2 holding the LOWER range — the writer must order pages by
         // firstKey across all node runs, so the concatenation is globally sorted regardless.
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("m"), object("n")));
         buffer.admit(2L, List.of(object("a"), object("b")));
         buffer.admit(1L, List.of(object("x"), object("y")));
@@ -485,7 +496,7 @@ class PageRunSegmentTest {
 
         Path path = dir.resolve("intermediate.pgr");
         long rows;
-        try (SortedCursor cursor = new InMemoryCursor(sorted, CMP, DuplicateHook.NO_OP)) {
+        try (SortedCursor cursor = SortTestSupport.cursor(sorted, CMP, DuplicateHook.NO_OP)) {
             rows = writer().writeIntermediate(cursor, path);
         }
 
@@ -506,7 +517,7 @@ class PageRunSegmentTest {
                 List.of(sorted.subList(0, 1_000), sorted.subList(1_000, 1_001)), CMP);
 
         Path actual = dir.resolve("actual.pageseg");
-        try (SortedCursor cursor = new InMemoryCursor(sorted, CMP, DuplicateHook.NO_OP)) {
+        try (SortedCursor cursor = SortTestSupport.cursor(sorted, CMP, DuplicateHook.NO_OP)) {
             writer().writeIntermediate(cursor, actual);
         }
 
@@ -515,7 +526,7 @@ class PageRunSegmentTest {
 
     @Test
     void zeroRecordSegmentRoundTripsToAnEmptyStream(@TempDir Path dir) throws IOException {
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);   // no admits at all
         assertThat(sealed.isEmpty()).isTrue();
 
@@ -533,7 +544,7 @@ class PageRunSegmentTest {
     void writeIntermediateWithAnEmptyCursorRoundTripsToAnEmptyStream(@TempDir Path dir) throws IOException {
         Path path = dir.resolve("empty-intermediate.pgr");
         long rows;
-        try (SortedCursor cursor = new InMemoryCursor(List.of(), CMP, DuplicateHook.NO_OP)) {
+        try (SortedCursor cursor = SortTestSupport.cursor(List.of(), CMP, DuplicateHook.NO_OP)) {
             rows = writer().writeIntermediate(cursor, path);
         }
         assertThat(rows).isEqualTo(0);
@@ -658,7 +669,7 @@ class PageRunSegmentTest {
     @Test
     void admissionRejectsAKeyThePersistedReaderWouldReject() {
         byte[] overlong = new byte[ByteMidpoint.MAX_KEY_LEN + 1];
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
 
         assertThatThrownBy(() -> buffer.admit(1L, List.of(
                 new CommonPrefixEntry(KeyBytes.of(overlong)))))
@@ -670,7 +681,7 @@ class PageRunSegmentTest {
     void admissionRejectsADictionaryValueThatCannotFitItsPersistedLength() {
         ObjectEntry overlongStorageClass = new ObjectEntry(KeyBytes.ofUtf8("a"), 1L, 0L, null,
                 "x".repeat(0x1_0000), null, false, null, null, null, null);
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
 
         assertThatThrownBy(() -> buffer.admit(1L, List.of(overlongStorageClass)))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -706,7 +717,7 @@ class PageRunSegmentTest {
         // reader's first advance() then loads NO page (recordsLeft==0 immediately) — the end-of-stream
         // completeness cross-check must fire unconditionally, not only when a body was loaded, so the
         // segment is never silently reported empty (which would drop its two rows during merging).
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("a"), object("b")));
         Path path = dir.resolve("seg.pgr");
         writer().flush(buffer.seal(SealTrigger.DRAIN), path);
@@ -751,7 +762,7 @@ class PageRunSegmentTest {
             sorted.add(object(String.format("k%06d", i)));
         }
         Path path = dir.resolve("multi.pgr");
-        try (SortedCursor cursor = new InMemoryCursor(sorted, CMP, DuplicateHook.NO_OP)) {
+        try (SortedCursor cursor = SortTestSupport.cursor(sorted, CMP, DuplicateHook.NO_OP)) {
             writer().writeIntermediate(cursor, path);
         }
 
@@ -761,7 +772,7 @@ class PageRunSegmentTest {
     }
 
     private void writeSimpleSegment(Path path, int entries) throws IOException {
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         List<ListEntry> page = new ArrayList<>();
         for (int i = 0; i < entries; i++) {
             page.add(object(String.format("k%06d", i)));

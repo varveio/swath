@@ -3,21 +3,23 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.stage;
 
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.spill.SealTrigger;
 import java.util.Objects;
 
 /**
  * The shared staging-segment fullness policy. The byte threshold has precedence when both limits
  * are reached by the same entry, preserving the listing lane's trigger classification.
  */
-record SegmentGate(SortConfig config) {
+public record SegmentGate(SortConfig config) {
 
-    SegmentGate {
+    public SegmentGate {
         Objects.requireNonNull(config, "config");
     }
 
-    boolean full(long estimatedBytes, long entries) {
+    public boolean full(long estimatedBytes, long entries) {
         return trigger(estimatedBytes, entries) != SealTrigger.DRAIN;
     }
 

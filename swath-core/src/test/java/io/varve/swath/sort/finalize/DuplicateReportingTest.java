@@ -3,13 +3,17 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
-import static io.varve.swath.sort.SortTestSupport.object;
+import static io.varve.swath.sort.finalize.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortOrderException;
+import io.varve.swath.sort.SortedCursor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,7 +31,7 @@ class DuplicateReportingTest {
         List<String> reports = new ArrayList<>();
 
         List<ListEntry> output = drain(new DuplicateReporting(
-                new InMemoryCursor(input, comparator, DuplicateHook.NO_OP), comparator,
+                SortTestSupport.cursor(input, comparator, DuplicateHook.NO_OP), comparator,
                 (previous, current) -> reports.add(current.key().asString())));
 
         assertThat(output).containsExactlyElementsOf(input);
@@ -75,7 +79,7 @@ class DuplicateReportingTest {
     @Test
     void rejectsAComparatorRegressionAfterPayingTheAdjacentComparison() {
         DuplicateReporting reporting = new DuplicateReporting(
-                new InMemoryCursor(List.of(object("a"), object("z"), object("m")),
+                SortTestSupport.cursor(List.of(object("a"), object("z"), object("m")),
                         comparator, DuplicateHook.NO_OP),
                 comparator, DuplicateHook.NO_OP);
 

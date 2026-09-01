@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 /** Allocation-free source-run classifier; counts saturate at two because only 0/1/many matters. */
 final class MergeRunTracker {

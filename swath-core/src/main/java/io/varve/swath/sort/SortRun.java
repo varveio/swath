@@ -8,6 +8,9 @@ package io.varve.swath.sort;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.finalize.MergeFdBudget;
+import io.varve.swath.sort.finalize.PartSizer;
+import io.varve.swath.sort.spill.PageRunFormat;
 import java.util.Comparator;
 import java.util.function.IntSupplier;
 
@@ -48,7 +51,7 @@ public record SortRun(
     }
 
     /** Ordering mode persisted into every cascade segment produced by this run. */
-    SortMode orderingMode() {
+    public SortMode orderingMode() {
         return equalKeyPolicy == EqualKeyPolicy.REJECT ? SortMode.OBJECTS : SortMode.VERSIONS;
     }
 

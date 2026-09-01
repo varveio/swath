@@ -3,9 +3,13 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedCursor;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -53,7 +57,7 @@ import java.util.List;
  * the file-then-directory fsync below, a half-written page-run file has no valid trailer and is
  * discarded whole on resume (I6 — durable iff finalized; segment-granularity, not sub-file).
  */
-final class PageRunSegmentWriter {
+public final class PageRunSegmentWriter {
 
     /** Segment magic: ASCII "SPGR" (swath Page-Run). Appears in the header and again at trailer end. */
     static final int MAGIC = 0x53504752;
@@ -65,7 +69,7 @@ final class PageRunSegmentWriter {
     static final String FORMAT_NAME = PageRunFormat.NAME;
 
     /** Bytes in the header emitted by this build. Readers honor the envelope's dynamic metadata length. */
-    static final int HEADER_BYTES = PageRunHeader.CURRENT_BYTES;
+    public static final int HEADER_BYTES = PageRunHeader.CURRENT_BYTES;
 
     /** Fixed trailer: trailerStart u64 + totalRecords u32 + totalEntries u64 + maxRecordLen u32 +
      *  maxRawPayloadLen u32 + maxKeyLen u32 + CRC32C u32 + magic u32 = 40 bytes. The reader reads exactly this
@@ -88,12 +92,12 @@ final class PageRunSegmentWriter {
     private final PageCodec codec;
     private final SortMode orderingMode;
 
-    PageRunSegmentWriter(Comparator<ListEntry> comparator, DuplicateHook hook, SortMetrics metrics,
+    public PageRunSegmentWriter(Comparator<ListEntry> comparator, DuplicateHook hook, SortMetrics metrics,
                         PageCodec codec) {
         this(comparator, hook, metrics, codec, SortMode.OBJECTS);
     }
 
-    PageRunSegmentWriter(Comparator<ListEntry> comparator, DuplicateHook hook, SortMetrics metrics,
+    public PageRunSegmentWriter(Comparator<ListEntry> comparator, DuplicateHook hook, SortMetrics metrics,
                          PageCodec codec, SortMode orderingMode) {
         PageRunFormat.requireCanonicalComparator(comparator);
         this.comparator = comparator;
@@ -109,7 +113,7 @@ final class PageRunSegmentWriter {
      * trailer; fsync file + parent dir. Returns the {@link SegmentResult} the checkpoint consumes
      * ({@code perNodeMaxKeys} comes from the in-memory seal, not the file).
      */
-    SegmentResult flush(SealedBuffer buffer, Path path) throws IOException {
+    public SegmentResult flush(SealedBuffer buffer, Path path) throws IOException {
         List<PageBlock> pages = buffer.pages();   // already a fresh, mutable, sortable list
 
         // Re-pack any page with a full-comparator regression. pack() preserves input order and sets
@@ -177,18 +181,18 @@ final class PageRunSegmentWriter {
      * closes {@code sorted}. Streams one page at a time so memory stays bounded; because boundary
      * selection has already completed, this path omits the unused index extension. Returns total rows.
      */
-    long writeIntermediate(SortedCursor sorted, Path path) throws IOException {
+    public long writeIntermediate(SortedCursor sorted, Path path) throws IOException {
         return writeIntermediate(sorted, path, PageBlock.MAX_RAW_PAYLOAD_BYTES);
     }
 
     /** Write a cascade whose generated pages cannot exceed the merge-planned decoded-page price. */
-    long writeIntermediate(SortedCursor sorted, Path path, int maxRawPayloadBytes)
+    public long writeIntermediate(SortedCursor sorted, Path path, int maxRawPayloadBytes)
             throws IOException {
         return writeSorted(sorted, path, SegmentKind.CASCADE_INTERMEDIATE, maxRawPayloadBytes);
     }
 
     /** Write one locally sorted fixture chunk without retaining an unused boundary sample. */
-    long writeFixtureChunk(SortedCursor sorted, Path path) throws IOException {
+    public long writeFixtureChunk(SortedCursor sorted, Path path) throws IOException {
         return writeSorted(sorted, path, SegmentKind.FIXTURE_CHUNK,
                 PageBlock.MAX_RAW_PAYLOAD_BYTES);
     }

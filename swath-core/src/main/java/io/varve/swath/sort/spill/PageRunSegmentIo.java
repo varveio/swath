@@ -3,9 +3,11 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import io.varve.swath.model.ByteMidpoint;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -38,7 +40,7 @@ import java.util.zip.CRC32C;
  * {@link #nextRecord()} for a body plus a {@code crcOk} flag so a debug dump can identify a torn
  * record without aborting the diagnostic walk.
  */
-final class PageRunSegmentIo implements AutoCloseable {
+public final class PageRunSegmentIo implements AutoCloseable {
 
     private final FileChannel channel;
     private final Path path;
@@ -53,7 +55,7 @@ final class PageRunSegmentIo implements AutoCloseable {
     private final int maxRawPayloadLength;
 
     /** Largest framed body length (from the trailer): bounds a record's claimed length before alloc. */
-    final long maxRecordLen;
+    public final long maxRecordLen;
     /** Exact largest decoded payload declared by any page header in this segment. */
     final int persistedMaxRawPayloadLength;
     /** Exact largest page-bound key length in this segment. */
@@ -110,18 +112,18 @@ final class PageRunSegmentIo implements AutoCloseable {
      * Closes the channel on any open-time failure. {@code metrics} carries the
      * {@code SORT.page_run_min_regression} engagement counter into the run summary.
      */
-    static PageRunSegmentIo open(Path path, SortMetrics metrics) throws IOException {
+    public static PageRunSegmentIo open(Path path, SortMetrics metrics) throws IOException {
         return open(path, metrics, PageBlock.MAX_RAW_PAYLOAD_BYTES);
     }
 
     /** Open with the segment's own CRC-protected fixed-trailer decoded-page maximum. */
-    static PageRunSegmentIo openUsingPersistedMaximum(Path path, SortMetrics metrics)
+    public static PageRunSegmentIo openUsingPersistedMaximum(Path path, SortMetrics metrics)
             throws IOException {
         return open(path, metrics, -1);
     }
 
     /** Open with the decoded-page maximum admitted for this segment by kickoff planning. */
-    static PageRunSegmentIo open(Path path, SortMetrics metrics, int maxRawPayloadLength)
+    public static PageRunSegmentIo open(Path path, SortMetrics metrics, int maxRawPayloadLength)
             throws IOException {
         if (maxRawPayloadLength < -1 || maxRawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
             throw new IllegalArgumentException("decoded-page limit is outside the format bound: "
@@ -216,14 +218,14 @@ final class PageRunSegmentIo implements AutoCloseable {
      * by this IO instance and is thereafter immutable. A decoded {@link PageBlock} retains that body
      * directly, so a frontier may advance or close without invalidating a previously returned block.
      */
-    record Page(byte[] body, PageBlockCodec.Header header) {
-        PageBlock decode(Path sourcePath) {
+    public record Page(byte[] body, PageBlockCodec.Header header) {
+        public PageBlock decode(Path sourcePath) {
             return PageBlockCodec.deserialize(body, header, sourcePath);
         }
     }
 
     /** Header-pass result for one physical frame; the stored payload was not read. */
-    record RoutingPage(long ordinal, long offset, int framedLen,
+    public record RoutingPage(long ordinal, long offset, int framedLen,
                        PageBlockCodec.RoutingHeader header) {
     }
 
@@ -234,7 +236,7 @@ final class PageRunSegmentIo implements AutoCloseable {
      * the body keeps cascade merge and test row decoding on the same guarded frame loop; a new bare
      * body reader cannot silently skip the logical ordering checks.
      */
-    Page nextPage() throws IOException {
+    public Page nextPage() throws IOException {
         if (pagesRead == totalRecords) {
             if (nextFrameOffset != trailerStart) {
                 throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
@@ -271,7 +273,7 @@ final class PageRunSegmentIo implements AutoCloseable {
      * Advance one frame using positional metadata reads only. The body CRC is intentionally deferred
      * to the encoder's positional read; this pass proves frame tiling, routing bounds, and totals.
      */
-    RoutingPage nextRoutingPage() throws IOException {
+    public RoutingPage nextRoutingPage() throws IOException {
         if (pagesRead == totalRecords) {
             return null;
         }
@@ -309,7 +311,7 @@ final class PageRunSegmentIo implements AutoCloseable {
     }
 
     /** Validate the exact header-to-trailer frame chain and both trailer totals. */
-    void checkRoutingComplete() throws IOException {
+    public void checkRoutingComplete() throws IOException {
         if (nextFrameOffset != trailerStart) {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "page frames end at " + nextFrameOffset
@@ -319,7 +321,7 @@ final class PageRunSegmentIo implements AutoCloseable {
     }
 
     /** Positional CRC/read/decode input for a reference, safe across concurrent encoder lanes. */
-    PageBlock readPage(PageRef ref) throws IOException {
+    public PageBlock readPage(PageRef ref) throws IOException {
         if (ref.offset() < headerBytes || ref.offset() >= trailerStart
                 || ref.ordinal() >= totalRecords) {
             throw fail("page reference is outside the physical frame region");
@@ -495,7 +497,7 @@ final class PageRunSegmentIo implements AutoCloseable {
     }
 
     /** Positional read of exactly {@code n} bytes (does not move the channel position). */
-    ByteBuffer readAt(long position, int n) throws IOException {
+    public ByteBuffer readAt(long position, int n) throws IOException {
         return readAt(channel, path, position, n);
     }
 
@@ -544,7 +546,7 @@ final class PageRunSegmentIo implements AutoCloseable {
         return new SegmentCorruptionException(path, errorClass, message, cause);
     }
 
-    Path path() {
+    public Path path() {
         return path;
     }
 

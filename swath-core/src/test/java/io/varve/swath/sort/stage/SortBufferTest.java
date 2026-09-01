@@ -3,11 +3,18 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.stage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.finalize.SortTestSupport;
+import io.varve.swath.sort.spill.PageBlock;
+import io.varve.swath.sort.spill.SealTrigger;
+import io.varve.swath.sort.spill.SealedBuffer;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 

@@ -3,7 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.stage;
+
+import io.varve.swath.sort.spill.SegmentResult;
 
 /**
  * The durability seam invoked by the {@link SortLane}'s encoder <b>after a staging segment is fully

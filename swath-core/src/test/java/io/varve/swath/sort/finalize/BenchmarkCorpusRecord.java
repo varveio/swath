@@ -3,8 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
+import io.varve.swath.sort.spill.PageRunFormat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -14,6 +14,15 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.sorted.SortedDatasetCommitter;
 import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -68,7 +77,7 @@ class PageBlockUtf8CorruptionTest {
 
     @SafeVarargs
     private static Path writePages(Path path, List<ListEntry>... pages) throws IOException {
-        SortBuffer buffer = new SortBuffer(
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(
                 SortConfigs.base().withSegmentCodec(PageCodec.NONE), CMP);
         long node = 0;
         for (List<ListEntry> page : pages) {

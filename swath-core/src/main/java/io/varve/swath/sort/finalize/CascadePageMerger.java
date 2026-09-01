@@ -3,9 +3,13 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.spill.PageBlock;
+import io.varve.swath.sort.spill.PageBlockCursor;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.Arrays;

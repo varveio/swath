@@ -7,10 +7,10 @@ package io.varve.swath.output.sorted;
 
 import io.varve.swath.output.dataset.DurableFiles;
 import io.varve.swath.sort.FinalPart;
-import io.varve.swath.sort.PreparedSortedParts;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.finalize.PreparedSortedParts;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.output.sorted;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -12,11 +12,16 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.sorted.SortedParquetStamp;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
-import io.varve.swath.output.sorted.SortedDatasetCommitter;
-import io.varve.swath.output.sorted.SortedDatasetCoordinator;
-import io.varve.swath.output.sorted.SortedDatasetResult;
-import io.varve.swath.output.sorted.StagingNames;
-import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.finalize.SortTestSupport;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

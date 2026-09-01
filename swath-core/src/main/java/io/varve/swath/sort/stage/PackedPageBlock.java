@@ -3,9 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.stage;
 
 import io.varve.swath.model.PackedPage;
+import io.varve.swath.sort.spill.PageBlock;
 
 /**
  * The sort package's concrete {@link PackedPage} (pack-on-fetch): a {@link PageBlock} the

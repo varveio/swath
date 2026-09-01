@@ -3,18 +3,18 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * The state moved out of a sealed {@link SortBuffer}: packed pages, distinct-node count, per-node
+ * The state moved out of a sealed {@link io.varve.swath.sort.stage.SortBuffer}: packed pages, distinct-node count, per-node
  * max keys, and the {@link SealTrigger}. {@link PageRunSegmentWriter} owns and sorts the page list
  * in place; merge ordering is resolved by the page-aware external merge.
  */
-final class SealedBuffer {
+public final class SealedBuffer {
 
     private final List<PageBlock> pages;
     private final int runCount;
@@ -23,7 +23,7 @@ final class SealedBuffer {
     private final SealTrigger trigger;
     private final long estimatedBytes;
 
-    SealedBuffer(List<PageBlock> pages, int runCount, Map<Long, byte[]> maxKeys, long entryCount,
+    public SealedBuffer(List<PageBlock> pages, int runCount, Map<Long, byte[]> maxKeys, long entryCount,
                  SealTrigger trigger, long estimatedBytes) {
         this.pages = pages;
         this.runCount = runCount;
@@ -33,7 +33,7 @@ final class SealedBuffer {
         this.estimatedBytes = estimatedBytes;
     }
 
-    long entryCount() {
+    public long entryCount() {
         return entryCount;
     }
 
@@ -44,34 +44,34 @@ final class SealedBuffer {
      * finalized (success or failure), feeding the in-flight staging-bytes high-water mark
      * ({@code swath.sort.staging.bytes.peak}).
      */
-    long estimatedBytes() {
+    public long estimatedBytes() {
         return estimatedBytes;
     }
 
     /** How many per-node page runs this buffer holds — the {@code page_runs_per_buffer} signal. */
-    int runCount() {
+    public int runCount() {
         return runCount;
     }
 
     /**
      * The moved page list in admission order, <b>not</b> globally sorted. The page-run writer owns
-     * this list and orders it by {@link PageBlock#firstKey()} in place; no live {@link SortBuffer}
+     * this list and orders it by {@link PageBlock#firstKey()} in place; no live {@link io.varve.swath.sort.stage.SortBuffer}
      * retains an alias after sealing.
      */
-    List<PageBlock> pages() {
+    public List<PageBlock> pages() {
         return pages;
     }
 
-    SealTrigger trigger() {
+    public SealTrigger trigger() {
         return trigger;
     }
 
-    boolean isEmpty() {
+    public boolean isEmpty() {
         return entryCount == 0;
     }
 
     /** Per-node max key for this segment (defensive byte[] copies) — feeds the checkpoint. */
-    Map<Long, byte[]> perNodeMaxKeys() {
+    public Map<Long, byte[]> perNodeMaxKeys() {
         Map<Long, byte[]> out = new LinkedHashMap<>(maxKeys.size());
         for (Map.Entry<Long, byte[]> e : maxKeys.entrySet()) {
             out.put(e.getKey(), e.getValue().clone());

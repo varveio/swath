@@ -3,9 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import io.varve.swath.model.ByteMidpoint;
+import io.varve.swath.sort.ListEntryComparator;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -15,7 +16,7 @@ import java.nio.file.Path;
  * Self-contained persisted page layout and one-pass structural header parser. Parsed headers retain
  * offsets into their immutable owning record body; they never copy the stored payload.
  */
-final class PageBlockCodec {
+public final class PageBlockCodec {
 
     static final ListEntryComparator ENTRY_COMPARATOR = new ListEntryComparator();
 
@@ -35,19 +36,19 @@ final class PageBlockCodec {
         OWNER_DISPLAY_NAME
     }
 
-    static final int DICT_COLUMN_COUNT = DictColumn.values().length;
+    public static final int DICT_COLUMN_COUNT = DictColumn.values().length;
     /** Raw contents of the two fixed five-int arrays in a persisted dictionary header. */
     static final int PERSISTED_DICTIONARY_COORDINATE_DATA_BYTES =
             2 * DICT_COLUMN_COUNT * Integer.BYTES;
     /** Conservative heap reservation including both array headers and the coordinate owner. */
-    static final int PERSISTED_DICTIONARY_COORDINATE_BYTES =
+    public static final int PERSISTED_DICTIONARY_COORDINATE_BYTES =
             PERSISTED_DICTIONARY_COORDINATE_DATA_BYTES + 88;
     /**
      * Maximum fixed heap added when every persisted dictionary slot materializes. The variable
      * UTF-16 character storage is covered by two times the encoded dictionary bytes in the record;
      * this term covers cache arrays, String/backing-array headers, and dictionary coordinates.
      */
-    static final long MAX_PERSISTED_DICTIONARY_OVERHEAD_BYTES =
+    public static final long MAX_PERSISTED_DICTIONARY_OVERHEAD_BYTES =
             16L + (long) DICT_COLUMN_COUNT * Long.BYTES
                     + (long) DICT_COLUMN_COUNT
                     * (16L + (long) PageBlock.DICT_CAP * Long.BYTES)
@@ -144,13 +145,13 @@ final class PageBlockCodec {
      * only if a row references them. {@code payloadOffset}/{@code payloadLength} remain valid for as
      * long as the caller retains the body passed to {@link #parseHeader(byte[])}.
      */
-    record Header(byte[] minKey, byte[] maxKey, int count, boolean ordered,
+    public record Header(byte[] minKey, byte[] maxKey, int count, boolean ordered,
                   PageBlockDictionaries dictionaries, boolean[] useDict, PageCodec codec,
                   int rawPayloadLength, int payloadOffset, int payloadLength) {
     }
 
     /** Routing fields available without reading the stored page payload. */
-    record RoutingHeader(byte[] minKey, byte[] maxKey, int count, int rawPayloadLength) {
+    public record RoutingHeader(byte[] minKey, byte[] maxKey, int count, int rawPayloadLength) {
     }
 
     @FunctionalInterface

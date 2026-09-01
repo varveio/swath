@@ -5,7 +5,7 @@
  */
 package io.varve.swath.output.parquet.sorted;
 
-import io.varve.swath.sort.SegmentCorruptionException;
+import io.varve.swath.sort.spill.SegmentCorruptionException;
 import java.nio.file.Path;
 
 /**

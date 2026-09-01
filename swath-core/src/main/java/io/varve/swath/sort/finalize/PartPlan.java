@@ -3,8 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
+import io.varve.swath.sort.spill.PageRef;
 import java.util.List;
 
 /** One complete, contiguous final part assigned by the router to one encoder. */

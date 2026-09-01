@@ -3,9 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
-import static io.varve.swath.sort.SortTestSupport.object;
+import static io.varve.swath.sort.finalize.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -17,6 +17,17 @@ import io.varve.swath.output.sorted.SortedDatasetCommitter;
 import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageRunSegmentWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -190,7 +201,7 @@ class SortMergeLiveProgressTest {
                 rows.add(object(String.format("k%05d", i * SEGMENTS + s)));
             }
             Path path = dir.resolve("seg-" + s + ".pageseg");
-            try (SortedCursor cursor = new InMemoryCursor(rows, cmp, DuplicateHook.NO_OP)) {
+            try (SortedCursor cursor = SortTestSupport.cursor(rows, cmp, DuplicateHook.NO_OP)) {
                 writer.writeIntermediate(cursor, path);
             }
             out.add(path);

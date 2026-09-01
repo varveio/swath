@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -19,6 +19,25 @@ import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.spill.PageBlock;
+import io.varve.swath.sort.spill.PageBlockCodec;
+import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageRef;
+import io.varve.swath.sort.spill.PageRunCatalog;
+import io.varve.swath.sort.spill.PageRunSegmentDescriptor;
+import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunTrailer;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -112,7 +131,7 @@ final class FinalizationPipelineTest {
                 SortMetrics.NO_OP, () -> -1).pipelineParallelism(1, catalog);
 
         for (int column = 0; column < PageBlockCodec.DICT_COLUMN_COUNT; column++) {
-            assertThat(persisted.dictionariesUnsafe().size(column)).isEqualTo(PageBlock.DICT_CAP);
+            assertThat(persisted.dictionarySize(column)).isEqualTo(PageBlock.DICT_CAP);
         }
         DecodedPageBudget budget = new DecodedPageBudget(
                 plan.retainedPageBytes(), SortMetrics.NO_OP);

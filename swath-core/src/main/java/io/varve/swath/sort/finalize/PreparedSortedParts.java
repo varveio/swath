@@ -3,8 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
+import io.varve.swath.sort.FinalPartMetadata;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;

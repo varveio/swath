@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -26,6 +26,11 @@ import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.runtime.ListRunner;
 import io.varve.swath.runtime.RunContext;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortArm;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;

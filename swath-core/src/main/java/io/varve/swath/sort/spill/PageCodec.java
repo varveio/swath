@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import com.github.luben.zstd.Zstd;
 import com.github.luben.zstd.ZstdCompressCtx;
@@ -25,7 +25,7 @@ import java.util.Arrays;
  * No mutable codec state is shared, so concurrent calls cannot interfere. Each call is a one-shot,
  * whole-buffer operation with no streaming state reused across calls.
  */
-enum PageCodec {
+public enum PageCodec {
 
     /** Payload stored verbatim — {@link #compress}/{@link #decompress} are no-ops. */
     NONE((byte) 0) {
@@ -138,7 +138,7 @@ enum PageCodec {
     }
 
     /** Case-insensitive parse of a config value ({@code NONE}/{@code LZ4}/{@code ZSTD1}). */
-    static PageCodec fromConfigValue(String raw) {
+    public static PageCodec fromConfigValue(String raw) {
         String v = raw.trim();
         for (PageCodec c : values()) {
             if (c.name().equalsIgnoreCase(v)) {

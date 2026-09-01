@@ -3,11 +3,16 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
-import static io.varve.swath.sort.SortTestSupport.object;
+import static io.varve.swath.sort.finalize.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,7 +40,7 @@ class PageRunSegmentInspectorTest {
     @Test
     void dumpMatchesWhatWasWrittenAndReportsCrcOk(@TempDir Path dir) throws IOException {
         // Two disjoint node runs → two pages ordered by minKey: [a,b] then [m,n].
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("m"), object("n")));
         buffer.admit(2L, List.of(object("a"), object("b")));
         Path path = dir.resolve("seg.pageseg");
@@ -75,7 +80,7 @@ class PageRunSegmentInspectorTest {
     @Test
     void bodyBitFlipIsReportedAsCrcFailNotThrown(@TempDir Path dir) throws IOException {
         Path path = dir.resolve("seg.pageseg");
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("a"), object("b"), object("c")));
         writer().flush(buffer.seal(SealTrigger.DRAIN), path);
 

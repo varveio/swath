@@ -3,10 +3,23 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.output.parquet.sorted.SortedParquetIndex;
 import io.varve.swath.output.sorted.StagingReconciliation;
+import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.SortCardinalityException;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortOrderException;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.spill.PageRunCatalog;
+import io.varve.swath.sort.spill.PageRunFormat;
+import io.varve.swath.sort.spill.PageRunSegmentDescriptor;
+import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunSegmentWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,7 +61,7 @@ public final class SortFinalizer {
         PageRunCatalog.requirePageRunNames(stagingSegments);
     }
 
-    SortFinalizer(SortRun run, PageRunCatalog.Opener catalogOpener) {
+    public SortFinalizer(SortRun run, PageRunCatalog.Opener catalogOpener) {
         this.run = run;
         this.planner = new MergePlanner(run);
         this.catalogOpener = catalogOpener;
@@ -238,7 +251,7 @@ public final class SortFinalizer {
     }
 
     /** Refuse a prepared value unless source, router, and durable part counts agree exactly. */
-    static void requireExactCardinality(
+    public static void requireExactCardinality(
             long sourceRows, long routedRows, long finalPartRows) throws IOException {
         requireExactCardinality(sourceRows, routedRows, finalPartRows, SortMetrics.NO_OP);
     }

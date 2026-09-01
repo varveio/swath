@@ -3,11 +3,14 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.sort.SortCardinalityException;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortOrderException;
 import java.lang.reflect.Modifier;
 import java.nio.file.Path;
 import java.util.List;

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.CommonPrefixEntry;
@@ -15,7 +15,7 @@ import java.util.Arrays;
 import java.util.NoSuchElementException;
 
 /** Forward-only decoder holding the independent front-coding state for one page traversal. */
-final class PageBlockCursor {
+public final class PageBlockCursor {
 
     private static final byte[] EMPTY_KEY = new byte[0];
 
@@ -41,11 +41,11 @@ final class PageBlockCursor {
         }
     }
 
-    boolean hasNext() {
+    public boolean hasNext() {
         return emitted < block.count();
     }
 
-    ListEntry next() {
+    public ListEntry next() {
         if (!hasNext()) {
             throw new NoSuchElementException();
         }
@@ -80,7 +80,7 @@ final class PageBlockCursor {
     }
 
     /** Decode the unconsumed tail so row count, payload exhaustion, and persisted bounds are checked. */
-    void drainAndValidate() {
+    public void drainAndValidate() {
         while (hasNext()) {
             next();
         }

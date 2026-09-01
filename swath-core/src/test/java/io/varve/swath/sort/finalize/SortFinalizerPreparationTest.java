@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -11,6 +11,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.output.sorted.StagingReconciliation;
 import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPartMetadata;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedFileWriterFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

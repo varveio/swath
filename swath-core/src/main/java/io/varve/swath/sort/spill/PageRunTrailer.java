@@ -3,8 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
+import io.varve.swath.sort.SortMetrics;
 import java.io.IOException;
 import java.nio.file.Path;
 
@@ -27,7 +28,7 @@ public final class PageRunTrailer {
     }
 
     /** Read the trailer metadata retained by an already-open segment. */
-    static Trailer read(PageRunSegmentIo io) {
+    public static Trailer read(PageRunSegmentIo io) {
         return new Trailer(io.totalRecords, io.totalEntries, io.maxRecordLen,
                 io.persistedMaxRawPayloadLength, io.persistedMaxKeyLength);
     }

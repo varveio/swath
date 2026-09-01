@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.output.sorted.StagingRetention;
+import io.varve.swath.sort.spill.PageCodec;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 

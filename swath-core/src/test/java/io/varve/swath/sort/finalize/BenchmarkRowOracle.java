@@ -3,13 +3,17 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.spill.PageBlockCursor;
+import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunTrailer;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;

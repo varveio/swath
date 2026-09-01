@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 /** Cooperative cancellation point shared by the merge and final-drain hot loops. */
 final class MergeCancellation {

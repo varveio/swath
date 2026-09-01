@@ -7,6 +7,9 @@ package io.varve.swath.sort;
 
 import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.StagingRetention;
+import io.varve.swath.sort.spill.PageBlock;
+import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.stage.SortLane;
 import java.util.function.UnaryOperator;
 
 /**
@@ -261,7 +264,7 @@ public final class SortConfig {
      * lookup} has the same contract as {@link System#getProperty(String)}: return {@code null} for
      * an unset key. Production goes through {@link #fromSystemProperties()}.
      */
-    static SortConfig fromProperties(UnaryOperator<String> lookup) {
+    public static SortConfig fromProperties(UnaryOperator<String> lookup) {
         // Each per-knob default is read from DEFAULT so the defaults live in exactly one place; the two
         // heap-adaptive knobs recompute from the (possibly overridden) heap-fraction rather than DEFAULT's.
         double heapFraction = doubleProp(lookup, "heap-fraction", DEFAULT.heapFraction());

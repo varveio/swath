@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
 import io.varve.swath.output.parquet.Manifest;

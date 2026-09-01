@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import io.varve.swath.model.ListEntry;
 import java.io.UncheckedIOException;
@@ -31,16 +31,16 @@ import java.util.List;
  * payload. The lazy caches are benign races: decoding is deterministic and blocks are otherwise
  * immutable.
  */
-final class PageBlock {
+public final class PageBlock {
 
     /** Per-entry fixed overhead used by the staging byte estimate. */
     static final int ENTRY_OVERHEAD_BYTES = 64;
 
     /** Maximum distinct values retained by one dictionary-eligible column. */
-    static final int DICT_CAP = 64;
+    public static final int DICT_CAP = 64;
 
     /** Hard allocation ceiling for one decoded S3 page payload read from an internal segment. */
-    static final int MAX_RAW_PAYLOAD_BYTES = 256 * 1024 * 1024;
+    public static final int MAX_RAW_PAYLOAD_BYTES = 256 * 1024 * 1024;
 
     /** Packed payload array, or the complete owned record body for a persisted block. */
     private final byte[] payloadOwner;
@@ -107,7 +107,7 @@ final class PageBlock {
     }
 
     /** Pack a page without payload compression. */
-    static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator) {
+    public static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator) {
         return pack(entries, comparator, PageCodec.NONE);
     }
 
@@ -116,7 +116,7 @@ final class PageBlock {
      * Front coding compares each key only with its immediate predecessor and therefore makes no
      * sorted-input assumption.
      */
-    static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec) {
+    public static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec) {
         return pack(entries, comparator, codec, MAX_RAW_PAYLOAD_BYTES);
     }
 
@@ -136,7 +136,7 @@ final class PageBlock {
     }
 
     /** The first entry's key as a defensive copy. */
-    byte[] firstKey() {
+    public byte[] firstKey() {
         return firstKeyBytes.clone();
     }
 
@@ -146,7 +146,7 @@ final class PageBlock {
     }
 
     /** The last entry's key as a defensive copy. */
-    byte[] lastKey() {
+    public byte[] lastKey() {
         return lastKeyBytes.clone();
     }
 
@@ -178,16 +178,16 @@ final class PageBlock {
         return orderedUnderFullComparator;
     }
 
-    int count() {
+    public int count() {
         return count;
     }
 
-    PageCodec codec() {
+    public PageCodec codec() {
         return codec;
     }
 
     /** Entry-shape estimate used only while an admission-packed block enters the staging gate. */
-    long stagingEstimatedBytes() {
+    public long stagingEstimatedBytes() {
         if (stagingEstimatedBytes < 0) {
             throw new IllegalStateException("persisted pages do not carry a staging estimate");
         }
@@ -195,7 +195,7 @@ final class PageBlock {
     }
 
     /** The shared logical-byte estimate used by every staging-segment gate. */
-    static long estimatedBytes(ListEntry entry) {
+    public static long estimatedBytes(ListEntry entry) {
         return entry.key().length() + ENTRY_OVERHEAD_BYTES;
     }
 
@@ -205,7 +205,7 @@ final class PageBlock {
     }
 
     /** A fresh sequential decoder, lazily decompressing this block's payload once. */
-    PageBlockCursor cursor() {
+    public PageBlockCursor cursor() {
         try {
             if (codec == PageCodec.NONE) {
                 if (payloadLength != rawPayloadLength) {
@@ -222,7 +222,7 @@ final class PageBlock {
         }
     }
 
-    byte[] serialize() {
+    public byte[] serialize() {
         return PageBlockCodec.serialize(this);
     }
 
@@ -230,7 +230,7 @@ final class PageBlock {
      * Parse a persisted body and transfer its immutable ownership to the returned block. Package
      * callers must not mutate {@code record} afterwards.
      */
-    static PageBlock deserialize(byte[] record) {
+    public static PageBlock deserialize(byte[] record) {
         return PageBlockCodec.deserialize(record, null);
     }
 
@@ -260,21 +260,26 @@ final class PageBlock {
         return parsedHeader != null;
     }
 
-    int rawPayloadLength() {
+    public int rawPayloadLength() {
         return rawPayloadLength;
     }
 
     /** Bytes of the retained CRC-verified record body backing a persisted page. */
-    int retainedRecordBytes() {
+    public int retainedRecordBytes() {
         return payloadOwner.length;
     }
 
-    long dictionaryCacheBudgetBytes() {
+    public long dictionaryCacheBudgetBytes() {
         return dictionaries.decodedCacheBudgetBytes();
     }
 
-    int dictionaryCoordinateBytes() {
+    public int dictionaryCoordinateBytes() {
         return dictionaries.coordinateBytes();
+    }
+
+    /** Number of distinct values retained for one dictionary-eligible column. */
+    public int dictionarySize(int column) {
+        return dictionaries.size(column);
     }
 
     PageBlockDictionaries dictionariesUnsafe() {

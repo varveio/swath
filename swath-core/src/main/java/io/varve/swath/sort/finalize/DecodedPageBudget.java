@@ -3,7 +3,12 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
+
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.spill.PageBlock;
+import io.varve.swath.sort.spill.PageBlockCodec;
+import io.varve.swath.sort.spill.PageCodec;
 
 /**
  * Exact retained-byte admission for decoded pages. Reservation precedes cursor creation because a

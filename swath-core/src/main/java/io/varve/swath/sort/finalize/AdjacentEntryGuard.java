@@ -3,10 +3,15 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.DuplicateKeyException;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortOrderException;
 import java.util.Comparator;
 
 /** Shared adjacent-row order, duplicate-reporting, and raw-key uniqueness policy. */

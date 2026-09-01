@@ -5,7 +5,7 @@
  */
 package io.varve.swath.output.sorted;
 
-import io.varve.swath.sort.PreparedSortedParts;
+import io.varve.swath.sort.finalize.PreparedSortedParts;
 import java.nio.file.Path;
 import java.util.List;
 

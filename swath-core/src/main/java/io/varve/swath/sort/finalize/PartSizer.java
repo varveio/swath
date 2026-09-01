@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 /**
  * Thread-safe encoded-part estimator shared by the router and encoders. The router is the sole
@@ -12,7 +12,7 @@ package io.varve.swath.sort;
  * geometry. A small first part costs one footer, while an oversized first wave can leave most
  * encoders idle.
  */
-final class PartSizer {
+public final class PartSizer {
     static final double INITIAL_ENCODED_TO_LOGICAL_RATIO = 1.0;
 
     /** Production byte calibration and a test-selected row-count control. */
@@ -22,8 +22,8 @@ final class PartSizer {
     }
 
     /** Immutable production- or test-selected policy; production supplies {@link #calibrated()}. */
-    record Target(Policy policy, long fixedRows) {
-        Target {
+    public record Target(Policy policy, long fixedRows) {
+        public Target {
             if (policy == Policy.FIXED_ROWS && fixedRows <= 0) {
                 throw new IllegalArgumentException("pipeline fixed-row target must be positive");
             }
@@ -32,11 +32,11 @@ final class PartSizer {
             }
         }
 
-        static Target calibrated() {
+        public static Target calibrated() {
             return new Target(Policy.CALIBRATED_BYTES, 0);
         }
 
-        static Target fixedRows(long rows) {
+        public static Target fixedRows(long rows) {
             return new Target(Policy.FIXED_ROWS, rows);
         }
     }

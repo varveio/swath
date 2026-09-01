@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
  * <p>The arithmetic is a pure, injectable function ({@link #clampedFanIn}) so it is testable without
  * depending on the real process {@code ulimit}; only {@link #softOpenFileLimit()} touches the OS.
  */
-final class MergeFdBudget {
+public final class MergeFdBudget {
 
     private static final Logger log = LoggerFactory.getLogger(MergeFdBudget.class);
 
@@ -69,7 +69,7 @@ final class MergeFdBudget {
      * unparseable (non-Linux, a locked-down container) so the clamp still applies a conservative
      * ceiling.
      */
-    static int softOpenFileLimit() {
+    public static int softOpenFileLimit() {
         Path limits = Path.of("/proc/self/limits");
         try {
             List<String> lines = Files.readAllLines(limits);

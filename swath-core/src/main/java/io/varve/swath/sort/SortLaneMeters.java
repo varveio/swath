@@ -5,6 +5,8 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.sort.stage.SortLane;
+
 /**
  * First-class-meter seam for the {@link SortLane}. Keeps {@code io.varve.swath.sort} free of a
  * Micrometer dependency: the pipeline injects an adapter over the live {@code RunMetrics},

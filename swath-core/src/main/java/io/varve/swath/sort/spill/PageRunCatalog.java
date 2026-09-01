@@ -3,9 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import io.varve.swath.output.sorted.StagingNames;
+import io.varve.swath.sort.SortMetrics;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -16,7 +17,7 @@ import java.util.Map;
 import java.util.Set;
 
 /** One immutable kickoff catalog of validated page-run inputs and primitive metadata. */
-final class PageRunCatalog {
+public final class PageRunCatalog {
 
     private final List<PageRunSegmentDescriptor> descriptors;
     private final List<Path> paths;
@@ -55,7 +56,7 @@ final class PageRunCatalog {
         totalEntries = entries;
     }
 
-    static void requirePageRunNames(List<Path> paths) {
+    public static void requirePageRunNames(List<Path> paths) {
         for (Path path : paths) {
             if (!hasPageRunName(path)) {
                 throw new IllegalArgumentException(
@@ -69,11 +70,11 @@ final class PageRunCatalog {
         return path.getFileName().toString().endsWith(StagingNames.PAGE_RUN_SUFFIX);
     }
 
-    static PageRunCatalog preflight(List<Path> paths, Opener opener) throws IOException {
+    public static PageRunCatalog preflight(List<Path> paths, Opener opener) throws IOException {
         return preflight(paths, opener, Map.of(), SortMetrics.NO_OP);
     }
 
-    static PageRunCatalog preflight(List<Path> paths, Opener opener,
+    public static PageRunCatalog preflight(List<Path> paths, Opener opener,
             Map<Path, PageRunFormat> expectedFormats, SortMetrics metrics) throws IOException {
         List<Path> normalizedPaths = requireUniqueNormalizedPaths(paths);
         Map<Path, PageRunFormat> normalizedExpected = normalizeExpectedFormats(expectedFormats);
@@ -128,15 +129,15 @@ final class PageRunCatalog {
         return path.toAbsolutePath().normalize();
     }
 
-    static PageRunCatalog fromDescriptors(List<PageRunSegmentDescriptor> descriptors) {
+    public static PageRunCatalog fromDescriptors(List<PageRunSegmentDescriptor> descriptors) {
         return new PageRunCatalog(descriptors);
     }
 
-    List<PageRunSegmentDescriptor> descriptors() {
+    public List<PageRunSegmentDescriptor> descriptors() {
         return descriptors;
     }
 
-    List<Path> paths() {
+    public List<Path> paths() {
         return paths;
     }
 
@@ -144,24 +145,24 @@ final class PageRunCatalog {
         return byPath;
     }
 
-    long maxRecordLen() {
+    public long maxRecordLen() {
         return maxRecordLen;
     }
 
-    int maxKeyLength() {
+    public int maxKeyLength() {
         return maxKeyLength;
     }
 
-    long totalRecords() {
+    public long totalRecords() {
         return totalRecords;
     }
 
-    long totalEntries() {
+    public long totalEntries() {
         return totalEntries;
     }
 
     @FunctionalInterface
-    interface Opener {
+    public interface Opener {
         PageRunSegmentIo open(Path path) throws IOException;
     }
 }

@@ -3,7 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
+
+import io.varve.swath.sort.SortedCursor;
 
 /** Package-local signal that a raw merge completed its caller's full logical range. */
 interface LogicalMergeCompletion {

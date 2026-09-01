@@ -3,13 +3,27 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
 import io.varve.swath.output.sorted.SortedDatasetCommitter;
 import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortBenchCorpus;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.spill.PageBlockAllocationCharacterizationTest;
+import io.varve.swath.sort.spill.PageCodec;
+import io.varve.swath.sort.spill.PageRunSegmentWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

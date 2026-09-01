@@ -22,7 +22,7 @@ import io.varve.swath.pipeline.Failure;
 import io.varve.swath.pipeline.Item;
 import io.varve.swath.pipeline.Msg;
 import io.varve.swath.pipeline.Pipeline;
-import io.varve.swath.sort.SortLane;
+import io.varve.swath.sort.stage.SortLane;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;

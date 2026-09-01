@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.Manifest;
@@ -14,6 +14,24 @@ import io.varve.swath.output.sorted.SortedDatasetCoordinator;
 import io.varve.swath.output.sorted.SortedDatasetResult;
 import io.varve.swath.output.sorted.StagingNames;
 import io.varve.swath.output.sorted.StaleFinalSweep;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPassListener;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortArm;
+import io.varve.swath.sort.SortBenchCorpus;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortRun;
+import io.varve.swath.sort.SortedCursor;
+import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.spill.PageRunSegmentIo;
+import io.varve.swath.sort.spill.PageRunSegmentWriter;
+import io.varve.swath.sort.spill.PageRunTrailer;
+import io.varve.swath.sort.spill.SealTrigger;
+import io.varve.swath.sort.spill.SegmentResult;
+import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -49,7 +67,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * MEASUREMENT harness for the concurrent finalization pipeline. It runs the ACTUAL production
  * merge path — {@link SortedDatasetCoordinator#transform}
  * with {@link SortedParquetWriterFactory} over live-format page-run staging segments produced through
- * the same {@link SortBuffer} seal and {@link PageRunSegmentWriter#flush} seam as listing. After one
+ * the same {@link PageRunFixtures} seal and {@link PageRunSegmentWriter#flush} seam as listing. After one
  * untimed full-transform warm-up, measured encoder counts are interleaved with one-encoder
  * brackets; speedups use medians and are invalidated when either bracket exceeds the explicit
  * variance threshold.
@@ -809,7 +827,7 @@ class ParallelMergeBenchmark {
         long accumulatedRows = 0;
         long totalBytes = 0;
         for (int seg = 0; seg < numSegments; seg++) {
-            SortBuffer buffer = new SortBuffer(config, CMP);
+            PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
             try (SortedCursor cursor =
                          SortBenchCorpus.generatedCursor(
                                  seg, numSegments, blockRows, totalRows, rowsPerDay, base)) {

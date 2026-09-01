@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.finalize;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
@@ -25,6 +25,14 @@ import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriter;
 import io.varve.swath.output.parquet.sorted.SortedParquetWriterFactory;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortArm;
+import io.varve.swath.sort.SortBenchCorpus;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.spill.PageRunFormat;
+import io.varve.swath.sort.spill.PageRunSegmentWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

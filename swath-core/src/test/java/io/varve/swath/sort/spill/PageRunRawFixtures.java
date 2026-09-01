@@ -3,13 +3,20 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.finalize.SortTestSupport;
+import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -65,9 +72,9 @@ public final class PageRunRawFixtures {
     }
 
     /** Write decoded rows {@code [a,z,m]} behind checksum-valid persisted bounds {@code [a,m]}. */
-    static Path writeInteriorRowRegression(Path path) throws IOException {
+    public static Path writeInteriorRowRegression(Path path) throws IOException {
         ListEntryComparator comparator = new ListEntryComparator();
-        SortBuffer buffer = new SortBuffer(
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(
                 SortConfigs.base().withSegmentCodec(PageCodec.NONE), comparator);
         buffer.admit(0L, List.of(prefix("a"), prefix("m"), prefix("z")));
         new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)

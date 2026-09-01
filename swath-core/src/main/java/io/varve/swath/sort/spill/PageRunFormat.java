@@ -3,9 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.sort.ListEntryComparator;
 import java.util.Comparator;
 
 /**
@@ -40,7 +41,7 @@ public record PageRunFormat(int formatVersion, int extensionType) {
      * PageRun v4 persists the canonical swath ordering without a comparator identifier. Reject an
      * alternate comparator before it can write or merge bytes under an unstated format contract.
      */
-    static void requireCanonicalComparator(Comparator<ListEntry> comparator) {
+    public static void requireCanonicalComparator(Comparator<ListEntry> comparator) {
         if (!(comparator instanceof ListEntryComparator)) {
             throw new IllegalArgumentException(
                     "page-run format v4 requires ListEntryComparator");

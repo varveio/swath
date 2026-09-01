@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -15,6 +15,12 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMetrics;
+import io.varve.swath.sort.stage.PageRunFixtures;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -218,7 +224,7 @@ class PageBlockSerdeTest {
 
     @Test
     void decodedPageOwnsBodyAcrossFrontierAdvanceAndClose(@TempDir Path dir) throws IOException {
-        SortBuffer buffer = new SortBuffer(configWithCodec(PageCodec.NONE), CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(configWithCodec(PageCodec.NONE), CMP);
         buffer.admit(1L, List.of(object("alpha"), object("bravo")));
         buffer.admit(1L, List.of(object("charlie"), object("delta")));
         Path path = dir.resolve("owned-lifetime.pageseg");
@@ -435,7 +441,7 @@ class PageBlockSerdeTest {
     @Test
     void segmentIoReadsMinMaxOfLz4CompressedPagesWithoutDecompressing(@TempDir Path dir) throws IOException {
         SortConfig config = configWithCodec(PageCodec.LZ4);
-        SortBuffer buffer = new SortBuffer(config, CMP);
+        PageRunFixtures.Buffer buffer = PageRunFixtures.buffer(config, CMP);
         buffer.admit(1L, List.of(object("alpha"), object("bravo")));
         buffer.admit(1L, List.of(object("charlie"), object("delta")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);

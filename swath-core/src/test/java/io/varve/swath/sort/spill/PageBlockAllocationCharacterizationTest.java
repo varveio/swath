@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.sort;
+package io.varve.swath.sort.spill;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -11,6 +11,7 @@ import com.sun.management.HotSpotDiagnosticMXBean;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.sort.ListEntryComparator;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.net.URI;
