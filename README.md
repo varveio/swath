@@ -70,14 +70,26 @@ requester-pays bucket, read the [request-cost guidance](docs/operating.md#reques
 
 ## See it at full scale
 
-[![swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
+[![swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](docs/full-scale-demo.md)
 
-*The embedded recording was captured with swath v0.2.1 against the full public
-`noaa-gestofs-pds` bucket. That observed run listed 39,585,029 objects, made 41,582
-`ListObjectsV2` calls, wrote 790.8 MB of Parquet, and peaked at about 1.7 GB RSS.
-The bucket and the current release can produce different figures. Read the
-[full-scale demonstration](docs/full-scale-demo.md) before reproducing it, or
-[explore the run trace](https://swath.varve.io/runs/noaa-gestofs-pds/).*
+*Run `noaa-gestofs-pds-2026-08-03-505ae26`. The embedded recording was captured on
+2026-08-03 with swath v0.2.1 (`505ae26e6019`) against the full public
+`noaa-gestofs-pds` bucket, at `--concurrency 128`, and published 39,585,029 objects to a
+managed Parquet dataset. It is an interrupted `swath list` followed by the `swath resume`
+that finished it; that resume invocation reported 41,582 `ListObjectsV2` attempts, 22
+Parquet parts totaling 790.0 MB, a peak of about 1.7 GB RSS, and 1m36s elapsed for
+itself. swath prints an elapsed time per invocation, and no clock for the whole capture
+was recorded. The bucket and the current release can produce different figures; the
+[run facts](site/data/runs/noaa-gestofs-pds-2026-08-03-505ae26.json) record what is known
+about this capture and what is not. Read the
+[full-scale demonstration](docs/full-scale-demo.md) before reproducing it.*
+
+The [interactive run trace](https://swath.varve.io/runs/noaa-gestofs-pds/) visualizes a
+separate capture of the same bucket, not this recording: run
+`noaa-gestofs-pds-field-guide-trace` listed 39,651,850 objects, 66,821 more than the
+recording above, and its
+[run facts](site/data/runs/noaa-gestofs-pds-field-guide-trace.json) leave version,
+commit, date, and command unknown.
 
 The [visual field guide](https://swath.varve.io/field-guide/) explains why S3 listing is
 hard to parallelize and walks through the range model, safe splitting, work stealing,

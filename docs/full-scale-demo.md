@@ -1,42 +1,77 @@
 # Full-scale public demonstration
 
 This page reproduces the large public listing shown in the README. It is evidence that
-swath can recover from severe key-distribution skew and resume a long run; it is not the
-recommended first command.
+swath can list a very large public bucket and resume it after an interruption; it is not
+the recommended first command.
 
 Start with [Getting started](getting-started.md) if you have not yet completed the small
 public example.
 
 ## What the recording shows
 
-The embedded README recording was captured with **swath v0.2.1** against the full public bucket
-`s3://noaa-gestofs-pds/` in `us-east-1`.
+The embedded README recording is run `noaa-gestofs-pds-2026-08-03-505ae26`, captured on
+2026-08-03 with **swath v0.2.1** (`505ae26e6019`) against the full public bucket
+`s3://noaa-gestofs-pds/`, with `--region us-east-1` and `--concurrency 128`.
 
-That observed run:
+It is two invocations: a `swath list` stopped by a signal, then the `swath resume` that
+finished the dataset. The completed dataset holds 39,585,029 objects, confirmed in the
+recording by a DuckDB count over its Parquet parts. The resume invocation reported:
 
-- listed 39,585,029 objects;
-- made 41,582 `ListObjectsV2` calls;
-- wrote 790.8 MB of Parquet;
-- peaked at about 1.7 GB of resident memory; and
-- began with 513 seed ranges, one of which contained 68% of the objects later found.
+- 41,582 `ListObjectsV2` attempts, including probes and retries;
+- 22 Parquet parts totaling 790.0 MB;
+- a peak of about 1.7 GB of resident memory; and
+- 1m36s elapsed for that invocation. swath prints an elapsed time per invocation, so this
+  is not a wall clock for the whole capture, and no such clock was recorded.
 
-swath discovered the imbalance while listing and split busy remaining ranges so idle
-workers could help. The [interactive run trace](https://swath.varve.io/runs/noaa-gestofs-pds/)
-shows the seed guesses, live ranges, split pivots, and long-tail behavior.
+The interrupted first attempt reported 573,741 objects and 635 attempts of its own. The
+recording does not say whether the resume invocation's totals already include them, so
+neither figure is a whole-capture request count.
 
-These figures describe one recorded run, not a portable benchmark or a promise for the
-current release. The bucket continues to change, object-store latency varies, and client
-CPU, memory, disk, region, and network path all affect the result.
+No run report or decision trace was retained for this capture, and the client machine,
+its provider, and its region are not recorded anywhere.
+[The run facts](../site/data/runs/noaa-gestofs-pds-2026-08-03-505ae26.json) list what is
+known and what is not.
+
+## The interactive trace is a separate capture
+
+The [interactive run trace](https://swath.varve.io/runs/noaa-gestofs-pds/) visualizes run
+`noaa-gestofs-pds-field-guide-trace`, a different capture of the same bucket. Read the two
+as separate runs:
+
+- it listed 39,651,850 objects, 66,821 more than the recording above;
+- it began with 513 initial ranges, one of which held 68.0% of the objects the run
+  returned;
+- it made 2,399 splits and completed all 2,912 ranges it claimed, with none failed; and
+- the report generated from its trace records a 68,592.2 ms span — about 1m 09s — between
+  the trace's first and last event. The trace file itself was not kept and no run summary
+  survives, so that span is the only listing duration available for this capture.
+
+That report counts 41,420 **committed listing pages** in the trace. It is a different
+metric from the 41,582 **`ListObjectsV2` attempts** the recording's resume invocation
+reported: committed pages exclude probes and retries, and the two counts belong to
+different runs in any case. This capture retains no API-attempt count, swath version,
+commit, capture date, or command; see
+[its run facts](../site/data/runs/noaa-gestofs-pds-field-guide-trace.json).
+
+That visualization is where the skew is visible: it shows the capture's seed guesses,
+live ranges, split pivots, and long tail as swath discovers the key-distribution
+imbalance while listing and splits the unscanned remainder of busy ranges so idle workers
+can help.
+
+Neither capture is a portable benchmark or a promise for the current release. The bucket
+continues to change, object-store latency varies, and client CPU, memory, disk, region,
+and network path all affect the result.
 
 ## Before you run it
 
 This command scans the entire public bucket. Review
-[request cost](operating.md#request-cost) first. The ideal page count is approximately
-one request per 1,000 returned keys, but probes, retries, sparse pages, and interrupted
-tails add overhead.
+[request cost](operating.md#request-cost) first. The floor is about one committed listing
+page per 1,000 returned keys, and each of those pages normally costs one successful
+request; probes, retries, sparse pages, and interrupted tails add further attempts.
 
-The command writes roughly a gigabyte of output for the recorded bucket state and uses
-more working memory than the small getting-started example. Keep the resulting
+The recording's resume invocation reported 790.0 MB written for the bucket state it
+captured; your run's output size will differ as the bucket changes. The command uses more
+working memory than the small getting-started example. Keep the resulting
 `_swath_summary.json`; it records the actual request count, duration, throughput, and
 resource evidence for your run.
 
@@ -119,7 +154,12 @@ work-supply starvation, output backpressure, and sorted-merge sizing.
 
 ## Related material
 
-- [Interactive trace for the recorded NOAA run](https://swath.varve.io/runs/noaa-gestofs-pds/)
+- [Interactive trace of run `noaa-gestofs-pds-field-guide-trace`](https://swath.varve.io/runs/noaa-gestofs-pds/)
+  — a separate capture of the same bucket
+- Run facts:
+  [`noaa-gestofs-pds-2026-08-03-505ae26`](../site/data/runs/noaa-gestofs-pds-2026-08-03-505ae26.json)
+  and
+  [`noaa-gestofs-pds-field-guide-trace`](../site/data/runs/noaa-gestofs-pds-field-guide-trace.json)
 - [Visual field guide](https://swath.varve.io/field-guide/)
 - [Getting started](getting-started.md)
 - [Operating swath and request cost](operating.md)
