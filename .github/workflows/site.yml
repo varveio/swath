@@ -1,0 +1,93 @@
+name: Site
+
+# The published website is built from `site/` on `main` and deployed by this workflow. The
+# deploy uploads a Pages artifact rather than pushing to a branch, so nothing about the
+# published site accumulates in git history: `site/` holds the reviewable source, and every
+# deploy replaces the served content wholesale.
+#
+# Why the checks and the deploy live in one workflow: the deploy job needs the checks as a
+# hard gate, and a gate in another workflow is a gate only as long as someone remembers to
+# make it a required check. Here the dependency is the file, and the deploy publishes the
+# exact artifact the checks ran against.
+#
+# The checks run on every pull request and every push, not only on site changes, because
+# they read the current documentation (`docs/**`, README, CHANGELOG) as well as the pages --
+# a docs-only change is exactly the kind of change that puts the site out of date. The
+# deploy runs unconditionally on `main` for the same reason a path filter is avoided
+# elsewhere here: an artifact deploy is idempotent and leaves no history, so making it
+# conditional would buy nothing and add a path list that can go stale.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Grouped per ref, so a manual run on a branch can never displace a queued `main` deploy.
+# PR runs coalesce: a new push cancels the superseded check run. A running deploy is never
+# cancelled -- a half-finished publish is worse than a slow one -- while a queued one can
+# still be superseded by a newer `main` commit, which is correct: each deploy publishes a
+# whole tree, so the newer commit's tree is the one that should win.
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  site-checks:
+    name: Site consistency checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Build the deployable site
+        run: ./scripts/ci/build-site.sh "${RUNNER_TEMP}/site"
+
+      # The videos live on a release rather than in git. Fetching them here rather than only
+      # at deploy time means a bad digest or a deleted asset fails on the pull request that
+      # introduced it, not on the merge that publishes it.
+      - name: Fetch and verify the pinned video assets
+        run: ./scripts/ci/fetch-site-media.sh "${RUNNER_TEMP}/site"
+
+      # Checked against the built tree, not against `site/`: link and anchor resolution is a
+      # property of what is served.
+      - name: Links, media, terminology, channel, run facts, accessibility
+        run: python3 ./scripts/ci/check-site.py --site "${RUNNER_TEMP}/site"
+
+      # Uploaded from this job so the deploy publishes the bytes the checks just passed.
+      - name: Upload the Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+          # Off by default, which would silently drop `.nojekyll` from the artifact. It is
+          # inert under an Actions deploy, but the artifact should be the built tree rather
+          # than the built tree minus whatever starts with a dot.
+          include-hidden-files: true
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: site-checks
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # A job-level block replaces the top-level one, so `contents: read` is restated here.
+      # `pages: write` and `id-token: write` are what deploy-pages needs and the only
+      # elevated permissions this workflow uses.
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Requires the repository's Pages build source to be "GitHub Actions". While it is
+      # still set to the gh-pages branch this step fails, which is the intended signal
+      # during cutover rather than a silent no-op.
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v5.0.0

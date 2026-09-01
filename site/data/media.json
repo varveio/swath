@@ -1,0 +1,19 @@
+{
+  "release": "site-media-2026-09",
+  "files": [
+    {
+      "path": "assets/swath-noaa-gestofs.mp4",
+      "asset": "swath-noaa-gestofs.mp4",
+      "bytes": 1536478,
+      "sha256": "e707ea4f38a6a644e2b72d469fb529ce889bed88cf51781c80f40c885055d282",
+      "description": "Replay visualization of run noaa-gestofs-pds-field-guide-trace, rendered by tools/explainer."
+    },
+    {
+      "path": "assets/swath-cli-demo.mp4",
+      "asset": "swath-cli-demo.mp4",
+      "bytes": 1194208,
+      "sha256": "4ec50d22c1303af9a382c2c7042eda80bdc9c3916d310aed4d5ed23ef4dbe6d4",
+      "description": "Terminal recording of the list / resume / DuckDB workflow, captured with swath 0.2.1."
+    }
+  ]
+}

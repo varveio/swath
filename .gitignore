@@ -53,3 +53,8 @@ __pycache__/
 
 # Browser-automation scratch (playwright-cli writes into the cwd it is invoked from)
 .playwright-cli/
+
+# Site videos are published as release assets and fetched at deploy time (see
+# site/data/media.json). A local fetch drops them here; committing one would put ~1.5 MB of
+# binary back into history for every re-record, which is what the release indirection avoids.
+site/assets/*.mp4
