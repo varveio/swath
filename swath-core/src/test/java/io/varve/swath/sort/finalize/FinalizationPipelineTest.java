@@ -1055,6 +1055,49 @@ final class FinalizationPipelineTest {
     }
 
     @Test
+    void encoderProgressIsNeverDeliveredConcurrentlyAcrossLanes(@TempDir Path root) throws IOException {
+        int lanes = 8;
+        int rowsPerSegment = 2_500;
+        List<List<List<ListEntry>>> segments = new ArrayList<>();
+        for (int segment = 0; segment < lanes; segment++) {
+            List<ListEntry> rows = new ArrayList<>();
+            for (int row = 0; row < rowsPerSegment; row++) {
+                rows.add(SortTestSupport.object(String.format("k%02d-%05d", segment, row)));
+            }
+            segments.add(List.of(rows));
+        }
+        AtomicBoolean insideCallback = new AtomicBoolean();
+        AtomicBoolean overlapDetected = new AtomicBoolean();
+        List<Long> observed = new java.util.concurrent.CopyOnWriteArrayList<>();
+        LongConsumer reentrancyDetectingCallback = units -> {
+            if (!insideCallback.compareAndSet(false, true)) {
+                overlapDetected.set(true);
+            }
+            try {
+                observed.add(units);
+            } finally {
+                insideCallback.set(false);
+            }
+        };
+
+        SortedDatasetResult result = runPages(root, segments, Long.MAX_VALUE,
+                SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT, 10_000, 64L << 20,
+                PageCompression.NONE, lanes, reentrancyDetectingCallback);
+
+        assertThat(overlapDetected).isFalse();
+        assertThat(result.totalRows()).isEqualTo((long) lanes * rowsPerSegment);
+        long running = 0;
+        long previousRunning = 0;
+        for (long value : observed) {
+            assertThat(value).isNotNegative();
+            running += value;
+            assertThat(running).isGreaterThanOrEqualTo(previousRunning);
+            previousRunning = running;
+        }
+        assertThat(running).isEqualTo(result.totalRows());
+    }
+
+    @Test
     void corruptReferencedPageAbortsWithoutTemporaryOutput(@TempDir Path root) throws IOException {
         Path staging = Files.createDirectories(root.resolve("_staging"));
         Files.createDirectories(root.resolve("data"));

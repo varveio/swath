@@ -30,6 +30,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongConsumer;
 
 /**
@@ -86,6 +87,7 @@ final class PartEncoders implements AutoCloseable {
     private final AtomicBoolean aborting = new AtomicBoolean();
     private final AtomicInteger partsOpen = new AtomicInteger();
     private final LongConsumer progressCallback;
+    private final AtomicLong progressTally = new AtomicLong();
     private final CountDownLatch firstCompletion = new CountDownLatch(1);
 
     /**
@@ -179,6 +181,23 @@ final class PartEncoders implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new MergeCancellation.Cancelled();
+        }
+    }
+
+    /**
+     * Deliver one lane's batched row count to the external callback, serialized so at most one lane
+     * is ever inside {@code progressCallback.accept} at a time. Every lane keeps its own hot-path
+     * batch counter (unsynchronized, see {@link Lane#progressRows}); only the handoff to the
+     * caller-supplied callback — which {@link SortFinalizer.Request} makes no concurrency promise
+     * about, and which production wires straight into a metrics counter increment — is serialized
+     * here. {@link #progressTally} is the internal running total this serializes against; it is not
+     * itself passed to the callback so an existing delta/increment-style consumer keeps working
+     * unchanged.
+     */
+    private void reportProgress(long batchRows) {
+        synchronized (progressTally) {
+            progressTally.addAndGet(batchRows);
+            progressCallback.accept(batchRows);
         }
     }
 
@@ -467,7 +486,7 @@ final class PartEncoders implements AutoCloseable {
             entryGuard.accept(entry);
             writer.write(entry);
             if (++progressRows >= CascadeReducer.PROGRESS_BATCH_ROWS) {
-                progressCallback.accept(progressRows);
+                reportProgress(progressRows);
                 progressRows = 0;
             }
         }
@@ -475,7 +494,7 @@ final class PartEncoders implements AutoCloseable {
         /** Report the final sub-rung remainder only after its part is durably closed. */
         private void flushProgress() {
             if (progressRows > 0) {
-                progressCallback.accept(progressRows);
+                reportProgress(progressRows);
                 progressRows = 0;
             }
         }

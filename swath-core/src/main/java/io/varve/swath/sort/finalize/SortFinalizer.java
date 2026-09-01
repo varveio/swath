@@ -346,7 +346,15 @@ public final class SortFinalizer {
         }
     }
 
-    /** Invocation state for preparation only; it carries no publication destination or committer. */
+    /**
+     * Invocation state for preparation only; it carries no publication destination or committer.
+     *
+     * <p>{@code progressCallback} is invoked serially — never concurrently, even though both the
+     * cascade reducer and multiple encoder lanes report into it — with a non-negative row-count
+     * increment each call, batched in fixed-size row groups. Treat it like a counter increment
+     * (production wires it into exactly that): the running sum of every value observed is
+     * monotonically non-decreasing and totals the exact row count prepared.
+     */
     public record Request(
             Admission admission,
             Path stagingDir,
