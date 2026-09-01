@@ -154,7 +154,7 @@
       /* One channel per question. FILL answers "is this being listed right now" — solid for
          active, pale for finished, nothing for unclaimed. Lineage is annotated separately by
          the rail below, so a screen full of the overloaded lineage reads as work in progress
-         rather than as a screen full of alarm colour. */
+         rather than as a screen full of alarm color. */
       var col = (d.st===1) ? css("--teal") : css("--pale");
       /* State has to out-read lineage here, or "145 finished, one has not" is invisible.
          An active range is the brightest thing on the strip from the moment it is claimed —

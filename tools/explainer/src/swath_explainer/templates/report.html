@@ -183,14 +183,14 @@
     <div class="col">
       <p>Horizontal is the keyspace weighted by objects — <b class="hl">equal width means an equal
       number of objects</b> — and vertical is time running downward. Each rectangle is one range
-      over the slice it owned and the time it owned it, coloured by which original seed guess it
+      over the slice it owned and the time it owned it, colored by which original seed guess it
       descends from. Because width is objects, a rectangle's <em>area</em> is roughly the work it
       did.</p>
       <p><b>Wide and short</b> is a big slice eaten fast. <b>A tall thin column</b> is a serial
       tail — a dense region that could not be divided, outliving everything around it.</p>
     </div>
     <div class="card">
-      <canvas id="static" role="img" aria-label="Keyspace over time: each range drawn as a rectangle whose width is the share of objects it owned and whose height is how long it owned them, coloured by seed lineage."></canvas>
+      <canvas id="static" role="img" aria-label="Keyspace over time: each range drawn as a rectangle whose width is the share of objects it owned and whose height is how long it owned them, colored by seed lineage."></canvas>
       <div class="key" id="static-key"></div>
       <p class="cap" id="static-cap"></p>
     </div>
@@ -513,7 +513,7 @@
   rest.appendChild(rw); rest.appendChild(document.createTextNode("all other seed lineages"));
   ky.appendChild(rest);
   document.getElementById("static-cap").textContent =
-    fmt(M.segments.length)+" range-lifetimes drawn, coloured by seed lineage; ochre dots are split "+
+    fmt(M.segments.length)+" range-lifetimes drawn, colored by seed lineage; ochre dots are split "+
     "pivots. Horizontal position is the share of objects below a key, measured from this run's "+
     fmt(meta.cdfPoints)+" page commits — so equal width is equal objects, and byte distance is "+
     "NOT preserved.";
@@ -639,7 +639,7 @@
     "finding above uses all of them");
   if(meta.anonymized) prov.push("ANONYMIZED — key names withheld");
   prov.push("Two stated aggregation choices: the horizontal axis is the measured key-mass CDF "+
-            "(equal width = equal objects, not equal bytes), and colour is seed lineage, not worker");
+            "(equal width = equal objects, not equal bytes), and color is seed lineage, not worker");
   prov.push("Where this page and the trace disagree, the trace wins");
   document.getElementById("provenance").textContent=prov.join(". ")+".";
 

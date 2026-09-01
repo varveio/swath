@@ -76,7 +76,7 @@ budget = base(callClass) × 2^level
 | point (`pivot_probe`) | 3 s | 6 s | 12 s |
 
 **Why the split of ownership.** Retry *policy* — how many rungs exist and when to climb one — is the
-engine's; it is about failure behaviour. What a rung is *worth* is the store's, because only the
+engine's; it is about failure behavior. What a rung is *worth* is the store's, because only the
 store knows each call class's base budget, and (per §1) call classes differ by more than a constant
 factor. `TransientRetryFetcher` therefore holds only `MAX_ATTEMPT_TIMEOUT_ESCALATION_LEVEL`.
 

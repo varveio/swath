@@ -131,9 +131,9 @@ boundary equal width, so a run seeded into hundreds of ranges renders as hundred
 slivers and width encodes nothing. The cost, stated on the generated page too: **screen distance
 is not byte distance**, and empty keyspace takes no width.
 
-**Colour is seed lineage, not worker id.** A reader cares which original guess the work descends
-from, not which of N threads happened to run it. With 64 workers and a palette of 8, colour-by-
-worker is decoration; colour-by-lineage is information.
+**Color is seed lineage, not worker id.** A reader cares which original guess the work descends
+from, not which of N threads happened to run it. With 64 workers and a palette of 8, color-by-
+worker is decoration; color-by-lineage is information.
 
 ## Determinism, and what wrote what
 
