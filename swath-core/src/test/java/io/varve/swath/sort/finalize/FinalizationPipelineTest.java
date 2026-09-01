@@ -850,6 +850,51 @@ final class FinalizationPipelineTest {
     }
 
     @Test
+    void cascadeFanInRefusesBeforeOpeningReadersWhenCapacityCannotFitTwoStreams(@TempDir Path root)
+            throws IOException {
+        Path segA = SortTestSupport.writePages(root.resolve("fanin-a" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("a"))));
+        Path segB = SortTestSupport.writePages(root.resolve("fanin-b" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("b"))));
+        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segA, segB),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        SortConfig config = SortConfigs.base()
+                .withFanIn(100)
+                .withMergeBudgetBytes(64L << 20)
+                .withMergePerStreamBytes(1);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        // headroom for encoderCount=4 is FD_HEADROOM + 3, so a soft limit of FD_HEADROOM + 4
+        // leaves an fd-bounded capacity of 1 — below the two-stream minimum a cascade needs.
+        FinalizationPlanner planner = new FinalizationPlanner(config, metrics,
+                () -> FileDescriptorBudget.FD_HEADROOM + 4);
+
+        assertThatThrownBy(() -> planner.pipelineFanIn(catalog, 4))
+                .isInstanceOf(CascadeCapacityExhaustedException.class)
+                .hasMessageContaining("cascade cannot open the minimum two streams");
+        assertThat(metrics.count("SORT.merge_fanin_floor_exhausted")).isEqualTo(1);
+    }
+
+    @Test
+    void singleSourceSegmentBypassesCascadeEvenUnderTheSameStarvedFdBudget(@TempDir Path root)
+            throws IOException {
+        Path segment = SortTestSupport.writePages(
+                root.resolve("fanin-single" + StagingNames.PAGE_RUN_SUFFIX),
+                List.of(List.of(SortTestSupport.object("a"))));
+        PageRunCatalog catalog = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunReader.open(path, SortMetrics.NO_OP));
+        SortConfig config = SortConfigs.base()
+                .withFanIn(100)
+                .withMergeBudgetBytes(64L << 20)
+                .withMergePerStreamBytes(1);
+        FinalizationPlanner planner = new FinalizationPlanner(config, SortMetrics.NO_OP,
+                () -> FileDescriptorBudget.FD_HEADROOM + 4);
+
+        // A single source segment never opens a cascade group, so the same starved budget that
+        // refuses a two-segment catalog above must not refuse here.
+        assertThat(planner.pipelineFanIn(catalog, 4)).isEqualTo(2);
+    }
+
+    @Test
     void calibratedCompressedDisjointPartsTrackTargetAfterCalibration(@TempDir Path root)
             throws IOException {
         long targetBytes = 64L << 10;

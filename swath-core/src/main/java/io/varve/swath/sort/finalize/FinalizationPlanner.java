@@ -39,7 +39,7 @@ final class FinalizationPlanner {
 
     /** Clamp cascade inputs while reserving descriptors for the requested output writers. */
     int pipelineFanIn(PageRunCatalog catalog, int encoderCount)
-            throws MergeMemoryExhaustedException {
+            throws CascadeCapacityExhaustedException {
         if (encoderCount < 1) {
             throw new IllegalArgumentException("pipeline encoder count must be positive");
         }
@@ -182,13 +182,28 @@ final class FinalizationPlanner {
     }
 
     private int runtimeFanIn(PageRunCatalog catalog, int outputWriters)
-            throws MergeMemoryExhaustedException {
+            throws CascadeCapacityExhaustedException {
         int staticFanIn = config.effectiveFanIn();
         int softFdLimit = softFdLimitSupplier.getAsInt();
         int recordSizedFanIn = recordSizedFanIn(catalog);
         int headroom = saturatedHeadroom(outputWriters);
         int clamped = FileDescriptorBudget.clampedFanIn(staticFanIn, softFdLimit,
                 headroom, recordSizedFanIn);
+        int segments = catalog.descriptors().size();
+        if (clamped < 2) {
+            if (segments >= 2) {
+                metrics.recordStealReason("SORT", "merge_fanin_floor_exhausted");
+                throw new CascadeCapacityExhaustedException(
+                        "cascade cannot open the minimum two streams under the current budget: "
+                                + "capacity=" + clamped + ", segments=" + segments
+                                + ", soft_fd_limit=" + softFdLimit
+                                + ", record_sized_fan_in=" + recordSizedFanIn);
+            }
+            // A single source segment never opens a cascade group (reduceToFanIn's size > fanIn
+            // guard skips it), so an unusable width here can never actually be exercised — but
+            // CascadeReducer's own fanIn >= 2 constructor invariant must still be satisfied.
+            clamped = 2;
+        }
         if (clamped < staticFanIn) {
             int fdBound = FileDescriptorBudget.fdBoundedFanIn(softFdLimit, headroom);
             metrics.recordStealReason("SORT", "merge_fanin_clamped");
@@ -200,10 +215,9 @@ final class FinalizationPlanner {
             }
             log.debug("sort_merge_fanin_clamped static_fan_in={} fd_bound={} "
                             + "record_sized_fan_in={} clamped_fan_in={} soft_fd_limit={} segments={}",
-                    staticFanIn, fdBound, recordSizedFanIn, clamped, softFdLimit,
-                    catalog.descriptors().size());
+                    staticFanIn, fdBound, recordSizedFanIn, clamped, softFdLimit, segments);
         }
-        warnIfCascadePredicted(catalog.descriptors().size(), clamped);
+        warnIfCascadePredicted(segments, clamped);
         return clamped;
     }
 
@@ -224,10 +238,14 @@ final class FinalizationPlanner {
                 segments, effectiveFanIn, predictedPasses);
     }
 
+    /**
+     * The record-size-bounded fan-in ceiling, honestly reported: {@code 0} or {@code 1} means even
+     * the minimum two-stream cascade width does not fit, not an artificially floored {@code 2}.
+     */
     private int recordSizedFanIn(PageRunCatalog catalog) {
         long perStreamPrice = Math.max(config.mergePerStreamBytes(), catalog.maxRecordLen());
         long bound = config.mergeBudgetBytes() / Math.max(1L, perStreamPrice);
-        return (int) Math.min(Integer.MAX_VALUE, Math.max(2L, bound));
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, bound));
     }
 
     private static int predictedPasses(int segments, int effectiveFanIn) {

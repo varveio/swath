@@ -22,9 +22,9 @@ class FileDescriptorBudgetTest {
     }
 
     @Test
-    void fdBoundedFanInFloorsAtTwoUnderAnExtremelyLowLimit() {
-        assertThat(FileDescriptorBudget.fdBoundedFanIn(129, 128)).isEqualTo(2);   // 1 would be below the floor
-        assertThat(FileDescriptorBudget.fdBoundedFanIn(10, 128)).isEqualTo(2);    // negative before the floor
+    void fdBoundedFanInReportsAnUnusableWidthUnderAnExtremelyLowLimitInsteadOfFlooring() {
+        assertThat(FileDescriptorBudget.fdBoundedFanIn(129, 128)).isEqualTo(1);
+        assertThat(FileDescriptorBudget.fdBoundedFanIn(10, 128)).isEqualTo(0);   // never negative
     }
 
     @Test
@@ -54,8 +54,8 @@ class FileDescriptorBudgetTest {
     }
 
     @Test
-    void clampedFanInNeverReturnsBelowTwo() {
-        assertThat(FileDescriptorBudget.clampedFanIn(512, 129, 128, Integer.MAX_VALUE)).isEqualTo(2);
-        assertThat(FileDescriptorBudget.clampedFanIn(512, 10_000, 128, 1)).isEqualTo(2);
+    void clampedFanInReportsAnUnusableWidthInsteadOfFlooringToTwo() {
+        assertThat(FileDescriptorBudget.clampedFanIn(512, 129, 128, Integer.MAX_VALUE)).isEqualTo(1);
+        assertThat(FileDescriptorBudget.clampedFanIn(512, 10_000, 128, 1)).isEqualTo(1);
     }
 }
