@@ -1,6 +1,7 @@
 """Command line entry point."""
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -33,6 +34,11 @@ def main(argv=None):
                         help="strip (default): the algorithm as it happens — seed cuts, parallel "
                              "drains, stealing. map: the space-time carving diagram, denser and "
                              "more diagnostic")
+    parser.add_argument("--run-facts", type=Path,
+                        help="path to a swath-public-run-v1 JSON provenance record for this "
+                             "run (run ID, version/commit, capture date, target, client, "
+                             "command); rendered as a visible table and embedded as "
+                             "machine-readable JSON. Report only; not read at all with --video")
     parser.add_argument("--self-test", action="store_true", help="run internal checks and exit")
     args = parser.parse_args(argv)
 
@@ -54,9 +60,13 @@ def main(argv=None):
         print("explainer: warning: unrecognized schema version(s) %s — this reader understands "
               "v%d; fields may be missing" % (sorted(unknown), SCHEMA_VERSION), file=sys.stderr)
 
+    facts = None
+    if args.run_facts and not args.video:
+        facts = json.loads(args.run_facts.read_text(encoding="utf-8"))
+
     model = build_model(events, skipped, args.title or args.trace.stem, args.anonymize)
     out = args.out or args.trace.with_suffix(".html")
-    page = render_video(model, args.video_style) if args.video else render_report(model)
+    page = render_video(model, args.video_style) if args.video else render_report(model, facts)
     out.write_text(page, encoding="utf-8")
 
     meta, F = model["meta"], model["findings"]
