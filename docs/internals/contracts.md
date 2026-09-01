@@ -766,6 +766,29 @@ one object's versions may span pages, but always rejects
 `previous.maxKey > next.minKey`. The writer enforces the rule before durability and every
 sequential or routing reader enforces it again.
 
+### Staging authority
+
+Every destructive staging or publication phase is gated on a captured physical identity rather than
+a pathname. `StagingReconciliation` records `BasicFileAttributes.fileKey()` for the staging
+directory, for the output directory, and for each original segment, rejects two names that resolve
+to one inode, and rechecks the directory key before each sweep, delete, or rename. A staging
+directory replaced mid-run is therefore refused instead of swept.
+
+That makes a file-key-reporting filesystem a hard requirement of the sorted path, not a preference.
+A provider that reports no file key is refused during preflight, before anything is deleted or
+published:
+
+```text
+cannot establish physical identity for sort staging directory because the filesystem did not provide a file key: <path>
+```
+
+`sort staging segment` and `sort output directory` produce the same message for their own subject.
+The JDK's default provider supplies a device/inode key for ordinary local mounts on Linux and
+macOS; alternative `FileSystemProvider` implementations, including object-store providers, commonly
+do not. There is no fallback and none is planned: an identity check weak enough to accept a null
+file key could not distinguish the directory swath validated from one substituted afterwards, and
+the operation it guards is deletion.
+
 ### Finalization contract
 
 `SortFinalizer` converts the complete sealed catalog into one globally sorted unpublished Parquet
