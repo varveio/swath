@@ -510,29 +510,30 @@
           <a href="assets/swath-noaa-gestofs.mp4">Watch the recorded run</a>
         </video>
         <figcaption>
-          This is a 36-second rendered visualization of run
-          <code>noaa-gestofs-pds-field-guide-trace</code>; the video's own playback length is not
-          the same clock as the run. The measured listing wall clock for this run was
-          <strong>68.6 seconds</strong> (68,592.2&nbsp;ms). The initial keyspace split created
-          513 ranges. <strong>One contained 68% of the objects.</strong> swath split that range
-          as idle workers requested more work. This is a separate capture from the
-          v0.2.1 recording in the project README (39,585,029 objects) — the two are different
-          runs, not the same numbers rounded differently.
+          One live listing of a 39.7-million-object public bucket, measured at
+          <strong>68.6 seconds</strong> (68,592.2&nbsp;ms) of listing wall clock. The initial
+          keyspace split created 513 ranges. <strong>One contained 68% of the objects</strong>,
+          and swath split that range as idle workers asked for more work. The video is a
+          36-second rendered visualization of run
+          <code>noaa-gestofs-pds-field-guide-trace</code>, played at a pace chosen for viewing,
+          not on the run's clock.
           <a href="runs/noaa-gestofs-pds/">View the trace and full provenance →</a>
         </figcaption>
         <details class="transcript">
-          <summary>Read what this visualization shows</summary>
+          <summary>What the visualization shows, and what is known about the run</summary>
           <div class="transcript-body">
-            <p>This video is a rendered visualization (produced by
-            <code>tools/explainer</code> from the run's <code>--trace</code> event log), not a
-            literal terminal recording — there is no on-screen command to transcribe. It plays
-            back the run's seed ranges draining in parallel and splitting as workers steal
-            work, colored by which original seed guess each range descends from.</p>
-            <p>The exact swath version, commit, capture date, and command used to produce this
-            run are <strong>unknown in retained evidence</strong>; only the trace's own recorded
-            figures (objects, ranges, splits, wall clock) survive. See the
-            <a href="runs/noaa-gestofs-pds/">full provenance table</a> for what is and is not
-            known about this capture.</p>
+            <p>Each band is one key range being drained by one worker, colored by which
+            original seed guess it descends from; a range splits when a worker steals from it
+            or its own worker sheds work ahead of itself. The picture is produced by
+            <code>tools/explainer</code> from the run's <code>--trace</code> event log, not
+            recorded from a terminal, so there is no on-screen command to transcribe.</p>
+            <p>Provenance: the swath version, commit, capture date, and command are
+            <strong>unknown in retained evidence</strong>; only the trace's own recorded figures
+            (objects, ranges, splits, wall clock) survive, and the
+            <a href="runs/noaa-gestofs-pds/">provenance table</a> lists exactly which. This is a
+            separate capture from the v0.2.1 recording in the project README
+            (39,585,029 objects); a live bucket changes between runs, so the two are
+            identified separately rather than treated as one number rounded two ways.</p>
           </div>
         </details>
       </figure>
@@ -598,12 +599,12 @@
           <a href="assets/swath-cli-demo.mp4">Watch the command-line demo</a>
         </video>
         <figcaption>
-          A recorded Docker workflow — interrupt, resume, and DuckDB query — captured with
-          swath <strong>0.2.1</strong> (commit <code>505ae26e6019</code>, from the video's own
-          opening <code>swath --version</code> frame). Its own capture date and machine are
-          unknown in retained evidence; the video file was added to this site's git history on
-          2026-08-20 (commit <code>34a6c63</code>), which is a lower bound on when it was
-          published, not a capture date.
+          A recorded Docker workflow: start a listing, interrupt it, resume it from its output
+          directory, and query the Parquet parts with DuckDB. Captured with swath
+          <strong>0.2.1</strong> (commit <code>505ae26e6019</code>, read from the video's own
+          opening <code>swath --version</code> frame); the capture date and machine are unknown
+          in retained evidence, and the file entered this site's history on 2026-08-20
+          (commit <code>34a6c63</code>), a lower bound on publication rather than a capture date.
         </figcaption>
         <details class="transcript">
           <summary>Read the commands and result shown in the video</summary>
