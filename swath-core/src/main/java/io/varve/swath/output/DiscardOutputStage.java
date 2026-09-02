@@ -34,7 +34,9 @@ public final class DiscardOutputStage implements Pipeline.Consumer<PageBatch> {
     @Override
     public void consume(RunContext ctx, Channel<PageBatch> in) throws SwathException, InterruptedException {
         while (true) {
+            long receiveStartedNs = System.nanoTime();
             Msg<PageBatch> msg = in.receive();
+            ctx.metrics().recordChannelReceive(System.nanoTime() - receiveStartedNs);
             switch (msg) {
                 case Item<PageBatch> item -> discardBatch(ctx, item.value());
                 case End<PageBatch> ignored -> {

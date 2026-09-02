@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+### Added
+
+- `client_cost[]` gains a `channel_receive` span (`swath.channel.receive.latency`): the consumer
+  stage's own wait to take each envelope off the shared channel, the complement of `emit` on the
+  consumer's timeline.
+
 ## 0.3.1 — 2026-09-01
 
 ### Changed

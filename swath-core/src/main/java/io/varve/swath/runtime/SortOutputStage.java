@@ -60,7 +60,9 @@ public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
     @Override
     public void consume(RunContext ctx, Channel<PageBatch> in) throws SwathException, InterruptedException {
         while (true) {
+            long receiveStartedNs = System.nanoTime();
             Msg<PageBatch> msg = in.receive();
+            ctx.metrics().recordChannelReceive(System.nanoTime() - receiveStartedNs);
             switch (msg) {
                 case Item<PageBatch> item -> {
                     // The per-page emit span (client service cost) -- one nanoTime pair per page

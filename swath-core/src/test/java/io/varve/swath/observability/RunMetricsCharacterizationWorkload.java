@@ -178,6 +178,7 @@ final class RunMetricsCharacterizationWorkload {
 
         // Per-page emit span.
         m.recordEmit(2_000L);
+        m.recordChannelReceive(1_500L);
 
         // Parquet writer pool — every rotation trigger and part outcome.
         m.recordParquetRotation("size");

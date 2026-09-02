@@ -101,10 +101,13 @@ final class ClientCostSpanRecordingTest {
                 RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT,
                 RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT,
                 RunMetrics.CLIENT_COST_SPAN_EMIT,
+                RunMetrics.CLIENT_COST_SPAN_CHANNEL_RECEIVE,
                 RunMetrics.CLIENT_COST_SPAN_WRITER_BACKPRESSURE);
         // Exactly one observation per page for each of the three PER-PAGE spans -- page-scoped, not
         // run-scoped and not batch-scoped.
         assertThat(spans.get(RunMetrics.CLIENT_COST_SPAN_EMIT).count()).isEqualTo(PAGES);
+        // The consumer's receive span is per ENVELOPE: every page plus the terminal End.
+        assertThat(spans.get(RunMetrics.CLIENT_COST_SPAN_CHANNEL_RECEIVE).count()).isEqualTo(PAGES + 1);
         assertThat(spans.get(RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT).count()).isEqualTo(PAGES);
         assertThat(spans.get(RunMetrics.CLIENT_COST_SPAN_WRITER_BACKPRESSURE).count()).isEqualTo(PAGES);
         // The two writer-thread spans are per-TASK and per-BATCH: the queue carries the run's
