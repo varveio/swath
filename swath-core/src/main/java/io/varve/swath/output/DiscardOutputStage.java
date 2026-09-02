@@ -7,7 +7,6 @@ package io.varve.swath.output;
 
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.SwathException;
-import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.pipeline.Channel;
 import io.varve.swath.pipeline.End;
@@ -56,16 +55,9 @@ public final class DiscardOutputStage implements Pipeline.Consumer<PageBatch> {
     }
 
     private void discardBatch(RunContext ctx, PageBatch batch) {
-        long entriesTallied = 0L;
         long startedNs = System.nanoTime();
-        try {
-            for (ListEntry entry : batch.entries()) {
-                tally.add(entry, ctx.metrics());
-                entriesTallied++;
-            }
-        } finally {
-            ctx.metrics().recordEntriesEmitted(entriesTallied);
-        }
+        ctx.metrics().recordEntriesEmitted(batch.entryCount());
+        tally.merge(batch.tally(), ctx.metrics());   // O(1): tallied on the fetch worker
         ctx.metrics().recordEmit(System.nanoTime() - startedNs);
     }
 

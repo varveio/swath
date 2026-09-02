@@ -13,10 +13,11 @@ import java.util.concurrent.Callable;
 import java.util.function.ToLongFunction;
 
 /**
- * The static listing pipeline skeleton: a single producer (the listing
- * engine) feeds a bounded {@link Channel} drained by a consumer (the output
- * stage). Filter/sort stages are inserted between them in later phases; the
- * shutdown discipline established here is what those stages inherit.
+ * The static listing pipeline skeleton: the producing side (the listing engine,
+ * which sends from every fetch worker concurrently) feeds a bounded
+ * {@link Channel} drained by a single consumer (the output stage). Filter/sort
+ * stages are inserted between them in later phases; the shutdown discipline
+ * established here is what those stages inherit.
  *
  * <p><b>I8 shutdown ordering.</b> The consumer runs on the calling thread; when
  * it returns (end-of-stream, broken pipe, or cancellation) the channel's

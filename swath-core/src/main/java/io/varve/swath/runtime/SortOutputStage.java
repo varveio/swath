@@ -8,14 +8,10 @@ package io.varve.swath.runtime;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.error.SwathException;
-import io.varve.swath.model.CommonPrefixEntry;
-import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
-import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.ObjectEntry;
-import io.varve.swath.model.PackedPage;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.output.ListingStatistics;
+import io.varve.swath.output.RowTally;
 import io.varve.swath.pipeline.Channel;
 import io.varve.swath.pipeline.End;
 import io.varve.swath.pipeline.Failure;
@@ -37,11 +33,7 @@ import java.util.Map;
 public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
 
     private final SpillLane lane;
-
-    private long objects;
-    private long commonPrefixes;
-    private long deleteMarkers;
-    private long estimatedBytes;
+    private final RowTally tally = new RowTally();
     /** Allocated only when JVM assertions engage the live-page ordering tripwire. */
     private Map<Long, AcceptedPage> acceptedPages;
 
@@ -50,11 +42,11 @@ public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
     }
 
     public long totalRows() {
-        return objects + commonPrefixes + deleteMarkers;
+        return tally.totalRows();
     }
 
     public ListingStatistics statistics(long apiCalls, Duration elapsed) {
-        return new ListingStatistics(objects, commonPrefixes, deleteMarkers, estimatedBytes, apiCalls, elapsed);
+        return tally.statistics(apiCalls, elapsed);
     }
 
     @Override
@@ -146,31 +138,13 @@ public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
     private record AcceptedPage(long pageSeq, byte[] lastKey) {
     }
 
+    /**
+     * O(1) per page: the fetch worker tallied the page when it built the batch (for the packed
+     * form, at pack time), so the drain thread merges four longs instead of iterating (and
+     * decoding) entries — the same totals a per-entry loop would produce.
+     */
     private void count(RunContext ctx, PageBatch batch) {
         ctx.metrics().recordEntriesEmitted(batch.entryCount());
-        if (batch.isPacked()) {
-            // The fetch worker tallied the per-row-type counts + object-size sum at pack time, so
-            // the drain thread reads them off the packed page instead of iterating (and decoding) entries —
-            // the same totals a per-entry loop would produce (recordEstimatedBytes is an additive counter).
-            PackedPage p = batch.packed();
-            objects += p.objectCount();
-            commonPrefixes += p.commonPrefixCount();
-            deleteMarkers += p.deleteMarkerCount();
-            long size = p.totalObjectSize();
-            estimatedBytes += size;
-            ctx.metrics().recordEstimatedBytes(size);
-            return;
-        }
-        for (ListEntry e : batch.entries()) {
-            switch (e) {
-                case ObjectEntry o -> {
-                    objects++;
-                    estimatedBytes += o.size();
-                    ctx.metrics().recordEstimatedBytes(o.size());
-                }
-                case CommonPrefixEntry ignored -> commonPrefixes++;
-                case DeleteMarkerEntry ignored -> deleteMarkers++;
-            }
-        }
+        tally.merge(batch.tally(), ctx.metrics());
     }
 }
