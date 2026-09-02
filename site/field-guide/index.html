@@ -977,10 +977,16 @@
         cannot see the profile; it only ever learns it by listing.
       </p>
       <p>
-        Each colored band is one <em class="term">range</em> owned by one worker. The filled
-        part is what that worker has already listed. Watch for the ochre marks: those are
-        <em class="term">splits</em> — the moment an idle worker carves a busy one in half
-        and takes the upper piece.
+        Each colored band is one <em class="term">range</em> owned by one worker (twelve
+        workers share six colors, so a color is not a worker's identity). The filled part is
+        what that worker has already listed, and the band sits on a faint copy of the
+        profile above it, so a cursor visibly slows where the keys are dense. Watch for the
+        ochre marks: those are <em class="term">splits</em>, and they come in two kinds. A
+        solid tick is a <em>thief</em>: an idle worker probed a busy range and took its
+        upper half. A hollow triangle is the busy range's <em>own worker</em> shedding its
+        far tail into the pending row for whoever is idle to claim — in the recorded run
+        below, that second kind made 92% of all splits. A red tick is a probe that found
+        nothing; the red hatched region is a flat directory nothing can split.
       </p>
     </div>
 
@@ -992,7 +998,7 @@
         <button id="replay" type="button">Replay</button>
       </div>
       <canvas id="strip" role="img"
-        aria-label="Animated keyspace strip: a lumpy key-density profile is tiled into adjacent colored ranges, each drained by one worker; idle workers split busy ranges at ochre pivot marks, and the run ends with one dense flat directory draining alone."></canvas>
+        aria-label="Animated keyspace strip: a lumpy key-density profile is tiled into adjacent colored ranges, each drained by one worker. Busy workers shed their far tails as pending ranges (hollow ochre triangles), idle workers claim them or probe and split a busy range (solid ochre ticks), and the run ends with one dense flat directory, hatched in red, draining alone."></canvas>
       <dl class="readout">
         <div><dt>Keys listed</dt><dd id="m-keys">0</dd></div>
         <div><dt>LIST requests</dt><dd id="m-reqs">0</dd></div>
@@ -1002,12 +1008,14 @@
       </dl>
     </div>
     <p class="col" style="margin-top:1.2rem; color:var(--ink-2); font-size:0.94rem;">
-      Two things worth catching before you read on. Early, a worker in a sparse
+      Three things worth catching before you read on. Early, a worker in a sparse
       region rips across a huge slice of the keyspace while a worker in a dense one
-      barely moves — <em class="term">progress in keyspace is not progress in keys</em>. Late,
-      one band goes red and everything else finishes around it: that is a single flat
-      directory with no internal structure to split on, and it is the one shape swath
-      genuinely cannot parallelize.
+      barely moves — <em class="term">progress in keyspace is not progress in keys</em>.
+      Through the middle, more new ranges appear as hollow triangles than as solid ticks:
+      busy workers shed work ahead of themselves before thieves get around to probing for
+      it, which is how the real engine keeps its worklist full. Late, one band goes red and everything
+      else finishes around it: that is a single flat directory with no internal structure
+      to split on, and it is the one shape swath genuinely cannot parallelize.
     </p>
   </section>
 
@@ -1376,6 +1384,16 @@
         mechanism is global; the trigger is local and demand-driven — design law L2 in
         <a href="https://github.com/varveio/swath/blob/main/docs/internals/overview.md"><span class="mono">docs/internals/overview.md</span></a>.
       </p>
+      <p>
+        In practice this fourth trigger does most of the work. In the recorded run below,
+        2,204 of the 2,399 committed splits were owner-side; thieves took 195. Both paths
+        are deliberately paced so a hot range is not shattered into confetti: an owner
+        carves at most once per 32 committed pages, and across the whole fleet only one
+        thief may hold a probe in flight at a time. Those two constants set how fast the
+        worklist refills, which is why a fleet can show idle workers while ranges still
+        exist to split — a limit being worked on in
+        <a href="https://github.com/varveio/swath/issues/205">issue #205</a>.
+      </p>
     </div>
 
     <details class="dive">
@@ -1639,7 +1657,7 @@
           </tr>
           <tr>
             <td class="k">TSV / JSONL directory dataset</td>
-            <td>Several background writers, and <span class="mono">_SUCCESS</span> written last — but not resumable in 0.3.0, and it requires <code>--checkpoint none</code>.</td>
+            <td>Several background writers, and <span class="mono">_SUCCESS</span> written last — but not resumable in 0.3.1, and it requires <code>--checkpoint none</code>.</td>
           </tr>
           <tr>
             <td class="k">a path ending <span class="mono">.parquet</span></td>
@@ -1761,6 +1779,18 @@
         directory's tail — a bucket with many dense directories still parallelizes across
         them; only the last, densest one serializes at the very end. That is the red band
         you saw in Plate 2.
+      </p>
+      <p>
+        There is a second floor, and it is inside the process rather than in S3. Every
+        listing worker hands its pages through one bounded channel to one output stage
+        before any writer sees them, and that hand-off has a fixed cost per page. On a
+        1.07-billion-object bucket with a 2,048-worker ceiling, one 32-vCPU client settled
+        at about 2,600 pages per second with two thirds of its workers waiting to hand off
+        a page, and a 64-vCPU client was no faster. That is an observation about those
+        runs, not a limit of the design; the fix is tracked in
+        <a href="https://github.com/varveio/swath/issues/206">issue #206</a>. Until it
+        lands, raising <span class="mono">--concurrency</span> far past a few hundred
+        buys little on a single machine.
       </p>
     </div>
 
@@ -2111,7 +2141,12 @@
       </p>
       <p>
         On a healthy endpoint the decrease path never fires — <span class="mono">T</span>
-        ramps to the ceiling and stays. Adaptive concurrency is a safety control, not the
+        ramps to the ceiling and stays. One caveat: the latency valve measures inflation
+        against the run's own first pages, so a client very close to the bucket, whose
+        first pages return in a few milliseconds, can be held well below the ceiling for
+        minutes by the ordinary latency rise that comes with load — tracked in
+        <a href="https://github.com/varveio/swath/issues/202">issue #202</a>.
+        Adaptive concurrency is a safety control, not the
         source of parallelism: seeding and splitting decide whether useful work exists at all,
         and AIMD only limits how much of it may call the store at once. It is a reactive
         backpressure controller, not an online throughput optimizer — it will not search back
@@ -2462,6 +2497,14 @@
   var WORKERS = 12;
   var TICKS_TO_DRAIN = 560;                 /* pacing target */
   var KEYS_PER_TICK = TOTAL / (WORKERS * TICKS_TO_DRAIN);
+  /* owner-side shedding, paced like the engine's own rate limit: a busy
+     worker sheds its far tail at most once per SHED_EVERY ticks, and only
+     while some worker is idle (the demand gate) */
+  var SHED_EVERY = 14;
+  var SHED_MIN_REMAINING = 0.015;           /* estimated share of all keys still ahead */
+  /* a thief probes only after waiting this long for shed work, the model's
+     stand-in for the engine's one-attempt-at-a-time steal slot and backoff */
+  var STEAL_PATIENCE = 10;
 
   var nodes, workers, keysDone, reqs, splits, phase, seedTimer, flashes, tick, done, floorSeen;
 
@@ -2470,7 +2513,7 @@
     workers = [];
     keysDone = 0; reqs = 0; splits = 0; tick = 0;
     phase = "seed"; seedTimer = 0; flashes = []; done = false; floorSeen = false;
-    for (var i = 0; i < WORKERS; i++) workers.push({ id: i, node: null, idle: true, backoff: 0 });
+    for (var i = 0; i < WORKERS; i++) workers.push({ id: i, node: null, idle: true, backoff: 0, idleAt: 0 });
   }
 
   function startScan() {
@@ -2483,7 +2526,7 @@
 
   var nid = 0;
   function mkNode(lo, hi) {
-    return { id: nid++, lo: lo, hi: hi, cursor: lo, drained: 0, owner: null, done: false, stuck: false };
+    return { id: nid++, lo: lo, hi: hi, cursor: lo, drained: 0, owner: null, done: false, stuck: false, lastShed: 0 };
   }
 
   function claim(w) {
@@ -2524,7 +2567,7 @@
       m = rung === 1 ? best.cursor + (best.hi - best.cursor) * 0.5
                      : best.cursor + (m - best.cursor) * 0.5;
     }
-    flashes.push({ x: m, t: 0, ok: massIn(m, best.hi) > 0, rung: rung });
+    flashes.push({ x: m, t: 0, ok: massIn(m, best.hi) > 0, rung: rung, kind: "thief" });
 
     if (massIn(m, best.hi) <= 0 || m <= best.cursor) { w.backoff = 14; return false; }
 
@@ -2549,12 +2592,30 @@
       return;
     }
 
-    var i, w, n, busy = 0;
+    var i, w, n, busy = 0, idle = 0;
+    for (i = 0; i < workers.length; i++) if (workers[i].idle && workers[i].backoff === 0) idle++;
+
+    /* owner-side split first, as in the engine: at page commit a busy worker
+       sheds its far tail for an idle one to claim, at most once per SHED_EVERY
+       ticks and only while there is unmet demand */
+    for (i = 0; i < workers.length && idle > 0; i++) {
+      n = workers[i].node;
+      if (workers[i].idle || !n || n.stuck || tick - n.lastShed < SHED_EVERY) continue;
+      if (estRemaining(n) <= SHED_MIN_REMAINING || (n.cursor > FLAT_LO && n.hi < FLAT_HI)) continue;
+      var pivot = n.cursor + (n.hi - n.cursor) * 0.6;
+      n.lastShed = tick;
+      if (massIn(pivot, n.hi) <= 0) continue;
+      nodes.push(mkNode(pivot, n.hi));
+      n.hi = pivot; splits++; idle--;
+      flashes.push({ x: pivot, t: 0, ok: true, rung: 0, kind: "owner" });
+    }
+
     for (i = 0; i < workers.length; i++) {
       w = workers[i];
       if (w.backoff > 0) { w.backoff--; continue; }
 
-      if (w.idle) { if (!claim(w)) trySteal(w); }
+      /* an idle worker claims shed work if any is pending; only after waiting does it steal */
+      if (w.idle) { if (!claim(w) && tick - w.idleAt >= STEAL_PATIENCE) trySteal(w); }
 
       if (!w.idle && w.node) {
         n = w.node;
@@ -2566,7 +2627,7 @@
         keysDone += moved * TOTAL;
         reqs += Math.max(1, Math.round(moved * TOTAL / 1000));
         n.cursor = posAt(next);
-        if (next >= limit - 1e-9) { n.done = true; n.owner = null; w.node = null; w.idle = true; }
+        if (next >= limit - 1e-9) { n.done = true; n.owner = null; w.node = null; w.idle = true; w.idleAt = tick; }
         else busy++;
       }
     }
@@ -2601,7 +2662,7 @@
     var dpr = window.devicePixelRatio || 1;
     var r = cv.getBoundingClientRect();
     W = Math.max(300, r.width);
-    H = W < 640 ? 274 : 232;                 /* room for the legend to wrap */
+    H = W < 640 ? 304 : 262;                 /* room for the legend to wrap */
     cv.style.height = H + "px";
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2636,14 +2697,26 @@
     ctx.textAlign = "right";
     ctx.fillText("keyspace →", px(1), 12);
 
-    /* flat-leaf marker */
-    if (floorSeen) {
-      ctx.fillStyle = pal.alert; ctx.globalAlpha = 0.09;
-      ctx.fillRect(px(FLAT_LO), profTop, px(FLAT_HI) - px(FLAT_LO), profH);
+    var bandTop = 108, bandH = 26, gap = 6;
+
+    /* a faint copy of the density under the band row, so a slowing cursor
+       can be read against the mass it is wading through */
+    if (phase !== "seed") {
+      ctx.fillStyle = pal.ink3;
+      for (i = 0; i < N; i += 4) {
+        var a0 = Math.pow(dens[i] / peak, 0.42) * 0.22;
+        if (a0 < 0.01) continue;
+        ctx.globalAlpha = a0;
+        ctx.fillRect(px(i / N), bandTop + 12, Math.max(1, px((i + 4) / N) - px(i / N)), bandH);
+      }
       ctx.globalAlpha = 1;
     }
 
-    var bandTop = 108, bandH = 26, gap = 6;
+    /* flat-leaf marker: hatched, in both strips, once the model has hit it */
+    if (floorSeen) {
+      hatch(px(FLAT_LO), profTop, px(FLAT_HI) - px(FLAT_LO), profH);
+      hatch(px(FLAT_LO), bandTop + 12, px(FLAT_HI) - px(FLAT_LO), bandH);
+    }
 
     /* baseline */
     ctx.strokeStyle = pal.rule; ctx.lineWidth = 1;
@@ -2667,7 +2740,8 @@
       return;
     }
 
-    /* ranges, laid out in rows so overlapping generations stay legible */
+    /* ranges: finished ones as a thin settled bar above, pending and active
+       ones in the band row (they never overlap in the keyspace, so one row) */
     var rows = [[], [], []];
     for (i = 0; i < nodes.length; i++) {
       n = nodes[i];
@@ -2694,10 +2768,12 @@
 
     /* active ranges */
     var y = bandTop + 12;
+    var slivers = 0;
     for (i = 0; i < rows[2].length; i++) {
       n = rows[2][i];
       var col = n.stuck ? pal.alert : pal.w[n.owner % pal.w.length];
       var x0 = px(n.lo), x1 = px(n.hi), xc = px(n.cursor);
+      if (x1 - x0 < 2.5) { slivers++; ctx.fillStyle = col; ctx.fillRect(x0, y, 1.5, bandH); continue; }
       ctx.strokeStyle = col; ctx.lineWidth = 1.2;
       ctx.strokeRect(x0 + 0.5, y + 0.5, Math.max(2, x1 - x0) - 1, bandH - 1);
       ctx.fillStyle = col; ctx.globalAlpha = 0.30;
@@ -2715,21 +2791,40 @@
       var a = 1 - fl.t / 26;
       ctx.globalAlpha = a;
       ctx.strokeStyle = fl.ok ? pal.signal : pal.alert;
-      ctx.lineWidth = fl.ok ? 2 : 1.2;
+      ctx.lineWidth = fl.ok && fl.kind === "thief" ? 2 : 1.2;
+      if (fl.kind === "owner") ctx.setLineDash([3, 2]);
       ctx.beginPath();
       ctx.moveTo(px(fl.x), bandTop + 4);
       ctx.lineTo(px(fl.x), bandTop + 12 + bandH + 6);
       ctx.stroke();
+      ctx.setLineDash([]);
       if (fl.ok) {
-        ctx.fillStyle = pal.signal;
         ctx.beginPath();
         ctx.moveTo(px(fl.x), bandTop + 2); ctx.lineTo(px(fl.x) - 4, bandTop - 5);
-        ctx.lineTo(px(fl.x) + 4, bandTop - 5); ctx.closePath(); ctx.fill();
+        ctx.lineTo(px(fl.x) + 4, bandTop - 5); ctx.closePath();
+        if (fl.kind === "owner") { ctx.strokeStyle = pal.signal; ctx.lineWidth = 1.4; ctx.stroke(); }
+        else { ctx.fillStyle = pal.signal; ctx.fill(); }
       }
       ctx.globalAlpha = 1;
     }
 
+    if (slivers > 0) {
+      ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+      ctx.fillStyle = pal.ink3; ctx.textAlign = "right";
+      ctx.fillText(slivers + " range" + (slivers === 1 ? "" : "s") + " too narrow to draw", px(1), bandTop + 12 + bandH + 16);
+    }
+
     drawFooter();
+
+    function hatch(x, yTop, w, h) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x, yTop, w, h); ctx.clip();
+      ctx.strokeStyle = pal.alert; ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
+      for (var hx = x - h; hx < x + w; hx += 6) {
+        ctx.beginPath(); ctx.moveTo(hx, yTop + h); ctx.lineTo(hx + h, yTop); ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     function drawFooter() {
       var fy = 208;
@@ -2737,11 +2832,13 @@
       ctx.textAlign = "left"; ctx.fillStyle = pal.ink3;
 
       var items = [
-        ["fill", pal.accent, "listed"],
+        ["fill", pal.w[0], "listed (one color per worker)"],
         ["bar", pal.ink3, "range finished"],
-        ["rect", pal.ink3, "not yet claimed"],
-        ["tick", pal.signal, "split committed"],
-        ["tick", pal.alert, "probe found nothing"]
+        ["rect", pal.ink3, "shed, not yet claimed"],
+        ["tick", pal.signal, "thief split"],
+        ["tri", pal.signal, "owner shed its tail"],
+        ["tick", pal.alert, "probe found nothing"],
+        ["hatch", pal.alert, "flat directory: no split possible"]
       ];
       var cx = px(0), right = px(1);
       for (var k = 0; k < items.length; k++) {
@@ -2751,6 +2848,8 @@
         if (it[0] === "fill") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.45; ctx.fillRect(cx, fy - 7, 16, 8); ctx.globalAlpha = 1; }
         else if (it[0] === "bar") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.5; ctx.fillRect(cx, fy - 5, 16, 4); ctx.globalAlpha = 1; }
         else if (it[0] === "rect") { ctx.strokeStyle = it[1]; ctx.lineWidth = 1; ctx.setLineDash([3, 2]); ctx.strokeRect(cx + 0.5, fy - 7.5, 16, 9); ctx.setLineDash([]); }
+        else if (it[0] === "tri") { ctx.strokeStyle = it[1]; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(cx + 8, fy - 9); ctx.lineTo(cx + 3, fy + 1); ctx.lineTo(cx + 13, fy + 1); ctx.closePath(); ctx.stroke(); }
+        else if (it[0] === "hatch") { hatch(cx, fy - 8, 16, 10); }
         else { ctx.strokeStyle = it[1]; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx + 7, fy - 9); ctx.lineTo(cx + 7, fy + 1); ctx.stroke(); }
         ctx.fillStyle = pal.ink3;
         ctx.fillText(it[2], cx + 22, fy);
@@ -2770,7 +2869,7 @@
 
   var NOTES = {
     seed:  "One delimiter=/ probe asks S3 where the directories are.",
-    scan:  "Workers drain their ranges; idle ones steal from the busiest.",
+    scan:  "Workers drain their ranges; busy ones shed their far tails, idle ones claim or steal.",
     floor: "One flat directory has no structure to split on — it drains alone.",
     done:  "Complete. The range set tiled the keyspace with no gaps and no overlap."
   };
