@@ -986,7 +986,7 @@
         upper half. A hollow triangle is the busy range's <em>own worker</em> shedding its
         far tail into the pending row for whoever is idle to claim — in the recorded run
         below, that second kind made 92% of all splits. A red tick is a probe that found
-        nothing; the red hatched region is a flat directory nothing can split.
+        nothing; the red hatching marks the model's intentionally unsplittable flat prefix.
       </p>
     </div>
 
@@ -1385,14 +1385,14 @@
         <a href="https://github.com/varveio/swath/blob/main/docs/internals/overview.md"><span class="mono">docs/internals/overview.md</span></a>.
       </p>
       <p>
-        In practice this fourth trigger does most of the work. In the recorded run below,
-        2,204 of the 2,399 committed splits were owner-side; thieves took 195. Both paths
-        are deliberately paced so a hot range is not shattered into confetti: an owner
-        carves at most once per 32 committed pages, and across the whole fleet only one
-        thief may hold a probe in flight at a time. Those two constants set how fast the
-        worklist refills, which is why a fleet can show idle workers while ranges still
-        exist to split — a limit being worked on in
-        <a href="https://github.com/varveio/swath/issues/205">issue #205</a>.
+        This fourth trigger did most of the work in the recorded run below: 2,204 of 2,399
+        committed splits were owner-side, while thieves took 195. Both paths are paced to
+        limit unproductive splitting: within a claimed range, its owner carves no more than
+        once per 32 committed non-empty pages, and across the fleet only one thief may own
+        the steal-attempt slot at a time, including any probes that attempt issues. These
+        limits can slow worklist refill;
+        <a href="https://github.com/varveio/swath/issues/205">issue #205</a> tracks their
+        effect and possible demand-aware replacements.
       </p>
     </div>
 
@@ -1781,16 +1781,13 @@
         you saw in Plate 2.
       </p>
       <p>
-        There is a second floor, and it is inside the process rather than in S3. Every
-        listing worker hands its pages through one bounded channel to one output stage
-        before any writer sees them, and that hand-off has a fixed cost per page. On a
-        1.07-billion-object bucket with a 2,048-worker ceiling, one 32-vCPU client settled
-        at about 2,600 pages per second with two thirds of its workers waiting to hand off
-        a page, and a 64-vCPU client was no faster. That is an observation about those
-        runs, not a limit of the design; the fix is tracked in
-        <a href="https://github.com/varveio/swath/issues/206">issue #206</a>. Until it
-        lands, raising <span class="mono">--concurrency</span> far past a few hundred
-        buys little on a single machine.
+        A second potential floor is inside the client: all listing workers feed one
+        bounded channel drained by one output-stage consumer, so output backpressure can
+        serialize a large fleet before batches reach the background writers. A swath 0.3.1
+        compressed-TSV run on a 1.07-billion-object bucket exposed this bottleneck; see
+        <a href="https://github.com/varveio/swath/blob/main/docs/performance.md#find-the-limiting-stage">the performance guide</a>
+        for diagnosis and <a href="https://github.com/varveio/swath/issues/206">issue #206</a>
+        for the dated evidence.
       </p>
     </div>
 
@@ -2141,8 +2138,9 @@
       </p>
       <p>
         On a healthy endpoint the decrease path never fires — <span class="mono">T</span>
-        ramps to the ceiling and stays. One caveat: the latency valve measures inflation
-        against the run's own first pages, so a client very close to the bucket, whose
+        ramps to the ceiling and stays. One caveat: the latency valve compares a short EWMA
+        with a rolling-minimum baseline seeded by the run's first successful pages, so a
+        client very close to the bucket, whose
         first pages return in a few milliseconds, can be held well below the ceiling for
         minutes by the ordinary latency rise that comes with load — tracked in
         <a href="https://github.com/varveio/swath/issues/202">issue #202</a>.
@@ -2567,12 +2565,17 @@
       m = rung === 1 ? best.cursor + (best.hi - best.cursor) * 0.5
                      : best.cursor + (m - best.cursor) * 0.5;
     }
-    flashes.push({ x: m, t: 0, ok: massIn(m, best.hi) > 0, rung: rung, kind: "thief" });
+    var hasMass = massIn(m, best.hi) > 0;
+    if (!hasMass || m <= best.cursor) {
+      flashes.push({ x: m, t: 0, ok: false, rung: rung, kind: "thief" });
+      w.backoff = 14;
+      return false;
+    }
 
-    if (massIn(m, best.hi) <= 0 || m <= best.cursor) { w.backoff = 14; return false; }
-
-    /* a flat leaf has no structure to divide: the split is refused */
+    /* a flat leaf has no structure to divide: the split is refused, and only the
+       hatching marks it */
     if (best.cursor > FLAT_LO && best.hi < FLAT_HI) { best.stuck = true; w.backoff = 30; floorSeen = true; return false; }
+    flashes.push({ x: m, t: 0, ok: true, rung: rung, kind: "thief" });
 
     var child = mkNode(m, best.hi);
     best.hi = m;
@@ -2603,20 +2606,28 @@
       if (workers[i].idle || !n || n.stuck || tick - n.lastShed < SHED_EVERY) continue;
       if (estRemaining(n) <= SHED_MIN_REMAINING || (n.cursor > FLAT_LO && n.hi < FLAT_HI)) continue;
       var pivot = n.cursor + (n.hi - n.cursor) * 0.6;
-      n.lastShed = tick;
       if (massIn(pivot, n.hi) <= 0) continue;
       nodes.push(mkNode(pivot, n.hi));
-      n.hi = pivot; splits++; idle--;
+      n.hi = pivot; n.lastShed = tick; splits++; idle--;
       flashes.push({ x: pivot, t: 0, ok: true, rung: 0, kind: "owner" });
     }
 
+    /* idle workers claim pending work; then at most one of them, per tick,
+       holds the fleet's single steal-attempt slot and probes a victim */
+    var stealAttempted = false;
     for (i = 0; i < workers.length; i++) {
       w = workers[i];
       if (w.backoff > 0) { w.backoff--; continue; }
+      if (w.idle && !claim(w) && !stealAttempted && tick - w.idleAt >= STEAL_PATIENCE) {
+        stealAttempted = true;
+        trySteal(w);
+      }
+    }
 
-      /* an idle worker claims shed work if any is pending; only after waiting does it steal */
-      if (w.idle) { if (!claim(w) && tick - w.idleAt >= STEAL_PATIENCE) trySteal(w); }
-
+    /* every busy worker drains one tick of keys */
+    for (i = 0; i < workers.length; i++) {
+      w = workers[i];
+      if (w.backoff > 0) continue;
       if (!w.idle && w.node) {
         n = w.node;
         var here = keysAt(n.cursor);
@@ -2773,7 +2784,7 @@
       n = rows[2][i];
       var col = n.stuck ? pal.alert : pal.w[n.owner % pal.w.length];
       var x0 = px(n.lo), x1 = px(n.hi), xc = px(n.cursor);
-      if (x1 - x0 < 2.5) { slivers++; ctx.fillStyle = col; ctx.fillRect(x0, y, 1.5, bandH); continue; }
+      if (x1 - x0 < 2.5) { slivers++; continue; }
       ctx.strokeStyle = col; ctx.lineWidth = 1.2;
       ctx.strokeRect(x0 + 0.5, y + 0.5, Math.max(2, x1 - x0) - 1, bandH - 1);
       ctx.fillStyle = col; ctx.globalAlpha = 0.30;
@@ -2832,13 +2843,13 @@
       ctx.textAlign = "left"; ctx.fillStyle = pal.ink3;
 
       var items = [
-        ["fill", pal.w[0], "listed (one color per worker)"],
-        ["bar", pal.ink3, "range finished"],
-        ["rect", pal.ink3, "shed, not yet claimed"],
+        ["fill", pal.w[0], "listed"],
+        ["bar", pal.ink3, "finished"],
+        ["rect", pal.ink3, "pending range"],
         ["tick", pal.signal, "thief split"],
-        ["tri", pal.signal, "owner shed its tail"],
-        ["tick", pal.alert, "probe found nothing"],
-        ["hatch", pal.alert, "flat directory: no split possible"]
+        ["tri", pal.signal, "owner split"],
+        ["tick", pal.alert, "failed probe"],
+        ["hatch", pal.alert, "flat prefix"]
       ];
       var cx = px(0), right = px(1);
       for (var k = 0; k < items.length; k++) {
