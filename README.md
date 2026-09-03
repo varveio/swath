@@ -95,6 +95,11 @@ The [visual field guide](https://swath.varve.io/field-guide/) explains why S3 li
 hard to parallelize and walks through the range model, safe splitting, work stealing,
 checkpointing, and cases where swath is not the right tool.
 
+For the story behind swath and the study that grew alongside it, read
+[How I built swath: listing a billion S3 objects in 4 minutes](https://sagi.org/posts/how-i-built-swath/).
+The evidence behind the published large-scale runs is in the
+[study findings](https://github.com/varveio/s3-listing-study/blob/main/RESULTS.md).
+
 ## How it works
 
 Suppose one worker owns the ordered key range `(A, Z]`. It lists forward from `A`. When
