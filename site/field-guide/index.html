@@ -312,6 +312,7 @@
   .sim-note {
     font-family: var(--mono);
     font-size: 0.72rem;
+    line-height: 1.35;
     color: var(--ink-2);
     flex: 1 1 16rem;
     min-width: 0;
@@ -328,34 +329,6 @@
     cursor: pointer;
   }
   button:hover { border-color: var(--ink-2); }
-
-  .sim-guide {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem 1.25rem;
-    padding: 0.55rem 1rem;
-    border-bottom: 1px solid var(--rule);
-    color: var(--ink-2);
-    font-family: var(--mono);
-    font-size: 0.7rem;
-  }
-  .worker-chip {
-    display: inline-block;
-    min-width: 1.7rem;
-    padding: 0.05rem 0.2rem;
-    border: 1px solid var(--accent);
-    background: var(--paper);
-    color: var(--accent);
-    font-weight: 600;
-    text-align: center;
-  }
-  .pending-chip {
-    display: inline-block;
-    width: 1.7rem;
-    height: 0.65rem;
-    border: 1px dashed var(--ink-3);
-    vertical-align: -0.05rem;
-  }
 
   #strip { display: block; width: 100%; height: 232px; }
 
@@ -1000,21 +973,18 @@
         cannot see the profile; it only ever learns it by listing.
       </p>
       <p>
-        Each solid-outlined band is one active <em class="term">range</em>. Its
-        <strong>W1–W12 badge is the worker</strong>, placed at that worker's moving cursor;
-        color only separates neighboring ranges and repeats after six workers. The filled
-        part behind the badge is what that worker has already listed. A worker never jumps
-        around inside its range: it moves left to right until it finishes or the range is
-        split. It then becomes idle and either claims a dashed pending range or steals the
-        upper child of a busy worker's range.
+        Each colored band is one active <em class="term">range</em>, owned by the worker
+        named inside it. The filled part is what that worker has already listed. A worker
+        moves left to right until it finishes; it never jumps from one live range to another.
       </p>
       <p>
-        Ochre marks show the two handoffs. At a hollow triangle, the current owner keeps
-        the lower range and sheds the upper range into the dashed pending row; an idle
-        worker claims it a moment later. At a solid tick, an idle <em>thief</em> splits a
-        busy worker's remaining range and immediately takes the upper child. In the
-        recorded run below, owner-side shedding made 92% of all splits. A red tick is a
-        steal probe that found no useful upper child.
+        When an idle worker steals, it cuts the <em>unscanned remainder</em> of a busy
+        worker's range in two. The busy worker keeps the lower child; the thief immediately
+        takes the upper child. The animation pauses on that exact moment and labels both
+        children. Hollow triangles show the other handoff: an owner shedding an upper child
+        into the dashed pending row for an idle worker to claim. In the recorded run below,
+        owner-side shedding made 92% of all splits. A red tick is a probe that found no
+        useful upper child.
       </p>
     </div>
 
@@ -1025,13 +995,8 @@
         <button id="toggle" type="button">Pause</button>
         <button id="replay" type="button">Replay</button>
       </div>
-      <div class="sim-guide" aria-hidden="true">
-        <span><span class="worker-chip">W7</span> in a solid range = active worker</span>
-        <span><span class="pending-chip"></span> pending range — no worker yet</span>
-        <span>Idle pool below = workers waiting for a range</span>
-      </div>
       <canvas id="strip" role="img"
-        aria-label="Animated keyspace strip. Active ranges carry W1 through W12 badges at their moving cursors. Dashed ranges are pending and have no worker. On an owner split, the existing worker stays in the lower range while an idle worker later claims the dashed upper range. On a thief split, an idle worker immediately takes the upper child."></canvas>
+        aria-label="Animated keyspace strip. Each colored active range is labeled with its worker. During a steal, the busy worker keeps the lower child of its unscanned remainder and the idle thief takes the upper child; the two adjacent children are briefly labeled. Dashed ranges are pending and have no worker."></canvas>
       <dl class="readout">
         <div><dt>Keys listed</dt><dd id="m-keys">0</dd></div>
         <div><dt>LIST requests</dt><dd id="m-reqs">0</dd></div>
@@ -1041,17 +1006,13 @@
       </dl>
     </div>
     <p class="col" style="margin-top:1.2rem; color:var(--ink-2); font-size:0.94rem;">
-      Follow one badge, not one color. On an owner split, the same badge stays in the
-      lower range while a dashed upper range appears; a previously idle badge then moves
-      out of the idle pool and appears inside that pending range. On a thief split, an idle badge appears immediately in the
-      new upper child while the victim's badge stays below. When a range finishes, its
-      badge leaves the active row and appears in the idle pool until that worker claims
-      or steals more work. This is the
-      work-stealing loop: <strong>workers do not move between splits while busy; they
-      finish, go idle, and then acquire another range.</strong> Also notice that a worker
-      in sparse keyspace moves much farther than one in dense keyspace — progress in
-      byte position is not progress in keys. The <a href="#limits">limits section</a>
-      covers the genuinely hard-to-split shapes separately.
+      The important moment is <strong>one band becoming two adjacent bands</strong>: the
+      original worker stays on the lower child and the formerly idle thief appears on the
+      upper child. Nobody joins a range that already has an owner. When a worker finishes,
+      it becomes idle and can later claim or steal another range. Also notice that a worker
+      in sparse keyspace moves much farther than one in dense keyspace — progress in byte
+      position is not progress in keys. The <a href="#limits">limits section</a> covers
+      the genuinely hard-to-split shapes separately.
     </p>
   </section>
 
@@ -2531,21 +2492,22 @@
   /* more workers than seed ranges, so some are thieves from the first tick —
      which is what a real run looks like at any sensible --concurrency */
   var WORKERS = 12;
-  var TICKS_TO_DRAIN = 120;                 /* watchable pacing target */
+  var TICKS_TO_DRAIN = 560;                 /* keep the original, readable pacing */
   var KEYS_PER_TICK = TOTAL / (WORKERS * TICKS_TO_DRAIN);
   /* owner-side shedding, paced like the engine's own rate limit: a busy
      worker sheds its far tail at most once per SHED_EVERY ticks, and only
      while some worker is idle (the demand gate) */
   var SHED_EVERY = 14;
   var SHED_MIN_REMAINING = 0.015;           /* estimated share of all keys still ahead */
-  var MIN_CHILD_SPAN = 0.045;                /* keep worker handoffs legible in this drawing */
+  var MIN_CHILD_SPAN = 0.012;                /* avoid microscopic children in this drawing */
   var OWNER_EVENT_GAP = 42;                 /* visual spacing between owner handoffs */
-  var PENDING_HOLD = 14;                    /* keep a shed child visibly unowned */
+  var PENDING_HOLD = 6;                     /* keep a shed child visibly unowned */
   /* a thief probes only after waiting this long for shed work, the model's
      stand-in for the engine's one-attempt-at-a-time steal slot and backoff */
   var STEAL_PATIENCE = 10;
 
   var nodes, workers, keysDone, reqs, splits, phase, seedTimer, flashes, tick, done;
+  var stealFocus, stealPauseUsed;
   var eventNote, eventUntil, holdFrames, lastAnnouncedTick, nextOwnerEvent;
 
   function reset() {
@@ -2553,6 +2515,7 @@
     workers = [];
     keysDone = 0; reqs = 0; splits = 0; tick = 0;
     phase = "seed"; seedTimer = 0; flashes = []; done = false;
+    stealFocus = null; stealPauseUsed = false;
     eventNote = ""; eventUntil = 0; holdFrames = 0; lastAnnouncedTick = -1; nextOwnerEvent = 0;
     for (var i = 0; i < WORKERS; i++) workers.push({ id: i, node: null, idle: true, backoff: 0, idleAt: 0 });
   }
@@ -2567,7 +2530,7 @@
       if (!claim(workers[i], false)) workers[i].idleAt = tick;
     }
     nextOwnerEvent = tick;
-    announce("Seed made 8 ranges. W1–W8 claim them; W9–W12 wait idle for work.", 90, 18);
+    announce("Seed made 8 ranges. W1–W8 claim them; W9–W12 wait idle for work.", 90, 0);
   }
 
   var nid = 0;
@@ -2594,12 +2557,11 @@
       if (!n.done && n.owner === null && n.readyAt <= tick) {
         n.owner = w.id; w.node = n; w.idle = false;
         if (tell) {
-          n.highlightUntil = tick + 24;
           if (n.origin === "owner") {
-            announce(workerName(w.id) + ": IDLE → ACTIVE. It claims the upper range shed by " +
-              workerName(n.sourceWorker) + ".", 54, 10);
+            announce(workerName(w.id) + " was idle; it now claims the upper range shed by " +
+              workerName(n.sourceWorker) + ".", 54, 0);
           } else {
-            announce(workerName(w.id) + ": IDLE → ACTIVE. It claims a pending range.", 45, 8);
+            announce(workerName(w.id) + " was idle; it now claims a pending range.", 45, 0);
           }
         }
         return true;
@@ -2649,22 +2611,39 @@
       flashes.push({ x: m, t: 0, ok: false, rung: rung, kind: "thief" });
       w.backoff = 14;
       announce(workerName(w.id) + " probed " + workerName(best.owner) +
-        " but found no useful upper child, so it stays idle.", 42, 7);
+        " but found no useful upper child, so it stays idle.", 42, 0);
       return false;
     }
 
     var victimWorker = best.owner;
+    var oldHi = best.hi;
     flashes.push({ x: m, t: 0, ok: true, rung: rung, kind: "thief" });
 
-    var child = mkNode(m, best.hi, "thief", victimWorker);
+    var child = mkNode(m, oldHi, "thief", victimWorker);
     best.hi = m;
     nodes.push(child);
     child.owner = w.id; w.node = child; w.idle = false;
-    child.highlightUntil = tick + 24;
     splits++;
-    announce(workerName(w.id) + ": IDLE → ACTIVE. It split " + workerName(victimWorker) +
-      "'s remaining range and took the upper child. " + workerName(victimWorker) +
-      " keeps the lower child.", 70, 14);
+    /* Tiny children still count, but they do not make a useful close-up. Only
+       explain steals whose two new bands are legible at this viewport. */
+    var lowerPixels = px(m) - px(best.lo);
+    var upperPixels = px(oldHi) - px(m);
+    var focusThisSteal = !stealPauseUsed && lowerPixels >= 19 && upperPixels >= 19;
+    if (focusThisSteal) {
+      stealFocus = {
+        lowerId: best.id, upperId: child.id,
+        victim: victimWorker, thief: w.id,
+        /* Tick does not advance during the pause; retire the caption as soon
+           as scanning resumes so a later steal cannot contradict it. */
+        until: tick
+      };
+      /* Keep the close-up about this split; stale marks read like extra arrows. */
+      flashes = [flashes[flashes.length - 1]];
+    }
+    var stealPause = focusThisSteal && !stealPauseUsed ? 26 : 0;
+    if (focusThisSteal) stealPauseUsed = true;
+    announce("STEAL: " + workerName(w.id) + " was idle. " + workerName(victimWorker) +
+      " keeps the lower child; " + workerName(w.id) + " takes the upper child.", 72, stealPause);
     return true;
   }
 
@@ -2698,7 +2677,7 @@
       nextOwnerEvent = tick + OWNER_EVENT_GAP;
       flashes.push({ x: pivot, t: 0, ok: true, rung: 0, kind: "owner" });
       announce(workerName(workers[i].id) + " splits ahead: it keeps the lower range; " +
-        "the upper range is dashed and PENDING with no worker.", 70, 16);
+        "the upper range is dashed and PENDING with no worker.", 70, 0);
       break;
     }
 
@@ -2742,7 +2721,7 @@
     if (finished.length && lastAnnouncedTick !== tick) {
       announce(finished.join(" and ") + " finished " +
         (finished.length === 1 ? "a range and is" : "their ranges and are") +
-        " now idle, ready to claim or steal.", 46, 7);
+        " now idle, ready to claim or steal.", 46, 0);
     }
 
     var live = 0;
@@ -2774,7 +2753,7 @@
     var dpr = window.devicePixelRatio || 1;
     var r = cv.getBoundingClientRect();
     W = Math.max(300, r.width);
-    H = W < 640 ? 304 : 262;                 /* room for the legend to wrap */
+    H = W < 640 ? 250 : 232;                 /* compact, with room for a wrapped legend */
     cv.style.height = H + "px";
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2809,7 +2788,7 @@
     ctx.textAlign = "right";
     ctx.fillText("keyspace →", px(1), 12);
 
-    var bandTop = 108, bandH = 26, gap = 6;
+    var bandTop = 108, bandH = 26;
 
     /* a faint copy of the density under the band row, so a slowing cursor
        can be read against the mass it is wading through */
@@ -2827,12 +2806,6 @@
     /* baseline */
     ctx.strokeStyle = pal.rule; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(px(0), bandTop - 12); ctx.lineTo(px(1), bandTop - 12); ctx.stroke();
-    ctx.fillStyle = pal.ink3;
-    ctx.font = '9px ' + getComputedStyle(document.body).getPropertyValue('--mono');
-    ctx.textAlign = "left";
-    ctx.fillText(phase === "seed" ? "ACTIVE RANGES — waiting for seed" :
-      "ACTIVE RANGES — every W badge is working", px(0), bandTop + 3);
-
     if (phase === "seed") {
       ctx.textAlign = "center";
       ctx.fillStyle = pal.ink2;
@@ -2876,12 +2849,6 @@
       ctx.setLineDash([2, 3]);
       ctx.strokeRect(pendingX0 + 0.5, bandTop + 12.5, Math.max(2, pendingX1 - pendingX0) - 1, bandH - 2);
       ctx.setLineDash([]);
-      if (pendingX1 - pendingX0 > 42) {
-        ctx.fillStyle = pal.ink3;
-        ctx.font = '7px ' + getComputedStyle(document.body).getPropertyValue('--mono');
-        ctx.textAlign = "center";
-        ctx.fillText("PENDING", (pendingX0 + pendingX1) / 2, bandTop + 29);
-      }
     }
 
     /* active ranges */
@@ -2900,28 +2867,61 @@
       /* the cursor itself */
       ctx.fillRect(Math.max(x0, xc - 1), y, 2, bandH);
 
-      /* The worker is the labeled badge centered on its cursor. Keep it inside
-         its current range so ownership and direction remain unambiguous. */
-      if (x1 - x0 >= 15) {
-        var badgeW = Math.min(21, x1 - x0 - 2), badgeH = 14;
-        var badgeX = Math.max(x0 + badgeW / 2, Math.min(x1 - badgeW / 2, xc));
-        var isNewOwner = n.highlightUntil && tick <= n.highlightUntil;
-        ctx.fillStyle = isNewOwner ? col : pal.paper;
-        ctx.fillRect(badgeX - badgeW / 2, y + 6, badgeW, badgeH);
-        ctx.strokeStyle = col; ctx.lineWidth = 1;
-        ctx.strokeRect(badgeX - badgeW / 2 + 0.5, y + 6.5, badgeW - 1, badgeH - 1);
-        ctx.fillStyle = isNewOwner ? pal.paper : col;
-        ctx.font = '600 ' + (badgeW < 19 ? '7px ' : '8px ') +
-          getComputedStyle(document.body).getPropertyValue('--mono');
+      /* A quiet worker label keeps ownership visible without turning every
+         range into a separate UI widget. */
+      if (x1 - x0 >= 19) {
+        ctx.fillStyle = col;
+        ctx.font = '600 9px ' + getComputedStyle(document.body).getPropertyValue('--mono');
         ctx.textAlign = "center";
-        ctx.fillText(workerName(n.owner), badgeX, y + 16);
+        ctx.fillText(workerName(n.owner), (x0 + x1) / 2, y + 17);
+      }
+    }
+
+    /* Freeze briefly on a real thief split. The two underlines are the two
+       children of the victim's unscanned remainder; no movement arrow is
+       needed because the worker labels already identify their new owners. */
+    if (stealFocus && tick <= stealFocus.until) {
+      var lower = null, upper = null;
+      for (i = 0; i < nodes.length; i++) {
+        if (nodes[i].id === stealFocus.lowerId) lower = nodes[i];
+        if (nodes[i].id === stealFocus.upperId) upper = nodes[i];
+      }
+      if (lower && upper) {
+        var splitX = px(lower.hi);
+        var underlineY = y + bandH + 5;
+        var victimCol = pal.w[stealFocus.victim % pal.w.length];
+        var thiefCol = pal.w[stealFocus.thief % pal.w.length];
+        ctx.strokeStyle = victimCol; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(px(lower.cursor), underlineY); ctx.lineTo(splitX - 2, underlineY);
+        ctx.stroke();
+        ctx.strokeStyle = thiefCol;
+        ctx.beginPath(); ctx.moveTo(splitX + 2, underlineY); ctx.lineTo(px(upper.hi), underlineY); ctx.stroke();
+
+        var lowerText = workerName(stealFocus.victim) + " keeps lower";
+        var upperText = workerName(stealFocus.thief) + " takes upper";
+        ctx.font = '600 10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+        var lowerW = ctx.measureText(lowerText).width, upperW = ctx.measureText(upperText).width;
+        var dotW = ctx.measureText("  ·  ").width;
+        var captionW = lowerW + dotW + upperW;
+        var captionX = Math.max(px(0) + captionW / 2,
+          Math.min(px(1) - captionW / 2, splitX));
+        var captionStart = captionX - captionW / 2;
+        ctx.fillStyle = pal.paper;
+        ctx.fillRect(captionStart - 5, underlineY + 5, captionW + 10, 16);
+        ctx.fillStyle = victimCol; ctx.textAlign = "left";
+        ctx.fillText(lowerText, captionStart, underlineY + 17);
+        ctx.fillStyle = pal.signal;
+        ctx.fillText("  ·  ", captionStart + lowerW, underlineY + 17);
+        ctx.fillStyle = thiefCol; ctx.textAlign = "left";
+        ctx.fillText(upperText, captionStart + lowerW + dotW, underlineY + 17);
       }
     }
 
     /* split flashes */
     for (i = flashes.length - 1; i >= 0; i--) {
       var fl = flashes[i];
-      fl.t++;
+      if (holdFrames === 0) fl.t++;
       if (fl.t > 26) { flashes.splice(i, 1); continue; }
       var a = 1 - fl.t / 26;
       ctx.globalAlpha = a;
@@ -2933,12 +2933,11 @@
       ctx.lineTo(px(fl.x), bandTop + 12 + bandH + 6);
       ctx.stroke();
       ctx.setLineDash([]);
-      if (fl.ok) {
+      if (fl.ok && fl.kind === "owner") {
         ctx.beginPath();
         ctx.moveTo(px(fl.x), bandTop + 2); ctx.lineTo(px(fl.x) - 4, bandTop - 5);
         ctx.lineTo(px(fl.x) + 4, bandTop - 5); ctx.closePath();
-        if (fl.kind === "owner") { ctx.strokeStyle = pal.signal; ctx.lineWidth = 1.4; ctx.stroke(); }
-        else { ctx.fillStyle = pal.signal; ctx.fill(); }
+        ctx.strokeStyle = pal.signal; ctx.lineWidth = 1.4; ctx.stroke();
       }
       ctx.globalAlpha = 1;
     }
@@ -2949,48 +2948,17 @@
       ctx.fillText(slivers + " range" + (slivers === 1 ? "" : "s") + " too narrow to draw", px(1), bandTop + 12 + bandH + 16);
     }
 
-    drawWorkerDock();
     drawFooter();
 
-    function dockX(workerId) {
-      return px(0) + (workerId + 0.5) * (px(1) - px(0)) / WORKERS;
-    }
-
-    function workerBadge(workerId, bx, by, col, width) {
-      var bw = width || 21, bh = 14;
-      ctx.fillStyle = pal.paper;
-      ctx.fillRect(bx - bw / 2, by - bh / 2, bw, bh);
-      ctx.strokeStyle = col; ctx.lineWidth = 1;
-      ctx.strokeRect(bx - bw / 2 + 0.5, by - bh / 2 + 0.5, bw - 1, bh - 1);
-      ctx.fillStyle = col;
-      ctx.font = '600 ' + (bw < 19 ? '7px ' : '8px ') +
-        getComputedStyle(document.body).getPropertyValue('--mono');
-      ctx.textAlign = "center";
-      ctx.fillText(workerName(workerId), bx, by + 3);
-    }
-
-    function drawWorkerDock() {
-      var dockY = 184, anyIdle = false;
-      ctx.font = '9px ' + getComputedStyle(document.body).getPropertyValue('--mono');
-      ctx.textAlign = "left"; ctx.fillStyle = pal.ink3;
-      for (var di = 0; di < workers.length; di++) if (workers[di].idle) anyIdle = true;
-      ctx.fillText("IDLE POOL — " + (anyIdle ? "waiting for a range" : "empty"), px(0), 166);
-      var slot = (px(1) - px(0)) / WORKERS;
-      for (di = 0; di < workers.length; di++) {
-        if (workers[di].idle) workerBadge(di, dockX(di), dockY, pal.ink3, Math.min(21, slot - 3));
-      }
-    }
-
     function drawFooter() {
-      var fy = 228;
+      var fy = 208;
       ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
       ctx.textAlign = "left"; ctx.fillStyle = pal.ink3;
 
       var items = [
-        ["worker", pal.w[0], "worker at cursor"],
-        ["fill", pal.w[0], "listed portion"],
-        ["bar", pal.ink3, "finished range"],
-        ["rect", pal.ink3, "pending — no worker"],
+        ["fill", pal.w[0], "listed"],
+        ["bar", pal.ink3, "finished"],
+        ["rect", pal.ink3, "pending range"],
         ["tick", pal.signal, "thief split"],
         ["tri", pal.signal, "owner split"],
         ["tick", pal.alert, "failed probe"]
@@ -3000,14 +2968,7 @@
         var it = items[k];
         var w = 22 + ctx.measureText(it[2]).width;
         if (cx + w > right) { cx = px(0); fy += 15; }   /* wrap on a narrow canvas */
-        if (it[0] === "worker") {
-          ctx.fillStyle = pal.paper; ctx.fillRect(cx, fy - 10, 18, 12);
-          ctx.strokeStyle = it[1]; ctx.lineWidth = 1; ctx.strokeRect(cx + 0.5, fy - 9.5, 17, 11);
-          ctx.fillStyle = it[1]; ctx.font = '600 7px ' + getComputedStyle(document.body).getPropertyValue('--mono');
-          ctx.textAlign = "center"; ctx.fillText("W7", cx + 9, fy - 1); ctx.textAlign = "left";
-          ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
-        }
-        else if (it[0] === "fill") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.45; ctx.fillRect(cx, fy - 7, 16, 8); ctx.globalAlpha = 1; }
+        if (it[0] === "fill") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.45; ctx.fillRect(cx, fy - 7, 16, 8); ctx.globalAlpha = 1; }
         else if (it[0] === "bar") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.5; ctx.fillRect(cx, fy - 5, 16, 4); ctx.globalAlpha = 1; }
         else if (it[0] === "rect") { ctx.strokeStyle = it[1]; ctx.lineWidth = 1; ctx.setLineDash([3, 2]); ctx.strokeRect(cx + 0.5, fy - 7.5, 16, 9); ctx.setLineDash([]); }
         else if (it[0] === "tri") { ctx.strokeStyle = it[1]; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(cx + 8, fy - 9); ctx.lineTo(cx + 3, fy + 1); ctx.lineTo(cx + 13, fy + 1); ctx.closePath(); ctx.stroke(); }
