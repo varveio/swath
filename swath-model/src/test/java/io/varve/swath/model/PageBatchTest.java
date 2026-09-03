@@ -70,6 +70,20 @@ final class PageBatchTest {
     }
 
     @Test
+    void rejectsATallyWhoseRowsDisagreeWithThePayload() {
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, List.of(obj("a")), null, false, PageTally.EMPTY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("tally rows (0)")
+                .hasMessageContaining("entry count (1)");
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, null, new StubPacked(3), false, PageTally.EMPTY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("entry count (3)");
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, List.of(), null, true, new PageTally(1L, 0L, 0L, 0L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("tally rows (1)");
+    }
+
+    @Test
     void rejectsBothOrNeitherForm() {
         assertThatThrownBy(() -> new PageBatch(0L, 0L, null, null))
                 .isInstanceOf(IllegalArgumentException.class);

@@ -26,7 +26,9 @@ import java.util.List;
  *
  * <p><b>Tally-on-build.</b> Every batch carries its {@link PageTally}, computed by the constructor
  * that built it — on the producing thread (a fetch worker), never on the single consumer stage,
- * which only merges it. The packed form reads the counts the packer already accumulated.
+ * which only merges it. The packed form reads the counts the packer already accumulated. The
+ * canonical constructor rejects a tally whose row count disagrees with the payload (an O(1) check;
+ * byte totals are trusted, since re-walking the entries would undo the single-tally design).
  */
 public record PageBatch(
         long nodeId,
@@ -43,6 +45,15 @@ public record PageBatch(
         }
         if (tally == null) {
             throw new IllegalArgumentException("PageBatch must carry its tally (non-null)");
+        }
+        // O(1) guard: every entry is classified into exactly one tally bucket, so the tally's row
+        // count must equal the payload's entry count. This catches a foreign tally (e.g. EMPTY on a
+        // non-empty page) without re-walking the entries on the producing thread.
+        long rows = tally.rows();
+        long count = packed != null ? packed.entryCount() : entries.size();
+        if (rows != count) {
+            throw new IllegalArgumentException(
+                    "PageBatch tally rows (" + rows + ") must equal its entry count (" + count + ")");
         }
     }
 
