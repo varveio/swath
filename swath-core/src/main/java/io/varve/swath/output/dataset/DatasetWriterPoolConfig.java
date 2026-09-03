@@ -17,7 +17,8 @@ public record DatasetWriterPoolConfig(
         List<PartInfo> existingParts,
         long rotationIntervalNanos,
         long rotationMaxRows,
-        DatasetWriterObserver observer) {
+        DatasetWriterObserver observer,
+        LaneRouting routing) {
 
     public DatasetWriterPoolConfig {
         if (sinkName == null || sinkName.isBlank()) {
@@ -27,5 +28,6 @@ public record DatasetWriterPoolConfig(
         partListener = partListener == null ? PartListener.NONE : partListener;
         existingParts = existingParts == null ? List.of() : List.copyOf(existingParts);
         observer = observer == null ? DatasetWriterObserver.NONE : observer;
+        routing = routing == null ? LaneRouting.STICKY : routing;
     }
 }

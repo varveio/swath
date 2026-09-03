@@ -38,10 +38,12 @@ import java.util.function.LongSupplier;
 /**
  * A format-neutral, decoupled dataset writer pool: a bounded number of {@code numWriters} lanes
  * (default 3), each on its own platform thread draining a bounded queue, so
- * sink I/O runs away from the listing workers. <b>Sticky</b> assignment — every
- * page of a node goes to {@code writer = nodeId % numWriters}, so a node's pages
- * occupy a contiguous run of one lane's size-rotated parts (which finalize in
- * order, making the {@code durable_cursor} model sound).
+ * sink I/O runs away from the listing workers. Lane choice is the config's {@link LaneRouting}:
+ * <b>sticky</b> — every page of a node goes to {@code writer = nodeId % numWriters}, so a node's
+ * pages occupy a contiguous run of one lane's size-rotated parts (which finalize in order, making
+ * the {@code durable_cursor} model sound) — or <b>spill</b>, for sinks without a resume
+ * contract, which sends a page whose sticky lane is full to the shortest other queue instead of
+ * blocking, so one full lane cannot idle the rest.
  *
  * <p><b>Publication.</b> A part becomes finalized only after {@link DatasetPartWriter#close()} and
  * the optional checkpoint listener succeed. It is then retained in the publication owner's live
@@ -137,6 +139,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     private final DatasetFormat format;
     private final DatasetPublication publication;
     private final int numWriters;
+    private final LaneRouting routing;
     private final long targetBytes;
     private final long rotationIntervalNanos;
     private final long rotationMaxRows;
@@ -200,6 +203,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         this.layout = DatasetLayout.of(dir);
         this.format = format;
         this.numWriters = numWriters;
+        this.routing = config.routing();
         this.targetBytes = targetBytes;
         this.rotationIntervalNanos = config.rotationIntervalNanos();
         this.rotationMaxRows = config.rotationMaxRows();
@@ -237,11 +241,38 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         }
     }
 
-    /** Route a batch to its sticky lane (blocking on a full lane queue — backpressure). */
+    /** Route a batch to its lane (blocking on a full lane queue — backpressure). */
     public void submit(PageBatch batch) throws OutputException, InterruptedException {
-        int laneId = (int) Math.floorMod(batch.nodeId(), numWriters);
-        lanes[laneId].admit(batch);
+        lanes[selectLane(batch)].admit(batch);
         checkFailure();
+    }
+
+    /**
+     * The sticky lane while its queue has room; under {@link LaneRouting#SPILL}, once it is full,
+     * the lane with the shortest queue instead (the sticky lane again if every queue is full, so
+     * the submit blocks there as before). The queue sizes are a racy read on purpose: a lane that
+     * fills between the scan and {@code admit} still blocks correctly, just once.
+     */
+    private int selectLane(PageBatch batch) {
+        int sticky = (int) Math.floorMod(batch.nodeId(), numWriters);
+        if (routing == LaneRouting.STICKY || numWriters == 1) {
+            return sticky;
+        }
+        int capacity = lanes[sticky].queueCapacity;
+        if (lanes[sticky].queueDepth() < capacity) {
+            return sticky;
+        }
+        int best = sticky;
+        int bestDepth = capacity;
+        for (int step = 1; step < numWriters && bestDepth > 0; step++) {
+            int candidate = (sticky + step) % numWriters;
+            int depth = lanes[candidate].queueDepth();
+            if (depth < bestDepth) {
+                best = candidate;
+                bestDepth = depth;
+            }
+        }
+        return best;
     }
 
     /** Whether this blocked sticky lane stranded another writer that had no queued work. */

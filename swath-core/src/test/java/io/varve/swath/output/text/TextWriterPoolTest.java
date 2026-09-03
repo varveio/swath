@@ -445,7 +445,7 @@ final class TextWriterPoolTest {
         RunMetrics metrics = new RunMetrics(registry);
         TextWriterPool pool = new TextWriterPool(new TextWriterPoolConfig(
                 dir, OutputFormat.TSV, TextCompression.NONE, true, "hash", "bucket",
-                2, Long.MAX_VALUE, 1, 0, 0, WRITEBACK_BYTES, metrics));
+                2, Long.MAX_VALUE, 4, 0, 0, WRITEBACK_BYTES, metrics));   // 4 slots: node 0 never spills
         List<ListEntry> entries = incompressibleEntries(6000, 384);
 
         for (int page = 0; page < 4; page++) {

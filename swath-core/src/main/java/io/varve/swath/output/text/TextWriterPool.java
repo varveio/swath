@@ -16,6 +16,7 @@ import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
 import io.varve.swath.output.dataset.DatasetWriterPoolConfig;
+import io.varve.swath.output.dataset.LaneRouting;
 import io.varve.swath.output.dataset.DatasetWriterResourcePlan;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.output.parquet.PartListener;
@@ -49,7 +50,8 @@ public final class TextWriterPool implements DatasetWriterPool {
             TextWriterPoolConfig config, DatasetFormat format) {
         DatasetWriterPoolConfig poolConfig = new DatasetWriterPoolConfig(
                 "text", config.bucket(), PartListener.NONE, List.of(),
-                config.rotationIntervalNanos(), config.rotationMaxRows(), observer(config));
+                config.rotationIntervalNanos(), config.rotationMaxRows(), observer(config),
+                LaneRouting.SPILL);
         SharedDatasetWriterPool delegate = new SharedDatasetWriterPool(
                 config.directory(), format, config.argsHash(),
                 config.writers(), config.targetBytes(), config.queueCapacity(), poolConfig);

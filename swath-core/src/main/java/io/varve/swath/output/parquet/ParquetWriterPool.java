@@ -16,6 +16,7 @@ import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
 import io.varve.swath.output.dataset.DatasetWriterPoolConfig;
+import io.varve.swath.output.dataset.LaneRouting;
 import io.varve.swath.output.dataset.DatasetWriterResourcePlan;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import java.nio.file.Path;
@@ -88,7 +89,7 @@ public final class ParquetWriterPool implements DatasetWriterPool {
     private static DatasetWriterPoolConfig sharedConfig(ParquetWriterPoolConfig config) {
         return new DatasetWriterPoolConfig("parquet", config.bucket(), config.partListener(),
                 config.existingParts(), config.rotationIntervalNanos(), config.rotationMaxRows(),
-                observer(config.metrics()));
+                observer(config.metrics()), LaneRouting.STICKY);
     }
 
     private static DatasetWriterObserver observer(RunMetrics metrics) {
