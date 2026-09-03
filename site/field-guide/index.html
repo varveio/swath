@@ -51,7 +51,7 @@
     --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
     --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", serif;
 
-    --measure: 34rem;
+    --measure: 60rem;
     --plate: 60rem;
   }
 
@@ -180,14 +180,14 @@
     color: var(--ink-2);
     margin-top: 1.1rem;
     font-weight: 400;
-    max-width: 46ch;
+    max-width: var(--plate);
     line-height: 1.45;
   }
 
   .standfirst {
     font-size: 1.14rem;
     line-height: 1.55;
-    max-width: 42rem;
+    max-width: var(--plate);
     color: var(--ink);
   }
   .standfirst strong { font-weight: 600; }
@@ -205,7 +205,7 @@
     line-height: 1.14;
     margin: 0 0 1.2rem;
     text-wrap: balance;
-    max-width: 24ch;
+    max-width: none;
   }
   h3 {
     font-family: var(--mono);
@@ -248,7 +248,7 @@
     font-size: 0.755rem;
     line-height: 1.55;
     color: var(--ink-2);
-    max-width: 56ch;
+    max-width: none;
   }
   figcaption b {
     color: var(--ink);
@@ -421,7 +421,7 @@
     padding: 0.9rem 1.1rem;
     margin: 1.7rem 0;
     font-size: 0.95rem;
-    max-width: 44rem;
+    max-width: none;
   }
   .note .lbl {
     font-family: var(--mono);
@@ -478,7 +478,7 @@
   .whatis {
     font-size: 1.02rem;
     line-height: 1.55;
-    max-width: 44rem;
+    max-width: var(--plate);
     color: var(--ink-2);
     margin: 0;
     padding-left: 0.9rem;
@@ -493,7 +493,7 @@
     letter-spacing: -0.035em;
     line-height: 1.14;
     margin: 0;
-    max-width: 30ch;
+    max-width: var(--plate);
     text-wrap: balance;
   }
 
@@ -533,7 +533,7 @@
     font-size: 0.7rem;
     line-height: 1.6;
     color: var(--ink-3);
-    max-width: 52ch;
+    max-width: var(--plate);
     margin: -0.5rem 0 0;
   }
   .prov-note a { color: var(--ink-3); }
@@ -688,7 +688,7 @@
     border-radius: 2px;
     padding: 1.1rem 1.3rem 1.2rem;
     margin: 2.8rem 0 0;
-    max-width: 46rem;
+    max-width: var(--plate);
   }
   .summary h2 {
     font-size: 0.9rem;
