@@ -436,14 +436,17 @@ its checkpoint/publication state.
   behavior through four writers while bounding aggregate queued batches by 256 (192 at the
   default three writers). Increasing concurrency therefore does not multiply queued page batches.
   This is a memory bound, not a throughput promise: above four writers each lane gets fewer slots,
-  so the sole sticky dispatcher can encounter head-of-line blocking sooner while another lane is
-  idle. `submit_blocked_ms`, `head_of_line_blocked_ms`, and the lane queue peaks decide whether a
+  so a sticky dispatcher can encounter head-of-line blocking sooner while another lane is
+  idle (spill routing sidesteps that; sticky Parquet lanes do not). `submit_blocked_ms`, `head_of_line_blocked_ms`, and the lane queue peaks decide whether a
   higher count helped on a real run.
-  Workers emit `PageBatch`es into the writer pool. **Sticky assignment:** all
-  pages of a node go to writer `node_id % numWriters`, so a node's pages
-  occupy a *contiguous* run of that writer's parts (which finalize in order)
-  — this is what makes the `durable_cursor` advance (algorithms.md §4.5)
-  sound. A part file holds pages from many nodes and a node's pages may span
+  Workers emit `PageBatch`es into the writer pool. **Lane routing** is a pool
+  policy. Parquet datasets use **sticky assignment:** all pages of a node go to
+  writer `node_id % numWriters`, so a node's pages occupy a *contiguous* run of
+  that writer's parts (which finalize in order) — this is what makes the
+  `durable_cursor` advance (algorithms.md §4.5) sound. Text datasets, which
+  offer no resume contract, use **spill routing:** the sticky lane while its
+  queue has room, and once that queue is full the lane with the shortest queue
+  instead of blocking, so one full lane cannot idle the others. A part file holds pages from many nodes and a node's pages may span
   several parts; **there is no one-part-per-node rule.** Admission is closed
   atomically before shutdown queues each lane's poison sentinel. A submitter
   blocked by a full sticky lane waits only on that lane's bounded-space

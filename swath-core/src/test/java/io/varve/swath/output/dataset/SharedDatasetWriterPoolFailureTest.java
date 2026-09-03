@@ -345,7 +345,7 @@ class SharedDatasetWriterPoolFailureTest {
         Files.createDirectories(directory);
         BlockingFormat format = new BlockingFormat(mode, releaseWriter);
         DatasetWriterPoolConfig config = new DatasetWriterPoolConfig(
-                "test", "bucket", PartListener.NONE, List.of(), 0, 0, null);
+                "test", "bucket", PartListener.NONE, List.of(), 0, 0, null, LaneRouting.STICKY);
         SharedDatasetWriterPool pool = new SharedDatasetWriterPool(directory, format, "hash", writers,
                 Long.MAX_VALUE, queueCapacity, config);
         return new Fixture(pool, format);

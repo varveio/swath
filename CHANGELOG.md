@@ -5,6 +5,15 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+### Changed
+
+- Text datasets (`--output-type dir` with TSV/JSONL) send a page whose `nodeId % writers` lane
+  has a full queue to the writer lane with the shortest queue instead of waiting for that lane. On a billion-object TSV run the single
+  dispatcher spent most of its time blocked on one full lane while the 16 lanes averaged ~60% busy
+  (`head_of_line_blocked_ms`); spilling removes that stall. Parquet datasets keep sticky
+  routing, which their `durable_cursor` resume model requires. A node's rows may now span several
+  text parts; text datasets never promised part-level ordering.
+
 ### Fixed
 
 - The listing pipeline's shared channel no longer wakes every parked fetch worker for each page the
