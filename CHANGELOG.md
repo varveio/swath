@@ -5,6 +5,8 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+## 0.3.2 — 2026-09-03
+
 ### Fixed
 
 - The listing pipeline's shared channel no longer wakes every parked fetch worker for each page the
