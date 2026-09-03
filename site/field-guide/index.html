@@ -103,8 +103,8 @@
     background: var(--paper);
     color: var(--ink);
     font-family: var(--serif);
-    font-size: 17px;
-    line-height: 1.62;
+    font-size: 18px;
+    line-height: 1.58;
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
@@ -156,7 +156,7 @@
 
   .eyebrow {
     font-family: var(--mono);
-    font-size: 0.685rem;
+    font-size: 0.72rem;
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--ink-3);
@@ -200,7 +200,7 @@
   h2 {
     font-family: var(--mono);
     font-weight: 500;
-    font-size: clamp(1.45rem, 3.4vw, 1.95rem);
+    font-size: clamp(1.6rem, 3.4vw, 2.15rem);
     letter-spacing: -0.03em;
     line-height: 1.14;
     margin: 0 0 1.2rem;
@@ -210,20 +210,18 @@
   h3 {
     font-family: var(--mono);
     font-weight: 600;
-    font-size: 0.98rem;
+    font-size: 1.05rem;
     letter-spacing: -0.01em;
     margin: 2rem 0 0.6rem;
   }
 
   .sec-head {
-    display: flex;
-    align-items: baseline;
-    gap: 1rem;
+    display: block;
     margin-bottom: 1.4rem;
     border-top: 2px solid var(--ink);
     padding-top: 0.7rem;
   }
-  .sec-head .eyebrow { flex: none; }
+  .sec-head .eyebrow { display: block; margin-bottom: 0.4rem; }
   .sec-head h2 { margin: 0; }
 
   /* ─────────────────────────────────────────────────────────
@@ -245,7 +243,7 @@
   figure svg { display: block; width: 100%; height: auto; min-width: 460px; }
   figcaption {
     font-family: var(--mono);
-    font-size: 0.755rem;
+    font-size: 0.82rem;
     line-height: 1.55;
     color: var(--ink-2);
     max-width: none;
@@ -420,12 +418,12 @@
     background: var(--signal-sub);
     padding: 0.9rem 1.1rem;
     margin: 1.7rem 0;
-    font-size: 0.95rem;
+    font-size: 1.02rem;
     max-width: none;
   }
   .note .lbl {
     font-family: var(--mono);
-    font-size: 0.66rem;
+    font-size: 0.7rem;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--signal);
@@ -476,7 +474,7 @@
      HERO — the opening claim, its evidence, and the two doors
      ───────────────────────────────────────────────────────── */
   .whatis {
-    font-size: 1.02rem;
+    font-size: 1.08rem;
     line-height: 1.55;
     max-width: var(--plate);
     color: var(--ink-2);
@@ -489,7 +487,7 @@
   .hero-q {
     font-family: var(--mono);
     font-weight: 500;
-    font-size: clamp(1.5rem, 3.3vw, 2.15rem);
+    font-size: clamp(1.65rem, 3.3vw, 2.4rem);
     letter-spacing: -0.035em;
     line-height: 1.14;
     margin: 0;
@@ -530,7 +528,7 @@
   }
   .prov-note {
     font-family: var(--mono);
-    font-size: 0.7rem;
+    font-size: 0.75rem;
     line-height: 1.6;
     color: var(--ink-3);
     max-width: var(--plate);
@@ -626,7 +624,7 @@
   /* Provenance line under a plate: where the claim can be audited. */
   .src {
     font-family: var(--mono);
-    font-size: 0.7rem;
+    font-size: 0.76rem;
     color: var(--ink-3);
   }
   .src a { color: var(--ink-3); }
@@ -691,12 +689,12 @@
     max-width: var(--plate);
   }
   .summary h2 {
-    font-size: 0.9rem;
+    font-size: 0.98rem;
     letter-spacing: 0.02em;
     max-width: none;
     margin: 0 0 0.75rem;
   }
-  .summary ol { margin: 0; padding-left: 1.35rem; font-size: 0.95rem; line-height: 1.55; }
+  .summary ol { margin: 0; padding-left: 1.35rem; font-size: 1rem; line-height: 1.55; }
   .summary li { margin-bottom: 0.45em; }
   .summary li:last-child { margin-bottom: 0; }
 
@@ -717,8 +715,6 @@
     header.mast { padding-top: 2.2rem; gap: 1.2rem; }
     section { padding-top: 2.6rem; }
 
-    .sec-head { display: block; }
-    .sec-head .eyebrow { display: block; margin-bottom: 0.4rem; }
     h2 { max-width: none; }
 
     .metrics { gap: 0 1.6rem; }
@@ -1005,7 +1001,7 @@
         <div><dt>Splits committed</dt><dd id="m-splits">0</dd></div>
       </dl>
     </div>
-    <p class="col" style="margin-top:1.2rem; color:var(--ink-2); font-size:0.94rem;">
+    <p class="col" style="margin-top:1.2rem; color:var(--ink-2);">
       The important moment is <strong>one band becoming two adjacent bands</strong>: the
       original worker stays on the lower child and the formerly idle thief appears on the
       upper child. Nobody joins a range that already has an owner. When a worker finishes,
