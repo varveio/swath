@@ -11,6 +11,7 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.model.RowType;
+import io.varve.swath.output.parquet.ParquetFiles;
 import java.io.IOException;
 import java.nio.file.Path;
 import org.apache.parquet.column.page.PageReadStore;
@@ -18,7 +19,6 @@ import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.ColumnIOFactory;
-import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.schema.MessageType;
@@ -44,7 +44,7 @@ public final class ParquetEntryReader implements AutoCloseable {
     private ListEntry head;
 
     public ParquetEntryReader(Path path) throws IOException {
-        this.reader = ParquetFileReader.open(new LocalInputFile(path));
+        this.reader = ParquetFiles.open(path);
         this.schema = reader.getFooter().getFileMetaData().getSchema();
         this.columnIo = new ColumnIOFactory().getColumnIO(schema);
         this.head = readNext();

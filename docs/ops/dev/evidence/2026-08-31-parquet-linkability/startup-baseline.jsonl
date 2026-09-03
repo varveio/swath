@@ -1,0 +1,16 @@
+{"format":"swath-parquet-startup-baseline-v1", "record":"run", "java_home":"/home/sagi_varve_io/.jdks/jdk-25.0.4+7", "os":"Linux amd64", "clock":"fresh process wall time; filesystem cache uncontrolled", "recorded_at":"2026-08-31T20:12:50.501512282Z"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"version", "iteration":"0", "elapsed_ns":"321266837"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"version", "iteration":"1", "elapsed_ns":"297930331"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"version", "iteration":"2", "elapsed_ns":"302839927"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"version", "iteration":"3", "elapsed_ns":"300991740"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"version", "iteration":"4", "elapsed_ns":"302902703"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"help", "iteration":"0", "elapsed_ns":"311447923"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"help", "iteration":"1", "elapsed_ns":"307159818"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"help", "iteration":"2", "elapsed_ns":"323067166"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"help", "iteration":"3", "elapsed_ns":"308515024"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"cli", "mode":"help", "iteration":"4", "elapsed_ns":"306727702"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"replay", "mode":"help", "iteration":"0", "elapsed_ns":"184800439"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"replay", "mode":"help", "iteration":"1", "elapsed_ns":"181849150"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"replay", "mode":"help", "iteration":"2", "elapsed_ns":"190103580"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"replay", "mode":"help", "iteration":"3", "elapsed_ns":"182862396"}
+{"format":"swath-parquet-startup-baseline-v1", "app":"replay", "mode":"help", "iteration":"4", "elapsed_ns":"182628413"}

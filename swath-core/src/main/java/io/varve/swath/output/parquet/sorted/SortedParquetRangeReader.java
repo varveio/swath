@@ -6,6 +6,7 @@
 package io.varve.swath.output.parquet.sorted;
 
 import io.varve.swath.model.KeyBytes;
+import io.varve.swath.output.parquet.ParquetFiles;
 import io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader.ObjectRow;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -21,6 +22,7 @@ import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 import org.apache.parquet.column.Dictionary;
 import org.apache.parquet.column.page.PageReadStore;
+import org.apache.parquet.filter2.columnindex.RowRanges;
 import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.filter2.predicate.FilterApi;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
@@ -31,9 +33,7 @@ import org.apache.parquet.hadoop.metadata.ColumnPath;
 import org.apache.parquet.internal.column.columnindex.OffsetIndex;
 import org.apache.parquet.internal.filter2.columnindex.ColumnIndexFilter;
 import org.apache.parquet.internal.filter2.columnindex.ColumnIndexStore;
-import org.apache.parquet.internal.filter2.columnindex.RowRanges;
 import org.apache.parquet.io.ColumnIOFactory;
-import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.io.api.Binary;
@@ -119,7 +119,7 @@ public final class SortedParquetRangeReader implements AutoCloseable {
         this.readers = new ArrayBlockingQueue<>(size);
         try {
             for (int i = 0; i < size; i++) {
-                ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file));
+                ParquetFileReader reader = ParquetFiles.open(file);
                 owned.add(reader);
                 readers.add(reader);
             }

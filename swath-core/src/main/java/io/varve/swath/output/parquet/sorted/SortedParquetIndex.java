@@ -5,6 +5,7 @@
  */
 package io.varve.swath.output.parquet.sorted;
 
+import io.varve.swath.output.parquet.ParquetFiles;
 import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -22,7 +23,6 @@ import org.apache.parquet.hadoop.metadata.BlockMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnPath;
 import org.apache.parquet.io.ColumnIOFactory;
-import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.schema.MessageType;
@@ -63,7 +63,7 @@ public final class SortedParquetIndex {
      * the writer recorded of rows actually written, which the reader relies on to decode at all.
      */
     public static long rowCount(Path file) throws IOException {
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+        try (ParquetFileReader reader = ParquetFiles.open(file)) {
             return reader.getRecordCount();
         }
     }
@@ -115,7 +115,7 @@ public final class SortedParquetIndex {
      * output).
      */
     public static List<RowGroupKey> firstKeysPerRowGroup(Path file) throws IOException {
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+        try (ParquetFileReader reader = ParquetFiles.open(file)) {
             MessageType full = reader.getFooter().getFileMetaData().getSchema();
             MessageType keyOnly = new MessageType(full.getName(), full.getType(KEY_FIELD));
             reader.setRequestedSchema(keyOnly);
@@ -190,7 +190,7 @@ public final class SortedParquetIndex {
      * readRowGroup(listPosition)}). Returns an empty list for a file with no rows.
      */
     public static List<RowGroupSpan> rowGroupSpans(Path file) throws IOException {
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+        try (ParquetFileReader reader = ParquetFiles.open(file)) {
             MessageType full = reader.getFooter().getFileMetaData().getSchema();
             MessageType keyOnly = new MessageType(full.getName(), full.getType(KEY_FIELD));
             reader.setRequestedSchema(keyOnly);
@@ -243,7 +243,7 @@ public final class SortedParquetIndex {
     /** Exact bounds scan with a cooperative check for merge/publication callers. */
     public static Bounds bounds(Path file, Runnable cancellationCheck) throws IOException {
         Objects.requireNonNull(cancellationCheck, "cancellationCheck");
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+        try (ParquetFileReader reader = ParquetFiles.open(file)) {
             MessageType full = reader.getFooter().getFileMetaData().getSchema();
             MessageType keyOnly = new MessageType(full.getName(), full.getType(KEY_FIELD));
             reader.setRequestedSchema(keyOnly);

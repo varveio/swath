@@ -119,6 +119,20 @@ or moves a seed cut count should assume the default build cannot see it.
 > ~2 GB JVM/native headroom), flagged in `ParquetPerf2Test` for a spec follow-up so the test
 > can assert against the pack instead of a derived bound.
 
+## Hadoop-free Parquet linkability laboratory
+
+PR 7's opt-in laboratory runs the current Parquet paths in fresh JVMs whose resolved runtime has no
+`org.apache.hadoop*` coordinate or class entry. It tests the pinned 1.15.1 and comparison 1.18.0
+families without changing production dependencies, records the current writer/reader operation
+baseline, and captures exact core/CLI/replay closures and package sizes:
+
+```bash
+./gradlew parquetBaseline
+```
+
+The task is diagnostic and is not wired into `build`. Its method, current linkage result, and checked-in
+raw evidence are in [the linkability laboratory note](parquet-linkability.md).
+
 ## Finalization pipeline harness
 
 `ParallelMergeBenchmark` measures the production finalization pipeline over page-run staging;

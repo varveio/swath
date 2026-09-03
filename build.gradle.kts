@@ -8,6 +8,7 @@ import com.github.jk1.license.filter.LicenseBundleNormalizer
 import com.github.jk1.license.render.InventoryMarkdownReportRenderer
 import com.github.jk1.license.render.JsonReportRenderer
 import com.github.jk1.license.render.ReportRenderer
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.tasks.Exec
 
 plugins {
@@ -81,6 +82,71 @@ subprojects {
         )
 
         allowedLicensesFile = rootProject.file("config/license/allowed-licenses.json")
+    }
+
+    if (path in setOf(":swath-core", ":swath-cli", ":swath-replay")) {
+        plugins.withId("java") {
+            val runtime = configurations.getByName("runtimeClasspath")
+            val withoutHadoop = configurations.create("parquetBaselineWithoutHadoop") {
+                isCanBeConsumed = false
+                isCanBeResolved = true
+                extendsFrom(
+                    configurations.getByName("implementation"),
+                    configurations.getByName("runtimeOnly"),
+                )
+                exclude(group = "org.apache.hadoop")
+                exclude(group = "org.apache.hadoop.thirdparty")
+            }
+            tasks.register("writeParquetDependencyBaseline") {
+                group = "reporting"
+                description = "Records this module's PR 7 runtime closure and Hadoop-attributable delta."
+                val report = layout.buildDirectory.file(
+                    "reports/parquet-linkability/dependency-baseline.jsonl")
+                inputs.files(runtime, withoutHadoop)
+                outputs.file(report)
+                doLast {
+                    fun externalArtifacts(configuration: org.gradle.api.artifacts.Configuration) =
+                        configuration.incoming.artifacts.artifacts.mapNotNull { artifact ->
+                            val component = artifact.id.componentIdentifier as? ModuleComponentIdentifier
+                                ?: return@mapNotNull null
+                            "${component.group}:${component.module}:${component.version}" to artifact.file
+                        }.toMap()
+                    fun json(fields: Map<String, String>): String = fields.entries.joinToString(
+                        prefix = "{", postfix = "}") { (key, value) ->
+                        val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
+                        "\"$key\":\"$escaped\""
+                    }
+
+                    val full = externalArtifacts(runtime)
+                    val slim = externalArtifacts(withoutHadoop)
+                    val attributable = full.keys - slim.keys
+                    val lines = mutableListOf(json(linkedMapOf(
+                        "format" to "swath-parquet-dependency-baseline-v1",
+                        "record" to "closure_summary",
+                        "project" to project.path,
+                        "artifacts" to full.size.toString(),
+                        "bytes" to full.values.sumOf { it.length() }.toString(),
+                        "hadoop_attributable_artifacts" to attributable.size.toString(),
+                        "hadoop_attributable_bytes" to
+                            attributable.sumOf { full.getValue(it).length() }.toString(),
+                    )))
+                    full.toSortedMap().forEach { (coordinate, file) ->
+                        lines += json(linkedMapOf(
+                            "format" to "swath-parquet-dependency-baseline-v1",
+                            "record" to "artifact",
+                            "project" to project.path,
+                            "coordinate" to coordinate,
+                            "file" to file.name,
+                            "bytes" to file.length().toString(),
+                            "hadoop_attributable" to (coordinate in attributable).toString(),
+                        ))
+                    }
+                    val output = report.get().asFile
+                    output.parentFile.mkdirs()
+                    output.writeText(lines.joinToString("\n", postfix = "\n"))
+                }
+            }
+        }
     }
 }
 
@@ -197,4 +263,73 @@ val verifyReplayThirdPartyNotices by tasks.registering {
             )
         }
     }
+}
+
+val parquetDependencyBaseline by tasks.registering {
+    group = "reporting"
+    description = "Records PR 7 runtime closures and distribution sizes with Hadoop-attributable deltas."
+    dependsOn(
+        ":swath-core:jar",
+        ":swath-core:writeParquetDependencyBaseline",
+        ":swath-cli:shadowJar",
+        ":swath-cli:installDist",
+        ":swath-cli:writeParquetDependencyBaseline",
+        ":swath-replay:installDist",
+        ":swath-replay:writeParquetDependencyBaseline",
+    )
+    val report = layout.buildDirectory.file("reports/parquet-linkability/dependency-baseline.jsonl")
+    val moduleReports = listOf(":swath-core", ":swath-cli", ":swath-replay").map { projectPath ->
+        project(projectPath).layout.buildDirectory.file(
+            "reports/parquet-linkability/dependency-baseline.jsonl")
+    }
+    inputs.files(moduleReports)
+    inputs.file(project(":swath-cli").layout.buildDirectory.file("libs/swath.jar"))
+    inputs.dir(project(":swath-cli").layout.buildDirectory.dir("install/swath"))
+    inputs.dir(project(":swath-replay").layout.buildDirectory.dir("install/swath-replay"))
+    outputs.file(report)
+    doLast {
+        fun json(fields: Map<String, String>): String = fields.entries.joinToString(
+            prefix = "{",
+            postfix = "}",
+        ) { (key, value) ->
+            val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
+            "\"$key\":\"$escaped\""
+        }
+
+        val lines = mutableListOf<String>()
+        moduleReports.forEach { moduleReport ->
+            val input = moduleReport.get().asFile
+            lines += input.readLines()
+        }
+
+        val packages = linkedMapOf(
+            "cli_fat_jar" to project(":swath-cli").layout.buildDirectory.file("libs/swath.jar").get().asFile,
+            "cli_install" to project(":swath-cli").layout.buildDirectory.dir("install/swath").get().asFile,
+            "replay_install" to project(":swath-replay").layout.buildDirectory.dir("install/swath-replay").get().asFile,
+        )
+        packages.forEach { (name, path) ->
+            val files = if (path.isDirectory) path.walkTopDown().filter { it.isFile }.toList() else listOf(path)
+            lines += json(linkedMapOf(
+                "format" to "swath-parquet-dependency-baseline-v1",
+                "record" to "package",
+                "package" to name,
+                "files" to files.size.toString(),
+                "jars" to files.count { it.extension == "jar" }.toString(),
+                "bytes" to files.sumOf { it.length() }.toString(),
+            ))
+        }
+        val output = report.get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(lines.joinToString("\n", postfix = "\n"))
+    }
+}
+
+tasks.register("parquetBaseline") {
+    group = "verification"
+    description = "Runs the complete PR 7 linkability and current-runtime baseline suite."
+    dependsOn(
+        ":swath-core:parquetLinkability",
+        ":swath-cli:parquetStartupBaseline",
+        parquetDependencyBaseline,
+    )
 }
