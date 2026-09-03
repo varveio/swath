@@ -168,15 +168,15 @@ EMBEDDED_RUN_FACTS = {
 # format). Every `<dt>` carrying one of these labels must show the record's value.
 FIELD_GUIDE_FIGURES: list[tuple[str, str, str, str]] = [
     ("Objects listed", TRACE_RUN, "/result/objects", "int"),
-    ("Initial guesses", TRACE_RUN, "/result/initial_ranges", "int"),
-    ("In one guess", TRACE_RUN, "/result/heaviest_initial_range/share_percent", "percent"),
-    ("Behind one guess", TRACE_RUN, "/result/heaviest_initial_range/objects", "int"),
+    ("Initial ranges", TRACE_RUN, "/result/initial_ranges", "int"),
+    ("In one range", TRACE_RUN, "/result/heaviest_initial_range/share_percent", "percent"),
+    ("Behind one range", TRACE_RUN, "/result/heaviest_initial_range/objects", "int"),
     ("Splits in that lineage", TRACE_RUN, "/result/heaviest_initial_range/splits_in_lineage", "int"),
     ("Ranges completed", TRACE_RUN, "/result/completed_ranges", "int"),
     ("Ranges failed", TRACE_RUN, "/result/failed_ranges", "int"),
     ("Listing workers", TRACE_RUN, "/result/listing_workers_observed", "int"),
-    ("Listing wall clock", TRACE_RUN, "/clocks/trace_event_span/display", "text"),
-    ("Busy worker-time", TRACE_RUN, "/analysis/share_of_perfect_speedup_percent", "percent"),
+    ("Trace event span", TRACE_RUN, "/clocks/trace_event_span/display", "text"),
+    ("Worker utilization", TRACE_RUN, "/analysis/share_of_perfect_speedup_percent", "percent"),
 ]
 
 

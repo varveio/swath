@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <title>swath — a field guide to parallel S3 listing</title>
-<meta name="description" content="How swath divides an S3 keyspace it cannot see: blind range guesses, work stealing that corrects them mid-sweep, and resumable managed Parquet output.">
+<meta name="description" content="How swath divides an S3 keyspace it cannot see: bounded structural seeding, work stealing that corrects it mid-sweep, and resumable managed Parquet output.">
 
 <!-- Publication URLs — this is the one place to change them.
      Live site: https://swath.varve.io (GitHub Pages, gh-pages branch of varveio/swath) -->
@@ -13,12 +13,12 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="swath">
 <meta property="og:title" content="How swath maps an S3 bucket it cannot see">
-<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to resumable managed Parquet.">
+<meta property="og:description" content="513 initial ranges. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to resumable managed Parquet.">
 <meta property="og:url" content="https://swath.varve.io/field-guide/">
 <meta property="og:image" content="https://swath.varve.io/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Two strips of an S3 keyspace: 513 evenly guessed ranges above, and below the same ranges at their measured sizes, one swelling to two thirds of the bucket.">
+<meta property="og:image:alt" content="Two strips of an S3 keyspace: 513 equal-width baseline ranges above, and below the same ranges at their measured sizes, one swelling to two thirds of the bucket.">
 <meta name="twitter:card" content="summary_large_image">
 
 <style>
@@ -26,7 +26,7 @@
      TOKENS
      Ground: cool bone / plotting-paper. Ink: blue-black.
      Accent: deep sea-green (a swath). Signal: ochre (a split).
-     Alert: rust (a refusal, a serial floor).
+     Alert: rust (a refusal, a residual tail).
      ───────────────────────────────────────────────────────── */
   :root {
     --paper:      #F1F2EB;
@@ -51,7 +51,7 @@
     --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
     --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", serif;
 
-    --measure: 34rem;
+    --measure: 60rem;
     --plate: 60rem;
   }
 
@@ -103,8 +103,8 @@
     background: var(--paper);
     color: var(--ink);
     font-family: var(--serif);
-    font-size: 17px;
-    line-height: 1.62;
+    font-size: 18px;
+    line-height: 1.58;
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
@@ -156,7 +156,7 @@
 
   .eyebrow {
     font-family: var(--mono);
-    font-size: 0.685rem;
+    font-size: 0.72rem;
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--ink-3);
@@ -180,14 +180,14 @@
     color: var(--ink-2);
     margin-top: 1.1rem;
     font-weight: 400;
-    max-width: 46ch;
+    max-width: var(--plate);
     line-height: 1.45;
   }
 
   .standfirst {
     font-size: 1.14rem;
     line-height: 1.55;
-    max-width: 42rem;
+    max-width: var(--plate);
     color: var(--ink);
   }
   .standfirst strong { font-weight: 600; }
@@ -200,30 +200,28 @@
   h2 {
     font-family: var(--mono);
     font-weight: 500;
-    font-size: clamp(1.45rem, 3.4vw, 1.95rem);
+    font-size: clamp(1.6rem, 3.4vw, 2.15rem);
     letter-spacing: -0.03em;
     line-height: 1.14;
     margin: 0 0 1.2rem;
     text-wrap: balance;
-    max-width: 24ch;
+    max-width: none;
   }
   h3 {
     font-family: var(--mono);
     font-weight: 600;
-    font-size: 0.98rem;
+    font-size: 1.05rem;
     letter-spacing: -0.01em;
     margin: 2rem 0 0.6rem;
   }
 
   .sec-head {
-    display: flex;
-    align-items: baseline;
-    gap: 1rem;
+    display: block;
     margin-bottom: 1.4rem;
     border-top: 2px solid var(--ink);
     padding-top: 0.7rem;
   }
-  .sec-head .eyebrow { flex: none; }
+  .sec-head .eyebrow { display: block; margin-bottom: 0.4rem; }
   .sec-head h2 { margin: 0; }
 
   /* ─────────────────────────────────────────────────────────
@@ -245,10 +243,10 @@
   figure svg { display: block; width: 100%; height: auto; min-width: 460px; }
   figcaption {
     font-family: var(--mono);
-    font-size: 0.755rem;
+    font-size: 0.82rem;
     line-height: 1.55;
     color: var(--ink-2);
-    max-width: 56ch;
+    max-width: none;
   }
   figcaption b {
     color: var(--ink);
@@ -309,12 +307,10 @@
     border: 1px solid var(--accent);
     white-space: nowrap;
   }
-  .phase[data-p="floor"] {
-    background: var(--alert-sub); color: var(--alert); border-color: var(--alert);
-  }
   .sim-note {
     font-family: var(--mono);
     font-size: 0.72rem;
+    line-height: 1.35;
     color: var(--ink-2);
     flex: 1 1 16rem;
     min-width: 0;
@@ -422,12 +418,12 @@
     background: var(--signal-sub);
     padding: 0.9rem 1.1rem;
     margin: 1.7rem 0;
-    font-size: 0.95rem;
-    max-width: 44rem;
+    font-size: 1.02rem;
+    max-width: none;
   }
   .note .lbl {
     font-family: var(--mono);
-    font-size: 0.66rem;
+    font-size: 0.7rem;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--signal);
@@ -478,9 +474,9 @@
      HERO — the opening claim, its evidence, and the two doors
      ───────────────────────────────────────────────────────── */
   .whatis {
-    font-size: 1.02rem;
+    font-size: 1.08rem;
     line-height: 1.55;
-    max-width: 44rem;
+    max-width: var(--plate);
     color: var(--ink-2);
     margin: 0;
     padding-left: 0.9rem;
@@ -491,11 +487,11 @@
   .hero-q {
     font-family: var(--mono);
     font-weight: 500;
-    font-size: clamp(1.5rem, 3.3vw, 2.15rem);
+    font-size: clamp(1.65rem, 3.3vw, 2.4rem);
     letter-spacing: -0.035em;
     line-height: 1.14;
     margin: 0;
-    max-width: 30ch;
+    max-width: var(--plate);
     text-wrap: balance;
   }
 
@@ -532,10 +528,10 @@
   }
   .prov-note {
     font-family: var(--mono);
-    font-size: 0.7rem;
+    font-size: 0.75rem;
     line-height: 1.6;
     color: var(--ink-3);
-    max-width: 52ch;
+    max-width: var(--plate);
     margin: -0.5rem 0 0;
   }
   .prov-note a { color: var(--ink-3); }
@@ -628,7 +624,7 @@
   /* Provenance line under a plate: where the claim can be audited. */
   .src {
     font-family: var(--mono);
-    font-size: 0.7rem;
+    font-size: 0.76rem;
     color: var(--ink-3);
   }
   .src a { color: var(--ink-3); }
@@ -690,15 +686,15 @@
     border-radius: 2px;
     padding: 1.1rem 1.3rem 1.2rem;
     margin: 2.8rem 0 0;
-    max-width: 46rem;
+    max-width: var(--plate);
   }
   .summary h2 {
-    font-size: 0.9rem;
+    font-size: 0.98rem;
     letter-spacing: 0.02em;
     max-width: none;
     margin: 0 0 0.75rem;
   }
-  .summary ol { margin: 0; padding-left: 1.35rem; font-size: 0.95rem; line-height: 1.55; }
+  .summary ol { margin: 0; padding-left: 1.35rem; font-size: 1rem; line-height: 1.55; }
   .summary li { margin-bottom: 0.45em; }
   .summary li:last-child { margin-bottom: 0; }
 
@@ -719,8 +715,6 @@
     header.mast { padding-top: 2.2rem; gap: 1.2rem; }
     section { padding-top: 2.6rem; }
 
-    .sec-head { display: block; }
-    .sec-head .eyebrow { display: block; margin-bottom: 0.4rem; }
     h2 { max-width: none; }
 
     .metrics { gap: 0 1.6rem; }
@@ -774,23 +768,23 @@
       assigns <strong>non-overlapping key ranges</strong> to listing workers, watches where the
       objects actually turn out to be, and splits the unscanned remainder of busy ranges so idle
       workers can help. In the recorded run below it opened with 513 adjacent ranges; one of them
-      held <strong>68% of the bucket</strong>, and nothing could have revealed that in advance.
+      ultimately held <strong>68% of the bucket</strong>, mass the seed could not know exactly in advance.
       This guide explains that range model, the durability boundary, and where parallelism stops
       helping. The name is the method: adjacent swaths, no gaps, no overlap.
     </p>
 
     <dl class="metrics">
       <div><dt>Objects listed</dt><dd>39,651,850</dd></div>
-      <div><dt>Initial guesses</dt><dd>513</dd></div>
-      <div><dt>In one guess</dt><dd class="hot">68.0%</dd></div>
+      <div><dt>Initial ranges</dt><dd>513</dd></div>
+      <div><dt>In one range</dt><dd class="hot">68.0%</dd></div>
       <div><dt>Listing workers</dt><dd>128</dd></div>
-      <div><dt>Listing wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="how it was measured">&#8224;</a></dd></div>
+      <div><dt>Trace event span</dt><dd>1m 09s<a class="prov" href="#timings" title="how it was measured">&#8224;</a></dd></div>
     </dl>
     <p class="prov-note">
       <a href="#timings">&#8224; One recorded run</a> — <span class="mono">noaa-gestofs-pds-field-guide-trace</span>,
-      from a dedicated cloud host at <span class="mono">--concurrency 128</span>. A wall clock is
-      a property of the machine and the network; the skew below is a property of this capture of
-      the bucket.
+      at a published ceiling of <span class="mono">--concurrency 128</span>. The 1m 09s is the
+      span between the first and last retained trace events, not a listing wall clock reported by
+      swath; the skew below is a property of this capture of the bucket.
     </p>
 
     <div class="cta">
@@ -803,10 +797,10 @@
       <summary>On this page</summary>
       <div class="toc-cols">
         <div>
-          <h3>The story · ~7 min</h3>
+          <h3>The story · ~20 min</h3>
           <ol>
             <li><a href="#terms">Keyspace and range, in one paragraph</a></li>
-            <li><a href="#reveal">513 guesses, and the one that mattered</a></li>
+            <li><a href="#reveal">513 ranges, and the one that mattered</a></li>
             <li><a href="#how">A miniature model of the mechanism</a></li>
             <li><a href="#constraint">The constraint everything follows from</a></li>
             <li><a href="#range">The range, and the one-key mistake</a></li>
@@ -820,7 +814,7 @@
           </ol>
         </div>
         <div>
-          <h3>Deep dives</h3>
+          <h3>Deep dives · ~7 min</h3>
           <ol>
             <li><a href="#dive-pipeline">The runtime pipeline</a></li>
             <li><a href="#dive-aimd">Concurrency control</a></li>
@@ -874,35 +868,34 @@
   <section id="reveal">
     <div class="sec-head">
       <span class="eyebrow">Plate&nbsp;1 · measured</span>
-      <h2>513 guesses, and the one that mattered</h2>
+      <h2>513 ranges, and the one that mattered</h2>
     </div>
     <div class="col">
       <p>
-        Before it lists anything, swath has to cut the keyspace into pieces. It has no
-        distribution to cut against, so it does what any blind partitioner does: one
-        <span class="mono">delimiter=/</span> probe for the top-level directories, then
-        ranges cut along the boundaries it returns — capped at
-        <span class="mono">min(1000, 4 × workers)</span> and evenly subsampled — each
-        implicitly assumed to hold about as much as the next. At 128 workers that cap is 512
-        cut points, which is where the 513 comes from.
-        For this bucket that came to 513 ranges and an expectation of
-        <strong>0.195% of the objects in each</strong>.
+        Before it emits any objects, swath cuts the keyspace into pieces with a bounded
+        <span class="mono">delimiter=/</span> descent. The boundaries reveal structure, not
+        exact object counts: even mass-aware seeding has only bounded samples and keyspace
+        span to work from. The worker-proportional cap is
+        <span class="mono">min(1000, 4 × workers)</span> cut points — 512 at 128 workers.
+        This run opened with 513 ranges, which is consistent with that cap, but the retained
+        trace records the range count rather than the seed path that produced it. The upper
+        strip therefore uses a uniform baseline: <strong>0.195% of the objects per range</strong>.
       </p>
       <p>
-        Below is that assumption on top, and what the run actually measured underneath.
-        Same 513 seeds, same order, same color. Only the widths differ.
+        Below is that baseline on top, and what the run actually measured underneath.
+        Same 513 initial ranges, same order, same color. Only the widths differ.
       </p>
     </div>
 
     <figure>
       <div class="plate-body">
-        <svg viewBox="0 0 760 300" role="img" aria-label="Two strips of the same keyspace. Above, 513 seed guesses at the uniform prior, every one an identical hairline. Below, the same 513 seeds at their measured object counts: one guess swells to two thirds of the strip while the remaining 512 compress into the right-hand quarter.">
+        <svg viewBox="0 0 760 300" role="img" aria-label="Two strips of the same keyspace. Above, 513 initial ranges at a uniform baseline, every one an identical hairline. Below, the same 513 ranges at their measured object counts: one swells to two thirds of the strip while the remaining 512 compress into the right-hand quarter.">
           <defs><pattern id="seedtick" width="1.3645" height="34" patternUnits="userSpaceOnUse">
             <rect width="0.5645" height="34" class="f-dim" opacity=".38"/>
           </pattern></defs>
         
-          <text class="hd f-ink" x="40" y="26">What the engine guessed</text>
-          <text class="sm" x="740" y="26" text-anchor="end">513 ranges · 0.195% expected in each</text>
+          <text class="hd f-ink" x="40" y="26">Uniform baseline</text>
+          <text class="sm" x="740" y="26" text-anchor="end">513 ranges · 0.195% each if mass were even</text>
           <rect x="40" y="38" width="700" height="34" fill="url(#seedtick)"/>
           <rect x="44.1" y="38" width="1.4" height="34" class="f-sig"/>
           <rect x="41.9" y="34" width="5.8" height="42" fill="none" class="s-sig" stroke-width="1.4"/>
@@ -913,20 +906,20 @@
         
           <rect x="36" y="163" width="176" height="18" style="fill:var(--paper-2)"/>
           <text class="hd f-ink" x="40" y="176">What was actually there</text>
-          <text class="sm" x="740" y="176" text-anchor="end">measured, same 513 seeds, same order</text>
+          <text class="sm" x="740" y="176" text-anchor="end">measured, same 513 ranges, same order</text>
           <path class="f-dim" opacity=".38" d="M40.0 188h0.5v34h-0.5zM40.0 188h0.5v34h-0.5zM40.1 188h34.6v34h-34.6zM550.4 188h0.5v34h-0.5zM550.6 188h0.5v34h-0.5zM550.9 188h0.5v34h-0.5zM551.3 188h0.5v34h-0.5zM551.7 188h0.5v34h-0.5zM552.0 188h0.5v34h-0.5zM552.4 188h0.5v34h-0.5zM552.8 188h0.5v34h-0.5zM553.0 188h0.5v34h-0.5zM553.4 188h0.5v34h-0.5zM553.8 188h0.5v34h-0.5zM554.1 188h0.5v34h-0.5zM554.5 188h0.5v34h-0.5zM554.9 188h0.5v34h-0.5zM555.2 188h0.5v34h-0.5zM555.6 188h0.5v34h-0.5zM556.0 188h0.5v34h-0.5zM556.3 188h0.5v34h-0.5zM556.6 188h0.5v34h-0.5zM557.0 188h0.5v34h-0.5zM557.3 188h0.5v34h-0.5zM557.7 188h0.5v34h-0.5zM558.1 188h0.5v34h-0.5zM558.4 188h0.5v34h-0.5zM558.8 188h0.5v34h-0.5zM559.2 188h0.5v34h-0.5zM559.5 188h0.5v34h-0.5zM559.9 188h0.5v34h-0.5zM560.3 188h0.5v34h-0.5zM560.6 188h0.5v34h-0.5zM560.9 188h0.5v34h-0.5zM561.3 188h0.5v34h-0.5zM561.7 188h0.5v34h-0.5zM562.0 188h0.5v34h-0.5zM562.4 188h0.5v34h-0.5zM562.8 188h0.5v34h-0.5zM563.1 188h0.5v34h-0.5zM563.5 188h0.5v34h-0.5zM563.9 188h0.5v34h-0.5zM564.1 188h0.5v34h-0.5zM564.5 188h0.5v34h-0.5zM564.9 188h0.5v34h-0.5zM565.2 188h0.5v34h-0.5zM565.6 188h0.5v34h-0.5zM566.0 188h0.5v34h-0.5zM566.3 188h0.5v34h-0.5zM566.7 188h0.5v34h-0.5zM567.1 188h0.5v34h-0.5zM567.4 188h0.5v34h-0.5zM567.8 188h0.5v34h-0.5zM568.1 188h0.5v34h-0.5zM568.4 188h0.5v34h-0.5zM568.8 188h0.5v34h-0.5zM569.2 188h0.5v34h-0.5zM569.5 188h0.5v34h-0.5zM569.9 188h0.5v34h-0.5zM570.3 188h0.5v34h-0.5zM570.7 188h0.5v34h-0.5zM571.0 188h0.5v34h-0.5zM571.4 188h0.5v34h-0.5zM571.7 188h0.5v34h-0.5zM572.0 188h0.5v34h-0.5zM572.3 188h0.5v34h-0.5zM572.7 188h0.5v34h-0.5zM573.0 188h0.5v34h-0.5zM573.4 188h0.5v34h-0.5zM573.8 188h0.5v34h-0.5zM574.1 188h0.5v34h-0.5zM574.5 188h0.5v34h-0.5zM574.9 188h0.5v34h-0.5zM575.2 188h0.5v34h-0.5zM575.5 188h0.5v34h-0.5zM575.9 188h0.5v34h-0.5zM576.3 188h0.5v34h-0.5zM576.6 188h0.5v34h-0.5zM577.0 188h0.5v34h-0.5zM577.4 188h0.5v34h-0.5zM577.7 188h0.5v34h-0.5zM578.1 188h0.5v34h-0.5zM578.5 188h0.5v34h-0.5zM578.8 188h0.5v34h-0.5zM579.1 188h0.5v34h-0.5zM579.5 188h0.5v34h-0.5zM579.9 188h0.5v34h-0.5zM580.2 188h0.5v34h-0.5zM580.6 188h0.5v34h-0.5zM581.0 188h0.5v34h-0.5zM581.3 188h0.5v34h-0.5zM581.7 188h0.5v34h-0.5zM582.1 188h0.5v34h-0.5zM582.4 188h0.5v34h-0.5zM582.7 188h0.5v34h-0.5zM583.1 188h0.5v34h-0.5zM583.4 188h0.5v34h-0.5zM583.8 188h0.5v34h-0.5zM584.2 188h0.5v34h-0.5zM584.6 188h0.5v34h-0.5zM584.9 188h0.5v34h-0.5zM585.3 188h0.5v34h-0.5zM585.7 188h0.5v34h-0.5zM586.0 188h0.5v34h-0.5zM586.4 188h0.5v34h-0.5zM586.7 188h0.5v34h-0.5zM587.0 188h0.5v34h-0.5zM587.4 188h0.5v34h-0.5zM587.8 188h0.5v34h-0.5zM588.2 188h0.5v34h-0.5zM588.5 188h0.5v34h-0.5zM588.9 188h0.5v34h-0.5zM589.3 188h0.5v34h-0.5zM589.6 188h0.5v34h-0.5zM590.0 188h0.5v34h-0.5zM590.3 188h0.5v34h-0.5zM590.6 188h0.5v34h-0.5zM591.0 188h0.5v34h-0.5zM591.4 188h0.5v34h-0.5zM591.7 188h0.5v34h-0.5zM592.1 188h0.5v34h-0.5zM592.5 188h0.5v34h-0.5zM592.9 188h0.5v34h-0.5zM593.2 188h0.5v34h-0.5zM593.6 188h0.5v34h-0.5zM594.0 188h0.5v34h-0.5zM594.2 188h0.5v34h-0.5zM594.6 188h0.5v34h-0.5zM595.0 188h0.5v34h-0.5zM595.3 188h0.5v34h-0.5zM595.7 188h0.5v34h-0.5zM596.1 188h0.5v34h-0.5zM596.4 188h0.5v34h-0.5zM596.8 188h0.5v34h-0.5zM597.2 188h0.5v34h-0.5zM597.6 188h0.5v34h-0.5zM597.8 188h0.5v34h-0.5zM598.2 188h0.5v34h-0.5zM598.6 188h0.5v34h-0.5zM598.9 188h0.5v34h-0.5zM599.3 188h0.5v34h-0.5zM599.7 188h0.5v34h-0.5zM600.0 188h0.5v34h-0.5zM600.4 188h0.5v34h-0.5zM600.8 188h0.5v34h-0.5zM601.2 188h0.5v34h-0.5zM601.5 188h0.5v34h-0.5zM601.8 188h0.5v34h-0.5zM602.2 188h0.5v34h-0.5zM602.5 188h0.5v34h-0.5zM602.9 188h0.5v34h-0.5zM603.3 188h0.5v34h-0.5zM603.6 188h0.5v34h-0.5zM604.0 188h0.5v34h-0.5zM604.4 188h0.5v34h-0.5zM604.7 188h0.5v34h-0.5zM605.1 188h0.5v34h-0.5zM605.4 188h0.5v34h-0.5zM605.8 188h0.5v34h-0.5zM606.1 188h0.5v34h-0.5zM606.5 188h0.5v34h-0.5zM606.9 188h0.5v34h-0.5zM607.2 188h0.5v34h-0.5zM607.6 188h0.5v34h-0.5zM608.0 188h0.5v34h-0.5zM608.3 188h0.5v34h-0.5zM608.7 188h0.5v34h-0.5zM609.0 188h0.5v34h-0.5zM609.4 188h0.5v34h-0.5zM609.7 188h0.5v34h-0.5zM610.1 188h0.5v34h-0.5zM610.5 188h0.5v34h-0.5zM610.8 188h0.5v34h-0.5zM611.2 188h0.5v34h-0.5zM611.6 188h0.5v34h-0.5zM611.9 188h0.5v34h-0.5zM612.3 188h0.5v34h-0.5zM612.7 188h0.5v34h-0.5zM613.0 188h0.5v34h-0.5zM613.3 188h0.5v34h-0.5zM613.7 188h0.5v34h-0.5zM614.1 188h0.5v34h-0.5zM614.4 188h0.5v34h-0.5zM614.8 188h0.5v34h-0.5zM615.2 188h0.5v34h-0.5zM615.5 188h0.5v34h-0.5zM615.9 188h0.5v34h-0.5zM616.3 188h0.5v34h-0.5zM616.6 188h0.5v34h-0.5zM616.9 188h0.5v34h-0.5zM617.3 188h0.5v34h-0.5zM617.7 188h0.5v34h-0.5zM618.0 188h0.5v34h-0.5zM618.4 188h0.5v34h-0.5zM618.8 188h0.5v34h-0.5zM618.9 188h0.5v34h-0.5zM619.3 188h0.5v34h-0.5zM619.7 188h0.5v34h-0.5zM620.0 188h0.5v34h-0.5zM620.3 188h0.5v34h-0.5zM620.7 188h0.5v34h-0.5zM621.1 188h0.5v34h-0.5zM621.4 188h0.5v34h-0.5zM621.8 188h0.5v34h-0.5zM622.2 188h0.5v34h-0.5zM622.5 188h0.5v34h-0.5zM622.9 188h0.5v34h-0.5zM623.3 188h0.5v34h-0.5zM623.7 188h0.5v34h-0.5zM623.9 188h0.5v34h-0.5zM624.3 188h0.5v34h-0.5zM624.7 188h0.5v34h-0.5zM625.0 188h0.5v34h-0.5zM625.4 188h0.5v34h-0.5zM625.8 188h0.5v34h-0.5zM626.2 188h0.5v34h-0.5zM626.5 188h0.5v34h-0.5zM626.9 188h0.5v34h-0.5zM627.3 188h0.5v34h-0.5zM627.6 188h0.5v34h-0.5zM627.9 188h0.5v34h-0.5zM628.3 188h0.5v34h-0.5zM628.7 188h0.5v34h-0.5zM629.0 188h0.5v34h-0.5zM629.4 188h0.5v34h-0.5zM629.8 188h0.5v34h-0.5zM630.2 188h0.5v34h-0.5zM630.5 188h0.5v34h-0.5zM630.9 188h0.5v34h-0.5zM631.3 188h0.5v34h-0.5zM631.5 188h0.5v34h-0.5zM631.9 188h0.5v34h-0.5zM632.3 188h0.5v34h-0.5zM632.7 188h0.5v34h-0.5zM633.0 188h0.5v34h-0.5zM633.4 188h0.5v34h-0.5zM633.8 188h0.5v34h-0.5zM634.1 188h0.5v34h-0.5zM634.5 188h0.5v34h-0.5zM634.9 188h0.5v34h-0.5zM635.2 188h0.5v34h-0.5zM635.5 188h0.5v34h-0.5zM635.9 188h0.5v34h-0.5zM636.3 188h0.5v34h-0.5zM636.6 188h0.5v34h-0.5zM637.0 188h0.5v34h-0.5zM637.4 188h0.5v34h-0.5zM637.8 188h0.5v34h-0.5zM638.1 188h0.5v34h-0.5zM638.5 188h0.5v34h-0.5zM638.9 188h0.5v34h-0.5zM639.2 188h0.5v34h-0.5zM639.5 188h0.5v34h-0.5zM639.9 188h0.5v34h-0.5zM640.3 188h0.5v34h-0.5zM640.6 188h0.5v34h-0.5zM641.0 188h0.5v34h-0.5zM641.4 188h0.5v34h-0.5zM641.8 188h0.5v34h-0.5zM642.1 188h0.5v34h-0.5zM642.5 188h0.5v34h-0.5zM642.8 188h0.5v34h-0.5zM643.1 188h0.5v34h-0.5zM643.5 188h0.5v34h-0.5zM643.9 188h0.5v34h-0.5zM644.3 188h0.5v34h-0.5zM644.6 188h0.5v34h-0.5zM645.0 188h0.5v34h-0.5zM645.4 188h0.5v34h-0.5zM645.7 188h0.5v34h-0.5zM646.1 188h0.5v34h-0.5zM646.5 188h0.5v34h-0.5zM646.8 188h0.5v34h-0.5zM647.1 188h0.5v34h-0.5zM647.5 188h0.5v34h-0.5zM647.9 188h0.5v34h-0.5zM648.2 188h0.5v34h-0.5zM648.6 188h0.5v34h-0.5zM649.0 188h0.5v34h-0.5zM649.4 188h0.5v34h-0.5zM649.7 188h0.5v34h-0.5zM650.1 188h0.5v34h-0.5zM650.4 188h0.5v34h-0.5zM650.8 188h0.5v34h-0.5zM651.1 188h0.5v34h-0.5zM651.5 188h0.5v34h-0.5zM651.9 188h0.5v34h-0.5zM652.2 188h0.5v34h-0.5zM652.6 188h0.5v34h-0.5zM653.0 188h0.5v34h-0.5zM653.3 188h0.5v34h-0.5zM653.7 188h0.5v34h-0.5zM654.1 188h0.5v34h-0.5zM654.4 188h0.5v34h-0.5zM654.7 188h0.5v34h-0.5zM655.1 188h0.5v34h-0.5zM655.5 188h0.5v34h-0.5zM655.9 188h0.5v34h-0.5zM656.2 188h0.5v34h-0.5zM656.6 188h0.5v34h-0.5zM657.0 188h0.5v34h-0.5zM657.3 188h0.5v34h-0.5zM657.7 188h0.5v34h-0.5zM658.0 188h0.5v34h-0.5zM658.4 188h0.5v34h-0.5zM658.7 188h0.5v34h-0.5zM659.1 188h0.5v34h-0.5zM659.5 188h0.5v34h-0.5zM659.8 188h0.5v34h-0.5zM660.2 188h0.5v34h-0.5zM660.6 188h0.5v34h-0.5zM661.0 188h0.5v34h-0.5zM661.3 188h0.5v34h-0.5zM661.6 188h0.5v34h-0.5zM662.0 188h0.5v34h-0.5zM662.4 188h0.5v34h-0.5zM662.7 188h0.5v34h-0.5zM663.1 188h0.5v34h-0.5zM663.5 188h0.5v34h-0.5zM663.8 188h0.5v34h-0.5zM664.2 188h0.5v34h-0.5zM664.6 188h0.5v34h-0.5zM664.9 188h0.5v34h-0.5zM665.3 188h0.5v34h-0.5zM665.6 188h0.5v34h-0.5zM666.0 188h0.5v34h-0.5zM666.3 188h0.5v34h-0.5zM666.7 188h0.5v34h-0.5zM667.1 188h0.5v34h-0.5zM667.5 188h0.5v34h-0.5zM667.8 188h0.5v34h-0.5zM668.2 188h0.5v34h-0.5zM668.6 188h0.5v34h-0.5zM668.9 188h0.5v34h-0.5zM669.2 188h0.5v34h-0.5zM669.6 188h0.5v34h-0.5zM670.0 188h0.5v34h-0.5zM670.3 188h0.5v34h-0.5zM670.7 188h0.5v34h-0.5zM671.1 188h0.5v34h-0.5zM671.4 188h0.5v34h-0.5zM671.8 188h0.5v34h-0.5zM672.2 188h0.5v34h-0.5zM672.6 188h0.5v34h-0.5zM672.9 188h0.5v34h-0.5zM673.2 188h0.5v34h-0.5zM673.6 188h0.5v34h-0.5zM674.0 188h0.5v34h-0.5zM674.3 188h0.5v34h-0.5zM674.7 188h0.5v34h-0.5zM675.1 188h0.5v34h-0.5zM675.4 188h0.5v34h-0.5zM675.8 188h0.5v34h-0.5zM676.2 188h0.5v34h-0.5zM676.6 188h0.5v34h-0.5zM676.8 188h0.5v34h-0.5zM677.2 188h0.5v34h-0.5zM677.6 188h0.5v34h-0.5zM677.9 188h0.5v34h-0.5zM678.3 188h0.5v34h-0.5zM678.7 188h0.5v34h-0.5zM679.1 188h0.5v34h-0.5zM679.4 188h0.5v34h-0.5zM679.8 188h0.5v34h-0.5zM680.2 188h0.5v34h-0.5zM680.5 188h0.5v34h-0.5zM680.8 188h0.5v34h-0.5zM681.2 188h0.5v34h-0.5zM681.6 188h0.5v34h-0.5zM681.9 188h0.5v34h-0.5zM682.3 188h0.5v34h-0.5zM682.7 188h0.5v34h-0.5zM683.1 188h0.5v34h-0.5zM683.4 188h0.5v34h-0.5zM683.8 188h0.5v34h-0.5zM684.2 188h0.5v34h-0.5zM684.4 188h0.5v34h-0.5zM684.8 188h0.5v34h-0.5zM685.2 188h0.5v34h-0.5zM685.6 188h0.5v34h-0.5zM685.9 188h0.5v34h-0.5zM686.3 188h0.5v34h-0.5zM686.7 188h0.5v34h-0.5zM687.0 188h0.5v34h-0.5zM687.4 188h0.5v34h-0.5zM687.8 188h0.5v34h-0.5zM688.1 188h0.5v34h-0.5zM688.4 188h0.5v34h-0.5zM688.8 188h0.5v34h-0.5zM689.2 188h0.5v34h-0.5zM689.6 188h0.5v34h-0.5zM689.9 188h0.5v34h-0.5zM690.3 188h0.5v34h-0.5zM690.7 188h0.5v34h-0.5zM691.0 188h0.5v34h-0.5zM691.4 188h0.5v34h-0.5zM691.8 188h0.5v34h-0.5zM692.1 188h0.5v34h-0.5zM692.4 188h0.5v34h-0.5zM692.8 188h0.5v34h-0.5zM693.2 188h0.5v34h-0.5zM693.5 188h0.5v34h-0.5zM693.9 188h0.5v34h-0.5zM694.3 188h0.5v34h-0.5zM694.7 188h0.5v34h-0.5zM695.0 188h0.5v34h-0.5zM695.4 188h0.5v34h-0.5zM695.7 188h0.5v34h-0.5zM696.1 188h0.5v34h-0.5zM696.4 188h0.5v34h-0.5zM696.8 188h0.5v34h-0.5zM697.2 188h0.5v34h-0.5zM697.5 188h0.5v34h-0.5zM697.9 188h0.5v34h-0.5zM698.3 188h0.5v34h-0.5zM698.7 188h0.5v34h-0.5zM699.0 188h0.5v34h-0.5zM699.4 188h0.5v34h-0.5zM699.7 188h0.5v34h-0.5zM700.0 188h0.5v34h-0.5zM700.4 188h0.5v34h-0.5zM700.8 188h0.5v34h-0.5zM701.2 188h0.5v34h-0.5zM701.5 188h0.5v34h-0.5zM701.9 188h0.5v34h-0.5zM702.3 188h0.5v34h-0.5zM702.6 188h0.5v34h-0.5zM703.0 188h0.5v34h-0.5zM703.3 188h0.5v34h-0.5zM703.7 188h0.5v34h-0.5zM704.0 188h0.5v34h-0.5zM704.4 188h0.5v34h-0.5zM704.8 188h0.5v34h-0.5zM705.2 188h0.5v34h-0.5zM705.5 188h0.5v34h-0.5zM705.9 188h0.5v34h-0.5zM706.3 188h0.5v34h-0.5zM706.6 188h0.5v34h-0.5zM707.0 188h0.5v34h-0.5zM707.3 188h0.5v34h-0.5zM707.7 188h0.5v34h-0.5zM708.0 188h0.5v34h-0.5zM708.4 188h0.5v34h-0.5zM708.8 188h0.5v34h-0.5zM709.1 188h0.5v34h-0.5zM709.5 188h0.5v34h-0.5zM709.9 188h0.5v34h-0.5zM710.3 188h0.5v34h-0.5zM710.6 188h0.5v34h-0.5zM710.9 188h0.5v34h-0.5zM711.3 188h0.5v34h-0.5zM711.7 188h0.5v34h-0.5zM712.0 188h0.5v34h-0.5zM712.4 188h0.5v34h-0.5zM712.8 188h0.5v34h-0.5zM713.1 188h0.5v34h-0.5zM713.5 188h0.5v34h-0.5zM713.9 188h0.5v34h-0.5zM714.3 188h0.5v34h-0.5zM714.5 188h0.5v34h-0.5zM714.9 188h0.5v34h-0.5zM715.3 188h0.5v34h-0.5zM715.6 188h0.5v34h-0.5zM716.0 188h0.5v34h-0.5zM716.4 188h0.5v34h-0.5zM716.8 188h0.5v34h-0.5zM717.1 188h0.5v34h-0.5zM717.5 188h0.5v34h-0.5zM717.9 188h0.5v34h-0.5zM718.2 188h0.5v34h-0.5zM718.5 188h0.5v34h-0.5zM718.9 188h0.5v34h-0.5zM719.3 188h0.5v34h-0.5zM719.6 188h0.5v34h-0.5zM720.0 188h0.5v34h-0.5zM720.4 188h0.5v34h-0.5zM720.8 188h0.5v34h-0.5zM721.1 188h0.5v34h-0.5zM721.5 188h0.5v34h-0.5zM721.9 188h0.5v34h-0.5zM722.1 188h0.5v34h-0.5zM722.5 188h0.5v34h-0.5zM722.9 188h0.5v34h-0.5zM723.3 188h0.5v34h-0.5zM723.6 188h0.5v34h-0.5zM724.0 188h0.5v34h-0.5zM724.4 188h0.5v34h-0.5zM724.7 188h0.5v34h-0.5zM725.1 188h0.5v34h-0.5zM725.5 188h0.5v34h-0.5zM725.9 188h0.5v34h-0.5zM726.1 188h0.5v34h-0.5zM726.5 188h0.5v34h-0.5zM726.9 188h0.5v34h-0.5zM727.3 188h0.5v34h-0.5zM727.6 188h0.5v34h-0.5zM728.0 188h0.5v34h-0.5zM728.4 188h0.5v34h-0.5zM728.7 188h0.5v34h-0.5zM729.1 188h0.5v34h-0.5zM729.5 188h0.5v34h-0.5zM729.8 188h0.5v34h-0.5zM730.1 188h0.5v34h-0.5zM730.5 188h0.5v34h-0.5zM730.9 188h0.5v34h-0.5zM731.2 188h0.5v34h-0.5zM731.6 188h0.5v34h-0.5zM732.0 188h0.5v34h-0.5zM732.4 188h0.5v34h-0.5zM732.7 188h0.5v34h-0.5zM733.1 188h0.5v34h-0.5zM733.5 188h6.5v34h-6.5z"/>
           <rect x="74.7" y="188" width="475.7" height="34" class="f-sig"/>
           <text class="sm" x="313" y="209" text-anchor="middle" style="fill:var(--paper)">26,946,179 objects — 68.0%</text>
-          <text class="sm" x="738" y="240" text-anchor="end">↑ the other 512 guesses, together 32%</text>
+          <text class="sm" x="738" y="240" text-anchor="end">↑ the other 512 ranges, together 32%</text>
         
           <line x1="40" y1="262" x2="740" y2="262" class="s-rule"/>
-          <text class="sm" x="40" y="282">1,281× the median guess · 510 of the 513 came in under the prior · none came back empty</text>
+          <text class="sm" x="40" y="282">1,281× the median range · 510 of the 513 came in under the baseline · none came back empty</text>
         </svg>
       </div>
       <figcaption>
-        <b>Plate 1</b> The uniform prior against the measured key mass of
+        <b>Plate 1</b> The uniform baseline against the measured key mass of
         <span class="mono">s3://noaa-gestofs-pds</span>. Widths in the lower strip are object
-        counts, not byte distances. 510 of the 513 guesses came in <em>under</em> the prior;
+        counts, not byte distances. 510 of the 513 ranges came in <em>under</em> the baseline;
         one came in at 349× it. This is the shape every design decision in the rest of this
         page is answering.
       </figcaption>
@@ -940,13 +933,13 @@
     <div class="note">
       <span class="lbl">Why this is the whole problem</span>
       <p>
-        A partitioner that trusts the prior parks two thirds of the bucket behind a single
+        A partitioner that trusts a uniform prior parks two thirds of the bucket behind a single
         worker's ranges while the rest of the fleet runs dry, and the run takes as long as
         that one worker takes.
-        Nothing about the guess can be improved by guessing harder — the information does not
-        exist until keys come back. So swath does not try to guess well. It guesses cheaply,
-        then <strong>corrects continuously while listing</strong>, which is what the rest of
-        this page is about.
+        A bounded seed can gather useful structural and sampled-mass evidence, but it still
+        cannot know exact range sizes without doing the listing. swath therefore does not need
+        the seed to be right: it <strong>corrects continuously while listing</strong>, which is
+        what the rest of this page is about.
       </p>
     </div>
   </section>
@@ -962,8 +955,7 @@
         <span class="lbl">This one is a drawing, not a measurement</span>
         <p>
           Everything in this plate is a <strong>deliberately simplified model</strong>: an
-          illustrative lumpy key distribution, 12 workers rather than 128, and a flat
-          directory placed at the end so the serial floor is certain to appear. It runs the
+          illustrative lumpy key distribution and 12 workers rather than 128. It runs the
           same <em>kinds of decisions</em> in the same order — seed, drain, estimate, split,
           claim, finish — at a speed and scale you can watch, not the engine's actual
           policies. Its counters are not measurements of anything.
@@ -977,22 +969,30 @@
         cannot see the profile; it only ever learns it by listing.
       </p>
       <p>
-        Each colored band is one <em class="term">range</em> owned by one worker. The filled
-        part is what that worker has already listed. Watch for the ochre marks: those are
-        <em class="term">splits</em> — the moment an idle worker carves a busy one in half
-        and takes the upper piece.
+        Each colored band is one active <em class="term">range</em>, owned by the worker
+        named inside it. The filled part is what that worker has already listed. A worker
+        moves left to right until it finishes; it never jumps from one live range to another.
+      </p>
+      <p>
+        When an idle worker steals, it cuts the <em>unscanned remainder</em> of a busy
+        worker's range in two. The busy worker keeps the lower child; the thief immediately
+        takes the upper child. The animation pauses on that exact moment and labels both
+        children. Hollow triangles show the other handoff: an owner shedding an upper child
+        into the dashed pending row for an idle worker to claim. In the recorded run below,
+        owner-side shedding made 92% of all splits. A red tick is a probe that found no
+        useful upper child.
       </p>
     </div>
 
     <div class="sim">
       <div class="sim-bar">
         <span class="phase" id="phase" data-p="seed">Seeding</span>
-        <span class="sim-note" id="note">One delimiter=/ probe asks S3 where the directories are.</span>
+        <span class="sim-note" id="note" role="status" aria-live="polite">This model uses one delimiter=/ probe to find structural boundaries.</span>
         <button id="toggle" type="button">Pause</button>
         <button id="replay" type="button">Replay</button>
       </div>
       <canvas id="strip" role="img"
-        aria-label="Animated keyspace strip: a lumpy key-density profile is tiled into adjacent colored ranges, each drained by one worker; idle workers split busy ranges at ochre pivot marks, and the run ends with one dense flat directory draining alone."></canvas>
+        aria-label="Animated keyspace strip. Each colored active range is labeled with its worker. During a steal, the busy worker keeps the lower child of its unscanned remainder and the idle thief takes the upper child; the two adjacent children are briefly labeled. Dashed ranges are pending and have no worker."></canvas>
       <dl class="readout">
         <div><dt>Keys listed</dt><dd id="m-keys">0</dd></div>
         <div><dt>LIST requests</dt><dd id="m-reqs">0</dd></div>
@@ -1001,13 +1001,14 @@
         <div><dt>Splits committed</dt><dd id="m-splits">0</dd></div>
       </dl>
     </div>
-    <p class="col" style="margin-top:1.2rem; color:var(--ink-2); font-size:0.94rem;">
-      Two things worth catching before you read on. Early, a worker in a sparse
-      region rips across a huge slice of the keyspace while a worker in a dense one
-      barely moves — <em class="term">progress in keyspace is not progress in keys</em>. Late,
-      one band goes red and everything else finishes around it: that is a single flat
-      directory with no internal structure to split on, and it is the one shape swath
-      genuinely cannot parallelize.
+    <p class="col" style="margin-top:1.2rem; color:var(--ink-2);">
+      The important moment is <strong>one band becoming two adjacent bands</strong>: the
+      original worker stays on the lower child and the formerly idle thief appears on the
+      upper child. Nobody joins a range that already has an owner. When a worker finishes,
+      it becomes idle and can later claim or steal another range. Also notice that a worker
+      in sparse keyspace moves much farther than one in dense keyspace — progress in byte
+      position is not progress in keys. The <a href="#limits">limits section</a> covers
+      the genuinely hard-to-split shapes separately.
     </p>
   </section>
 
@@ -1019,17 +1020,22 @@
     </div>
     <div class="col">
       <p>
-        S3's <code>ListObjectsV2</code> gives you one page — up to 1000 keys, in sorted
-        byte order — plus a way to ask for the next one. You can start anywhere by
-        sending <code>start-after=&lt;token&gt;</code>, and the token need not be a key that
+        For a general-purpose bucket, S3's <code>ListObjectsV2</code> gives you one page —
+        up to 1000 keys, in sorted byte order — plus a way to ask for the next one. You can
+        start anywhere by sending <code>start-after=&lt;boundary&gt;</code>, and the boundary need not be a key that
         exists. So <em class="term">splitting the keyspace is free.</em>
       </p>
       <p>
-        What no request will tell you is how many keys sit between two tokens. There is
+        What no request will tell you is how many keys sit between two boundaries. There is
         no <span class="mono">count(prefix)</span> and no "give me keys 50,000–51,000".
         The only way to find out how much work a range holds is to list it — which is
         the work. That is the whole problem, and it is why parallel listing is a
         <em class="term">guessing problem</em> rather than a partitioning one.
+      </p>
+      <p>
+        That ordered <span class="mono">start-after</span> contract is what the range model
+        rests on. S3 directory buckets provide neither the same global order nor
+        <span class="mono">StartAfter</span>, which is why swath does not support them.
       </p>
     </div>
 
@@ -1256,7 +1262,7 @@
 
           <!-- RIGHT PANEL -->
           <text class="hd" x="410" y="14">delimiter=/ probe — structural, one call</text>
-          <text class="sm" x="410" y="30">ask S3 where the directories are</text>
+          <text class="sm" x="410" y="30">ask S3 for CommonPrefix boundaries</text>
 
           <line class="s-ink" x1="410" y1="96" x2="760" y2="96" stroke-width="1.2"/>
           <g class="f-acc" opacity="0.75">
@@ -1375,6 +1381,16 @@
         time, gated to fire only while live work has fallen below the worker count. The
         mechanism is global; the trigger is local and demand-driven — design law L2 in
         <a href="https://github.com/varveio/swath/blob/main/docs/internals/overview.md"><span class="mono">docs/internals/overview.md</span></a>.
+      </p>
+      <p>
+        This fourth trigger did most of the work in the recorded run below: 2,204 of 2,399
+        committed splits were owner-side, while thieves took 195. Both paths are paced to
+        limit unproductive splitting: within a claimed range, its owner carves no more than
+        once per 32 committed non-empty pages, and across the fleet only one thief may own
+        the steal-attempt slot at a time, including any probes that attempt issues. These
+        limits can slow worklist refill;
+        <a href="https://github.com/varveio/swath/issues/205">issue #205</a> tracks their
+        effect and possible demand-aware replacements.
       </p>
     </div>
 
@@ -1639,7 +1655,7 @@
           </tr>
           <tr>
             <td class="k">TSV / JSONL directory dataset</td>
-            <td>Several background writers, and <span class="mono">_SUCCESS</span> written last — but not resumable in 0.3.0, and it requires <code>--checkpoint none</code>.</td>
+            <td>Several background writers, and <span class="mono">_SUCCESS</span> written last — but not resumable in 0.3.1, and it requires <code>--checkpoint none</code>.</td>
           </tr>
           <tr>
             <td class="k">a path ending <span class="mono">.parquet</span></td>
@@ -1691,9 +1707,10 @@
     </div>
     <div class="col">
       <p>
-        No row lost, none duplicated — across splits, steals, crashes, and resumes.
-        A guarantee like that is worth exactly as much as the machinery that would
-        catch its violation. This is that machinery.
+        For a managed Parquet dataset: no row lost, none duplicated — across splits,
+        steals, crashes, and resumes. An interrupted stdout or text-file run is
+        at-most-once, as the table above describes. A guarantee like that is worth exactly
+        as much as the machinery that would catch its violation. This is that machinery.
       </p>
       <p>
         Each invariant carries a number (<em class="term">I1–I12</em>) in the repository’s
@@ -1746,21 +1763,28 @@
     </div>
     <div class="col">
       <p>
-        Inside <em>one</em> flat directory — a single prefix with no sub-structure — the
-        only tool S3 offers is <span class="mono">start-after</span> pagination: one
-        round trip per 1000 keys, strictly sequential. A directory with 110,000 keys is
-        ~110 sequential round trips, and adding workers does not help, because handing a
-        worker a valid starting point deep inside that directory requires already
-        knowing a key that far in — which costs exactly the listing you were trying to
-        parallelize.
+        A flat prefix is harder to divide, but it is not inherently serial. Current swath
+        recognizes a truncated, dense flat region during seeding and pre-cuts it into
+        leading-byte radix bands. During the run, a thief can also synthesize a
+        density-based pivot without that boundary being an existing key. Those guesses work
+        especially well for hex, UUID, timestamp, and similar printable-ASCII names.
       </p>
       <p>
-        You can sometimes split such a directory by guessing name-prefix bands (hex
-        <span class="mono">0</span>–<span class="mono">f</span>, say) when the names are
-        uniform. When they aren't, the sequential floor is real. It bounds only that one
-        directory's tail — a bucket with many dense directories still parallelizes across
-        them; only the last, densest one serializes at the very end. That is the red band
-        you saw in Plate 2.
+        Parallelism stops helping when those bounded guesses cannot find a useful populated
+        child, or when no safe boundary remains strictly between a range's cursor and end.
+        The owner must then finish that residual range. Ordinary pagination within one range
+        is sequential — one round trip per page of up to 1,000 keys — so a large residual tail
+        can still set the run's finish time. The red band in Plate 2 illustrates that outcome;
+        it does not claim that every flat prefix reaches it.
+      </p>
+      <p>
+        A second potential floor is inside the client: all listing workers feed one
+        bounded channel drained by one output-stage consumer, so output backpressure can
+        serialize a large fleet before batches reach the background writers. A swath 0.3.1
+        compressed-TSV run on a 1.07-billion-object bucket exposed this bottleneck; see
+        <a href="https://github.com/varveio/swath/blob/main/docs/performance.md#find-the-limiting-stage">the performance guide</a>
+        for diagnosis and <a href="https://github.com/varveio/swath/issues/206">issue #206</a>
+        for the dated evidence.
       </p>
     </div>
 
@@ -1802,20 +1826,18 @@
   <section id="run">
     <div class="sec-head">
       <span class="eyebrow">the run</span>
-      <h2>One bad guess became work for all 128 workers</h2>
+      <h2>One heavy initial range became work for all 128 workers</h2>
     </div>
     <div class="col">
       <p>
         The measured example on this page is the capture identified as
         <span class="mono">noaa-gestofs-pds-field-guide-trace</span> — a label assigned to this
-        artifact, not one recorded at capture time. It ran against
-        <span class="mono">s3://noaa-gestofs-pds/</span> — a public NOAA forecast archive in
-        <span class="mono">us-east-1</span> — listed cold, with no inventory and no prior
-        knowledge of its shape, from a dedicated US-East cloud host at a different provider,
-        so the path to S3 crossed networks. It used a listing-concurrency ceiling of 128. The
-        swath version, commit, capture date, machine type, and exact command are
-        <em>unknown in the retained evidence</em>; they are marked unknown here rather than
-        inferred.
+        artifact, not one recorded at capture time. It ran against the public NOAA archive
+        <span class="mono">s3://noaa-gestofs-pds/</span>. The trace shows 128 distinct listing
+        workers, consistent with the published concurrency ceiling of 128. The swath version,
+        commit, capture date, exact command, output mode, target and client regions, machine
+        type, and whether seeding used prior information are <em>unknown in the retained
+        evidence</em>; they are marked unknown here rather than inferred.
       </p>
       <p>
         This is not the recording embedded in the repository README. That is a separate capture
@@ -1835,26 +1857,27 @@
     <div class="result">
       <dl>
         <div><dt>Objects listed</dt><dd>39,651,850</dd></div>
-        <div><dt>Initial guesses</dt><dd>513</dd></div>
-        <div><dt>Behind one guess</dt><dd class="hot">26,946,179</dd></div>
+        <div><dt>Initial ranges</dt><dd>513</dd></div>
+        <div><dt>Behind one range</dt><dd class="hot">26,946,179</dd></div>
         <div><dt>Splits in that lineage</dt><dd>2,155</dd></div>
         <div><dt>Ranges completed</dt><dd>2,912</dd></div>
         <div><dt>Ranges failed</dt><dd>0</dd></div>
-        <div><dt>Listing wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="what this clock measures">&#8224;</a></dd></div>
-        <div><dt>Busy worker-time</dt><dd>57.3%<a class="prov" href="#timings" title="what this clock measures">&#8224;</a></dd></div>
+        <div><dt>Trace event span</dt><dd>1m 09s<a class="prov" href="#timings" title="what this measurement means">&#8224;</a></dd></div>
+        <div><dt>Worker utilization</dt><dd>57.3%<a class="prov" href="#timings" title="what this measurement means">&#8224;</a></dd></div>
       </dl>
     </div>
 
     <div class="note stop" id="timings">
-      <span class="lbl">&#8224; What these clocks measure</span>
+      <span class="lbl">&#8224; What these measurements mean</span>
       <p>
-        <strong>1m 09s is the measured listing wall clock</strong> — 68,592 ms — for this one
-        recorded run, and it is not a benchmark: no competing listers were measured alongside
-        it, and instance type, network, and the day's S3 behavior all move it. The replay
-        animation on the trace page runs for 36 seconds; that is a playback length chosen for
-        viewing, not a measurement of anything. The speedup percentage is a ratio of busy to
-        idle worker-time <em>within</em> this run: useful for diagnosing the steal path, not
-        comparable across machines or concurrency settings.
+        <strong>1m 09s — 68,592 ms — is the trace event span</strong>: the time between the
+        first and last event in this run's <span class="mono">--trace</span> JSONL. It is not
+        a listing wall clock reported by swath; no run summary was retained for this capture.
+        No competing listers were measured alongside it, and machine, network, and the day's
+        S3 behavior all move the span. The replay animation on the trace page runs for 36
+        seconds; that is a playback length chosen for viewing, not a measurement of the run.
+        The 57.3% is listing-worker utilization over that trace span — useful for diagnosing
+        this capture's work distribution, not comparable across machines or concurrency settings.
       </p>
       <p style="margin-top:0.8em;">
         In this capture the bucket state was highly skewed: one of 513 initial ranges held
@@ -1870,12 +1893,12 @@
 
     <div class="col">
       <p>
-        In this run the measured wall clock was 69 seconds. Dividing the 5,030 recorded busy
-        worker-seconds evenly across 128 workers gives a 39-second idealized lower bound for
-        this run's own work accounting. The 30-second gap is the run's 3,750
-        recorded idle worker-seconds — worker time not spent listing. Startup, request latency,
-        stretches with less splittable work than workers, and the final unsplittable tail all
-        contribute to that idle time; the figure does not separate them. At 128
+        Across the 69-second trace event span, dividing the 5,030 recorded busy worker-seconds
+        evenly across 128 workers gives a 39-second idealized lower bound for this run's own
+        work accounting. The roughly 30-second gap is the run's 3,750 recorded idle
+        worker-seconds divided across the fleet — worker time not spent listing. Startup,
+        stretches with less splittable work than workers, and residual work that could not be
+        usefully split all contribute; the figure does not separate them. At 128
         workers, a large share of the fleet was waiting rather than listing. That is a
         diagnostic of this run — a lead being tracked — not a portable efficiency score or a
         benchmark result.
@@ -1892,8 +1915,9 @@
     <div class="note" style="margin-top:2rem;">
       <span class="lbl">Do you have a bucket that breaks this?</span>
       <p>
-        The interesting failure mode is a key distribution the pivot cascade cannot cut —
-        deep uniform prefixes, one enormous flat directory, names that defeat interpolation.
+        The interesting failure mode is a key distribution the pivot cascade cannot cut well —
+        deep uniform prefixes, a flat region whose names defeat radix bands and interpolation,
+        or a residual range with no safe boundary left.
         If you have one, we would genuinely like to see it. Bucket names and object contents
         are not needed; a redacted ordered key distribution, or just the shape of it, is
         enough. Open an issue, or mail <span class="mono">oss@varve.io</span>.
@@ -2111,7 +2135,13 @@
       </p>
       <p>
         On a healthy endpoint the decrease path never fires — <span class="mono">T</span>
-        ramps to the ceiling and stays. Adaptive concurrency is a safety control, not the
+        ramps to the ceiling and stays. One caveat: the latency valve compares a short EWMA
+        with a rolling-minimum baseline seeded by the run's first successful pages, so a
+        client very close to the bucket, whose
+        first pages return in a few milliseconds, can be held well below the ceiling for
+        minutes by the ordinary latency rise that comes with load — tracked in
+        <a href="https://github.com/varveio/swath/issues/202">issue #202</a>.
+        Adaptive concurrency is a safety control, not the
         source of parallelism: seeding and splitting decide whether useful work exists at all,
         and AIMD only limits how much of it may call the store at once. It is a reactive
         backpressure controller, not an online throughput optimizer — it will not search back
@@ -2384,9 +2414,8 @@
 
   /* ── the keyspace, as mass ──────────────────────────────────
      A cumulative distribution over [0,1]. Clusters are the
-     bucket's "directories"; the gaps between them are the empty
-     byte-space a naive midpoint aims into. One cluster is marked
-     flat: no internal structure, so no split can divide it.
+     bucket's structural clusters; the gaps between them are the empty
+     byte-space a naive midpoint aims into.
      ───────────────────────────────────────────────────────── */
   var TOTAL = 39600000;
   var N = 3072;
@@ -2399,9 +2428,8 @@
     { c: 0.505, w: 0.008, m: 0.110 },
     { c: 0.605, w: 0.026, m: 0.130 },
     { c: 0.720, w: 0.014, m: 0.090 },
-    { c: 0.895, w: 0.021, m: 0.300 }   /* the dense flat leaf */
+    { c: 0.895, w: 0.021, m: 0.300 }
   ];
-  var FLAT_LO = 0.845, FLAT_HI = 0.950;   /* unsplittable region */
 
   var dens = new Float64Array(N);
   var cum  = new Float64Array(N + 1);
@@ -2460,37 +2488,87 @@
   /* more workers than seed ranges, so some are thieves from the first tick —
      which is what a real run looks like at any sensible --concurrency */
   var WORKERS = 12;
-  var TICKS_TO_DRAIN = 560;                 /* pacing target */
+  var TICKS_TO_DRAIN = 560;                 /* keep the original, readable pacing */
   var KEYS_PER_TICK = TOTAL / (WORKERS * TICKS_TO_DRAIN);
+  /* owner-side shedding, paced like the engine's own rate limit: a busy
+     worker sheds its far tail at most once per SHED_EVERY ticks, and only
+     while some worker is idle (the demand gate) */
+  var SHED_EVERY = 14;
+  var SHED_MIN_REMAINING = 0.015;           /* estimated share of all keys still ahead */
+  var MIN_CHILD_SPAN = 0.012;                /* avoid microscopic children in this drawing */
+  var OWNER_EVENT_GAP = 42;                 /* visual spacing between owner handoffs */
+  var PENDING_HOLD = 6;                     /* keep a shed child visibly unowned */
+  /* a thief probes only after waiting this long for shed work, the model's
+     stand-in for the engine's one-attempt-at-a-time steal slot and backoff */
+  var STEAL_PATIENCE = 10;
 
-  var nodes, workers, keysDone, reqs, splits, phase, seedTimer, flashes, tick, done, floorSeen;
+  var nodes, workers, keysDone, reqs, splits, phase, seedTimer, flashes, tick, done;
+  var stealFocus, stealPauseUsed;
+  var eventNote, eventUntil, holdFrames, lastAnnouncedTick, nextOwnerEvent;
 
   function reset() {
     nodes = [];
     workers = [];
     keysDone = 0; reqs = 0; splits = 0; tick = 0;
-    phase = "seed"; seedTimer = 0; flashes = []; done = false; floorSeen = false;
-    for (var i = 0; i < WORKERS; i++) workers.push({ id: i, node: null, idle: true, backoff: 0 });
+    phase = "seed"; seedTimer = 0; flashes = []; done = false;
+    stealFocus = null; stealPauseUsed = false;
+    eventNote = ""; eventUntil = 0; holdFrames = 0; lastAnnouncedTick = -1; nextOwnerEvent = 0;
+    for (var i = 0; i < WORKERS; i++) workers.push({ id: i, node: null, idle: true, backoff: 0, idleAt: 0 });
   }
 
   function startScan() {
     var cuts = seedCuts(), prev = 0, i;
-    for (i = 0; i < cuts.length; i++) { nodes.push(mkNode(prev, cuts[i])); prev = cuts[i]; }
-    nodes.push(mkNode(prev, 1));            /* the closing range */
+    for (i = 0; i < cuts.length; i++) { nodes.push(mkNode(prev, cuts[i], "seed", null)); prev = cuts[i]; }
+    nodes.push(mkNode(prev, 1, "seed", null));            /* the closing range */
     reqs += 1;                              /* the seed probe itself */
     phase = "scan";
+    for (i = 0; i < workers.length; i++) {
+      if (!claim(workers[i], false)) workers[i].idleAt = tick;
+    }
+    nextOwnerEvent = tick;
+    announce("Seed made 8 ranges. W1–W8 claim them; W9–W12 wait idle for work.", 90, 0);
   }
 
   var nid = 0;
-  function mkNode(lo, hi) {
-    return { id: nid++, lo: lo, hi: hi, cursor: lo, drained: 0, owner: null, done: false, stuck: false };
+  function workerName(id) { return "W" + (id + 1); }
+
+  function announce(message, duration, pause) {
+    eventNote = message;
+    eventUntil = tick + (duration || 40);
+    holdFrames = Math.max(holdFrames, pause || 0);
+    lastAnnouncedTick = tick;
   }
 
-  function claim(w) {
+  function mkNode(lo, hi, origin, sourceWorker) {
+    return {
+      id: nid++, lo: lo, hi: hi, cursor: lo, drained: 0, owner: null,
+      done: false, lastShed: 0, origin: origin || "seed",
+      sourceWorker: sourceWorker, readyAt: 0
+    };
+  }
+
+  function claim(w, tell) {
     for (var i = 0; i < nodes.length; i++) {
-      if (!nodes[i].done && nodes[i].owner === null) {
-        nodes[i].owner = w.id; w.node = nodes[i]; w.idle = false; return true;
+      var n = nodes[i];
+      if (!n.done && n.owner === null && n.readyAt <= tick) {
+        n.owner = w.id; w.node = n; w.idle = false;
+        if (tell) {
+          if (n.origin === "owner") {
+            announce(workerName(w.id) + " was idle; it now claims the upper range shed by " +
+              workerName(n.sourceWorker) + ".", 54, 0);
+          } else {
+            announce(workerName(w.id) + " was idle; it now claims a pending range.", 45, 0);
+          }
+        }
+        return true;
       }
+    }
+    return false;
+  }
+
+  function hasPending() {
+    for (var i = 0; i < nodes.length; i++) {
+      if (!nodes[i].done && nodes[i].owner === null) return true;
     }
     return false;
   }
@@ -2509,8 +2587,8 @@
     var best = null, bestScore = 0, i, n;
     for (i = 0; i < nodes.length; i++) {
       n = nodes[i];
-      if (n.done || n.owner === null || n.stuck) continue;
-      if (n.hi - n.cursor < 0.0015) continue;
+      if (n.done || n.owner === null) continue;
+      if (n.hi - n.cursor < MIN_CHILD_SPAN * 2.4) continue;
       var s = estRemaining(n);
       if (s > bestScore) { bestScore = s; best = n; }
     }
@@ -2524,18 +2602,44 @@
       m = rung === 1 ? best.cursor + (best.hi - best.cursor) * 0.5
                      : best.cursor + (m - best.cursor) * 0.5;
     }
-    flashes.push({ x: m, t: 0, ok: massIn(m, best.hi) > 0, rung: rung });
+    var hasMass = massIn(m, best.hi) > 0;
+    if (!hasMass || m - best.cursor < MIN_CHILD_SPAN || best.hi - m < MIN_CHILD_SPAN) {
+      flashes.push({ x: m, t: 0, ok: false, rung: rung, kind: "thief" });
+      w.backoff = 14;
+      announce(workerName(w.id) + " probed " + workerName(best.owner) +
+        " but found no useful upper child, so it stays idle.", 42, 0);
+      return false;
+    }
 
-    if (massIn(m, best.hi) <= 0 || m <= best.cursor) { w.backoff = 14; return false; }
+    var victimWorker = best.owner;
+    var oldHi = best.hi;
+    flashes.push({ x: m, t: 0, ok: true, rung: rung, kind: "thief" });
 
-    /* a flat leaf has no structure to divide: the split is refused */
-    if (best.cursor > FLAT_LO && best.hi < FLAT_HI) { best.stuck = true; w.backoff = 30; floorSeen = true; return false; }
-
-    var child = mkNode(m, best.hi);
+    var child = mkNode(m, oldHi, "thief", victimWorker);
     best.hi = m;
     nodes.push(child);
     child.owner = w.id; w.node = child; w.idle = false;
     splits++;
+    /* Tiny children still count, but they do not make a useful close-up. Only
+       explain steals whose two new bands are legible at this viewport. */
+    var lowerPixels = px(m) - px(best.lo);
+    var upperPixels = px(oldHi) - px(m);
+    var focusThisSteal = !stealPauseUsed && lowerPixels >= 19 && upperPixels >= 19;
+    if (focusThisSteal) {
+      stealFocus = {
+        lowerId: best.id, upperId: child.id,
+        victim: victimWorker, thief: w.id,
+        /* Tick does not advance during the pause; retire the caption as soon
+           as scanning resumes so a later steal cannot contradict it. */
+        until: tick
+      };
+      /* Keep the close-up about this split; stale marks read like extra arrows. */
+      flashes = [flashes[flashes.length - 1]];
+    }
+    var stealPause = focusThisSteal && !stealPauseUsed ? 26 : 0;
+    if (focusThisSteal) stealPauseUsed = true;
+    announce("STEAL: " + workerName(w.id) + " was idle. " + workerName(victimWorker) +
+      " keeps the lower child; " + workerName(w.id) + " takes the upper child.", 72, stealPause);
     return true;
   }
 
@@ -2549,13 +2653,50 @@
       return;
     }
 
-    var i, w, n, busy = 0;
+    var i, w, n, idle = 0;
+    for (i = 0; i < workers.length; i++) if (workers[i].idle && workers[i].backoff === 0) idle++;
+
+    /* owner-side split first, as in the engine: at page commit a busy worker
+       sheds its far tail for an idle one to claim, at most once per SHED_EVERY
+       ticks and only while there is unmet demand */
+    for (i = 0; i < workers.length && idle > 0 && tick >= nextOwnerEvent; i++) {
+      n = workers[i].node;
+      if (workers[i].idle || !n || tick - n.lastShed < SHED_EVERY) continue;
+      if (estRemaining(n) <= SHED_MIN_REMAINING) continue;
+      var pivot = n.cursor + (n.hi - n.cursor) * 0.6;
+      if (pivot - n.cursor < MIN_CHILD_SPAN || n.hi - pivot < MIN_CHILD_SPAN ||
+          massIn(pivot, n.hi) <= 0) continue;
+      var pending = mkNode(pivot, n.hi, "owner", workers[i].id);
+      pending.readyAt = tick + PENDING_HOLD;
+      nodes.push(pending);
+      n.hi = pivot; n.lastShed = tick; splits++; idle--;
+      nextOwnerEvent = tick + OWNER_EVENT_GAP;
+      flashes.push({ x: pivot, t: 0, ok: true, rung: 0, kind: "owner" });
+      announce(workerName(workers[i].id) + " splits ahead: it keeps the lower range; " +
+        "the upper range is dashed and PENDING with no worker.", 70, 0);
+      break;
+    }
+
+    /* Show one reassignment at a time. Pending work always wins; while a shed
+       child is waiting to become claimable, thieves do not start another handoff. */
+    var reassigned = false;
     for (i = 0; i < workers.length; i++) {
       w = workers[i];
       if (w.backoff > 0) { w.backoff--; continue; }
+      if (!w.idle || reassigned) continue;
+      if (claim(w, true)) {
+        reassigned = true;
+      } else if (!hasPending() && tick - w.idleAt >= STEAL_PATIENCE) {
+        reassigned = true;
+        trySteal(w);
+      }
+    }
 
-      if (w.idle) { if (!claim(w)) trySteal(w); }
-
+    /* every busy worker drains one tick of keys */
+    var finished = [];
+    for (i = 0; i < workers.length; i++) {
+      w = workers[i];
+      if (w.backoff > 0) continue;
       if (!w.idle && w.node) {
         n = w.node;
         var here = keysAt(n.cursor);
@@ -2566,18 +2707,25 @@
         keysDone += moved * TOTAL;
         reqs += Math.max(1, Math.round(moved * TOTAL / 1000));
         n.cursor = posAt(next);
-        if (next >= limit - 1e-9) { n.done = true; n.owner = null; w.node = null; w.idle = true; }
-        else busy++;
+        if (next >= limit - 1e-9) {
+          n.done = true; n.owner = null; w.node = null; w.idle = true; w.idleAt = tick;
+          finished.push(workerName(w.id));
+        }
       }
+    }
+
+    if (finished.length && lastAnnouncedTick !== tick) {
+      announce(finished.join(" and ") + " finished " +
+        (finished.length === 1 ? "a range and is" : "their ranges and are") +
+        " now idle, ready to claim or steal.", 46, 0);
     }
 
     var live = 0;
     for (i = 0; i < nodes.length; i++) if (!nodes[i].done) live++;
-    if (live === 0) { phase = "done"; done = true; keysDone = TOTAL; }
-    /* only call it a serial floor once the stuck directory IS the run —
-       while other ranges are still draining, this is just ordinary scanning */
-    else if (floorSeen && live <= 2) phase = "floor";
-    else if (phase === "floor") phase = "scan";
+    if (live === 0) {
+      phase = "done"; done = true; keysDone = TOTAL;
+      announce("All ranges are finished. Every worker is idle; the scan is complete.", 1000, 0);
+    }
   }
 
   /* ── rendering ─────────────────────────────────────────────── */
@@ -2601,7 +2749,7 @@
     var dpr = window.devicePixelRatio || 1;
     var r = cv.getBoundingClientRect();
     W = Math.max(300, r.width);
-    H = W < 640 ? 274 : 232;                 /* room for the legend to wrap */
+    H = W < 640 ? 250 : 232;                 /* compact, with room for a wrapped legend */
     cv.style.height = H + "px";
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2636,19 +2784,24 @@
     ctx.textAlign = "right";
     ctx.fillText("keyspace →", px(1), 12);
 
-    /* flat-leaf marker */
-    if (floorSeen) {
-      ctx.fillStyle = pal.alert; ctx.globalAlpha = 0.09;
-      ctx.fillRect(px(FLAT_LO), profTop, px(FLAT_HI) - px(FLAT_LO), profH);
+    var bandTop = 108, bandH = 26;
+
+    /* a faint copy of the density under the band row, so a slowing cursor
+       can be read against the mass it is wading through */
+    if (phase !== "seed") {
+      ctx.fillStyle = pal.ink3;
+      for (i = 0; i < N; i += 4) {
+        var a0 = Math.pow(dens[i] / peak, 0.42) * 0.22;
+        if (a0 < 0.01) continue;
+        ctx.globalAlpha = a0;
+        ctx.fillRect(px(i / N), bandTop + 12, Math.max(1, px((i + 4) / N) - px(i / N)), bandH);
+      }
       ctx.globalAlpha = 1;
     }
-
-    var bandTop = 108, bandH = 26, gap = 6;
 
     /* baseline */
     ctx.strokeStyle = pal.rule; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(px(0), bandTop - 12); ctx.lineTo(px(1), bandTop - 12); ctx.stroke();
-
     if (phase === "seed") {
       ctx.textAlign = "center";
       ctx.fillStyle = pal.ink2;
@@ -2667,7 +2820,8 @@
       return;
     }
 
-    /* ranges, laid out in rows so overlapping generations stay legible */
+    /* ranges: finished ones as a thin settled bar above, pending and active
+       ones in the band row (they never overlap in the keyspace, so one row) */
     var rows = [[], [], []];
     for (i = 0; i < nodes.length; i++) {
       n = nodes[i];
@@ -2686,18 +2840,21 @@
     /* pending (unclaimed) ranges */
     for (i = 0; i < rows[1].length; i++) {
       n = rows[1][i];
+      var pendingX0 = px(n.lo), pendingX1 = px(n.hi);
       ctx.strokeStyle = pal.ink3; ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
-      ctx.strokeRect(px(n.lo) + 0.5, bandTop + 12.5, Math.max(2, px(n.hi) - px(n.lo)) - 1, bandH - 2);
+      ctx.strokeRect(pendingX0 + 0.5, bandTop + 12.5, Math.max(2, pendingX1 - pendingX0) - 1, bandH - 2);
       ctx.setLineDash([]);
     }
 
     /* active ranges */
     var y = bandTop + 12;
+    var slivers = 0;
     for (i = 0; i < rows[2].length; i++) {
       n = rows[2][i];
-      var col = n.stuck ? pal.alert : pal.w[n.owner % pal.w.length];
+      var col = pal.w[n.owner % pal.w.length];
       var x0 = px(n.lo), x1 = px(n.hi), xc = px(n.cursor);
+      if (x1 - x0 < 2.5) { slivers++; continue; }
       ctx.strokeStyle = col; ctx.lineWidth = 1.2;
       ctx.strokeRect(x0 + 0.5, y + 0.5, Math.max(2, x1 - x0) - 1, bandH - 1);
       ctx.fillStyle = col; ctx.globalAlpha = 0.30;
@@ -2705,28 +2862,86 @@
       ctx.globalAlpha = 1;
       /* the cursor itself */
       ctx.fillRect(Math.max(x0, xc - 1), y, 2, bandH);
+
+      /* A quiet worker label keeps ownership visible without turning every
+         range into a separate UI widget. */
+      if (x1 - x0 >= 19) {
+        ctx.fillStyle = col;
+        ctx.font = '600 9px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+        ctx.textAlign = "center";
+        ctx.fillText(workerName(n.owner), (x0 + x1) / 2, y + 17);
+      }
+    }
+
+    /* Freeze briefly on a real thief split. The two underlines are the two
+       children of the victim's unscanned remainder; no movement arrow is
+       needed because the worker labels already identify their new owners. */
+    if (stealFocus && tick <= stealFocus.until) {
+      var lower = null, upper = null;
+      for (i = 0; i < nodes.length; i++) {
+        if (nodes[i].id === stealFocus.lowerId) lower = nodes[i];
+        if (nodes[i].id === stealFocus.upperId) upper = nodes[i];
+      }
+      if (lower && upper) {
+        var splitX = px(lower.hi);
+        var underlineY = y + bandH + 5;
+        var victimCol = pal.w[stealFocus.victim % pal.w.length];
+        var thiefCol = pal.w[stealFocus.thief % pal.w.length];
+        ctx.strokeStyle = victimCol; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(px(lower.cursor), underlineY); ctx.lineTo(splitX - 2, underlineY);
+        ctx.stroke();
+        ctx.strokeStyle = thiefCol;
+        ctx.beginPath(); ctx.moveTo(splitX + 2, underlineY); ctx.lineTo(px(upper.hi), underlineY); ctx.stroke();
+
+        var lowerText = workerName(stealFocus.victim) + " keeps lower";
+        var upperText = workerName(stealFocus.thief) + " takes upper";
+        ctx.font = '600 10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+        var lowerW = ctx.measureText(lowerText).width, upperW = ctx.measureText(upperText).width;
+        var dotW = ctx.measureText("  ·  ").width;
+        var captionW = lowerW + dotW + upperW;
+        var captionX = Math.max(px(0) + captionW / 2,
+          Math.min(px(1) - captionW / 2, splitX));
+        var captionStart = captionX - captionW / 2;
+        ctx.fillStyle = pal.paper;
+        ctx.fillRect(captionStart - 5, underlineY + 5, captionW + 10, 16);
+        ctx.fillStyle = victimCol; ctx.textAlign = "left";
+        ctx.fillText(lowerText, captionStart, underlineY + 17);
+        ctx.fillStyle = pal.signal;
+        ctx.fillText("  ·  ", captionStart + lowerW, underlineY + 17);
+        ctx.fillStyle = thiefCol; ctx.textAlign = "left";
+        ctx.fillText(upperText, captionStart + lowerW + dotW, underlineY + 17);
+      }
     }
 
     /* split flashes */
     for (i = flashes.length - 1; i >= 0; i--) {
       var fl = flashes[i];
-      fl.t++;
+      if (holdFrames === 0) fl.t++;
       if (fl.t > 26) { flashes.splice(i, 1); continue; }
       var a = 1 - fl.t / 26;
       ctx.globalAlpha = a;
       ctx.strokeStyle = fl.ok ? pal.signal : pal.alert;
-      ctx.lineWidth = fl.ok ? 2 : 1.2;
+      ctx.lineWidth = fl.ok && fl.kind === "thief" ? 2 : 1.2;
+      if (fl.kind === "owner") ctx.setLineDash([3, 2]);
       ctx.beginPath();
       ctx.moveTo(px(fl.x), bandTop + 4);
       ctx.lineTo(px(fl.x), bandTop + 12 + bandH + 6);
       ctx.stroke();
-      if (fl.ok) {
-        ctx.fillStyle = pal.signal;
+      ctx.setLineDash([]);
+      if (fl.ok && fl.kind === "owner") {
         ctx.beginPath();
         ctx.moveTo(px(fl.x), bandTop + 2); ctx.lineTo(px(fl.x) - 4, bandTop - 5);
-        ctx.lineTo(px(fl.x) + 4, bandTop - 5); ctx.closePath(); ctx.fill();
+        ctx.lineTo(px(fl.x) + 4, bandTop - 5); ctx.closePath();
+        ctx.strokeStyle = pal.signal; ctx.lineWidth = 1.4; ctx.stroke();
       }
       ctx.globalAlpha = 1;
+    }
+
+    if (slivers > 0) {
+      ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+      ctx.fillStyle = pal.ink3; ctx.textAlign = "right";
+      ctx.fillText(slivers + " range" + (slivers === 1 ? "" : "s") + " too narrow to draw", px(1), bandTop + 12 + bandH + 16);
     }
 
     drawFooter();
@@ -2737,11 +2952,12 @@
       ctx.textAlign = "left"; ctx.fillStyle = pal.ink3;
 
       var items = [
-        ["fill", pal.accent, "listed"],
-        ["bar", pal.ink3, "range finished"],
-        ["rect", pal.ink3, "not yet claimed"],
-        ["tick", pal.signal, "split committed"],
-        ["tick", pal.alert, "probe found nothing"]
+        ["fill", pal.w[0], "listed"],
+        ["bar", pal.ink3, "finished"],
+        ["rect", pal.ink3, "pending range"],
+        ["tick", pal.signal, "thief split"],
+        ["tri", pal.signal, "owner split"],
+        ["tick", pal.alert, "failed probe"]
       ];
       var cx = px(0), right = px(1);
       for (var k = 0; k < items.length; k++) {
@@ -2751,6 +2967,7 @@
         if (it[0] === "fill") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.45; ctx.fillRect(cx, fy - 7, 16, 8); ctx.globalAlpha = 1; }
         else if (it[0] === "bar") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.5; ctx.fillRect(cx, fy - 5, 16, 4); ctx.globalAlpha = 1; }
         else if (it[0] === "rect") { ctx.strokeStyle = it[1]; ctx.lineWidth = 1; ctx.setLineDash([3, 2]); ctx.strokeRect(cx + 0.5, fy - 7.5, 16, 9); ctx.setLineDash([]); }
+        else if (it[0] === "tri") { ctx.strokeStyle = it[1]; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(cx + 8, fy - 9); ctx.lineTo(cx + 3, fy + 1); ctx.lineTo(cx + 13, fy + 1); ctx.closePath(); ctx.stroke(); }
         else { ctx.strokeStyle = it[1]; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx + 7, fy - 9); ctx.lineTo(cx + 7, fy + 1); ctx.stroke(); }
         ctx.fillStyle = pal.ink3;
         ctx.fillText(it[2], cx + 22, fy);
@@ -2769,19 +2986,18 @@
   var elSpl   = document.getElementById("m-splits");
 
   var NOTES = {
-    seed:  "One delimiter=/ probe asks S3 where the directories are.",
-    scan:  "Workers drain their ranges; idle ones steal from the busiest.",
-    floor: "One flat directory has no structure to split on — it drains alone.",
+    seed:  "This model uses one delimiter=/ probe to find structural boundaries.",
+    scan:  "A badge marks each busy worker. Idle workers have no badge until they claim or steal.",
     done:  "Complete. The range set tiled the keyspace with no gaps and no overlap."
   };
-  var LABELS = { seed: "Seeding", scan: "Scanning", floor: "Serial floor", done: "Complete" };
+  var LABELS = { seed: "Seeding", scan: "Scanning", done: "Complete" };
 
   function fmt(n) { return Math.round(n).toLocaleString("en-US"); }
 
   function readout() {
     elPhase.textContent = LABELS[phase];
     elPhase.setAttribute("data-p", phase);
-    elNote.textContent = NOTES[phase];
+    elNote.textContent = eventNote && tick <= eventUntil ? eventNote : NOTES[phase];
     elKeys.textContent = fmt(keysDone);
     elReqs.textContent = fmt(reqs);
     var live = 0, busy = 0, i;
@@ -2801,6 +3017,11 @@
     if (!running) return;
     if (ts - last < 26) return;
     last = ts;
+    if (holdFrames > 0) {
+      holdFrames--;
+      draw(); readout();
+      return;
+    }
     step(); draw(); readout();
     if (done) { running = false; setBtn(); }
   }
@@ -2819,9 +3040,9 @@
   function boot() {
     readPalette(); resize(); reset();
     if (reduce.matches) {
-      /* render a representative mid-run state rather than animating */
+      /* render a representative handoff state rather than animating */
       startScan();
-      for (var i = 0; i < 240; i++) step();
+      for (var i = 0; i < 34; i++) step();
     } else if ("IntersectionObserver" in window) {
       /* start only when the plate scrolls into view, so a reader who lingers
          on Plate 1 does not arrive at a model that has already finished */
