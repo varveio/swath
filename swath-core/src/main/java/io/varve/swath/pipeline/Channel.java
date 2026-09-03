@@ -13,7 +13,16 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.ToLongFunction;
 
 /**
- * A bounded, single-producer channel of {@link Msg} envelopes.
+ * A bounded, multi-producer, single-consumer channel of {@link Msg} envelopes.
+ *
+ * <p>The work-stealing engine drives {@link #send} from every fetch worker concurrently (thousands
+ * of virtual threads), while exactly one consumer stage drains {@link #receive}. The wakeup
+ * discipline is therefore a <b>relay</b>, not a broadcast: {@link #receive} signals one parked
+ * sender per released envelope, and a sender that is admitted while budget remains signals the
+ * next. A broadcast ({@code signalAll}) per released page would wake every parked sender to
+ * re-contend one lock, and with ~1,000 senders parked that convoy cost the consumer more time per
+ * page than the sink write itself (varveio/swath#206). The 50 ms bounded {@code await} in {@link
+ * #send} stays as the lost-wakeup backstop: a missed relay costs one 50 ms re-check, never a wedge.
  *
  * <p><b>The bound is a <i>weight</i> budget, not a slot count.</b> Each data
  * {@link Item} carries a weight (its entry count for the listing pipeline,
@@ -26,10 +35,11 @@ import java.util.function.ToLongFunction;
  * documented budget {@code cap × max_key_len × #queues} already accounts for that
  * one in-flight page of slack.
  *
- * <p>Backpressure: {@link #send} blocks while over budget. The producer is never
+ * <p>Backpressure: {@link #send} blocks while over budget. A producer is never
  * wedged there: two things wake it — {@link #dropReceiver()} (I8), which makes a
  * blocked {@code send} return {@code false}, or {@code Thread.interrupt()} from
- * {@code Scope.close() → shutdownNow()}.
+ * {@code Scope.close() → shutdownNow()}. Both exits relay the wakeup they consumed
+ * to the next parked sender before leaving.
  */
 public final class Channel<T> {
 
@@ -81,14 +91,24 @@ public final class Channel<T> {
             // Admit while in-flight < cap (the whole item, even if it overshoots).
             // A zero-weight envelope (End/Failure) adds nothing to the budget, so it
             // NEVER blocks — control signals must always get through even when the
-            // data budget is full. Periodic wake re-checks receiverDropped.
-            while (weight > 0 && inFlight >= capacity && !receiverDropped) {
-                notFull.await(50, TimeUnit.MILLISECONDS);
+            // data budget is full. Periodic wake re-checks receiverDropped and is the
+            // lost-wakeup backstop for the relay signalling below.
+            try {
+                while (weight > 0 && inFlight >= capacity && !receiverDropped) {
+                    notFull.await(50, TimeUnit.MILLISECONDS);
+                }
+            } catch (InterruptedException e) {
+                notFull.signal();   // relay: leaving without admitting must not swallow a wakeup
+                throw e;
             }
             if (receiverDropped) {
+                notFull.signal();   // relay: the drop reaches the next parked sender at once
                 return false;
             }
             inFlight += weight;
+            if (inFlight < capacity) {
+                notFull.signal();   // relay: budget remains, so the next parked sender may admit too
+            }
         } finally {
             lock.unlock();
         }
@@ -119,7 +139,7 @@ public final class Channel<T> {
         lock.lock();
         try {
             inFlight -= weight;
-            notFull.signalAll();
+            notFull.signal();   // one waiter; an admitted sender relays onward while budget remains
         } finally {
             lock.unlock();
         }
@@ -134,7 +154,7 @@ public final class Channel<T> {
         lock.lock();
         try {
             receiverDropped = true;
-            notFull.signalAll();   // wake a producer blocked on the budget
+            notFull.signalAll();   // fires once; every parked producer must observe it
         } finally {
             lock.unlock();
         }

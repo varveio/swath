@@ -159,6 +159,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.api.latency.percentile|{op=listObjectsV2,phi=0.5}",
             "GAUGE|swath.api.latency.percentile|{op=listObjectsV2,phi=0.99}",
             "GAUGE|swath.api.latency.percentile|{op=listObjectsV2,phi=0.9}",
+            "GAUGE|swath.channel.receive.latency.percentile|{phi=0.5}",
+            "GAUGE|swath.channel.receive.latency.percentile|{phi=0.99}",
+            "GAUGE|swath.channel.receive.latency.percentile|{phi=0.9}",
             "GAUGE|swath.checkpoint.commit.latency.percentile|{phi=0.5}",
             "GAUGE|swath.checkpoint.commit.latency.percentile|{phi=0.99}",
             "GAUGE|swath.checkpoint.commit.latency.percentile|{phi=0.9}",
@@ -254,6 +257,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.tail_occupancy.wall_share|{pct=5}",
             "GAUGE|swath.workers.active|{}",
             "TIMER|swath.api.latency|{op=listObjectsV2}",
+            "TIMER|swath.channel.receive.latency|{}",
             "TIMER|swath.checkpoint.commit.latency|{}",
             "TIMER|swath.checkpoint.commit.wait|{}",
             "TIMER|swath.checkpoint.queue.wait|{}",
@@ -303,6 +307,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.api.calls{strategy=WORK_STEALING}=3",
             "swath.api.latency{op=listObjectsV2}=1",
             "swath.bytes.estimated{}=90000",
+            "swath.channel.receive.latency{}=1",
             "swath.checkpoint.commit.latency{}=1",
             "swath.checkpoint.commit.wait{}=1",
             "swath.checkpoint.commit_batch_size{}=1",
@@ -411,7 +416,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 215;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 219;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

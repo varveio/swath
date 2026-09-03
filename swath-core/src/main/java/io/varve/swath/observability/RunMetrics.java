@@ -225,6 +225,7 @@ public final class RunMetrics {
     private final ConcurrentMap<String, Counter> outputBytes = new ConcurrentHashMap<>();
     private final Counter outputBrokenPipe;
     private final Timer emitLatency;
+    private final Timer channelReceiveLatency;
     private final Timer runDuration;
     private final AtomicReference<Double> runThroughputKeysPerSec = new AtomicReference<>();
 
@@ -562,6 +563,10 @@ public final class RunMetrics {
         // The consumer stage's own per-page sink-write span (client service cost, see
         // #buildClientCostSummary).
         emitLatency = clientCostSpanTimer("swath.emit.latency").register(registry);
+        // The consumer stage's per-envelope wait on the shared channel (client service cost, see
+        // #buildClientCostSummary): the seam the emit span leaves out, and where a sender convoy
+        // on the channel lock shows up as consumer time (varveio/swath#206).
+        channelReceiveLatency = clientCostSpanTimer("swath.channel.receive.latency").register(registry);
         runDuration = runScopedTimer("swath.run.duration").register(registry);
         Gauge.builder("swath.run.throughput", runThroughputKeysPerSec,
                         r -> r.get() == null ? Double.NaN : r.get())
@@ -1872,6 +1877,21 @@ public final class RunMetrics {
     }
 
     /**
+     * The consumer stage's per-envelope channel-receive span: how long ONE {@code
+     * Channel.receive()} took on the single consumer thread — the time between finishing one
+     * page's {@link #recordEmit emit} and holding the next envelope. It is the complement of {@code
+     * emit} on the consumer's timeline: consumer wall ≈ Σ emit + Σ channel_receive. A genuinely
+     * idle consumer (producers slower than the sink) shows here as long waits with a low page rate;
+     * a consumer that is itself the bottleneck shows here as a per-page cost that does not fall as
+     * the queue fills — the wakeup convoy varveio/swath#206 measured is that second shape. One
+     * observation per envelope, so the count is the page count plus the terminal {@code End}/{@code
+     * Failure}.
+     */
+    public void recordChannelReceive(long nanos) {
+        channelReceiveLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    /**
      * The per-page entries-emitted bump: {@code swath.entries.emitted} plus universal progress
      * (§3.2). Called from exactly ONE of {@link io.varve.swath.output.OutputStage} ("the single
      * output stage" — its own class javadoc), {@link
@@ -2676,6 +2696,8 @@ public final class RunMetrics {
     public static final String CLIENT_COST_SPAN_CHECKPOINT_COMMIT = "checkpoint_commit";
     /** {@code span} name: the consumer stage's per-page sink write. */
     public static final String CLIENT_COST_SPAN_EMIT = "emit";
+    /** {@code span} name: the consumer stage's per-envelope wait to take the next page off the shared channel. */
+    public static final String CLIENT_COST_SPAN_CHANNEL_RECEIVE = "channel_receive";
     /** {@code span} name: the fetch worker's blocked-on-a-full-channel wait handing the page downstream. */
     public static final String CLIENT_COST_SPAN_WRITER_BACKPRESSURE = "writer_backpressure";
     /** {@code span} name: a Parquet writer lane's own encode/write stretch, off the page's critical path. */
@@ -2712,6 +2734,7 @@ public final class RunMetrics {
         addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT, checkpointQueueWait);
         addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_COMMIT, checkpointCommitLatency);
         addClientCostSpan(out, CLIENT_COST_SPAN_EMIT, emitLatency);
+        addClientCostSpan(out, CLIENT_COST_SPAN_CHANNEL_RECEIVE, channelReceiveLatency);
         addClientCostSpan(out, CLIENT_COST_SPAN_WRITER_BACKPRESSURE, queueWait);
         addClientCostSpan(out, CLIENT_COST_SPAN_PARQUET_WRITE, parquetWriteLatency);
         Timer textWrite = textDatasetWriteLatency.get();

@@ -46,6 +46,7 @@ class RunMetricsClientCostSpanTest {
         metrics.recordCheckpointQueueWait(2_000_000L);
         metrics.recordCheckpointCommit(1L, 8);
         metrics.recordEmit(4_000_000L);
+        metrics.recordChannelReceive(6_000_000L);
         metrics.recordQueueWait(metrics.startQueueWaitTimer());
         metrics.recordParquetWrite(5_000_000L);
 
@@ -56,6 +57,7 @@ class RunMetricsClientCostSpanTest {
                 RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT,
                 RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT,
                 RunMetrics.CLIENT_COST_SPAN_EMIT,
+                RunMetrics.CLIENT_COST_SPAN_CHANNEL_RECEIVE,
                 RunMetrics.CLIENT_COST_SPAN_WRITER_BACKPRESSURE,
                 RunMetrics.CLIENT_COST_SPAN_PARQUET_WRITE);
         assertThat(spans.get(RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT).count())

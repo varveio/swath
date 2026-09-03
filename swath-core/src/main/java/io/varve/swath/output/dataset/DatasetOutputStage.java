@@ -7,7 +7,6 @@ package io.varve.swath.output.dataset;
 
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.SwathException;
-import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.output.ListingStatistics;
 import io.varve.swath.output.RowTally;
@@ -52,7 +51,9 @@ public final class DatasetOutputStage implements Pipeline.Consumer<PageBatch> {
     @Override
     public void consume(RunContext ctx, Channel<PageBatch> in) throws SwathException, InterruptedException {
         while (true) {
+            long receiveStartedNs = System.nanoTime();
             Msg<PageBatch> msg = in.receive();
+            ctx.metrics().recordChannelReceive(System.nanoTime() - receiveStartedNs);
             switch (msg) {
                 case Item<PageBatch> item -> {
                     // The per-page emit span (client service cost) -- one nanoTime pair per page
@@ -77,10 +78,9 @@ public final class DatasetOutputStage implements Pipeline.Consumer<PageBatch> {
         }
     }
 
+    /** O(1) per page: the fetch worker tallied the page when it built the batch. */
     private void count(RunContext ctx, PageBatch batch) {
         ctx.metrics().recordEntriesEmitted(batch.entryCount());
-        for (ListEntry e : batch.entries()) {
-            tally.add(e, ctx.metrics());
-        }
+        tally.merge(batch.tally(), ctx.metrics());
     }
 }

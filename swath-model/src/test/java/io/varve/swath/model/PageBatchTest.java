@@ -33,6 +33,8 @@ final class PageBatchTest {
         assertThat(batch.pageSeq()).isEqualTo(3L);
         assertThat(batch.nodeCompleted()).isFalse();
         assertThat(batch.channelWeight()).isEqualTo(2);
+        assertThat(batch.tally()).as("tallied on build, on the producing thread")
+                .isEqualTo(new PageTally(2L, 0L, 0L, 2L));
     }
 
     @Test
@@ -45,6 +47,8 @@ final class PageBatchTest {
         assertThat(batch.entryCount()).isEqualTo(5);
         assertThat(batch.nodeId()).isEqualTo(2L);
         assertThat(batch.pageSeq()).isEqualTo(9L);
+        assertThat(batch.tally()).as("read off the packer's own counts")
+                .isEqualTo(new PageTally(5L, 0L, 0L, 0L));
     }
 
     @Test
@@ -55,6 +59,28 @@ final class PageBatchTest {
         assertThat(completion.completionOnly()).isTrue();
         assertThat(completion.entryCount()).isZero();
         assertThat(completion.channelWeight()).isEqualTo(1);
+        assertThat(completion.tally()).isEqualTo(PageTally.EMPTY);
+    }
+
+    @Test
+    void rejectsAMissingTally() {
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, List.of(obj("a")), null, false, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("tally");
+    }
+
+    @Test
+    void rejectsATallyWhoseRowsDisagreeWithThePayload() {
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, List.of(obj("a")), null, false, PageTally.EMPTY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("tally rows (0)")
+                .hasMessageContaining("entry count (1)");
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, null, new StubPacked(3), false, PageTally.EMPTY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("entry count (3)");
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, List.of(), null, true, new PageTally(1L, 0L, 0L, 0L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("tally rows (1)");
     }
 
     @Test

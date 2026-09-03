@@ -68,7 +68,9 @@ public final class OutputStage implements Pipeline.Consumer<PageBatch> {
         try {
             formatter.writeHeader();
             while (true) {
+                long receiveStartedNs = System.nanoTime();
                 Msg<PageBatch> msg = in.receive();
+                ctx.metrics().recordChannelReceive(System.nanoTime() - receiveStartedNs);
                 switch (msg) {
                     case Item<PageBatch> item -> writeBatch(ctx, item.value());
                     case End<PageBatch> ignored -> {

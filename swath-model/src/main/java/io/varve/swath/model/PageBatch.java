@@ -23,34 +23,53 @@ import java.util.List;
  *       drain thread.</li>
  * </ul>
  * The unused form is {@code null}; {@link #isPacked()} distinguishes them.
+ *
+ * <p><b>Tally-on-build.</b> Every batch carries its {@link PageTally}, computed by the constructor
+ * that built it — on the producing thread (a fetch worker), never on the single consumer stage,
+ * which only merges it. The packed form reads the counts the packer already accumulated. The
+ * canonical constructor rejects a tally whose row count disagrees with the payload (an O(1) check;
+ * byte totals are trusted, since re-walking the entries would undo the single-tally design).
  */
 public record PageBatch(
         long nodeId,
         long pageSeq,
         List<ListEntry> entries,
         PackedPage packed,
-        boolean nodeCompleted) {
+        boolean nodeCompleted,
+        PageTally tally) {
 
     public PageBatch {
         if ((entries == null) == (packed == null)) {
             throw new IllegalArgumentException(
                     "PageBatch must carry exactly one of entries / packed (non-null)");
         }
+        if (tally == null) {
+            throw new IllegalArgumentException("PageBatch must carry its tally (non-null)");
+        }
+        // O(1) guard: every entry is classified into exactly one tally bucket, so the tally's row
+        // count must equal the payload's entry count. This catches a foreign tally (e.g. EMPTY on a
+        // non-empty page) without re-walking the entries on the producing thread.
+        long rows = tally.rows();
+        long count = packed != null ? packed.entryCount() : entries.size();
+        if (rows != count) {
+            throw new IllegalArgumentException(
+                    "PageBatch tally rows (" + rows + ") must equal its entry count (" + count + ")");
+        }
     }
 
-    /** Compatibility constructor for an ordinary, non-terminal batch. */
+    /** Compatibility constructor for an ordinary, non-terminal batch; tallies whichever form is present. */
     public PageBatch(long nodeId, long pageSeq, List<ListEntry> entries, PackedPage packed) {
-        this(nodeId, pageSeq, entries, packed, false);
+        this(nodeId, pageSeq, entries, packed, false, tallyOf(entries, packed));
     }
 
-    /** Raw-entries form (non-{@code --sort} pipelines): {@code packed} is {@code null}. */
+    /** Raw-entries form (non-{@code --sort} pipelines): {@code packed} is {@code null}; tallies {@code entries} here. */
     public PageBatch(long nodeId, long pageSeq, List<ListEntry> entries) {
-        this(nodeId, pageSeq, entries, null, false);
+        this(nodeId, pageSeq, entries, null, false, PageTally.of(entries));
     }
 
-    /** Raw-entries form carrying the producing node's completion signal. */
+    /** Raw-entries form carrying the producing node's completion signal; tallies {@code entries} here. */
     public PageBatch(long nodeId, long pageSeq, List<ListEntry> entries, boolean nodeCompleted) {
-        this(nodeId, pageSeq, entries, null, nodeCompleted);
+        this(nodeId, pageSeq, entries, null, nodeCompleted, PageTally.of(entries));
     }
 
     /** Packed form ({@code --sort} mode): {@code entries} is {@code null}. */
@@ -61,12 +80,19 @@ public record PageBatch(
     /** Packed form carrying the producing node's completion signal. */
     public static PageBatch ofPacked(
             long nodeId, long pageSeq, PackedPage packed, boolean nodeCompleted) {
-        return new PageBatch(nodeId, pageSeq, null, packed, nodeCompleted);
+        return new PageBatch(nodeId, pageSeq, null, packed, nodeCompleted, PageTally.of(packed));
     }
 
     /** Zero-row control batch used when a completed node's terminal page retained no rows. */
     public static PageBatch completion(long nodeId, long pageSeq) {
-        return new PageBatch(nodeId, pageSeq, List.of(), null, true);
+        return new PageBatch(nodeId, pageSeq, List.of(), null, true, PageTally.EMPTY);
+    }
+
+    private static PageTally tallyOf(List<ListEntry> entries, PackedPage packed) {
+        if (entries != null) {
+            return PageTally.of(entries);
+        }
+        return packed != null ? PageTally.of(packed) : PageTally.EMPTY;   // the compact constructor rejects both-null
     }
 
     /** True iff this batch carries a pre-{@link #packed} page (sort mode) rather than raw {@link #entries}. */

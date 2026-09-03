@@ -5,6 +5,24 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+### Fixed
+
+- The listing pipeline's shared channel no longer wakes every parked fetch worker for each page the
+  output stage drains. With 2,048 workers behind a 50,000-entry budget that broadcast cost the single
+  consumer more time per page than the sink write itself and capped billion-object TSV, JSONL,
+  Parquet and `--sort` runs at roughly 2,600 pages/s regardless of writer count; the channel now
+  relays one wakeup per released page and the admitted sender relays onward while budget remains
+  (#206). Backpressure semantics (`--object-listing-queue-size`) are unchanged.
+- Per-page row tallies (objects, common prefixes, delete markers, object bytes) are computed on the
+  fetch worker that built the page and merged by the output stage in constant time, instead of being
+  walked entry by entry on the single consumer thread.
+
+### Added
+
+- `client_cost[]` gains a `channel_receive` span (`swath.channel.receive.latency`): the consumer
+  stage's own wait to take each envelope off the shared channel, the complement of `emit` on the
+  consumer's timeline.
+
 ## 0.3.1 — 2026-09-01
 
 ### Changed

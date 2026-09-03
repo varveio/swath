@@ -115,6 +115,10 @@ to one background writer, called a lane. Read the report's `dataset_writer` bloc
 - If `submit_blocked_ms` rises and `client_cost[].writer_backpressure` follows, output is slowing
   the listing workers. A queue reaching capacity without measurable blocked time is not a
   bottleneck by itself.
+- If `writer_backpressure` is high while `submit_blocked_ms` stays near zero and lanes are mostly
+  idle, the workers are waiting on the consumer stage itself, not on the writers. Read
+  `client_cost[].channel_receive` and `emit` per page: together they are the consumer's whole
+  per-page cost, and its reciprocal is the page rate the run can reach regardless of writer count.
 
 Do not infer writer capacity from an I/O-bound run whose lanes are mostly idle. Validate a writer
 count against the fastest expected listing regime. Sustained submit blocking means output is

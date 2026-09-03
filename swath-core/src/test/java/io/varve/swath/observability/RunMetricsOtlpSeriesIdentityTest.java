@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 146;
+    static final int EXPECTED_OTLP_METER_COUNT = 147;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -201,6 +201,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "GAUGE|swath.tail_occupancy.wall_share|{pct=5}",
             "GAUGE|swath.workers.active|{}",
             "TIMER|swath.api.latency|{op=listObjectsV2}",
+            "TIMER|swath.channel.receive.latency|{}",
             "TIMER|swath.checkpoint.commit.latency|{}",
             "TIMER|swath.checkpoint.commit.wait|{}",
             "TIMER|swath.checkpoint.queue.wait|{}",
@@ -248,6 +249,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
      */
     private static final List<String> EXPECTED_SUMMARY_SERIES = List.of(
             "SUMMARY|swath.api.latency|{op=listObjectsV2}",
+            "SUMMARY|swath.channel.receive.latency|{}",
             "SUMMARY|swath.checkpoint.commit.latency|{}",
             "SUMMARY|swath.checkpoint.commit.wait|{}",
             "SUMMARY|swath.checkpoint.queue.wait|{}",
