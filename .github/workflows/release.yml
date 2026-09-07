@@ -67,10 +67,10 @@ jobs:
           java-version: "25"
 
       # gradle/actions/wrapper-validation@v4
-      - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a
+      - uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb
 
       # gradle/actions/setup-gradle@v4
-      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
         with:
           cache-disabled: true
 
@@ -126,7 +126,7 @@ jobs:
 
       - name: Generate SPDX SBOM from the shipped jar
         # anchore/sbom-action@v0
-        uses: anchore/sbom-action@aa80c8c5bd439a416a62804f2151ab38c671a638
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
         with:
           file: swath-cli/build/libs/swath.jar
           format: spdx-json
@@ -179,7 +179,7 @@ jobs:
           java-version: "25"
 
       # gradle/actions/setup-gradle@v4
-      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
         with:
           cache-disabled: true
 
@@ -221,7 +221,7 @@ jobs:
           java-version: "25"
 
       # gradle/actions/setup-gradle@v4
-      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
         with:
           cache-disabled: true
 
@@ -421,7 +421,7 @@ jobs:
 
       - name: Install cosign
         # sigstore/cosign-installer@v3
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
 
       # SHA256SUMS is signed LAST and deliberately: it is the one file whose integrity
       # transitively covers every other asset, so a consumer who verifies only its
