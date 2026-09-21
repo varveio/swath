@@ -39,13 +39,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Set up JDK 25
-        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c  # v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v4
         with:
           distribution: temurin
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
 
       # Deep tier serially (-PtestMaxParallelForks=1) so probe budgets are asserted without
       # cross-fork CPU contention, exactly as the main-merge deep-tests job runs them.
@@ -114,13 +114,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Set up JDK 25
-        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c  # v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v4
         with:
           distribution: temurin
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
 
       # installDist, not the shadow jar: the install `lib/` directory is the resolved closure
       # with each module still a separately identifiable artifact, which is what the scanner
@@ -135,12 +135,12 @@ jobs:
             swath-replay/build/install/swath-replay/lib
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
       # Builder-native arch only, and no push: this scans the base layer's OS packages, which
       # are the same image for both arches' JRE bases in every way this scan looks at.
       - name: Build the runtime images (builder-native arch)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           load: true
@@ -148,7 +148,7 @@ jobs:
           cache-from: type=gha,scope=swath
 
       - name: Build the replay runtime image (builder-native arch)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           file: Dockerfile.replay
