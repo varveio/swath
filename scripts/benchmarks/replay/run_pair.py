@@ -9,6 +9,7 @@ silently dropping a pair. No timing assertion is made until all 12 pairs finish.
 """
 
 import argparse
+from datetime import datetime
 import glob
 import hashlib
 import json
@@ -50,7 +51,8 @@ def affinity(cpu_set):
 def clean_java_env():
     env = os.environ.copy()
     inherited = {key: env.pop(key) for key in
-                 ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "JAVA_OPTS") if key in env}
+                 ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "JAVA_OPTS",
+                  "SWATH_REPLAY_OPTS") if key in env}
     return env, inherited
 
 
@@ -62,6 +64,21 @@ def fetch_json(url):
 def is_healthy(url):
     with urllib.request.urlopen(url, timeout=2) as response:
         return response.status == 200 and response.read(16).strip() == b"ok"
+
+
+def wait_for_health(server, url, start_timeout):
+    deadline = time.monotonic() + start_timeout
+    while True:
+        if server.poll() is not None:
+            raise RuntimeError(f"server exited with {server.returncode}")
+        try:
+            if is_healthy(url):
+                return
+        except (OSError, ValueError, urllib.error.HTTPError):
+            pass
+        if time.monotonic() >= deadline:
+            raise TimeoutError("server did not become healthy")
+        time.sleep(.2)
 
 
 def meter(snapshot, name, tags=None):
@@ -113,10 +130,78 @@ def heap_bytes(java_opts):
     return int(match.group(1)) * {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[match.group(2).lower()]
 
 
+def gc_log_summary(init_log, gc_log, start_epoch_ms, end_epoch_ms):
+    region = re.search(r"Heap Region Size: (\d+)([KMG])", Path(init_log).read_text())
+    if not region:
+        raise RuntimeError("GC init log omitted G1 heap region size")
+    region_bytes = int(region.group(1)) * {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}[region.group(2)]
+    counts = {name: 0 for name in ("humongous", "evacuation", "metadata", "other")}
+    pause_ms = {name: 0.0 for name in counts}
+    for line in Path(gc_log).read_text().splitlines():
+        if " Pause " not in line or "GC(" not in line:
+            continue
+        stamp = re.match(r"\[([^]]+)\]", line)
+        duration = re.search(r"(\d+(?:\.\d+)?)ms$", line)
+        if not stamp or not duration:
+            continue
+        epoch_ms = datetime.fromisoformat(stamp.group(1)).timestamp() * 1000
+        if not start_epoch_ms <= epoch_ms <= end_epoch_ms:
+            continue
+        cause = ("humongous" if "G1 Humongous Allocation" in line else
+                 "evacuation" if "G1 Evacuation Pause" in line else
+                 "metadata" if "Metadata GC Threshold" in line else "other")
+        counts[cause] += 1
+        pause_ms[cause] += float(duration.group(1))
+    return {"g1_region_bytes": region_bytes, "gc_pause_cause_counts": counts,
+            "gc_pause_cause_ms": {key: round(value, 3) for key, value in pause_ms.items()}}
+
+
 def cpu_ticks(pid):
     # comm may contain spaces and parentheses; everything after its final ')' is fixed-position.
     fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
     return int(fields[11]) + int(fields[12])
+
+
+def thread_cpu_ticks(pid):
+    """Snapshot JVM OS threads; virtual-thread CPU is charged to carrier threads."""
+    result = {}
+    for task in Path(f"/proc/{pid}/task").iterdir():
+        try:
+            fields = (task / "stat").read_text().rsplit(")", 1)[1].split()
+            result[int(task.name)] = {
+                "name": (task / "comm").read_text().strip(),
+                "ticks": int(fields[11]) + int(fields[12])}
+        except (FileNotFoundError, ProcessLookupError):
+            # A short-lived JVM thread can disappear between task listing and its stat read.
+            continue
+    return result
+
+
+def cpu_busy_ticks(cpu_set):
+    """Per-CPU non-idle ticks, including kernel/interrupt work, from one /proc/stat sample."""
+    selected = {}
+    for line in Path("/proc/stat").read_text().splitlines():
+        fields = line.split()
+        if not fields or not fields[0].startswith("cpu") or not fields[0][3:].isdigit():
+            continue
+        cpu = int(fields[0][3:])
+        if cpu in cpu_set:
+            counters = [int(value) for value in fields[1:]]
+            selected[cpu] = sum(counters[index] for index in (0, 1, 2, 5, 6, 7))
+    if set(selected) != set(cpu_set):
+        raise RuntimeError("/proc/stat did not report every reserved CPU")
+    return selected
+
+
+def thread_utilization(before, after, elapsed_seconds):
+    hz = os.sysconf("SC_CLK_TCK")
+    threads = []
+    for tid, later in after.items():
+        ticks_before = before.get(tid, {"ticks": 0})["ticks"]
+        seconds = max(0, later["ticks"] - ticks_before) / hz
+        threads.append({"tid": tid, "name": later["name"], "cpu_seconds": seconds,
+                        "utilization": seconds / elapsed_seconds})
+    return sorted(threads, key=lambda thread: thread["cpu_seconds"], reverse=True)
 
 
 def rss_bytes(pid):
@@ -135,45 +220,57 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
     server_cmd += args.baseline_option if label == "baseline" else args.candidate_option
     env, _ = clean_java_env()
     env["JAVA_HOME"] = args.java_home
-    env["JAVA_OPTS"] = args.server_java_opts
+    prefix = f"{round_number:02d}-{label}"
+    gc_init_log = output_dir / f"{prefix}-gc-init.log"
+    gc_log = output_dir / f"{prefix}-gc.log"
+    env["JAVA_OPTS"] = (args.server_java_opts
+                        + f" -Xlog:gc+init=info:file={gc_init_log}:time,level,tags"
+                        + f" -Xlog:gc=info:file={gc_log}:time,level,tags")
     driver_env = env.copy()
     driver_env.pop("JAVA_OPTS", None)
     log_path = output_dir / f"{round_number:02d}-{label}-server.log"
     receipt = {"round": round_number, "arm": label, "server_command": server_cmd,
+               "server_log": str(log_path),
                "server_cpus": sorted(server_cpus), "client_cpus": sorted(client_cpus),
                "fixture": args.fixture, "fixture_glob": args.fixture_glob,
                "page_size": args.page_size, "clients": args.clients, "warmup_walks": args.warmup,
                "partitioned": args.partitioned, "repetitions": args.repetitions,
                "java_home": args.java_home, "server_java_opts": args.server_java_opts,
+               "resolved_server_java_opts": env["JAVA_OPTS"],
+               "gc_init_log": str(gc_init_log), "gc_log": str(gc_log),
                "fixture_fingerprints": args.fixture_fingerprints, "status": "failed"}
     with log_path.open("wb") as log:
         server = subprocess.Popen(server_cmd, env=env, stdout=log, stderr=subprocess.STDOUT,
                                   preexec_fn=affinity(server_cpus))
         try:
-            deadline = time.monotonic() + args.start_timeout
-            while True:
-                if server.poll() is not None:
-                    raise RuntimeError(f"server exited with {server.returncode}; see {log_path}")
-                try:
-                    if is_healthy(f"http://127.0.0.1:{args.metrics_port}/healthz"):
-                        break
-                except (OSError, ValueError, urllib.error.HTTPError):
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(f"server did not start; see {log_path}")
-                    time.sleep(.2)
+            wait_for_health(server, f"http://127.0.0.1:{args.metrics_port}/healthz", args.start_timeout)
             metrics_url = f"http://127.0.0.1:{args.metrics_port}/metrics"
             receipt["runtime_attestation"] = fetch_json(
                 f"http://127.0.0.1:{args.metrics_port}/runtime-attestation")
             protocol = args.baseline_protocol if label == "baseline" else args.candidate_protocol
+            driver_class = {
+                "flat": "io.varve.swath.replay.bench.ReplayHttpBench",
+                "gcs_narrow": "io.varve.swath.replay.bench.ReplayGcsNarrowBench",
+                "seek": "io.varve.swath.replay.bench.ReplayShapeBench",
+                "delimiter": "io.varve.swath.replay.bench.ReplayShapeBench",
+            }[args.workload]
             command = [f"{args.java_home}/bin/java", "--enable-native-access=ALL-UNNAMED",
                        *shlex.split(args.driver_java_opts),
-                       "-cp", args.classpath, "io.varve.swath.replay.bench.ReplayHttpBench",
+                       "-cp", args.classpath, driver_class,
                        f"http://127.0.0.1:{args.port}", protocol, args.bucket,
                        args.fixture_glob, str(args.clients), str(args.page_size), str(args.warmup)]
             command.append(f"{args.inventory['fixture_count']}:{args.inventory['fixture_digest']}")
             command.append("bracket")
-            if args.partitioned:
+            if args.workload != "flat":
+                mode = ("unchanged" if label == "baseline" else "narrowed") \
+                        if args.workload == "gcs_narrow" else args.workload
+                command += [mode, str(args.repetitions)]
+                if args.workload == "delimiter":
+                    command.append(args.delimiter_prefix)
+            elif args.partitioned:
                 command += ["partitioned", str(args.repetitions)]
+            if args.end_ack:
+                command.append("end_ack")
             with (output_dir / f"{round_number:02d}-{label}-driver.err").open("w") as driver_error:
                 driver = subprocess.Popen(command, env=driver_env, stdout=subprocess.PIPE,
                                           stdin=subprocess.PIPE,
@@ -191,6 +288,8 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                     reader.start()
                     before = after = None
                     cpu_before = cpu_after = client_cpu_before = client_cpu_after = None
+                    client_threads_before = client_threads_after = None
+                    host_busy_before = host_busy_after = None
                     rss_before = rss_after = peak_rss = None
                     output_lines = []
                     run_deadline = time.monotonic() + args.run_timeout
@@ -217,6 +316,8 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                                 validate_metrics(before)
                                 cpu_before = cpu_ticks(server.pid)
                                 client_cpu_before = cpu_ticks(driver.pid)
+                                client_threads_before = thread_cpu_ticks(driver.pid)
+                                host_busy_before = cpu_busy_ticks(server_cpus | client_cpus)
                                 rss_before = rss_bytes(server.pid)
                                 peak_rss = rss_before or 0
                                 driver.stdin.write("\n")
@@ -224,9 +325,14 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                             elif message.get("event") == "MEASURE_END":
                                 cpu_after = cpu_ticks(server.pid)
                                 client_cpu_after = cpu_ticks(driver.pid)
+                                client_threads_after = thread_cpu_ticks(driver.pid)
+                                host_busy_after = cpu_busy_ticks(server_cpus | client_cpus)
                                 rss_after = rss_bytes(server.pid)
                                 after = fetch_json(metrics_url)
                                 validate_metrics(after)
+                                if args.end_ack:
+                                    driver.stdin.write("\n")
+                                    driver.stdin.flush()
                     driver.wait(timeout=10)
                 finally:
                     if driver.poll() is None:
@@ -259,19 +365,64 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
             result = json.loads(next(line for line in reversed(output_lines) if line.lstrip().startswith("{")))
             if result["attempted_requests"] != result["successful_requests"]:
                 raise RuntimeError("unintended refused or failed requests")
-            expected_objects = args.inventory["fixture_count"] * (
-                args.repetitions if args.partitioned else args.clients)
-            if result["objects"] != expected_objects or result["emitted_objects"] < result["objects"]:
+            expected_objects = (args.inventory["fixture_count"] *
+                                (args.repetitions if args.partitioned else args.clients)
+                                if args.workload in ("flat", "gcs_narrow") else
+                                args.clients * args.repetitions if args.workload == "seek" else None)
+            if (expected_objects is not None and result["objects"] != expected_objects
+                    or result["emitted_objects"] < result["objects"]
+                    or args.workload == "delimiter" and result.get("common_prefixes", 0) < 1):
                 raise RuntimeError("completed inventory or emitted-row accounting mismatch")
+            if args.workload in ("flat", "gcs_narrow"):
+                expected_metadata = args.inventory["fixture_count"] * args.repetitions * args.warmup \
+                        * (1 if args.partitioned else args.clients)
+                if (result.get("metadata_profile") != "fixture_name_size_time"
+                        or result.get("warmup_metadata_verified_objects") != expected_metadata):
+                    raise RuntimeError("fixture-backed warmup metadata was not fully verified")
+                if args.workload == "gcs_narrow" and (
+                        result.get("mode") != ("unchanged" if label == "baseline" else "narrowed")
+                        or result.get("overshoot_objects") != result["emitted_objects"] - result["objects"]
+                        or label == "candidate" and result["overshoot_objects"] != 0):
+                    raise RuntimeError("GCS narrowed mode or overshoot accounting mismatch")
+            elif args.workload == "seek":
+                expected_metadata = args.clients * args.repetitions * args.warmup
+                if (result.get("metadata_profile") != "fixture_seek_name_size_time"
+                        or result.get("warmup_metadata_verified_objects") != expected_metadata):
+                    raise RuntimeError("seek warmup metadata was not fully verified")
+            elif args.workload == "delimiter":
+                if (result.get("metadata_profile") != "fixture_delimiter_direct_name_size_time"
+                        or not isinstance(result.get("warmup_metadata_verified_objects"), int)):
+                    raise RuntimeError("delimiter warmup metadata was not fully verified")
             receipt["result"] = result
             receipt["server_cpu_ns_per_object"] = receipt["server_cpu_seconds"] * 1e9 / result["objects"]
+            receipt["server_cpu_ns_per_request"] = receipt["server_cpu_seconds"] * 1e9 / result["requests"]
             elapsed_seconds = result["elapsed_ns"] / 1e9
             receipt["client_cpu_utilization"] = receipt["client_cpu_seconds"] / (elapsed_seconds * len(client_cpus))
             receipt["server_cpu_utilization"] = receipt["server_cpu_seconds"] / (elapsed_seconds * len(server_cpus))
+            hz = os.sysconf("SC_CLK_TCK")
+            server_busy = sum(host_busy_after[cpu] - host_busy_before[cpu] for cpu in server_cpus) / hz
+            client_busy = sum(host_busy_after[cpu] - host_busy_before[cpu] for cpu in client_cpus) / hz
+            receipt["foreign_server_cpu_seconds_upper_bound"] = max(
+                0.0, server_busy - receipt["server_cpu_seconds"])
+            receipt["foreign_client_cpu_seconds_upper_bound"] = max(
+                0.0, client_busy - receipt["client_cpu_seconds"])
+            receipt["foreign_cpu_utilization_upper_bound"] = (
+                receipt["foreign_server_cpu_seconds_upper_bound"]
+                + receipt["foreign_client_cpu_seconds_upper_bound"]) / (
+                    elapsed_seconds * (len(server_cpus) + len(client_cpus)))
+            quality_failure = None
+            if receipt["foreign_cpu_utilization_upper_bound"] > args.max_foreign_cpu_utilization:
+                quality_failure = "host_noisy"
+            driver_threads = thread_utilization(client_threads_before, client_threads_after, elapsed_seconds)
+            receipt["client_max_thread_utilization"] = max(
+                (thread["utilization"] for thread in driver_threads), default=0)
+            receipt["client_thread_cpu_top"] = driver_threads[:16]
+            receipt["client_os_threads_before"] = len(client_threads_before)
+            receipt["client_os_threads_after"] = len(client_threads_after)
             if receipt["client_cpu_utilization"] > args.max_client_utilization:
-                raise RuntimeError("client_limited")
+                quality_failure = quality_failure or "client_limited"
             if elapsed_seconds < args.min_duration:
-                raise RuntimeError("under_duration")
+                quality_failure = quality_failure or "under_duration"
             server_requests = meter(after, "swath.replay.http.requests") - meter(before, "swath.replay.http.requests")
             server_errors = meter(after, "swath.replay.http.errors") - meter(before, "swath.replay.http.errors")
             server_refusals = meter(after, "swath.replay.serving.refused") - meter(before, "swath.replay.serving.refused")
@@ -292,9 +443,23 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
             receipt["backing_reads_per_object"] = backing_reads / result["objects"]
             receipt["backing_rows"] = backing_rows
             receipt["backing_rows_per_object"] = backing_rows / result["objects"]
+            if args.workload == "delimiter":
+                decoded = (meter_field(after, "swath.replay.delimiter.skipscan.decoded_key_rows", "total")
+                           - meter_field(before, "swath.replay.delimiter.skipscan.decoded_key_rows", "total"))
+                reseeks = (meter_field(after, "swath.replay.delimiter.skipscan.page_reseeks", "total")
+                           - meter_field(before, "swath.replay.delimiter.skipscan.page_reseeks", "total"))
+                prefixes = result["common_prefixes"]
+                receipt["decoded_key_rows_per_prefix"] = decoded / prefixes
+                receipt["page_reseeks_per_prefix"] = reseeks / prefixes
             receipt["server_cpu_ns_per_encoded_byte"] = receipt["server_cpu_seconds"] * 1e9 / result["bytes"]
             receipt["gc_pause_ms"] = (meter_field(after, "jvm.gc.pause", "sum_ms")
                                       - meter_field(before, "jvm.gc.pause", "sum_ms"))
+            promoted = (meter(after, "jvm.gc.memory.promoted")
+                        - meter(before, "jvm.gc.memory.promoted"))
+            receipt["gc_promoted_bytes_estimate"] = promoted
+            receipt["gc_promoted_bytes_per_object_estimate"] = promoted / result["objects"]
+            receipt.update(gc_log_summary(gc_init_log, gc_log,
+                                          before["sampled_at_epoch_ms"], after["sampled_at_epoch_ms"]))
             receipt["heap_used_bytes_after"] = meter(after, "jvm.memory.used", {"area": "heap"})
             if after["schema_version"] == 2:
                 receipt["serving_configuration_after"] = after["serving"]
@@ -303,6 +468,8 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                 allocated / result["objects"] if allocated > 0 else None)
             receipt["server_direct_bytes_before"] = meter(before, "jvm.buffer.memory.used", {"id": "direct"})
             receipt["server_direct_bytes_after"] = meter(after, "jvm.buffer.memory.used", {"id": "direct"})
+            if quality_failure is not None:
+                raise RuntimeError(quality_failure)
             receipt["status"] = "passed"
         except Exception as exc:
             receipt["error"] = str(exc)
@@ -319,9 +486,11 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
     return receipt
 
 
-def summarize(receipts, metric, threshold, direction):
+def summarize(receipts, metric, threshold, direction, rounds=12):
     pairs = []
-    for index in range(1, 13):
+    if rounds not in (6, 12):
+        raise ValueError("only predeclared six-pair A/A and twelve-pair gates are supported")
+    for index in range(1, rounds + 1):
         round_receipts = [r for r in receipts if r["round"] == index]
         if len(round_receipts) != 2:
             return {"metric": metric, "status": "incomplete", "round": index}
@@ -341,11 +510,14 @@ def summarize(receipts, metric, threshold, direction):
             pairs.append(candidate / base)
     logs = [math.log(ratio) for ratio in pairs]
     mean = statistics.mean(logs)
-    half = 2.201 * statistics.stdev(logs) / math.sqrt(12)
+    half = (2.571 if rounds == 6 else 2.201) * statistics.stdev(logs) / math.sqrt(rounds)
     interval = [math.exp(mean - half), math.exp(mean + half)]
     passed = interval[0] >= threshold if direction == "min" else interval[1] <= threshold
     return {"metric": metric, "pairs": pairs, "geometric_mean": math.exp(mean),
-            "ci95": interval, "threshold": threshold, "direction": direction,
+            "ci95": interval, "ci95_half_width_log": half,
+            "sample_log_ratio_sd": statistics.stdev(logs),
+            "projected_12_pair_ci_half_width_log": 2.201 * statistics.stdev(logs) / math.sqrt(12),
+            "threshold": threshold, "direction": direction,
             "status": "passed" if passed else "inconclusive_or_failed"}
 
 
@@ -364,6 +536,8 @@ def main():
     parser.add_argument("--bucket", default="bench")
     parser.add_argument("--baseline-protocol", choices=["s3", "gcs", "azure"], default="s3")
     parser.add_argument("--candidate-protocol", choices=["s3", "gcs", "azure"], default="s3")
+    parser.add_argument("--workload", choices=["flat", "seek", "delimiter", "gcs_narrow"], default="flat")
+    parser.add_argument("--delimiter-prefix")
     parser.add_argument("--mode", default="sorted")
     parser.add_argument("--clients", type=int, required=True)
     parser.add_argument("--page-size", type=int, default=1000)
@@ -373,6 +547,8 @@ def main():
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--pilot", action="store_true",
                         help="one baseline characterization arm to freeze repetitions before a 12-pair gate")
+    parser.add_argument("--aa-control", action="store_true",
+                        help="predeclared six-pair identical-binary noise control, not a release gate")
     parser.add_argument("--pilot-target-duration", type=float, default=50,
                         help="conservative measured seconds for the fixed repetitions suggested by a pilot")
     parser.add_argument("--connections", type=int, default=16)
@@ -386,6 +562,8 @@ def main():
                         help="identical explicit heap/direct/JDK options for both arms")
     parser.add_argument("--driver-java-opts", default="-Xms512m -Xmx2g -Djdk.nio.maxCachedBufferSize=262144",
                         help="explicit JVM options for the isolated Java HTTP driver")
+    parser.add_argument("--end-ack", action="store_true",
+                        help="hold Java client threads after MEASURE_END until per-thread CPU snapshot completes")
     parser.add_argument("--window-rows", type=int, default=12500)
     parser.add_argument("--max-windows", type=int, default=96)
     parser.add_argument("--require-oversized-fixture", action="store_true")
@@ -398,7 +576,11 @@ def main():
     parser.add_argument("--throughput-floor", type=float)
     parser.add_argument("--cpu-ceiling", type=float)
     parser.add_argument("--p99-ceiling", type=float)
+    parser.add_argument("--decoded-work-ceiling", type=float)
+    parser.add_argument("--backing-work-ceiling", type=float)
     parser.add_argument("--max-client-utilization", type=float, default=.70)
+    parser.add_argument("--max-foreign-cpu-utilization", type=float, default=.02,
+                        help="conservative upper bound for other processes/kernel work on reserved CPUs")
     parser.add_argument("--min-duration", type=float, default=30)
     args = parser.parse_args()
     inventory_env, inherited_java_options = clean_java_env()
@@ -407,10 +589,22 @@ def main():
         parser.error("at least one full warmup walk is required to compute the inventory oracle")
     if args.repetitions < 1:
         parser.error("repetitions must be positive and fixed before round 1")
-    if not args.partitioned and args.repetitions != 1:
-        parser.error("repetitions require --partitioned")
+    if args.workload == "flat" and not args.partitioned and args.repetitions != 1:
+        parser.error("flat repetitions require --partitioned")
+    if args.workload == "seek" and (args.partitioned or args.page_size != 1 or args.delimiter_prefix):
+        parser.error("seek workload requires page size 1 and no partition/delimiter options")
+    if args.workload == "delimiter" and (args.partitioned or not args.delimiter_prefix):
+        parser.error("delimiter workload requires --delimiter-prefix and no partitioning")
+    if args.workload == "flat" and args.delimiter_prefix:
+        parser.error("flat workload does not use --delimiter-prefix")
+    if args.workload == "gcs_narrow" and (not args.partitioned or args.delimiter_prefix
+            or args.baseline_protocol != "gcs" or args.candidate_protocol != "gcs"
+            or args.page_size > 1000):
+        parser.error("GCS narrowed comparison requires partitioning, GCS on both arms and <=1k pages")
     if args.pilot:
         args.min_duration = 0
+    if args.pilot and args.aa_control:
+        parser.error("pilot and A/A control are separate modes")
     server_cpus, client_cpus = cpus(args.server_cpus), cpus(args.client_cpus)
     available = os.sched_getaffinity(0)
     if not server_cpus or not client_cpus or server_cpus & client_cpus:
@@ -419,11 +613,16 @@ def main():
         parser.error(f"CPU sets must be within available set {sorted(available)}")
     same_protocol = args.baseline_protocol == args.candidate_protocol
     if args.throughput_floor is None:
-        args.throughput_floor = .95 if same_protocol else .90
+        args.throughput_floor = .95 if args.workload == "flat" and same_protocol else .90
     if args.cpu_ceiling is None:
-        args.cpu_ceiling = 1.05 if same_protocol else 1.20
-    if args.p99_ceiling is None and same_protocol:
+        args.cpu_ceiling = (1.05 if same_protocol else 1.20) if args.workload == "flat" \
+                else 1.20 if args.workload == "seek" else None
+    if args.p99_ceiling is None and same_protocol and args.workload == "flat":
         args.p99_ceiling = 1.10
+    if args.decoded_work_ceiling is None and args.workload == "delimiter":
+        args.decoded_work_ceiling = 1.10
+    if args.backing_work_ceiling is None and args.workload == "gcs_narrow":
+        args.backing_work_ceiling = 1.10
     fixture_files = sorted(glob.glob(args.fixture_glob))
     if not fixture_files:
         parser.error("fixture glob matched no files")
@@ -458,10 +657,16 @@ def main():
     if not driver_fingerprints or not any(item["path"].endswith(".jar") for item in baseline_fingerprints) \
             or not any(item["path"].endswith(".jar") for item in candidate_fingerprints):
         parser.error("benchmark classes and both runnable distributions must be nonempty")
+    if args.aa_control and (baseline_fingerprints != candidate_fingerprints
+                            or args.baseline_option != args.candidate_option
+                            or args.baseline_protocol != args.candidate_protocol):
+        parser.error("A/A control requires identical binary fingerprints, server options and protocol")
     git_status = subprocess.run(["git", "status", "--porcelain=v1"], text=True,
                                 capture_output=True, check=True).stdout.splitlines()
-    plan = {"rounds": 0 if args.pilot else 12,
-            "purpose": "pilot_characterization" if args.pilot else "fixed_paired_gate",
+    rounds = 6 if args.aa_control else 12
+    plan = {"rounds": 0 if args.pilot else rounds,
+            "purpose": "pilot_characterization" if args.pilot else
+                    "six_pair_aa_noise_control" if args.aa_control else "fixed_paired_gate",
             "args": {key: str(value) if isinstance(value, Path) else value
                                   for key, value in vars(args).items() if key not in ("fixture_fingerprints", "inventory")},
             "fixture_fingerprints": args.fixture_fingerprints,
@@ -483,7 +688,7 @@ def main():
     if args.pilot:
         pilot = run_arm(args, "baseline", 0, args.output, server_cpus, client_cpus)
         pilot["purpose"] = "pilot_characterization_not_gate"
-        if pilot["status"] == "passed" and args.partitioned:
+        if pilot["status"] == "passed" and (args.partitioned or args.workload != "flat"):
             seconds = pilot["result"]["elapsed_ns"] / 1e9
             pilot["suggested_fixed_repetitions"] = suggest_repetitions(
                 args.repetitions, args.pilot_target_duration, seconds)
@@ -497,7 +702,7 @@ def main():
     receipt_file = args.output / "rounds.jsonl"
     aborted = False
     with receipt_file.open("x") as out:
-        for round_number in range(1, 13):
+        for round_number in range(1, rounds + 1):
             order = ("baseline", "candidate") if round_number % 2 else ("candidate", "baseline")
             for arm in order:
                 receipt = run_arm(args, arm, round_number, args.output, server_cpus, client_cpus)
@@ -508,20 +713,48 @@ def main():
                 if receipt["status"] != "passed":
                     print(f"failure receipt: {receipt_file}", file=sys.stderr)
                     aborted = True
-                    break
-            if aborted:
+                    if not args.aa_control:
+                        break
+            if aborted and not args.aa_control:
                 break
-    summary = {"rounds": 12, "order": "alternating baseline/candidate",
-               "objects_per_s": summarize(receipts, "objects_per_s", args.throughput_floor, "min"),
-               "server_cpu_ns_per_object": summarize(receipts, "server_cpu_ns_per_object", args.cpu_ceiling, "max")}
+    throughput_metric = "objects_per_s" if args.workload in ("flat", "gcs_narrow") else "requests_per_s"
+    summary = {"rounds": rounds, "order": "alternating baseline/candidate", "workload": args.workload,
+               "purpose": "aa_control" if args.aa_control else "fixed_paired_gate",
+               throughput_metric: summarize(receipts, throughput_metric, args.throughput_floor, "min", rounds)}
+    gated_metrics = [throughput_metric]
+    if args.cpu_ceiling is not None:
+        cpu_metric = "server_cpu_ns_per_request" if args.workload == "seek" else "server_cpu_ns_per_object"
+        summary[cpu_metric] = summarize(receipts, cpu_metric, args.cpu_ceiling, "max", rounds)
+        gated_metrics.append(cpu_metric)
+    if args.workload == "delimiter":
+        for metric in ("decoded_key_rows_per_prefix", "page_reseeks_per_prefix"):
+            summary[metric] = summarize(receipts, metric, args.decoded_work_ceiling, "max", rounds)
+            gated_metrics.append(metric)
+    if args.workload == "gcs_narrow":
+        metric = "backing_rows_per_object"
+        summary[metric] = summarize(receipts, metric, args.backing_work_ceiling, "max", rounds)
+        gated_metrics.append(metric)
     if args.p99_ceiling is not None:
-        summary["p99_ns"] = summarize(receipts, "p99_ns", args.p99_ceiling, "max")
+        summary["p99_ns"] = summarize(receipts, "p99_ns", args.p99_ceiling, "max", rounds)
     else:
         summary["p99_ns"] = {"status": "characterization", "reason": "no cross-protocol p99 budget"}
-    summary["status"] = ("passed" if all(summary[key]["status"] == "passed" for key in
-                                         ("objects_per_s", "server_cpu_ns_per_object"))
-                         and summary["p99_ns"]["status"] in ("passed", "characterization")
-                         else "inconclusive_or_failed")
+    if args.aa_control:
+        control_metrics = gated_metrics + (["p99_ns"] if summary["p99_ns"]["status"] != "characterization" else [])
+        if all("ci95" in summary[key] for key in control_metrics):
+            summary["aa_ci_contains_one"] = {key: summary[key]["ci95"][0] <= 1 <= summary[key]["ci95"][1]
+                                              for key in control_metrics}
+            summary["projected_12_pair_ci_resolution"] = {
+                key: [math.exp(-summary[key]["projected_12_pair_ci_half_width_log"]),
+                      math.exp(summary[key]["projected_12_pair_ci_half_width_log"])]
+                for key in control_metrics}
+            summary["status"] = ("passed" if all(summary["aa_ci_contains_one"].values())
+                                 else "biased_or_noisy")
+        else:
+            summary["status"] = "incomplete"
+    else:
+        summary["status"] = ("passed" if all(summary[key]["status"] == "passed" for key in gated_metrics)
+                             and summary["p99_ns"]["status"] in ("passed", "characterization")
+                             else "inconclusive_or_failed")
     summary["fixture_unchanged"] = fingerprints(args.fixture) == args.fixture_fingerprints
     if not summary["fixture_unchanged"]:
         summary["status"] = "fixture_changed"

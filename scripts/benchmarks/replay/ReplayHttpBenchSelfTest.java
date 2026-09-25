@@ -9,6 +9,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayInputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -30,6 +31,8 @@ public final class ReplayHttpBenchSelfTest {
         refusesMalformedXmlAndWrongInventory();
         rejectsHttpFailuresAndTokenLoops();
         timesOutAStalledBody();
+        azureMarkerRetainsEncodedStartFrom();
+        percentDecodedNamesMatchIndependentByteOracle();
         System.out.println("ReplayHttpBenchSelfTest passed");
     }
 
@@ -164,6 +167,52 @@ public final class ReplayHttpBenchSelfTest {
                 future.cancel(true);
             }
         } finally { stalled.stop(0); }
+    }
+
+    private static void azureMarkerRetainsEncodedStartFrom() throws Exception {
+        String first = "a+b %/é";
+        String marker = "opaque+/%";
+        ReplayHttpBench.Partition partition = new ReplayHttpBench.Partition(
+                raw(first), null, null, 1, "ignored");
+        URI uri = ReplayHttpBench.requestUri(URI.create("http://127.0.0.1:19090"),
+                "azure", "bucket", 1, marker, partition);
+        String query = uri.getRawQuery();
+        require(query.contains("startFrom=") && query.contains("marker="),
+                "Azure continuation retains both startFrom and marker");
+        java.util.Map<String, String> decoded = new java.util.HashMap<>();
+        for (String part : query.split("&")) {
+            String[] pair = part.split("=", 2);
+            decoded.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8));
+        }
+        require(first.equals(decoded.get("startFrom")), "Azure startFrom UTF-8/plus/percent round-trip");
+        require(marker.equals(decoded.get("marker")), "Azure marker plus/percent round-trip");
+        require(query.contains("%2B") && query.contains("%25") && query.contains("%2F"),
+                "Azure query uses explicit percent encoding");
+    }
+
+    private static void percentDecodedNamesMatchIndependentByteOracle() throws Exception {
+        require(Arrays.equals(ReplayHttpBench.percentDecode("a+b%25%2Fc"), raw("a+b%/c")),
+                "literal plus and escaped percent/slash keep byte identity");
+        require(Arrays.equals(ReplayHttpBench.percentDecode("%00%7f%80%FF+"),
+                new byte[] {0, 0x7f, (byte) 0x80, (byte) 0xff, '+'}),
+                "percent triplets remain raw bytes, including zero and non-UTF8 octets");
+        require(Arrays.equals(ReplayHttpBench.percentDecode("é/💩"), raw("é/💩")),
+                "literal BMP and supplementary Unicode use UTF-8 bytes");
+        require(!Arrays.equals(ReplayHttpBench.percentDecode("é"),
+                ReplayHttpBench.percentDecode("e\u0301")), "normalization is not changed");
+        for (String malformed : new String[] {"%", "%0", "%GG", "%ＦＦ", "x\uD800", "x\uDC00"}) {
+            expectFailure("malformed percent/UTF-16: " + malformed,
+                    () -> ReplayHttpBench.percentDecode(malformed));
+        }
+        MessageDigest digest = sha256();
+        ReplayHttpBench.Page page = ReplayHttpBench.parseXml(bytes("""
+                <ListBucketResult><KeyCount>1</KeyCount><Contents><Key>a%2Bb%25%2F%C3%A9</Key></Contents>
+                <IsTruncated>false</IsTruncated></ListBucketResult>
+                """), "s3", digest, null, null);
+        require(page.count() == 1 && Arrays.equals(page.lastKey(), raw("a+b%/é")),
+                "S3 URL-encoded XML key matches independent UTF-8 byte oracle");
+        require(HexFormat.of().formatHex(digest.digest()).equals(digestOf("a+b%/é")),
+                "S3 page digest matches independent length-prefixed key digest");
     }
 
     private static ReplayHttpBench.Walk walk(HttpServer server, Duration deadline) throws Exception {

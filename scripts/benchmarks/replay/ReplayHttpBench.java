@@ -27,6 +27,9 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.Properties;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
@@ -52,6 +55,8 @@ public final class ReplayHttpBench {
             .disable(StreamReadFeature.AUTO_CLOSE_SOURCE).build();
     private static final AtomicLong ATTEMPTED = new AtomicLong();
     private static final AtomicLong SUCCEEDED = new AtomicLong();
+    private static final AtomicLong OUTSTANDING = new AtomicLong();
+    private static final AtomicLong PEAK_OUTSTANDING = new AtomicLong();
     private static final Duration BODY_DEADLINE = Duration.ofSeconds(30);
 
     private ReplayHttpBench() {}
@@ -73,9 +78,11 @@ public final class ReplayHttpBench {
             System.out.println(out.append("]}").toString());
             return;
         }
-        if (argv.length < 7 || argv.length > 11 || argv.length >= 9 && !"bracket".equals(argv[8])
-                || argv.length == 11 && !"partitioned".equals(argv[9])) {
-            System.err.println("usage: ReplayHttpBench ENDPOINT s3|gcs|azure BUCKET FIXTURE_GLOB CLIENTS PAGE_SIZE WARMUP_WALKS [COUNT:DIGEST [bracket [partitioned REPS]]]");
+        boolean endAck = argv.length > 0 && "end_ack".equals(argv[argv.length - 1]);
+        int fields = argv.length - (endAck ? 1 : 0);
+        if (fields < 7 || fields > 11 || fields >= 9 && !"bracket".equals(argv[8])
+                || fields == 11 && !"partitioned".equals(argv[9])) {
+            System.err.println("usage: ReplayHttpBench ENDPOINT s3|gcs|azure BUCKET FIXTURE_GLOB CLIENTS PAGE_SIZE WARMUP_WALKS [COUNT:DIGEST [bracket [partitioned REPS] [end_ack]]]");
             System.exit(2);
         }
         URI endpoint = URI.create(argv[0]);
@@ -86,19 +93,23 @@ public final class ReplayHttpBench {
         int clients = Integer.parseInt(argv[4]);
         int pageSize = Integer.parseInt(argv[5]);
         int warmup = Integer.parseInt(argv[6]);
-        boolean partitioned = argv.length == 11;
+        boolean partitioned = fields == 11;
         int repetitions = partitioned ? Integer.parseInt(argv[10]) : 1;
         if (clients < 1 || clients > 512 || pageSize < 1 || pageSize > 5000 || warmup < 0 || warmup > 10)
             throw new IllegalArgumentException("clients/page size/warmup out of range");
         if (repetitions < 1) throw new IllegalArgumentException("repetitions must be positive");
 
         Inventory expected = partitioned ? fixtureInventory(fixture, clients)
-                : argv.length >= 8 ? parseInventory(argv[7]) : fixtureInventory(fixture, 0);
-        if (partitioned && argv.length >= 8) {
+                : fields >= 8 ? parseInventory(argv[7]) : fixtureInventory(fixture, 0);
+        if (partitioned && fields >= 8) {
             Inventory supplied = parseInventory(argv[7]);
             if (supplied.count() != expected.count() || !supplied.digest().equals(expected.digest()))
                 throw new IllegalStateException("fixture changed since declared inventory");
         }
+        FixtureMetadataOracle.Plan metadataPlan = warmup == 0 ? null
+                : FixtureMetadataOracle.plan(fixture, protocol, partitioned ? clients : 0);
+        if (metadataPlan != null && metadataPlan.total().count() != expected.count())
+            throw new IllegalStateException("fixture metadata oracle count differs from key inventory");
         long start;
         long elapsed;
         List<Walk> walks = new ArrayList<>();
@@ -107,20 +118,28 @@ public final class ReplayHttpBench {
         var executor = Executors.newVirtualThreadPerTaskExecutor();
         ScheduledThreadPoolExecutor watchdog = new ScheduledThreadPoolExecutor(1);
         watchdog.setRemoveOnCancelPolicy(true);
+        long warmupAttempted;
+        long warmupSuccessful;
         try {
             for (int w = 0; w < warmup; w++)
                 runBatch(client, watchdog, executor, endpoint, protocol, bucket, pageSize, clients, expected,
-                        partitioned, repetitions);
+                        partitioned, repetitions, metadataPlan);
+            warmupAttempted = ATTEMPTED.get();
+            warmupSuccessful = SUCCEEDED.get();
+            if (warmupAttempted != warmupSuccessful)
+                throw new IllegalStateException("warmup request outcomes disagree");
             ATTEMPTED.set(0);
             SUCCEEDED.set(0);
+            if (OUTSTANDING.get() != 0) throw new IllegalStateException("warmup left an outstanding request");
+            PEAK_OUTSTANDING.set(0);
             System.out.println("{\"event\":\"MEASURE_START\"}");
             System.out.flush();
-            if (argv.length >= 9 && System.in.read() < 0)
+            if (fields >= 9 && System.in.read() < 0)
                 throw new IllegalStateException("measurement controller did not acknowledge start");
             start = System.nanoTime();
             try {
                 walks.addAll(runBatch(client, watchdog, executor, endpoint, protocol, bucket, pageSize, clients,
-                        expected, partitioned, repetitions));
+                        expected, partitioned, repetitions, null));
             } catch (Exception failure) {
                 executor.shutdownNow();
                 client.shutdownNow();
@@ -131,39 +150,54 @@ public final class ReplayHttpBench {
             elapsed = System.nanoTime() - start;
             System.out.println("{\"event\":\"MEASURE_END\"}");
             System.out.flush();
+            if (endAck && System.in.read() < 0)
+                throw new IllegalStateException("measurement controller did not acknowledge end");
         } finally {
             watchdog.shutdownNow();
             executor.shutdownNow();
             client.shutdownNow();
         }
-        long objects = 0, emitted = 0, requests = 0, bytes = 0;
+        long objects = 0, emitted = 0, requests = 0, bytes = 0, maxBody = 0, activeWallNanos = 0;
         LatencyHistogram latencies = new LatencyHistogram();
         for (Walk walk : walks) {
             objects += walk.count();
             emitted += walk.emitted();
             requests += walk.requests();
             bytes += walk.bytes();
+            maxBody = Math.max(maxBody, walk.maxResponseBytes());
+            activeWallNanos += walk.activeWallNanos();
             latencies.addAll(walk.latencies());
         }
         System.out.printf(Locale.ROOT,
                 "{\"protocol\":\"%s\",\"clients\":%d,\"page_size\":%d,\"fixture_count\":%d,"
                 + "\"fixture_digest\":\"%s\",\"partitioned\":%s,\"repetitions\":%d,"
                 + "\"objects\":%d,\"emitted_objects\":%d,\"requests\":%d,\"bytes\":%d,"
+                + "\"max_response_bytes\":%d,"
                 + "\"elapsed_ns\":%d,\"objects_per_s\":%.3f,\"requests_per_s\":%.3f,"
                 + "\"bytes_per_s\":%.3f,\"p50_ns\":%d,\"p95_ns\":%d,\"p99_ns\":%d,"
                 + "\"latency_histogram_relative_error_max\":0.016,"
-                + "\"attempted_requests\":%d,\"successful_requests\":%d}%n",
+                + "\"client_active_wall_ns\":%d,\"tail_dilution_ratio\":%.6f,"
+                + "\"metadata_profile\":\"%s\",\"warmup_metadata_verified_objects\":%d,"
+                + "\"warmup_attempted_requests\":%d,\"warmup_successful_requests\":%d,"
+                + "\"attempted_requests\":%d,\"successful_requests\":%d,"
+                + "\"peak_outstanding_requests\":%d}%n",
                 protocol, clients, pageSize, expected.count(), expected.digest(), partitioned, repetitions,
-                objects, emitted, requests, bytes,
+                objects, emitted, requests, bytes, maxBody,
                 elapsed, objects * 1e9 / elapsed, requests * 1e9 / elapsed, bytes * 1e9 / elapsed,
                 latencies.percentile(.50), latencies.percentile(.95), latencies.percentile(.99),
-                ATTEMPTED.get(), SUCCEEDED.get());
+                activeWallNanos, (double) activeWallNanos / (clients * elapsed),
+                metadataPlan == null ? "none" : "fixture_name_size_time",
+                metadataPlan == null ? 0 : expected.count() * repetitions * warmup
+                        * (partitioned ? 1 : clients),
+                warmupAttempted, warmupSuccessful,
+                ATTEMPTED.get(), SUCCEEDED.get(), PEAK_OUTSTANDING.get());
     }
 
     private static List<Walk> runBatch(HttpClient client, ScheduledThreadPoolExecutor watchdog,
                                        java.util.concurrent.ExecutorService executor, URI endpoint,
                                        String protocol, String bucket, int pageSize, int clients, Inventory expected,
-                                       boolean partitioned, int repetitions) throws Exception {
+                                       boolean partitioned, int repetitions,
+                                       FixtureMetadataOracle.Plan metadataPlan) throws Exception {
         if (partitioned && expected.partitions().size() != clients)
             throw new IllegalStateException("partition plan does not match client count");
         ExecutorCompletionService<Walk> completion = new ExecutorCompletionService<>(executor);
@@ -171,15 +205,25 @@ public final class ReplayHttpBench {
         try {
             for (int i = 0; i < clients; i++) {
                 final Partition partition = partitioned ? expected.partitions().get(i) : null;
+                final FixtureMetadataOracle.Digest expectedMetadata = metadataPlan == null ? null
+                        : partitioned ? metadataPlan.partitions().get(i) : metadataPlan.total();
                 futures.add(completion.submit((Callable<Walk>) () -> {
+                    long activeStart = System.nanoTime();
                     List<Walk> repeated = new ArrayList<>(repetitions);
                     for (int repetition = 0; repetition < repetitions; repetition++) {
+                        MetadataVerifier metadata = expectedMetadata == null ? null : new MetadataVerifier();
                         Walk result = walk(client, watchdog, endpoint, protocol, bucket, pageSize,
-                                partition == null ? expected.count() : partition.count(), partition, BODY_DEADLINE);
+                                partition == null ? expected.count() : partition.count(), partition, BODY_DEADLINE,
+                                metadata);
                         check(partition == null ? expected : partition.inventory(), result);
+                        if (metadata != null && !metadata.finish().equals(expectedMetadata))
+                            throw new IllegalStateException("fixture-backed metadata inventory mismatch");
                         repeated.add(result);
                     }
-                    return combine(repeated);
+                    Walk combined = combine(repeated);
+                    return new Walk(combined.count(), combined.emitted(), combined.requests(),
+                            combined.bytes(), combined.maxResponseBytes(), combined.digest(),
+                            combined.latencies(), System.nanoTime() - activeStart);
                 }));
             }
             List<Walk> walks = new ArrayList<>(clients);
@@ -192,16 +236,17 @@ public final class ReplayHttpBench {
     }
 
     private static Walk combine(List<Walk> walks) {
-        long count = 0, emitted = 0, requests = 0, bytes = 0;
+        long count = 0, emitted = 0, requests = 0, bytes = 0, maxBody = 0;
         LatencyHistogram latencies = new LatencyHistogram();
         for (Walk walk : walks) {
             count += walk.count();
             emitted += walk.emitted();
             requests += walk.requests();
             bytes += walk.bytes();
+            maxBody = Math.max(maxBody, walk.maxResponseBytes());
             latencies.addAll(walk.latencies());
         }
-        return new Walk(count, emitted, requests, bytes, "repeated", latencies);
+        return new Walk(count, emitted, requests, bytes, maxBody, "repeated", latencies, 0);
     }
 
     static Inventory fixtureInventory(String fixture, int partitionCount) throws Exception {
@@ -281,9 +326,9 @@ public final class ReplayHttpBench {
 
     private static Walk walk(HttpClient client, ScheduledThreadPoolExecutor watchdog, URI endpoint, String protocol,
                              String bucket, int pageSize, long expectedCount, Partition partition,
-                             Duration bodyDeadline) throws Exception {
+                             Duration bodyDeadline, MetadataVerifier metadata) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        long count = 0, emitted = 0, bytes = 0, requests = 0;
+        long count = 0, emitted = 0, bytes = 0, requests = 0, maxBody = 0;
         String continuation = null;
         byte[] prior = null;
         LatencyHistogram latencies = new LatencyHistogram();
@@ -295,6 +340,9 @@ public final class ReplayHttpBench {
             if (protocol.equals("azure")) builder.header("x-ms-version", "2026-06-06");
             long begun = System.nanoTime();
             ATTEMPTED.incrementAndGet();
+            long outstanding = OUTSTANDING.incrementAndGet();
+            PEAK_OUTSTANDING.accumulateAndGet(outstanding, Math::max);
+            try {
             HttpResponse<InputStream> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() != 200) {
                 response.body().close();
@@ -310,8 +358,8 @@ public final class ReplayHttpBench {
             try (body) {
                 try {
                     byte[] upper = partition == null ? null : partition.upper();
-                    page = protocol.equals("gcs") ? parseGcs(body, digest, prior, upper)
-                            : parseXml(body, protocol, digest, prior, upper);
+                    page = protocol.equals("gcs") ? parseGcs(body, digest, prior, upper, metadata)
+                            : parseXml(body, protocol, digest, prior, upper, metadata);
                     byte[] rest = new byte[8192];
                     int n;
                     while ((n = body.read(rest)) >= 0) {
@@ -336,13 +384,18 @@ public final class ReplayHttpBench {
             count += page.owned();
             emitted += page.count();
             bytes += body.bytes;
+            maxBody = Math.max(maxBody, body.bytes);
             prior = page.lastKey() == null ? prior : page.lastKey();
             if (page.crossedUpper()) break;
             if (page.nextToken() == null) break;
             if (page.nextToken().equals(continuation)) throw new IllegalStateException("repeated continuation token");
             continuation = page.nextToken();
+            } finally {
+                OUTSTANDING.decrementAndGet();
+            }
         }
-        return new Walk(count, emitted, requests, bytes, HexFormat.of().formatHex(digest.digest()), latencies);
+        return new Walk(count, emitted, requests, bytes, maxBody,
+                HexFormat.of().formatHex(digest.digest()), latencies, 0);
     }
 
     /** Small stub-server seam for adversarial parser, pagination, and body-deadline tests. */
@@ -353,15 +406,15 @@ public final class ReplayHttpBench {
         watchdog.setRemoveOnCancelPolicy(true);
         try {
             return walk(client, watchdog, endpoint, protocol, bucket, pageSize,
-                    expectedCount, null, bodyDeadline);
+                    expectedCount, null, bodyDeadline, null);
         } finally {
             watchdog.shutdownNow();
             client.shutdownNow();
         }
     }
 
-    private static URI requestUri(URI endpoint, String protocol, String bucket, int limit, String token,
-                                  Partition partition) throws CharacterCodingException {
+    static URI requestUri(URI endpoint, String protocol, String bucket, int limit, String token,
+                          Partition partition) throws CharacterCodingException {
         String base = endpoint.toString().replaceAll("/$", "");
         String path;
         if (protocol.equals("s3")) {
@@ -377,7 +430,7 @@ public final class ReplayHttpBench {
         } else {
             path = "/replay/" + encode(bucket) + "?restype=container&comp=list&maxresults=" + limit;
             if (token != null) path += "&marker=" + encode(token);
-            else if (partition != null && partition.first() != null)
+            if (partition != null && partition.first() != null)
                 path += "&startFrom=" + encode(strictUtf8(partition.first()));
         }
         return URI.create(base + path);
@@ -397,7 +450,12 @@ public final class ReplayHttpBench {
     }
 
     static Page parseXml(InputStream body, String protocol, MessageDigest digest, byte[] prior,
-                                 byte[] upper) throws Exception {
+                         byte[] upper) throws Exception {
+        return parseXml(body, protocol, digest, prior, upper, null);
+    }
+
+    static Page parseXml(InputStream body, String protocol, MessageDigest digest, byte[] prior,
+                         byte[] upper, MetadataVerifier metadata) throws Exception {
         XMLInputFactory factory = XMLInputFactory.newFactory();
         factory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
         factory.setProperty("javax.xml.stream.isSupportingExternalEntities", false);
@@ -411,6 +469,9 @@ public final class ReplayHttpBench {
         boolean truncated = false;
         String token = null;
         byte[] last = null;
+        byte[] itemKey = null;
+        long itemSize = 0, itemTime = 0;
+        boolean itemOwned = false, hasSize = false, hasTime = false;
         long declaredCount = -1;
         String root = null;
         try {
@@ -419,7 +480,14 @@ public final class ReplayHttpBench {
                 if (event == XMLStreamConstants.START_ELEMENT) {
                     String tag = xml.getLocalName();
                     if (root == null) root = tag;
-                    if (tag.equals(item)) depth++;
+                    if (tag.equals(item)) {
+                        depth++;
+                        if (metadata != null) {
+                            itemKey = null;
+                            itemOwned = false;
+                            hasSize = hasTime = false;
+                        }
+                    }
                     else if (depth == 1 && tag.equals(name)) {
                         boolean encoded = protocol.equals("s3") || protocol.equals("azure")
                                 && "true".equalsIgnoreCase(xml.getAttributeValue(null, "Encoded"));
@@ -430,14 +498,34 @@ public final class ReplayHttpBench {
                         if (upper == null || compareUnsigned(key, upper) < 0) {
                             digestKey(digest, key);
                             owned++;
+                            if (metadata != null) itemOwned = true;
                         } else crossedUpper = true;
+                        if (metadata != null) itemKey = key;
                         last = key;
                         count++;
+                    } else if (depth == 1 && metadata != null
+                            && tag.equals(protocol.equals("s3") ? "Size" : "Content-Length")) {
+                        itemSize = Long.parseLong(xml.getElementText().trim());
+                        hasSize = true;
+                    } else if (depth == 1 && metadata != null
+                            && tag.equals(protocol.equals("s3") ? "LastModified" : "Last-Modified")) {
+                        String timestamp = xml.getElementText();
+                        itemTime = protocol.equals("s3") ? Instant.parse(timestamp).toEpochMilli()
+                                : ZonedDateTime.parse(timestamp, DateTimeFormatter.RFC_1123_DATE_TIME)
+                                        .toEpochSecond();
+                        hasTime = true;
                     } else if (tag.equals(tokenTag)) token = xml.getElementText();
                     else if (tag.equals("IsTruncated")) truncated = Boolean.parseBoolean(xml.getElementText());
                     else if (protocol.equals("s3") && tag.equals("KeyCount"))
                         declaredCount = Long.parseLong(xml.getElementText());
-                } else if (event == XMLStreamConstants.END_ELEMENT && xml.getLocalName().equals(item)) depth--;
+                } else if (event == XMLStreamConstants.END_ELEMENT && xml.getLocalName().equals(item)) {
+                    if (metadata != null && itemOwned) {
+                        if (itemKey == null || !hasSize || !hasTime)
+                            throw new IllegalStateException("listed object omitted fixture-backed metadata");
+                        metadata.accept(itemKey, itemSize, itemTime);
+                    }
+                    depth--;
+                }
             }
         } finally {
             xml.close();
@@ -454,6 +542,11 @@ public final class ReplayHttpBench {
     }
 
     static Page parseGcs(InputStream body, MessageDigest digest, byte[] prior, byte[] upper) throws Exception {
+        return parseGcs(body, digest, prior, upper, null);
+    }
+
+    static Page parseGcs(InputStream body, MessageDigest digest, byte[] prior, byte[] upper,
+                         MetadataVerifier metadata) throws Exception {
         long count = 0, owned = 0;
         boolean crossedUpper = false;
         String token = null;
@@ -468,6 +561,8 @@ public final class ReplayHttpBench {
                     while (next(json) != JsonToken.END_ARRAY) {
                         if (json.currentToken() != JsonToken.START_OBJECT) throw new IllegalStateException("bad item");
                         String name = null;
+                        long size = 0, updatedMicros = 0;
+                        boolean hasSize = false, hasUpdated = false;
                         while (next(json) != JsonToken.END_OBJECT) {
                             String itemField = json.currentName();
                             next(json);
@@ -475,8 +570,19 @@ public final class ReplayHttpBench {
                                 if (json.currentToken() != JsonToken.VALUE_STRING || name != null)
                                     throw new IllegalStateException("duplicate or non-string GCS name");
                                 name = json.getText();
-                            }
-                            else json.skipChildren();
+                            } else if (metadata != null && "size".equals(itemField)) {
+                                if (json.currentToken() != JsonToken.VALUE_STRING || hasSize)
+                                    throw new IllegalStateException("missing/duplicate GCS size");
+                                size = Long.parseLong(json.getText());
+                                hasSize = true;
+                            } else if (metadata != null && "updated".equals(itemField)) {
+                                if (json.currentToken() != JsonToken.VALUE_STRING || hasUpdated)
+                                    throw new IllegalStateException("missing/duplicate GCS updated");
+                                Instant time = Instant.parse(json.getText());
+                                updatedMicros = Math.addExact(Math.multiplyExact(time.getEpochSecond(), 1_000_000L),
+                                        time.getNano() / 1_000L);
+                                hasUpdated = true;
+                            } else json.skipChildren();
                         }
                         if (name == null) throw new IllegalStateException("item without name");
                         byte[] key = name.getBytes(StandardCharsets.UTF_8);
@@ -485,6 +591,11 @@ public final class ReplayHttpBench {
                         if (upper == null || compareUnsigned(key, upper) < 0) {
                             digestKey(digest, key);
                             owned++;
+                            if (metadata != null) {
+                                if (!hasSize || !hasUpdated)
+                                    throw new IllegalStateException("listed GCS object omitted fixture-backed metadata");
+                                metadata.accept(key, size, updatedMicros);
+                            }
                         } else crossedUpper = true;
                         last = key;
                         count++;
@@ -510,23 +621,73 @@ public final class ReplayHttpBench {
         return token;
     }
 
-    private static byte[] percentDecode(String text) {
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(text.length());
+    static byte[] percentDecode(String text) {
+        long byteCount = 0;
         for (int i = 0; i < text.length();) {
-            if (text.charAt(i) == '%') {
-                if (i + 2 >= text.length()) throw new IllegalStateException("bad Azure encoded name");
-                int hi = Character.digit(text.charAt(i + 1), 16);
-                int lo = Character.digit(text.charAt(i + 2), 16);
-                if (hi < 0 || lo < 0) throw new IllegalStateException("bad Azure encoded name");
-                out.write((hi << 4) | lo);
+            char c = text.charAt(i);
+            if (c == '%') {
+                if (i + 2 >= text.length() || asciiHex(text.charAt(i + 1)) < 0
+                        || asciiHex(text.charAt(i + 2)) < 0) {
+                    throw new IllegalStateException("bad percent escape");
+                }
+                byteCount++;
                 i += 3;
+            } else if (c < 0x80) {
+                byteCount++;
+                i++;
+            } else if (c < 0x800) {
+                byteCount += 2;
+                i++;
+            } else if (Character.isHighSurrogate(c)) {
+                if (i + 1 >= text.length() || !Character.isLowSurrogate(text.charAt(i + 1)))
+                    throw new IllegalStateException("unpaired UTF-16 surrogate");
+                byteCount += 4;
+                i += 2;
+            } else if (Character.isLowSurrogate(c)) {
+                throw new IllegalStateException("unpaired UTF-16 surrogate");
             } else {
-                int codePoint = text.codePointAt(i);
-                out.writeBytes(new String(Character.toChars(codePoint)).getBytes(StandardCharsets.UTF_8));
-                i += Character.charCount(codePoint);
+                byteCount += 3;
+                i++;
+            }
+            if (byteCount > Integer.MAX_VALUE) throw new IllegalStateException("decoded name too long");
+        }
+        byte[] out = new byte[(int) byteCount];
+        int at = 0;
+        for (int i = 0; i < text.length();) {
+            char c = text.charAt(i);
+            if (c == '%') {
+                out[at++] = (byte) ((asciiHex(text.charAt(i + 1)) << 4)
+                        | asciiHex(text.charAt(i + 2)));
+                i += 3;
+            } else if (c < 0x80) {
+                out[at++] = (byte) c;
+                i++;
+            } else if (c < 0x800) {
+                out[at++] = (byte) (0xc0 | c >>> 6);
+                out[at++] = (byte) (0x80 | c & 0x3f);
+                i++;
+            } else if (Character.isHighSurrogate(c)) {
+                int codePoint = Character.toCodePoint(c, text.charAt(i + 1));
+                out[at++] = (byte) (0xf0 | codePoint >>> 18);
+                out[at++] = (byte) (0x80 | codePoint >>> 12 & 0x3f);
+                out[at++] = (byte) (0x80 | codePoint >>> 6 & 0x3f);
+                out[at++] = (byte) (0x80 | codePoint & 0x3f);
+                i += 2;
+            } else {
+                out[at++] = (byte) (0xe0 | c >>> 12);
+                out[at++] = (byte) (0x80 | c >>> 6 & 0x3f);
+                out[at++] = (byte) (0x80 | c & 0x3f);
+                i++;
             }
         }
-        return out.toByteArray();
+        return out;
+    }
+
+    private static int asciiHex(char value) {
+        if (value >= '0' && value <= '9') return value - '0';
+        if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+        if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+        return -1;
     }
 
     private static int compareUnsigned(byte[] a, byte[] b) {
@@ -546,8 +707,8 @@ public final class ReplayHttpBench {
         PartitionBuilder() throws Exception { digest = MessageDigest.getInstance("SHA-256"); }
     }
     record Page(long count, long owned, String nextToken, byte[] lastKey, boolean crossedUpper) {}
-    record Walk(long count, long emitted, long requests, long bytes, String digest,
-                LatencyHistogram latencies) {}
+    record Walk(long count, long emitted, long requests, long bytes, long maxResponseBytes, String digest,
+                LatencyHistogram latencies, long activeWallNanos) {}
 
     private static final class CountingInputStream extends FilterInputStream {
         long bytes;

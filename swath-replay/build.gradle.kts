@@ -34,6 +34,33 @@ val replayBenchmarkSelfTest by tasks.registering(JavaExec::class) {
     dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
 }
 
+val replayShapeBenchmarkSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Runs native seek and delimiter HTTP checks for the standalone replay benchmark."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.ReplayShapeBenchSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
+val replayGcsNarrowBenchmarkSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks exact GCS partition inventory and native narrowed endOffset walks."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.ReplayGcsNarrowBenchSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
+val replayFixtureMetadataOracleSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks the independent Parquet name, size and timestamp benchmark oracle."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.FixtureMetadataOracleSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
 // The application distribution also ships the conformance launcher's dependency closure.
 // Include both closures in the license allow-list gate and generated inventory.
 configure<LicenseReportExtension> {
@@ -204,10 +231,22 @@ val providerEvidenceSelfTest by tasks.registering(Exec::class) {
             rootProject.file("scripts/provider-conformance").absolutePath, "-p", "test_*.py")
 }
 
+val replayBenchmarkPythonSelfTest by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Checks benchmark runner quality gates and resource receipt validation."
+    environment("PYTHONDONTWRITEBYTECODE", "1")
+    commandLine("python3", "-m", "unittest", "discover", "-s",
+            rootProject.file("scripts/benchmarks/replay").absolutePath, "-p", "test_*.py")
+}
+
 tasks.named("check") {
     dependsOn(rootProject.tasks.named("verifyReplayThirdPartyNotices"))
     dependsOn(replayBenchmarkSelfTest)
+    dependsOn(replayShapeBenchmarkSelfTest)
+    dependsOn(replayGcsNarrowBenchmarkSelfTest)
+    dependsOn(replayFixtureMetadataOracleSelfTest)
     dependsOn(providerEvidenceSelfTest)
+    dependsOn(replayBenchmarkPythonSelfTest)
 }
 
 // Overrides the swath.java-conventions default (10 min) — the replay module's suite is
