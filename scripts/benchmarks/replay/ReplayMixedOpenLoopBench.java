@@ -41,6 +41,8 @@ public final class ReplayMixedOpenLoopBench {
     private static final Duration BODY_DEADLINE = Duration.ofSeconds(30);
     private static final long MAX_BODY_BYTES = 64L * 1024 * 1024;
     private static final List<String> ALL = List.of("s3", "gcs", "azure");
+    private static final int GROUP_COUNT = 3;
+    private static final int LANES_PER_GROUP = 16;
 
     private ReplayMixedOpenLoopBench() { }
 
@@ -53,16 +55,16 @@ public final class ReplayMixedOpenLoopBench {
         int fields = argv.length - (endAck ? 1 : 0);
         if (fields != 12 || !"bracket".equals(argv[11])) {
             throw new IllegalArgumentException("usage: ReplayMixedOpenLoopBench ENDPOINT BUCKET "
-                    + "FIXTURE_GLOB COUNT:DIGEST s3|gcs|azure|s3,gcs,azure RATE_EACH_RPS "
-                    + "OFFERED_EACH_COUNT PAGE_SIZE WARMUP_FULL_CYCLES RATE_WARMUP_CYCLES "
+                    + "FIXTURE_GLOB COUNT:DIGEST s3|gcs|azure|s3,gcs,azure RATE_PER_GROUP_RPS "
+                    + "OFFERED_PER_GROUP_COUNT PAGE_SIZE WARMUP_FULL_CYCLES RATE_WARMUP_CYCLES "
                     + "MAX_OUTSTANDING bracket [end_ack]");
         }
         URI endpoint = URI.create(argv[0]);
         String bucket = argv[1];
         String fixture = argv[2];
         String declared = argv[3];
-        List<String> protocols = argv[4].equals("s3,gcs,azure") ? ALL : List.of(argv[4]);
-        if (protocols.stream().anyMatch(p -> !ALL.contains(p))) throw new IllegalArgumentException("protocol");
+        List<String> selected = argv[4].equals("s3,gcs,azure") ? ALL : List.of(argv[4]);
+        List<String> groupProtocols = logicalGroupProtocols(selected);
         double rate = Double.parseDouble(argv[5]);
         int offeredEach = Integer.parseInt(argv[6]);
         double nominalDuration = offeredEach / rate;
@@ -89,39 +91,39 @@ public final class ReplayMixedOpenLoopBench {
         ScheduledThreadPoolExecutor watchdog = new ScheduledThreadPoolExecutor(1);
         watchdog.setRemoveOnCancelPolicy(true);
         var workers = Executors.newVirtualThreadPerTaskExecutor();
-        List<Stats> stats = protocols.stream().map(Stats::new).toList();
         Semaphore permits = new Semaphore(maxOutstanding);
         AtomicLong outstanding = new AtomicLong();
         AtomicLong peakOutstanding = new AtomicLong();
-        Histogram scheduleLag = new Histogram();
-        long maxScheduleLag = 0;
-        Histogram workerDispatchLag = new Histogram();
-        AtomicLong maxWorkerDispatchLag = new AtomicLong();
-        Histogram clientSendLag = new Histogram();
-        AtomicLong maxClientSendLag = new AtomicLong();
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        List<List<PageSpec>> nativePages = new ArrayList<>(protocols.size());
+        List<List<PageSpec>> nativePages = new ArrayList<>(GROUP_COUNT);
         PhaseCounts nativeWarmupCounts = new PhaseCounts();
         PhaseCounts targetWarmupCounts = new PhaseCounts();
-        AtomicLong measuredScheduled = new AtomicLong();
-        long start = 0;
-        long end = 0;
-        int unsent = 0;
+        PhaseCounts measuredCounts = new PhaseCounts();
         boolean targetWarmupStarted = false;
         boolean rateWarmupEndEmitted = false;
-        WarmupOutcome rateWarmup = null;
+        boolean measurementStarted = false;
+        PhaseOutcome targetWarmup = null;
+        PhaseOutcome measured = null;
         try {
             nativePages.addAll(warmupNativeWalks(client, watchdog, endpoint, bucket,
-                    protocols, fixture, inventory, pageSize, nativeWarmupCounts));
-            for (List<PageSpec> pages : nativePages) {
-                if (offeredEach < pages.size()) {
-                    throw new IllegalArgumentException("fixed offered stream must cover every native page");
+                    groupProtocols, fixture, inventory, pageSize, nativeWarmupCounts));
+            int pageCount = nativePages.getFirst().size();
+            laneRanges(pageCount); // All 48 capacity lanes must be active.
+            if (offeredEach < pageCount || offeredEach % pageCount != 0) {
+                throw new IllegalArgumentException("offered tickets must be exact full native cycles");
+            }
+            for (int group = 0; group < GROUP_COUNT; group++) {
+                if (nativePages.get(group).size() != pageCount) {
+                    throw new IllegalStateException("three logical groups have different native page counts");
                 }
-                if (pages.size() != nativePages.getFirst().size()) {
-                    throw new IllegalArgumentException("equal-rate mixed arm needs one common native page count");
+                for (int prior = 0; prior < group; prior++) {
+                    if (groupProtocols.get(group).equals(groupProtocols.get(prior))
+                            && !pagePlanSha256(nativePages.get(group))
+                                    .equals(pagePlanSha256(nativePages.get(prior)))) {
+                        throw new IllegalStateException("same-protocol group warmups changed page boundaries");
+                    }
                 }
             }
-            int rateWarmupTickets = Math.multiplyExact(nativePages.getFirst().size(), rateWarmupCycles);
+            int rateWarmupTickets = Math.multiplyExact(pageCount, rateWarmupCycles);
             if (rateWarmupTickets > 1_000_000) {
                 throw new IllegalArgumentException("target-rate warmup exceeds request bound");
             }
@@ -129,84 +131,35 @@ public final class ReplayMixedOpenLoopBench {
             System.out.println("{\"event\":\"RATE_WARMUP_START\"}");
             System.out.flush();
             if (System.in.read() < 0) throw new IllegalStateException("rate warmup start ACK missing");
-            rateWarmup = runRateWarmup(client, watchdog, workers, endpoint, bucket,
-                    protocols, nativePages, rate, rateWarmupTickets, pageSize, permits, outstanding,
-                    targetWarmupCounts);
-            if (outstanding.get() != 0 || permits.availablePermits() != maxOutstanding) {
-                throw new IllegalStateException("target-rate warmup left outstanding requests");
+            targetWarmup = runLanePhase(client, watchdog, workers, endpoint, bucket,
+                    groupProtocols, nativePages, rate, rateWarmupCycles, pageSize,
+                    permits, outstanding, peakOutstanding, targetWarmupCounts);
+            if (outstanding.get() != 0 || permits.availablePermits() != maxOutstanding
+                    || targetWarmupCounts.unsent.get() != 0) {
+                throw new IllegalStateException("target-rate warmup left incomplete lane work");
+            }
+            double warmupNominalSeconds = rateWarmupTickets / rate;
+            if (targetWarmup.elapsedNs() > Math.round(warmupNominalSeconds * 1_100_000_000.0)
+                    + 1_000_000_000L) {
+                throw new IllegalStateException("target-rate warmup did not sustain its fixed offered schedule");
             }
             System.out.println("{\"event\":\"RATE_WARMUP_END\"}");
             System.out.flush();
             rateWarmupEndEmitted = true;
             if (System.in.read() < 0) throw new IllegalStateException("rate warmup end ACK missing");
             peakOutstanding.set(0);
+            measurementStarted = true;
             System.out.println("{\"event\":\"MEASURE_START\"}");
             System.out.flush();
             if (System.in.read() < 0) throw new IllegalStateException("measurement start ACK missing");
-            start = System.nanoTime();
-            long period = Math.round(1_000_000_000.0 / rate);
-            CountDownLatch done = new CountDownLatch(Math.multiplyExact(offeredEach, protocols.size()));
-            for (int i = 0; i < offeredEach; i++) {
-                for (int p = 0; p < protocols.size(); p++) {
-                    String protocol = protocols.get(p);
-                    long scheduled = start + Math.round((i + timePhase(protocol)) * period);
-                    while (System.nanoTime() < scheduled) {
-                        LockSupport.parkNanos(Math.min(1_000_000L, scheduled - System.nanoTime()));
-                    }
-                    long lag = Math.max(0, System.nanoTime() - scheduled);
-                    measuredScheduled.incrementAndGet();
-                    scheduleLag.add(lag);
-                    maxScheduleLag = Math.max(maxScheduleLag, lag);
-                    Stats stat = stats.get(p);
-                    List<PageSpec> pages = nativePages.get(p);
-                    int phaseOffset = phaseOffset(stat.protocol, pages.size());
-                    PageSpec page = pages.get((i + phaseOffset) % pages.size());
-                    if (!permits.tryAcquire()) {
-                        unsent++;
-                        done.countDown();
-                        continue;
-                    }
-                    long active = outstanding.incrementAndGet();
-                    peakOutstanding.accumulateAndGet(active, Math::max);
-                    try {
-                        workers.submit(() -> {
-                            try {
-                                long dispatchLag = Math.max(0, System.nanoTime() - scheduled);
-                                workerDispatchLag.add(dispatchLag);
-                                maxWorkerDispatchLag.accumulateAndGet(dispatchLag, Math::max);
-                                stat.dispatchLag.add(dispatchLag);
-                                FetchResult response = fetch(client, watchdog, endpoint, bucket, stat.protocol,
-                                        page.token(), page.predecessor(), page.upper(), page, pageSize, false);
-                                long sendLag = Math.max(0, response.sendStartedNanos() - scheduled);
-                                clientSendLag.add(sendLag);
-                                maxClientSendLag.accumulateAndGet(sendLag, Math::max);
-                                stat.sendLag.add(sendLag);
-                                stat.record(page.count(), response.bytes(), System.nanoTime() - scheduled);
-                            } catch (Throwable error) {
-                                failure.compareAndSet(null, error);
-                            } finally {
-                                outstanding.decrementAndGet();
-                                permits.release();
-                                done.countDown();
-                            }
-                        });
-                    } catch (RuntimeException submitError) {
-                        failure.compareAndSet(null, submitError);
-                        outstanding.decrementAndGet();
-                        permits.release();
-                        done.countDown();
-                    }
-                }
-            }
-            if (!done.await(120, TimeUnit.SECONDS)) throw new IllegalStateException("open-loop response drain timeout");
-            end = System.nanoTime();
+            measured = runLanePhase(client, watchdog, workers, endpoint, bucket,
+                    groupProtocols, nativePages, rate, offeredEach / pageCount, pageSize,
+                    permits, outstanding, peakOutstanding, measuredCounts);
             System.out.println("{\"event\":\"MEASURE_END\"}");
             System.out.flush();
             if (endAck && System.in.read() < 0) throw new IllegalStateException("measurement end ACK missing");
         } catch (Exception error) {
-            if (targetWarmupStarted && !rateWarmupEndEmitted && start == 0) {
-                // Keep the failing target-rate phase bracketed while client threads still exist.
-                // A failed diagnostic snapshot must not replace the original warmup failure.
+            if (targetWarmupStarted && !rateWarmupEndEmitted && !measurementStarted) {
                 System.out.println("{\"event\":\"RATE_WARMUP_END\",\"status\":\"failed\"}");
                 System.out.flush();
                 try {
@@ -215,17 +168,10 @@ public final class ReplayMixedOpenLoopBench {
                     error.addSuppressed(ackError);
                 }
             }
-            long measuredSuccessful = 0;
-            for (Stats stat : stats) measuredSuccessful += stat.requests.get();
-            String phase = start != 0 ? "measurement"
+            String phase = measurementStarted ? "measurement"
                     : targetWarmupStarted ? "target_rate_warmup" : "native_warmup";
-            long offered = start != 0 ? measuredScheduled.get()
-                    : targetWarmupStarted ? targetWarmupCounts.scheduled.get()
-                    : nativeWarmupCounts.scheduled.get();
-            long successful = start != 0 ? measuredSuccessful
-                    : targetWarmupStarted ? targetWarmupCounts.successful.get()
-                    : nativeWarmupCounts.successful.get();
-            long skipped = start != 0 ? unsent : targetWarmupCounts.unsent.get();
+            PhaseCounts current = measurementStarted ? measuredCounts
+                    : targetWarmupStarted ? targetWarmupCounts : nativeWarmupCounts;
             System.out.printf(Locale.ROOT,
                     "{\"status\":\"failed\",\"phase\":\"%s\","
                     + "\"offered_requests\":%d,\"unsent_requests\":%d,"
@@ -235,11 +181,11 @@ public final class ReplayMixedOpenLoopBench {
                     + "\"target_warmup_completed\":%d,\"target_warmup_unsent\":%d,"
                     + "\"measured_scheduled\":%d,\"measured_completed\":%d,"
                     + "\"duration_plan_s\":%.3f,\"failure_reason\":\"%s\"}%n",
-                    phase, offered, skipped, successful, maxOutstanding,
-                    nativeWarmupCounts.scheduled.get(), nativeWarmupCounts.successful.get(),
+                    phase, current.scheduled.get(), current.unsent.get(), current.successful.get(),
+                    maxOutstanding, nativeWarmupCounts.scheduled.get(), nativeWarmupCounts.successful.get(),
                     targetWarmupCounts.scheduled.get(), targetWarmupCounts.admitted.get(),
                     targetWarmupCounts.successful.get(), targetWarmupCounts.unsent.get(),
-                    measuredScheduled.get(), measuredSuccessful,
+                    measuredCounts.scheduled.get(), measuredCounts.successful.get(),
                     nominalDuration, jsonEscape(error.toString()));
             throw error;
         } finally {
@@ -247,122 +193,182 @@ public final class ReplayMixedOpenLoopBench {
             workers.shutdownNow();
             client.shutdownNow();
         }
-        if (failure.get() != null || unsent != 0 || outstanding.get() != 0) {
-            long successful = 0;
-            for (Stats stat : stats) successful += stat.requests.get();
-            System.out.printf(Locale.ROOT,
-                    "{\"status\":\"failed\",\"offered_requests\":%d,"
-                    + "\"unsent_requests\":%d,\"successful_requests\":%d,"
-                    + "\"max_outstanding_limit\":%d,\"duration_plan_s\":%.3f,"
-                    + "\"failure_reason\":\"%s\"}%n",
-                    offeredEach * protocols.size(), unsent, successful, maxOutstanding, nominalDuration,
-                    failure.get() != null ? jsonEscape(failure.get().toString()) : "client_limit");
-            if (failure.get() != null) throw new IllegalStateException("open-loop request failed", failure.get());
-            throw new IllegalStateException("open-loop client limit reached");
+        if (measured == null || targetWarmup == null || outstanding.get() != 0
+                || permits.availablePermits() != maxOutstanding) {
+            throw new IllegalStateException("fixed lane phase did not drain");
         }
-        long elapsed = end - start;
-        long scheduledWindow = Math.round(offeredEach * (1_000_000_000.0 / rate));
-        long totalObjects = 0, totalRequests = 0, totalBytes = 0, warmupRequests = 0;
-        Histogram aggregate = new Histogram();
-        for (int i = 0; i < stats.size(); i++) {
-            Stats stat = stats.get(i);
+        long expectedNative = (long) nativePages.getFirst().size() * GROUP_COUNT;
+        long expectedRateWarmup = (long) targetWarmup.offeredEach() * GROUP_COUNT;
+        long expectedMeasured = (long) offeredEach * GROUP_COUNT;
+        if (nativeWarmupCounts.scheduled.get() != expectedNative
+                || nativeWarmupCounts.successful.get() != expectedNative
+                || targetWarmupCounts.scheduled.get() != expectedRateWarmup
+                || targetWarmupCounts.admitted.get() != expectedRateWarmup
+                || targetWarmupCounts.successful.get() != expectedRateWarmup
+                || targetWarmupCounts.unsent.get() != 0
+                || measuredCounts.scheduled.get() != expectedMeasured
+                || measuredCounts.admitted.get() != expectedMeasured
+                || measuredCounts.successful.get() != expectedMeasured
+                || measuredCounts.unsent.get() != 0) {
+            throw new IllegalStateException("fixed lane phase request accounting disagrees");
+        }
+        printResult(inventory, groupProtocols, nativePages, rate, offeredEach, pageSize,
+                rateWarmupCycles, maxOutstanding, nativeWarmupCounts, targetWarmupCounts,
+                measuredCounts, targetWarmup, measured);
+    }
+
+    private static void printResult(ReplayHttpBench.Inventory inventory,
+                                    List<String> groupProtocols, List<List<PageSpec>> nativePages,
+                                    double rate, int offeredEach, int pageSize, int rateWarmupCycles,
+                                    int maxOutstanding, PhaseCounts nativeWarmupCounts,
+                                    PhaseCounts targetWarmupCounts, PhaseCounts measuredCounts,
+                                    PhaseOutcome targetWarmup, PhaseOutcome measured) throws Exception {
+        long elapsed = measured.elapsedNs();
+        long totalObjects = 0, totalRequests = 0, totalBytes = 0;
+        Histogram latency = new Histogram();
+        Histogram wake = new Histogram();
+        Histogram dispatch = new Histogram();
+        Histogram send = new Histogram();
+        Histogram predecessor = new Histogram();
+        long maxWake = 0, maxDispatch = 0, maxSend = 0, maxPredecessor = 0;
+        int cycles = offeredEach / nativePages.getFirst().size();
+        for (int group = 0; group < GROUP_COUNT; group++) {
+            Stats stat = measured.groups().get(group);
+            if (stat.requests.get() != offeredEach
+                    || stat.objects.get() != Math.multiplyExact(inventory.count(), cycles)) {
+                throw new IllegalStateException("logical group omitted or duplicated a native page");
+            }
             totalObjects += stat.objects.get();
             totalRequests += stat.requests.get();
             totalBytes += stat.bytes.get();
-            warmupRequests += nativePages.get(i).size();
-            aggregate.addAll(stat.latencies);
-        }
-        if (nativeWarmupCounts.scheduled.get() != warmupRequests
-                || nativeWarmupCounts.successful.get() != warmupRequests
-                || targetWarmupCounts.scheduled.get() != (long) rateWarmup.offeredEach() * protocols.size()
-                || targetWarmupCounts.admitted.get() != targetWarmupCounts.scheduled.get()
-                || targetWarmupCounts.successful.get() != targetWarmupCounts.scheduled.get()
-                || targetWarmupCounts.unsent.get() != 0) {
-            throw new IllegalStateException("native or target-rate warmup request accounting disagrees");
+            latency.addAll(stat.latencies);
+            wake.addAll(stat.wakeLag);
+            dispatch.addAll(stat.dispatchLag);
+            send.addAll(stat.sendLag);
+            predecessor.addAll(stat.predecessorWait);
+            maxWake = Math.max(maxWake, stat.maxWakeLag.get());
+            maxDispatch = Math.max(maxDispatch, stat.maxDispatchLag.get());
+            maxSend = Math.max(maxSend, stat.maxSendLag.get());
+            maxPredecessor = Math.max(maxPredecessor, stat.maxPredecessorWait.get());
         }
         StringBuilder out = new StringBuilder();
-        out.append("{\"workload\":\"mixed_open_loop\",\"fixture_count\":")
-                .append(inventory.count()).append(",\"fixture_digest\":\"")
-                .append(inventory.digest()).append("\",\"page_size\":").append(pageSize)
-                .append(",\"offered_rate_each_rps\":").append(rate)
-                .append(",\"duration_plan_s\":").append(nominalDuration)
+        out.append("{\"workload\":\"mixed_open_loop\",\"fixture_count\":").append(inventory.count())
+                .append(",\"fixture_digest\":\"").append(inventory.digest())
+                .append("\",\"page_size\":").append(pageSize)
+                .append(",\"logical_groups\":3,\"lanes_per_group\":16")
+                .append(",\"offered_rate_per_group_rps\":").append(rate)
+                .append(",\"duration_plan_s\":").append(offeredEach / rate)
                 .append(",\"max_outstanding_limit\":").append(maxOutstanding)
-                .append(",\"offered_requests_each\":").append(offeredEach)
-                .append(",\"unsent_requests\":").append(unsent)
-                .append(",\"peak_outstanding_requests\":").append(peakOutstanding.get())
-                .append(",\"scheduler_wakeup_p99_lag_ns\":").append(scheduleLag.percentile(.99))
-                .append(",\"scheduler_wakeup_max_lag_ns\":").append(maxScheduleLag)
-                .append(",\"worker_dispatch_p99_lag_ns\":").append(workerDispatchLag.percentile(.99))
-                .append(",\"worker_dispatch_max_lag_ns\":").append(maxWorkerDispatchLag.get())
-                .append(",\"client_send_p99_lag_ns\":").append(clientSendLag.percentile(.99))
-                .append(",\"client_send_max_lag_ns\":").append(maxClientSendLag.get())
+                .append(",\"offered_requests_per_group\":").append(offeredEach)
+                .append(",\"offered_requests\":").append((long) offeredEach * GROUP_COUNT)
+                .append(",\"unsent_requests\":0")
+                .append(",\"peak_outstanding_requests\":").append(measured.peakOutstanding())
+                .append(",\"scheduler_wakeup_p99_lag_ns\":").append(wake.percentile(.99))
+                .append(",\"scheduler_wakeup_max_lag_ns\":").append(maxWake)
+                .append(",\"worker_dispatch_p99_lag_ns\":").append(dispatch.percentile(.99))
+                .append(",\"worker_dispatch_max_lag_ns\":").append(maxDispatch)
+                .append(",\"client_send_p99_lag_ns\":").append(send.percentile(.99))
+                .append(",\"client_send_max_lag_ns\":").append(maxSend)
+                .append(",\"predecessor_wait_p99_ns\":").append(predecessor.percentile(.99))
+                .append(",\"predecessor_wait_max_ns\":").append(maxPredecessor)
                 .append(",\"elapsed_ns\":").append(elapsed)
-                .append(",\"scheduled_window_ns\":").append(scheduledWindow)
-                .append(",\"completion_drain_ns\":").append(Math.max(0, elapsed - scheduledWindow))
+                .append(",\"scheduled_window_ns\":").append(measured.scheduledWindowNs())
+                .append(",\"completion_drain_ns\":")
+                .append(Math.max(0, elapsed - measured.scheduledWindowNs()))
                 .append(",\"objects\":").append(totalObjects)
                 .append(",\"emitted_objects\":").append(totalObjects)
                 .append(",\"requests\":").append(totalRequests)
                 .append(",\"bytes\":").append(totalBytes)
-                .append(",\"objects_per_s\":")
-                .append(String.format(Locale.ROOT, "%.6f", totalObjects * 1e9 / elapsed))
-                .append(",\"requests_per_s\":")
-                .append(String.format(Locale.ROOT, "%.6f", totalRequests * 1e9 / elapsed))
-                .append(",\"bytes_per_s\":")
-                .append(String.format(Locale.ROOT, "%.6f", totalBytes * 1e9 / elapsed))
-                .append(",\"p50_ns\":").append(aggregate.percentile(.50))
-                .append(",\"p95_ns\":").append(aggregate.percentile(.95))
-                .append(",\"p99_ns\":").append(aggregate.percentile(.99))
+                .append(",\"objects_per_s\":").append(String.format(Locale.ROOT, "%.6f", totalObjects * 1e9 / elapsed))
+                .append(",\"requests_per_s\":").append(String.format(Locale.ROOT, "%.6f", totalRequests * 1e9 / elapsed))
+                .append(",\"bytes_per_s\":").append(String.format(Locale.ROOT, "%.6f", totalBytes * 1e9 / elapsed))
+                .append(",\"p50_ns\":").append(latency.percentile(.50))
+                .append(",\"p95_ns\":").append(latency.percentile(.95))
+                .append(",\"p99_ns\":").append(latency.percentile(.99))
                 .append(",\"latency_histogram_relative_error_max\":0.016")
                 .append(",\"metadata_profile\":\"fixture_name_size_time\"")
                 .append(",\"warmup_metadata_verified_objects\":")
-                .append(inventory.count() * protocols.size())
+                .append(inventory.count() * GROUP_COUNT)
+                .append(",\"key_digest_basis\":\"fixture_oracle_certified_by_measured_page_validation\"")
                 .append(",\"target_rate_warmup_cycles\":").append(rateWarmupCycles)
-                .append(",\"target_rate_warmup_seconds\":")
-                .append(rateWarmup.offeredEach() / rate)
-                .append(",\"target_rate_warmup_offered_each\":").append(rateWarmup.offeredEach())
-                .append(",\"target_rate_warmup_elapsed_ns\":").append(rateWarmup.elapsedNs())
+                .append(",\"target_rate_warmup_seconds\":").append(targetWarmup.offeredEach() / rate)
+                .append(",\"target_rate_warmup_offered_each\":").append(targetWarmup.offeredEach())
+                .append(",\"target_rate_warmup_elapsed_ns\":").append(targetWarmup.elapsedNs())
+                .append(",\"native_warmup_scheduled\":").append(nativeWarmupCounts.scheduled.get())
+                .append(",\"native_warmup_completed\":").append(nativeWarmupCounts.successful.get())
+                .append(",\"target_warmup_scheduled\":").append(targetWarmupCounts.scheduled.get())
+                .append(",\"target_warmup_admitted\":").append(targetWarmupCounts.admitted.get())
+                .append(",\"target_warmup_completed\":").append(targetWarmupCounts.successful.get())
+                .append(",\"target_warmup_unsent\":").append(targetWarmupCounts.unsent.get())
+                .append(",\"measured_scheduled\":").append(measuredCounts.scheduled.get())
+                .append(",\"measured_admitted\":").append(measuredCounts.admitted.get())
+                .append(",\"measured_completed\":").append(measuredCounts.successful.get())
                 .append(",\"warmup_attempted_requests\":")
-                .append(warmupRequests + (long) rateWarmup.offeredEach() * protocols.size())
+                .append(nativeWarmupCounts.scheduled.get() + targetWarmupCounts.scheduled.get())
                 .append(",\"warmup_successful_requests\":")
-                .append(warmupRequests + (long) rateWarmup.offeredEach() * protocols.size())
-                .append(",\"attempted_requests\":").append(offeredEach * protocols.size())
+                .append(nativeWarmupCounts.successful.get() + targetWarmupCounts.successful.get())
+                .append(",\"attempted_requests\":").append(measuredCounts.scheduled.get())
                 .append(",\"successful_requests\":").append(totalRequests)
-                .append(",\"protocols\":{");
-        for (int i = 0; i < stats.size(); i++) {
-            Stats stat = stats.get(i);
-            List<PageSpec> pages = nativePages.get(i);
-            long expectedObjectsEach = 0;
-            for (int request = 0; request < offeredEach; request++) {
-                expectedObjectsEach += pages.get((request + phaseOffset(stat.protocol, pages.size()))
-                        % pages.size()).count();
-            }
-            if (stat.requests.get() != offeredEach || stat.objects.get() != expectedObjectsEach) {
-                throw new IllegalStateException("open-loop measured inventory mismatch for " + stat.protocol);
-            }
-            if (i > 0) out.append(',');
-            out.append('"').append(stat.protocol).append("\":{")
-                    .append("\"native_pages\":").append(pages.size())
-                    .append(",\"phase_offset_pages\":").append(phaseOffset(stat.protocol, pages.size()))
-                    .append(",\"time_phase_fraction\":")
-                    .append(String.format(Locale.ROOT, "%.6f", timePhase(stat.protocol)))
-                    .append(",\"page_plan_sha256\":\"").append(pagePlanSha256(pages)).append('"')
-                    .append(",\"complete_inventory_cycles\":").append(offeredEach / pages.size())
-                    .append(",\"partial_tail_pages\":").append(offeredEach % pages.size())
+                .append(",\"groups\":[");
+        for (int group = 0; group < GROUP_COUNT; group++) {
+            if (group > 0) out.append(',');
+            Stats stat = measured.groups().get(group);
+            out.append("{\"group_id\":").append(group)
+                    .append(",\"protocol\":\"").append(groupProtocols.get(group)).append('"')
+                    .append(",\"cycles\":").append(cycles)
+                    .append(",\"tickets\":").append(stat.requests.get())
+                    .append(",\"objects\":").append(stat.objects.get())
+                    .append(",\"key_digest\":\"").append(inventory.digest()).append('"')
+                    .append(",\"page_plan_sha\":\"").append(pagePlanSha256(nativePages.get(group))).append('"')
+                    .append(",\"phase\":").append((double) group / GROUP_COUNT)
+                    .append(",\"native_pages\":").append(nativePages.get(group).size())
+                    .append(",\"native_warmup_requests\":").append(nativePages.get(group).size())
+                    .append(",\"native_warmup_objects\":").append(inventory.count())
                     .append(",\"attempted_requests\":").append(offeredEach)
                     .append(",\"successful_requests\":").append(stat.requests.get())
-                    .append(",\"delivered_fraction\":")
-                    .append(String.format(Locale.ROOT, "%.6f",
-                            (double) stat.requests.get() / offeredEach))
-                    .append(",\"objects\":").append(stat.objects.get())
                     .append(",\"bytes\":").append(stat.bytes.get())
+                    .append(",\"delivered_fraction\":1.0")
                     .append(",\"drain_inclusive_rate_rps\":")
                     .append(String.format(Locale.ROOT, "%.6f", stat.requests.get() * 1e9 / elapsed))
-                    .append(",\"worker_dispatch_p99_lag_ns\":")
-                    .append(stat.dispatchLag.percentile(.99))
+                    .append(",\"predecessor_wait_p99_ns\":").append(stat.predecessorWait.percentile(.99))
                     .append(",\"client_send_p99_lag_ns\":").append(stat.sendLag.percentile(.99))
-                    .append(",\"p50_ns\":").append(stat.latencies.percentile(.50))
-                    .append(",\"p95_ns\":").append(stat.latencies.percentile(.95))
                     .append(",\"p99_ns\":").append(stat.latencies.percentile(.99)).append('}');
+        }
+        out.append("],\"protocols\":{");
+        for (int p = 0; p < ALL.size(); p++) {
+            String protocol = ALL.get(p);
+            List<Integer> selectedGroups = new ArrayList<>();
+            for (int group = 0; group < GROUP_COUNT; group++) {
+                if (groupProtocols.get(group).equals(protocol)) selectedGroups.add(group);
+            }
+            if (selectedGroups.isEmpty()) continue;
+            if (out.charAt(out.length() - 1) != '{') out.append(',');
+            long requests = 0, objects = 0, bytes = 0;
+            Histogram pLatency = new Histogram(), pSend = new Histogram();
+            for (int group : selectedGroups) {
+                Stats stat = measured.groups().get(group);
+                requests += stat.requests.get();
+                objects += stat.objects.get();
+                bytes += stat.bytes.get();
+                pLatency.addAll(stat.latencies);
+                pSend.addAll(stat.sendLag);
+            }
+            List<PageSpec> pages = nativePages.get(selectedGroups.getFirst());
+            out.append('"').append(protocol).append("\":{\"native_pages\":").append(pages.size())
+                    .append(",\"page_plan_sha256\":\"").append(pagePlanSha256(pages)).append('"')
+                    .append(",\"complete_inventory_cycles\":").append(cycles * selectedGroups.size())
+                    .append(",\"partial_tail_pages\":0")
+                    .append(",\"attempted_requests\":").append(offeredEach * selectedGroups.size())
+                    .append(",\"successful_requests\":").append(requests)
+                    .append(",\"delivered_fraction\":1.0")
+                    .append(",\"objects\":").append(objects)
+                    .append(",\"bytes\":").append(bytes)
+                    .append(",\"drain_inclusive_rate_rps\":")
+                    .append(String.format(Locale.ROOT, "%.6f", requests * 1e9 / elapsed))
+                    .append(",\"client_send_p99_lag_ns\":").append(pSend.percentile(.99))
+                    .append(",\"p50_ns\":").append(pLatency.percentile(.50))
+                    .append(",\"p95_ns\":").append(pLatency.percentile(.95))
+                    .append(",\"p99_ns\":").append(pLatency.percentile(.99)).append('}');
         }
         System.out.println(out.append("}}").toString());
     }
@@ -462,72 +468,102 @@ public final class ReplayMixedOpenLoopBench {
         return List.copyOf(verified);
     }
 
-    /** Fixed offered-rate connection/JIT warmup; every response still validates its native page. */
-    private static WarmupOutcome runRateWarmup(HttpClient client, ScheduledThreadPoolExecutor watchdog,
-                                      java.util.concurrent.ExecutorService workers, URI endpoint,
-                                      String bucket, List<String> protocols,
-                                      List<List<PageSpec>> pagesByProtocol, double rate,
-                                      int offeredEach, int pageSize, Semaphore permits,
-                                      AtomicLong outstanding, PhaseCounts counts) throws Exception {
-        if (offeredEach < 1) throw new IllegalArgumentException("target-rate warmup offered no requests");
-        CountDownLatch done = new CountDownLatch(Math.multiplyExact(offeredEach, protocols.size()));
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        int unsent = 0;
+    /** Three fixed groups of sixteen response-ordered lanes for warmup and measurement alike. */
+    private static PhaseOutcome runLanePhase(HttpClient client, ScheduledThreadPoolExecutor watchdog,
+                                             java.util.concurrent.ExecutorService workers, URI endpoint,
+                                             String bucket, List<String> groupProtocols,
+                                             List<List<PageSpec>> pagePlans, double rate,
+                                             int cycles, int pageSize, Semaphore permits,
+                                             AtomicLong outstanding, AtomicLong peakOutstanding,
+                                             PhaseCounts counts) throws Exception {
+        if (groupProtocols.size() != GROUP_COUNT || pagePlans.size() != GROUP_COUNT || cycles < 1
+                || !Double.isFinite(rate) || rate <= 0) {
+            throw new IllegalArgumentException("fixed lane phase needs three groups and positive cycles");
+        }
+        int offeredEach = Math.multiplyExact(pagePlans.getFirst().size(), cycles);
+        long scheduledWindow = scheduledWindowNanos(offeredEach, rate);
+        List<Stats> groups = groupProtocols.stream().map(ignored -> new Stats()).toList();
+        var completion = new java.util.concurrent.ExecutorCompletionService<Void>(workers);
+        List<java.util.concurrent.Future<Void>> futures = new ArrayList<>(GROUP_COUNT * LANES_PER_GROUP);
         long start = System.nanoTime();
-        long period = Math.round(1_000_000_000.0 / rate);
-        for (int i = 0; i < offeredEach; i++) {
-            for (int p = 0; p < protocols.size(); p++) {
-                String protocol = protocols.get(p);
-                long scheduled = start + Math.round((i + timePhase(protocol)) * period);
-                while (System.nanoTime() < scheduled) {
-                    LockSupport.parkNanos(Math.min(1_000_000L, scheduled - System.nanoTime()));
-                }
-                counts.scheduled.incrementAndGet();
-                List<PageSpec> pages = pagesByProtocol.get(p);
-                PageSpec page = pages.get((i + phaseOffset(protocol, pages.size())) % pages.size());
-                if (!permits.tryAcquire()) {
-                    unsent++;
-                    counts.unsent.incrementAndGet();
-                    done.countDown();
-                    continue;
-                }
-                counts.admitted.incrementAndGet();
-                outstanding.incrementAndGet();
-                try {
-                    workers.submit(() -> {
-                        try {
-                            fetch(client, watchdog, endpoint, bucket, protocol, page.token(),
-                                    page.predecessor(), page.upper(), page, pageSize, false);
-                            counts.successful.incrementAndGet();
-                        } catch (Throwable error) {
-                            failure.compareAndSet(null, error);
-                        } finally {
-                            outstanding.decrementAndGet();
-                            permits.release();
-                            done.countDown();
+        long deadline = phaseDeadlineNanos(start, offeredEach, rate, TimeUnit.SECONDS.toNanos(120));
+        try {
+            for (int group = 0; group < GROUP_COUNT; group++) {
+                final int groupId = group;
+                final String protocol = groupProtocols.get(group);
+                final List<PageSpec> pages = pagePlans.get(group);
+                final Stats stat = groups.get(group);
+                List<LaneRange> ranges = laneRanges(pages.size());
+                for (int lane = 0; lane < LANES_PER_GROUP; lane++) {
+                    final int laneId = lane;
+                    final LaneRange range = ranges.get(lane);
+                    futures.add(completion.submit(() -> {
+                        LaneCursor cursor = new LaneCursor(pages, range, cycles);
+                        while (cursor.hasNext()) {
+                            long scheduled = scheduledNanos(start, groupId, laneId,
+                                    cursor.roundWithinLane(), cursor.cycle(), pages.size(), rate);
+                            long ready = readyNanos(scheduled, cursor.predecessorCompleted());
+                            while (System.nanoTime() < ready) {
+                                LockSupport.parkNanos(Math.min(1_000_000L, ready - System.nanoTime()));
+                            }
+                            long awakened = System.nanoTime();
+                            counts.scheduled.incrementAndGet();
+                            long predecessorWait = cursor.predecessorCompleted() == Long.MIN_VALUE ? 0
+                                    : Math.max(0, cursor.predecessorCompleted() - scheduled);
+                            stat.predecessorWait.add(predecessorWait);
+                            stat.maxPredecessorWait.accumulateAndGet(predecessorWait, Math::max);
+                            long wakeLag = Math.max(0, awakened - ready);
+                            stat.wakeLag.add(wakeLag);
+                            stat.maxWakeLag.accumulateAndGet(wakeLag, Math::max);
+                            if (!permits.tryAcquire()) {
+                                counts.unsent.incrementAndGet();
+                                throw new IllegalStateException("fixed-lane client outstanding limit reached");
+                            }
+                            counts.admitted.incrementAndGet();
+                            long active = outstanding.incrementAndGet();
+                            peakOutstanding.accumulateAndGet(active, Math::max);
+                            try {
+                                PageSpec page = cursor.expected();
+                                long dispatchLag = Math.max(0, System.nanoTime() - ready);
+                                stat.dispatchLag.add(dispatchLag);
+                                stat.maxDispatchLag.accumulateAndGet(dispatchLag, Math::max);
+                                FetchResult response = fetch(client, watchdog, endpoint, bucket, protocol,
+                                        cursor.token(), cursor.prior(), page.upper(), page, pageSize, false);
+                                long completed = System.nanoTime();
+                                cursor.complete(response, completed);
+                                long sendLag = Math.max(0, response.sendStartedNanos() - ready);
+                                stat.sendLag.add(sendLag);
+                                stat.maxSendLag.accumulateAndGet(sendLag, Math::max);
+                                stat.record(page.count(), response.bytes(), completed - scheduled);
+                                counts.successful.incrementAndGet();
+                            } finally {
+                                outstanding.decrementAndGet();
+                                permits.release();
+                            }
                         }
-                    });
-                } catch (RuntimeException submitError) {
-                    failure.compareAndSet(null, submitError);
-                    outstanding.decrementAndGet();
-                    permits.release();
-                    done.countDown();
+                        if (cursor.completed() != Math.multiplyExact(cycles,
+                                range.endExclusive() - range.startInclusive())) {
+                            throw new IllegalStateException("lane omitted an assigned native page");
+                        }
+                        return null;
+                    }));
                 }
             }
+            for (int i = 0; i < futures.size(); i++) {
+                long remaining = deadline - System.nanoTime();
+                java.util.concurrent.Future<Void> finished = remaining <= 0 ? null
+                        : completion.poll(remaining, TimeUnit.NANOSECONDS);
+                if (finished == null) throw new IllegalStateException("fixed-lane response drain timeout");
+                finished.get();
+            }
+        } catch (Exception | Error failure) {
+            for (java.util.concurrent.Future<Void> future : futures) future.cancel(true);
+            throw failure;
         }
-        if (!done.await(120, TimeUnit.SECONDS)) throw new IllegalStateException("target-rate warmup drain timeout");
-        if (counts.admitted.get() + counts.unsent.get() != counts.scheduled.get()) {
-            throw new IllegalStateException("target-rate warmup admitted+unsent differs from scheduled");
-        }
-        if (failure.get() != null) throw new IllegalStateException("target-rate warmup failed", failure.get());
-        if (unsent != 0) throw new IllegalStateException("target-rate warmup client limit reached: " + unsent);
         long elapsed = System.nanoTime() - start;
-        double nominalSeconds = offeredEach / rate;
-        if (elapsed > Math.round(nominalSeconds * 1_100_000_000.0) + 1_000_000_000L) {
-            throw new IllegalStateException("target-rate warmup did not sustain its fixed offered schedule");
-        }
-        return new WarmupOutcome(offeredEach, elapsed);
+        return new PhaseOutcome(offeredEach, elapsed, scheduledWindow, groups, peakOutstanding.get());
     }
+
 
     private static FetchResult fetch(HttpClient client, ScheduledThreadPoolExecutor watchdog, URI endpoint,
                                      String bucket, String protocol, String token, byte[] prior,
@@ -703,21 +739,139 @@ public final class ReplayMixedOpenLoopBench {
         return out.toString();
     }
 
-    private static int phaseOffset(String protocol, int pageCount) {
-        return ALL.indexOf(protocol) * pageCount / ALL.size();
+    static List<String> logicalGroupProtocols(List<String> selected) {
+        if (selected.equals(ALL)) return ALL;
+        if (selected.size() == 1 && ALL.contains(selected.getFirst())) {
+            return List.of(selected.getFirst(), selected.getFirst(), selected.getFirst());
+        }
+        throw new IllegalArgumentException("mixed driver requires all protocols or one isolated protocol");
     }
 
-    private static double timePhase(String protocol) {
-        return (double) ALL.indexOf(protocol) / ALL.size();
+    static List<LaneRange> laneRanges(int pageCount) {
+        if (pageCount < LANES_PER_GROUP) {
+            throw new IllegalArgumentException("fixed 16-lane arm needs at least 16 native pages");
+        }
+        List<LaneRange> ranges = new ArrayList<>(LANES_PER_GROUP);
+        int perLane = pageCount / LANES_PER_GROUP;
+        int longer = pageCount % LANES_PER_GROUP;
+        for (int lane = 0; lane < LANES_PER_GROUP; lane++) {
+            int start = lane * perLane + Math.min(lane, longer);
+            int end = start + perLane + (lane < longer ? 1 : 0);
+            ranges.add(new LaneRange(start, end));
+        }
+        return List.copyOf(ranges);
     }
 
-    private record PageSpec(String token, String nextToken, byte[] first, byte[] predecessor, byte[] upper,
-                            int count, String digest, FixtureMetadataOracle.Digest metadata) { }
+    static long scheduledNanos(long start, int groupId, int laneId, int roundWithinLane,
+                               int cycle, int pageCount, double rate) {
+        if (groupId < 0 || groupId >= GROUP_COUNT || laneId < 0 || laneId >= LANES_PER_GROUP
+                || roundWithinLane < 0 || cycle < 0 || pageCount < LANES_PER_GROUP
+                || !Double.isFinite(rate) || rate <= 0) {
+            throw new IllegalArgumentException("invalid fixed-lane schedule input");
+        }
+        long slotIndex = Math.addExact(Math.multiplyExact((long) cycle, pageCount),
+                Math.addExact((long) roundWithinLane * LANES_PER_GROUP, laneId));
+        double slot = slotIndex + (double) groupId / GROUP_COUNT;
+        return Math.addExact(start, Math.round(slot * 1_000_000_000.0 / rate));
+    }
+
+    static long readyNanos(long scheduled, long predecessorCompleted) {
+        return Math.max(scheduled, predecessorCompleted);
+    }
+
+    static long phaseDeadlineNanos(long start, int offeredEach, double rate, long drainAllowanceNanos) {
+        if (drainAllowanceNanos < 0) throw new IllegalArgumentException("negative phase drain allowance");
+        try {
+            return Math.addExact(start, Math.addExact(scheduledWindowNanos(offeredEach, rate),
+                    drainAllowanceNanos));
+        } catch (ArithmeticException overflow) {
+            throw new IllegalArgumentException("phase deadline overflow", overflow);
+        }
+    }
+
+    private static long scheduledWindowNanos(int offeredEach, double rate) {
+        if (offeredEach < 1 || !Double.isFinite(rate) || rate <= 0) {
+            throw new IllegalArgumentException("invalid offered window");
+        }
+        double nanos = offeredEach * 1_000_000_000.0 / rate;
+        if (!Double.isFinite(nanos) || nanos > Long.MAX_VALUE) {
+            throw new IllegalArgumentException("offered window exceeds deadline range");
+        }
+        return Math.round(nanos);
+    }
+
+    record LaneRange(int startInclusive, int endExclusive) { }
+
+    static final class LaneCursor {
+        private final List<PageSpec> pages;
+        private final LaneRange range;
+        private final int cycles;
+        private int cycle;
+        private int index;
+        private int completed;
+        private long objects;
+        private long predecessorCompleted = Long.MIN_VALUE;
+        private String token;
+        private byte[] prior;
+
+        LaneCursor(List<PageSpec> pages, LaneRange range, int cycles) {
+            if (cycles < 1 || range.startInclusive() < 0
+                    || range.startInclusive() >= range.endExclusive()
+                    || range.endExclusive() > pages.size()) {
+                throw new IllegalArgumentException("invalid lane range/cycles");
+            }
+            this.pages = pages;
+            this.range = range;
+            this.cycles = cycles;
+            restart();
+        }
+
+        boolean hasNext() { return cycle < cycles; }
+        PageSpec expected() {
+            if (!hasNext()) throw new IllegalStateException("lane completed all cycles");
+            return pages.get(index);
+        }
+        String token() { return token; }
+        byte[] prior() { return prior; }
+        int completed() { return completed; }
+        long objects() { return objects; }
+        int cycle() { return cycle; }
+        int roundWithinLane() { return index - range.startInclusive(); }
+        long predecessorCompleted() { return predecessorCompleted; }
+
+        void complete(FetchResult result, long completionNanos) {
+            PageSpec expected = expected();
+            if (result.count() != expected.count() || !result.digest().equals(expected.digest())
+                    || !Objects.equals(result.nextToken(), expected.nextToken())) {
+                throw new IllegalStateException("lane response differs from verified native page");
+            }
+            completed++;
+            objects += result.count();
+            predecessorCompleted = completionNanos;
+            if (++index < range.endExclusive()) {
+                token = result.nextToken();
+                prior = result.lastKey();
+            } else if (++cycle < cycles) {
+                restart();
+            }
+        }
+
+        private void restart() {
+            index = range.startInclusive();
+            PageSpec bootstrap = pages.get(index);
+            token = bootstrap.token();
+            prior = bootstrap.predecessor();
+        }
+    }
+
+    record PageSpec(String token, String nextToken, byte[] first, byte[] predecessor, byte[] upper,
+                    int count, String digest, FixtureMetadataOracle.Digest metadata) { }
     private record ObservedPage(String token, long count, String digest,
                                 FixtureMetadataOracle.Digest metadata, byte[] lastKey) { }
-    private record FetchResult(long count, String digest, FixtureMetadataOracle.Digest metadata,
-                               byte[] lastKey, String nextToken, long bytes, long sendStartedNanos) { }
-    private record WarmupOutcome(int offeredEach, long elapsedNs) { }
+    record FetchResult(long count, String digest, FixtureMetadataOracle.Digest metadata,
+                       byte[] lastKey, String nextToken, long bytes, long sendStartedNanos) { }
+    private record PhaseOutcome(int offeredEach, long elapsedNs, long scheduledWindowNs,
+                                List<Stats> groups, long peakOutstanding) { }
 
     private static final class PhaseCounts {
         final AtomicLong scheduled = new AtomicLong();
@@ -746,14 +900,18 @@ public final class ReplayMixedOpenLoopBench {
     }
 
     private static final class Stats {
-        final String protocol;
         final AtomicLong requests = new AtomicLong();
         final AtomicLong objects = new AtomicLong();
         final AtomicLong bytes = new AtomicLong();
         final Histogram latencies = new Histogram();
+        final Histogram wakeLag = new Histogram();
         final Histogram dispatchLag = new Histogram();
         final Histogram sendLag = new Histogram();
-        Stats(String protocol) { this.protocol = protocol; }
+        final Histogram predecessorWait = new Histogram();
+        final AtomicLong maxWakeLag = new AtomicLong();
+        final AtomicLong maxDispatchLag = new AtomicLong();
+        final AtomicLong maxSendLag = new AtomicLong();
+        final AtomicLong maxPredecessorWait = new AtomicLong();
         void record(long count, long byteCount, long latency) {
             requests.incrementAndGet();
             objects.addAndGet(count);

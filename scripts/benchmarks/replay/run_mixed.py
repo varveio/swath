@@ -23,6 +23,8 @@ import run_pair
 
 PROTOCOLS = ("s3", "gcs", "azure")
 ARM_ORDER = (*PROTOCOLS, "mixed")
+GROUP_COUNT = 3
+LANES_PER_GROUP = 16
 WILLIAMS = (("s3", "gcs", "mixed", "azure"),
             ("gcs", "azure", "s3", "mixed"),
             ("azure", "mixed", "gcs", "s3"),
@@ -53,6 +55,68 @@ def exact_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def group_matches(result, arm, plan, cycles):
+    """Three exact full-inventory scans are present in both isolated and mixed arms."""
+    page_count = next(iter(plan["native_page_counts"].values()))
+    tickets = page_count * cycles
+    groups = result.get("groups")
+    if not isinstance(groups, list) or len(groups) != GROUP_COUNT:
+        return False
+    if any(not exact_int(result.get(field)) for field in
+           ("offered_requests_per_group", "offered_requests", "attempted_requests",
+            "successful_requests", "requests", "objects")):
+        return False
+    if (result.get("offered_requests_per_group") != tickets
+            or result.get("offered_requests") != GROUP_COUNT * tickets
+            or result.get("attempted_requests") != GROUP_COUNT * tickets
+            or result.get("successful_requests") != GROUP_COUNT * tickets
+            or result.get("requests") != GROUP_COUNT * tickets
+            or result.get("objects") != GROUP_COUNT * plan["fixture_count"] * cycles
+            or result.get("key_digest_basis")
+               != "fixture_oracle_certified_by_measured_page_validation"
+            or result.get("native_warmup_scheduled") != GROUP_COUNT * page_count
+            or result.get("native_warmup_completed") != GROUP_COUNT * page_count
+            or result.get("target_warmup_scheduled")
+               != GROUP_COUNT * page_count * plan["rate_warmup_cycles"]
+            or result.get("target_warmup_admitted")
+               != GROUP_COUNT * page_count * plan["rate_warmup_cycles"]
+            or result.get("target_warmup_completed")
+               != GROUP_COUNT * page_count * plan["rate_warmup_cycles"]
+            or result.get("target_warmup_unsent") != 0
+            or result.get("warmup_attempted_requests")
+               != GROUP_COUNT * page_count * (1 + plan["rate_warmup_cycles"])
+            or result.get("warmup_successful_requests")
+               != GROUP_COUNT * page_count * (1 + plan["rate_warmup_cycles"])):
+        return False
+    seen = set()
+    for group in groups:
+        if not isinstance(group, dict) or not exact_int(group.get("group_id")):
+            return False
+        group_id = group["group_id"]
+        if not 0 <= group_id < GROUP_COUNT or group_id in seen:
+            return False
+        seen.add(group_id)
+        protocol = PROTOCOLS[group_id] if arm == "mixed" else arm
+        if (group.get("protocol") != protocol
+                or not all(exact_int(group.get(field)) for field in
+                           ("cycles", "tickets", "objects"))
+                or group["cycles"] != cycles or group["tickets"] != tickets
+                or group["objects"] != plan["fixture_count"] * cycles
+                or group.get("key_digest") != plan["fixture_digest"]
+                or group.get("page_plan_sha") != plan["native_page_plan_sha256"][protocol]
+                or group.get("native_pages") != page_count
+                or group.get("native_warmup_requests") != page_count
+                or group.get("native_warmup_objects") != plan["fixture_count"]
+                or group.get("attempted_requests") != tickets
+                or group.get("successful_requests") != tickets
+                or group.get("delivered_fraction") != 1.0
+                or not isinstance(group.get("phase"), (int, float))
+                or not math.isclose(group["phase"], group_id / GROUP_COUNT,
+                                    rel_tol=0, abs_tol=1e-12)):
+            return False
+    return True
+
+
 def interval(ratios, ceiling):
     if len(ratios) != 12 or any(r <= 0 or not math.isfinite(r) for r in ratios):
         return {"status": "incomplete_or_invalid", "pairs": ratios}
@@ -67,13 +131,15 @@ def interval(ratios, ceiling):
 
 def validate_plan(plan):
     if (not all(exact_int(plan[name]) for name in
-                ("rounds", "page_size", "full_warmup_cycles", "cost_pilot_repetitions",
-                 "rate_warmup_cycles", "max_outstanding"))
+                ("rounds", "page_size", "full_warmup_cycles", "cost_pilot_cycles",
+                 "rate_warmup_cycles", "max_outstanding", "group_count", "lanes_per_group"))
             or plan["rounds"] != 12 or plan["page_size"] != 1000
-            or plan["full_warmup_cycles"] != 1):
-        raise ValueError("mixed gate requires 12 fixed rounds, 1k pages and one full native warmup")
-    if plan["cost_pilot_repetitions"] < 1:
-        raise ValueError("isolated CPU-cost pilots must have fixed full inventory repetitions")
+            or plan["full_warmup_cycles"] != 1
+            or plan["group_count"] != GROUP_COUNT
+            or plan["lanes_per_group"] != LANES_PER_GROUP):
+        raise ValueError("mixed gate requires 12 rounds, 1k pages and fixed 3x16 lanes")
+    if plan["cost_pilot_cycles"] != 2 or plan["cost_pilot_rate_per_group_rps"] != 400.0:
+        raise ValueError("isolated CPU-cost pilots must use predeclared 400/group and two cycles")
     if not exact_int(plan["rate_warmup_cycles"]) or not 1 <= plan["rate_warmup_cycles"] <= 10:
         raise ValueError("target-rate warmup must cover complete native page-plan cycles")
     if plan["max_outstanding"] < 1 or plan["max_outstanding"] > 512:
@@ -83,7 +149,7 @@ def validate_plan(plan):
     if (plan["max_actual_utilization_gap"] <= 0 or plan["max_actual_utilization_gap"] > .05
             or plan["max_client_send_p99_lag_ns"] <= 0
             or not .55 <= plan["minimum_actual_server_utilization"] <= .70
-            or not .60 <= plan["target_predicted_cpu_utilization"] <= .70):
+            or plan["target_predicted_cpu_utilization"] != .65):
         raise ValueError("matched-utilization or dispatch-lag quality limit missing")
     if any(not math.isfinite(plan[name]) for name in
            ("max_actual_utilization_gap", "max_client_send_p99_lag_ns",
@@ -91,13 +157,13 @@ def validate_plan(plan):
         raise ValueError("nonfinite mixed quality limit")
     if set(plan["cpu_cost_ns_per_request"]) != set(PROTOCOLS) \
             or set(plan["cost_pilots"]) != set(PROTOCOLS) \
-            or set(plan["isolated_rates_rps"]) != set(PROTOCOLS) \
+            or set(plan["isolated_group_rates_rps"]) != set(PROTOCOLS) \
             or set(plan["isolated_cycles"]) != set(PROTOCOLS) \
             or set(plan["native_page_counts"]) != set(PROTOCOLS) \
             or set(plan["native_page_plan_sha256"]) != set(PROTOCOLS):
         raise ValueError("all three isolated cost receipts and rates are required")
     costs = plan["cpu_cost_ns_per_request"]
-    rate = plan["mixed_rate_each_rps"]
+    rate = plan["mixed_rate_per_group_rps"]
     if any(not math.isfinite(v) or v <= 0 for v in costs.values()) \
             or not math.isfinite(rate) or rate <= 0:
         raise ValueError("invalid isolated cost pilots or mixed rate")
@@ -122,12 +188,12 @@ def validate_plan(plan):
                 or item["page_plan_sha256"] != plan["native_page_plan_sha256"][protocol]):
             raise ValueError("native page-plan preflight count/hash changed")
     page_count = next(iter(plan["native_page_counts"].values()))
-    if page_count < 1 or page_count > plan["fixture_count"] \
+    if page_count < LANES_PER_GROUP or page_count > plan["fixture_count"] \
             or page_count * plan["rate_warmup_cycles"] > 1_000_000 \
             or plan["mixed_cycles"] < 1 \
             or page_count * plan["mixed_cycles"] > 1_000_000 \
-            or (page_count * plan["mixed_cycles"] - 1) / plan["mixed_rate_each_rps"] < 31 \
-            or page_count * plan["rate_warmup_cycles"] / plan["mixed_rate_each_rps"] < 5:
+            or (page_count * plan["mixed_cycles"] - 1) / plan["mixed_rate_per_group_rps"] < 31 \
+            or page_count * plan["rate_warmup_cycles"] / plan["mixed_rate_per_group_rps"] < 5:
         raise ValueError("mixed arm must schedule exact complete native inventory cycles")
     for protocol in PROTOCOLS:
         pilot = plan["cost_pilots"][protocol]
@@ -138,15 +204,42 @@ def validate_plan(plan):
             raise ValueError("isolated cost pilot build plan changed")
         pilot_plan = json.loads(pilot_plan_path.read_text())
         if (pilot_plan["baseline_distribution"] != plan["candidate_distribution_fingerprints"]
-                or pilot_plan["candidate_distribution"] != plan["candidate_distribution_fingerprints"]):
-            raise ValueError("isolated cost pilot used a different distribution build")
+                or pilot_plan["candidate_distribution"] != plan["candidate_distribution_fingerprints"]
+                or pilot_plan.get("harness_manifest_sha256") != plan["harness_manifest_sha256"]
+                or pilot_plan.get("driver_classes_fingerprints")
+                   != plan["driver_classes_fingerprints"]
+                or pilot_plan.get("driver_libraries_fingerprints")
+                   != plan["driver_libraries_fingerprints"]
+                or pilot_plan.get("driver_java_opts") != plan["driver_java_opts"]
+                or pilot_plan.get("protocol") != protocol
+                or pilot_plan.get("group_count") != GROUP_COUNT
+                or pilot_plan.get("lanes_per_group") != LANES_PER_GROUP
+                or pilot_plan.get("rate_per_group_rps") != plan["cost_pilot_rate_per_group_rps"]
+                or pilot_plan.get("cycles") != plan["cost_pilot_cycles"]
+                or pilot_plan.get("fixture_digest") != plan["fixture_digest"]
+                or pilot_plan.get("fixture_fingerprints") != plan["fixture_fingerprints"]
+                or pilot_plan.get("server_cpus") != plan["server_cpus"]
+                or pilot_plan.get("client_cpus") != plan["client_cpus"]
+                or pilot_plan.get("server_java_opts") != plan["server_java_opts"]
+                or pilot_plan.get("server_options") != plan["server_options"]
+                or pilot_plan.get("connections") != plan["connections"]
+                or pilot_plan.get("max_concurrent_requests") != plan["max_concurrent_requests"]):
+            raise ValueError("isolated cost pilot used a different build or lane workload")
         receipt = json.loads(Path(pilot["path"]).read_text())
-        if receipt["status"] != "passed" or receipt["result"]["protocol"] != protocol \
-                or receipt["result"]["page_size"] != 1000 \
-                or receipt["result"]["objects"] \
-                   != plan["fixture_count"] * plan["cost_pilot_repetitions"] \
-                or receipt["result"]["repetitions"] != plan["cost_pilot_repetitions"] \
-                or receipt["result"]["fixture_digest"] != plan["fixture_digest"] \
+        result = receipt["result"]
+        if receipt["status"] != "passed" or set(result.get("protocols", {})) != {protocol} \
+                or result["page_size"] != 1000 \
+                or result["fixture_digest"] != plan["fixture_digest"] \
+                or result.get("elapsed_ns", 0) < 30_000_000_000 \
+                or result.get("warmup_metadata_verified_objects") \
+                   != GROUP_COUNT * plan["fixture_count"] \
+                or result["protocols"][protocol].get("complete_inventory_cycles") \
+                   != GROUP_COUNT * plan["cost_pilot_cycles"] \
+                or result["protocols"][protocol].get("page_plan_sha256") \
+                   != plan["native_page_plan_sha256"][protocol] \
+                or not group_matches(result, protocol, plan, plan["cost_pilot_cycles"]) \
+                or not math.isclose(result.get("offered_rate_per_group_rps", float("nan")),
+                                    plan["cost_pilot_rate_per_group_rps"], rel_tol=1e-12) \
                 or receipt["fixture_fingerprints"] != plan["fixture_fingerprints"] \
                 or receipt["fixture_glob"] != plan["fixture_glob"] \
                 or receipt["server_cpus"] != sorted(run_pair.cpus(plan["server_cpus"])) \
@@ -172,8 +265,8 @@ def validate_plan(plan):
     if abs(predicted_cpu_util - plan["target_predicted_cpu_utilization"]) > .01:
         raise ValueError("mixed rate misses the predeclared nontrivial CPU target")
     for protocol in PROTOCOLS:
-        derived_rate = rate * sum(costs.values()) / costs[protocol]
-        actual = plan["isolated_rates_rps"][protocol]
+        derived_rate = rate * sum(costs.values()) / (GROUP_COUNT * costs[protocol])
+        actual = plan["isolated_group_rates_rps"][protocol]
         if not math.isfinite(actual) or abs(actual / derived_rate - 1) > .01:
             raise ValueError("isolated rate does not match predeclared aggregate CPU target")
         if (plan["isolated_cycles"][protocol] < 1
@@ -212,7 +305,7 @@ def resource_arm_args(plan, inventory, fixture_fingerprints):
     proof = plan["resource_proof"]
     offered = plan["native_page_counts"]["s3"] * plan["mixed_cycles"]
     args = arm_args(plan, inventory, fixture_fingerprints, "s3,gcs,azure",
-                    plan["mixed_rate_each_rps"], offered)
+                    plan["mixed_rate_per_group_rps"], offered)
     args.server_java_opts = proof["server_java_opts"]
     args.resource_observation = True
     args.resource_caps = proof["caps"]
@@ -225,6 +318,7 @@ def summarize_rounds(plan, rounds):
     issues = []
     utilization = []
     for number in range(1, 13):
+        issues_before_round = len(issues)
         by_arm = {receipt["panel_arm"]: receipt for receipt in rounds
                   if receipt["round"] == number}
         if set(by_arm) != set(ARM_ORDER) or any(x["status"] != "passed" for x in by_arm.values()):
@@ -240,11 +334,10 @@ def summarize_rounds(plan, rounds):
             issues.append({"round": number, "reason": "mixed_protocol_set_changed"})
             continue
         weighted_cost = 0.0
+        round_p99 = {}
         mixed_objects = mixed_result["objects"]
-        expected_mixed_tickets = (plan["native_page_counts"]["s3"]
-                                  * plan["mixed_cycles"])
-        if mixed_result["offered_requests_each"] != expected_mixed_tickets \
-                or mixed_result["unsent_requests"] != 0:
+        if (not group_matches(mixed_result, "mixed", plan, plan["mixed_cycles"])
+                or mixed_result["unsent_requests"] != 0):
             issues.append({"round": number, "reason": "mixed_scheduled_ticket_accounting"})
         if mixed["server_cpu_utilization"] < plan["minimum_actual_server_utilization"]:
             issues.append({"round": number, "reason": "mixed_cpu_utilization_below_contention_floor"})
@@ -263,27 +356,37 @@ def summarize_rounds(plan, rounds):
                 continue
             isolated_result = isolated_scope[protocol]
             mixed_protocol = mixed_result["protocols"][protocol]
+            if (isolated_result.get("objects")
+                    != GROUP_COUNT * plan["fixture_count"] * plan["isolated_cycles"][protocol]
+                    or mixed_protocol.get("objects")
+                    != plan["fixture_count"] * plan["mixed_cycles"]):
+                issues.append({"round": number, "reason": "protocol_group_inventory_mismatch",
+                               "protocol": protocol})
             if isolated["server_cpu_utilization"] < plan["minimum_actual_server_utilization"]:
                 issues.append({"round": number, "reason": "isolated_cpu_utilization_below_contention_floor",
                                "protocol": protocol})
             if isolated["server_cpu_utilization"] > .70:
                 issues.append({"round": number, "reason": "isolated_cpu_utilization_above_70pct",
                                "protocol": protocol})
-            expected_iso_tickets = (plan["native_page_counts"][protocol]
-                                    * plan["isolated_cycles"][protocol])
-            if isolated["result"]["offered_requests_each"] != expected_iso_tickets \
-                    or isolated["result"]["unsent_requests"] != 0 \
-                    or isolated_result["partial_tail_pages"] != 0 \
-                    or isolated_result["complete_inventory_cycles"] != plan["isolated_cycles"][protocol] \
-                    or mixed_protocol["partial_tail_pages"] != 0 \
-                    or mixed_protocol["complete_inventory_cycles"] != plan["mixed_cycles"]:
+            if (not group_matches(isolated["result"], protocol, plan,
+                                  plan["isolated_cycles"][protocol])
+                    or isolated["result"]["unsent_requests"] != 0
+                    or isolated_result["complete_inventory_cycles"]
+                       != GROUP_COUNT * plan["isolated_cycles"][protocol]
+                    or mixed_protocol["partial_tail_pages"] != 0
+                    or mixed_protocol["complete_inventory_cycles"] != plan["mixed_cycles"]):
                 issues.append({"round": number, "reason": "isolated_scheduled_ticket_accounting",
                                "protocol": protocol})
             if isolated_result["page_plan_sha256"] != mixed_protocol["page_plan_sha256"]:
                 issues.append({"round": number, "reason": "native_page_plan_mismatch",
                                "protocol": protocol})
-            if (isolated_result["phase_offset_pages"] != mixed_protocol["phase_offset_pages"]
-                    or isolated_result["time_phase_fraction"] != mixed_protocol["time_phase_fraction"]):
+            isolated_groups = {g["group_id"]: g for g in isolated["result"].get("groups", [])
+                               if isinstance(g, dict) and exact_int(g.get("group_id"))}
+            mixed_groups = {g["group_id"]: g for g in mixed_result.get("groups", [])
+                            if isinstance(g, dict) and exact_int(g.get("group_id"))}
+            if any(isolated_groups.get(group_id, {}).get("phase")
+                   != mixed_groups.get(group_id, {}).get("phase")
+                   for group_id in range(GROUP_COUNT)):
                 issues.append({"round": number, "reason": "canonical_phase_identity_changed",
                                "protocol": protocol})
             if (isolated_result["page_plan_sha256"] != plan["native_page_plan_sha256"][protocol]
@@ -295,9 +398,9 @@ def summarize_rounds(plan, rounds):
                 issues.append({"round": number, "reason": "offered_rate_missed",
                                "protocol": protocol})
             if (isolated_result["drain_inclusive_rate_rps"]
-                    / plan["isolated_rates_rps"][protocol] < .99
+                    / (GROUP_COUNT * plan["isolated_group_rates_rps"][protocol]) < .99
                     or mixed_protocol["drain_inclusive_rate_rps"]
-                    / plan["mixed_rate_each_rps"] < .99):
+                    / plan["mixed_rate_per_group_rps"] < .99):
                 issues.append({"round": number, "reason": "achieved_rate_below_offered_99pct",
                                "protocol": protocol})
             if abs(isolated["server_cpu_utilization"] - mixed["server_cpu_utilization"]) \
@@ -308,9 +411,12 @@ def summarize_rounds(plan, rounds):
                                "mixed": mixed["server_cpu_utilization"]})
             weighted_cost += (mixed_protocol["objects"] / mixed_objects
                               * isolated["server_cpu_ns_per_object"])
-            p99_ratios[protocol].append(mixed_protocol["p99_ns"] / isolated_result["p99_ns"])
-        if weighted_cost > 0:
+            round_p99[protocol] = mixed_protocol["p99_ns"] / isolated_result["p99_ns"]
+        if len(issues) == issues_before_round and weighted_cost > 0 \
+                and set(round_p99) == set(PROTOCOLS):
             cpu_ratios.append(mixed["server_cpu_ns_per_object"] / weighted_cost)
+            for protocol in PROTOCOLS:
+                p99_ratios[protocol].append(round_p99[protocol])
     metrics = {"weighted_server_cpu_per_object": interval(cpu_ratios, 1.05)}
     metrics.update({protocol + "_p99": interval(p99_ratios[protocol], 1.20)
                     for protocol in PROTOCOLS})
@@ -420,8 +526,8 @@ def main():
     receipts = []
     for number in range(1, 13):
         for arm in balanced_order(number):
-            rate = (plan["mixed_rate_each_rps"] if arm == "mixed"
-                    else plan["isolated_rates_rps"][arm])
+            rate = (plan["mixed_rate_per_group_rps"] if arm == "mixed"
+                    else plan["isolated_group_rates_rps"][arm])
             offered_each = plan["native_page_counts"]["s3"] * (
                     plan["mixed_cycles"] if arm == "mixed" else plan["isolated_cycles"][arm])
             duration = offered_each / rate
@@ -432,7 +538,7 @@ def main():
             receipt = run_pair.run_arm(args, "baseline", number, directory,
                                        server_cpus, client_cpus)
             receipt["panel_arm"] = arm
-            receipt["offered_rate_each_rps"] = rate
+            receipt["offered_rate_per_group_rps"] = rate
             receipt["scheduled_duration_seconds"] = duration
             receipt["purpose"] = "native_mixed_open_loop_fixed_gate"
             (directory / "receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")

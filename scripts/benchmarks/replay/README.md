@@ -95,15 +95,21 @@ compares an unchanged GCS walk with two native endOffset intervals per partition
 requiring the same exact owned inventory and zero narrowed overshoot. Its paired
 gates use objects/s and backing rows per owned object.
 
-`ReplayMixedOpenLoopBench` first walks all three native token streams and checks
-each server-chosen page boundary against the independent fixture and metadata
-oracle. Its measured phase reuses those real tokens in fixed full-inventory
-cycles, sends equal offered rates for S3/GCS/Azure, and measures response latency
-from the scheduled send time. It reports unsent tickets, actual send lag, per-
-protocol p99, page-plan hashes, cycle counts and drain-inclusive attained rates.
+`ReplayMixedOpenLoopBench` uses three logical scan groups of 16 sequential lanes
+in every arm. Each group covers the full fixture inventory in fixed cycles. The
+mixed arm maps the groups to S3, GCS and Azure; an isolated arm maps all three
+to one protocol. Full native warmup walks verify server-chosen page boundaries,
+names, sizes and timestamps against the fixture oracle. A lane bootstraps from a
+verified token only at its block start or cycle restart; later requests use the
+actual preceding response token. Timed responses verify keys, counts and tokens.
+Each group has a pinned offered rate. Scheduled-to-completion latency includes
+predecessor wait; ready-to-send lag is reported and gated separately. Results
+include per-group inventory counts and page-plan hashes, unsent tickets,
+per-protocol p99 and drain-inclusive attained rates.
 `run_mixed.py --plan /path/to/predeclared-mixed-plan.json` runs 12 Williams-balanced
 four-arm rounds: three isolated protocols at matched aggregate CPU utilization and
-one mixed arm. The plan pins isolated CPU-cost pilot receipts, an independent
+one mixed arm. Its isolated CPU-cost pilots use the same three-group lane driver
+at a pinned per-group rate. The plan pins those pilot receipts, an independent
 native page-plan preflight, exact integer ticket counts, JVM/artifact hashes,
 resource limits and all thresholds before round 1. A completed receipt is still
 required before claiming the mixed gate passes. With a fixed `resource_proof`

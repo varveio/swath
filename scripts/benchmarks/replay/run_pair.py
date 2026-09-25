@@ -544,18 +544,29 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                     raise RuntimeError("delimiter warmup metadata was not fully verified")
             elif args.workload == "mixed_open_loop":
                 expected_protocols = set(args.mixed_protocols.split(","))
+                groups = result.get("groups", [])
+                expected_group_protocols = (["s3", "gcs", "azure"]
+                                            if len(expected_protocols) == 3
+                                            else [next(iter(expected_protocols))] * 3)
                 if (result.get("metadata_profile") != "fixture_name_size_time"
                         or result.get("warmup_metadata_verified_objects")
-                        != args.inventory["fixture_count"] * len(expected_protocols)
+                        != args.inventory["fixture_count"] * 3
                         or set(result.get("protocols", {})) != expected_protocols
+                        or not isinstance(groups, list) or len(groups) != 3
+                        or any(not isinstance(group, dict)
+                               or group.get("group_id") != index
+                               or group.get("protocol") != expected_group_protocols[index]
+                               for index, group in enumerate(groups))
                         or result.get("warmup_attempted_requests")
                         != result.get("warmup_successful_requests")
                         or result.get("unsent_requests") != 0
-                        or result.get("offered_requests_each") != args.mixed_offered_each
+                        or result.get("offered_requests_per_group") != args.mixed_offered_each
+                        or result.get("offered_requests") != 3 * args.mixed_offered_each
+                        or result.get("attempted_requests") != 3 * args.mixed_offered_each
                         or result.get("max_outstanding_limit") != args.mixed_max_outstanding
                         or result.get("target_rate_warmup_cycles")
                         != args.mixed_rate_warmup_cycles
-                        or not math.isclose(result.get("offered_rate_each_rps", float("nan")),
+                        or not math.isclose(result.get("offered_rate_per_group_rps", float("nan")),
                                             args.mixed_rate, rel_tol=1e-12)):
                     raise RuntimeError("mixed native scope, exact tickets or warmup disagree")
             receipt["result"] = result
