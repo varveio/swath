@@ -251,6 +251,69 @@ def build_driver_command(args, label):
     return command
 
 
+def capture_rate_warmup_marker(event, state, metrics_url, server_pid, client_pid,
+                               cpu_set, driver_stdin):
+    """ACK target-rate markers after sampling, including a failed phase's live client."""
+    if event == "RATE_WARMUP_START":
+        if state.get("started_at") is not None:
+            raise RuntimeError("duplicate or late rate-warmup start marker")
+        state["metrics_before"] = fetch_json(metrics_url)
+        validate_metrics(state["metrics_before"])
+        state["server_cpu_before"] = cpu_ticks(server_pid)
+        state["client_cpu_before"] = cpu_ticks(client_pid)
+        state["client_threads_before"] = thread_cpu_ticks(client_pid)
+        state["host_busy_before"] = cpu_busy_ticks(cpu_set)
+        state["rss_sampled_peak"] = rss_bytes(server_pid) or 0
+        state["started_at"] = time.monotonic()
+        driver_stdin.write("\n")
+        driver_stdin.flush()
+        return
+    if event != "RATE_WARMUP_END" or state.get("started_at") is None or state.get("ended"):
+        raise RuntimeError("rate-warmup end marker without one start")
+    state["ended"] = True
+    state["elapsed_seconds"] = time.monotonic() - state["started_at"]
+    try:
+        state["server_cpu_after"] = cpu_ticks(server_pid)
+        state["client_cpu_after"] = cpu_ticks(client_pid)
+        state["client_threads_after"] = thread_cpu_ticks(client_pid)
+        state["host_busy_after"] = cpu_busy_ticks(cpu_set)
+        state["rss_sampled_peak"] = max(state["rss_sampled_peak"], rss_bytes(server_pid) or 0)
+        metrics_after = fetch_json(metrics_url)
+        validate_metrics(metrics_after)
+        state["metrics_after"] = metrics_after
+    except Exception as snapshot_error:
+        state["snapshot_error"] = str(snapshot_error)
+    finally:
+        driver_stdin.write("\n")
+        driver_stdin.flush()
+
+
+def rate_warmup_receipt(state):
+    """Keep a partial failed-phase snapshot without masking the driver's error."""
+    elapsed = state.get("elapsed_seconds")
+    server_after = state.get("server_cpu_after")
+    client_after = state.get("client_cpu_after")
+    threads_after = state.get("client_threads_after")
+    return {
+        "metrics_before": state["metrics_before"], "metrics_after": state.get("metrics_after"),
+        "server_cpu_seconds": (server_after - state["server_cpu_before"])
+        / os.sysconf("SC_CLK_TCK") if server_after is not None else None,
+        "client_cpu_seconds": (client_after - state["client_cpu_before"])
+        / os.sysconf("SC_CLK_TCK") if client_after is not None else None,
+        "client_threads_before": state["client_threads_before"],
+        "client_threads_after": threads_after,
+        "client_thread_utilization": thread_utilization(state["client_threads_before"],
+                                                         threads_after, elapsed)
+        if threads_after is not None and elapsed is not None and elapsed > 0 else None,
+        "host_busy_before": state["host_busy_before"],
+        "host_busy_after": state.get("host_busy_after"),
+        "rss_sampled_peak": state["rss_sampled_peak"],
+        "elapsed_seconds": elapsed,
+        "phase_end_status": state.get("phase_end_status"),
+        "snapshot_error": state.get("snapshot_error"),
+        "complete_snapshot": state.get("metrics_after") is not None and client_after is not None}
+
+
 def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
     server_cmd = [str(args.baseline if label == "baseline" else args.candidate), "serve",
                   "--fixture", args.fixture, "--bucket", args.bucket, "--host", "127.0.0.1",
@@ -349,6 +412,7 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                     client_threads_before = client_threads_after = None
                     host_busy_before = host_busy_after = None
                     rss_before = rss_after = peak_rss = None
+                    rate_state = {}
                     output_lines = []
                     run_deadline = time.monotonic() + args.run_timeout
                     while True:
@@ -356,6 +420,9 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                             raise TimeoutError("driver timed out")
                         if before is not None and after is None:
                             peak_rss = max(peak_rss, rss_bytes(server.pid) or 0)
+                        if rate_state.get("started_at") is not None and not rate_state.get("ended"):
+                            rate_state["rss_sampled_peak"] = max(
+                                rate_state["rss_sampled_peak"], rss_bytes(server.pid) or 0)
                         try:
                             line = lines.get(timeout=.2)
                         except queue.Empty:
@@ -369,7 +436,18 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                             if not line.lstrip().startswith("{"):
                                 continue
                             message = json.loads(line)
-                            if message.get("event") == "MEASURE_START":
+                            if message.get("event") == "RATE_WARMUP_START":
+                                if before is not None:
+                                    raise RuntimeError("duplicate or late rate-warmup start marker")
+                                capture_rate_warmup_marker("RATE_WARMUP_START", rate_state, metrics_url,
+                                                           server.pid, driver.pid, server_cpus | client_cpus,
+                                                           driver.stdin)
+                            elif message.get("event") == "RATE_WARMUP_END":
+                                rate_state["phase_end_status"] = message.get("status", "passed")
+                                capture_rate_warmup_marker("RATE_WARMUP_END", rate_state, metrics_url,
+                                                           server.pid, driver.pid, server_cpus | client_cpus,
+                                                           driver.stdin)
+                            elif message.get("event") == "MEASURE_START":
                                 before = fetch_json(metrics_url)
                                 validate_metrics(before)
                                 cpu_before = cpu_ticks(server.pid)
@@ -392,6 +470,17 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                                     driver.stdin.write("\n")
                                     driver.stdin.flush()
                     driver.wait(timeout=10)
+                    if rate_state.get("started_at") is not None and not rate_state.get("ended"):
+                        # Preserve the driver's original failure even if its metrics endpoint
+                        # also fails while we collect this pre-measurement diagnostic snapshot.
+                        try:
+                            rate_state["server_cpu_after"] = cpu_ticks(server.pid)
+                            rate_state["host_busy_after"] = cpu_busy_ticks(server_cpus | client_cpus)
+                            rate_state["metrics_after"] = fetch_json(metrics_url)
+                            validate_metrics(rate_state["metrics_after"])
+                            rate_state["elapsed_seconds"] = time.monotonic() - rate_state["started_at"]
+                        except Exception as snapshot_error:
+                            rate_state["snapshot_error"] = str(snapshot_error)
                 finally:
                     if driver.poll() is None:
                         driver.kill()
@@ -405,6 +494,8 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                             (client_cpu_after - client_cpu_before) / os.sysconf("SC_CLK_TCK") if after else None,
                             "server_rss_sampled_peak": peak_rss,
                             "metrics_before": before, "metrics_after": after})
+            if rate_state.get("started_at") is not None:
+                receipt["rate_warmup"] = rate_warmup_receipt(rate_state)
             if before is not None:
                 receipt["serving_configuration"] = before.get("serving") if before["schema_version"] == 2 else {
                     "source": "unmodified_69cb809_cli_and_source",

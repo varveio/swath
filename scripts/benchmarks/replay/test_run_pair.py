@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import run_pair
 
@@ -25,6 +25,78 @@ def receipts(base, candidate, metric="objects_per_s"):
 
 
 class PairRunnerTest(unittest.TestCase):
+    def test_failed_rate_warmup_brackets_live_client_and_acks_before_failure(self):
+        state = {}
+        stdin = Mock()
+        samples = iter((100, 111, 110, 118))
+        threads = iter(({1: {"name": "carrier", "ticks": 10}},
+                        {1: {"name": "carrier", "ticks": 14}}))
+        with patch.object(run_pair, "fetch_json", side_effect=[{"schema_version": 2},
+                                                         {"schema_version": 2}]), \
+             patch.object(run_pair, "validate_metrics"), \
+             patch.object(run_pair, "cpu_ticks", side_effect=samples), \
+             patch.object(run_pair, "thread_cpu_ticks", side_effect=threads), \
+             patch.object(run_pair, "cpu_busy_ticks", side_effect=[{0: 50}, {0: 60}]), \
+             patch.object(run_pair, "rss_bytes", side_effect=[1000, 1100]), \
+             patch.object(run_pair.time, "monotonic", side_effect=[10.0, 12.0]):
+            run_pair.capture_rate_warmup_marker("RATE_WARMUP_START", state, "/metrics",
+                                                1, 2, {0}, stdin)
+            self.assertEqual(stdin.write.call_count, 1)
+            self.assertNotIn("client_cpu_after", state)
+            run_pair.capture_rate_warmup_marker("RATE_WARMUP_END", state, "/metrics",
+                                                1, 2, {0}, stdin)
+        self.assertEqual(stdin.write.call_count, 2)
+        self.assertEqual(stdin.flush.call_count, 2)
+        self.assertEqual(state["client_cpu_after"] - state["client_cpu_before"], 7)
+        self.assertEqual(state["client_threads_after"][1]["ticks"], 14)
+        self.assertEqual(state["metrics_after"], {"schema_version": 2})
+        with self.assertRaisesRegex(RuntimeError, "without one start"):
+            run_pair.capture_rate_warmup_marker("RATE_WARMUP_END", {}, "/metrics",
+                                                1, 2, {0}, stdin)
+
+    def test_missing_rate_warmup_end_metrics_still_acks_and_preserves_error(self):
+        state = {}
+        stdin = Mock()
+        with patch.object(run_pair, "fetch_json", side_effect=[{"schema_version": 2},
+                                                         OSError("metrics endpoint unavailable")]), \
+             patch.object(run_pair, "validate_metrics"), \
+             patch.object(run_pair, "cpu_ticks", side_effect=[100, 200, 110, 210]), \
+             patch.object(run_pair, "thread_cpu_ticks", return_value={}), \
+             patch.object(run_pair, "cpu_busy_ticks", return_value={0: 50}), \
+             patch.object(run_pair, "rss_bytes", return_value=1000), \
+             patch.object(run_pair.time, "monotonic", side_effect=[10.0, 12.0]):
+            run_pair.capture_rate_warmup_marker("RATE_WARMUP_START", state, "/metrics",
+                                                1, 2, {0}, stdin)
+            run_pair.capture_rate_warmup_marker("RATE_WARMUP_END", state, "/metrics",
+                                                1, 2, {0}, stdin)
+        self.assertEqual(stdin.write.call_count, 2)
+        self.assertEqual(stdin.flush.call_count, 2)
+        self.assertEqual(state["snapshot_error"], "metrics endpoint unavailable")
+        self.assertNotIn("metrics_after", state)
+        self.assertEqual(state["client_cpu_after"] - state["client_cpu_before"], 10)
+
+    def test_partial_rate_warmup_end_snapshot_cannot_mask_driver_failure(self):
+        state = {}
+        stdin = Mock()
+        with patch.object(run_pair, "fetch_json", return_value={"schema_version": 2}), \
+             patch.object(run_pair, "validate_metrics"), \
+             patch.object(run_pair, "cpu_ticks", side_effect=[100, 200, 110, 210]), \
+             patch.object(run_pair, "thread_cpu_ticks", return_value={}), \
+             patch.object(run_pair, "cpu_busy_ticks", side_effect=[{0: 50},
+                                                              OSError("host ticks unavailable")]), \
+             patch.object(run_pair, "rss_bytes", return_value=1000), \
+             patch.object(run_pair.time, "monotonic", side_effect=[10.0, 12.0]):
+            run_pair.capture_rate_warmup_marker("RATE_WARMUP_START", state, "/metrics",
+                                                1, 2, {0}, stdin)
+            run_pair.capture_rate_warmup_marker("RATE_WARMUP_END", state, "/metrics",
+                                                1, 2, {0}, stdin)
+        receipt = run_pair.rate_warmup_receipt(state)
+        self.assertEqual(stdin.write.call_count, 2)
+        self.assertEqual(receipt["snapshot_error"], "host ticks unavailable")
+        self.assertIsNone(receipt["metrics_after"])
+        self.assertFalse(receipt["complete_snapshot"])
+        self.assertEqual(receipt["client_cpu_seconds"], 10 / os.sysconf("SC_CLK_TCK"))
+
     def test_identity_pairs_have_exact_unit_interval(self):
         report = run_pair.summarize(receipts([100] * 12, [100] * 12),
                                     "objects_per_s", .95, "min")

@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Short nonfinal pages, real opaque native tokens, exact fixture oracle and open-loop counts. */
 public final class ReplayMixedOpenLoopBenchSelfTest {
     private static final AtomicBoolean MEASURED = new AtomicBoolean();
+    private static final AtomicBoolean RATE_WARMUP = new AtomicBoolean();
     private ReplayMixedOpenLoopBenchSelfTest() { }
 
     public static void main(String[] args) throws Exception {
@@ -54,6 +55,7 @@ public final class ReplayMixedOpenLoopBenchSelfTest {
             AtomicBoolean mutateMeasuredName = new AtomicBoolean();
             AtomicBoolean refuseMeasured = new AtomicBoolean();
             AtomicBoolean slowMeasured = new AtomicBoolean();
+            AtomicBoolean slowTargetWarmup = new AtomicBoolean();
             AtomicBoolean emptyFinal = new AtomicBoolean();
             AtomicInteger availableKeys = new AtomicInteger(1001);
             Map<String, AtomicLong> requestCounts = new ConcurrentHashMap<>();
@@ -74,7 +76,7 @@ public final class ReplayMixedOpenLoopBenchSelfTest {
                         .incrementAndGet();
                 boolean measured = MEASURED.get();
                 if (token != null) tokenRequests.incrementAndGet();
-                if (slowMeasured.get() && measured) {
+                if (slowMeasured.get() && measured || slowTargetWarmup.get() && RATE_WARMUP.get()) {
                     try { Thread.sleep(250); }
                     catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
                 }
@@ -123,6 +125,8 @@ public final class ReplayMixedOpenLoopBenchSelfTest {
                 requestCounts.clear();
                 String mixed = run(endpoint, fixture, declared);
                 if (!mixed.contains("\"native_pages\":3")
+                        || !mixed.contains("\"RATE_WARMUP_START\"")
+                        || !mixed.contains("\"RATE_WARMUP_END\"")
                         || !mixed.contains("\"complete_inventory_cycles\":1")
                         || !mixed.contains("\"partial_tail_pages\":0")
                         || !mixed.contains("\"page_plan_sha256\":\"")
@@ -183,6 +187,30 @@ public final class ReplayMixedOpenLoopBenchSelfTest {
                             + overloaded.output(), overloaded.failure());
                 }
                 slowMeasured.set(false);
+                slowTargetWarmup.set(true);
+                requestCounts.clear();
+                RunOutcome warmupLimited = capture(endpoint, fixture, declared, "15", "4");
+                if (warmupLimited.failure() == null
+                        || !warmupLimited.output().contains("\"phase\":\"target_rate_warmup\"")
+                        || !warmupLimited.output().contains(
+                                "\"event\":\"RATE_WARMUP_END\",\"status\":\"failed\"")
+                        || warmupLimited.output().contains("\"MEASURE_START\"")) {
+                    throw new AssertionError("target-rate warmup failure phase was not preserved: "
+                            + warmupLimited.output(), warmupLimited.failure());
+                }
+                long scheduled = number(warmupLimited.output(), "target_warmup_scheduled");
+                long admitted = number(warmupLimited.output(), "target_warmup_admitted");
+                long completed = number(warmupLimited.output(), "target_warmup_completed");
+                long missed = number(warmupLimited.output(), "target_warmup_unsent");
+                if (scheduled != 9 || missed < 1 || admitted + missed != scheduled
+                        || completed != admitted
+                        || number(warmupLimited.output(), "offered_requests") != scheduled
+                        || number(warmupLimited.output(), "successful_requests") != completed
+                        || number(warmupLimited.output(), "measured_scheduled") != 0) {
+                    throw new AssertionError("target-rate warmup counters were mislabeled: "
+                            + warmupLimited.output());
+                }
+                slowTargetWarmup.set(false);
                 emptyFinal.set(true);
                 availableKeys.set(1000);
                 requestCounts.clear();
@@ -243,17 +271,21 @@ public final class ReplayMixedOpenLoopBenchSelfTest {
         ByteArrayOutputStream capture = new ByteArrayOutputStream();
         Exception failure = null;
         MEASURED.set(false);
+        RATE_WARMUP.set(false);
         OutputStream marked = new OutputStream() {
             @Override public void write(int value) throws IOException { capture.write(value); }
             @Override public void write(byte[] bytes, int offset, int length) throws IOException {
                 capture.write(bytes, offset, length);
-                if (capture.toString(StandardCharsets.UTF_8).contains("\"MEASURE_START\"")) {
+                String text = capture.toString(StandardCharsets.UTF_8);
+                if (text.contains("\"RATE_WARMUP_START\"")) RATE_WARMUP.set(true);
+                if (text.contains("\"RATE_WARMUP_END\"")) RATE_WARMUP.set(false);
+                if (text.contains("\"MEASURE_START\"")) {
                     MEASURED.set(true);
                 }
             }
         };
         try (PrintStream stream = new PrintStream(marked, true, StandardCharsets.UTF_8)) {
-            System.setIn(new ByteArrayInputStream(new byte[] {'\n', '\n'}));
+            System.setIn(new ByteArrayInputStream(new byte[] {'\n', '\n', '\n', '\n'}));
             System.setOut(stream);
             try {
                 ReplayMixedOpenLoopBench.main(new String[] {endpoint, "bench", fixture.toString(),
@@ -282,6 +314,13 @@ public final class ReplayMixedOpenLoopBenchSelfTest {
     }
 
     private record RunOutcome(String output, Exception failure) { }
+
+    private static long number(String output, String field) {
+        var match = java.util.regex.Pattern.compile("\\\"" + field + "\\\":(\\d+)")
+                .matcher(output);
+        if (!match.find()) throw new AssertionError("missing " + field + " in " + output);
+        return Long.parseLong(match.group(1));
+    }
 
     private static Map<String, String> query(String raw) {
         Map<String, String> result = new HashMap<>();

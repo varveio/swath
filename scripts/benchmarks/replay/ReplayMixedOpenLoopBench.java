@@ -101,13 +101,18 @@ public final class ReplayMixedOpenLoopBench {
         AtomicLong maxClientSendLag = new AtomicLong();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         List<List<PageSpec>> nativePages = new ArrayList<>(protocols.size());
+        PhaseCounts nativeWarmupCounts = new PhaseCounts();
+        PhaseCounts targetWarmupCounts = new PhaseCounts();
+        AtomicLong measuredScheduled = new AtomicLong();
         long start = 0;
         long end = 0;
         int unsent = 0;
+        boolean targetWarmupStarted = false;
+        boolean rateWarmupEndEmitted = false;
         WarmupOutcome rateWarmup = null;
         try {
             nativePages.addAll(warmupNativeWalks(client, watchdog, endpoint, bucket,
-                    protocols, fixture, inventory, pageSize));
+                    protocols, fixture, inventory, pageSize, nativeWarmupCounts));
             for (List<PageSpec> pages : nativePages) {
                 if (offeredEach < pages.size()) {
                     throw new IllegalArgumentException("fixed offered stream must cover every native page");
@@ -120,11 +125,20 @@ public final class ReplayMixedOpenLoopBench {
             if (rateWarmupTickets > 1_000_000) {
                 throw new IllegalArgumentException("target-rate warmup exceeds request bound");
             }
+            targetWarmupStarted = true;
+            System.out.println("{\"event\":\"RATE_WARMUP_START\"}");
+            System.out.flush();
+            if (System.in.read() < 0) throw new IllegalStateException("rate warmup start ACK missing");
             rateWarmup = runRateWarmup(client, watchdog, workers, endpoint, bucket,
-                    protocols, nativePages, rate, rateWarmupTickets, pageSize, permits, outstanding);
+                    protocols, nativePages, rate, rateWarmupTickets, pageSize, permits, outstanding,
+                    targetWarmupCounts);
             if (outstanding.get() != 0 || permits.availablePermits() != maxOutstanding) {
                 throw new IllegalStateException("target-rate warmup left outstanding requests");
             }
+            System.out.println("{\"event\":\"RATE_WARMUP_END\"}");
+            System.out.flush();
+            rateWarmupEndEmitted = true;
+            if (System.in.read() < 0) throw new IllegalStateException("rate warmup end ACK missing");
             peakOutstanding.set(0);
             System.out.println("{\"event\":\"MEASURE_START\"}");
             System.out.flush();
@@ -140,6 +154,7 @@ public final class ReplayMixedOpenLoopBench {
                         LockSupport.parkNanos(Math.min(1_000_000L, scheduled - System.nanoTime()));
                     }
                     long lag = Math.max(0, System.nanoTime() - scheduled);
+                    measuredScheduled.incrementAndGet();
                     scheduleLag.add(lag);
                     maxScheduleLag = Math.max(maxScheduleLag, lag);
                     Stats stat = stats.get(p);
@@ -189,15 +204,43 @@ public final class ReplayMixedOpenLoopBench {
             System.out.flush();
             if (endAck && System.in.read() < 0) throw new IllegalStateException("measurement end ACK missing");
         } catch (Exception error) {
-            long successful = 0;
-            for (Stats stat : stats) successful += stat.requests.get();
+            if (targetWarmupStarted && !rateWarmupEndEmitted && start == 0) {
+                // Keep the failing target-rate phase bracketed while client threads still exist.
+                // A failed diagnostic snapshot must not replace the original warmup failure.
+                System.out.println("{\"event\":\"RATE_WARMUP_END\",\"status\":\"failed\"}");
+                System.out.flush();
+                try {
+                    if (System.in.read() < 0) throw new IllegalStateException("rate warmup failure end ACK missing");
+                } catch (Exception ackError) {
+                    error.addSuppressed(ackError);
+                }
+            }
+            long measuredSuccessful = 0;
+            for (Stats stat : stats) measuredSuccessful += stat.requests.get();
+            String phase = start != 0 ? "measurement"
+                    : targetWarmupStarted ? "target_rate_warmup" : "native_warmup";
+            long offered = start != 0 ? measuredScheduled.get()
+                    : targetWarmupStarted ? targetWarmupCounts.scheduled.get()
+                    : nativeWarmupCounts.scheduled.get();
+            long successful = start != 0 ? measuredSuccessful
+                    : targetWarmupStarted ? targetWarmupCounts.successful.get()
+                    : nativeWarmupCounts.successful.get();
+            long skipped = start != 0 ? unsent : targetWarmupCounts.unsent.get();
             System.out.printf(Locale.ROOT,
                     "{\"status\":\"failed\",\"phase\":\"%s\","
                     + "\"offered_requests\":%d,\"unsent_requests\":%d,"
                     + "\"successful_requests\":%d,\"max_outstanding_limit\":%d,"
+                    + "\"native_warmup_scheduled\":%d,\"native_warmup_completed\":%d,"
+                    + "\"target_warmup_scheduled\":%d,\"target_warmup_admitted\":%d,"
+                    + "\"target_warmup_completed\":%d,\"target_warmup_unsent\":%d,"
+                    + "\"measured_scheduled\":%d,\"measured_completed\":%d,"
                     + "\"duration_plan_s\":%.3f,\"failure_reason\":\"%s\"}%n",
-                    start == 0 ? "warmup" : "measurement", offeredEach * protocols.size(),
-                    unsent, successful, maxOutstanding, nominalDuration, jsonEscape(error.toString()));
+                    phase, offered, skipped, successful, maxOutstanding,
+                    nativeWarmupCounts.scheduled.get(), nativeWarmupCounts.successful.get(),
+                    targetWarmupCounts.scheduled.get(), targetWarmupCounts.admitted.get(),
+                    targetWarmupCounts.successful.get(), targetWarmupCounts.unsent.get(),
+                    measuredScheduled.get(), measuredSuccessful,
+                    nominalDuration, jsonEscape(error.toString()));
             throw error;
         } finally {
             watchdog.shutdownNow();
@@ -228,6 +271,14 @@ public final class ReplayMixedOpenLoopBench {
             totalBytes += stat.bytes.get();
             warmupRequests += nativePages.get(i).size();
             aggregate.addAll(stat.latencies);
+        }
+        if (nativeWarmupCounts.scheduled.get() != warmupRequests
+                || nativeWarmupCounts.successful.get() != warmupRequests
+                || targetWarmupCounts.scheduled.get() != (long) rateWarmup.offeredEach() * protocols.size()
+                || targetWarmupCounts.admitted.get() != targetWarmupCounts.scheduled.get()
+                || targetWarmupCounts.successful.get() != targetWarmupCounts.scheduled.get()
+                || targetWarmupCounts.unsent.get() != 0) {
+            throw new IllegalStateException("native or target-rate warmup request accounting disagrees");
         }
         StringBuilder out = new StringBuilder();
         out.append("{\"workload\":\"mixed_open_loop\",\"fixture_count\":")
@@ -329,7 +380,7 @@ public final class ReplayMixedOpenLoopBench {
         watchdog.setRemoveOnCancelPolicy(true);
         try {
             List<List<PageSpec>> plans = warmupNativeWalks(client, watchdog, endpoint, bucket,
-                    ALL, fixture, inventory, 1000);
+                    ALL, fixture, inventory, 1000, new PhaseCounts());
             StringBuilder json = new StringBuilder("{\"purpose\":\"native_page_plan_preflight\","
                     + "\"fixture_count\":").append(inventory.count())
                     .append(",\"fixture_digest\":\"").append(inventory.digest())
@@ -352,12 +403,12 @@ public final class ReplayMixedOpenLoopBench {
                                                            URI endpoint, String bucket,
                                                            List<String> protocols, String fixture,
                                                            ReplayHttpBench.Inventory inventory,
-                                                           int pageSize) throws Exception {
+                                                           int pageSize, PhaseCounts counts) throws Exception {
         List<List<ObservedPage>> observed = new ArrayList<>(protocols.size());
         List<java.util.Set<String>> seenTokens = new ArrayList<>(protocols.size());
         String[] nextTokens = new String[protocols.size()];
         byte[][] priorKeys = new byte[protocols.size()][];
-        long[] counts = new long[protocols.size()];
+        long[] ownedCounts = new long[protocols.size()];
         boolean[] finished = new boolean[protocols.size()];
         for (String ignored : protocols) {
             observed.add(new ArrayList<>());
@@ -372,15 +423,18 @@ public final class ReplayMixedOpenLoopBench {
                     throw new IllegalStateException("native pagination exceeded inventory-derived bound");
                 }
                 String token = nextTokens[p];
+                counts.scheduled.incrementAndGet();
+                counts.admitted.incrementAndGet();
                 FetchResult response = fetch(client, watchdog, endpoint, bucket, protocols.get(p),
                         token, priorKeys[p], null, null, pageSize, true);
+                counts.successful.incrementAndGet();
                 if (response.count() == 0 && response.nextToken() != null) {
                     throw new IllegalStateException("empty nonfinal native page");
                 }
                 pages.add(new ObservedPage(token, response.count(), response.digest(),
                         response.metadata(), response.lastKey()));
-                counts[p] += response.count();
-                if (counts[p] > inventory.count()) {
+                ownedCounts[p] += response.count();
+                if (ownedCounts[p] > inventory.count()) {
                     throw new IllegalStateException("native walk exceeded fixture count");
                 }
                 priorKeys[p] = response.lastKey() == null ? priorKeys[p] : response.lastKey();
@@ -400,7 +454,7 @@ public final class ReplayMixedOpenLoopBench {
         }
         List<List<PageSpec>> verified = new ArrayList<>(protocols.size());
         for (int p = 0; p < protocols.size(); p++) {
-            if (counts[p] != inventory.count()) {
+            if (ownedCounts[p] != inventory.count()) {
                 throw new IllegalStateException("native warmup omitted fixture keys for " + protocols.get(p));
             }
             verified.add(verifyNativePages(fixture, protocols.get(p), inventory, observed.get(p)));
@@ -414,7 +468,7 @@ public final class ReplayMixedOpenLoopBench {
                                       String bucket, List<String> protocols,
                                       List<List<PageSpec>> pagesByProtocol, double rate,
                                       int offeredEach, int pageSize, Semaphore permits,
-                                      AtomicLong outstanding) throws Exception {
+                                      AtomicLong outstanding, PhaseCounts counts) throws Exception {
         if (offeredEach < 1) throw new IllegalArgumentException("target-rate warmup offered no requests");
         CountDownLatch done = new CountDownLatch(Math.multiplyExact(offeredEach, protocols.size()));
         AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -428,19 +482,23 @@ public final class ReplayMixedOpenLoopBench {
                 while (System.nanoTime() < scheduled) {
                     LockSupport.parkNanos(Math.min(1_000_000L, scheduled - System.nanoTime()));
                 }
+                counts.scheduled.incrementAndGet();
                 List<PageSpec> pages = pagesByProtocol.get(p);
                 PageSpec page = pages.get((i + phaseOffset(protocol, pages.size())) % pages.size());
                 if (!permits.tryAcquire()) {
                     unsent++;
+                    counts.unsent.incrementAndGet();
                     done.countDown();
                     continue;
                 }
+                counts.admitted.incrementAndGet();
                 outstanding.incrementAndGet();
                 try {
                     workers.submit(() -> {
                         try {
                             fetch(client, watchdog, endpoint, bucket, protocol, page.token(),
                                     page.predecessor(), page.upper(), page, pageSize, false);
+                            counts.successful.incrementAndGet();
                         } catch (Throwable error) {
                             failure.compareAndSet(null, error);
                         } finally {
@@ -458,6 +516,9 @@ public final class ReplayMixedOpenLoopBench {
             }
         }
         if (!done.await(120, TimeUnit.SECONDS)) throw new IllegalStateException("target-rate warmup drain timeout");
+        if (counts.admitted.get() + counts.unsent.get() != counts.scheduled.get()) {
+            throw new IllegalStateException("target-rate warmup admitted+unsent differs from scheduled");
+        }
         if (failure.get() != null) throw new IllegalStateException("target-rate warmup failed", failure.get());
         if (unsent != 0) throw new IllegalStateException("target-rate warmup client limit reached: " + unsent);
         long elapsed = System.nanoTime() - start;
@@ -657,6 +718,13 @@ public final class ReplayMixedOpenLoopBench {
     private record FetchResult(long count, String digest, FixtureMetadataOracle.Digest metadata,
                                byte[] lastKey, String nextToken, long bytes, long sendStartedNanos) { }
     private record WarmupOutcome(int offeredEach, long elapsedNs) { }
+
+    private static final class PhaseCounts {
+        final AtomicLong scheduled = new AtomicLong();
+        final AtomicLong admitted = new AtomicLong();
+        final AtomicLong successful = new AtomicLong();
+        final AtomicLong unsent = new AtomicLong();
+    }
 
     private static final class CountingInputStream extends FilterInputStream {
         long bytes;
