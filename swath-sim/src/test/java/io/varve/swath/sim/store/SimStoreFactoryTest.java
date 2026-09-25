@@ -9,8 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ListedObject;
-import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.store.SortedParquetStore;
 import io.varve.swath.replay.store.WindowedListingStore;

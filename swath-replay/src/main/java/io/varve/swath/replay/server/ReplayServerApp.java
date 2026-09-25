@@ -7,7 +7,12 @@ package io.varve.swath.replay.server;
 
 import io.varve.swath.replay.fixture.SortFixtureCommand;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -66,29 +71,118 @@ public final class ReplayServerApp implements Callable<Integer> {
         ShapeLatency injected =
                 ShapeLatency.parse(options.injectLatency, options.latencyJitter, options.latencyScale);
         long startedNanos = System.nanoTime();
-        try (ReplayServer server = injected == null
-                ? new ReplayServer(options.host, options.port, bucket, fixture, options.parquetConnections,
-                        options.servingMode, options.maxConcurrentRequests)
-                : new ReplayServer(options.host, options.port, bucket, fixture, options.parquetConnections,
-                        options.servingMode, injected, options.maxConcurrentRequests)) {
+        ServeConfig config = new ServeConfig(fixture, options.host, options.port, bucket,
+                options.servingMode, options.parquetConnections, options.maxConcurrentRequests,
+                parseProtocols(options.protocols), options.azureAccount, options.responseBufferBudget,
+                options.maxResponseBytes, parseDuration(options.stopTimeout),
+                parseDuration(options.idleTimeout), parseDuration(options.writeTimeout),
+                options.advertisedHost, injected == null ? (req, result) -> Duration.ZERO : injected);
+        ReplayServer server = ReplayServer.open(config);
+        ShutdownOwner owner = new ShutdownOwner(server, config.stopTimeout());
+        Thread hook = new Thread(() -> {
+            owner.close();
+            System.err.println("swath_replay_shutdown_hook complete");
+        }, "swath-replay-shutdown");
+        Runtime.getRuntime().addShutdownHook(hook);
+        try {
             server.start();
             // Opened after the fixture is served, so a reader that can reach /metrics knows the
             // index derive is already done and the numbers it reads are serving numbers.
-            try (MetricsEndpoint metrics = options.metricsPort < 0 ? null
+            MetricsEndpoint metrics = options.metricsPort < 0 ? null
                     : MetricsEndpoint.start(options.host, options.metricsPort, server.metrics().registry(),
-                            server.resolvedServingMode().toString(), startedNanos)) {
+                            server.resolvedServingMode().toString(), startedNanos, server::servingMetadata);
+            owner.setMetrics(metrics);
+            try {
+                ServingMetadata serving = server.servingMetadata();
                 System.err.printf("swath_replay endpoint=http://%s:%d bucket=%s fixture=%s "
                                 + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s "
-                                + "metrics_endpoint=%s max_concurrent_requests=%d%n",
+                                + "metrics_endpoint=%s max_concurrent_requests=%d protocols=%s "
+                                + "response_buffer_budget=%d max_response_bytes=%d max_responses=%d "
+                                + "fixture_identity=%s ordering_profile=%s metadata_policy=%s profiles=%s "
+                                + "native_endpoints=%s%n",
                         options.host, server.port(), bucket, fixture.toAbsolutePath(),
                         server.resolvedServingMode(), server.resolvedParquetConnections(),
                         injected == null ? "off" : options.injectLatency, options.latencyScale,
                         metrics == null ? "off" : metricsEndpoint(options.host, metrics.port()),
-                        options.maxConcurrentRequests);
+                        options.maxConcurrentRequests, String.join(",", serving.protocols()),
+                        config.responseBufferBudget(), config.maxResponseBytes(), config.maxResponses(),
+                        serving.fixtureIdentity(), serving.orderingProfile(), serving.metadataPolicy(),
+                        serving.profiles(), endpointExamples(config, server.port()));
                 server.join();
+            } finally {
+                owner.close();
+            }
+        } finally {
+            owner.close();
+            try {
+                Runtime.getRuntime().removeShutdownHook(hook);
+            } catch (IllegalStateException ignored) {
+                // The shutdown hook is already running.
             }
         }
         return 0;
+    }
+
+    private static Set<Protocol> parseProtocols(String value) {
+        try {
+            Set<Protocol> parsed = Arrays.stream(value.split(",", -1))
+                    .map(String::trim).map(String::toUpperCase).map(Protocol::valueOf)
+                    .collect(Collectors.toSet());
+            if (parsed.isEmpty()) {
+                throw new IllegalArgumentException("empty protocol set");
+            }
+            return parsed;
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("--protocols must be a comma-separated subset of s3,gcs,azure", e);
+        }
+    }
+
+    private static Duration parseDuration(String value) {
+        String text = value.trim().toLowerCase(java.util.Locale.ROOT);
+        try {
+            if (text.endsWith("ms")) {
+                return Duration.ofMillis(Long.parseLong(text.substring(0, text.length() - 2)));
+            }
+            if (text.endsWith("s")) {
+                return Duration.ofSeconds(Long.parseLong(text.substring(0, text.length() - 1)));
+            }
+            return Duration.parse(value);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("invalid serve timeout: " + value, e);
+        }
+    }
+
+    private static final class ShutdownOwner {
+        private final ReplayServer server;
+        private final Duration stopTimeout;
+        private final AtomicBoolean closed = new AtomicBoolean();
+        private MetricsEndpoint metrics;
+
+        private ShutdownOwner(ReplayServer server, Duration stopTimeout) {
+            this.server = server;
+            this.stopTimeout = stopTimeout;
+        }
+
+        synchronized void setMetrics(MetricsEndpoint metrics) { this.metrics = metrics; }
+
+        synchronized void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            long deadline = System.nanoTime() + stopTimeout.toNanos();
+            server.beginShutdownAt(deadline);
+            try {
+                if (metrics != null) {
+                    metrics.closeAt(deadline);
+                }
+            } catch (Exception e) {
+                System.err.println("failed to stop replay metrics endpoint: " + e.getMessage());
+            } finally {
+                server.closeAt(deadline, metrics == null
+                        ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                        : metrics.stoppedFuture());
+            }
+        }
     }
 
     static String metricsEndpoint(String host, int port) {
@@ -96,9 +190,27 @@ public final class ReplayServerApp implements Callable<Integer> {
         return "http://%s:%d/metrics".formatted(authorityHost, port);
     }
 
+    private static String endpointExamples(ServeConfig config, int port) {
+        String host = config.advertisedHost() == null ? config.host() : config.advertisedHost();
+        String authority = host.indexOf(':') >= 0 && !host.startsWith("[") ? "[" + host + "]" : host;
+        String base = "http://" + authority + ':' + port;
+        var examples = new java.util.ArrayList<String>();
+        if (config.protocols().contains(Protocol.S3)) {
+            examples.add("s3:" + base + '/' + config.bucket() + "?list-type=2");
+        }
+        if (config.protocols().contains(Protocol.GCS)) {
+            examples.add("gcs:" + base + "/storage/v1/b/" + config.bucket() + "/o");
+        }
+        if (config.protocols().contains(Protocol.AZURE)) {
+            examples.add("azure:" + base + '/' + config.azureAccount() + '/' + config.bucket()
+                    + "?restype=container&comp=list");
+        }
+        return String.join(",", examples);
+    }
+
     @Command(name = "serve",
             mixinStandardHelpOptions = true,
-            description = "Serve a captured swath Parquet listing as an S3 ListObjectsV2 endpoint.")
+            description = "Serve a captured swath Parquet listing through selected native listing routes.")
     static final class ServeCommand implements Callable<Integer> {
 
         @Option(names = "--fixture", required = true, paramLabel = "PATH",

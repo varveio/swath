@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.ListingFixture;
 import io.varve.swath.replay.protocol.S3ListRequest;
@@ -269,6 +270,101 @@ class ReplayServerTest {
         // nor re-throws/re-surfaces the first call's failure.
         server.close();
         assertThat(fixtureCloseCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void uninterruptibleReadDefersStoreCloseUntilItReturns() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch ownerClosed = new CountDownLatch(1);
+        ListingFixture held = request -> {
+            entered.countDown();
+            while (release.getCount() != 0) {
+                try {
+                    release.await();
+                } catch (InterruptedException ignored) {
+                    // Model a JNI call that does not stop on thread interruption.
+                }
+            }
+            return new S3ListResult(request, List.of(), false, null);
+        };
+        ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", held,
+                ReplayServerFixtureConfig.DEFAULT.withOwnedFixture(ownerClosed::countDown)
+                        .withStopTimeout(Duration.ofMillis(200)));
+        server.start();
+        AtomicReference<HttpResponse<String>> lateResponse = new AtomicReference<>();
+        AtomicReference<Exception> lateFailure = new AtomicReference<>();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                var request = executor.submit(() -> {
+                    try {
+                        lateResponse.set(HttpProbe.response(server, "/bucket?list-type=2"));
+                    } catch (Exception error) {
+                        lateFailure.set(error);
+                    }
+                });
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                var shutdown = executor.submit(server::close);
+                shutdown.get(700, TimeUnit.MILLISECONDS);
+                assertThat(ownerClosed.getCount()).as("active read still owns the store").isEqualTo(1);
+                release.countDown();
+                assertThat(ownerClosed.await(5, TimeUnit.SECONDS)).as("deferred owner close").isTrue();
+                request.get(5, TimeUnit.SECONDS);
+                assertThat(lateResponse.get()).as("no response commits after shutdown deadline").isNull();
+                assertThat(lateFailure.get()).isNotNull();
+            } finally {
+                release.countDown();
+            }
+        } finally {
+            server.close();
+        }
+    }
+
+    @Test
+    void startFailureClosesOwnedFixtureAndPreservesCleanupFailureAsSuppressed() throws Exception {
+        ListingFixture fixture = request -> new S3ListResult(request, List.of(), false, null);
+        try (ReplayServer occupied = new ReplayServer("127.0.0.1", 0, "bucket", fixture)) {
+            occupied.start();
+            AtomicInteger closes = new AtomicInteger();
+            ReplayServer conflicting = new ReplayServer("127.0.0.1", occupied.port(), "bucket", fixture,
+                    ReplayServerFixtureConfig.DEFAULT.withOwnedFixture(() -> {
+                        closes.incrementAndGet();
+                        throw new IllegalStateException("cleanup failed");
+                    }));
+            assertThatThrownBy(conflicting::start)
+                    .isInstanceOf(Exception.class)
+                    .satisfies(error -> assertThat(error.getSuppressed()).hasSize(1));
+            assertThat(closes.get()).isEqualTo(1);
+            conflicting.close();
+            assertThat(closes.get()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void closeInterruptsLongInjectedDelayWithinOneStopDeadline() throws Exception {
+        CountDownLatch selectedDelay = new CountDownLatch(1);
+        ListingFixture fixture = request -> new S3ListResult(request, List.of(), false, null);
+        ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", fixture,
+                ReplayServerFixtureConfig.DEFAULT.withLatency((request, result) -> {
+                    selectedDelay.countDown();
+                    return Duration.ofSeconds(60);
+                }).withStopTimeout(Duration.ofMillis(200)));
+        server.start();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var request = executor.submit(() -> {
+                try {
+                    HttpProbe.response(server, "/bucket?list-type=2");
+                } catch (Exception ignored) {
+                    // The interrupted delayed response can end by connection failure.
+                }
+            });
+            assertThat(selectedDelay.await(5, TimeUnit.SECONDS)).isTrue();
+            Thread.sleep(30);
+            executor.submit(server::close).get(700, TimeUnit.MILLISECONDS);
+            request.get(5, TimeUnit.SECONDS);
+        } finally {
+            server.close();
+        }
     }
 
     private static byte[] bytes(String value) {

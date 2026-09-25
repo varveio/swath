@@ -34,8 +34,8 @@ import java.util.concurrent.TimeUnit;
  * published percentiles and are {@code null} on a timer that publishes none — the same values
  * {@code bench} reports, read the same way, so a scrape and a bench report of the same run agree.
  *
- * <p>Hand-rolled rather than Jackson-backed, matching {@code TokenWalkBenchmark.Report#toJson()};
- * this module carries no JSON dependency and one small writer is cheaper than adding one.
+ * <p>Hand-rolled to keep the metrics scrape independent of the GCS JSON response renderer and its
+ * per-request generator, matching {@code TokenWalkBenchmark.Report#toJson()}.
  */
 final class MetricsSnapshotJson {
 
@@ -52,10 +52,17 @@ final class MetricsSnapshotJson {
      */
     static String render(MeterRegistry registry, String servingMode, long uptimeMillis,
                          long sampledAtEpochMillis) {
+        return render(registry, servingMode, uptimeMillis, sampledAtEpochMillis,
+                ServingMetadata.legacy(servingMode));
+    }
+
+    static String render(MeterRegistry registry, String servingMode, long uptimeMillis,
+                         long sampledAtEpochMillis, ServingMetadata serving) {
         StringBuilder json = new StringBuilder(1024);
-        json.append("{\"schema_version\":1");
+        json.append("{\"schema_version\":2");
         json.append(",\"serving_mode\":");
         appendString(json, servingMode);
+        appendServing(json, serving);
         json.append(",\"uptime_ms\":").append(uptimeMillis);
         json.append(",\"sampled_at_epoch_ms\":").append(sampledAtEpochMillis);
         json.append(",\"meters\":[");
@@ -82,6 +89,51 @@ final class MetricsSnapshotJson {
         }
         json.append("]}");
         return json.toString();
+    }
+
+    private static void appendServing(StringBuilder json, ServingMetadata serving) {
+        json.append(",\"serving\":{\"protocols\":[");
+        for (int i = 0; i < serving.protocols().size(); i++) {
+            if (i != 0) json.append(',');
+            appendString(json, serving.protocols().get(i));
+        }
+        json.append("],\"bucket\":");
+        appendString(json, serving.bucket());
+        json.append(",\"azure_account\":");
+        if (serving.azureAccount() == null) json.append("null");
+        else appendString(json, serving.azureAccount());
+        json.append(",\"fixture_identity\":");
+        appendString(json, serving.fixtureIdentity());
+        json.append(",\"ordering_profile\":");
+        appendString(json, serving.orderingProfile());
+        json.append(",\"metadata_policy\":");
+        appendString(json, serving.metadataPolicy());
+        json.append(",\"max_concurrent_requests\":").append(serving.maxConcurrentRequests());
+        json.append(",\"max_responses\":").append(serving.maxResponses());
+        json.append(",\"read_permit_limit\":").append(serving.readPermitLimit());
+        json.append(",\"response_buffer_budget\":").append(serving.responseBufferBudget());
+        json.append(",\"max_response_bytes\":").append(serving.maxResponseBytes());
+        json.append(",\"charged_response_bytes\":").append(serving.chargedResponseBytes());
+        json.append(",\"peak_charged_response_bytes\":").append(serving.peakChargedResponseBytes());
+        json.append(",\"active_responses\":").append(serving.activeResponses());
+        json.append(",\"stop_timeout_ms\":").append(serving.stopTimeoutMs());
+        json.append(",\"idle_timeout_ms\":").append(serving.idleTimeoutMs());
+        json.append(",\"write_timeout_ms\":").append(serving.writeTimeoutMs());
+        json.append(",\"latency_injection\":");
+        appendString(json, serving.latencyInjection());
+        json.append(",\"pagination_profile\":");
+        appendString(json, serving.paginationProfile());
+        json.append(",\"profiles\":{");
+        boolean firstProfile = true;
+        for (var entry : new java.util.TreeMap<>(serving.profiles()).entrySet()) {
+            if (!firstProfile) json.append(',');
+            firstProfile = false;
+            appendString(json, entry.getKey());
+            json.append(':');
+            appendString(json, entry.getValue());
+        }
+        json.append('}');
+        json.append('}');
     }
 
     /**

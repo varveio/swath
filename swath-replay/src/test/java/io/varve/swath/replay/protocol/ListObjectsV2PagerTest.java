@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import io.varve.swath.replay.server.ReplayMetrics;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.testkit.FakeListingStore;
 import java.nio.charset.StandardCharsets;

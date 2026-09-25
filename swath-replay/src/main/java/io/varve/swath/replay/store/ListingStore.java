@@ -83,6 +83,19 @@ public interface ListingStore extends AutoCloseable {
         return null;
     }
 
+    /**
+     * Provider-aware variant. S3 suppresses a rolled prefix at/before its resume floor; GCS's
+     * inclusive startOffset may still include rows inside that prefix and must emit it. Stores that
+     * cannot distinguish these rules decline the GCS path and let its pager use range reads.
+     */
+    default List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
+                                                 byte[] prefix, byte[] delimiter, int limit, Projection projection,
+                                                 boolean suppressPrefixAtOrBeforeFloor) {
+        return suppressPrefixAtOrBeforeFloor
+                ? delimitedRollup(from, fromInclusive, toExclusive, prefix, delimiter, limit, projection)
+                : null;
+    }
+
     @Override
     void close();
 }

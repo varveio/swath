@@ -12,6 +12,7 @@ import io.varve.swath.replay.fixture.FixtureMetrics;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexLoadResult;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.store.ListingStore;
@@ -53,7 +54,7 @@ import org.junit.jupiter.api.io.TempDir;
  * must be observationally indistinguishable from the bare {@link SortedParquetStore} for every call
  * pattern the pager produces, so a wrong prefetch (a too-short window short-serving a page, a stale
  * or mis-keyed window bleeding a neighbour's rows, a botched {@code fromInclusive} boundary, a
- * projection leak, an eager/LRU eviction that drops a live window) surfaces as a divergence
+ * projection leak, or an LRU eviction that drops a live window) surfaces as a divergence
  * attributable to the decorator by construction.
  *
  * <p>Three layers, all against the REAL sorted Parquet store (no S3, sized-down, seeded):
@@ -61,7 +62,7 @@ import org.junit.jupiter.api.io.TempDir;
  *   <li><b>Pager-level small-window churn</b> ({@link #smallWindowChurnWalksIdenticallyPrefetchOnVsOff})
  *       — the full {@code pager + SortedParquetStore + ListObjectsV2Pager} HTTP walk with prefetch
  *       forced to a tiny window ({@code window-rows=50}, {@code max-windows=2}) so non-final windows,
- *       refills, LRU eviction and eager eviction all churn — asserted byte-identical against the same
+ *       refills and LRU eviction all churn — asserted byte-identical against the same
  *       walk with prefetch DISABLED. A {@code max-keys=1000} scenario forces {@code limit > window-rows},
  *       exercising the {@code max(windowRows, limit)} fill guard end-to-end.</li>
  *   <li><b>Adversarial store-level call patterns</b> — token re-use, {@code start-after} landing at
@@ -199,8 +200,7 @@ class WindowedPrefetchDifferentialTest {
     @Test
     void tokenReuseServesIdentically(@TempDir Path dir) throws IOException {
         try (Stores s = buildStores(dir, sequentialKeys(500), 64, 4)) {
-            // Replay the SAME (from, toExclusive, limit, projection) call twice: the second is likely a
-            // window hit; it must equal the first serve AND the bare store, byte for byte.
+            // Replayed cold requests may be refilled; equality is required either way.
             ByteKey from = key(s.sortedKeys.get(120));
             for (int rep = 0; rep < 3; rep++) {
                 assertIdentical(s, from, false, null, 25, Projection.KEYS_ONLY, "token-reuse rep " + rep);
@@ -217,12 +217,13 @@ class WindowedPrefetchDifferentialTest {
     void startAfterBoundariesServeIdentically(@TempDir Path dir) throws IOException {
         List<String> keys = sequentialKeys(500);
         try (Stores s = buildStores(dir, keys, 64, 4)) {
-            // Seed a non-final window over rows [0, 64) keyed toExclusive=null.
+            // Cold page plus exclusive token resume seeds a non-final ramped window.
             assertIdentical(s, null, true, null, 10, Projection.KEYS_ONLY, "seed");
-            // Probe boundaries relative to that 64-row window: window start (index 0), interior,
-            // last buffered row (63), first row past the window (64), each inclusive and exclusive,
+            assertIdentical(s, key(keys.get(9)), false, null, 10, Projection.KEYS_ONLY, "seed ramp");
+            // The non-final ramped window holds indexes 10..49. Probe both sides of its start
+            // and end, each inclusive and exclusive,
             // at limits that both fit inside the window and overrun it (forcing refills).
-            int[] boundaries = {0, 1, 31, 62, 63, 64, 65};
+            int[] boundaries = {8, 9, 10, 48, 49, 50, 51};
             int[] limits = {1, 5, 10, 64, 80};
             for (int idx : boundaries) {
                 ByteKey from = key(keys.get(idx));
@@ -233,6 +234,8 @@ class WindowedPrefetchDifferentialTest {
                     }
                 }
             }
+            assertThat(counter(s.metrics, "swath.replay.prefetch.window.hit", null, null))
+                    .isGreaterThan(0);
         }
         // A window that IS delegate-final (window-rows > fixture): every serve is a short-tail hit.
         try (Stores s = buildStores(dir.resolve("final"), keys, 5_000, 4)) {
@@ -319,6 +322,33 @@ class WindowedPrefetchDifferentialTest {
         sweep(dir.resolve("single"), keys, 50_000, 8, new Random(0x5EED_0002L), 500);
     }
 
+    @Test
+    void realSortedSeededWindowsServeNarrowedBoundsAndTwoWindowJoin(@TempDir Path dir) throws IOException {
+        List<String> keys = sequentialKeys(500);
+        try (Stores s = buildStores(dir.resolve("contained"), keys, 40, 8)) {
+            assertIdentical(s, null, true, null, 5, Projection.KEYS_ONLY, "cold");
+            assertIdentical(s, key(keys.get(4)), false, null, 5, Projection.KEYS_ONLY, "ramp");
+            for (int i = 8; i < 20; i++) {
+                assertIdentical(s, key(keys.get(i)), false, key(keys.get(20)), 20,
+                        Projection.KEYS_ONLY, "narrowed bound " + i);
+            }
+            assertThat(counter(s.metrics, "swath.replay.prefetch.window.selection", "reason",
+                    "single_contained_bound")).isGreaterThan(0);
+        }
+        try (Stores s = buildStores(dir.resolve("joined"), keys, 12, 8)) {
+            ByteKey cursor = null;
+            for (int i = 0; i < 6; i++) {
+                List<ListedObject> page = assertIdentical(s, cursor, cursor == null, null, 2,
+                        Projection.KEYS_ONLY, "leading page " + i);
+                cursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+            }
+            assertIdentical(s, key(keys.get(6)), false, null, 5, Projection.KEYS_ONLY,
+                    "cross-window page");
+            assertThat(counter(s.metrics, "swath.replay.prefetch.window.join", "reason", "hit"))
+                    .isGreaterThan(0);
+        }
+    }
+
     private void sweep(Path dir, List<String> keys, int windowRows, int maxWindows, Random rng, int probes)
             throws IOException {
         try (Stores s = buildStores(dir, keys, windowRows, maxWindows)) {
@@ -347,7 +377,8 @@ class WindowedPrefetchDifferentialTest {
 
     // ------------------------------------------------------------------------------- store harness
 
-    private record Stores(WindowedListingStore wrapped, ListingStore bare, List<String> sortedKeys)
+    private record Stores(WindowedListingStore wrapped, ListingStore bare, List<String> sortedKeys,
+                          ReplayMetrics metrics)
             implements AutoCloseable {
         @Override
         public void close() {
@@ -360,11 +391,12 @@ class WindowedPrefetchDifferentialTest {
             throws IOException {
         Fixture fx = writeSorted(dir, keys);
         SortedParquetStore backing = new SortedParquetStore(fx.files(), fx.index(), new ReplayMetrics(), 2);
+        ReplayMetrics prefetchMetrics = new ReplayMetrics();
         WindowedListingStore wrapped =
-                new WindowedListingStore(backing, new ReplayMetrics(), windowRows, maxWindows);
+                new WindowedListingStore(backing, prefetchMetrics, windowRows, maxWindows);
         SortedParquetStore bare = new SortedParquetStore(fx.files(), fx.index(), new ReplayMetrics(), 2);
         List<String> sorted = new ArrayList<>(new TreeSet<>(keys));
-        return new Stores(wrapped, bare, sorted);
+        return new Stores(wrapped, bare, sorted, prefetchMetrics);
     }
 
     /** Serves the same request from wrapped + bare, asserts byte-for-byte identity, returns the page. */

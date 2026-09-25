@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.replay.server;
+package io.varve.swath.replay.metrics;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -14,9 +14,12 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntSupplier;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,7 +54,7 @@ public final class ReplayMetrics {
     private final Counter httpErrors;
     private final Timer httpRequestLatency;
     private final Timer fixtureListLatency;
-    private final Map<ShapeLatency.Shape, Timer> shapedRequestLatency;
+    private final Map<RequestShape, Timer> shapedRequestLatency;
     private final Counter servingPath;
     private final Timer pageReadLatency;
     private final Timer parquetQueryLatency;
@@ -62,6 +65,18 @@ public final class ReplayMetrics {
     private final Timer prefetchWindowFill;
     private final Map<String, Counter> prefetchAnchorEvents;
     private final Counter prefetchWindowEvictions;
+    private final Counter prefetchRowBudgetEvictions;
+    private final DistributionSummary prefetchRampCeilingRows;
+    private final Map<String, Counter> prefetchSelection = new ConcurrentHashMap<>();
+    private final Map<String, Counter> prefetchJoin = new ConcurrentHashMap<>();
+    private final Map<String, Counter> prefetchUncached = new ConcurrentHashMap<>();
+    private final Map<String, Counter> providerPaths = new ConcurrentHashMap<>();
+    private final Map<String, Timer> requestStages = new ConcurrentHashMap<>();
+    private final Map<String, Counter> admissionRefusals = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> protocolActiveSources = new ConcurrentHashMap<>();
+    private LongSupplier responseBytesGaugeSource;
+    private LongSupplier responseBytesPeakGaugeSource;
+    private IntSupplier activeResponsesGaugeSource;
     private final Counter delimiterSkipScanRowGroupOpens;
     private final Counter delimiterSkipScanWholeGroupShortcuts;
     private final DistributionSummary delimiterSkipScanDecodedKeyRows;
@@ -72,6 +87,7 @@ public final class ReplayMetrics {
     // for the metrics lifetime or a sustained run's next GC turns both live-cache values into NaN.
     private IntSupplier prefetchWindowsGaugeSource;
     private IntSupplier prefetchAnchorsGaugeSource;
+    private LongSupplier prefetchCachedRowsGaugeSource;
     private final AtomicLong parquetQueriesInFlight = new AtomicLong();
     private final AtomicLong parquetQueriesPeak = new AtomicLong();
     private final long startedNanos = System.nanoTime();
@@ -100,8 +116,8 @@ public final class ReplayMetrics {
                 .publishPercentiles(0.5, 0.99).register(registry);
         fixtureListLatency = Timer.builder("swath.replay.fixture.list.latency")
                 .publishPercentiles(0.5, 0.99).register(registry);
-        shapedRequestLatency = new EnumMap<>(ShapeLatency.Shape.class);
-        for (ShapeLatency.Shape shape : ShapeLatency.Shape.values()) {
+        shapedRequestLatency = new EnumMap<>(RequestShape.class);
+        for (RequestShape shape : RequestShape.values()) {
             shapedRequestLatency.put(shape, Timer.builder("swath.replay.request.latency")
                     .tag("shape", shape.name().toLowerCase(Locale.ROOT))
                     .publishPercentiles(0.5, 0.99)
@@ -126,6 +142,10 @@ public final class ReplayMetrics {
                 "evicted_before_claim", Counter.builder("swath.replay.prefetch.anchor")
                         .tag("event", "evicted_before_claim").register(registry));
         prefetchWindowEvictions = Counter.builder("swath.replay.prefetch.window.eviction").register(registry);
+        prefetchRowBudgetEvictions = Counter.builder("swath.replay.prefetch.window.row_budget_eviction")
+                .register(registry);
+        prefetchRampCeilingRows = DistributionSummary.builder("swath.replay.prefetch.window.ramp_ceiling_rows")
+                .register(registry);
         delimiterSkipScanRowGroupOpens = Counter.builder("swath.replay.delimiter.skipscan.row_group_opens")
                 .register(registry);
         delimiterSkipScanWholeGroupShortcuts = Counter.builder(
@@ -258,9 +278,81 @@ public final class ReplayMetrics {
         prefetchWindowEvictions.increment();
     }
 
+    public void registerPrefetchCachedRowsGauge(LongSupplier rows) {
+        prefetchCachedRowsGaugeSource = rows;
+        Gauge.builder("swath.replay.prefetch.rows.live", prefetchCachedRowsGaugeSource,
+                        LongSupplier::getAsLong).register(registry);
+    }
+
+    public void recordPrefetchSelection(String reason) {
+        prefetchSelection.computeIfAbsent(reason, key -> Counter.builder(
+                "swath.replay.prefetch.window.selection").tag("reason", key).register(registry)).increment();
+    }
+
+    public void recordPrefetchJoin(String reason) {
+        prefetchJoin.computeIfAbsent(reason, key -> Counter.builder(
+                "swath.replay.prefetch.window.join").tag("reason", key).register(registry)).increment();
+    }
+
+    public void recordPrefetchUncached(String reason) {
+        prefetchUncached.computeIfAbsent(reason, key -> Counter.builder(
+                "swath.replay.prefetch.window.uncached").tag("reason", key).register(registry)).increment();
+    }
+
+    public void recordPrefetchRowBudgetEviction() {
+        prefetchRowBudgetEvictions.increment();
+    }
+
+    public void recordPrefetchRampCeiling(int requestedRows) {
+        prefetchRampCeilingRows.record(requestedRows);
+    }
+
+    /** Records an engaged provider paging path and the classification that selected it. */
+    public void recordProviderPath(String protocol, String path, String reason) {
+        String key = protocol + ':' + path + ':' + reason;
+        providerPaths.computeIfAbsent(key, ignored -> Counter.builder("swath.replay.provider.path")
+                .tag("protocol", protocol.toLowerCase(Locale.ROOT))
+                .tag("path", path).tag("reason", reason).register(registry)).increment();
+    }
+
+    public void registerResponseGauges(LongSupplier bytes, LongSupplier peak, IntSupplier activeResponses) {
+        responseBytesGaugeSource = bytes;
+        responseBytesPeakGaugeSource = peak;
+        activeResponsesGaugeSource = activeResponses;
+        Gauge.builder("swath.replay.response.bytes.live", responseBytesGaugeSource,
+                LongSupplier::getAsLong).register(registry);
+        Gauge.builder("swath.replay.response.bytes.peak", responseBytesPeakGaugeSource,
+                LongSupplier::getAsLong).register(registry);
+        Gauge.builder("swath.replay.response.active", activeResponsesGaugeSource,
+                IntSupplier::getAsInt).register(registry);
+    }
+
+    public void registerProtocolActiveGauge(String protocol, AtomicInteger active) {
+        protocolActiveSources.computeIfAbsent(protocol, key -> {
+            Gauge.builder("swath.replay.protocol.requests.active", active, AtomicInteger::get)
+                    .tag("protocol", key).register(registry);
+            return active;
+        });
+    }
+
+    public void recordRequestStage(Timer.Sample sample, String protocol, String stage) {
+        String key = protocol + ':' + stage;
+        sample.stop(requestStages.computeIfAbsent(key, ignored ->
+                Timer.builder("swath.replay.request.stage.latency")
+                        .tag("protocol", protocol).tag("stage", stage)
+                        .publishPercentiles(0.5, 0.99).register(registry)));
+    }
+
+    public void recordAdmissionRefusal(String protocol, String reason) {
+        String key = protocol + ':' + reason;
+        admissionRefusals.computeIfAbsent(key, ignored ->
+                Counter.builder("swath.replay.response.admission.refused")
+                        .tag("protocol", protocol).tag("reason", reason).register(registry)).increment();
+    }
+
     /**
      * Records the server's own cost of serving one request, tagged with the request's
-     * {@link ShapeLatency.Shape shape} — {@code worker_page}, {@code pivot_probe} or
+     * request shape — {@code worker_page}, {@code pivot_probe} or
      * {@code structure_probe}, the same three the latency injector keys on.
      *
      * <p>The shapes cost wildly different amounts to serve and are issued in wildly different
@@ -273,7 +365,7 @@ public final class ReplayMetrics {
      * <p>Timed around the fixture read and <b>excluding</b> any injected delay: this measures what
      * the server costs, not what it was told to pretend to cost.
      */
-    public void recordShapedRequest(Timer.Sample sample, ShapeLatency.Shape shape) {
+    public void recordShapedRequest(Timer.Sample sample, RequestShape shape) {
         sample.stop(shapedRequestLatency.get(shape));
     }
 
@@ -290,7 +382,7 @@ public final class ReplayMetrics {
      * to; a run full of them measured the harness. Only a counter can tell those apart after the
      * fact, and the server that could have said so is usually gone by then.
      */
-    public void recordInjectionOverrun(ShapeLatency.Shape shape, long overshootNanos) {
+    public void recordInjectionOverrun(RequestShape shape, long overshootNanos) {
         String tag = shape.name().toLowerCase(Locale.ROOT);
         Counter.builder("swath.replay.inject.overrun")
                 .tag("shape", tag).register(registry).increment();
