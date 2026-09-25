@@ -8,6 +8,7 @@ import socket
 import os
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 import zipfile
@@ -22,7 +23,7 @@ from resource_fault import (adequate_budget, diagnostic_classpath_provenance,
                             prove_trickle, require_declared_chunk_size,
                             require_effective_vm_flags, require_oracle_request_accounting,
                             require_unconstrained_cpu_quota,
-                            receive_trickle_chunk, sha256)
+                            receive_trickle_chunk, sample_resources, sha256)
 
 
 class ResourceFaultTest(unittest.TestCase):
@@ -156,6 +157,23 @@ class ResourceFaultTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             require_unconstrained_cpu_quota("500000 100000", 16)
 
+    def test_cpu_only_sampling_uses_proc_without_metrics_scrapes(self):
+        stopped = threading.Event()
+        samples, errors = [], []
+        timer = threading.Timer(.22, stopped.set)
+        timer.start()
+        try:
+            with patch("resource_fault.http_json", side_effect=AssertionError("unexpected scrape")):
+                sample_resources(os.getpid(), "http://unused", stopped, samples, errors,
+                                 cpu_only=True)
+        finally:
+            stopped.set()
+            timer.join()
+        self.assertGreaterEqual(len(samples), 1)
+        self.assertTrue(all(sample["fd_count"] > 0 and sample["thread_count"] > 0
+                            and "heap" not in sample for sample in samples))
+        self.assertEqual(errors, [])
+
     def test_stdout_queue_drains_prestart_line_before_child_waits_for_ack(self):
         child_source = """
 import sys
@@ -252,6 +270,14 @@ sys.exit(3)
                   for stage in ("page", "render", "delay")]
         held = {"meters": stages}
         prove_slow_rendered(before, held, 4, "s3")
+        azure_stages = [stage | {"tags": {"protocol": "azure", "stage": stage["tags"]["stage"]}}
+                        for stage in stages[:2]]
+        prove_slow_rendered(before, {"meters": azure_stages}, 4, "azure", expect_delay=False)
+        with self.assertRaises(RuntimeError):
+            prove_slow_rendered(before, {"meters": azure_stages + [{
+                "name": "swath.replay.request.stage.latency", "count": 1,
+                "tags": {"protocol": "azure", "stage": "delay"}}]},
+                4, "azure", expect_delay=False)
         for change in (stages[:2],
                        stages + [{"name": "swath.replay.request.stage.latency", "count": 1,
                                   "tags": {"protocol": "s3", "stage": "write"}}],

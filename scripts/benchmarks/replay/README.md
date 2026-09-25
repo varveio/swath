@@ -23,7 +23,9 @@ mkdir -p /tmp/swath-replay-bench-classes
   scripts/benchmarks/replay/ReplayHttpBench.java \
   scripts/benchmarks/replay/FixtureMetadataOracle.java \
   scripts/benchmarks/replay/MetadataVerifier.java \
-  scripts/benchmarks/replay/ReplayShapeBench.java
+  scripts/benchmarks/replay/ReplayShapeBench.java \
+  scripts/benchmarks/replay/ReplayGcsNarrowBench.java \
+  scripts/benchmarks/replay/ReplayMixedOpenLoopBench.java
 ```
 
 The paired runner starts one server per arm, pins server and client to disjoint CPU sets,
@@ -88,9 +90,27 @@ and validates emitted objects and prefixes. Predeclared wide/deep candidates on
 and `contrib/datacomp/DCLM-pool/jsonl/` (89 prefixes over 5.08m descendants), at a
 50-entry page size for prefix-ending pages. Shape panels compare requests/s; seek adds
 CPU/request, and delimiter adds decoded key rows and page reseeks per emitted prefix,
-with zero S3 baselines handled explicitly. Narrowed GCS restarts and mixed open-loop
-traffic still need separate declared workload drivers and receipts before final epic
-acceptance.
+with zero S3 baselines handled explicitly. `--workload gcs_narrow --partitioned`
+compares an unchanged GCS walk with two native endOffset intervals per partition,
+requiring the same exact owned inventory and zero narrowed overshoot. Its paired
+gates use objects/s and backing rows per owned object.
+
+`ReplayMixedOpenLoopBench` first walks all three native token streams and checks
+each server-chosen page boundary against the independent fixture and metadata
+oracle. Its measured phase reuses those real tokens in fixed full-inventory
+cycles, sends equal offered rates for S3/GCS/Azure, and measures response latency
+from the scheduled send time. It reports unsent tickets, actual send lag, per-
+protocol p99, page-plan hashes, cycle counts and drain-inclusive attained rates.
+`run_mixed.py --plan /path/to/predeclared-mixed-plan.json` runs 12 Williams-balanced
+four-arm rounds: three isolated protocols at matched aggregate CPU utilization and
+one mixed arm. The plan pins isolated CPU-cost pilot receipts, an independent
+native page-plan preflight, exact integer ticket counts, JVM/artifact hashes,
+resource limits and all thresholds before round 1. A completed receipt is still
+required before claiming the mixed gate passes. With a fixed `resource_proof`
+block (ten caps, NMT-enabled server flags and observer source hash), the same
+plan may be run once with `--resource-only`; that arm uses the dedicated
+resource observer and emits a memory/FD/thread receipt without a throughput-CI
+verdict.
 
 `resource_fault.py` is the separate opt-in response-resource arm. It starts a candidate
 server and writes `receipt.json`, a server log, before/after `/metrics` snapshots,
@@ -107,10 +127,13 @@ masquerade as a backpressure test.
 Declare an upper bound `M` on the encoded body length, then size the normal arm with
 `B >= C × max(preflightPeakCapacity, M + chunk)` on chunked candidates, where `C`
 is concurrent responses and `preflightPeakCapacity` is read from the fresh
-server's `peak_charged_response_bytes` after one serial page. For the frozen
-growable-array baseline, the driver uses `ceil(2.5 × M)` instead of `M + chunk`
+server's `peak_charged_response_bytes` after one serial page. For a frozen
+pre-chunk shared-runtime candidate such as `d2bd7b0`, the driver uses
+`ceil(2.5 × M)` instead of `M + chunk`
 to cover both old and new arrays during a 1.5× growth copy. The receipt names
-which allocator model was measured.
+which allocator model was measured. The unmodified `69cb809` baseline predates
+the schema-2 serving/budget fields required by `resource_fault.py`; use the
+separate HTTP comparison runner for that baseline.
 The driver rejects a budget below this bound and any response above `M`. This byte
 arithmetic excludes decoded rows, the shared cache, Jetty buffers, JDK direct buffers,
 and transient garbage; predeclare `-Xmx`, `MaxDirectMemorySize`, and
@@ -126,6 +149,20 @@ inventory during the measured interval. The driver holds its JVM open at
 `--min-measured-seconds 30 --min-server-cpu-utilization 0.90` and a separate
 client headroom ceiling before it runs. Failing any declared threshold makes
 the arm fail; a short or low-load pilot is characterization only.
+On a deliberately saturated server, `--cpu-only-sampling` keeps 100 ms local
+`/proc` RSS, FD, and thread samples without periodic HTTP metrics scrapes.
+The final metrics snapshot still checks exact peak charged bytes, refusals, and
+drain; the receipt marks sampled heap/direct peaks as unmeasured in this arm.
+Use the normal strict sampling profile for the separate lifecycle/memory arms.
+
+Dedicated replay resource-only runs can use `resource_observer.py` through
+`run_pair.py --resource-observation`. The runner waits for its `READY`
+line after an initial NMT snapshot and `/proc`/metrics sample, then stops it
+before server shutdown. All ten RSS, FD, thread, heap, direct, charged-response,
+active-response, cache-row, cache-window, and NMT-committed caps must be declared.
+The charged-byte cap uses the server's exact lifetime peak as well as sampled live
+values; the other peaks are sampled and their raw time series remain in the observer
+receipt. This mode is for bounded-resource proof and stays off in throughput CI.
 
 For a deterministic long-key resource corpus, generate a 600,000-object capture with
 1,024-byte keys and stamp it through `sort-fixture` into a new durable directory:
@@ -217,8 +254,9 @@ python3 scripts/benchmarks/replay/resource_fault.py \
 This checks the timeout path under a declared diagnostic socket setting. It is not
 evidence that a default-socket client consuming already buffered bytes triggers that
 server-side deadline. The receipt pins the diagnostic class file and candidate main JAR,
-and the connector listener records accepted `SO_SNDBUF` at connection open: minimum,
-maximum, and sample count. With no explicit send-buffer setting, Linux may autotune
+and the connector listener records Java `SocketChannel.getOption(SO_SNDBUF)` at
+connection open: minimum, maximum, and sample count. It does not expose raw
+kernel-internal send-buffer capacity. With no explicit setting, Linux may autotune
 later writes up to the receipt's recorded `tcp_wmem` maximum. Keep those receipts
 separate and label the transport choice.
 With the same diagnostic classpath but `--accepted-send-buffer-bytes 0`, the launcher

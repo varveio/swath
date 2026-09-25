@@ -93,6 +93,20 @@ class PairRunnerTest(unittest.TestCase):
                 run_pair.wait_for_health(server, "http://127.0.0.1/healthz", 0)
         sleeping.assert_not_called()
 
+    def test_flat_driver_command_keeps_native_token_walk_cli(self):
+        args = SimpleNamespace(java_home="/jdk", driver_java_opts="-Xmx2g", classpath="classes:lib/*",
+                               port=19091, workload="flat", baseline_protocol="s3",
+                               candidate_protocol="s3", bucket="bench", fixture_glob="fixture/*.parquet",
+                               clients=16, page_size=1000, warmup=1,
+                               inventory={"fixture_count": 100, "fixture_digest": "a" * 64},
+                               partitioned=True, repetitions=7, end_ack=True)
+        self.assertEqual(run_pair.build_driver_command(args, "baseline"),
+                         ["/jdk/bin/java", "--enable-native-access=ALL-UNNAMED", "-Xmx2g",
+                          "-cp", "classes:lib/*", "io.varve.swath.replay.bench.ReplayHttpBench",
+                          "http://127.0.0.1:19091", "s3", "bench", "fixture/*.parquet",
+                          "16", "1000", "1", "100:" + "a" * 64, "bracket",
+                          "partitioned", "7", "end_ack"])
+
     def test_per_thread_cpu_headroom_uses_carrier_deltas(self):
         before = {12: {"name": "carrier-a", "ticks": 100},
                   13: {"name": "carrier-b", "ticks": 50}}

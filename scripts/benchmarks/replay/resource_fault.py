@@ -273,6 +273,8 @@ def oracle_walk(args, clients, output, inventory, environment, server_pid):
                 driver.kill()
                 driver.wait()
             reader.join(timeout=1)
+            driver.stdin.close()
+            driver.stdout.close()
             (output / f"oracle-c{clients}.log").write_text("".join(stdout_lines))
     if reader_errors:
         raise RuntimeError("oracle stdout collector failed: " + ", ".join(reader_errors))
@@ -377,11 +379,16 @@ def await_condition(predicate, seconds, interval=.05):
     return None
 
 
-def sample_resources(pid, metrics_url, stop, samples, errors):
+def sample_resources(pid, metrics_url, stop, samples, errors, cpu_only=False):
     try:
         while not stop.wait(.1):
             value = rss(pid)
-            sample = {"rss": value, "at_ns": time.monotonic_ns()}
+            sample = {"rss": value, "at_ns": time.monotonic_ns(),
+                      "fd_count": sum(1 for _ in Path(f"/proc/{pid}/fd").iterdir()),
+                      "thread_count": sum(1 for _ in Path(f"/proc/{pid}/task").iterdir())}
+            if cpu_only:
+                samples.append(sample)
+                continue
             try:
                 snapshot = http_json(metrics_url)
                 sample.update({"direct": metric(snapshot, "jvm.buffer.memory.used", {"id": "direct"}),
@@ -510,13 +517,17 @@ def prove_slow_held(snapshot, min_held, body_length):
         raise RuntimeError("slow clients were counted during injection but did not hold writes")
 
 
-def prove_slow_rendered(before, held, clients, protocol):
+def prove_slow_rendered(before, held, clients, protocol, expect_delay=True):
     stages = "swath.replay.request.stage.latency"
-    for stage in ("page", "render", "delay"):
+    required_stages = ("page", "render", "delay") if expect_delay else ("page", "render")
+    for stage in required_stages:
         observed = metric(held, stages, {"protocol": protocol, "stage": stage}) - metric(
             before, stages, {"protocol": protocol, "stage": stage})
         if observed != clients:
             raise RuntimeError(f"slow clients did not all finish {stage} before the hold proof")
+    if not expect_delay and (metric(held, stages, {"protocol": protocol, "stage": "delay"})
+                             - metric(before, stages, {"protocol": protocol, "stage": "delay"})) != 0:
+        raise RuntimeError("injection-free slow arm unexpectedly recorded a delay stage")
     writes = metric(held, stages, {"protocol": protocol, "stage": "write"}) - metric(
         before, stages, {"protocol": protocol, "stage": "write"})
     overruns = metric(held, "swath.replay.inject.overrun") - metric(
@@ -574,7 +585,7 @@ def run(args):
                "max_concurrent_requests": args.max_concurrent_requests,
                "write_timeout": args.write_timeout, "idle_timeout": args.idle_timeout,
                "min_held": args.min_held, "hold_seconds": args.hold_seconds,
-               "expect_overload": args.expect_overload, "normal_walker": args.normal_walker,
+               "expect_overload": args.expect_overload, "normal_walker_enabled": args.normal_walker,
                "driver_warmup": args.driver_warmup,
                "driver_repetitions": args.driver_repetitions,
                "declared_server_cpus": sorted(args.server_cpu_set or []),
@@ -582,6 +593,7 @@ def run(args):
                "min_measured_seconds": args.min_measured_seconds,
                "min_server_cpu_utilization": args.min_server_cpu_utilization,
                "max_client_cpu_utilization": args.max_client_cpu_utilization,
+               "sampling_profile": "cpu_only_proc" if args.cpu_only_sampling else "strict_metrics",
                "heap_headroom_bytes": args.heap_headroom,
                "staging_and_other_headroom_bytes": args.cache_staging_headroom,
                "decoded_row_bytes_assumption": args.decoded_row_bytes,
@@ -591,6 +603,8 @@ def run(args):
                "transport": ("diagnostic_accepted_sndbuf" if args.accepted_send_buffer_bytes
                              else "instrumented_default_sndbuf" if args.diagnostic_server_classpath
                              else "default"),
+               "sndbuf_readback_source": ("Java SocketChannel.getOption(SO_SNDBUF) at connection open"
+                                          if args.diagnostic_server_classpath else "not instrumented"),
                "server_java_opts": args.server_java_opts,
                "driver_java_opts": args.driver_java_opts,
                "driver_flags": parse_driver_opts(args.driver_java_opts),
@@ -606,6 +620,9 @@ def run(args):
     if (args.min_measured_seconds > 0 or args.min_server_cpu_utilization > 0
             or args.max_client_cpu_utilization < 1) and not args.server_cpu_set:
         raise ValueError("measured CPU thresholds require declared disjoint process affinities")
+    if args.cpu_only_sampling and (args.mode != "normal512"
+                                   or args.min_server_cpu_utilization <= 0):
+        raise ValueError("CPU-only sampling requires a thresholded normal512 CPU arm")
     if args.server_cpu_set:
         receipt["declared_cpu_topology"] = declared_cpu_topology(
             args.server_cpu_set, args.client_cpu_set)
@@ -625,8 +642,6 @@ def run(args):
     if args.mode == "slow" and args.write_timeout_seconds <= (
             args.injected_seconds + args.hold_seconds + args.timeout_grace + 1):
         raise ValueError("slow hold must end well before the total write deadline")
-    if args.mode == "slow" and args.injected_seconds <= 0:
-        raise ValueError("slow hold proof requires a positive worker_page injection")
     if args.mode == "trickle" and args.clients != 1:
         raise ValueError("trickle proof opens exactly one client; declare --clients 1")
     if args.min_held < 1 or args.min_held > args.clients:
@@ -714,7 +729,7 @@ def run(args):
     sample_errors = []
     sampler = threading.Thread(target=sample_resources,
                                args=(server.pid, metrics_url, stop_samples, resource_samples,
-                                     sample_errors), daemon=True)
+                                     sample_errors, args.cpu_only_sampling), daemon=True)
     sampler_started = False
     try:
         def healthy():
@@ -846,7 +861,7 @@ def run(args):
             receipt["held_metrics"] = http_json(metrics_url)
             prove_slow_held(receipt["held_metrics"], args.min_held, preflight["length"])
             prove_slow_rendered(receipt["metrics_before"], receipt["held_metrics"],
-                                args.clients, args.protocol)
+                                args.clients, args.protocol, args.injected_seconds > 0)
             receipt["nmt_held"] = target_jcmd("VM.native_memory", "summary")
             if receipt["nmt_held"].get("exit") != 0 or "Total:" not in receipt["nmt_held"].get("stdout", ""):
                 raise RuntimeError("NMT held snapshot unavailable")
@@ -915,10 +930,12 @@ def run(args):
                     eof_or_reset = True
                 elif chunk:
                     received += len(chunk)
-                    if time.monotonic() - started > args.idle_timeout_seconds:
-                        progressed_after_idle = True
                 snapshot = http_json(metrics_url)
                 state = snapshot["serving"]
+                if (chunk and time.monotonic() - started > args.idle_timeout_seconds
+                        and state["active_responses"] >= 1
+                        and state["charged_response_bytes"] >= body_length):
+                    progressed_after_idle = True
                 expired = metric(snapshot, "swath.replay.response.write.deadline",
                                  {"protocol": args.protocol, "reason": "total_deadline"}) > deadline_before
                 deadline_counter_engaged |= expired
@@ -1023,17 +1040,22 @@ def run(args):
                                             if "heap" in sample), default=None)
         receipt["direct_peak_sampled"] = max((sample.get("direct") for sample in resource_samples
                                               if "direct" in sample), default=None)
+        receipt["fd_peak_sampled"] = max((sample["fd_count"] for sample in resource_samples),
+                                         default=None)
+        receipt["thread_peak_sampled"] = max((sample["thread_count"] for sample in resource_samples),
+                                             default=None)
         receipt["active_responses_peak_sampled"] = max((sample.get("active_responses")
                 for sample in resource_samples if "active_responses" in sample), default=None)
         receipt["charged_bytes_peak_sampled"] = max((sample.get("charged_bytes")
                 for sample in resource_samples if "charged_bytes" in sample), default=None)
-        if receipt["heap_peak_sampled"] is None or receipt["direct_peak_sampled"] is None:
+        if not args.cpu_only_sampling and (receipt["heap_peak_sampled"] is None
+                                           or receipt["direct_peak_sampled"] is None):
             raise RuntimeError("heap/direct sampled resource observations are missing")
         if sample_errors:
             raise RuntimeError("resource sampler missed or failed a metrics scrape")
         direct_limit = memory_bytes(receipt["server_flags"]["max_direct_memory"])
         receipt["direct_limit_bytes"] = direct_limit
-        if receipt["direct_peak_sampled"] > direct_limit:
+        if receipt["direct_peak_sampled"] is not None and receipt["direct_peak_sampled"] > direct_limit:
             raise RuntimeError("sampled direct-buffer use exceeded declared MaxDirectMemorySize")
         potential_clients = args.clients + (1 if args.mode == "slow" else 0)
         receipt["encoded_peak_bound_clients"] = potential_clients
@@ -1057,6 +1079,8 @@ def run(args):
             raise RuntimeError("server HTTP request count disagrees with driver/socket attempts")
         receipt["claim_scope"] = ("diagnostic custom-send-buffer bounds and recovery only"
                 if args.accepted_send_buffer_bytes else
+                "CPU saturation, exact response budget and local proc peaks; sampled heap/direct unmeasured"
+                if args.cpu_only_sampling else
                 "instrumented default-socket resource bounds; at least one reuse and accepts <= clients"
                 if args.diagnostic_server_classpath else
                 "default-transport resource bounds; pooled-connection reuse requires separate proof")
@@ -1117,6 +1141,8 @@ def main():
     parser.add_argument("--min-measured-seconds", type=float, default=0)
     parser.add_argument("--min-server-cpu-utilization", type=float, default=0)
     parser.add_argument("--max-client-cpu-utilization", type=float, default=1)
+    parser.add_argument("--cpu-only-sampling", action="store_true",
+                        help="CPU saturation arm: sample local proc RSS/FD/threads without periodic metrics scrapes")
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--protocol", choices=("s3", "azure"), default="s3")
     parser.add_argument("--azure-account", default="replay")

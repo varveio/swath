@@ -52,6 +52,15 @@ val replayGcsNarrowBenchmarkSelfTest by tasks.registering(JavaExec::class) {
     dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
 }
 
+val replayMixedBenchmarkSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks native-token mixed open-loop pages, scheduled timing and failure receipts."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.ReplayMixedOpenLoopBenchSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
 val replayFixtureMetadataOracleSelfTest by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Checks the independent Parquet name, size and timestamp benchmark oracle."
@@ -244,6 +253,7 @@ tasks.named("check") {
     dependsOn(replayBenchmarkSelfTest)
     dependsOn(replayShapeBenchmarkSelfTest)
     dependsOn(replayGcsNarrowBenchmarkSelfTest)
+    dependsOn(replayMixedBenchmarkSelfTest)
     dependsOn(replayFixtureMetadataOracleSelfTest)
     dependsOn(providerEvidenceSelfTest)
     dependsOn(replayBenchmarkPythonSelfTest)

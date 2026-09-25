@@ -17,6 +17,7 @@ import math
 import os
 from pathlib import Path
 import queue
+import select
 import shlex
 import signal
 import socket
@@ -214,6 +215,42 @@ def rss_bytes(pid):
     return None
 
 
+def build_driver_command(args, label):
+    protocol = args.baseline_protocol if label == "baseline" else args.candidate_protocol
+    driver_class = {
+        "flat": "io.varve.swath.replay.bench.ReplayHttpBench",
+        "gcs_narrow": "io.varve.swath.replay.bench.ReplayGcsNarrowBench",
+        "mixed_open_loop": "io.varve.swath.replay.bench.ReplayMixedOpenLoopBench",
+        "seek": "io.varve.swath.replay.bench.ReplayShapeBench",
+        "delimiter": "io.varve.swath.replay.bench.ReplayShapeBench",
+    }[args.workload]
+    command = [f"{args.java_home}/bin/java", "--enable-native-access=ALL-UNNAMED",
+               *shlex.split(args.driver_java_opts), "-cp", args.classpath, driver_class,
+               f"http://127.0.0.1:{args.port}"]
+    if args.workload == "mixed_open_loop":
+        command += [args.bucket, args.fixture_glob,
+                    f"{args.inventory['fixture_count']}:{args.inventory['fixture_digest']}",
+                    args.mixed_protocols, str(args.mixed_rate), str(args.mixed_offered_each),
+                    "1000", "1", str(args.mixed_rate_warmup_cycles),
+                    str(args.mixed_max_outstanding), "bracket"]
+    else:
+        command += [protocol, args.bucket, args.fixture_glob, str(args.clients),
+                    str(args.page_size), str(args.warmup),
+                    f"{args.inventory['fixture_count']}:{args.inventory['fixture_digest']}",
+                    "bracket"]
+        if args.workload != "flat":
+            mode = ("unchanged" if label == "baseline" else "narrowed") \
+                    if args.workload == "gcs_narrow" else args.workload
+            command += [mode, str(args.repetitions)]
+            if args.workload == "delimiter":
+                command.append(args.delimiter_prefix)
+        elif args.partitioned:
+            command += ["partitioned", str(args.repetitions)]
+    if args.end_ack:
+        command.append("end_ack")
+    return command
+
+
 def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
     server_cmd = [str(args.baseline if label == "baseline" else args.candidate), "serve",
                   "--fixture", args.fixture, "--bucket", args.bucket, "--host", "127.0.0.1",
@@ -245,35 +282,53 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
     with log_path.open("wb") as log:
         server = subprocess.Popen(server_cmd, env=env, stdout=log, stderr=subprocess.STDOUT,
                                   preexec_fn=affinity(server_cpus))
+        observer = None
+        observer_error = None
+        observer_receipt = None
         try:
             wait_for_health(server, f"http://127.0.0.1:{args.metrics_port}/healthz", args.start_timeout)
             metrics_url = f"http://127.0.0.1:{args.metrics_port}/metrics"
             receipt["runtime_attestation"] = fetch_json(
                 f"http://127.0.0.1:{args.metrics_port}/runtime-attestation")
-            protocol = args.baseline_protocol if label == "baseline" else args.candidate_protocol
-            driver_class = {
-                "flat": "io.varve.swath.replay.bench.ReplayHttpBench",
-                "gcs_narrow": "io.varve.swath.replay.bench.ReplayGcsNarrowBench",
-                "seek": "io.varve.swath.replay.bench.ReplayShapeBench",
-                "delimiter": "io.varve.swath.replay.bench.ReplayShapeBench",
-            }[args.workload]
-            command = [f"{args.java_home}/bin/java", "--enable-native-access=ALL-UNNAMED",
-                       *shlex.split(args.driver_java_opts),
-                       "-cp", args.classpath, driver_class,
-                       f"http://127.0.0.1:{args.port}", protocol, args.bucket,
-                       args.fixture_glob, str(args.clients), str(args.page_size), str(args.warmup)]
-            command.append(f"{args.inventory['fixture_count']}:{args.inventory['fixture_digest']}")
-            command.append("bracket")
-            if args.workload != "flat":
-                mode = ("unchanged" if label == "baseline" else "narrowed") \
-                        if args.workload == "gcs_narrow" else args.workload
-                command += [mode, str(args.repetitions)]
-                if args.workload == "delimiter":
-                    command.append(args.delimiter_prefix)
-            elif args.partitioned:
-                command += ["partitioned", str(args.repetitions)]
-            if args.end_ack:
-                command.append("end_ack")
+            if getattr(args, "resource_observation", False):
+                if "-XX:NativeMemoryTracking=" not in args.server_java_opts:
+                    raise RuntimeError("resource observation requires explicit NativeMemoryTracking")
+                observer_caps = args.resource_caps
+                observer_flags = {
+                    "rss_bytes": "--rss-cap", "fd_count": "--fd-cap",
+                    "thread_count": "--thread-cap", "heap_bytes": "--heap-cap",
+                    "direct_bytes": "--direct-cap", "charged_response_bytes": "--charged-cap",
+                    "active_responses": "--active-cap", "cached_rows": "--cache-rows-cap",
+                    "cached_windows": "--cache-windows-cap",
+                    "nmt_committed_bytes": "--nmt-committed-cap"}
+                if set(observer_caps) != set(observer_flags) or any(
+                        not isinstance(cap, int) or cap <= 0 for cap in observer_caps.values()):
+                    raise RuntimeError("resource observation needs explicit positive caps")
+                observer_receipt = output_dir / f"{prefix}-resource-observer.json"
+                observer_source = Path(__file__).with_name("resource_observer.py")
+                observer_command = [sys.executable, str(observer_source),
+                                    "--pid", str(server.pid), "--metrics-url", metrics_url,
+                                    "--output", str(observer_receipt), "--java-home", args.java_home]
+                for field, option in observer_flags.items():
+                    observer_command += [option, str(observer_caps[field])]
+                receipt["resource_observer_command"] = observer_command
+                receipt["resource_observer_source_sha256"] = hashlib.sha256(
+                    observer_source.read_bytes()).hexdigest()
+                observer_error_path = output_dir / f"{prefix}-resource-observer.err"
+                receipt["resource_observer_stderr"] = str(observer_error_path)
+                observer_error = observer_error_path.open("w")
+                observer = subprocess.Popen(observer_command, env=driver_env,
+                                            stdout=subprocess.PIPE, stderr=observer_error,
+                                            text=True, bufsize=1, preexec_fn=affinity(client_cpus))
+                ready, _, _ = select.select([observer.stdout], [], [], 30)
+                line = observer.stdout.readline() if ready else ""
+                if not line or json.loads(line) != {"event": "READY", "pid": server.pid}:
+                    raise RuntimeError("resource observer did not become ready before driver warmup")
+            command = build_driver_command(args, label)
+            if args.workload == "mixed_open_loop":
+                receipt["client_model"] = "scheduled_open_loop"
+                receipt["clients"] = None
+                receipt["client_max_outstanding"] = args.mixed_max_outstanding
             with (output_dir / f"{round_number:02d}-{label}-driver.err").open("w") as driver_error:
                 driver = subprocess.Popen(command, env=driver_env, stdout=subprocess.PIPE,
                                           stdin=subprocess.PIPE,
@@ -396,6 +451,22 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                 if (result.get("metadata_profile") != "fixture_delimiter_direct_name_size_time"
                         or not isinstance(result.get("warmup_metadata_verified_objects"), int)):
                     raise RuntimeError("delimiter warmup metadata was not fully verified")
+            elif args.workload == "mixed_open_loop":
+                expected_protocols = set(args.mixed_protocols.split(","))
+                if (result.get("metadata_profile") != "fixture_name_size_time"
+                        or result.get("warmup_metadata_verified_objects")
+                        != args.inventory["fixture_count"] * len(expected_protocols)
+                        or set(result.get("protocols", {})) != expected_protocols
+                        or result.get("warmup_attempted_requests")
+                        != result.get("warmup_successful_requests")
+                        or result.get("unsent_requests") != 0
+                        or result.get("offered_requests_each") != args.mixed_offered_each
+                        or result.get("max_outstanding_limit") != args.mixed_max_outstanding
+                        or result.get("target_rate_warmup_cycles")
+                        != args.mixed_rate_warmup_cycles
+                        or not math.isclose(result.get("offered_rate_each_rps", float("nan")),
+                                            args.mixed_rate, rel_tol=1e-12)):
+                    raise RuntimeError("mixed native scope, exact tickets or warmup disagree")
             receipt["result"] = result
             receipt["server_cpu_ns_per_object"] = receipt["server_cpu_seconds"] * 1e9 / result["objects"]
             receipt["server_cpu_ns_per_request"] = receipt["server_cpu_seconds"] * 1e9 / result["requests"]
@@ -426,6 +497,10 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
                 quality_failure = quality_failure or "client_limited"
             if receipt["client_max_thread_utilization"] > args.max_client_utilization:
                 quality_failure = quality_failure or "client_hot_thread_limited"
+            if (args.workload == "mixed_open_loop"
+                    and result.get("client_send_p99_lag_ns", float("inf"))
+                    > args.mixed_max_client_send_p99_lag_ns):
+                quality_failure = quality_failure or "client_send_limited"
             if elapsed_seconds < args.min_duration:
                 quality_failure = quality_failure or "under_duration"
             server_requests = meter(after, "swath.replay.http.requests") - meter(before, "swath.replay.http.requests")
@@ -481,6 +556,32 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
             if "output_lines" in locals():
                 receipt["driver_stdout_lines"] = output_lines[-8:]
         finally:
+            if observer is not None:
+                if observer.poll() is None:
+                    observer.send_signal(signal.SIGTERM)
+                try:
+                    observer.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    observer.kill()
+                    observer.wait()
+                receipt["resource_observer_exit"] = observer.returncode
+                if observer_receipt is not None and observer_receipt.exists():
+                    try:
+                        observation = json.loads(observer_receipt.read_text())
+                        receipt["resource_observation"] = {
+                            "status": observation.get("status"), "receipt": str(observer_receipt),
+                            "peaks": observation.get("peaks"),
+                            "sample_count": len(observation.get("samples", [])),
+                            "nmt_count": len(observation.get("nmt", []))}
+                    except (OSError, ValueError) as error:
+                        receipt["resource_observer_read_error"] = str(error)
+                if observer.returncode != 0 or receipt.get("resource_observation", {}).get("status") != "passed":
+                    receipt["status"] = "failed"
+                    receipt["error"] = (receipt.get("error", "")
+                                        + "; resource observer failed or exceeded a declared cap").lstrip("; ")
+                observer.stdout.close()
+            if observer_error is not None:
+                observer_error.close()
             if server.poll() is None:
                 server.send_signal(signal.SIGTERM)
             try:
@@ -586,8 +687,23 @@ def main():
     parser.add_argument("--max-client-utilization", type=float, default=.70)
     parser.add_argument("--max-foreign-cpu-utilization", type=float, default=.02,
                         help="conservative upper bound for other processes/kernel work on reserved CPUs")
+    parser.add_argument("--resource-observation", action="store_true",
+                        help="run the dedicated FD/thread/heap/direct/NMT observer for a resource proof arm")
+    for option in ("rss-bytes", "fd-count", "thread-count", "heap-bytes", "direct-bytes",
+                   "charged-response-bytes", "active-responses", "cached-rows",
+                   "cached-windows", "nmt-committed-bytes"):
+        parser.add_argument("--resource-cap-" + option, type=int)
     parser.add_argument("--min-duration", type=float, default=30)
     args = parser.parse_args()
+    cap_fields = ("rss_bytes", "fd_count", "thread_count", "heap_bytes", "direct_bytes",
+                  "charged_response_bytes", "active_responses", "cached_rows",
+                  "cached_windows", "nmt_committed_bytes")
+    if args.resource_observation:
+        args.resource_caps = {name: getattr(args, "resource_cap_" + name) for name in cap_fields}
+        if any(value is None or value <= 0 for value in args.resource_caps.values()):
+            parser.error("resource observation requires all ten positive resource caps")
+    else:
+        args.resource_caps = None
     inventory_env, inherited_java_options = clean_java_env()
     args.removed_inherited_java_option_keys = sorted(inherited_java_options)
     if args.warmup < 1:
