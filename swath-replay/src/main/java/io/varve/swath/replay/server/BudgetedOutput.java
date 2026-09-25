@@ -29,6 +29,8 @@ public final class BudgetedOutput extends OutputStream {
     private int allocatedCapacity;
     private int firstChunkHint;
     private int length;
+    private int percentOnePassValues;
+    private int percentExactFallbackValues;
     private boolean closed;
     private OwnedBody body;
 
@@ -129,6 +131,8 @@ public final class BudgetedOutput extends OutputStream {
     public int capacity() { return allocatedCapacity; }
     int chargedCapacityAndCredit() { return allocatedCapacity + reservedCredit; }
     int chunkBytes() { return chunkBytes; }
+    int percentOnePassValues() { return percentOnePassValues; }
+    int percentExactFallbackValues() { return percentExactFallbackValues; }
 
     public void setFirstChunkHint(int hint) {
         if (hint <= 0) return;
@@ -166,7 +170,33 @@ public final class BudgetedOutput extends OutputStream {
     }
 
     public void appendPercentEncoded(byte[] value) {
-        long encodedLength = value.length;
+        int inputLength = value.length;
+        if (closed) throw new IllegalStateException("response output is closed");
+        if (body != null) throw new IllegalStateException("response output is frozen");
+        if (!chunks.isEmpty()) {
+            Chunk last = chunks.getLast();
+            int room = last.bytes.length - last.used;
+            // This chunk is already charged, and length <= allocatedCapacity <= cap.
+            // A three-byte upper bound avoids another reservation, allocation, or scan.
+            if (inputLength <= room / 3) {
+                int cursor = last.used;
+                for (byte b : value) {
+                    int v = b & 0xff;
+                    if (URL_SAFE[v]) {
+                        last.bytes[cursor++] = b;
+                    } else {
+                        last.bytes[cursor++] = '%';
+                        last.bytes[cursor++] = HEX[v >>> 4];
+                        last.bytes[cursor++] = HEX[v & 0x0f];
+                    }
+                }
+                length += cursor - last.used;
+                last.used = cursor;
+                percentOnePassValues++;
+                return;
+            }
+        }
+        long encodedLength = inputLength;
         for (byte b : value) {
             if (!URL_SAFE[b & 0xff]) encodedLength += 2;
         }
@@ -195,6 +225,7 @@ public final class BudgetedOutput extends OutputStream {
                 }
             }
         }
+        percentExactFallbackValues++;
     }
 
     public void appendEscaped(String value) {

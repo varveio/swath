@@ -80,6 +80,7 @@ public final class ReplayMetrics {
     private final Map<String, Counter> protocolObjects = new ConcurrentHashMap<>();
     private final Map<String, Counter> protocolPrefixes = new ConcurrentHashMap<>();
     private final Map<String, Counter> protocolEncodedBytes = new ConcurrentHashMap<>();
+    private final Map<String, Counter> percentEncodingPaths = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> protocolActiveSources = new ConcurrentHashMap<>();
     private LongSupplier responseBytesGaugeSource;
     private LongSupplier responseBytesPeakGaugeSource;
@@ -407,6 +408,24 @@ public final class ReplayMetrics {
                 Counter.builder("swath.replay.protocol.encoded.bytes")
                         .tag("protocol", protocol).tag("shape", shape).register(registry))
                 .increment(encodedBytes);
+    }
+
+    /** Count completed-render URL values once per page; no registry work runs per key. */
+    public void recordPercentEncodingPaths(String protocol, int onePass, int exactFallback) {
+        if (onePass < 0 || exactFallback < 0) {
+            throw new IllegalArgumentException("percent encoding path counts must be nonnegative");
+        }
+        recordPercentEncodingPath(protocol, "charged_chunk_one_pass", onePass);
+        recordPercentEncodingPath(protocol, "exact_length_fallback", exactFallback);
+    }
+
+    private void recordPercentEncodingPath(String protocol, String reason, int count) {
+        if (count == 0) return;
+        String key = protocol + ':' + reason;
+        percentEncodingPaths.computeIfAbsent(key, ignored ->
+                Counter.builder("swath.replay.response.percent.encoding.path")
+                        .tag("protocol", protocol).tag("reason", reason)
+                        .register(registry)).increment(count);
     }
 
     /**

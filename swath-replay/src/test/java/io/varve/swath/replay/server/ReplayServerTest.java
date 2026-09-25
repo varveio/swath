@@ -72,6 +72,12 @@ class ReplayServerTest {
             assertThat(server.metrics().registry().get("swath.replay.protocol.encoded.bytes")
                     .tags("protocol", "s3", "shape", "page").counter().count())
                     .isEqualTo(response.body().getBytes(StandardCharsets.UTF_8).length);
+            assertThat(server.metrics().registry().get("swath.replay.response.percent.encoding.path")
+                    .tags("protocol", "s3", "reason", "charged_chunk_one_pass")
+                    .counter().count()).isEqualTo(2);
+            assertThat(server.metrics().registry().find("swath.replay.response.percent.encoding.path")
+                    .tags("protocol", "s3", "reason", "exact_length_fallback")
+                    .counter()).isNull();
         }
     }
 
@@ -87,6 +93,8 @@ class ReplayServerTest {
             assertThat(response.body()).contains("<Code>NoSuchBucket</Code>");
             assertThat(server.metrics().registry().get("swath.replay.protocol.http.requests")
                     .tags("protocol", "s3", "status_class", "4xx").counter().count()).isEqualTo(1);
+            assertThat(server.metrics().registry().find("swath.replay.response.percent.encoding.path")
+                    .tag("protocol", "s3").counter()).isNull();
         }
     }
 

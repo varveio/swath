@@ -72,6 +72,7 @@ class ListingRequestRunnerTest {
                     @Override public PreparedPage page() {
                         return output -> {
                             int bytes = oversized.getAndSet(false) ? 65 : 1;
+                            output.appendPercentEncoded(new byte[] {'x'});
                             output.write(new byte[bytes], 0, bytes);
                             return new RenderedResponse(200, "text/plain", Map.of(), output.body());
                         };
@@ -97,11 +98,16 @@ class ListingRequestRunnerTest {
         assertThat(metrics.registry().get("swath.replay.response.admission.refused")
                 .tags("protocol", "s3", "reason", "response_too_large")
                 .counter().count()).isEqualTo(1);
+        assertThat(metrics.registry().find("swath.replay.response.percent.encoding.path")
+                .tag("protocol", "s3").counter()).isNull();
         runner.serve(http, request, response, outer, handler);
         assertThat(status).hasValue(200);
         assertThat(writes).hasValue(2);
         assertThat(runner.chargedBytes()).isZero();
         assertThat(runner.activeResponses()).isZero();
+        assertThat(metrics.registry().get("swath.replay.response.percent.encoding.path")
+                .tags("protocol", "s3", "reason", "exact_length_fallback")
+                .counter().count()).isEqualTo(1);
         runner.stopDeadlines();
         metrics.registry().close();
     }

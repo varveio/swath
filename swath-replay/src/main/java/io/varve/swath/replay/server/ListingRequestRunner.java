@@ -159,6 +159,8 @@ final class ListingRequestRunner {
             metrics.recordProtocolResponse(protocol, rendered.status());
             if (rendered.status() >= 200 && rendered.status() < 300) {
                 metrics.recordListingObservation(protocol, observation, rendered.body().length());
+                metrics.recordPercentEncodingPaths(protocol, output.percentOnePassValues(),
+                        output.percentExactFallbackValues());
             }
             var writeSample = metrics.startTimer();
             Callback completion = new Callback() {

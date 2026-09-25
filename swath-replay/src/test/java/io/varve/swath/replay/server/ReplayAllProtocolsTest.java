@@ -64,6 +64,10 @@ class ReplayAllProtocolsTest {
                 assertThat(server.metrics().registry().get("swath.replay.protocol.prefixes")
                         .tags("protocol", route[0], "shape", "delimiter").counter().count()).isEqualTo(1);
             }
+            assertThat(server.metrics().registry().find("swath.replay.response.percent.encoding.path")
+                    .tag("protocol", "azure").counter()).isNull();
+            assertThat(server.metrics().registry().find("swath.replay.response.percent.encoding.path")
+                    .tag("protocol", "gcs").counter()).isNull();
         }
     }
 

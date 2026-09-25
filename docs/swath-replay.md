@@ -498,6 +498,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `request.stage.latency{protocol,stage}` | Paging (including read-permit wait), rendering, engaged injected delay, and socket write through callback completion. |
 | `response.admission.refused{protocol,reason}`, `response.bytes.live`, `response.bytes.peak`, `response.active` | Labeled response-limit refusals, charged encoded-array capacity now/peak, and held response permits. |
 | `response.write.deadline{protocol,reason=total_deadline}` | A total write deadline closed a client connection before callback completion. |
+| `response.percent.encoding.path{protocol,reason}` | Successfully rendered S3 URL values encoded by the `charged_chunk_one_pass` or `exact_length_fallback` path. Counts publish once per page after rendering; Azure encoded names use a separate grammar. |
 | `protocol.requests.active{protocol}`, `provider.path{protocol,path,reason}` | Active provider requests and engaged pager path/classification. |
 | `protocol.http.requests{protocol,status_class}`, `protocol.objects`, `protocol.prefixes`, `protocol.encoded.bytes{protocol,shape}` | Native response classes and successful page output attributed by protocol and neutral page/seek/delimiter shape. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |

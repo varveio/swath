@@ -256,6 +256,155 @@ class BudgetedOutputTest {
         }
     }
 
+    @Test
+    void percentEncodingReusesChargedChunkWithoutAllocatingAndRejectsFrozenOrClosedOutput() {
+        ResponseByteBudget budget = new ResponseByteBudget(32);
+        AtomicInteger allocations = new AtomicInteger();
+        BudgetedOutput output = new BudgetedOutput(budget, 8, 32, 32, bytes -> {
+            allocations.incrementAndGet();
+            return new byte[bytes];
+        });
+        try {
+            output.appendAscii("prefix");
+            assertThat(allocations).hasValue(1);
+            assertThat(budget.charged()).isEqualTo(32);
+            output.appendPercentEncoded(new byte[] {'a', ' ', (byte) 0xe9});
+            assertThat(allocations).hasValue(1);
+            assertThat(output.capacity()).isEqualTo(32);
+            assertThat(output.percentOnePassValues()).isEqualTo(1);
+            assertThat(output.percentExactFallbackValues()).isZero();
+            assertThat(new String(bytes(output.body()), StandardCharsets.US_ASCII))
+                    .isEqualTo("prefixa%20%E9");
+            assertThat(output.percentOnePassValues()).isEqualTo(1);
+            assertThatThrownBy(() -> output.appendPercentEncoded(new byte[0]))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("frozen");
+        } finally {
+            output.close();
+        }
+        assertThat(budget.charged()).isZero();
+        assertThatThrownBy(() -> output.appendPercentEncoded(new byte[0]))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("closed");
+    }
+
+    @Test
+    void prefixedFastAndExactFallbackMatchIndependentPercentOracleForAllBytesAndRandomMix() {
+        byte[] everyByte = new byte[256];
+        for (int i = 0; i < everyByte.length; i++) everyByte[i] = (byte) i;
+        byte[] mixed = new byte[512];
+        new Random(220).nextBytes(mixed);
+        for (byte[] value : List.of(everyByte, mixed)) {
+            String encoded = ByteKeys.percentEncode(value);
+            String fastPrefix = "p".repeat(50);
+            try (BudgetedOutput fast = new BudgetedOutput(new ResponseByteBudget(4096),
+                    64, 4096, 4096)) {
+                fast.appendAscii(fastPrefix);
+                fast.appendPercentEncoded(value);
+                OwnedBody body = fast.body();
+                assertThat(new String(bytes(body), StandardCharsets.US_ASCII))
+                        .isEqualTo(fastPrefix + encoded);
+                assertThat(body.views()).extracting(ByteBuffer::remaining)
+                        .containsExactly(fastPrefix.length() + encoded.length());
+                assertThat(fast.percentOnePassValues()).isEqualTo(1);
+                assertThat(fast.percentExactFallbackValues()).isZero();
+            }
+            String exactPrefix = "p".repeat(4096 - encoded.length());
+            assertThat(value.length).isGreaterThan(encoded.length() / 3);
+            try (BudgetedOutput fallback = new BudgetedOutput(new ResponseByteBudget(4096),
+                    64, 4096, 4096)) {
+                fallback.appendAscii(exactPrefix);
+                fallback.appendPercentEncoded(value);
+                OwnedBody body = fallback.body();
+                assertThat(new String(bytes(body), StandardCharsets.US_ASCII))
+                        .isEqualTo(exactPrefix + encoded);
+                assertThat(body.views()).extracting(ByteBuffer::remaining).containsExactly(4096);
+                assertThat(fallback.percentOnePassValues()).isZero();
+                assertThat(fallback.percentExactFallbackValues()).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void percentFastPathEngagesAtExactlyOneThirdRoomAndFallsBackOneByteBeyond() {
+        ResponseByteBudget budget = new ResponseByteBudget(32);
+        try (BudgetedOutput exactBoundary = new BudgetedOutput(budget, 8, 32, 32)) {
+            exactBoundary.appendAscii("p".repeat(23));
+            exactBoundary.appendPercentEncoded(new byte[] {0, 0x7f, (byte) 0xff});
+            assertThat(new String(bytes(exactBoundary.body()), StandardCharsets.US_ASCII))
+                    .isEqualTo("p".repeat(23) + "%00%7F%FF");
+            assertThat(exactBoundary.percentOnePassValues()).isEqualTo(1);
+            assertThat(exactBoundary.capacity()).isEqualTo(32);
+        }
+        assertThat(budget.charged()).isZero();
+        try (BudgetedOutput oneBeyond = new BudgetedOutput(budget, 8, 32, 32)) {
+            oneBeyond.appendAscii("p".repeat(23));
+            oneBeyond.appendPercentEncoded("abcd".getBytes(StandardCharsets.US_ASCII));
+            assertThat(new String(bytes(oneBeyond.body()), StandardCharsets.US_ASCII))
+                    .isEqualTo("p".repeat(23) + "abcd");
+            assertThat(oneBeyond.percentOnePassValues()).isZero();
+            assertThat(oneBeyond.percentExactFallbackValues()).isEqualTo(1);
+            assertThat(oneBeyond.capacity()).isEqualTo(32);
+        }
+        assertThat(budget.charged()).isZero();
+    }
+
+    @Test
+    void conservativePercentFastPathFallsBackToExactCapAndBudgetDecisions() {
+        ResponseByteBudget budget = new ResponseByteBudget(14);
+        try (BudgetedOutput exactFit = new BudgetedOutput(budget, 5, 10, 10)) {
+            exactFit.appendAscii("xxxxx");
+            // Four safe bytes fit, though the 3x fast-path bound does not.
+            exactFit.appendPercentEncoded("aaaa".getBytes(StandardCharsets.US_ASCII));
+            assertThat(exactFit.percentOnePassValues()).isZero();
+            assertThat(exactFit.percentExactFallbackValues()).isEqualTo(1);
+            assertThat(new String(bytes(exactFit.body()), StandardCharsets.US_ASCII))
+                    .isEqualTo("xxxxxaaaa");
+            ReplayMetrics metrics = new ReplayMetrics();
+            try {
+                metrics.recordPercentEncodingPaths("s3", exactFit.percentOnePassValues(),
+                        exactFit.percentExactFallbackValues());
+                assertThat(metrics.registry().get("swath.replay.response.percent.encoding.path")
+                        .tags("protocol", "s3", "reason", "exact_length_fallback")
+                        .counter().count()).isEqualTo(1);
+                assertThat(metrics.registry().find("swath.replay.response.percent.encoding.path")
+                        .tags("protocol", "s3", "reason", "charged_chunk_one_pass")
+                        .counter()).isNull();
+            } finally {
+                metrics.registry().close();
+            }
+        }
+        assertThat(budget.charged()).isZero();
+        try (BudgetedOutput capped = new BudgetedOutput(budget, 5, 10, 10)) {
+            capped.appendAscii("xxxxxxx");
+            assertThatThrownBy(() -> capped.appendPercentEncoded("a b".getBytes(StandardCharsets.US_ASCII)))
+                    .isInstanceOf(ReplayOutputException.class)
+                    .satisfies(error -> assertThat(((ReplayOutputException) error).responseTooLarge()).isTrue());
+            assertThat(capped.size()).isEqualTo(7);
+            assertThat(capped.capacity()).isEqualTo(10);
+            assertThat(capped.percentExactFallbackValues()).isZero();
+        }
+        assertThat(budget.charged()).isZero();
+        try (BudgetedOutput split = new BudgetedOutput(budget, 7, 14, 7)) {
+            split.appendAscii("xxxxx");
+            split.appendPercentEncoded(new byte[] {' '});
+            assertThat(split.percentExactFallbackValues()).isEqualTo(1);
+            assertThat(new String(bytes(split.body()), StandardCharsets.US_ASCII)).isEqualTo("xxxxx%20");
+            assertThat(split.body().views()).extracting(ByteBuffer::remaining).containsExactly(7, 1);
+        }
+        assertThat(budget.charged()).isZero();
+        ResponseByteBudget exhausted = new ResponseByteBudget(6);
+        try (BudgetedOutput output = new BudgetedOutput(exhausted, 4, 8, 4)) {
+            output.appendAscii("xxxx");
+            assertThatThrownBy(() -> output.appendPercentEncoded(new byte[] {' '}))
+                    .isInstanceOf(ReplayOutputException.class)
+                    .satisfies(error -> assertThat(((ReplayOutputException) error).responseTooLarge()).isFalse());
+            assertThat(output.size()).isEqualTo(4);
+            assertThat(output.capacity()).isEqualTo(4);
+            assertThat(exhausted.charged()).isEqualTo(4);
+            assertThat(output.percentExactFallbackValues()).isZero();
+        }
+        assertThat(exhausted.charged()).isZero();
+    }
+
     private static byte[] bytes(OwnedBody body) {
         byte[] result = new byte[body.length()];
         int offset = 0;
