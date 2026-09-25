@@ -63,6 +63,7 @@ public final class GcsProfileComparator {
         ObjectNode merged = JSON.createObjectNode().put("kind", "storage#objects");
         ArrayNode mergedItems = JSON.createArrayNode();
         ArrayNode mergedPrefixes = JSON.createArrayNode();
+        Set<String> emittedPrefixes = new HashSet<>();
         String expectedToken = null;
         Set<String> seen = new HashSet<>();
         for (int i = 0; i < pages.size(); i++) {
@@ -70,7 +71,12 @@ public final class GcsProfileComparator {
             equal("GCS request token at page " + i, expectedToken, capture.requestToken());
             JsonNode page = readPage(capture.body(), replay);
             for (JsonNode item : items(page)) mergedItems.add(item);
-            for (String prefix : prefixes(page)) mergedPrefixes.add(prefix);
+            for (String prefix : prefixes(page)) {
+                if (!emittedPrefixes.add(prefix)) {
+                    fail("cross-page repeated GCS prefix is unsupported by replay profile");
+                }
+                mergedPrefixes.add(prefix);
+            }
             if (mergedItems.size() + mergedPrefixes.size() > maxEntries) {
                 fail("GCS walk entry bound violated");
             }

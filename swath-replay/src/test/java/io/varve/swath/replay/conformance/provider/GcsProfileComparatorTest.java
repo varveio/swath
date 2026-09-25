@@ -8,7 +8,14 @@ package io.varve.swath.replay.conformance.provider;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.replay.protocol.ListedObject;
+import io.varve.swath.replay.protocol.gcs.GcsJson;
+import io.varve.swath.replay.protocol.gcs.GcsListRequest;
+import io.varve.swath.replay.protocol.gcs.GcsPage;
+import io.varve.swath.replay.server.BudgetedOutput;
+import io.varve.swath.replay.testkit.OwnedBodyBytes;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -29,6 +36,20 @@ class GcsProfileComparatorTest {
     @Test
     void mapsNamespaceAndComparesExactFieldsWhileCheckingSyntheticTypes() {
         assertThatCode(() -> compare(NATIVE, REPLAY)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void strictReplayPolicyAcceptsActualGcsRendererOutput() throws Exception {
+        long micros = Instant.parse("2026-01-01T00:00:00.123Z").toEpochMilli() * 1000;
+        ListedObject object = new ListedObject(bytes("a/1"), 12, micros,
+                null, null, null, null, null, null);
+        try (BudgetedOutput output = BudgetedOutput.standalone(4096)) {
+            GcsJson.write(new GcsListRequest("replay", null, null, null, null, 100,
+                            null, false),
+                    new GcsPage(List.of(object), List.of(bytes("b/")), null), output);
+            GcsProfileComparator.assertPage(bytes(NATIVE), OwnedBodyBytes.copy(output.body()),
+                    "live", "replay", false);
+        }
     }
 
     @Test
@@ -95,6 +116,20 @@ class GcsProfileComparatorTest {
                 new GcsProfileComparator.CapturedPage("wrong", bytes(nativeB))),
                 List.of(new GcsProfileComparator.CapturedPage(null, bytes(replayTwo))),
                 "live", "replay", false, 3, 10)).hasMessageContaining("request token");
+    }
+
+    @Test
+    void crossPagePrefixRepeatIsRecordedAsUnsupportedRatherThanDeduplicated() {
+        String first = "{\"kind\":\"storage#objects\",\"prefixes\":[\"a/\"],"
+                + "\"nextPageToken\":\"native-1\"}";
+        String second = "{\"kind\":\"storage#objects\",\"prefixes\":[\"a/\"]}";
+        assertThatThrownBy(() -> GcsProfileComparator.assertWalk(List.of(
+                new GcsProfileComparator.CapturedPage(null, bytes(first)),
+                new GcsProfileComparator.CapturedPage("native-1", bytes(second))),
+                List.of(new GcsProfileComparator.CapturedPage(null,
+                        bytes("{\"kind\":\"storage#objects\",\"prefixes\":[\"a/\"]}"))),
+                "live", "replay", false, 3, 10))
+                .hasMessageContaining("cross-page repeated GCS prefix");
     }
 
     private static String page(String items, String token) {

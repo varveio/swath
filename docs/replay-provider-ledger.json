@@ -6,147 +6,252 @@
       "provider": "gcs",
       "feature": "`startOffset` inclusive and `endOffset` exclusive, including equality",
       "profile_promise": "Provisional bounded list",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "gcs-02",
       "provider": "gcs",
       "feature": "Prefix intersection with both offsets",
       "profile_promise": "Provisional bounded list",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "gcs-03",
       "provider": "gcs",
       "feature": "Delimiter with offset at, inside, and after a subtree",
       "profile_promise": "Provisional; fast path gated",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "gcs-04",
       "provider": "gcs",
       "feature": "BMP versus supplementary Unicode ordering",
       "profile_promise": "Provisional unsigned UTF-8 order",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "gcs-05",
       "provider": "gcs",
       "feature": "Literal plus, percent escapes, duplicate query fields",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "gcs-06",
       "provider": "gcs",
       "feature": "Zero and overflow `maxResults`",
       "profile_promise": "Zero refused pending evidence",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "gcs-07",
       "provider": "gcs",
       "feature": "Short/empty pages and repeated prefixes",
       "profile_promise": "Complete native-token walk required",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
     },
     {
       "id": "gcs-08",
       "provider": "gcs",
       "feature": "Name length/encoding and raw wire spelling",
       "profile_promise": "Strict UTF-8 subset",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "gcs-09",
       "provider": "gcs",
       "feature": "HTTP Java SDK default projection, fields, and auto-pagination",
       "profile_promise": "Must run unmodified with endpoint override",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "sdk_run"
     },
     {
       "id": "gcs-10",
       "provider": "gcs",
       "feature": "Retry-disabled one-attempt errors; normal SDK retries",
       "profile_promise": "Separate request counts",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "retry_run"
     },
     {
       "id": "azure-01",
       "provider": "azure",
       "feature": "Account accepts service version and echoes it",
       "profile_promise": "Explicit version only",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-02",
       "provider": "azure",
       "feature": "Account rollout and version echo",
       "profile_promise": "Version individually gated",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-03",
       "provider": "azure",
       "feature": "`startFrom` inclusive and prefix intersection",
       "profile_promise": "Provisional flat list",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-04",
       "provider": "azure",
       "feature": "Delimiter with `startFrom` at, inside, after subtree",
       "profile_promise": "**Unsupported until native evidence**",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-05",
       "provider": "azure",
       "feature": "`marker` plus `startFrom` precedence",
       "profile_promise": "Matching `startFrom` retained on continuation; other combinations refused pending evidence",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-06",
       "provider": "azure",
       "feature": "BMP versus supplementary Unicode ordering",
       "profile_promise": "Provisional unsigned UTF-8 order",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-07",
       "provider": "azure",
       "feature": "Encoded names, raw plus/percent escapes, exact XML text/attributes",
       "profile_promise": "Explicit encoding; raw-wire assertion required",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-08",
       "provider": "azure",
       "feature": "Duplicate parameters; zero/overflow `maxresults`",
       "profile_promise": "Zero refused pending evidence",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-09",
       "provider": "azure",
       "feature": "Short/empty pages, repeated prefixes, native 5k pages",
       "profile_promise": "Complete native-marker walk required",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
     },
     {
       "id": "azure-10",
       "provider": "azure",
       "feature": "Java SDK flat/hierarchy auto-pagination and `setStartFrom`",
       "profile_promise": "Must run unmodified with endpoint override",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "sdk_run"
     },
     {
       "id": "azure-11",
       "provider": "azure",
       "feature": "Retry-disabled one-attempt errors; normal SDK retries",
       "profile_promise": "Separate request counts",
-      "status": "UNMEASURED"
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "retry_run"
+    },
+    {
+      "id": "azure-12",
+      "provider": "azure",
+      "feature": "Name length units and slash-segment boundary cases",
+      "profile_promise": "Provisional 1,024 UTF-16 units and 254 segments; native creation probes required",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "status": "UNMEASURED",
+      "evidence_kind": "exchange"
     }
   ]
 }

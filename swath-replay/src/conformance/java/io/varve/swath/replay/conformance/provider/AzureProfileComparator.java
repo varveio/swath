@@ -71,17 +71,36 @@ public final class AzureProfileComparator {
             fail("Azure walk page bound violated");
         }
         List<Entry> entries = new ArrayList<>();
+        Set<String> emittedPrefixes = new HashSet<>();
         String expectedMarker = null;
         Set<String> seen = new HashSet<>();
         Page first = null;
+        String scopePrefix = null;
+        String scopeDelimiter = null;
         for (int i = 0; i < pages.size(); i++) {
             CapturedPage capture = pages.get(i);
             equal("Azure request marker at page " + i, expectedMarker, capture.requestMarker());
             Page page = parse(capture.body(), replay);
-            if (first == null) first = page;
-            else {
+            equal("Azure Marker echo at page " + i, capture.requestMarker(), page.echoes().get("Marker"));
+            equal("Azure Prefix echo at page " + i, capture.requestPrefix(), page.echoes().get("Prefix"));
+            equal("Azure Delimiter echo at page " + i,
+                    capture.requestDelimiter(), page.echoes().get("Delimiter"));
+            equal("Azure MaxResults echo at page " + i,
+                    capture.requestMaxResults(), page.echoes().get("MaxResults"));
+            if (first == null) {
+                first = page;
+                scopePrefix = capture.requestPrefix();
+                scopeDelimiter = capture.requestDelimiter();
+            } else {
                 equal("Azure endpoint across pages", first.endpoint(), page.endpoint());
                 equal("Azure container across pages", first.container(), page.container());
+                equal("Azure Prefix scope across pages", scopePrefix, capture.requestPrefix());
+                equal("Azure Delimiter scope across pages", scopeDelimiter, capture.requestDelimiter());
+            }
+            for (Entry entry : page.entries()) {
+                if ("BlobPrefix".equals(entry.kind()) && !emittedPrefixes.add(entry.name())) {
+                    fail("cross-page repeated Azure BlobPrefix is unsupported by replay profile");
+                }
             }
             entries.addAll(page.entries());
             if (entries.size() > maxEntries) fail("Azure walk entry bound violated");
@@ -94,7 +113,12 @@ public final class AzureProfileComparator {
         return new Page(first.endpoint(), first.container(), Map.of(), List.copyOf(entries), "");
     }
 
-    public record CapturedPage(String requestMarker, byte[] body) {
+    public record CapturedPage(String requestMarker, String requestPrefix, String requestDelimiter,
+                               String requestMaxResults, byte[] body) {
+        public CapturedPage(String requestMarker, byte[] body) {
+            this(requestMarker, null, null, null, body);
+        }
+
         public CapturedPage { body = body.clone(); }
         @Override
         public byte[] body() { return body.clone(); }
