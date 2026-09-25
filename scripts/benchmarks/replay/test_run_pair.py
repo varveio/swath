@@ -122,6 +122,20 @@ class PairRunnerTest(unittest.TestCase):
         self.assertEqual(summary["gc_pause_cause_counts"]["evacuation"], 0)
         self.assertEqual(summary["gc_pause_cause_ms"]["humongous"], 3.0)
 
+    def test_gc_log_numeric_offset_without_colon(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            init = Path(scratch) / "gc-init.log"
+            events = Path(scratch) / "gc.log"
+            init.write_text("[0.003s][info][gc,init] Heap Region Size: 1M\n")
+            events.write_text(
+                "[2026-09-25T13:00:01+0100][info][gc] GC(1) Pause Young "
+                "(Normal) (G1 Evacuation Pause) 1M->1M(1536M) 2.000ms\n")
+            start = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc).timestamp() * 1000
+            end = datetime(2026, 9, 25, 12, 0, 2, tzinfo=timezone.utc).timestamp() * 1000
+            summary = run_pair.gc_log_summary(init, events, start, end)
+        self.assertEqual(summary["gc_pause_cause_counts"]["evacuation"], 1)
+        self.assertEqual(summary["gc_pause_cause_ms"]["evacuation"], 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

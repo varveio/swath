@@ -123,18 +123,44 @@ public final class ProviderExchangeComparator {
                                    String nativeContainer, String replayContainer,
                                    String requestedVersion, String clientRequestId,
                                    String nativeRequestMarker, String replayRequestMarker) throws IOException {
+        assertAzure(nativeExchange, replayExchange, nativeEndpoint, replayEndpoint,
+                nativeContainer, replayContainer, requestedVersion, clientRequestId,
+                nativeRequestMarker, replayRequestMarker, "GET");
+    }
+
+    public static void assertAzure(Exchange nativeExchange, Exchange replayExchange,
+                                   String nativeEndpoint, String replayEndpoint,
+                                   String nativeContainer, String replayContainer,
+                                   String requestedVersion, String clientRequestId,
+                                   String nativeRequestMarker, String replayRequestMarker,
+                                   String requestMethod) throws IOException {
         equal("Azure HTTP status", nativeExchange.status(), replayExchange.status());
-        checkHeaders(nativeExchange, AZURE_HEADERS, "application/xml");
-        checkHeaders(replayExchange, AZURE_HEADERS, "application/xml");
+        boolean head = "HEAD".equals(requestMethod);
+        checkHeaders(nativeExchange, AZURE_HEADERS, "application/xml", head);
+        checkHeaders(replayExchange, AZURE_HEADERS, "application/xml", head);
         equal("native x-ms-version", requestedVersion, single(nativeExchange, "x-ms-version"));
         equal("replay x-ms-version", requestedVersion, single(replayExchange, "x-ms-version"));
-        equal("Azure BOM/prolog", xmlPreamble(nativeExchange.body()), xmlPreamble(replayExchange.body()));
         if (clientRequestId != null) {
             equal("native x-ms-client-request-id", clientRequestId,
                     single(nativeExchange, "x-ms-client-request-id"));
             equal("replay x-ms-client-request-id", clientRequestId,
                     single(replayExchange, "x-ms-client-request-id"));
         }
+        if (head) {
+            if (nativeExchange.status() < 400 || nativeExchange.status() > 599
+                    || nativeExchange.body().length != 0
+                    || replayExchange.body().length != 0) {
+                fail("Azure HEAD error profile requires empty non-success bodies");
+            }
+            String nativeCode = single(nativeExchange, "x-ms-error-code");
+            String replayCode = single(replayExchange, "x-ms-error-code");
+            if (nativeCode == null || nativeCode.isEmpty() || replayCode == null || replayCode.isEmpty()) {
+                fail("Azure HEAD error code header is missing");
+            }
+            equal("Azure HEAD error code", nativeCode, replayCode);
+            return;
+        }
+        equal("Azure BOM/prolog", xmlPreamble(nativeExchange.body()), xmlPreamble(replayExchange.body()));
         if (nativeExchange.status() == 200) {
             AzureProfileComparator.assertPage(nativeExchange.body(), replayExchange.body(),
                     nativeEndpoint, replayEndpoint, nativeContainer, replayContainer,
@@ -160,17 +186,26 @@ public final class ProviderExchangeComparator {
     }
 
     private static void checkHeaders(Exchange exchange, Set<String> allowed, String contentType) {
+        checkHeaders(exchange, allowed, contentType, false);
+    }
+
+    private static void checkHeaders(Exchange exchange, Set<String> allowed, String contentType,
+                                     boolean head) {
         for (String header : exchange.headers().keySet()) {
             if (!allowed.contains(header)) fail("unclassified HTTP header " + header);
         }
         String actualType = single(exchange, "content-type");
-        if (actualType == null || !actualType.toLowerCase(Locale.ROOT).split(";", 2)[0].trim().equals(contentType)) {
+        if (actualType == null ? !head
+                : !actualType.toLowerCase(Locale.ROOT).split(";", 2)[0].trim().equals(contentType)) {
             fail("HTTP Content-Type differs from " + contentType);
         }
         String length = single(exchange, "content-length");
         if (length != null) {
             try {
-                if (Long.parseLong(length) != exchange.body().length) fail("HTTP Content-Length differs from body");
+                long declared = Long.parseLong(length);
+                if (declared < 0 || !head && declared != exchange.body().length) {
+                    fail("HTTP Content-Length differs from body");
+                }
             } catch (NumberFormatException e) {
                 fail("HTTP Content-Length is malformed");
             }

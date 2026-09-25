@@ -244,15 +244,20 @@ class GcsSdkTest {
         }
         Path raw = dir.resolve("sdk-run-raw.json");
         Path safe = dir.resolve("sdk-run-safe.json");
+        Path reportFile = dir.resolve("sdk-sanitize.log");
         Files.writeString(raw, json.writeValueAsString(Map.of("steps", steps)));
         Path script = Path.of("..", "scripts", "provider-conformance", "evidence.py").toAbsolutePath();
         Process process = new ProcessBuilder("python3", script.toString(), "sanitize",
                 "--kind", "sdk_run", "--input", raw.toString(), "--output", safe.toString(),
                 "--provider", "gcs", "--bucket", "bucket", "--manifest", manifest.toString(),
-                "--probe-id", "gcs-09").redirectErrorStream(true).start();
-        String report = new String(process.getInputStream().readAllBytes(),
-                java.nio.charset.StandardCharsets.UTF_8);
-        assertThat(process.waitFor()).as(report).isZero();
+                "--probe-id", "gcs-09").redirectErrorStream(true)
+                .redirectOutput(reportFile.toFile()).start();
+        if (!process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            throw new AssertionError("provider capture sanitizer timed out");
+        }
+        assertThat(process.exitValue()).as(Files.readString(reportFile)).isZero();
         var sanitized = json.readTree(safe.toFile());
         assertThat(sanitized.path("schema_version").asText()).isEqualTo("provider-capture-run-v1");
         assertThat(sanitized.path("steps").size()).isEqualTo(3);

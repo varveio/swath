@@ -416,6 +416,8 @@ public final class ReplayShapeBench {
         factory.setProperty("javax.xml.stream.isSupportingExternalEntities", false);
         XMLStreamReader xml = factory.createXMLStreamReader(body);
         List<Entry> entries = new ArrayList<>();
+        List<Entry> s3Objects = protocol.equals("s3") ? new ArrayList<>() : null;
+        List<Entry> s3Prefixes = protocol.equals("s3") ? new ArrayList<>() : null;
         String token = null;
         boolean truncated = false;
         boolean entryPrefix = false;
@@ -465,8 +467,13 @@ public final class ReplayShapeBench {
                         if (entryName == null) throw new IllegalStateException("XML entry missing name");
                         if (verifyMetadata && !entryPrefix && (!hasSize || !hasTime))
                             throw new IllegalStateException("XML item omitted fixture-backed metadata");
-                        entries.add(new Entry(entryPrefix, entryName, entrySize, entryTime,
-                                verifyMetadata && !entryPrefix));
+                        Entry entry = new Entry(entryPrefix, entryName, entrySize, entryTime,
+                                verifyMetadata && !entryPrefix);
+                        if (protocol.equals("s3")) {
+                            (entryPrefix ? s3Prefixes : s3Objects).add(entry);
+                        } else {
+                            entries.add(entry);
+                        }
                         insideEntry = false;
                     }
                 }
@@ -479,6 +486,12 @@ public final class ReplayShapeBench {
             if (truncated && (token == null || token.isEmpty()))
                 throw new IllegalStateException("S3 truncated without token");
             if (!truncated) token = null;
+            requireIncreasing(s3Objects, "S3 Contents");
+            requireIncreasing(s3Prefixes, "S3 CommonPrefixes");
+            entries.addAll(s3Objects);
+            entries.addAll(s3Prefixes);
+            entries.sort((a, b) -> Arrays.compareUnsigned(a.name(), b.name()));
+            requireIncreasing(entries, "S3 merged page");
         } else if (token != null && token.isEmpty()) token = null;
         return new Response(entries, token, 0, 0);
     }

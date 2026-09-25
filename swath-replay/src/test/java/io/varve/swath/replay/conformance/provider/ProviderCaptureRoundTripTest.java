@@ -166,6 +166,58 @@ class ProviderCaptureRoundTripTest {
                 "2026-06-06", null, null, null)).hasMessageContaining("BOM/prolog");
     }
 
+    @Test
+    void azureHeadErrorCaptureAndReceiptCompareHeadersWithEmptyBody(@TempDir Path dir) throws Exception {
+        String raw = """
+                {"captured_at":"2026-09-25T10:00:00Z",
+                 "request":{"method":"HEAD",
+                            "url":"https://liveacct.blob.core.windows.net/livecontainer?restype=container&comp=list&maxresults=0",
+                            "headers":[{"name":"x-ms-version","value":"2026-06-06"}]},
+                 "response":{"status":400,"headers":[
+                     {"name":"x-ms-version","value":"2026-06-06"},
+                     {"name":"x-ms-error-code","value":"OutOfRangeQueryParameterValue"},
+                     {"name":"Content-Length","value":"150"}],"body_base64":""}}
+                """;
+        JsonNode safe = sanitize(dir, "azure", "azure-08", raw,
+                "--account", "liveacct", "2026-06-06", "--container", "livecontainer");
+        assertThat(safe.path("response").path("body_base64").asText()).isEmpty();
+        var replayRequest = new ProviderMatchReceipt.Request("HEAD", "/replay/bucket",
+                "restype=container&comp=list&maxresults=0",
+                Map.of("x-ms-version", List.of("2026-06-06")));
+        var replayResponse = new ProviderExchangeComparator.Exchange(400,
+                Map.of("x-ms-version", List.of("2026-06-06"),
+                        "x-ms-error-code", List.of("OutOfRangeQueryParameterValue"),
+                        "content-length", List.of("0")), new byte[0]);
+        Path source = dir.resolve("EvidenceTest.java");
+        Path distribution = dir.resolve("replay.jar");
+        Files.writeString(source, "class EvidenceTest { @Test void exactTest() {} }");
+        Files.writeString(distribution, "synthetic replay distribution");
+        git(dir, "init");
+        git(dir, "config", "user.name", "Replay Test");
+        git(dir, "config", "user.email", "replay-test@example.invalid");
+        git(dir, "add", "-A");
+        git(dir, "commit", "-m", "fixture");
+        var mapping = new AzureNamespaceMapping("{account}", "{container}", "replay", "bucket");
+        ProviderMatchReceipt.azure(dir.resolve("safe.json"), replayRequest, replayResponse,
+                Map.of(), mapping, "https://{account}.blob.core.windows.net/",
+                "http://127.0.0.1/replay/", dir, distribution, source,
+                "exactTest", dir.resolve("match.json"));
+        assertThat(JSON.readTree(dir.resolve("match.json").toFile()).path("status").asText())
+                .isEqualTo("PASS");
+        var invalidBody = new ProviderExchangeComparator.Exchange(400, replayResponse.headers(),
+                bytes("<Error/>"));
+        assertThatThrownBy(() -> ProviderMatchReceipt.azure(dir.resolve("safe.json"),
+                replayRequest, invalidBody, Map.of(), mapping,
+                "https://{account}.blob.core.windows.net/", "http://127.0.0.1/replay/",
+                dir, distribution, source, "exactTest", dir.resolve("bad.json")))
+                .hasMessageContaining("empty non-success bodies");
+        var noContent = new ProviderExchangeComparator.Exchange(204, replayResponse.headers(), new byte[0]);
+        assertThatThrownBy(() -> ProviderExchangeComparator.assertAzure(noContent, noContent,
+                "https://{account}.blob.core.windows.net/", "http://127.0.0.1/replay/",
+                "{container}", "bucket", "2026-06-06", null, null, null, "HEAD"))
+                .hasMessageContaining("empty non-success bodies");
+    }
+
     private static JsonNode sanitize(Path dir, String provider, String probeId, String raw,
                                      String nameFlag, String nameValue, String version,
                                      String... moreNames) throws Exception {

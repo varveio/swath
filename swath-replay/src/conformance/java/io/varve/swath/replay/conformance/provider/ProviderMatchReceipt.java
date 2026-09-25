@@ -79,7 +79,7 @@ public final class ProviderMatchReceipt {
                 normalizedAzureResponse(replayResponse, clientId), nativeEndpoint, replayEndpoint,
                 mapping.nativeContainer(), mapping.replayContainer(), version, clientId,
                 token(nativeStep.request().query(), "marker"), mappedToken(replayRequest.query(),
-                        "marker", replayTokenToNativeToken));
+                        "marker", replayTokenToNativeToken), nativeStep.request().method());
         write(capture, captureFile, repoRoot, distribution, testSource, testName, receipt);
     }
 
@@ -136,7 +136,8 @@ public final class ProviderMatchReceipt {
                         normalizedAzureResponse(replayStep.exchange(), clientId), nativeEndpoint,
                         replayEndpoint, mapping.nativeContainer(), mapping.replayContainer(),
                         version, clientId, token(nativeStep.request().query(), "marker"),
-                        mappedToken(replayStep.request().query(), "marker", replayTokenToNativeToken));
+                        mappedToken(replayStep.request().query(), "marker", replayTokenToNativeToken),
+                        nativeStep.request().method());
             }
         } else {
             List<ProviderExchangeComparator.CapturedExchangePage> nativePages = new ArrayList<>();

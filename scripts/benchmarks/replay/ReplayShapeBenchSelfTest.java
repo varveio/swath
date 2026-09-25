@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Tiny fixture-backed HTTP smoke for each seek and delimiter route. */
 public final class ReplayShapeBenchSelfTest {
-    private static final List<String> KEYS = List.of("a/1", "a/2", "a/b/1", "c");
+    private static final List<String> KEYS = List.of("a/1", "a/2", "a/b/1", "a/c", "c");
 
     private ReplayShapeBenchSelfTest() { }
 
@@ -91,6 +91,21 @@ public final class ReplayShapeBenchSelfTest {
         expectFailure("S3 truncated without token", () -> ReplayShapeBench.parseXml(bytes("""
                 <ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>
                 """), "s3"));
+        ReplayShapeBench.Response grouped = ReplayShapeBench.parseXml(bytes("""
+                <ListBucketResult><Contents><Key>a/c</Key></Contents>
+                <CommonPrefixes><Prefix>a/b/</Prefix></CommonPrefixes>
+                <IsTruncated>false</IsTruncated></ListBucketResult>
+                """), "s3");
+        if (grouped.entries().size() != 2 || !grouped.entries().get(0).prefix()
+                || !"a/b/".equals(new String(grouped.entries().get(0).name(), StandardCharsets.UTF_8))
+                || !"a/c".equals(new String(grouped.entries().get(1).name(), StandardCharsets.UTF_8))) {
+            throw new AssertionError("S3 grouped XML was not merged into unsigned key order");
+        }
+        expectFailure("S3 merged duplicate object/prefix", () -> ReplayShapeBench.parseXml(bytes("""
+                <ListBucketResult><Contents><Key>a/b/</Key></Contents>
+                <CommonPrefixes><Prefix>a/b/</Prefix></CommonPrefixes>
+                <IsTruncated>false</IsTruncated></ListBucketResult>
+                """), "s3"));
     }
 
     private static ByteArrayInputStream bytes(String value) {
@@ -151,6 +166,7 @@ public final class ReplayShapeBenchSelfTest {
             entries.add(new LogicalEntry(false, "a/1"));
             entries.add(new LogicalEntry(false, "a/2"));
             entries.add(new LogicalEntry(true, "a/b/"));
+            entries.add(new LogicalEntry(false, "a/c"));
         } else {
             String floor = query.getOrDefault("startOffset", query.getOrDefault("startFrom", null));
             String after = query.get("start-after");
@@ -199,13 +215,17 @@ public final class ReplayShapeBenchSelfTest {
 
     private static String s3(List<LogicalEntry> entries, String next) {
         StringBuilder xml = new StringBuilder("<ListBucketResult>");
+        StringBuilder objects = new StringBuilder();
+        StringBuilder prefixes = new StringBuilder();
         for (LogicalEntry entry : entries) {
-            xml.append(entry.prefix() ? "<CommonPrefixes><Prefix>" : "<Contents><Key>")
+            StringBuilder section = entry.prefix() ? prefixes : objects;
+            section.append(entry.prefix() ? "<CommonPrefixes><Prefix>" : "<Contents><Key>")
                     .append(entry.name()).append(entry.prefix()
                             ? "</Prefix></CommonPrefixes>"
                             : "</Key><LastModified>2020-01-01T00:00:00.000Z</LastModified>"
                             + "<Size>1</Size></Contents>");
         }
+        xml.append(objects).append(prefixes);
         xml.append("<IsTruncated>").append(next != null).append("</IsTruncated>");
         if (next != null) xml.append("<NextContinuationToken>").append(next).append("</NextContinuationToken>");
         return xml.append("</ListBucketResult>").toString();

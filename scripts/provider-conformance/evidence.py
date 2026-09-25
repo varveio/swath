@@ -201,9 +201,16 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
             raise ValueError("Azure capture version differs from manifest/request/response")
 
     body = base64.b64decode(response["body_base64"], validate=True)
+    method = request["method"]
+    azure_head_error = provider == "azure" and method == "HEAD" \
+        and 400 <= response["status"] <= 599
+    if provider == "azure" and method == "HEAD" and not azure_head_error:
+        raise ValueError("Azure HEAD success is outside the captured error profile")
+    if azure_head_error and body:
+        raise ValueError("Azure HEAD error capture must have an empty body")
     body_text = body.decode("utf-8", errors="strict")
-    safe_body_text = sanitize_gcs_body(body_text, names["bucket"]) if provider == "gcs" \
-        else sanitize_azure_body(body_text, names["account"], names["container"])
+    safe_body_text = "" if azure_head_error else (sanitize_gcs_body(body_text, names["bucket"])
+        if provider == "gcs" else sanitize_azure_body(body_text, names["account"], names["container"]))
     safe_body = safe_body_text.encode("utf-8")
     segments = url.path.split("/")
     if provider == "gcs":
@@ -246,8 +253,10 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
             header["value"] = "request-id-sha256-" + hashlib.sha256(header["value"].encode("utf-8")).hexdigest()
         elif header["name"] == "x-ms-client-request-id":
             header["value"] = opaque_digest(header["value"])
-        elif header["name"] == "content-length":
+        elif header["name"] == "content-length" and not azure_head_error:
             header["value"] = str(len(safe_body))
+        elif header["name"] == "content-length" and not re.fullmatch(r"[0-9]+", header["value"]):
+            raise ValueError("Azure HEAD Content-Length is malformed")
     safe = {
         "schema_version": "provider-capture-v1",
         "provider": provider,
@@ -262,9 +271,11 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
                      "body_base64": base64.b64encode(safe_body).decode("ascii")},
     }
     datetime.fromisoformat(exchange["captured_at"].replace("Z", "+00:00"))
-    visible_parts = [unquote(query),
+    visible_query = "&".join(part for part in query.split("&")
+                             if not (provider == "azure" and part == "restype=container"))
+    visible_parts = [unquote(visible_query),
                      *[header["value"] for header in request_headers + response_headers]]
-    if provider == "azure":
+    if provider == "azure" and not azure_head_error:
         xml = ElementTree.fromstring(safe_body)
         # Namespace fields were structurally replaced above. Inspect every other
         # body field without treating a placeholder such as {account} as a leak.
@@ -274,7 +285,7 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
         for name in xml.findall(".//Name"):
             if name.attrib.get("Encoded", "").lower() == "true":
                 visible_parts.append(unquote(name.text or "", errors="strict"))
-    else:
+    elif provider == "gcs":
         body_for_review = strict_json(safe_body_text)
         for item in body_for_review.get("items", []):
             item.pop("bucket", None)

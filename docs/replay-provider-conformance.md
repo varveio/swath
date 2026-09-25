@@ -148,6 +148,10 @@ carry request IDs are redacted without removing the typed error code or changing
 the native XML BOM and declaration. Azure SDK replay receipts require the same
 explicit client request ID on the captured and replay request, with each response
 echo checked independently.
+Azure `HEAD` 4xx/5xx error probes retain an empty body and compare status, service version,
+error-code and classified headers; nonempty `HEAD` bodies and `HEAD` success
+captures are outside this provisional evidence profile. `GET` errors still require
+their typed XML envelope and native preamble.
 SDK run receipts also require every retained native product/version token to appear
 in the matching replay request header. Use the same pinned SDK and JDK for both
 runs; a changed runtime or transport may alter auxiliary SDK tokens even when

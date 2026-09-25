@@ -144,7 +144,10 @@ def gc_log_summary(init_log, gc_log, start_epoch_ms, end_epoch_ms):
         duration = re.search(r"(\d+(?:\.\d+)?)ms$", line)
         if not stamp or not duration:
             continue
-        epoch_ms = datetime.fromisoformat(stamp.group(1)).timestamp() * 1000
+        # JDK unified logging writes numeric offsets without a colon on some builds;
+        # Python before 3.11 requires the ISO 8601 colon form.
+        iso_stamp = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", stamp.group(1))
+        epoch_ms = datetime.fromisoformat(iso_stamp).timestamp() * 1000
         if not start_epoch_ms <= epoch_ms <= end_epoch_ms:
             continue
         cause = ("humongous" if "G1 Humongous Allocation" in line else
@@ -421,6 +424,8 @@ def run_arm(args, label, round_number, output_dir, server_cpus, client_cpus):
             receipt["client_os_threads_after"] = len(client_threads_after)
             if receipt["client_cpu_utilization"] > args.max_client_utilization:
                 quality_failure = quality_failure or "client_limited"
+            if receipt["client_max_thread_utilization"] > args.max_client_utilization:
+                quality_failure = quality_failure or "client_hot_thread_limited"
             if elapsed_seconds < args.min_duration:
                 quality_failure = quality_failure or "under_duration"
             server_requests = meter(after, "swath.replay.http.requests") - meter(before, "swath.replay.http.requests")

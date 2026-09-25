@@ -156,6 +156,35 @@ class EvidenceTest(unittest.TestCase):
         self.assertTrue(evidence.sanitize_azure_body(error, "acct", "container").startswith(preamble))
         self.assertTrue(evidence.sanitize_azure_body(success, "acct", "container").startswith(preamble))
 
+    def test_azure_head_error_capture_is_empty_and_keeps_typed_headers(self):
+        capture = {"captured_at": "2026-09-25T10:00:00Z",
+                   "request": {"method": "HEAD",
+                               "url": "https://acct.blob.core.windows.net/container"
+                                      "?restype=container&comp=list&maxresults=0",
+                               "headers": [{"name": "x-ms-version", "value": "2026-06-06"}]},
+                   "response": {"status": 400,
+                                "headers": [{"name": "x-ms-version", "value": "2026-06-06"},
+                                            {"name": "x-ms-error-code",
+                                             "value": "OutOfRangeQueryParameterValue"},
+                                            {"name": "Content-Length", "value": "150"}],
+                                "body_base64": ""}}
+        safe = evidence.sanitize_exchange(capture, "azure", {"account": "acct",
+                                                          "container": "container"},
+                                          "b" * 64, "azure-08", "2026-06-06")
+        self.assertEqual(safe["response"]["body_base64"], "")
+        self.assertIn({"name": "content-length", "value": "150"}, safe["response"]["headers"])
+        capture["response"]["body_base64"] = base64.b64encode(b"<Error/>").decode("ascii")
+        with self.assertRaisesRegex(ValueError, "empty body"):
+            evidence.sanitize_exchange(capture, "azure", {"account": "acct",
+                                                       "container": "container"},
+                                       "b" * 64, "azure-08", "2026-06-06")
+        capture["response"]["body_base64"] = ""
+        capture["response"]["status"] = 204
+        with self.assertRaisesRegex(ValueError, "outside the captured error profile"):
+            evidence.sanitize_exchange(capture, "azure", {"account": "acct",
+                                                       "container": "container"},
+                                       "b" * 64, "azure-08", "2026-06-06")
+
     def test_azure_encoded_name_leak_is_decoded_before_sanitizer_accepts(self):
         account = "privateaccount"
         encoded = "".join(f"%{byte:02X}" for byte in account.encode("utf-8"))
