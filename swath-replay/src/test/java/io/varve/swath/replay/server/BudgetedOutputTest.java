@@ -29,26 +29,11 @@ import org.junit.jupiter.api.Test;
 
 class BudgetedOutputTest {
     @Test
-    void invalidChunkPropertyFailsInsteadOfSilentlyUsingTheDefault() throws Exception {
-        String javaBinary = java.nio.file.Path.of(System.getProperty("java.home"), "bin", "java").toString();
-        String probe = BudgetedOutputTest.PropertyProbe.class.getName();
-        Process valid = new ProcessBuilder(javaBinary, "-Dswath.replay.response-chunk-bytes=131072",
-                "-cp", System.getProperty("java.class.path"), probe)
-                .redirectErrorStream(true).start();
-        String validOutput = new String(valid.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        assertThat(valid.waitFor()).isZero();
-        assertThat(validOutput).contains("131072");
-        Process invalid = new ProcessBuilder(javaBinary, "-Dswath.replay.response-chunk-bytes=128k",
-                "-cp", System.getProperty("java.class.path"), probe)
-                .redirectErrorStream(true).start();
-        String invalidOutput = new String(invalid.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        assertThat(invalid.waitFor()).isNotZero();
-        assertThat(invalidOutput).contains("must be 65536, 131072, or 262144");
-    }
-
-    public static final class PropertyProbe {
-        public static void main(String[] ignored) {
-            System.out.println(BudgetedOutput.configuredChunkBytes());
+    void productionChunkSizeIsFixedWhileTestConstructorCanExerciseOtherBoundaries() {
+        assertThat(BudgetedOutput.configuredChunkBytes()).isEqualTo(256 * 1024);
+        try (BudgetedOutput output = new BudgetedOutput(new ResponseByteBudget(4096),
+                1, 4096, 7)) {
+            assertThat(output.chunkBytes()).isEqualTo(7);
         }
     }
 

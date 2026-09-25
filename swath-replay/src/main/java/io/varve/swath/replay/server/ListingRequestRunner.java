@@ -67,7 +67,6 @@ final class ListingRequestRunner {
         if (maxResponses <= 0 || maxResponseBytes <= 0 || maxResponseBytes > responseBufferBudget) {
             throw new IllegalArgumentException("invalid response admission limits");
         }
-        BudgetedOutput.configuredChunkBytes();
         this.metrics = metrics;
         this.readPermits = maxConcurrentReads > 0 ? new Semaphore(maxConcurrentReads, true) : null;
         this.responsePermits = new Semaphore(maxResponses);

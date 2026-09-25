@@ -84,9 +84,7 @@ shutdown (defaults 30s and 10s). A read that ignores interruption retains its st
 resources until it returns; shutdown reports `shutdown_incomplete` when that deadline
 expires.
 
-Encoded responses use charged chunks (256 KiB by default); the internal
-`swath.replay.response-chunk-bytes` JVM property accepts 64, 128, or 256 KiB for
-predeclared diagnostic comparisons. The initial estimate is reserved before paging,
+Encoded responses use fixed 256 KiB charged chunks. The initial estimate is reserved before paging,
 then chunks allocate lazily from that credit. Unused credit returns after encoding;
 the remaining charge tracks actual chunk capacity through the write callback. The
 `serving.output_chunk_bytes` report field records the active setting. A sufficient

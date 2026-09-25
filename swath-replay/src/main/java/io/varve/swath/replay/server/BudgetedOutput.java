@@ -17,8 +17,6 @@ public final class BudgetedOutput extends OutputStream {
     private static final byte[] HEX = "0123456789ABCDEF".getBytes(StandardCharsets.US_ASCII);
     private static final boolean[] URL_SAFE = urlSafeTable();
     private static final int DEFAULT_CHUNK_BYTES = 256 * 1024;
-    private static final String CHUNK_BYTES_PROPERTY = "swath.replay.response-chunk-bytes";
-    private static final int CONFIGURED_CHUNK_BYTES = chunkBytesFromSystemProperty();
 
     private final ResponseByteBudget budget;
     private final int cap;
@@ -71,21 +69,7 @@ public final class BudgetedOutput extends OutputStream {
     }
 
     static int configuredChunkBytes() {
-        int selected = CONFIGURED_CHUNK_BYTES;
-        if (selected != 64 * 1024 && selected != 128 * 1024 && selected != 256 * 1024) {
-            throw new IllegalArgumentException(CHUNK_BYTES_PROPERTY + " must be 65536, 131072, or 262144");
-        }
-        return selected;
-    }
-
-    private static int chunkBytesFromSystemProperty() {
-        String configured = System.getProperty(CHUNK_BYTES_PROPERTY);
-        if (configured == null) return DEFAULT_CHUNK_BYTES;
-        try {
-            return Integer.parseInt(configured);
-        } catch (NumberFormatException invalid) {
-            return -1;
-        }
+        return DEFAULT_CHUNK_BYTES;
     }
 
     @Override
