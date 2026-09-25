@@ -5,16 +5,23 @@
 
 import unittest
 import socket
+import os
+import subprocess
+import sys
+from types import SimpleNamespace
+from unittest.mock import patch
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from resource_fault import (adequate_budget, diagnostic_classpath_provenance,
-                            diagnostic_connections,
-                            duration_seconds, parse_server_opts,
+                            diagnostic_connections, cpu_utilization, pinned_command,
+                            driver_java_prefix, duration_seconds, oracle_walk,
+                            parse_driver_opts, parse_server_opts,
                             peak_capacity_bound, prove_slow_held, prove_slow_rendered,
                             prove_trickle, require_declared_chunk_size,
                             require_effective_vm_flags, require_oracle_request_accounting,
+                            require_unconstrained_cpu_quota,
                             receive_trickle_chunk, sha256)
 
 
@@ -68,6 +75,16 @@ class ResourceFaultTest(unittest.TestCase):
                                        properties, declared)
         with self.assertRaises(RuntimeError):
             require_effective_vm_flags(flags, {"exit": 0, "stdout": ""}, declared)
+
+    def test_driver_commands_include_declared_heap_and_nio_bounds(self):
+        options = "-Xms512m -Xmx2g -Djdk.nio.maxCachedBufferSize=262144"
+        self.assertEqual(parse_driver_opts(options)["max_heap"], "2g")
+        self.assertEqual(driver_java_prefix(SimpleNamespace(java_home="/jdk",
+                                                          driver_java_opts=options)),
+                         ["/jdk/bin/java", "-Xms512m", "-Xmx2g",
+                          "-Djdk.nio.maxCachedBufferSize=262144"])
+        with self.assertRaises(ValueError):
+            parse_driver_opts("-Xmx2g -Djdk.nio.maxCachedBufferSize=262144")
 
     def test_chunked_arms_must_match_reported_server_allocator(self):
         require_declared_chunk_size({"output_chunk_bytes": 262_144}, 262_144)
@@ -127,6 +144,70 @@ class ResourceFaultTest(unittest.TestCase):
             require_oracle_request_accounting(driver | {"warmup_successful_requests": 2}, 13)
         with self.assertRaises(RuntimeError):
             require_oracle_request_accounting({"attempted_requests": 10}, 10)
+
+    def test_declared_affinity_and_process_cpu_denominator(self):
+        ticks = os.sysconf("SC_CLK_TCK")
+        self.assertEqual(cpu_utilization(0, 2 * ticks, 1, 2), 1)
+        with self.assertRaises(ValueError):
+            cpu_utilization(10, 5, 1, 2)
+        self.assertEqual(pinned_command(["java", "-version"], {1, 0})[-4:],
+                         ["-c", "0,1", "java", "-version"])
+        require_unconstrained_cpu_quota("max 100000", 16)
+        with self.assertRaises(ValueError):
+            require_unconstrained_cpu_quota("500000 100000", 16)
+
+    def test_stdout_queue_drains_prestart_line_before_child_waits_for_ack(self):
+        child_source = """
+import sys
+print('{"note":"prestart"}', flush=True)
+print('{"event":"MEASURE_START"}', flush=True)
+sys.stdin.readline()
+print('{"event":"MEASURE_END"}', flush=True)
+sys.stdin.readline()
+print('{"objects":1,"attempted_requests":1,"successful_requests":1,"elapsed_ns":1}', flush=True)
+"""
+        args = SimpleNamespace(java_home="/unused", driver_java_opts="-Xms512m -Xmx2g "
+                               "-Djdk.nio.maxCachedBufferSize=262144",
+                               driver_classpath="/unused", port=1,
+                               protocol="s3", bucket="bucket", fixture_glob="/unused",
+                               page_size=1, driver_warmup=0, driver_repetitions=1,
+                               client_cpu_set=None, server_cpu_set=None, driver_timeout=3)
+        original_popen = subprocess.Popen
+        def fake_driver(command, **kwargs):
+            return original_popen([sys.executable, "-u", "-c", child_source], **kwargs)
+        with TemporaryDirectory(prefix="resource-stdout-") as temporary:
+            with patch("resource_fault.subprocess.Popen", side_effect=fake_driver):
+                result = oracle_walk(args, 1, Path(temporary),
+                                     {"fixture_count": 1, "fixture_digest": "0" * 64},
+                                     os.environ.copy(), os.getpid())
+        self.assertEqual(result["result"]["objects"], 1)
+        self.assertGreaterEqual(result["cpu"]["measured_wall_seconds"], 0)
+
+    def test_stdout_queue_preserves_partial_log_when_child_fails(self):
+        child_source = """
+import sys
+print('{"event":"MEASURE_START"}', flush=True)
+sys.stdin.readline()
+print('{"status":"failed","cause":"test"}', flush=True)
+sys.exit(3)
+"""
+        args = SimpleNamespace(java_home="/unused", driver_java_opts="-Xms512m -Xmx2g "
+                               "-Djdk.nio.maxCachedBufferSize=262144",
+                               driver_classpath="/unused", port=1,
+                               protocol="s3", bucket="bucket", fixture_glob="/unused",
+                               page_size=1, driver_warmup=0, driver_repetitions=1,
+                               client_cpu_set=None, server_cpu_set=None, driver_timeout=3)
+        original_popen = subprocess.Popen
+        def fake_driver(command, **kwargs):
+            return original_popen([sys.executable, "-u", "-c", child_source], **kwargs)
+        with TemporaryDirectory(prefix="resource-stdout-fail-") as temporary:
+            with patch("resource_fault.subprocess.Popen", side_effect=fake_driver):
+                with self.assertRaisesRegex(RuntimeError, "driver failed or omitted markers"):
+                    oracle_walk(args, 1, Path(temporary),
+                                {"fixture_count": 1, "fixture_digest": "0" * 64},
+                                os.environ.copy(), os.getpid())
+            self.assertIn('"status":"failed"',
+                          (Path(temporary) / "oracle-c1.log").read_text())
 
     def test_trickle_requires_held_body_progress_timeout_and_actual_close(self):
         valid = {"body_started": True, "held_after_body_start": True,

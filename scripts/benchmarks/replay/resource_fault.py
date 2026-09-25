@@ -15,9 +15,10 @@ import json
 import math
 import os
 from pathlib import Path
+import queue
 import re
-import select
 import shlex
+import shutil
 import socket
 import subprocess
 import threading
@@ -26,7 +27,9 @@ import urllib.error
 import urllib.request
 import zipfile
 
-from run_pair import clean_java_env
+from run_pair import clean_java_env, cpus
+
+DEFAULT_DRIVER_JAVA_OPTS = "-Xms512m -Xmx2g -Djdk.nio.maxCachedBufferSize=262144"
 
 
 def peak_capacity_bound(body_upper, preflight_peak, chunk_bytes=None):
@@ -116,6 +119,46 @@ def rss(pid):
     return None
 
 
+def process_cpu_ticks(pid):
+    stat = Path(f"/proc/{pid}/stat").read_text()
+    fields = stat[stat.rfind(")") + 2:].split()
+    return int(fields[11]) + int(fields[12])
+
+
+def cpu_utilization(start_ticks, end_ticks, elapsed_seconds, cpu_count):
+    if elapsed_seconds <= 0 or cpu_count <= 0 or end_ticks < start_ticks:
+        raise ValueError("invalid process CPU observation")
+    return ((end_ticks - start_ticks) / os.sysconf("SC_CLK_TCK")
+            / elapsed_seconds / cpu_count)
+
+
+def pinned_command(command, cpu_set):
+    if cpu_set is None:
+        return command
+    taskset = shutil.which("taskset")
+    if taskset is None:
+        raise RuntimeError("taskset is required for declared process CPU affinity")
+    return [taskset, "-c", ",".join(map(str, sorted(cpu_set))), *command]
+
+
+def declared_cpu_topology(server_cpus, client_cpus):
+    siblings = {}
+    for cpu in sorted(server_cpus | client_cpus):
+        path = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list")
+        siblings[str(cpu)] = path.read_text().strip()
+    if any(cpus(siblings[str(cpu)]) & client_cpus for cpu in server_cpus):
+        raise ValueError("declared server/client CPUs share hyperthread sibling cores")
+    return siblings
+
+
+def require_unconstrained_cpu_quota(cpu_max, reserved_cpus):
+    fields = cpu_max.split()
+    if len(fields) != 2:
+        raise ValueError("cgroup cpu.max is unavailable or malformed")
+    if fields[0] != "max" and int(fields[0]) / int(fields[1]) < reserved_cpus:
+        raise ValueError("cgroup CPU quota is below combined reserved CPU count")
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as source:
@@ -153,10 +196,15 @@ def full_get(url, headers=None):
                 "sha256": hashlib.sha256(body).hexdigest()}
 
 
+def driver_java_prefix(args):
+    return [str(Path(args.java_home) / "bin" / "java"), *shlex.split(args.driver_java_opts)]
+
+
 def oracle_inventory(args, clients, environment):
-    command = [str(Path(args.java_home) / "bin" / "java"), "--enable-native-access=ALL-UNNAMED",
+    command = pinned_command([*driver_java_prefix(args),
+               "--enable-native-access=ALL-UNNAMED",
                "-cp", args.driver_classpath, "io.varve.swath.replay.bench.ReplayHttpBench",
-               "--inventory", args.fixture_glob, str(clients)]
+               "--inventory", args.fixture_glob, str(clients)], args.client_cpu_set)
     result = subprocess.run(command, text=True, capture_output=True, env=environment,
                             timeout=args.driver_timeout, check=False)
     if result.returncode != 0:
@@ -164,37 +212,59 @@ def oracle_inventory(args, clients, environment):
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
-def oracle_walk(args, clients, output, inventory, environment):
-    command = [str(Path(args.java_home) / "bin" / "java"), "--enable-native-access=ALL-UNNAMED",
+def oracle_walk(args, clients, output, inventory, environment, server_pid):
+    command = pinned_command([*driver_java_prefix(args),
+               "--enable-native-access=ALL-UNNAMED",
                "-cp", args.driver_classpath, "io.varve.swath.replay.bench.ReplayHttpBench",
                f"http://127.0.0.1:{args.port}", args.protocol, args.bucket, args.fixture_glob,
                str(clients), str(args.page_size), str(args.driver_warmup),
                f"{inventory['fixture_count']}:{inventory['fixture_digest']}", "bracket",
-               "partitioned", "1"]
+               "partitioned", str(args.driver_repetitions), "end_ack"], args.client_cpu_set)
     stdout_lines = []
     marker_before = marker_after = False
+    cpu_start = cpu_end = None
     with (output / f"oracle-c{clients}.err").open("w") as errors:
         driver = subprocess.Popen(command, text=True, bufsize=1, stdout=subprocess.PIPE,
                                   stdin=subprocess.PIPE, stderr=errors, env=environment)
+        lines = queue.Queue()
+        reader_errors = []
+        def collect_stdout():
+            try:
+                for output_line in driver.stdout:
+                    lines.put(output_line)
+            except Exception as error:
+                reader_errors.append(repr(error))
+            finally:
+                lines.put(None)
+        reader = threading.Thread(target=collect_stdout, name="resource-driver-stdout", daemon=True)
+        reader.start()
         try:
             deadline = time.monotonic() + args.driver_timeout
             while time.monotonic() < deadline:
-                ready, _, _ = select.select([driver.stdout], [], [], .2)
-                if ready:
-                    line = driver.stdout.readline()
-                    if not line:
-                        break
-                    stdout_lines.append(line)
-                    if line.lstrip().startswith("{"):
-                        event = json.loads(line)
-                        if event.get("event") == "MEASURE_START":
-                            marker_before = True
-                            driver.stdin.write("\n")
-                            driver.stdin.flush()
-                        elif event.get("event") == "MEASURE_END":
-                            marker_after = True
-                elif driver.poll() is not None:
+                try:
+                    line = lines.get(timeout=.2)
+                except queue.Empty:
+                    continue
+                if line is None:
                     break
+                stdout_lines.append(line)
+                if line.lstrip().startswith("{"):
+                    event = json.loads(line)
+                    if event.get("event") == "MEASURE_START":
+                        marker_before = True
+                        cpu_start = {"at": time.monotonic(),
+                                     "server_ticks": process_cpu_ticks(server_pid),
+                                     "client_ticks": process_cpu_ticks(driver.pid),
+                                     "client_affinity": sorted(os.sched_getaffinity(driver.pid))}
+                        driver.stdin.write("\n")
+                        driver.stdin.flush()
+                    elif event.get("event") == "MEASURE_END":
+                        marker_after = True
+                        cpu_end = {"at": time.monotonic(),
+                                   "server_ticks": process_cpu_ticks(server_pid),
+                                   "client_ticks": process_cpu_ticks(driver.pid)}
+                        driver.stdin.write("\n")
+                        driver.stdin.flush()
             else:
                 raise TimeoutError("oracle driver exceeded declared timeout")
             driver.wait(timeout=10)
@@ -202,16 +272,41 @@ def oracle_walk(args, clients, output, inventory, environment):
             if driver.poll() is None:
                 driver.kill()
                 driver.wait()
-    (output / f"oracle-c{clients}.log").write_text("".join(stdout_lines))
+            reader.join(timeout=1)
+            (output / f"oracle-c{clients}.log").write_text("".join(stdout_lines))
+    if reader_errors:
+        raise RuntimeError("oracle stdout collector failed: " + ", ".join(reader_errors))
     if driver.returncode != 0 or not marker_before or not marker_after:
         raise RuntimeError(f"oracle driver failed or omitted markers; see oracle-c{clients}.err/log")
     result = json.loads(next(line for line in reversed(stdout_lines)
                              if line.lstrip().startswith("{") and '"status"' not in line))
     if result["attempted_requests"] != result["successful_requests"]:
         raise RuntimeError("oracle walk had failed/refused HTTP requests")
-    if result["objects"] != inventory["fixture_count"]:
+    if result["objects"] != inventory["fixture_count"] * args.driver_repetitions:
         raise RuntimeError("oracle walk inventory count mismatch")
-    return {"command": command, "inventory": inventory, "result": result}
+    if cpu_start is None or cpu_end is None:
+        raise RuntimeError("oracle driver omitted process CPU marker observations")
+    observed_seconds = cpu_end["at"] - cpu_start["at"]
+    server_cpus = len(args.server_cpu_set or os.sched_getaffinity(server_pid))
+    client_cpus = len(cpu_start["client_affinity"])
+    cpu = {"measured_wall_seconds": observed_seconds,
+           "driver_elapsed_seconds": result["elapsed_ns"] / 1_000_000_000,
+           "window_minus_driver_seconds": (observed_seconds
+                                           - result["elapsed_ns"] / 1_000_000_000),
+           "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"),
+           "server_ticks_start": cpu_start["server_ticks"],
+           "server_ticks_end": cpu_end["server_ticks"],
+           "client_ticks_start": cpu_start["client_ticks"],
+           "client_ticks_end": cpu_end["client_ticks"],
+           "server_cpu_utilization": cpu_utilization(cpu_start["server_ticks"],
+                                                     cpu_end["server_ticks"], observed_seconds,
+                                                     server_cpus),
+           "client_cpu_utilization": cpu_utilization(cpu_start["client_ticks"],
+                                                     cpu_end["client_ticks"], observed_seconds,
+                                                     client_cpus),
+           "server_allocated_cpus": server_cpus,
+           "client_affinity": cpu_start["client_affinity"]}
+    return {"command": command, "inventory": inventory, "result": result, "cpu": cpu}
 
 
 def require_oracle_request_accounting(driver, server_requests):
@@ -314,6 +409,24 @@ def parse_server_opts(opts):
         flags[key] = matches[0]
     if flags["nio_cached_buffer"] != "262144":
         raise ValueError("jdk.nio.maxCachedBufferSize must be 262144 for this panel")
+    return flags
+
+
+def parse_driver_opts(opts):
+    flags = {}
+    for key, pattern in {
+        "initial_heap": r"(?<!\S)-Xms(\d+[kKmMgG])(?=\s|$)",
+        "max_heap": r"(?<!\S)-Xmx(\d+[kKmMgG])(?=\s|$)",
+        "nio_cached_buffer": r"(?<!\S)-Djdk\.nio\.maxCachedBufferSize=(\d+)(?=\s|$)",
+    }.items():
+        matches = re.findall(pattern, opts)
+        if len(matches) != 1:
+            raise ValueError(f"--driver-java-opts must declare {key} exactly once")
+        flags[key] = matches[0]
+    if memory_bytes(flags["initial_heap"]) > memory_bytes(flags["max_heap"]):
+        raise ValueError("driver initial heap exceeds its maximum")
+    if flags["nio_cached_buffer"] != "262144":
+        raise ValueError("driver NIO cached-buffer bound must be 262144")
     return flags
 
 
@@ -463,19 +576,44 @@ def run(args):
                "min_held": args.min_held, "hold_seconds": args.hold_seconds,
                "expect_overload": args.expect_overload, "normal_walker": args.normal_walker,
                "driver_warmup": args.driver_warmup,
+               "driver_repetitions": args.driver_repetitions,
+               "declared_server_cpus": sorted(args.server_cpu_set or []),
+               "declared_client_cpus": sorted(args.client_cpu_set or []),
+               "min_measured_seconds": args.min_measured_seconds,
+               "min_server_cpu_utilization": args.min_server_cpu_utilization,
+               "max_client_cpu_utilization": args.max_client_cpu_utilization,
                "heap_headroom_bytes": args.heap_headroom,
-               "cache_and_staging_headroom_bytes": args.cache_staging_headroom,
+               "staging_and_other_headroom_bytes": args.cache_staging_headroom,
                "decoded_row_bytes_assumption": args.decoded_row_bytes,
+               "fixture_rows_assumption": args.fixture_rows,
+               "cache_row_cap_assumption": args.cache_row_cap,
                "accepted_send_buffer_bytes": args.accepted_send_buffer_bytes,
                "transport": ("diagnostic_accepted_sndbuf" if args.accepted_send_buffer_bytes
                              else "instrumented_default_sndbuf" if args.diagnostic_server_classpath
                              else "default"),
                "server_java_opts": args.server_java_opts,
+               "driver_java_opts": args.driver_java_opts,
+               "driver_flags": parse_driver_opts(args.driver_java_opts),
                "server_flags": parse_server_opts(args.server_java_opts),
                "removed_inherited_java_option_keys": sorted(inherited_java_options),
                "provenance": provenance(args, environment)}
     if args.body_upper <= 0 or args.body_upper > args.max_response_bytes:
         raise ValueError("declared body upper bound must fit the per-response cap")
+    if (args.driver_repetitions < 1 or args.min_measured_seconds < 0
+            or not 0 <= args.min_server_cpu_utilization <= 1
+            or not 0 < args.max_client_cpu_utilization <= 1):
+        raise ValueError("invalid repetition or measured CPU threshold")
+    if (args.min_measured_seconds > 0 or args.min_server_cpu_utilization > 0
+            or args.max_client_cpu_utilization < 1) and not args.server_cpu_set:
+        raise ValueError("measured CPU thresholds require declared disjoint process affinities")
+    if args.server_cpu_set:
+        receipt["declared_cpu_topology"] = declared_cpu_topology(
+            args.server_cpu_set, args.client_cpu_set)
+        require_unconstrained_cpu_quota(receipt["provenance"]["cgroup_cpu_max"],
+                                        len(args.server_cpu_set | args.client_cpu_set))
+    if args.mode != "normal512" and (args.min_measured_seconds > 0
+                                     or args.min_server_cpu_utilization > 0):
+        raise ValueError("CPU saturation thresholds belong to the normal512 arm")
     if args.clients > 2 * args.max_concurrent_requests and args.mode == "normal512":
         raise ValueError("normal arm exceeds response-count ceiling")
     if args.mode == "normal512" and args.protocol != "s3":
@@ -500,17 +638,25 @@ def run(args):
                             args.clients + (1 if args.mode == "slow" else 0))
     prepared_rows = prepared_handlers * args.page_size
     prepared_bytes = prepared_rows * args.decoded_row_bytes
+    cache_rows = min(args.fixture_rows, args.cache_row_cap)
+    cache_bytes = cache_rows * args.decoded_row_bytes
     receipt["prepared_row_headroom"] = {
         "concurrent_handlers_assumption": prepared_handlers,
         "page_rows_per_handler": args.page_size,
         "decoded_row_bytes_assumption": args.decoded_row_bytes,
         "prepared_rows": prepared_rows,
         "prepared_bytes": prepared_bytes,
-        "cache_and_staging_headroom_bytes": args.cache_staging_headroom,
+        "cache_rows_assumption": cache_rows,
+        "cache_bytes_assumption": cache_bytes,
+        "staging_and_other_headroom_bytes": args.cache_staging_headroom,
+        "total_modeled_headroom_bytes": prepared_bytes + cache_bytes + args.cache_staging_headroom,
         "heap_headroom_bytes": args.heap_headroom}
     if (args.decoded_row_bytes <= 0 or args.cache_staging_headroom <= 0
-            or prepared_bytes + args.cache_staging_headroom > args.heap_headroom):
-        raise ValueError("decoded rows plus cache/staging must fit separate heap headroom")
+            or args.fixture_rows < 0 or args.cache_row_cap <= 0
+            or prepared_bytes + cache_bytes + args.cache_staging_headroom > args.heap_headroom):
+        raise ValueError("prepared rows, cache rows, and staging must fit separate heap headroom")
+    if args.mode == "normal512" and args.clients >= 512 and args.fixture_rows <= 0:
+        raise ValueError("512-client arm requires a declared fixture row count for cache headroom")
     if args.mode == "trickle" and args.idle_timeout_seconds >= args.write_timeout_seconds:
         raise ValueError("trickle arm requires idle timeout below total write timeout")
     if args.mode == "slow" and not args.expect_overload and not args.normal_walker:
@@ -553,6 +699,7 @@ def run(args):
                    args.azure_account, str(args.accepted_send_buffer_bytes), args.inject_latency]
         receipt["diagnostic_server_source_sha256"] = sha256(
             Path(__file__).with_name("ResourceFaultServer.java"))
+    command = pinned_command(command, args.server_cpu_set)
     receipt["server_command"] = command
     log = (output / "server.log").open("wb")
     server = subprocess.Popen(command, env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -581,6 +728,9 @@ def run(args):
                 return False
         if not await_condition(healthy, args.start_timeout):
             raise TimeoutError("replay server startup deadline exceeded")
+        receipt["server_effective_affinity"] = sorted(os.sched_getaffinity(server.pid))
+        if args.server_cpu_set and set(receipt["server_effective_affinity"]) != args.server_cpu_set:
+            raise RuntimeError("server CPU affinity differs from declared set")
         if args.diagnostic_server_classpath:
             log.flush()
             marker = f"transport={receipt['transport']}"
@@ -641,16 +791,26 @@ def run(args):
                 raise RuntimeError("JFR start failed")
         if args.mode == "normal512":
             inventory = oracle_inventory(args, args.clients, environment)
+            if args.fixture_rows and inventory["fixture_count"] != args.fixture_rows:
+                raise RuntimeError("fixture row count differs from declared cache-headroom input")
             if inventory["fixture_count"] < args.clients * args.page_size:
                 raise RuntimeError("fixture cannot offer one full page to each partitioned client")
             driver_before = metric(http_json(metrics_url), "swath.replay.http.requests")
             accepted_before = (diagnostic_connections(http_json(metrics_url))["accepted"]
                                if args.diagnostic_server_classpath else None)
-            receipt["oracle"] = oracle_walk(args, args.clients, output, inventory, environment)
+            receipt["oracle"] = oracle_walk(args, args.clients, output, inventory,
+                                            environment, server.pid)
             receipt["oracle"]["server_requests"] = (metric(http_json(metrics_url),
                     "swath.replay.http.requests") - driver_before)
             receipt["oracle"]["warmup_requests"] = require_oracle_request_accounting(
                 receipt["oracle"]["result"], receipt["oracle"]["server_requests"])
+            cpu = receipt["oracle"]["cpu"]
+            if args.client_cpu_set and set(cpu["client_affinity"]) != args.client_cpu_set:
+                raise RuntimeError("client CPU affinity differs from declared set")
+            if (cpu["measured_wall_seconds"] < args.min_measured_seconds
+                    or cpu["server_cpu_utilization"] < args.min_server_cpu_utilization
+                    or cpu["client_cpu_utilization"] > args.max_client_cpu_utilization):
+                raise RuntimeError("measured duration or CPU saturation/headroom criterion unmet")
             max_body = receipt["oracle"]["result"].get("max_response_bytes")
             if max_body is None or max_body > args.body_upper:
                 raise RuntimeError("oracle driver did not prove every response fits declared M")
@@ -696,7 +856,7 @@ def run(args):
                 walker_before = metric(http_json(metrics_url), "swath.replay.http.requests")
                 receipt["normal_walker"] = oracle_walk(args, 1, output,
                                                          oracle_inventory(args, 1, environment),
-                                                         environment)
+                                                         environment, server.pid)
                 receipt["normal_walker"]["server_requests"] = (metric(http_json(metrics_url),
                         "swath.replay.http.requests") - walker_before)
                 receipt["normal_walker"]["warmup_requests"] = require_oracle_request_accounting(
@@ -943,12 +1103,20 @@ def main():
     parser.add_argument("--fixture", required=True)
     parser.add_argument("--fixture-glob", help="Parquet glob for ReplayHttpBench inventory oracle")
     parser.add_argument("--driver-classpath", help="compiled ReplayHttpBench classes and dependency jars")
+    parser.add_argument("--driver-java-opts", default=DEFAULT_DRIVER_JAVA_OPTS,
+                        help="explicit Java HTTP driver heap and NIO settings")
     parser.add_argument("--diagnostic-server-classpath",
                         help="ResourceFaultServer class plus frozen replay distribution jars")
     parser.add_argument("--accepted-send-buffer-bytes", type=int, default=0,
-                        help="diagnostic-only accepted TCP send buffer; 0 uses production launcher")
+                        help="diagnostic-only accepted TCP send buffer; 0 preserves the connector default")
     parser.add_argument("--driver-warmup", type=int, default=0)
+    parser.add_argument("--driver-repetitions", type=int, default=1)
     parser.add_argument("--driver-timeout", type=float, default=3600)
+    parser.add_argument("--server-cpus", help="declared Linux CPU list for the replay server")
+    parser.add_argument("--client-cpus", help="disjoint Linux CPU list for the Java walker")
+    parser.add_argument("--min-measured-seconds", type=float, default=0)
+    parser.add_argument("--min-server-cpu-utilization", type=float, default=0)
+    parser.add_argument("--max-client-cpu-utilization", type=float, default=1)
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--protocol", choices=("s3", "azure"), default="s3")
     parser.add_argument("--azure-account", default="replay")
@@ -981,8 +1149,12 @@ def main():
     parser.add_argument("--heap-headroom", type=int, default=1024 * 1024 * 1024)
     parser.add_argument("--decoded-row-bytes", type=int, required=True,
                         help="predeclared upper estimate per prepared fixture row, including key bytes")
+    parser.add_argument("--fixture-rows", type=int, default=0,
+                        help="declared fixture row count for cache headroom; required at 512 clients")
+    parser.add_argument("--cache-row-cap", type=int, default=1_200_000,
+                        help="declared replay cache row cap, currently 12500 * 96 by default")
     parser.add_argument("--cache-staging-headroom", type=int, default=256 * 1024 * 1024,
-                        help="separate cache, serializer staging, and other heap allowance")
+                        help="serializer staging and other heap allowance beyond cache rows")
     parser.add_argument("--deadline-epsilon", type=float, default=.5)
     parser.add_argument("--start-timeout", type=float, default=60.0)
     parser.add_argument("--expect-overload", action="store_true")
@@ -992,6 +1164,16 @@ def main():
     args.write_timeout_seconds = duration_seconds(args.write_timeout)
     args.idle_timeout_seconds = duration_seconds(args.idle_timeout)
     args.injected_seconds = injection_seconds(args.inject_latency)
+    if bool(args.server_cpus) != bool(args.client_cpus):
+        parser.error("--server-cpus and --client-cpus must be declared together")
+    args.server_cpu_set = cpus(args.server_cpus) if args.server_cpus else None
+    args.client_cpu_set = cpus(args.client_cpus) if args.client_cpus else None
+    if args.server_cpu_set:
+        available = os.sched_getaffinity(0)
+        if (not args.server_cpu_set or not args.client_cpu_set
+                or args.server_cpu_set & args.client_cpu_set
+                or not (args.server_cpu_set | args.client_cpu_set).issubset(available)):
+            parser.error("declared CPU sets must be nonempty, disjoint, and available")
     if args.min_held is None:
         args.min_held = args.clients
     try:

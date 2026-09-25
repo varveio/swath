@@ -117,12 +117,22 @@ and transient garbage; predeclare `-Xmx`, `MaxDirectMemorySize`, and
 `jdk.nio.maxCachedBufferSize=262144` separately. The `slow` arm may intentionally use
 a smaller budget to prove 503 refusal and recovery; it is not a throughput pass.
 
+For a declared resource CPU arm, `--server-cpus` and `--client-cpus` pin the two
+processes to disjoint Linux CPU sets using `taskset`; the receipt verifies their
+effective affinities. `--driver-repetitions` repeats the same exact partitioned
+inventory during the measured interval. The driver holds its JVM open at
+`MEASURE_START` and `MEASURE_END`, so the harness can sample both processes'
+`/proc` CPU ticks around only that interval. A saturation arm declares
+`--min-measured-seconds 30 --min-server-cpu-utilization 0.90` and a separate
+client headroom ceiling before it runs. Failing any declared threshold makes
+the arm fail; a short or low-load pilot is characterization only.
+
 For a deterministic long-key resource corpus, generate a 600,000-object capture with
 1,024-byte keys and stamp it through `sort-fixture` into a new durable directory:
 
 ```sh
 python3 scripts/benchmarks/replay/make_longkey_fixture.py \
-  --replay "$CANDIDATE/bin/swath-replay" \
+  --replay "$CANDIDATE/bin/swath-replay" --java-home "$JAVA_HOME" \
   --output /path/to/durable-fixtures/replay-longkeys-600k \
   --count 600000 --key-bytes 1024
 ```
@@ -143,24 +153,31 @@ python3 scripts/benchmarks/replay/resource_fault.py \
   --fixture /path/to/stamped-long-key-fixture \
   --fixture-glob '/path/to/stamped-long-key-fixture/*.parquet' \
   --driver-classpath '/path/to/versioned-benchmark-classes:/path/to/candidate/lib/*' \
+  --driver-java-opts '-Xms2g -Xmx4g -Djdk.nio.maxCachedBufferSize=262144' \
   --bucket bench --output /path/to/durable-receipts/longkeys-c512 \
-  --mode normal512 --clients 512 --page-size 1000 \
-  --body-upper 1500000 --response-buffer-budget 2147483648 \
+  --mode normal512 --clients 512 --page-size 1000 --driver-warmup 1 \
+  --server-cpus 0-5 --client-cpus 6-15 \
+  --body-upper 1500000 --response-buffer-budget 1073741824 \
   --max-response-bytes 67108864 --max-concurrent-requests 512 \
-  --output-chunk-bytes 262144 --decoded-row-bytes 2048 \
-  --heap-headroom 1610612736 --cache-staging-headroom 268435456 \
-  --server-java-opts '-Xms4g -Xmx4g -XX:MaxDirectMemorySize=512m -XX:NativeMemoryTracking=summary -Djdk.nio.maxCachedBufferSize=262144' \
+  --output-chunk-bytes 262144 --decoded-row-bytes 2048 --fixture-rows 600000 \
+  --cache-row-cap 1200000 --heap-headroom 4294967296 \
+  --cache-staging-headroom 536870912 \
+  --server-java-opts '-Xms6g -Xmx6g -XX:MaxDirectMemorySize=512m -XX:NativeMemoryTracking=summary -Djdk.nio.maxCachedBufferSize=262144' \
   --jfr
 ```
 
 For the growable-array baseline, the example bound is
 `512 × ceil(2.5 × 1,500,000) = 1,920,000,000` bytes. A 256 KiB chunked candidate
 uses at least `512 × (1,500,000 + 262,144) = 902,217,728` bytes, or more if its
-measured preflight credit exceeds that amount per response. The declared 2 GiB budget
-clears only the encoded-output term. The separate 1.5 GiB heap headroom declares
-`512 × 1,000 × 2,048 = 1,048,576,000` bytes of prepared rows plus 256 MiB for
-cache, serializer staging, and other heap use; 2,048 bytes per decoded row is a
-declared assumption to validate against the fixture and sampled heap. Measure a serial preflight
+measured preflight credit exceeds that amount per response. The example's 1 GiB
+budget is a candidate-only resource arm; a matched baseline/candidate comparison
+must declare the same budget above the larger baseline bound. The declared 1 GiB budget
+clears only the encoded-output term. The separate 4 GiB heap headroom models
+`512 × 1,000 × 2,048 = 1,048,576,000` bytes of prepared rows,
+`min(600,000, 1,200,000) × 2,048 = 1,228,800,000` bytes of cache rows, and
+512 MiB of serializer staging/other heap, with remaining margin for model error.
+The 2,048-byte decoded-row size is a declared assumption to validate against the
+fixture and sampled heap. Measure a serial preflight
 response and inspect fixture key lengths before choosing `M`; the script checks its
 actual preflight and measured response lengths but cannot prove unseen pages fit `M`.
 The resource arm is characterization until its fixture, JVM limits, direct-memory
