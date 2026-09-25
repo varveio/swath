@@ -484,6 +484,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
 | `request.stage.latency{protocol,stage}` | Paging (including read-permit wait), rendering, engaged injected delay, and socket write through callback completion. |
 | `response.admission.refused{protocol,reason}`, `response.bytes.live`, `response.bytes.peak`, `response.active` | Labeled response-limit refusals, charged encoded-array capacity now/peak, and held response permits. |
+| `response.write.deadline{protocol,reason=total_deadline}` | A total write deadline closed a client connection before callback completion. |
 | `protocol.requests.active{protocol}`, `provider.path{protocol,path,reason}` | Active provider requests and engaged pager path/classification. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows`, `prefetch.window.ramp_ceiling_rows` | Window-cache cost, effectiveness, and page-aligned ramp behavior. |

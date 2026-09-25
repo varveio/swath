@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.Semaphore;
@@ -87,7 +88,7 @@ final class ListingRequestRunner {
             metrics.recordAdmissionRefusal(protocol, "shutdown");
             try {
                 writeSmall(jettyRequest, response, handler.error(new ReplayFailure(ReplayFailure.Kind.OVERLOAD,
-                        "shutdown", "replay server is stopping"), request), callback, sample, null);
+                        "shutdown", "replay server is stopping"), request), callback, sample, null, protocol);
             } catch (Throwable error) {
                 callback.failed(error);
             }
@@ -192,7 +193,7 @@ final class ListingRequestRunner {
             output = null;
             countHeld = false;
             ownedCallback = completion;
-            writeOwned(jettyRequest, response, rendered, ownedCallback);
+            writeOwned(jettyRequest, response, rendered, ownedCallback, protocol);
         } catch (Throwable error) {
             if (ownedCallback != null) {
                 ownedCallback.failed(error);
@@ -214,7 +215,7 @@ final class ListingRequestRunner {
             }
             try {
                 RenderedResponse failure = failure(handler, request, error);
-                writeSmall(jettyRequest, response, failure, callback, sample, protocolActive);
+                writeSmall(jettyRequest, response, failure, callback, sample, protocolActive, protocol);
             } catch (Throwable errorRenderingFailure) {
                 protocolActive.decrementAndGet();
                 errorRenderingFailure.addSuppressed(error);
@@ -255,7 +256,8 @@ final class ListingRequestRunner {
     }
 
     private void writeSmall(Request request, Response response, RenderedResponse rendered, Callback callback,
-                            io.micrometer.core.instrument.Timer.Sample sample, AtomicInteger protocolActive) {
+                            io.micrometer.core.instrument.Timer.Sample sample, AtomicInteger protocolActive,
+                            String protocol) {
         metrics.recordHttpRequest(sample, rendered.status());
         synchronized (drainLock) {
             activeCallbacks++;
@@ -263,7 +265,8 @@ final class ListingRequestRunner {
         WriteDeadline deadline;
         try {
             org.eclipse.jetty.io.Connection connection = request.getConnectionMetaData().getConnection();
-            deadline = new WriteDeadline(writeDeadlines, connection, writeTimeout);
+            deadline = new WriteDeadline(writeDeadlines, connection, writeTimeout,
+                    () -> metrics.recordWriteDeadlineExpiration(protocol));
         } catch (RuntimeException schedulingFailure) {
             if (protocolActive != null) {
                 protocolActive.decrementAndGet();
@@ -311,11 +314,13 @@ final class ListingRequestRunner {
         }
     }
 
-    private void writeOwned(Request request, Response response, RenderedResponse rendered, Callback callback) {
+    private void writeOwned(Request request, Response response, RenderedResponse rendered, Callback callback,
+                            String protocol) {
         writeHeaders(response, rendered);
         ByteBuffer body = rendered.body().asReadOnlyBuffer();
         org.eclipse.jetty.io.Connection connection = request.getConnectionMetaData().getConnection();
-        WriteDeadline deadline = new WriteDeadline(writeDeadlines, connection, writeTimeout);
+        WriteDeadline deadline = new WriteDeadline(writeDeadlines, connection, writeTimeout,
+                () -> metrics.recordWriteDeadlineExpiration(protocol));
         IteratingCallback writer = new IteratingCallback() {
             private boolean emptyWritten;
 
@@ -504,16 +509,28 @@ final class ListingRequestRunner {
         private final AtomicInteger state = new AtomicInteger(ACTIVE);
         private final ScheduledFuture<?> timer;
         private final org.eclipse.jetty.io.Connection connection;
+        private final Runnable onExpiry;
+        private final CountDownLatch expirationFinished = new CountDownLatch(1);
 
         WriteDeadline(ScheduledThreadPoolExecutor scheduler, org.eclipse.jetty.io.Connection connection,
-                      Duration timeout) {
+                      Duration timeout, Runnable onExpiry) {
             this.connection = connection;
+            this.onExpiry = onExpiry;
             timer = scheduler.schedule(this::expire, timeout.toNanos(), TimeUnit.NANOSECONDS);
         }
 
         void expire() {
             if (state.compareAndSet(ACTIVE, EXPIRED)) {
-                connection.close();
+                try {
+                    onExpiry.run();
+                } catch (Throwable observationFailure) {
+                    log.error("failed to record replay write deadline expiration", observationFailure);
+                } finally {
+                    // close() may synchronously invoke the write callback, so the observer must
+                    // finish before close() starts; otherwise that callback waits on itself.
+                    expirationFinished.countDown();
+                    connection.close();
+                }
             }
         }
 
@@ -523,6 +540,16 @@ final class ListingRequestRunner {
                 return writeFailure;
             }
             if (state.get() == EXPIRED) {
+                boolean interrupted = false;
+                for (;;) {
+                    try {
+                        expirationFinished.await();
+                        break;
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
                 return new TimeoutException("replay response write deadline expired");
             }
             return writeFailure;

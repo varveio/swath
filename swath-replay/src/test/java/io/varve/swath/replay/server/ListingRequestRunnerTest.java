@@ -6,6 +6,7 @@
 package io.varve.swath.replay.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.replay.metrics.ReplayMetrics;
 import java.lang.reflect.Proxy;
@@ -18,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -36,6 +38,81 @@ import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.junit.jupiter.api.Test;
 
 class ListingRequestRunnerTest {
+    @Test
+    void synchronousConnectionCloseCallbackCannotDeadlockDeadlineObserver() throws Exception {
+        ReplayMetrics metrics = new ReplayMetrics();
+        AtomicReference<ListingRequestRunner.WriteDeadline> deadlineRef = new AtomicReference<>();
+        AtomicReference<Throwable> callbackResult = new AtomicReference<>();
+        Connection connection = proxy(Connection.class, (method, args) -> {
+            if (method.equals("close")) {
+                callbackResult.set(deadlineRef.get().finish(null));
+            }
+            return null;
+        });
+        ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1);
+        try {
+            var deadline = new ListingRequestRunner.WriteDeadline(scheduler, connection,
+                    Duration.ofSeconds(10), () -> metrics.recordWriteDeadlineExpiration("s3"));
+            deadlineRef.set(deadline);
+            Thread expiration = Thread.ofVirtual().start(deadline::expire);
+            expiration.join(Duration.ofSeconds(1));
+            assertThat(expiration.isAlive()).isFalse();
+            assertThat(callbackResult.get()).isInstanceOf(TimeoutException.class);
+            assertThat(metrics.registry().get("swath.replay.response.write.deadline")
+                    .tags("protocol", "s3", "reason", "total_deadline")
+                    .counter().count()).isEqualTo(1);
+        } finally {
+            scheduler.shutdownNow();
+            metrics.registry().close();
+        }
+    }
+
+    @Test
+    void deadlineObservationFinishesBeforeTimedOutCallbackCanReleaseRegistry() throws Exception {
+        ReplayMetrics metrics = new ReplayMetrics();
+        CountDownLatch observerEntered = new CountDownLatch(1);
+        CountDownLatch releaseObserver = new CountDownLatch(1);
+        AtomicInteger closes = new AtomicInteger();
+        Connection connection = proxy(Connection.class, (method, args) -> {
+            if (method.equals("close")) closes.incrementAndGet();
+            return null;
+        });
+        ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1);
+        var deadline = new ListingRequestRunner.WriteDeadline(scheduler, connection,
+                Duration.ofSeconds(10), () -> {
+                    observerEntered.countDown();
+                    try {
+                        releaseObserver.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                    metrics.recordWriteDeadlineExpiration("s3");
+                });
+        try (var workers = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                var expiration = workers.submit(deadline::expire);
+                assertThat(observerEntered.await(5, TimeUnit.SECONDS)).isTrue();
+                var callback = workers.submit(() -> deadline.finish(null));
+                assertThatThrownBy(() -> callback.get(100, TimeUnit.MILLISECONDS))
+                        .isInstanceOf(TimeoutException.class);
+                releaseObserver.countDown();
+                expiration.get(5, TimeUnit.SECONDS);
+                assertThat(callback.get(5, TimeUnit.SECONDS)).isInstanceOf(TimeoutException.class);
+                assertThat(metrics.registry().get("swath.replay.response.write.deadline")
+                        .tags("protocol", "s3", "reason", "total_deadline")
+                        .counter().count()).isEqualTo(1);
+                assertThat(closes).hasValue(1);
+            } finally {
+                releaseObserver.countDown();
+            }
+        } finally {
+            releaseObserver.countDown();
+            scheduler.shutdownNow();
+            metrics.registry().close();
+        }
+    }
+
     @Test
     void countAdmissionRefusalKeepsSmallErrorOutsideByteBudgetAndRecovers() {
         ReplayMetrics metrics = new ReplayMetrics();
@@ -100,21 +177,27 @@ class ListingRequestRunnerTest {
         });
         ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1);
         scheduler.setRemoveOnCancelPolicy(true);
+        ReplayMetrics metrics = new ReplayMetrics();
+        Runnable recordDeadline = () -> metrics.recordWriteDeadlineExpiration("s3");
         try {
             var successWins = new ListingRequestRunner.WriteDeadline(scheduler, connection,
-                    Duration.ofSeconds(10));
+                    Duration.ofSeconds(10), recordDeadline);
             assertThat(successWins.finish(null)).isNull();
             successWins.expire();
             assertThat(closes).hasValue(0);
             assertThat(scheduler.getQueue()).isEmpty();
 
             var timeoutWins = new ListingRequestRunner.WriteDeadline(scheduler, connection,
-                    Duration.ofSeconds(10));
+                    Duration.ofSeconds(10), recordDeadline);
             timeoutWins.expire();
             assertThat(timeoutWins.finish(null)).isInstanceOf(TimeoutException.class);
             assertThat(closes).hasValue(1);
+            assertThat(metrics.registry().get("swath.replay.response.write.deadline")
+                    .tags("protocol", "s3", "reason", "total_deadline")
+                    .counter().count()).isEqualTo(1);
         } finally {
             scheduler.shutdownNow();
+            metrics.registry().close();
         }
     }
 

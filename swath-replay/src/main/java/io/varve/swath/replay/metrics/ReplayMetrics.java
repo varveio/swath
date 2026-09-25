@@ -73,6 +73,7 @@ public final class ReplayMetrics {
     private final Map<String, Counter> providerPaths = new ConcurrentHashMap<>();
     private final Map<String, Timer> requestStages = new ConcurrentHashMap<>();
     private final Map<String, Counter> admissionRefusals = new ConcurrentHashMap<>();
+    private final Map<String, Counter> writeDeadlineExpirations = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> protocolActiveSources = new ConcurrentHashMap<>();
     private LongSupplier responseBytesGaugeSource;
     private LongSupplier responseBytesPeakGaugeSource;
@@ -348,6 +349,14 @@ public final class ReplayMetrics {
         admissionRefusals.computeIfAbsent(key, ignored ->
                 Counter.builder("swath.replay.response.admission.refused")
                         .tag("protocol", protocol).tag("reason", reason).register(registry)).increment();
+    }
+
+    /** The total write deadline closed a client connection before its callback completed. */
+    public void recordWriteDeadlineExpiration(String protocol) {
+        writeDeadlineExpirations.computeIfAbsent(protocol, key ->
+                Counter.builder("swath.replay.response.write.deadline")
+                        .tag("protocol", key).tag("reason", "total_deadline")
+                        .register(registry)).increment();
     }
 
     /**
