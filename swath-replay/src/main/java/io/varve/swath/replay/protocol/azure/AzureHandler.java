@@ -5,6 +5,8 @@
  */
 package io.varve.swath.replay.protocol.azure;
 
+import io.varve.swath.replay.metrics.ListingObservation;
+import io.varve.swath.replay.metrics.ObservationShape;
 import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.PaginationTestProfile;
 import io.varve.swath.replay.server.ListingHttpRequest;
@@ -88,15 +90,34 @@ public final class AzureHandler implements ListingProtocolHandler {
             @Override
             public PreparedPage page() {
                 AzureListResult result = pager.list(parsed);
-                return output -> {
-                    try {
-                        AzureXml.write(result, endpointBase.get(), output, metrics);
-                    } catch (AzureXml.FixtureProblem e) {
-                        if (metrics != null) metrics.recordProviderPath("azure", "fixture_rejected", e.reason());
-                        throw failure(ReplayFailure.Kind.FIXTURE_INCOMPATIBLE, e.reason());
+                long prefixes = 0;
+                for (AzureListResult.Entry entry : result.entries()) {
+                    if (entry instanceof AzureListResult.Entry.BlobPrefix) prefixes++;
+                }
+                ObservationShape shape = parsed.delimiter() != null ? ObservationShape.DELIMITER
+                        : parsed.pageSize() == 1 ? ObservationShape.SEEK : ObservationShape.PAGE;
+                ListingObservation observation = new ListingObservation(shape,
+                        result.entries().size() - prefixes, prefixes);
+                return new PreparedPage() {
+                    @Override
+                    public ListingObservation observation() { return observation; }
+
+                    @Override
+                    public int initialOutputBytesHint() {
+                        return Math.max(4096, 2048 + result.entries().size() * 512);
                     }
-                    return new RenderedResponse(200, CONTENT_TYPE, headers(parsed.version(),
-                            parsed.clientRequestId(), null), output.buffer());
+
+                    @Override
+                    public RenderedResponse render(io.varve.swath.replay.server.BudgetedOutput output) {
+                        try {
+                            AzureXml.write(result, endpointBase.get(), output, metrics);
+                        } catch (AzureXml.FixtureProblem e) {
+                            if (metrics != null) metrics.recordProviderPath("azure", "fixture_rejected", e.reason());
+                            throw failure(ReplayFailure.Kind.FIXTURE_INCOMPATIBLE, e.reason());
+                        }
+                        return new RenderedResponse(200, CONTENT_TYPE, headers(parsed.version(),
+                                parsed.clientRequestId(), null), output.body());
+                    }
                 };
             }
         };

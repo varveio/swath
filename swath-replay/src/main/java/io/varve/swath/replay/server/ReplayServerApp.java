@@ -98,6 +98,7 @@ public final class ReplayServerApp implements Callable<Integer> {
                                 + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s "
                                 + "metrics_endpoint=%s max_concurrent_requests=%d protocols=%s "
                                 + "response_buffer_budget=%d max_response_bytes=%d max_responses=%d "
+                                + "output_chunk_bytes=%d "
                                 + "fixture_identity=%s ordering_profile=%s metadata_policy=%s profiles=%s "
                                 + "native_endpoints=%s%n",
                         options.host, server.port(), bucket, fixture.toAbsolutePath(),
@@ -106,6 +107,7 @@ public final class ReplayServerApp implements Callable<Integer> {
                         metrics == null ? "off" : metricsEndpoint(options.host, metrics.port()),
                         options.maxConcurrentRequests, String.join(",", serving.protocols()),
                         config.responseBufferBudget(), config.maxResponseBytes(), config.maxResponses(),
+                        serving.outputChunkBytes(),
                         serving.fixtureIdentity(), serving.orderingProfile(), serving.metadataPolicy(),
                         serving.profiles(), endpointExamples(config, server.port()));
                 server.join();
@@ -137,16 +139,19 @@ public final class ReplayServerApp implements Callable<Integer> {
         }
     }
 
-    private static Duration parseDuration(String value) {
+    static Duration parseDuration(String value) {
         String text = value.trim().toLowerCase(java.util.Locale.ROOT);
         try {
+            if (text.startsWith("p") || text.startsWith("-p") || text.startsWith("+p")) {
+                return Duration.parse(value.trim());
+            }
             if (text.endsWith("ms")) {
                 return Duration.ofMillis(Long.parseLong(text.substring(0, text.length() - 2)));
             }
             if (text.endsWith("s")) {
                 return Duration.ofSeconds(Long.parseLong(text.substring(0, text.length() - 1)));
             }
-            return Duration.parse(value);
+            return Duration.parse(value.trim());
         } catch (RuntimeException e) {
             throw new IllegalArgumentException("invalid serve timeout: " + value, e);
         }

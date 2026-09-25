@@ -68,7 +68,7 @@ class ReplayHandlerDispatchTest {
                             byte[] bytes = protocol.name().toLowerCase(java.util.Locale.ROOT)
                                     .getBytes(StandardCharsets.UTF_8);
                             output.write(bytes, 0, bytes.length);
-                            return new RenderedResponse(200, "text/plain", Map.of(), output.buffer());
+                            return new RenderedResponse(200, "text/plain", Map.of(), output.body());
                         };
                     }
                 };

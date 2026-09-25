@@ -6,6 +6,7 @@
 package io.varve.swath.replay.protocol;
 
 import io.varve.swath.replay.server.BudgetedOutput;
+import io.varve.swath.replay.server.OwnedBody;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -29,14 +30,21 @@ public final class S3Xml {
      * response-sized UTF-16 {@link String} and immediately encode the whole response back to UTF-8.
      */
     public static ByteBuffer listBucketBuffer(S3ListResult result) {
-        S3ListRequest request = result.request();
-        BudgetedOutput xml = BudgetedOutput.standalone(Math.max(4096,
-                RESPONSE_BASE_CAPACITY + result.entries().size() * ESTIMATED_BYTES_PER_ENTRY));
-        return listBucketBuffer(result, xml);
+        try (BudgetedOutput xml = BudgetedOutput.standalone(Math.max(4096,
+                RESPONSE_BASE_CAPACITY + result.entries().size() * ESTIMATED_BYTES_PER_ENTRY))) {
+            writeBucket(result, xml);
+            // The compatibility form is not used by the serving path; flattening is confined here.
+            return xml.buffer();
+        }
     }
 
-    /** Render into a request-owned bounded sink while retaining the S3 byte grammar. */
-    public static ByteBuffer listBucketBuffer(S3ListResult result, BudgetedOutput xml) {
+    /** Render into request-owned chunks while retaining the S3 byte grammar. */
+    public static OwnedBody listBucketBody(S3ListResult result, BudgetedOutput xml) {
+        writeBucket(result, xml);
+        return xml.body();
+    }
+
+    private static void writeBucket(S3ListResult result, BudgetedOutput xml) {
         S3ListRequest request = result.request();
         xml.appendAscii("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
         xml.appendAscii("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
@@ -73,7 +81,6 @@ public final class S3Xml {
             }
         }
         xml.appendAscii("</ListBucketResult>");
-        return xml.buffer();
     }
 
     /** Exact-sized compatibility form for callers that specifically need an owning byte array. */

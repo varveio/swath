@@ -8,12 +8,15 @@ package io.varve.swath.replay.server;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.replay.metrics.ListingObservation;
+import io.varve.swath.replay.metrics.ObservationShape;
 import io.varve.swath.replay.metrics.ReplayMetrics;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +41,166 @@ import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.junit.jupiter.api.Test;
 
 class ListingRequestRunnerTest {
+    @Test
+    void oversizedRenderUsesSmallUnbudgetedErrorThenRecovers() {
+        ReplayMetrics metrics = new ReplayMetrics();
+        ListingRequestRunner runner = new ListingRequestRunner(metrics, 1, 2,
+                64, 64, Duration.ofSeconds(5));
+        AtomicBoolean oversized = new AtomicBoolean(true);
+        AtomicInteger status = new AtomicInteger();
+        AtomicInteger writes = new AtomicInteger();
+        Connection connection = proxy(Connection.class, (method, args) -> null);
+        ConnectionMetaData metadata = proxy(ConnectionMetaData.class,
+                (method, args) -> method.equals("getConnection") ? connection : null);
+        Request request = proxy(Request.class,
+                (method, args) -> method.equals("getConnectionMetaData") ? metadata : null);
+        HttpFields.Mutable headers = HttpFields.build();
+        Response response = proxy(Response.class, (method, args) -> {
+            if (method.equals("getHeaders")) return headers;
+            if (method.equals("setStatus")) status.set((int) args[0]);
+            if (method.equals("write")) {
+                writes.incrementAndGet();
+                ((Callback) args[2]).succeeded();
+            }
+            return null;
+        });
+        ListingProtocolHandler handler = new ListingProtocolHandler() {
+            @Override public Protocol protocol() { return Protocol.S3; }
+            @Override public ListingOperation parse(ListingHttpRequest ignored) {
+                return new ListingOperation() {
+                    @Override public int initialOutputBytes() { return 32; }
+                    @Override public PreparedPage page() {
+                        return output -> {
+                            int bytes = oversized.getAndSet(false) ? 65 : 1;
+                            output.write(new byte[bytes], 0, bytes);
+                            return new RenderedResponse(200, "text/plain", Map.of(), output.body());
+                        };
+                    }
+                };
+            }
+            @Override public RenderedResponse error(ReplayFailure failure, ListingHttpRequest ignored) {
+                return new RenderedResponse(500, "text/plain",
+                        Map.of(ReplayFailure.REASON_HEADER, failure.reason()),
+                        ByteBuffer.wrap(new byte[] {'e'}));
+            }
+        };
+        Callback outer = new Callback() {
+            @Override public void succeeded() { }
+            @Override public void failed(Throwable error) { throw new AssertionError(error); }
+        };
+        ListingHttpRequest http = new ListingHttpRequest("GET", "/bucket", null, Map.of());
+        runner.serve(http, request, response, outer, handler);
+        assertThat(status).hasValue(500);
+        assertThat(headers.get(ReplayFailure.REASON_HEADER)).isEqualTo("response_too_large");
+        assertThat(runner.chargedBytes()).isZero();
+        assertThat(runner.activeResponses()).isZero();
+        assertThat(metrics.registry().get("swath.replay.response.admission.refused")
+                .tags("protocol", "s3", "reason", "response_too_large")
+                .counter().count()).isEqualTo(1);
+        runner.serve(http, request, response, outer, handler);
+        assertThat(status).hasValue(200);
+        assertThat(writes).hasValue(2);
+        assertThat(runner.chargedBytes()).isZero();
+        assertThat(runner.activeResponses()).isZero();
+        runner.stopDeadlines();
+        metrics.registry().close();
+    }
+
+    @Test
+    void chunkViewsWriteIterativelyAndReleaseOnInlineSuccessOrDisconnect() {
+        byte[] pattern = new byte[600_000];
+        new java.util.Random(220).nextBytes(pattern);
+        for (boolean disconnect : new boolean[] {false, true}) {
+            ReplayMetrics metrics = new ReplayMetrics();
+            ListingRequestRunner runner = new ListingRequestRunner(metrics, 1, 2,
+                    2L * 1024 * 1024, 1024 * 1024, Duration.ofSeconds(5));
+            AtomicInteger writes = new AtomicInteger();
+            AtomicInteger lastWrites = new AtomicInteger();
+            AtomicInteger successes = new AtomicInteger();
+            AtomicInteger failures = new AtomicInteger();
+            java.io.ByteArrayOutputStream emitted = new java.io.ByteArrayOutputStream();
+            Connection connection = proxy(Connection.class, (method, args) -> null);
+            ConnectionMetaData metadata = proxy(ConnectionMetaData.class,
+                    (method, args) -> method.equals("getConnection") ? connection : null);
+            Request request = proxy(Request.class,
+                    (method, args) -> method.equals("getConnectionMetaData") ? metadata : null);
+            HttpFields.Mutable headers = HttpFields.build();
+            Response response = proxy(Response.class, (method, args) -> {
+                if (method.equals("getHeaders")) return headers;
+                if (method.equals("write")) {
+                    int call = writes.incrementAndGet();
+                    ByteBuffer view = ((ByteBuffer) args[1]).duplicate();
+                    assertThat(view.remaining()).isLessThanOrEqualTo(256 * 1024);
+                    byte[] transferred = new byte[view.remaining()];
+                    view.get(transferred);
+                    emitted.writeBytes(transferred);
+                    if ((boolean) args[0]) lastWrites.incrementAndGet();
+                    if (disconnect && call == 2) {
+                        ((Callback) args[2]).failed(new java.io.IOException("disconnect"));
+                    } else {
+                        ((Callback) args[2]).succeeded();
+                    }
+                }
+                return null;
+            });
+            ListingProtocolHandler handler = new ListingProtocolHandler() {
+                @Override public Protocol protocol() { return Protocol.S3; }
+                @Override public ListingOperation parse(ListingHttpRequest ignored) {
+                    return new ListingOperation() {
+                        @Override public int initialOutputBytes() { return 320_512; }
+                        @Override public PreparedPage page() {
+                            return new PreparedPage() {
+                                @Override public ListingObservation observation() {
+                                    return new ListingObservation(ObservationShape.PAGE, 7, 2);
+                                }
+                                @Override public RenderedResponse render(BudgetedOutput output) {
+                                    output.write(pattern, 0, pattern.length);
+                                    return new RenderedResponse(200, "text/plain", Map.of(), output.body());
+                                }
+                            };
+                        }
+                    };
+                }
+                @Override public RenderedResponse error(ReplayFailure failure, ListingHttpRequest ignored) {
+                    throw new AssertionError(failure);
+                }
+            };
+            runner.serve(new ListingHttpRequest("GET", "/bucket", null, Map.of()), request, response,
+                    new Callback() {
+                        @Override public void succeeded() {
+                            successes.incrementAndGet();
+                            assertThat(runner.chargedBytes()).isZero();
+                            assertThat(runner.activeResponses()).isZero();
+                        }
+                        @Override public void failed(Throwable error) {
+                            failures.incrementAndGet();
+                            assertThat(runner.chargedBytes()).isZero();
+                            assertThat(runner.activeResponses()).isZero();
+                        }
+                    }, handler);
+            assertThat(writes).hasValue(disconnect ? 2 : 3);
+            assertThat(lastWrites).hasValue(disconnect ? 0 : 1);
+            assertThat(successes).hasValue(disconnect ? 0 : 1);
+            assertThat(failures).hasValue(disconnect ? 1 : 0);
+            assertThat(headers.get("Content-Length")).isEqualTo("600000");
+            assertThat(emitted.toByteArray()).isEqualTo(disconnect
+                    ? java.util.Arrays.copyOf(pattern, 2 * 256 * 1024) : pattern);
+            assertThat(runner.writeDeadlineQueueSize()).isZero();
+            assertThat(metrics.registry().get("swath.replay.response.chunk.allocation")
+                    .tag("reason", "initial").counter().count()).isEqualTo(1);
+            assertThat(metrics.registry().get("swath.replay.response.chunk.allocation")
+                    .tag("reason", "continuation").counter().count()).isEqualTo(2);
+            assertThat(metrics.registry().get("swath.replay.protocol.objects")
+                    .tags("protocol", "s3", "shape", "page").counter().count()).isEqualTo(7);
+            assertThat(metrics.registry().get("swath.replay.protocol.prefixes")
+                    .tags("protocol", "s3", "shape", "page").counter().count()).isEqualTo(2);
+            assertThat(metrics.registry().get("swath.replay.protocol.encoded.bytes")
+                    .tags("protocol", "s3", "shape", "page").counter().count()).isEqualTo(600_000);
+            runner.stopDeadlines();
+            metrics.registry().close();
+        }
+    }
+
     @Test
     void synchronousConnectionCloseCallbackCannotDeadlockDeadlineObserver() throws Exception {
         ReplayMetrics metrics = new ReplayMetrics();
@@ -137,7 +300,7 @@ class ListingRequestRunnerTest {
                     @Override public PreparedPage page() {
                         return output -> {
                             output.write('x');
-                            return new RenderedResponse(200, "text/plain", Map.of(), output.buffer());
+                            return new RenderedResponse(200, "text/plain", Map.of(), output.body());
                         };
                     }
                 };
@@ -205,7 +368,7 @@ class ListingRequestRunnerTest {
     void drainWaitsForOutOfLockStoreAndRegistryCleanupActions() throws Exception {
         ReplayMetrics metrics = new ReplayMetrics();
         ListingRequestRunner runner = new ListingRequestRunner(metrics, 1, 2,
-                1024, 256, Duration.ofSeconds(5));
+                1024, 64, Duration.ofSeconds(5));
         CountDownLatch storeCloseEntered = new CountDownLatch(1);
         CountDownLatch releaseStoreClose = new CountDownLatch(1);
         AtomicBoolean registryClosed = new AtomicBoolean();
@@ -238,7 +401,7 @@ class ListingRequestRunnerTest {
     void storeClosesAfterPagingButRegistryAndBytesStayOwnedThroughWriteCallback() {
         ReplayMetrics metrics = new ReplayMetrics();
         ListingRequestRunner runner = new ListingRequestRunner(metrics, 1, 2,
-                1024, 256, Duration.ofSeconds(5));
+                1024, 64, Duration.ofSeconds(5));
         AtomicReference<Callback> write = new AtomicReference<>();
         AtomicBoolean storeClosed = new AtomicBoolean();
         AtomicBoolean registryClosed = new AtomicBoolean();
@@ -262,7 +425,7 @@ class ListingRequestRunnerTest {
                     @Override public PreparedPage page() {
                         return output -> {
                             output.write('x');
-                            return new RenderedResponse(200, "text/plain", Map.of(), output.buffer());
+                            return new RenderedResponse(200, "text/plain", Map.of(), output.body());
                         };
                     }
                 };
@@ -352,7 +515,7 @@ class ListingRequestRunnerTest {
                                 }
                             }
                             output.write('x');
-                            return new RenderedResponse(200, "text/plain", Map.of(), output.buffer());
+                            return new RenderedResponse(200, "text/plain", Map.of(), output.body());
                         };
                     }
                 };

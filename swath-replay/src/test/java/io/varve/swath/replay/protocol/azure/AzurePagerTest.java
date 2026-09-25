@@ -8,6 +8,7 @@ package io.varve.swath.replay.protocol.azure;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.replay.metrics.ObservationShape;
 import io.varve.swath.replay.protocol.PaginationTestProfile;
 import io.varve.swath.replay.server.ListingHttpRequest;
 import io.varve.swath.replay.server.ReplayRequestException;
@@ -127,6 +128,26 @@ class AzurePagerTest {
                     "restype=container&comp=list&marker=" + first.nextMarker()));
             assertThat(names(second)).containsExactly("O:b");
             assertThat(second.nextMarker()).isNull();
+        }
+    }
+
+    @Test
+    void preparedPageReportsExactBlobAndPrefixCounts() {
+        try (FakeListingStore store = FakeListingStore.ofKeys("a/1", "b")) {
+            AzureHandler handler = new AzureHandler("replay", "bucket",
+                    () -> "http://127.0.0.1/replay/", store, "fixture", null);
+            var delimiter = handler.parse(new ListingHttpRequest("GET", "/replay/bucket",
+                    "restype=container&comp=list&delimiter=%2F&maxresults=1",
+                    Map.of("x-ms-version", "2026-06-06"))).page().observation();
+            assertThat(delimiter.shape()).isEqualTo(ObservationShape.DELIMITER);
+            assertThat(delimiter.objects()).isZero();
+            assertThat(delimiter.prefixes()).isEqualTo(1);
+            var seek = handler.parse(new ListingHttpRequest("GET", "/replay/bucket",
+                    "restype=container&comp=list&maxresults=1",
+                    Map.of("x-ms-version", "2026-06-06"))).page().observation();
+            assertThat(seek.shape()).isEqualTo(ObservationShape.SEEK);
+            assertThat(seek.objects()).isEqualTo(1);
+            assertThat(seek.prefixes()).isZero();
         }
     }
 

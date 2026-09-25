@@ -73,7 +73,13 @@ public final class ReplayMetrics {
     private final Map<String, Counter> providerPaths = new ConcurrentHashMap<>();
     private final Map<String, Timer> requestStages = new ConcurrentHashMap<>();
     private final Map<String, Counter> admissionRefusals = new ConcurrentHashMap<>();
+    private final Map<ChunkAllocationReason, Counter> chunkAllocations;
+    private final Map<ChunkAllocationReason, DistributionSummary> chunkAllocationBytes;
     private final Map<String, Counter> writeDeadlineExpirations = new ConcurrentHashMap<>();
+    private final Map<String, Counter> protocolResponses = new ConcurrentHashMap<>();
+    private final Map<String, Counter> protocolObjects = new ConcurrentHashMap<>();
+    private final Map<String, Counter> protocolPrefixes = new ConcurrentHashMap<>();
+    private final Map<String, Counter> protocolEncodedBytes = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> protocolActiveSources = new ConcurrentHashMap<>();
     private LongSupplier responseBytesGaugeSource;
     private LongSupplier responseBytesPeakGaugeSource;
@@ -111,6 +117,15 @@ public final class ReplayMetrics {
     public ReplayMetrics(MeterRegistry registry, String servingMode) {
         this.registry = registry;
         this.servingMode = servingMode;
+        chunkAllocations = new EnumMap<>(ChunkAllocationReason.class);
+        chunkAllocationBytes = new EnumMap<>(ChunkAllocationReason.class);
+        for (ChunkAllocationReason reason : ChunkAllocationReason.values()) {
+            String tag = reason.name().toLowerCase(Locale.ROOT);
+            chunkAllocations.put(reason, Counter.builder("swath.replay.response.chunk.allocation")
+                    .tag("reason", tag).register(registry));
+            chunkAllocationBytes.put(reason, DistributionSummary.builder(
+                    "swath.replay.response.chunk.capacity.bytes").tag("reason", tag).register(registry));
+        }
         httpRequests = Counter.builder("swath.replay.http.requests").register(registry);
         httpErrors = Counter.builder("swath.replay.http.errors").register(registry);
         httpRequestLatency = Timer.builder("swath.replay.http.request.latency")
@@ -351,12 +366,47 @@ public final class ReplayMetrics {
                         .tag("protocol", protocol).tag("reason", reason).register(registry)).increment();
     }
 
+    /** One charged chunk allocation after a successful nonblocking budget/array reservation. */
+    public void recordChunkAllocation(ChunkAllocationReason reason, int bytes) {
+        chunkAllocations.get(reason).increment();
+        chunkAllocationBytes.get(reason).record(bytes);
+    }
+
     /** The total write deadline closed a client connection before its callback completed. */
     public void recordWriteDeadlineExpiration(String protocol) {
         writeDeadlineExpirations.computeIfAbsent(protocol, key ->
                 Counter.builder("swath.replay.response.write.deadline")
                         .tag("protocol", key).tag("reason", "total_deadline")
                         .register(registry)).increment();
+    }
+
+    /** New native attribution; the existing aggregate HTTP meters retain their identity. */
+    public void recordProtocolResponse(String protocol, int status) {
+        String statusClass = status / 100 + "xx";
+        String key = protocol + ':' + statusClass;
+        protocolResponses.computeIfAbsent(key, ignored ->
+                Counter.builder("swath.replay.protocol.http.requests")
+                        .tag("protocol", protocol).tag("status_class", statusClass)
+                        .register(registry)).increment();
+    }
+
+    /** Called once after a provider page rendered successfully, before the socket write. */
+    public void recordListingObservation(String protocol, ListingObservation observation, int encodedBytes) {
+        if (encodedBytes < 0) {
+            throw new IllegalArgumentException("encoded bytes must be nonnegative");
+        }
+        String shape = observation.shape().name().toLowerCase(Locale.ROOT);
+        String key = protocol + ':' + shape;
+        protocolObjects.computeIfAbsent(key, ignored -> Counter.builder("swath.replay.protocol.objects")
+                .tag("protocol", protocol).tag("shape", shape).register(registry))
+                .increment(observation.objects());
+        protocolPrefixes.computeIfAbsent(key, ignored -> Counter.builder("swath.replay.protocol.prefixes")
+                .tag("protocol", protocol).tag("shape", shape).register(registry))
+                .increment(observation.prefixes());
+        protocolEncodedBytes.computeIfAbsent(key, ignored ->
+                Counter.builder("swath.replay.protocol.encoded.bytes")
+                        .tag("protocol", protocol).tag("shape", shape).register(registry))
+                .increment(encodedBytes);
     }
 
     /**

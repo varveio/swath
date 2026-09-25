@@ -293,9 +293,10 @@ public final class ReplayServer implements AutoCloseable {
     ServingMetadata servingMetadata() {
         if (serveConfig == null) {
             return new ServingMetadata(java.util.List.of("s3"), bucket, null,
-                    fixtureIdentity, resolvedMode.toString(), "fixture", maxConcurrentRequests,
+                    fixtureIdentity, ServingMetadata.ORDERING_PROFILE, "fixture", maxConcurrentRequests,
                     runner.maxResponses(), readPermitLimit, runner.responseBufferBudget(),
-                    runner.maxResponseBytes(), runner.chargedBytes(), runner.peakChargedBytes(),
+                    runner.maxResponseBytes(), BudgetedOutput.configuredChunkBytes(),
+                    runner.chargedBytes(), runner.peakChargedBytes(),
                     runner.activeResponses(), stopTimeout.toMillis(),
                     ((ServerConnector) server.getConnectors()[0]).getIdleTimeout(),
                     runner.writeTimeoutMs(), "off", "default",
@@ -313,9 +314,10 @@ public final class ReplayServer implements AutoCloseable {
             });
         }
         return new ServingMetadata(protocols, serveConfig.bucket(), serveConfig.azureAccount(),
-                fixtureIdentity, resolvedMode.toString(), "fixture-plus-synthetic",
+                fixtureIdentity, ServingMetadata.ORDERING_PROFILE, "fixture-plus-synthetic",
                 serveConfig.maxConcurrentRequests(), serveConfig.maxResponses(), readPermitLimit,
                 serveConfig.responseBufferBudget(), serveConfig.maxResponseBytes(),
+                BudgetedOutput.configuredChunkBytes(),
                 runner.chargedBytes(), runner.peakChargedBytes(), runner.activeResponses(),
                 serveConfig.stopTimeout().toMillis(), serveConfig.idleTimeout().toMillis(),
                 serveConfig.writeTimeout().toMillis(),

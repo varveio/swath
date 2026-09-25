@@ -11,7 +11,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.varve.swath.replay.conformance.provider.AzureEvidence;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.server.BudgetedOutput;
+import io.varve.swath.replay.testkit.OwnedBodyBytes;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -25,7 +28,7 @@ class AzureXmlTest {
                 new AzureListResult.Entry.BlobPrefix("c/".getBytes(StandardCharsets.UTF_8))), "opaque");
         try (BudgetedOutput out = BudgetedOutput.standalone(128)) {
             AzureXml.write(page, "http://127.0.0.1:1234/replay/", out);
-            byte[] bytes = java.util.Arrays.copyOf(out.buffer().array(), out.size());
+            byte[] bytes = OwnedBodyBytes.copy(out.body());
             String xml = new String(bytes, StandardCharsets.UTF_8);
             assertThat(xml).startsWith("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
             assertThat(xml).contains("<Last-Modified>Wed, 31 Dec 1969 23:59:59 GMT</Last-Modified>");
@@ -48,13 +51,38 @@ class AzureXmlTest {
             AzureXml.write(new AzureListResult(request, List.of(
                     new AzureListResult.Entry.Blob(object("x\uFFFE/y", 1, 0))), null),
                     "http://127.0.0.1/replay/", out);
-            String xml = new String(out.buffer().array(), 0, out.size(), StandardCharsets.UTF_8);
+            String xml = new String(OwnedBodyBytes.copy(out.body()), StandardCharsets.UTF_8);
             assertThat(xml).contains("<Name Encoded=\"true\">x%EF%BF%BE%2Fy</Name>");
         }
         try (BudgetedOutput out = BudgetedOutput.standalone(128)) {
             assertThatThrownBy(() -> AzureXml.write(new AzureListResult(request, List.of(
                     new AzureListResult.Entry.Blob(object("bad\u0001", 1, 0))), null),
                     "http://127.0.0.1/replay/", out)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    void rejectsUnrenderableYearWithoutChangingValidNegativeEpoch() throws Exception {
+        long first = LocalDateTime.of(1, 1, 1, 0, 0).toEpochSecond(ZoneOffset.UTC);
+        long afterLast = LocalDateTime.of(10000, 1, 1, 0, 0).toEpochSecond(ZoneOffset.UTC);
+        for (long micros : List.of((first - 1) * 1_000_000L, afterLast * 1_000_000L)) {
+            try (BudgetedOutput out = BudgetedOutput.standalone(128)) {
+                assertThatThrownBy(() -> AzureXml.write(new AzureListResult(request(false), List.of(
+                        new AzureListResult.Entry.Blob(object("a", 1, micros))), null),
+                        "http://127.0.0.1/replay/", out))
+                        .isInstanceOf(AzureXml.FixtureProblem.class)
+                        .hasMessage("timestamp_year_out_of_range");
+            }
+        }
+        for (long micros : List.of(first * 1_000_000L, afterLast * 1_000_000L - 1,
+                -1L)) {
+            try (BudgetedOutput out = BudgetedOutput.standalone(128)) {
+                AzureXml.write(new AzureListResult(request(false), List.of(
+                        new AzureListResult.Entry.Blob(object("a", 1, micros))), null),
+                        "http://127.0.0.1/replay/", out);
+                assertThat(new String(OwnedBodyBytes.copy(out.body()), StandardCharsets.UTF_8))
+                        .contains("<Last-Modified>");
+            }
         }
     }
 

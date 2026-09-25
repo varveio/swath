@@ -7,8 +7,8 @@ normal listing.
 `ListObjectsV2` and optional native GCS JSON and Azure Blob XML listing routes. It makes real bucket shapes repeatable for client tests,
 engine debugging, conformance checks, and benchmarks without repeatedly listing S3.
 
-It is built in this repository but distributed separately from the `swath` CLI. Its wire
-S3 wire behavior is conformance-tested. Native GCS and Azure routes have offline tests;
+It is built in this repository but distributed separately from the `swath` CLI. S3 wire
+behavior is conformance-tested. Native GCS and Azure routes have offline tests;
 live-provider conformance evidence is still being collected. Diagnostics and launcher
 settings remain a development surface.
 
@@ -83,6 +83,19 @@ while `--idle-timeout` controls connector idle time and `--stop-timeout` bounds 
 shutdown (defaults 30s and 10s). A read that ignores interruption retains its store
 resources until it returns; shutdown reports `shutdown_incomplete` when that deadline
 expires.
+
+Encoded responses use charged chunks (256 KiB by default); the internal
+`swath.replay.response-chunk-bytes` JVM property accepts 64, 128, or 256 KiB for
+predeclared diagnostic comparisons. The initial estimate is reserved before paging,
+then chunks allocate lazily from that credit. Unused credit returns after encoding;
+the remaining charge tracks actual chunk capacity through the write callback. The
+`serving.output_chunk_bytes` report field records the active setting. A sufficient
+encoded-byte budget for `C` simultaneous responses of at most `M` bytes is
+`C × max(initial reservation, M + chunk size)`; account for decoded rows, cache and
+native memory separately.
+`swath.replay.response.chunk.allocation{reason}` and
+`swath.replay.response.chunk.capacity.bytes{reason}` show when initial, subsequent,
+and cap-limited allocations engaged.
 
 The distribution launcher sets `jdk.nio.maxCachedBufferSize=262144` and sends encoded
 bodies in views of at most 256 KiB. These settings constrain temporary NIO buffer
@@ -317,7 +330,9 @@ compare with its declared allocation, not an allocation request of its own.
 The metrics payload has `schema_version: 2` and fields
 `{schema_version, serving_mode, serving, uptime_ms, sampled_at_epoch_ms, meters[]}`.
 The `serving` object records enabled protocols, fixture identity, ordering and metadata
-profiles, response bounds and live/peak charged bytes, active responses, and timeouts.
+profiles, response/chunk bounds and live/peak charged bytes, active responses, and timeouts.
+`ordering_profile=unsigned-utf8-byte-order` describes the unsigned key-byte comparison
+used for fixture order and page boundaries; `serving_mode` separately names the backing store.
 Each meter carries its `name`, `type` (`timer`, `counter`,
 `distribution`, `gauge`), and `tags`; a timer adds `count`, `sum_ms`, `mean_ms`,
 `max_ms`, `p50_ms`, `p99_ms` — the same values `bench` reports, read the same
@@ -486,6 +501,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `response.admission.refused{protocol,reason}`, `response.bytes.live`, `response.bytes.peak`, `response.active` | Labeled response-limit refusals, charged encoded-array capacity now/peak, and held response permits. |
 | `response.write.deadline{protocol,reason=total_deadline}` | A total write deadline closed a client connection before callback completion. |
 | `protocol.requests.active{protocol}`, `provider.path{protocol,path,reason}` | Active provider requests and engaged pager path/classification. |
+| `protocol.http.requests{protocol,status_class}`, `protocol.objects`, `protocol.prefixes`, `protocol.encoded.bytes{protocol,shape}` | Native response classes and successful page output attributed by protocol and neutral page/seek/delimiter shape. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows`, `prefetch.window.ramp_ceiling_rows` | Window-cache cost, effectiveness, and page-aligned ramp behavior. |
 | `prefetch.windows.live`, `prefetch.rows.live`, `prefetch.anchors.live`, `prefetch.anchor{event}` | Live cache entries, retained decoded rows, anchors, and anchor churn. |

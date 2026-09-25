@@ -111,7 +111,7 @@ public final class GcsPager {
         Boundary lastEmitted = null;
         int emitted = 0;
         while (true) {
-            List<ListedObject> rows = rows(cursor, upper, 4096);
+            List<ListedObject> rows = rows(cursor, upper, Math.min(4096, pageSize - emitted + 1));
             if (rows.isEmpty()) {
                 return new GcsPage(objects, prefixes, null);
             }

@@ -113,6 +113,7 @@ final class MetricsSnapshotJson {
         json.append(",\"read_permit_limit\":").append(serving.readPermitLimit());
         json.append(",\"response_buffer_budget\":").append(serving.responseBufferBudget());
         json.append(",\"max_response_bytes\":").append(serving.maxResponseBytes());
+        json.append(",\"output_chunk_bytes\":").append(serving.outputChunkBytes());
         json.append(",\"charged_response_bytes\":").append(serving.chargedResponseBytes());
         json.append(",\"peak_charged_response_bytes\":").append(serving.peakChargedResponseBytes());
         json.append(",\"active_responses\":").append(serving.activeResponses());

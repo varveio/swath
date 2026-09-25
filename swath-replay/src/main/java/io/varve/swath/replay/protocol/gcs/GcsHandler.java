@@ -5,6 +5,8 @@
  */
 package io.varve.swath.replay.protocol.gcs;
 
+import io.varve.swath.replay.metrics.ListingObservation;
+import io.varve.swath.replay.metrics.ObservationShape;
 import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.PaginationTestProfile;
 import io.varve.swath.replay.server.ListingHttpRequest;
@@ -78,14 +80,29 @@ public final class GcsHandler implements ListingProtocolHandler {
             @Override
             public PreparedPage page() {
                 GcsPage page = pager.list(parsed);
-                return output -> {
-                    try {
-                        GcsJson.write(parsed, page, output);
-                    } catch (GcsJson.FixtureProblem e) {
-                        record("fixture_rejected", e.reason());
-                        throw failure(ReplayFailure.Kind.FIXTURE_INCOMPATIBLE, e.reason());
+                ObservationShape shape = parsed.delimiter() != null ? ObservationShape.DELIMITER
+                        : parsed.pageSize() == 1 ? ObservationShape.SEEK : ObservationShape.PAGE;
+                ListingObservation observation = new ListingObservation(shape,
+                        page.objects().size(), page.prefixes().size());
+                return new PreparedPage() {
+                    @Override
+                    public ListingObservation observation() { return observation; }
+
+                    @Override
+                    public int initialOutputBytesHint() {
+                        return Math.max(4096, 1024 + (page.objects().size() + page.prefixes().size()) * 384);
                     }
-                    return new RenderedResponse(200, CONTENT_TYPE, Map.of(), output.buffer());
+
+                    @Override
+                    public RenderedResponse render(io.varve.swath.replay.server.BudgetedOutput output) {
+                        try {
+                            GcsJson.write(parsed, page, output, metrics);
+                        } catch (GcsJson.FixtureProblem e) {
+                            record("fixture_rejected", e.reason());
+                            throw failure(ReplayFailure.Kind.FIXTURE_INCOMPATIBLE, e.reason());
+                        }
+                        return new RenderedResponse(200, CONTENT_TYPE, Map.of(), output.body());
+                    }
                 };
             }
         };

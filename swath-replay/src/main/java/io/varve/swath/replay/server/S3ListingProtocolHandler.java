@@ -5,12 +5,15 @@
  */
 package io.varve.swath.replay.server;
 
+import io.varve.swath.replay.metrics.ListingObservation;
+import io.varve.swath.replay.metrics.ObservationShape;
 import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ListObjectsV2RequestParser;
 import io.varve.swath.replay.protocol.ListingFixture;
 import io.varve.swath.replay.protocol.S3Error;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
+import io.varve.swath.replay.protocol.S3ResultEntry;
 import io.varve.swath.replay.protocol.S3Xml;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -75,10 +78,29 @@ final class S3ListingProtocolHandler implements ListingProtocolHandler {
                 metrics.recordShapedRequest(shaped, shape);
                 logIfSlow(listRequest, result, System.nanoTime() - startedNanos, shape);
                 Duration delay = latency.apply(listRequest, result);
+                long objects = 0;
+                for (S3ResultEntry entry : result.entries()) {
+                    if (entry instanceof S3ResultEntry.ObjectResult) objects++;
+                }
+                long prefixes = result.entries().size() - objects;
+                ObservationShape neutralShape = switch (shape) {
+                    case WORKER_PAGE -> ObservationShape.PAGE;
+                    case PIVOT_PROBE -> ObservationShape.SEEK;
+                    case STRUCTURE_PROBE -> ObservationShape.DELIMITER;
+                };
+                ListingObservation observation = new ListingObservation(neutralShape, objects, prefixes);
                 return new PreparedPage() {
                     @Override
+                    public int initialOutputBytesHint() {
+                        return Math.max(4096, 512 + result.entries().size() * 320);
+                    }
+
+                    @Override
+                    public ListingObservation observation() { return observation; }
+
+                    @Override
                     public RenderedResponse render(BudgetedOutput output) {
-                        ByteBuffer body = S3Xml.listBucketBuffer(result, output);
+                        OwnedBody body = S3Xml.listBucketBody(result, output);
                         return new RenderedResponse(200, "application/xml", RESPONSE_HEADERS, body);
                     }
 

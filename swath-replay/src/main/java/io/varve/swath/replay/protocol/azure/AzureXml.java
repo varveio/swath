@@ -13,6 +13,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
@@ -21,7 +22,20 @@ import java.util.Locale;
 public final class AzureXml {
     private static final DateTimeFormatter HTTP_TIME = DateTimeFormatter
             .ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.ROOT).withZone(ZoneOffset.UTC);
+    private static final long FIRST_RENDERABLE_SECOND = LocalDateTime.of(1, 1, 1, 0, 0)
+            .toEpochSecond(ZoneOffset.UTC);
+    private static final long LAST_RENDERABLE_SECOND = LocalDateTime.of(9999, 12, 31, 23, 59, 59)
+            .toEpochSecond(ZoneOffset.UTC);
     private static final byte[] HEX = "0123456789ABCDEF".getBytes(StandardCharsets.US_ASCII);
+    private static final String PROLOG_AND_ROOT = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+            + "<EnumerationResults ServiceEndpoint=\"";
+    private static final String BLOB_PROPERTIES_BEFORE_SIZE = "<Properties><Last-Modified>";
+    private static final String BLOB_PROPERTIES_AFTER_TIME = "</Last-Modified><Etag>0x000000000000001</Etag>"
+            + "<Content-Length>";
+    private static final String BLOB_PROPERTIES_AFTER_SIZE = "</Content-Length>"
+            + "<Content-Type>application/octet-stream</Content-Type><BlobType>BlockBlob</BlobType>"
+            + "<AccessTier>Hot</AccessTier><AccessTierInferred>true</AccessTierInferred>"
+            + "<LeaseStatus>unlocked</LeaseStatus><LeaseState>available</LeaseState></Properties></Blob>";
 
     private AzureXml() {
     }
@@ -33,16 +47,18 @@ public final class AzureXml {
     public static void write(AzureListResult result, String endpoint, BudgetedOutput out,
                              ReplayMetrics metrics) {
         AzureListRequest request = result.request();
-        out.appendAscii("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
-        out.appendAscii("<EnumerationResults ServiceEndpoint=\"");
+        out.appendAscii(PROLOG_AND_ROOT);
         out.appendEscaped(endpoint);
         out.appendAscii("\" ContainerName=\"");
         out.appendEscaped(request.container());
         out.appendAscii("\">");
-        if (request.prefixSupplied()) element(out, "Prefix", request.prefix() == null ? "" : request.prefix());
-        if (request.markerSupplied()) element(out, "Marker", request.marker() == null ? "" : request.marker());
-        if (request.maxResultsSupplied()) element(out, "MaxResults", request.requestedMaxResults());
-        if (request.delimiterSupplied()) element(out, "Delimiter",
+        if (request.prefixSupplied()) echo(out, "<Prefix>", "</Prefix>",
+                request.prefix() == null ? "" : request.prefix());
+        if (request.markerSupplied()) echo(out, "<Marker>", "</Marker>",
+                request.marker() == null ? "" : request.marker());
+        if (request.maxResultsSupplied()) echo(out, "<MaxResults>", "</MaxResults>",
+                request.requestedMaxResults());
+        if (request.delimiterSupplied()) echo(out, "<Delimiter>", "</Delimiter>",
                 request.delimiter() == null ? "" : request.delimiter());
         out.appendAscii("<Blobs>");
         long cachedSecond = Long.MIN_VALUE;
@@ -55,24 +71,19 @@ public final class AzureXml {
                 }
                 out.appendAscii("<Blob>");
                 name(out, object.key(), false, metrics);
-                out.appendAscii("<Properties>");
+                out.appendAscii(BLOB_PROPERTIES_BEFORE_SIZE);
                 long second = Math.floorDiv(object.lastModifiedEpochMicros(), 1_000_000L);
+                if (second < FIRST_RENDERABLE_SECOND || second > LAST_RENDERABLE_SECOND) {
+                    throw new FixtureProblem("timestamp_year_out_of_range");
+                }
                 if (cachedSecond != second) {
                     cachedTime = HTTP_TIME.format(Instant.ofEpochSecond(second));
                     cachedSecond = second;
                 }
-                element(out, "Last-Modified", cachedTime);
-                element(out, "Etag", "0x000000000000001");
-                out.appendAscii("<Content-Length>");
+                out.appendAscii(cachedTime);
+                out.appendAscii(BLOB_PROPERTIES_AFTER_TIME);
                 out.appendLong(object.size());
-                out.appendAscii("</Content-Length>");
-                element(out, "Content-Type", "application/octet-stream");
-                element(out, "BlobType", "BlockBlob");
-                element(out, "AccessTier", "Hot");
-                element(out, "AccessTierInferred", "true");
-                element(out, "LeaseStatus", "unlocked");
-                element(out, "LeaseState", "available");
-                out.appendAscii("</Properties></Blob>");
+                out.appendAscii(BLOB_PROPERTIES_AFTER_SIZE);
             } else if (entry instanceof AzureListResult.Entry.BlobPrefix prefix) {
                 out.appendAscii("<BlobPrefix>");
                 name(out, prefix.name(), true, metrics);
@@ -85,7 +96,28 @@ public final class AzureXml {
     }
 
     private static void name(BudgetedOutput out, byte[] raw, boolean derivedPrefix, ReplayMetrics metrics) {
-        String decoded = decodeName(raw, derivedPrefix);
+        if (raw.length == 0) throw new FixtureProblem("empty_name");
+        boolean ascii = true;
+        int segments = 1;
+        for (byte value : raw) {
+            int b = value & 0xff;
+            if (b >= 0x80) ascii = false;
+            else {
+                if (b < 0x20 && (!derivedPrefix || b != '\t' && b != '\n' && b != '\r')) {
+                    throw new FixtureProblem("control_character");
+                }
+                if (b == '/') segments++;
+            }
+        }
+        if (ascii) {
+            if (raw.length > 1024) throw new FixtureProblem("name_too_long");
+            if (!derivedPrefix && segments > 254) throw new FixtureProblem("too_many_segments");
+            out.appendAscii("<Name>");
+            appendAsciiName(out, raw);
+            out.appendAscii("</Name>");
+            return;
+        }
+        String decoded = decodeNonAsciiName(raw, derivedPrefix);
         boolean encoded = decoded.indexOf('\ufffe') >= 0 || decoded.indexOf('\uffff') >= 0;
         if (encoded && metrics != null) {
             metrics.recordProviderPath("azure", "encoded_name", derivedPrefix ? "prefix_xml_forbidden"
@@ -111,8 +143,7 @@ public final class AzureXml {
         out.appendAscii("</Name>");
     }
 
-    private static String decodeName(byte[] raw, boolean derivedPrefix) {
-        if (raw.length == 0) throw new FixtureProblem("empty_name");
+    private static String decodeNonAsciiName(byte[] raw, boolean derivedPrefix) {
         String name;
         try {
             name = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -138,10 +169,31 @@ public final class AzureXml {
         return name;
     }
 
-    private static void element(BudgetedOutput out, String tag, String value) {
-        out.appendAscii("<" + tag + ">");
+    private static void echo(BudgetedOutput out, String open, String close, String value) {
+        out.appendAscii(open);
         out.appendEscaped(value);
-        out.appendAscii("</" + tag + ">");
+        out.appendAscii(close);
+    }
+
+    private static void appendAsciiName(BudgetedOutput out, byte[] raw) {
+        int from = 0;
+        for (int i = 0; i < raw.length; i++) {
+            String replacement = switch (raw[i]) {
+                case '&' -> "&amp;";
+                case '<' -> "&lt;";
+                case '>' -> "&gt;";
+                case '"' -> "&quot;";
+                case '\'' -> "&apos;";
+                case '\r' -> "&#13;";
+                default -> null;
+            };
+            if (replacement != null) {
+                if (i > from) out.write(raw, from, i - from);
+                out.appendAscii(replacement);
+                from = i + 1;
+            }
+        }
+        if (from < raw.length) out.write(raw, from, raw.length - from);
     }
 
     private static void appendXmlText(BudgetedOutput out, String value) {

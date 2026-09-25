@@ -6,10 +6,12 @@
 package io.varve.swath.replay.server;
 
 import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
+import io.varve.swath.replay.metrics.ListingObservation;
 import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.S3Error;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -65,11 +67,12 @@ final class ListingRequestRunner {
         if (maxResponses <= 0 || maxResponseBytes <= 0 || maxResponseBytes > responseBufferBudget) {
             throw new IllegalArgumentException("invalid response admission limits");
         }
+        BudgetedOutput.configuredChunkBytes();
         this.metrics = metrics;
         this.readPermits = maxConcurrentReads > 0 ? new Semaphore(maxConcurrentReads, true) : null;
         this.responsePermits = new Semaphore(maxResponses);
         this.maxResponses = maxResponses;
-        this.byteBudget = new ResponseByteBudget(responseBufferBudget);
+        this.byteBudget = new ResponseByteBudget(responseBufferBudget, metrics::recordChunkAllocation);
         this.maxResponseBytes = maxResponseBytes;
         this.writeTimeout = writeTimeout;
         writeDeadlines.setRemoveOnCancelPolicy(true);
@@ -79,7 +82,7 @@ final class ListingRequestRunner {
     void serve(ListingHttpRequest request, Request jettyRequest, Response response, Callback callback,
                ListingProtocolHandler handler) {
         var sample = metrics.startTimer();
-        String protocol = handler.protocol().name().toLowerCase(java.util.Locale.ROOT);
+        String protocol = handler.protocol().metricName();
         if (!beginOperation()) {
             if (pastShutdownDeadline()) {
                 callback.failed(new TimeoutException("replay shutdown deadline expired"));
@@ -126,12 +129,14 @@ final class ListingRequestRunner {
                 }
             }
             metrics.recordRequestStage(pageSample, protocol, "page");
+            output.setFirstChunkHint(page.initialOutputBytesHint());
             var renderSample = metrics.startTimer();
             RenderedResponse rendered = page.render(output);
             if (!output.owns(rendered.body())) {
                 throw new IllegalStateException("provider response did not use owned output bytes");
             }
             metrics.recordRequestStage(renderSample, protocol, "render");
+            ListingObservation observation = page.observation();
             Duration injected = page.injectedLatency();
             java.util.function.LongConsumer overrunRecorder = page.injectionOverrunRecorder();
             // Drop decoded rows before injected delay and network completion.
@@ -152,6 +157,10 @@ final class ListingRequestRunner {
             }
             BudgetedOutput ownedOutput = output;
             metrics.recordHttpRequest(sample, rendered.status());
+            metrics.recordProtocolResponse(protocol, rendered.status());
+            if (rendered.status() >= 200 && rendered.status() < 300) {
+                metrics.recordListingObservation(protocol, observation, rendered.body().length());
+            }
             var writeSample = metrics.startTimer();
             Callback completion = new Callback() {
                 private final AtomicBoolean finished = new AtomicBoolean();
@@ -259,6 +268,7 @@ final class ListingRequestRunner {
                             io.micrometer.core.instrument.Timer.Sample sample, AtomicInteger protocolActive,
                             String protocol) {
         metrics.recordHttpRequest(sample, rendered.status());
+        metrics.recordProtocolResponse(protocol, rendered.status());
         synchronized (drainLock) {
             activeCallbacks++;
         }
@@ -308,7 +318,10 @@ final class ListingRequestRunner {
         };
         try {
             writeHeaders(response, rendered);
-            response.write(true, rendered.body(), wrapped);
+            if (rendered.body().views().size() != 1) {
+                throw new IllegalStateException("small replay error must have one byte view");
+            }
+            response.write(true, rendered.body().views().getFirst().duplicate(), wrapped);
         } catch (Throwable error) {
             wrapped.failed(error);
         }
@@ -317,28 +330,31 @@ final class ListingRequestRunner {
     private void writeOwned(Request request, Response response, RenderedResponse rendered, Callback callback,
                             String protocol) {
         writeHeaders(response, rendered);
-        ByteBuffer body = rendered.body().asReadOnlyBuffer();
+        List<ByteBuffer> views = new java.util.ArrayList<>();
+        for (ByteBuffer chunk : rendered.body().views()) {
+            ByteBuffer remaining = chunk.duplicate();
+            while (remaining.hasRemaining()) {
+                int size = Math.min(remaining.remaining(), WRITE_VIEW_BYTES);
+                ByteBuffer view = remaining.slice();
+                view.limit(size);
+                remaining.position(remaining.position() + size);
+                views.add(view);
+            }
+        }
+        if (views.isEmpty()) views.add(ByteBuffer.allocate(0));
         org.eclipse.jetty.io.Connection connection = request.getConnectionMetaData().getConnection();
         WriteDeadline deadline = new WriteDeadline(writeDeadlines, connection, writeTimeout,
                 () -> metrics.recordWriteDeadlineExpiration(protocol));
         IteratingCallback writer = new IteratingCallback() {
-            private boolean emptyWritten;
+            private int nextView;
 
             @Override
             protected Action process() {
-                if (!body.hasRemaining()) {
-                    if (!emptyWritten && rendered.body().remaining() == 0) {
-                        emptyWritten = true;
-                        response.write(true, ByteBuffer.allocate(0), this);
-                        return Action.SCHEDULED;
-                    }
+                if (nextView == views.size()) {
                     return Action.SUCCEEDED;
                 }
-                int size = Math.min(body.remaining(), WRITE_VIEW_BYTES);
-                ByteBuffer view = body.slice();
-                view.limit(size);
-                body.position(body.position() + size);
-                response.write(!body.hasRemaining(), view, this);
+                ByteBuffer view = views.get(nextView++);
+                response.write(nextView == views.size(), view, this);
                 return Action.SCHEDULED;
             }
 
@@ -362,7 +378,7 @@ final class ListingRequestRunner {
         response.setStatus(rendered.status());
         response.getHeaders().put(HttpHeader.CONTENT_TYPE, rendered.contentType());
         response.getHeaders().put(HttpHeader.CONTENT_LENGTH,
-                Integer.toString(rendered.body().remaining()));
+                Integer.toString(rendered.body().length()));
         rendered.headers().forEach((name, value) -> response.getHeaders().put(name, value));
     }
 

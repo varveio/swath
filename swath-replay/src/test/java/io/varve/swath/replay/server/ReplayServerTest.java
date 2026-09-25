@@ -61,6 +61,17 @@ class ReplayServerTest {
             assertThat(response.body()).contains("<Prefix>a/</Prefix>");
             assertThat(response.body()).contains("<Key>a/1</Key>");
             assertThat(server.metrics().snapshot().httpRequests()).isEqualTo(1);
+            assertThat(server.servingMetadata().orderingProfile())
+                    .isEqualTo(ServingMetadata.ORDERING_PROFILE);
+            assertThat(server.metrics().registry().get("swath.replay.protocol.http.requests")
+                    .tags("protocol", "s3", "status_class", "2xx").counter().count()).isEqualTo(1);
+            assertThat(server.metrics().registry().get("swath.replay.protocol.objects")
+                    .tags("protocol", "s3", "shape", "page").counter().count()).isEqualTo(1);
+            assertThat(server.metrics().registry().get("swath.replay.protocol.prefixes")
+                    .tags("protocol", "s3", "shape", "page").counter().count()).isZero();
+            assertThat(server.metrics().registry().get("swath.replay.protocol.encoded.bytes")
+                    .tags("protocol", "s3", "shape", "page").counter().count())
+                    .isEqualTo(response.body().getBytes(StandardCharsets.UTF_8).length);
         }
     }
 
@@ -74,6 +85,8 @@ class ReplayServerTest {
 
             assertThat(response.statusCode()).isEqualTo(404);
             assertThat(response.body()).contains("<Code>NoSuchBucket</Code>");
+            assertThat(server.metrics().registry().get("swath.replay.protocol.http.requests")
+                    .tags("protocol", "s3", "status_class", "4xx").counter().count()).isEqualTo(1);
         }
     }
 
@@ -121,6 +134,10 @@ class ReplayServerTest {
                     .doesNotContain(sensitiveDetail)
                     .doesNotContain("/srv/captures")
                     .doesNotContain("secret/customer");
+            assertThat(server.metrics().registry().get("swath.replay.protocol.http.requests")
+                    .tags("protocol", "s3", "status_class", "5xx").counter().count()).isEqualTo(1);
+            assertThat(server.metrics().registry().find("swath.replay.protocol.objects")
+                    .tag("protocol", "s3").counter()).isNull();
         }
     }
 

@@ -9,9 +9,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.replay.fixture.FixtureIdentity;
+import io.varve.swath.replay.metrics.ObservationShape;
 import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.PaginationTestProfile;
+import io.varve.swath.replay.server.ListingHttpRequest;
 import io.varve.swath.replay.testkit.FakeListingStore;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
@@ -20,6 +22,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -51,6 +54,23 @@ class GcsPagerTest {
                     .counter().count()).isEqualTo(1.0);
         } finally {
             metrics.registry().close();
+        }
+    }
+
+    @Test
+    void preparedPageReportsExactProtocolShapeCounts() {
+        try (FakeListingStore store = FakeListingStore.ofKeys("a/1", "b")) {
+            GcsHandler handler = new GcsHandler("bucket", store, "fixture");
+            var delimiter = handler.parse(new ListingHttpRequest("GET", "/storage/v1/b/bucket/o",
+                    "delimiter=%2F&maxResults=1", Map.of())).page().observation();
+            assertThat(delimiter.shape()).isEqualTo(ObservationShape.DELIMITER);
+            assertThat(delimiter.objects()).isZero();
+            assertThat(delimiter.prefixes()).isEqualTo(1);
+            var seek = handler.parse(new ListingHttpRequest("GET", "/storage/v1/b/bucket/o",
+                    "maxResults=1", Map.of())).page().observation();
+            assertThat(seek.shape()).isEqualTo(ObservationShape.SEEK);
+            assertThat(seek.objects()).isEqualTo(1);
+            assertThat(seek.prefixes()).isZero();
         }
     }
 
@@ -112,6 +132,30 @@ class GcsPagerTest {
             assertThat(page.objects()).hasSize(1000);
             assertThat(page.nextPageToken()).isNull();
             assertThat(store.calls()).isLessThanOrEqualTo(2);
+        }
+    }
+
+    @Test
+    void delimiterFallbackPageOneFetchesOnlyOneEntryAndLookahead() {
+        try (FakeListingStore store = FakeListingStore.ofKeys("a", "b", "c", "d")) {
+            GcsPager pager = new GcsPager(store, "fixture");
+            GcsPage first = pager.list(new GcsListRequest("bucket", null, "/", null, null,
+                    1, null, false));
+            assertThat(names(first.objects())).containsExactly("a");
+            assertThat(first.nextPageToken()).isNotNull();
+            assertThat(store.calls()).isEqualTo(1);
+            assertThat(store.lastLimit()).isEqualTo(2);
+            GcsPage second = pager.list(new GcsListRequest("bucket", null, "/", null, null,
+                    1, first.nextPageToken(), false));
+            assertThat(names(second.objects())).containsExactly("b");
+            assertThat(store.lastLimit()).isEqualTo(2);
+        }
+        try (FakeListingStore store = FakeListingStore.ofKeys("a/1", "a/2", "a/3", "b")) {
+            GcsPage page = new GcsPager(store, "fixture").list(
+                    new GcsListRequest("bucket", null, "/", null, null, 1, null, false));
+            assertThat(strings(page.prefixes())).containsExactly("a/");
+            assertThat(page.nextPageToken()).isNotNull();
+            assertThat(store.lastLimit()).isEqualTo(1);
         }
     }
 
