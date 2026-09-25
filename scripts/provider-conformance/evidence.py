@@ -270,6 +270,8 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
         "response": {"status": response["status"], "headers": response_headers,
                      "body_base64": base64.b64encode(safe_body).decode("ascii")},
     }
+    if provider == "azure":
+        validate_azure_head_error(safe)
     datetime.fromisoformat(exchange["captured_at"].replace("Z", "+00:00"))
     visible_query = "&".join(part for part in query.split("&")
                              if not (provider == "azure" and part == "restype=container"))
@@ -344,6 +346,17 @@ def response_token(exchange: dict, provider: str) -> str | None:
     if token is not None and (not isinstance(token, str) or not token.startswith("token-sha256-")):
         raise ValueError("run response token is not sanitized")
     return token or None
+
+
+def validate_azure_head_error(exchange: dict) -> None:
+    if exchange["request"]["method"] != "HEAD":
+        return
+    response = exchange["response"]
+    codes = [header["value"] for header in response["headers"]
+             if header["name"].lower() == "x-ms-error-code"]
+    if not 400 <= response["status"] <= 599 or response["body_base64"] != "" \
+            or len(codes) != 1 or not re.fullmatch(r"[A-Za-z]+", codes[0]):
+        raise ValueError("Azure HEAD error needs empty body and exactly one typed x-ms-error-code")
 
 
 def validate_run_shape(capture: dict, kind: str) -> None:
@@ -499,6 +512,8 @@ def validate_promotion(row: dict, version: str, proof: dict, manifest: dict,
                 raise ValueError("run step provenance/version differs from ledger")
     request = exchanges[0]["request"]
     for exchange in exchanges:
+        if row["provider"] == "azure":
+            validate_azure_head_error(exchange)
         token_hashes = exchange["request"].get("token_wire_sha256")
         parts = query_parts(exchange["request"]["query"])
         names = [key for key, _ in parts]

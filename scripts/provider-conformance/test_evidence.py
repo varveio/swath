@@ -173,6 +173,40 @@ class EvidenceTest(unittest.TestCase):
                                           "b" * 64, "azure-08", "2026-06-06")
         self.assertEqual(safe["response"]["body_base64"], "")
         self.assertIn({"name": "content-length", "value": "150"}, safe["response"]["headers"])
+        for invalid_headers in (
+            [header for header in capture["response"]["headers"]
+             if header["name"] != "x-ms-error-code"],
+            [{**header, "value": ""} if header["name"] == "x-ms-error-code" else header
+             for header in capture["response"]["headers"]],
+            capture["response"]["headers"] + [{"name": "x-ms-error-code", "value": "InternalError"}],
+        ):
+            malformed = json.loads(json.dumps(capture))
+            malformed["response"]["headers"] = invalid_headers
+            with self.assertRaisesRegex(ValueError, "x-ms-error-code"):
+                evidence.sanitize_exchange(malformed, "azure", {"account": "acct",
+                                                           "container": "container"},
+                                           "b" * 64, "azure-08", "2026-06-06")
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            manifest = {"provider": "azure", "namespace_mode": "flat-hns-off", "region": "test",
+                        "api_version": "2026-06-06", "sdk_product": "azsdk-java-azure-storage-blob",
+                        "sdk_version": "12.35.1", "capture_date": "2026-09-25",
+                        "objects": [{"name": "a", "size": 1, "sha256": "a" * 64}]}
+            forged = json.loads(json.dumps(safe))
+            forged["probe_id"] = "azure-03"
+            forged["manifest_sha256"] = hashlib.sha256(evidence.canonical(manifest)).hexdigest()
+            forged["response"]["headers"] = [header for header in forged["response"]["headers"]
+                                              if header["name"] != "x-ms-error-code"]
+            payload = evidence.canonical(forged)
+            (root / "forged.json").write_bytes(payload)
+            row = {"id": "azure-03", "provider": "azure", "evidence_kind": "exchange",
+                   "api_versions": ["2026-06-06"], "status": "OBSERVED", "evidence": {
+                       "2026-06-06": {"probe_request":
+                           "HEAD /{container}?restype=container&comp=list&maxresults=0",
+                           "expected_result": "typed HEAD error", "capture_file": "forged.json",
+                           "capture_sha256": hashlib.sha256(payload).hexdigest()}}}
+            with self.assertRaisesRegex(ValueError, "x-ms-error-code"):
+                evidence.validate_ledger({"rows": [row]}, {("azure", "2026-06-06"): manifest}, root)
         capture["response"]["body_base64"] = base64.b64encode(b"<Error/>").decode("ascii")
         with self.assertRaisesRegex(ValueError, "empty body"):
             evidence.sanitize_exchange(capture, "azure", {"account": "acct",
