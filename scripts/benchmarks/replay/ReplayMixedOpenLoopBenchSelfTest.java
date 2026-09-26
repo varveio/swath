@@ -21,7 +21,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
@@ -34,6 +36,8 @@ public final class ReplayMixedOpenLoopBenchSelfTest {
     private ReplayMixedOpenLoopBenchSelfTest() { }
 
     public static void main(String[] args) throws Exception {
+        verifyCancelledLanesActuallyExit();
+        verifyInterruptedLaneWaitStopsBeforeSending();
         verifyFixedLanePlan();
         verifyCursorUsesCompletedToken();
         verifyAbsoluteSchedule();
@@ -436,6 +440,69 @@ public final class ReplayMixedOpenLoopBenchSelfTest {
             if (cursor.completed() != 0 || cursor.expected() != first) {
                 throw new AssertionError("failed page advanced lane cursor");
             }
+        }
+    }
+
+    private static void verifyCancelledLanesActuallyExit() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var exited = new CountDownLatch(1);
+        var settled = new CountDownLatch(1);
+        var observedExit = new AtomicBoolean();
+        try (var workers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var future = workers.submit(() -> {
+                entered.countDown();
+                try {
+                    // Model a task that cannot leave its response callback on interrupt alone.
+                    while (true) {
+                        try { release.await(); break; }
+                        catch (InterruptedException ignored) { }
+                    }
+                } finally {
+                    exited.countDown();
+                }
+                return null;
+            });
+            try {
+                if (!entered.await(5, TimeUnit.SECONDS)) throw new AssertionError("lane did not start");
+                Thread waiter = Thread.ofVirtual().start(() -> {
+                    observedExit.set(ReplayMixedOpenLoopBench.cancelAndAwaitLaneExit(
+                            List.of(future), workers, TimeUnit.SECONDS.toNanos(5)));
+                    settled.countDown();
+                });
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (!future.isDone() && System.nanoTime() < deadline) {
+                    Thread.sleep(1);
+                }
+                if (!future.isDone() || settled.await(50, TimeUnit.MILLISECONDS)) {
+                    throw new AssertionError("Future cancellation was mistaken for lane exit");
+                }
+                release.countDown();
+                if (!settled.await(5, TimeUnit.SECONDS) || !observedExit.get()
+                        || exited.getCount() != 0) {
+                    throw new AssertionError("cancelled lane exit was not observed");
+                }
+                waiter.join();
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    private static void verifyInterruptedLaneWaitStopsBeforeSending() throws Exception {
+        var stopped = new AtomicBoolean();
+        Thread lane = Thread.ofVirtual().start(() -> {
+            Thread.currentThread().interrupt();
+            try {
+                ReplayMixedOpenLoopBench.waitUntilReady(
+                        System.nanoTime() + TimeUnit.SECONDS.toNanos(5));
+            } catch (InterruptedException expected) {
+                stopped.set(true);
+            }
+        });
+        lane.join(TimeUnit.SECONDS.toMillis(1));
+        if (lane.isAlive() || !stopped.get()) {
+            throw new AssertionError("interrupted lane remained parked before scheduled work");
         }
     }
 

@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Properties;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -180,12 +179,13 @@ public final class ReplayMixedOpenLoopBench {
                     + "\"target_warmup_scheduled\":%d,\"target_warmup_admitted\":%d,"
                     + "\"target_warmup_completed\":%d,\"target_warmup_unsent\":%d,"
                     + "\"measured_scheduled\":%d,\"measured_completed\":%d,"
-                    + "\"duration_plan_s\":%.3f,\"failure_reason\":\"%s\"}%n",
+                    + "\"counts_stable\":%s,\"duration_plan_s\":%.3f,\"failure_reason\":\"%s\"}%n",
                     phase, current.scheduled.get(), current.unsent.get(), current.successful.get(),
                     maxOutstanding, nativeWarmupCounts.scheduled.get(), nativeWarmupCounts.successful.get(),
                     targetWarmupCounts.scheduled.get(), targetWarmupCounts.admitted.get(),
                     targetWarmupCounts.successful.get(), targetWarmupCounts.unsent.get(),
                     measuredCounts.scheduled.get(), measuredCounts.successful.get(),
+                    current.lanesExited,
                     nominalDuration, jsonEscape(error.toString()));
             throw error;
         } finally {
@@ -503,9 +503,7 @@ public final class ReplayMixedOpenLoopBench {
                             long scheduled = scheduledNanos(start, groupId, laneId,
                                     cursor.roundWithinLane(), cursor.cycle(), pages.size(), rate);
                             long ready = readyNanos(scheduled, cursor.predecessorCompleted());
-                            while (System.nanoTime() < ready) {
-                                LockSupport.parkNanos(Math.min(1_000_000L, ready - System.nanoTime()));
-                            }
+                            waitUntilReady(ready);
                             long awakened = System.nanoTime();
                             counts.scheduled.incrementAndGet();
                             long predecessorWait = cursor.predecessorCompleted() == Long.MIN_VALUE ? 0
@@ -557,11 +555,46 @@ public final class ReplayMixedOpenLoopBench {
                 finished.get();
             }
         } catch (Exception | Error failure) {
-            for (java.util.concurrent.Future<Void> future : futures) future.cancel(true);
+            client.shutdownNow();
+            if (!cancelAndAwaitLaneExit(futures, workers, TimeUnit.SECONDS.toNanos(35))) {
+                counts.lanesExited = false;
+                failure.addSuppressed(new IllegalStateException("cancelled lanes did not exit; counters unstable"));
+            }
             throw failure;
         }
         long elapsed = System.nanoTime() - start;
         return new PhaseOutcome(offeredEach, elapsed, scheduledWindow, groups, peakOutstanding.get());
+    }
+
+    static void waitUntilReady(long ready) throws InterruptedException {
+        while (System.nanoTime() < ready) {
+            if (Thread.interrupted()) throw new InterruptedException("lane phase cancelled");
+            LockSupport.parkNanos(Math.min(1_000_000L, ready - System.nanoTime()));
+        }
+        if (Thread.interrupted()) throw new InterruptedException("lane phase cancelled");
+    }
+
+    static boolean cancelAndAwaitLaneExit(List<? extends java.util.concurrent.Future<?>> futures,
+                                          java.util.concurrent.ExecutorService workers,
+                                          long timeoutNanos) {
+        for (var future : futures) future.cancel(true);
+        workers.shutdownNow();
+        long started = System.nanoTime();
+        boolean interrupted = false;
+        try {
+            while (true) {
+                long remaining = timeoutNanos - (System.nanoTime() - started);
+                if (remaining <= 0) return workers.isTerminated();
+                try {
+                    if (workers.awaitTermination(remaining, TimeUnit.NANOSECONDS)) return true;
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
+                    workers.shutdownNow();
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt();
+        }
     }
 
 
@@ -878,6 +911,7 @@ public final class ReplayMixedOpenLoopBench {
         final AtomicLong admitted = new AtomicLong();
         final AtomicLong successful = new AtomicLong();
         final AtomicLong unsent = new AtomicLong();
+        volatile boolean lanesExited = true;
     }
 
     private static final class CountingInputStream extends FilterInputStream {
