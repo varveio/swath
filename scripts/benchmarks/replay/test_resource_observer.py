@@ -13,11 +13,28 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from resource_observer import (charged_peak_for_cap, check_bounds, nmt_committed_bytes,
-                               observe, read_sample)
+from resource_observer import (charged_peak_for_cap, check_bounds, inside_git_checkout,
+                               nmt_committed_bytes, observe, read_sample)
 
 
 class ResourceObserverTest(unittest.TestCase):
+    def test_output_rejects_checkout_and_worktree_git_markers(self):
+        with TemporaryDirectory(prefix="resource-observer-path-", dir="/var/tmp") as temporary:
+            root = Path(temporary)
+            self.assertFalse(inside_git_checkout(root))
+            for marker_is_file in (False, True):
+                checkout = root / ("worktree" if marker_is_file else "checkout")
+                checkout.mkdir()
+                marker = checkout / ".git"
+                if marker_is_file:
+                    marker.write_text("gitdir: /elsewhere/worktrees/example\n")
+                else:
+                    marker.mkdir()
+                output = checkout / "receipts" / "observer.json"
+                self.assertTrue(inside_git_checkout(output))
+                with self.assertRaisesRegex(ValueError, "outside the repository"):
+                    observe(SimpleNamespace(output=str(output)))
+
     def test_nmt_total_is_read_in_bytes(self):
         self.assertEqual(nmt_committed_bytes("Total: reserved=4GB, committed=2274755KB"),
                          2274755 * 1024)
@@ -100,7 +117,11 @@ class ResourceObserverTest(unittest.TestCase):
                 if '"READY"' in value:
                     order.append("READY")
                 return super().write(value)
-        with TemporaryDirectory(prefix="resource-observer-") as temporary:
+        with TemporaryDirectory(prefix="resource-observer-", dir="/var/tmp") as temporary:
+            self.assertFalse(inside_git_checkout(Path(temporary)))
+            archived_source = Path(temporary) / "harness" / "source" / "resource_observer.py"
+            archived_source.parent.mkdir(parents=True)
+            archived_source.write_text("# frozen observer source\n")
             output = Path(temporary) / "observer.json"
             args = SimpleNamespace(output=str(output), pid=1, metrics_url="http://unused",
                                    java_home="/jdk", sample_ms=10, nmt_interval_s=5,
@@ -111,7 +132,9 @@ class ResourceObserverTest(unittest.TestCase):
             stdout = ReadyCapture()
             with (patch("resource_observer.jcmd", side_effect=fake_nmt),
                   patch("resource_observer.read_sample", side_effect=fake_sample),
+                  patch("resource_observer.__file__", str(archived_source)),
                   redirect_stdout(stdout)):
+                self.assertFalse(inside_git_checkout(output.resolve()))
                 receipt = observe(args, stopped)
             self.assertEqual(order[:3], ["nmt", "sample", "READY"])
             self.assertEqual(json.loads(stdout.getvalue().strip()),

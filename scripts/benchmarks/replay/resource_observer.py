@@ -77,10 +77,15 @@ def charged_peak_for_cap(samples):
                    sample["server_peak_charged_response_bytes"]) for sample in samples)
 
 
+def inside_git_checkout(path):
+    # A worktree has a .git file; an ordinary checkout has a .git directory.
+    return any((parent / ".git").is_file() or (parent / ".git").is_dir()
+               for parent in (path, *path.parents))
+
+
 def observe(args, stop_event=None):
     output = Path(args.output).resolve()
-    source_root = Path(__file__).resolve().parents[3]
-    if output == source_root or source_root in output.parents:
+    if inside_git_checkout(output):
         raise ValueError("resource observer output must be outside the repository")
     output.parent.mkdir(parents=True, exist_ok=True)
     caps = {"rss_bytes": args.rss_cap, "fd_count": args.fd_cap,
