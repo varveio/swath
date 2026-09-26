@@ -17,6 +17,59 @@ val conformanceSourceSet = sourceSets.create("conformance") {
     runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath.get()
 }
 
+// Compile the standalone out-of-process HTTP driver against this distribution's APIs. Runtime
+// comparisons still compile/run it against the frozen baseline distribution separately.
+val benchmarkSourceSet = sourceSets.create("benchmark") {
+    java.srcDir(rootProject.file("scripts/benchmarks/replay"))
+    compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
+    runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath.get()
+}
+
+val replayBenchmarkSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Runs adversarial parser and HTTP checks for the standalone replay benchmark."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.ReplayHttpBenchSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
+val replayShapeBenchmarkSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Runs native seek and delimiter HTTP checks for the standalone replay benchmark."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.ReplayShapeBenchSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
+val replayGcsNarrowBenchmarkSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks exact GCS partition inventory and native narrowed endOffset walks."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.ReplayGcsNarrowBenchSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
+val replayMixedBenchmarkSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks native-token mixed open-loop pages, scheduled timing and failure receipts."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.ReplayMixedOpenLoopBenchSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
+val replayFixtureMetadataOracleSelfTest by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks the independent Parquet name, size and timestamp benchmark oracle."
+    classpath = benchmarkSourceSet.runtimeClasspath
+    mainClass = "io.varve.swath.replay.bench.FixtureMetadataOracleSelfTest"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.named(benchmarkSourceSet.classesTaskName))
+}
+
 // The application distribution also ships the conformance launcher's dependency closure.
 // Include both closures in the license allow-list gate and generated inventory.
 configure<LicenseReportExtension> {
@@ -33,6 +86,7 @@ dependencies {
     implementation(platform(libs.jetty.bom))
     implementation(libs.jetty.server)
     implementation(libs.duckdb.jdbc)
+    implementation(libs.jackson.core)
     // The swath-core io.varve.swath.sort API (sort-fixture engine, stamp detection, index derive):
     // main-scope so .fixture can call it directly. swath-core declares
     // parquet-hadoop/hadoop/zstd-jni as its OWN main-scope `implementation` deps, so those land on
@@ -65,6 +119,9 @@ dependencies {
     testImplementation(conformanceSourceSet.output)
     testImplementation(libs.awssdk.s3)
     testImplementation(libs.awssdk.apache.client)
+    testImplementation(libs.google.cloud.storage)
+    testImplementation(libs.azure.storage.blob)
+    testImplementation(libs.azure.core.http.jdk)
     testImplementation(libs.parquet.hadoop)
     testImplementation(libs.zstd.jni)
     testImplementation(libs.hadoop.common) {
@@ -109,7 +166,8 @@ val writeReplayRuntimeArtifactCoordinates by tasks.registering {
 application {
     mainClass = "io.varve.swath.replay.server.ReplayServerApp"
     applicationName = "swath-replay"
-    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED",
+            "-Djdk.nio.maxCachedBufferSize=262144")
 }
 
 val replayLegalFiles = listOf(
@@ -127,7 +185,8 @@ val conformanceJar by tasks.registering(Jar::class) {
 val conformanceStartScripts by tasks.registering(CreateStartScripts::class) {
     applicationName = "swath-replay-conformance"
     mainClass.set("io.varve.swath.replay.conformance.ReplayConformanceApp")
-    defaultJvmOpts = listOf("--enable-native-access=ALL-UNNAMED")
+    defaultJvmOpts = listOf("--enable-native-access=ALL-UNNAMED",
+            "-Djdk.nio.maxCachedBufferSize=262144")
     outputDir = conformanceScriptsDir.get().asFile
     classpath = files(
             conformanceJar,
@@ -173,8 +232,31 @@ listOf("installDist", "distZip", "distTar").forEach { taskName ->
     }
 }
 
+val providerEvidenceSelfTest by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Validates offline provider capture sanitization and ledger gating."
+    environment("PYTHONDONTWRITEBYTECODE", "1")
+    commandLine("python3", "-m", "unittest", "discover", "-s",
+            rootProject.file("scripts/provider-conformance").absolutePath, "-p", "test_*.py")
+}
+
+val replayBenchmarkPythonSelfTest by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Checks benchmark runner quality gates and resource receipt validation."
+    environment("PYTHONDONTWRITEBYTECODE", "1")
+    commandLine("python3", "-m", "unittest", "discover", "-s",
+            rootProject.file("scripts/benchmarks/replay").absolutePath, "-p", "test_*.py")
+}
+
 tasks.named("check") {
     dependsOn(rootProject.tasks.named("verifyReplayThirdPartyNotices"))
+    dependsOn(replayBenchmarkSelfTest)
+    dependsOn(replayShapeBenchmarkSelfTest)
+    dependsOn(replayGcsNarrowBenchmarkSelfTest)
+    dependsOn(replayMixedBenchmarkSelfTest)
+    dependsOn(replayFixtureMetadataOracleSelfTest)
+    dependsOn(providerEvidenceSelfTest)
+    dependsOn(replayBenchmarkPythonSelfTest)
 }
 
 // Overrides the swath.java-conventions default (10 min) — the replay module's suite is

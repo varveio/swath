@@ -7,6 +7,7 @@ package io.varve.swath.replay.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;

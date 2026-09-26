@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.ListObjectsV2Pager;
 import io.varve.swath.replay.protocol.S3ListRequest;
@@ -47,13 +48,13 @@ class SwathRoundTripIT {
             writer.write(object("b/1.txt", 30));
         }
 
-        try (ListObjectsV2Pager direct = pager(parquet)) {
+        try (OwnedPager direct = pager(parquet)) {
             assertThat(direct.list(new S3ListRequest(
                     "bucket", null, null, null, null, 2, true, false)).entries())
                     .hasSize(2);
         }
 
-        try (ListObjectsV2Pager fixture = pager(parquet);
+        try (OwnedPager fixture = pager(parquet);
              ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", fixture)) {
             server.start();
             S3Config config = new S3Config(
@@ -93,7 +94,7 @@ class SwathRoundTripIT {
             writer.write(object("a/z.txt", 40));
         }
 
-        try (ListObjectsV2Pager fixture = pager(parquet);
+        try (OwnedPager fixture = pager(parquet);
              ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", fixture)) {
             server.start();
             S3Config config = new S3Config(
@@ -129,7 +130,7 @@ class SwathRoundTripIT {
                     .owner("owner-1", "Alice").checksum("SHA256", "FULL_OBJECT").build());
         }
 
-        try (ListObjectsV2Pager fixture = pager(parquet);
+        try (OwnedPager fixture = pager(parquet);
              ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", fixture)) {
             server.start();
             S3Config config = new S3Config(
@@ -163,7 +164,7 @@ class SwathRoundTripIT {
             writer.write(object("a/1.txt", 10));
         }
 
-        try (ListObjectsV2Pager fixture = pager(dir)) {
+        try (OwnedPager fixture = pager(dir)) {
             S3ListResult page = fixture.list(new S3ListRequest(
                     "bucket", null, null, null, null, 1000, true, false));
 
@@ -237,10 +238,33 @@ class SwathRoundTripIT {
         }
     }
 
-    private static ListObjectsV2Pager pager(Path parquet) {
-        ReplayMetrics metrics = new ReplayMetrics();
-        return new ListObjectsV2Pager(
-                new DuckDbListingStore(parquet, metrics, DuckDbListingStore.defaultConnectionCount()), metrics);
+    private static OwnedPager pager(Path parquet) {
+        return new OwnedPager(parquet);
+    }
+
+    private static final class OwnedPager implements io.varve.swath.replay.protocol.ListingFixture {
+        private final ReplayMetrics metrics = new ReplayMetrics();
+        private final DuckDbListingStore store;
+        private final ListObjectsV2Pager pager;
+
+        private OwnedPager(Path parquet) {
+            store = new DuckDbListingStore(parquet, metrics, DuckDbListingStore.defaultConnectionCount());
+            pager = new ListObjectsV2Pager(store, metrics);
+        }
+
+        @Override
+        public io.varve.swath.replay.protocol.S3ListResult list(S3ListRequest request) {
+            return pager.list(request);
+        }
+
+        @Override
+        public void close() {
+            try {
+                store.close();
+            } finally {
+                metrics.registry().close();
+            }
+        }
     }
 
     private static ObjectEntry object(String key, long size) {

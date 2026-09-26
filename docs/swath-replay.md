@@ -3,16 +3,18 @@
 This is a contributor tool. It is not part of the `swath` CLI and is not needed for a
 normal listing.
 
-`swath-replay` prepares, benchmarks, and serves Parquet listings through the subset of S3
-`ListObjectsV2` that swath uses. It makes real bucket shapes repeatable for client tests,
+`swath-replay` prepares, benchmarks, and serves Parquet listings through S3
+`ListObjectsV2` and optional native GCS JSON and Azure Blob XML listing routes. It makes real bucket shapes repeatable for client tests,
 engine debugging, conformance checks, and benchmarks without repeatedly listing S3.
 
-It is built in this repository but distributed separately from the `swath` CLI. Its wire
-behavior is conformance-tested; diagnostics and launcher settings remain a development
-surface.
+It is built in this repository but distributed separately from the `swath` CLI. S3 wire
+behavior is conformance-tested. Native GCS and Azure routes have offline tests;
+live-provider conformance evidence is still being collected. Diagnostics and launcher
+settings remain a development surface.
 
-It is not a general S3 emulator: there is no object data, mutation, authentication,
-virtual-host routing, version listing, or API other than path-style `ListObjectsV2`.
+It is not a general object-store emulator: there is no object data, mutation,
+authentication, virtual-host routing, or version listing. Its listing routes serve the
+documented subsets only.
 
 For an investigation workflow, see [Replay troubleshooting](replay-troubleshooting.md).
 
@@ -50,6 +52,54 @@ kill "$SERVER_PID"
 ```
 
 Each step is explained in detail below.
+
+### Native listing routes
+
+The default `--protocols=s3` keeps the existing path-style S3 route. To expose one
+opened fixture through all three listing routes, use `--protocols=s3,gcs,azure`:
+
+```bash
+swath-replay serve --fixture /data/sorted --bucket replay-fixture \
+  --protocols=s3,gcs,azure --azure-account=replay \
+  --host 127.0.0.1 --port 19090 --serving-mode sorted
+```
+
+S3 uses `/{bucket}?list-type=2`; GCS JSON uses
+`/storage/v1/b/{bucket}/o`; Azure Blob XML uses
+`/{account}/{container}?restype=container&comp=list`, where `--bucket` supplies the
+container name. Azure accepts `x-ms-version: 2026-06-06` or `2026-10-06` for the
+flat listing subset. A wildcard bind with Azure also needs `--advertised-host` so
+the XML service endpoint names a reachable host. S3-only keeps its existing first-path-
+segment routing, including paths after the bucket segment. Enabled native selectors
+claim their routes before method validation; conflicting selectors return a replay 400.
+
+One store, cache, reader pool, and metrics registry back every enabled route. The
+default encoded-response budget is 256 MiB across active responses, with a 64 MiB
+per-response cap and a response-count ceiling of twice `--max-concurrent-requests`.
+`--response-buffer-budget` and `--max-response-bytes` set the byte bounds. Overload
+responses carry `x-swath-replay-error` with the refusal reason; the per-response cap
+produces a labeled 500. Slow writes are closed after `--write-timeout` (default 30s),
+while `--idle-timeout` controls connector idle time and `--stop-timeout` bounds normal
+shutdown (defaults 30s and 10s). A read that ignores interruption retains its store
+resources until it returns; shutdown reports `shutdown_incomplete` when that deadline
+expires.
+
+Encoded responses use fixed 256 KiB charged chunks. The initial estimate is reserved before paging,
+then chunks allocate lazily from that credit. Unused credit returns after encoding;
+the remaining charge tracks actual chunk capacity through the write callback. The
+`serving.output_chunk_bytes` report field records the active setting. A sufficient
+encoded-byte budget for `C` simultaneous responses of at most `M` bytes is
+`C × max(initial reservation, M + chunk size)`; account for decoded rows, cache and
+native memory separately.
+`swath.replay.response.chunk.allocation{reason}` and
+`swath.replay.response.chunk.capacity.bytes{reason}` show when initial, subsequent,
+and cap-limited allocations engaged.
+
+The distribution launcher sets `jdk.nio.maxCachedBufferSize=262144` and sends encoded
+bodies in views of at most 256 KiB. These settings constrain temporary NIO buffer
+sizes; they do not make the encoded-byte budget a bound on Jetty direct memory or
+decoded Parquet rows. Benchmark receipts should state the JVM direct-memory cap and
+observed direct-buffer use alongside heap and response-budget settings.
 
 ## Build
 
@@ -152,7 +202,15 @@ Sorted mode derives an in-memory first-key-per-row-group index and performs boun
 reads. A bounded sequential-window cache is enabled by default. Its system properties are
 `swath.replay.prefetch.enabled` (`true`), `swath.replay.prefetch.window-rows` (`12500`),
 and `swath.replay.prefetch.max-windows` (`96`). Size the window at least as large as one
-row group's row count or repeated fills will decode the same group.
+row group's row count or repeated fills will decode the same group. Continuations round
+their maximum fill up to whole requested pages: with the defaults, a 1,001-row store
+request can fill 13,013 rows and a 5,001-row request can fill 15,003. Cold reads still
+fetch only the requested size. The global cache remains capped at
+`max-windows × window-rows` decoded rows as well as `max-windows` entries; the default
+1.2 million-row budget holds at most 92 fully grown 1k windows or 79 fully grown 5k
+windows. A request larger than `window-rows` is served uncached at its requested size.
+Cached windows remain in LRU for lagging walkers, and a compatible pair can answer one
+page across a window boundary without creating a merged cache entry.
 
 Request admission happens at this cache: hits bypass Parquet permits, continuation anchors
 are claimed before a request can wait for a backing read, and the sorted store's connection
@@ -267,8 +325,13 @@ and agreement with the declared allocation are downstream verifier checks, not
 claims made by this producer. This is runtime evidence for a controller to
 compare with its declared allocation, not an allocation request of its own.
 
-The payload is `{schema_version, serving_mode, uptime_ms, sampled_at_epoch_ms,
-meters[]}`. Each meter carries its `name`, `type` (`timer`, `counter`,
+The metrics payload has `schema_version: 2` and fields
+`{schema_version, serving_mode, serving, uptime_ms, sampled_at_epoch_ms, meters[]}`.
+The `serving` object records enabled protocols, fixture identity, ordering and metadata
+profiles, response/chunk bounds and live/peak charged bytes, active responses, and timeouts.
+`ordering_profile=unsigned-utf8-byte-order` describes the unsigned key-byte comparison
+used for fixture order and page boundaries; `serving_mode` separately names the backing store.
+Each meter carries its `name`, `type` (`timer`, `counter`,
 `distribution`, `gauge`), and `tags`; a timer adds `count`, `sum_ms`, `mean_ms`,
 `max_ms`, `p50_ms`, `p99_ms` — the same values `bench` reports, read the same
 way, so a scrape and a bench report of the same run agree. Meters are emitted in
@@ -278,6 +341,13 @@ an interval without trusting its own clock against the server's.
 Read server headroom from `swath.replay.request.latency{shape}` per request shape,
 against the injected profile for that same shape. A pooled average would hide the
 important case because clients issue different mixtures of differently priced requests.
+The new `swath.replay.request.stage.latency{protocol,stage}` timers separate paging,
+rendering, injected delay, and callback write time. Response gauges report current and
+peak charged encoded-array capacity plus held response permits; use
+`swath.replay.response.admission.refused{protocol,reason}` to distinguish deliberate
+count exhaustion, byte exhaustion, per-response cap, and shutdown refusals.
+`swath.replay.provider.path{protocol,path,reason}` records which native pager route
+engaged and why.
 
 **It is a second port on purpose.** A metrics or runtime-attestation request does not
 enter the serving path, take a read permit, receive injected latency, or increment a
@@ -425,9 +495,16 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `page.read.latency`, `fixture.list.latency` | Post-borrow bounded-page decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
 | `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independent `connections`-wide range and lazy row-group pools per file. One request owns one reader, while concurrent ordinary and delimiter requests can engage both pools. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
+| `request.stage.latency{protocol,stage}` | Paging (including read-permit wait), rendering, engaged injected delay, and socket write through callback completion. |
+| `response.admission.refused{protocol,reason}`, `response.bytes.live`, `response.bytes.peak`, `response.active` | Labeled response-limit refusals, charged encoded-array capacity now/peak, and held response permits. |
+| `response.write.deadline{protocol,reason=total_deadline}` | A total write deadline closed a client connection before callback completion. |
+| `response.percent.encoding.path{protocol,reason}` | Successfully rendered S3 URL values encoded by the `charged_chunk_one_pass` or `exact_length_fallback` path. Counts publish once per page after rendering; Azure encoded names use a separate grammar. |
+| `protocol.requests.active{protocol}`, `provider.path{protocol,path,reason}` | Active provider requests and engaged pager path/classification. |
+| `protocol.http.requests{protocol,status_class}`, `protocol.objects`, `protocol.prefixes`, `protocol.encoded.bytes{protocol,shape}` | Native response classes and successful page output attributed by protocol and neutral page/seek/delimiter shape. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
-| `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |
-| `prefetch.windows.live`, `prefetch.anchors.live`, `prefetch.anchor{event}` | Live cache/anchor occupancy and anchor registration, claim, or eviction-before-claim churn. |
+| `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows`, `prefetch.window.ramp_ceiling_rows` | Window-cache cost, effectiveness, and page-aligned ramp behavior. |
+| `prefetch.windows.live`, `prefetch.rows.live`, `prefetch.anchors.live`, `prefetch.anchor{event}` | Live cache entries, retained decoded rows, anchors, and anchor churn. |
+| `prefetch.window.selection{reason}`, `prefetch.window.join{reason}`, `prefetch.window.uncached{reason}`, `prefetch.window.row_budget_eviction` | Contained-range reuse, two-window joins and declines, uncached fallbacks, and global row-budget eviction. |
 
 Names above omit the common `swath.replay.` prefix for compactness. Fallback reasons are
 `no_stamp`, `unsupported_mode`, `unknown_format_version`, `incomplete_multifile`,
@@ -439,7 +516,8 @@ JVM, connection pool, and filesystem cache before recording a benchmark.
 
 ## Fidelity limits
 
-- Only object rows and `ListObjectsV2` are served; version listing is unsupported.
+- Only object rows and the documented S3, GCS, and Azure listing subsets are served;
+  version listing is unsupported.
 - The server is usually faster than S3 unless a target profile is injected.
 - One local process does not reproduce distributed service capacity or real network faults.
 - In-server injection adds latency, not API errors, resets, malformed bodies, or partial

@@ -8,6 +8,7 @@ package io.varve.swath.replay.server;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.testkit.HttpProbe;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;

@@ -5,7 +5,7 @@
  */
 package io.varve.swath.replay.protocol;
 
-import io.varve.swath.replay.server.ReplayMetrics;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import java.nio.charset.StandardCharsets;
@@ -88,7 +88,8 @@ public final class ListObjectsV2Pager implements ListingFixture {
 
     @Override
     public void close() {
-        store.close();
+        // The serving owner closes the shared store after all protocol operations drain.
+        // A pager only borrows it; closing a pager must not invalidate sibling adapters.
     }
 
     private S3ListResult listObjects(S3ListRequest request, Boundary boundary, int maxKeys) {

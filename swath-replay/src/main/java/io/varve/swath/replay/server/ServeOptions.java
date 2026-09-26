@@ -16,6 +16,36 @@ import picocli.CommandLine.Option;
  */
 final class ServeOptions {
 
+    @Option(names = "--protocols", defaultValue = "s3",
+            description = "Comma-separated native listing protocols: s3,gcs,azure (default: s3).")
+    String protocols;
+
+    @Option(names = "--azure-account", description = "Azure local account path segment (default: replay).")
+    String azureAccount;
+
+    @Option(names = "--response-buffer-budget", defaultValue = "" + ServeConfig.DEFAULT_RESPONSE_BUFFER_BUDGET,
+            description = "Aggregate bytes charged to live encoded response arrays (default: 256 MiB).")
+    long responseBufferBudget;
+
+    @Option(names = "--max-response-bytes", defaultValue = "" + ServeConfig.DEFAULT_MAX_RESPONSE_BYTES,
+            description = "Per-response encoded array capacity cap (default: 64 MiB).")
+    int maxResponseBytes;
+
+    @Option(names = "--stop-timeout", defaultValue = "10s",
+            description = "Total server stop deadline (default: 10s).")
+    String stopTimeout;
+
+    @Option(names = "--idle-timeout", defaultValue = "30s",
+            description = "Connector idle timeout (default: 30s).")
+    String idleTimeout;
+
+    @Option(names = "--write-timeout", defaultValue = "30s",
+            description = "Total response write timeout (default: 30s).")
+    String writeTimeout;
+
+    @Option(names = "--advertised-host", description = "Host to advertise in native response URLs.")
+    String advertisedHost;
+
     @Option(names = "--host", defaultValue = "127.0.0.1", description = "Bind host.")
     String host;
 
@@ -43,7 +73,7 @@ final class ServeOptions {
                     + "startup line. A scrape never touches the serving path or listing counters.")
     int metricsPort;
 
-    @Option(names = "--max-concurrent-requests", defaultValue = "512",
+    @Option(names = "--max-concurrent-requests", defaultValue = "" + ReplayServer.DEFAULT_MAX_CONCURRENT_REQUESTS,
             description = "Ceiling on requests served at once. Injected latency is a blocking sleep "
                     + "held on the serving thread, so an in-flight request occupies one for the whole "
                     + "profile; a client fanning out wider than this has its excess queued, and the "

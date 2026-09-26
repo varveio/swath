@@ -65,7 +65,7 @@ class ReplayServingFactoryTest {
                     .tag("source", "derived").timer().count()).isEqualTo(1L);
             assertThat(result.metrics().registry().find("swath.replay.index.entries").summary()).isNotNull();
         } finally {
-            result.fixture().close();
+            result.close();
         }
     }
 
@@ -82,7 +82,7 @@ class ReplayServingFactoryTest {
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false))))
                     .containsExactly("a", "b", "c");
         } finally {
-            result.fixture().close();
+            result.close();
         }
     }
 
@@ -148,10 +148,10 @@ class ReplayServingFactoryTest {
                         new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
                 assertThat(mixedKeys).containsExactly("a1", "a3", "a5", "a7").isEqualTo(objectsOnlyKeys);
             } finally {
-                objectsOnlyResult.fixture().close();
+                objectsOnlyResult.close();
             }
         } finally {
-            mixedResult.fixture().close();
+            mixedResult.close();
         }
     }
 
@@ -188,7 +188,7 @@ class ReplayServingFactoryTest {
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
             assertThat(served).containsExactly("a", "b", "c", "d");
         } finally {
-            result.fixture().close();
+            result.close();
         }
     }
 
@@ -230,7 +230,7 @@ class ReplayServingFactoryTest {
             assertThat(served).hasSizeLessThan(keys.size());
             assertThat(keys).containsAll(served);
         } finally {
-            truncatedResult.fixture().close();
+            truncatedResult.close();
         }
 
         ReplayServingFactory.Result completeResult = ReplayServingFactory.open(completeDir, ServingMode.SORTED, 1);
@@ -240,7 +240,7 @@ class ReplayServingFactoryTest {
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false))))
                     .isEqualTo(keys);
         } finally {
-            completeResult.fixture().close();
+            completeResult.close();
         }
     }
 
@@ -256,7 +256,7 @@ class ReplayServingFactoryTest {
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false));
             assertThat(page.entries()).hasSize(3);
         } finally {
-            result.fixture().close();
+            result.close();
         }
     }
 

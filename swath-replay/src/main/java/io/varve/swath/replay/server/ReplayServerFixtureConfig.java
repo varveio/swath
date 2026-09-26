@@ -24,21 +24,27 @@ import java.util.function.BiFunction;
  *                (default {@code Duration.ZERO}, i.e. off)
  */
 record ReplayServerFixtureConfig(AutoCloseable ownedFixture, int maxConcurrentReads,
-                                 BiFunction<S3ListRequest, S3ListResult, Duration> latency) {
+                                 BiFunction<S3ListRequest, S3ListResult, Duration> latency,
+                                 Duration stopTimeout) {
 
     /** No owned fixture, unbounded reads, no latency injection. */
     static final ReplayServerFixtureConfig DEFAULT =
-            new ReplayServerFixtureConfig(null, 0, (req, result) -> Duration.ZERO);
+            new ReplayServerFixtureConfig(null, 0, (req, result) -> Duration.ZERO,
+                    Duration.ofSeconds(10));
 
     ReplayServerFixtureConfig withOwnedFixture(AutoCloseable ownedFixture) {
-        return new ReplayServerFixtureConfig(ownedFixture, maxConcurrentReads, latency);
+        return new ReplayServerFixtureConfig(ownedFixture, maxConcurrentReads, latency, stopTimeout);
     }
 
     ReplayServerFixtureConfig withMaxConcurrentReads(int maxConcurrentReads) {
-        return new ReplayServerFixtureConfig(ownedFixture, maxConcurrentReads, latency);
+        return new ReplayServerFixtureConfig(ownedFixture, maxConcurrentReads, latency, stopTimeout);
     }
 
     ReplayServerFixtureConfig withLatency(BiFunction<S3ListRequest, S3ListResult, Duration> latency) {
-        return new ReplayServerFixtureConfig(ownedFixture, maxConcurrentReads, latency);
+        return new ReplayServerFixtureConfig(ownedFixture, maxConcurrentReads, latency, stopTimeout);
+    }
+
+    ReplayServerFixtureConfig withStopTimeout(Duration timeout) {
+        return new ReplayServerFixtureConfig(ownedFixture, maxConcurrentReads, latency, timeout);
     }
 }
