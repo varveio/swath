@@ -19,7 +19,6 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -430,8 +429,9 @@ public final class SortedParquetStore implements ListingStore {
      *       this, since every later cursor is already past the previous entry) and jump the cursor to
      *       {@link ByteKeys#successor}{@code (P)} inclusive, past {@code P}'s whole subtree in one hop.
      *   <li>No {@code /} after the prefix → a bare object directly under it. The only hop that pays
-     *       for the full row rather than just the key column, read through the pooled row-group
-     *       reader the cursor already owns, a run of rows at a time ({@link #objectAt}).
+     *       for the value columns rather than just the key column, read by the key cursor's row
+     *       position through the pooled row-group reader the cursor already owns, a run of rows at a
+     *       time ({@link #valuesCovering}).
      *       Advance the cursor past this exact key (exclusive) and continue.
      *   <li>The cursor lands past every key in its row group (a gap — {@code successor(P)} is rarely an
      *       actual key) → jump straight to the next group's first key; the last group exhausting the
@@ -459,7 +459,7 @@ public final class SortedParquetStore implements ListingStore {
         int cachedBlockIndex = -1;
         int pendingPageReseekBlockIndex = -1;
         SortedParquetRowGroupReader.KeyCursor keyCursor = null;
-        Deque<SortedParquetRowGroupReader.ObjectRow> lookahead = new ArrayDeque<>();
+        ValueRun values = null;
         try {
             hop:
             while (out.size() < limit + 1) {
@@ -531,9 +531,10 @@ public final class SortedParquetStore implements ListingStore {
                         stats.close(keyCursor);
                         keyCursor = null;
                     }
-                    // Opened at the page that can hold this hop's target, not at the group's first row,
-                    // and carrying no page that can only hold keys at/above the scan's upper bound.
-                    keyCursor = reader.openKeyCursor(entry.rowGroup(), cursor, inclusive, upper);
+                    // Opened at the page that can hold this hop's target, not at the group's first row.
+                    // It loads one page at a time, so stopping at the upper bound below reads at most
+                    // the page holding the first key at or beyond it.
+                    keyCursor = reader.openKeyCursor(entry.rowGroup(), cursor);
                     cachedBlockIndex = entry.rowGroup();
                     if (pendingPageReseekBlockIndex == entry.rowGroup()) {
                         stats.pageReseeks++;
@@ -587,9 +588,10 @@ public final class SortedParquetStore implements ListingStore {
                         }
                     }
                 } else {
-                    out.add(new DelimitedEntry(null, toListedObject(objectAt(
-                            lookahead, reader, entry, key, upper,
-                            limit + 1 - out.size(), projection.owner()))));
+                    long row = keyCursor.position();
+                    values = valuesCovering(values, reader, entry, row, limit + 1 - out.size(),
+                            projection.owner());
+                    out.add(new DelimitedEntry(null, values.object(key, row)));
                     cursor = key;
                     inclusive = false;
                 }
@@ -627,40 +629,44 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     /**
-     * The full row at {@code key} — every listing column — read through the pooled row-group reader
-     * the delimiter cursor already owns, <b>a run of rows at a time</b>.
+     * {@code current} if it already holds the values of row {@code row} of {@code entry}'s row group,
+     * otherwise the values of up to {@code want} rows starting there, read through the pooled
+     * row-group reader the delimiter cursor already owns.
      *
      * <p>A bare object is one hop, and hops are what the scan is O(). Reading one row per hop is
      * correct and, on a directory that is mostly bare objects, a thousand separate page-index seeks
-     * landing in the same handful of pages. Bare objects under one prefix are consecutive in key
-     * order, so {@code want} of them cost one read.
-     *
-     * <p>{@code lookahead} is validated by exact key, never by position: the scan may jump to a
-     * successor at any hop, and a row buffered before the jump must not be served after it. A miss
-     * refills, so the buffer is a saving and never a source of truth.
+     * landing in the same handful of pages. Bare objects under one prefix are consecutive rows, so
+     * {@code want} of them cost one read. The run is addressed by row position, which the key cursor
+     * reports for the key it just decoded; a successor jump moves to a row outside the run and refills.
      */
-    private SortedParquetRowGroupReader.ObjectRow objectAt(Deque<SortedParquetRowGroupReader.ObjectRow> lookahead,
-                                                    SortedParquetRowGroupReader reader, IndexEntry entry,
-                                                    byte[] key, byte[] upper, int want,
-                                                    boolean includeOwner) throws IOException {
-        if (lookahead.isEmpty() || !Arrays.equals(lookahead.peek().keyUnsafe(), key)) {
-            lookahead.clear();
-            var sample = metrics.startTimer();
-            try {
-                lookahead.addAll(reader.objectRange(
-                        entry.rowGroup(), key, true, upper, Math.max(1, want), includeOwner));
-            } finally {
-                metrics.recordPageRead(sample);
-            }
+    private ValueRun valuesCovering(ValueRun current, SortedParquetRowGroupReader reader, IndexEntry entry,
+                                    long row, int want, boolean includeOwner) throws IOException {
+        if (current != null && current.covers(entry, row)) {
+            return current;
         }
-        SortedParquetRowGroupReader.ObjectRow row = lookahead.poll();
-        if (row != null && Arrays.equals(row.keyUnsafe(), key)) {
-            return row;
+        var sample = metrics.startTimer();
+        try {
+            return new ValueRun(entry.file(), entry.rowGroup(), row,
+                    reader.objectsAt(entry.rowGroup(), row, Math.max(1, want), includeOwner));
+        } finally {
+            metrics.recordPageRead(sample);
         }
-        // Only reachable if the key vanished between the cursor reading it and this read, which the
-        // skip-scan cannot recover from silently.
-        throw new IllegalStateException("sorted fixture has no OBJECT row at a key its own key cursor "
-                + "just returned, in " + entry.file() + " row group " + entry.rowGroup());
+    }
+
+    /** The values of consecutive rows of one row group, starting at {@code firstRow}. */
+    private record ValueRun(Path file, int rowGroup, long firstRow,
+                            List<SortedParquetRowGroupReader.ObjectValues> values) {
+
+        boolean covers(IndexEntry entry, long row) {
+            return entry.rowGroup() == rowGroup && entry.file().equals(file)
+                    && row >= firstRow && row < firstRow + values.size();
+        }
+
+        ListedObject object(byte[] key, long row) {
+            SortedParquetRowGroupReader.ObjectValues v = values.get(Math.toIntExact(row - firstRow));
+            return new ListedObject(key, v.size(), v.lastModifiedEpochMicros(), v.etag(), v.storageClass(),
+                    v.ownerId(), v.ownerDisplayName(), v.checksumAlgorithm(), v.checksumType());
+        }
     }
 
     /**

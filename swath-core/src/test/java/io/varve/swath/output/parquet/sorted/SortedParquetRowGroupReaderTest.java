@@ -33,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * through exactly this class, so its per-row-group decode must be exact at a row-group boundary
  * (never bleed a neighboring group's rows in or drop the group's own), for all four of its tiers
  * ({@link SortedParquetRowGroupReader.KeyCursor} key-only resumable, {@link SortedParquetRowGroupReader#forEachKey}
- * key-only bulk, {@link SortedParquetRowGroupReader#objectRange} bounded full row, and {@link
+ * key-only bulk, {@link SortedParquetRowGroupReader#objectsAt} values by row position, and {@link
  * SortedParquetRowGroupReader#rows} whole-group full row).
  */
 class SortedParquetRowGroupReaderTest {
@@ -249,7 +249,7 @@ class SortedParquetRowGroupReaderTest {
     }
 
     @Test
-    void objectRangeCanFollowAKeyOnlyCursorInALaterRowGroup(@TempDir Path dir) throws IOException {
+    void objectsAtCanFollowAKeyOnlyCursorInALaterRowGroup(@TempDir Path dir) throws IOException {
         List<String> keys = new ArrayList<>();
         SplittableRandom random = new SplittableRandom(0x5A17CA5EL);
         for (int i = 0; i < 8_000; i++) {
@@ -290,14 +290,12 @@ class SortedParquetRowGroupReaderTest {
                 // Opening the cursor is enough to select and decode the key projection.
             }
             int groupOneStart = Math.toIntExact(spans.get(0).rowCount());
-            String from = keys.get(groupOneStart + 500);
-            String to = keys.get(groupOneStart + 502);
             try (SortedParquetRowGroupReader.KeyCursor ignored = reader.openKeyCursor(targetBlock)) {
-                List<SortedParquetRowGroupReader.ObjectRow> rows = reader.objectRange(
-                        targetBlock, bytes(from), true, bytes(to), 2, true);
-                assertThat(rows).extracting(row -> utf8(row.key()))
-                        .containsExactly(from, keys.get(groupOneStart + 501));
-                assertThat(rows).extracting(SortedParquetRowGroupReader.ObjectRow::ownerId)
+                List<SortedParquetRowGroupReader.ObjectValues> values = reader.objectsAt(targetBlock, 500, 2, true);
+                assertThat(values).extracting(SortedParquetRowGroupReader.ObjectValues::etag)
+                        .containsExactly("etag-" + keys.get(groupOneStart + 500),
+                                "etag-" + keys.get(groupOneStart + 501));
+                assertThat(values).extracting(SortedParquetRowGroupReader.ObjectValues::ownerId)
                         .containsExactly("owner-id", "owner-id");
             }
         }
@@ -432,7 +430,7 @@ class SortedParquetRowGroupReaderTest {
         assertThat(SortedParquetIndex.rowGroupSpans(path)).hasSize(1);
 
         try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
-            assertThatThrownBy(() -> reader.openKeyCursor(0, bytes("d00000000"), true, null))
+            assertThatThrownBy(() -> reader.openKeyCursor(0, bytes("d00000000")))
                     .isInstanceOfSatisfying(RowGroupOrderException.class, e -> {
                         assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER);
                         assertThat(e.file()).isEqualTo(path);
@@ -486,7 +484,7 @@ class SortedParquetRowGroupReaderTest {
             // position() still meaning "row index within the row group".
             for (int at : new int[] {0, 1, 1023, 1024, 8191, 8192, 8193, 9000, 20_000, 29_999}) {
                 try (SortedParquetRowGroupReader.KeyCursor cursor =
-                             reader.openKeyCursor(0, bytes(keys.get(at)), true, null)) {
+                             reader.openKeyCursor(0, bytes(keys.get(at)))) {
                     // The cursor opens at the first row of the PAGE that can hold the target, never at
                     // the target itself — the page filter prunes pages, never rows — so it must still
                     // be stepped there, exactly as the skip-scan steps it.
@@ -502,6 +500,46 @@ class SortedParquetRowGroupReaderTest {
                             .isEqualTo(bytes(keys.get(ahead)));
                     assertThat(cursor.position()).as("position at %d after stepping", ahead)
                             .isEqualTo(ahead);
+                }
+            }
+        }
+    }
+
+    /**
+     * Values read by row position must be the values of exactly that row, wherever the run starts and
+     * however many value pages it crosses — the skip-scan pairs them with the key its cursor decoded at
+     * the same position, and nothing re-checks the pairing. A run past the group's last row is cut
+     * short, never padded or wrapped.
+     */
+    @Test
+    void objectsAtMatchesTheWholeGroupDecodeAtEveryPosition(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        SortConfig manyPagesOneGroup = config(Map.of("final-page-rows", "1024",
+                "final-row-group-bytes", Long.toString(64L << 20)));
+        try (SortedFileWriter writer = new SortedParquetWriter(path, manyPagesOneGroup, SortMode.OBJECTS, 1)) {
+            for (int i = 0; i < 30_000; i++) {
+                writer.write(object(String.format("%08d", i) + "x".repeat(60)));
+            }
+        }
+        assertThat(SortedParquetIndex.rowGroupSpans(path)).hasSize(1);
+
+        try (SortedParquetRowGroupReader reader = new SortedParquetRowGroupReader(path)) {
+            List<SortedParquetRowGroupReader.ObjectRow> rows = reader.rows(0, true);
+            for (int at : new int[] {0, 1, 1023, 1024, 4095, 8192, 20_000, 29_990}) {
+                for (boolean owner : new boolean[] {true, false}) {
+                    List<SortedParquetRowGroupReader.ObjectValues> values = reader.objectsAt(0, at, 2_000, owner);
+                    assertThat(values).as("run at %d", at).hasSize(Math.min(2_000, rows.size() - at));
+                    for (int i = 0; i < values.size(); i++) {
+                        SortedParquetRowGroupReader.ObjectRow row = rows.get(at + i);
+                        SortedParquetRowGroupReader.ObjectValues value = values.get(i);
+                        assertThat(value.etag()).as("row %d", at + i).isEqualTo(row.etag());
+                        assertThat(value.size()).isEqualTo(row.size());
+                        assertThat(value.lastModifiedEpochMicros()).isEqualTo(row.lastModifiedEpochMicros());
+                        assertThat(value.storageClass()).isEqualTo(row.storageClass());
+                        assertThat(value.checksumAlgorithm()).isEqualTo(row.checksumAlgorithm());
+                        assertThat(value.checksumType()).isEqualTo(row.checksumType());
+                        assertThat(value.ownerId()).isEqualTo(owner ? row.ownerId() : null);
+                    }
                 }
             }
         }
