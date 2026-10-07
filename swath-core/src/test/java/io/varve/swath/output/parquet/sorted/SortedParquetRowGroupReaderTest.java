@@ -48,6 +48,81 @@ class SortedParquetRowGroupReaderTest {
         return pageRows == null ? config : config.withFinalPageRows(Integer.parseInt(pageRows));
     }
 
+    private static org.apache.parquet.io.InputFile trackingInput(LocalInputFile local,
+            java.util.concurrent.atomic.AtomicBoolean closed) {
+        return new org.apache.parquet.io.InputFile() {
+            @Override
+            public long getLength() throws IOException {
+                return local.getLength();
+            }
+
+            @Override
+            public org.apache.parquet.io.SeekableInputStream newStream() throws IOException {
+                var stream = local.newStream();
+                return new org.apache.parquet.io.DelegatingSeekableInputStream(stream) {
+                    @Override
+                    public long getPos() throws IOException {
+                        return stream.getPos();
+                    }
+
+                    @Override
+                    public void seek(long position) throws IOException {
+                        stream.seek(position);
+                    }
+
+                    @Override
+                    public void close() throws IOException {
+                        closed.set(true);
+                        stream.close();
+                    }
+                };
+            }
+        };
+    }
+
+    @Test
+    void inputFileConstructorClosesStreamWhenSchemaInitializationFails(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("wrong-schema.parquet");
+        var schema = org.apache.parquet.schema.MessageTypeParser.parseMessageType(
+                "message wrong { required binary other; }");
+        try (var writer = org.apache.parquet.hadoop.example.ExampleParquetWriter.builder(
+                new org.apache.parquet.io.LocalOutputFile(path)).withType(schema).build()) {
+            writer.write(new org.apache.parquet.example.data.simple.SimpleGroupFactory(schema)
+                    .newGroup().append("other", "value"));
+        }
+        var closed = new java.util.concurrent.atomic.AtomicBoolean();
+        assertThatThrownBy(() -> new SortedParquetRowGroupReader(
+                trackingInput(new LocalInputFile(path), closed), dir.resolve("diagnostic-only")))
+                .isInstanceOf(RuntimeException.class);
+        assertThat(closed.get()).isTrue();
+    }
+
+    @Test
+    void inputFileOverloadPreservesIndexedRowsAndClosesItsStream(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("remote-fixture.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(path,
+                config(Map.of("final-page-rows", "16")), SortMode.OBJECTS, 1)) {
+            for (int i = 0; i < 128; i++) {
+                writer.write(object(String.format("key/%04d", i)));
+            }
+        }
+        var closed = new java.util.concurrent.atomic.AtomicBoolean();
+        var local = new LocalInputFile(path);
+        org.apache.parquet.io.InputFile external = trackingInput(local, closed);
+        byte[] from = "key/0032".getBytes(StandardCharsets.UTF_8);
+        byte[] to = "key/0040".getBytes(StandardCharsets.UTF_8);
+        try (var direct = new SortedParquetRowGroupReader(path);
+                var remote = new SortedParquetRowGroupReader(external, dir.resolve("diagnostic-only"))) {
+            assertThat(remote.rows(0, true)).usingRecursiveComparison().isEqualTo(direct.rows(0, true));
+            assertThat(remote.objectRange(0, from, true, to, 8, true)).usingRecursiveComparison()
+                    .isEqualTo(direct.objectRange(0, from, true, to, 8, true));
+            assertThat(drain(remote.openKeyCursor(0, from, true, to)))
+                    .containsExactlyElementsOf(drain(direct.openKeyCursor(0, from, true, to)));
+            assertThat(closed.get()).isFalse();
+        }
+        assertThat(closed.get()).isTrue();
+    }
+
     @Test
     void keyCursorAndRowsMatchWrittenOrderAcrossEveryRowGroupBoundary(@TempDir Path dir) throws IOException {
         List<String> keys = new ArrayList<>();

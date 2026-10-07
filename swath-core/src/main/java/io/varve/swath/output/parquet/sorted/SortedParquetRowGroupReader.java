@@ -35,6 +35,7 @@ import org.apache.parquet.internal.filter2.columnindex.ColumnIndexFilter;
 import org.apache.parquet.internal.filter2.columnindex.ColumnIndexStore;
 import org.apache.parquet.internal.filter2.columnindex.RowRanges;
 import org.apache.parquet.io.ColumnIOFactory;
+import org.apache.parquet.io.InputFile;
 import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
@@ -151,22 +152,36 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
     private final MessageColumnIO objectRangeColumnIoWithoutOwner;
 
     public SortedParquetRowGroupReader(Path file) throws IOException {
-        this.file = file;
-        this.reader = ParquetFileReader.open(new LocalInputFile(file));
-        this.createdBy = reader.getFooter().getFileMetaData().getCreatedBy();
-        this.blocks = List.copyOf(reader.getFooter().getBlocks());
-        MessageType full = reader.getFooter().getFileMetaData().getSchema();
-        this.keySchema = project(full, KEY_FIELD);
-        this.keyColumnIo = columnIoFactory.getColumnIO(keySchema);
-        this.keyColumn = keySchema.getColumns().getFirst();
-        this.objectSchemaWithOwner = objectProjection(full, true);
-        this.objectColumnIoWithOwner = columnIoFactory.getColumnIO(objectSchemaWithOwner);
-        this.objectSchemaWithoutOwner = objectProjection(full, false);
-        this.objectColumnIoWithoutOwner = columnIoFactory.getColumnIO(objectSchemaWithoutOwner);
-        this.objectRangeSchemaWithOwner = objectProjection(full, true, true);
-        this.objectRangeColumnIoWithOwner = columnIoFactory.getColumnIO(objectRangeSchemaWithOwner);
-        this.objectRangeSchemaWithoutOwner = objectProjection(full, false, true);
-        this.objectRangeColumnIoWithoutOwner = columnIoFactory.getColumnIO(objectRangeSchemaWithoutOwner);
+        this(new LocalInputFile(file), file);
+    }
+
+    /** Opens an input whose streams this reader owns; the path identifies errors only. */
+    public SortedParquetRowGroupReader(InputFile input, Path diagnosticPath) throws IOException {
+        this.file = java.util.Objects.requireNonNull(diagnosticPath, "diagnosticPath");
+        this.reader = ParquetFileReader.open(java.util.Objects.requireNonNull(input, "input"));
+        try {
+            this.createdBy = reader.getFooter().getFileMetaData().getCreatedBy();
+            this.blocks = List.copyOf(reader.getFooter().getBlocks());
+            MessageType full = reader.getFooter().getFileMetaData().getSchema();
+            this.keySchema = project(full, KEY_FIELD);
+            this.keyColumnIo = columnIoFactory.getColumnIO(keySchema);
+            this.keyColumn = keySchema.getColumns().getFirst();
+            this.objectSchemaWithOwner = objectProjection(full, true);
+            this.objectColumnIoWithOwner = columnIoFactory.getColumnIO(objectSchemaWithOwner);
+            this.objectSchemaWithoutOwner = objectProjection(full, false);
+            this.objectColumnIoWithoutOwner = columnIoFactory.getColumnIO(objectSchemaWithoutOwner);
+            this.objectRangeSchemaWithOwner = objectProjection(full, true, true);
+            this.objectRangeColumnIoWithOwner = columnIoFactory.getColumnIO(objectRangeSchemaWithOwner);
+            this.objectRangeSchemaWithoutOwner = objectProjection(full, false, true);
+            this.objectRangeColumnIoWithoutOwner = columnIoFactory.getColumnIO(objectRangeSchemaWithoutOwner);
+        } catch (RuntimeException | Error failure) {
+            try {
+                reader.close();
+            } catch (IOException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
     }
 
     /**
