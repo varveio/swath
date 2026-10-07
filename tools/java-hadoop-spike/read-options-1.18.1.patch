@@ -1,0 +1,40 @@
+--- a/parquet-hadoop/src/main/java/org/apache/parquet/ParquetReadOptions.java
++++ b/parquet-hadoop/src/main/java/org/apache/parquet/ParquetReadOptions.java
+@@ -274,6 +274,22 @@
+     }
+ 
+     public Builder(ParquetConfiguration conf) {
++      this(conf, null, null, false);
++    }
++
++    /** Build generic options without constructing Hadoop codecs or filters. */
++    public Builder(
++        ParquetConfiguration conf,
++        CompressionCodecFactory codecFactory,
++        FilterCompat.Filter recordFilter) {
++      this(conf, codecFactory, recordFilter, true);
++    }
++
++    private Builder(
++        ParquetConfiguration conf,
++        CompressionCodecFactory codecFactory,
++        FilterCompat.Filter recordFilter,
++        boolean explicitDependencies) {
+       this.conf = conf;
+       useSignedStringMinMax(conf.getBoolean("parquet.strings.signed-min-max.enabled", false));
+       useDictionaryFilter(conf.getBoolean(DICTIONARY_FILTERING_ENABLED, true));
+@@ -283,8 +299,12 @@
+       usePageChecksumVerification(conf.getBoolean(PAGE_VERIFY_CHECKSUM_ENABLED, usePageChecksumVerification));
+       useBloomFilter(conf.getBoolean(BLOOM_FILTERING_ENABLED, true));
+       useOffHeapDecryptBuffer(conf.getBoolean(OFF_HEAP_DECRYPT_BUFFER_ENABLED, false));
+-      withCodecFactory(HadoopCodecs.newFactory(conf, 0));
+-      withRecordFilter(getFilter(conf));
++      withCodecFactory(explicitDependencies
++          ? java.util.Objects.requireNonNull(codecFactory, "codecFactory")
++          : HadoopCodecs.newFactory(conf, 0));
++      withRecordFilter(explicitDependencies
++          ? java.util.Objects.requireNonNull(recordFilter, "recordFilter")
++          : getFilter(conf));
+       withMaxAllocationInBytes(conf.getInt(ALLOCATION_SIZE, 8388608));
+       withUseHadoopVectoredIo(conf.getBoolean(HADOOP_VECTORED_IO_ENABLED, HADOOP_VECTORED_IO_DEFAULT));
+       String badRecordThresh = conf.get(BAD_RECORD_THRESHOLD_CONF_KEY);
