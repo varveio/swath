@@ -1,0 +1,23 @@
+plugins { id 'java' }
+repositories { mavenCentral() }
+dependencies {
+ implementation files('../../swath-cli/build/libs/swath.jar')
+ implementation 'com.google.apis:google-api-services-storage:v1-rev20260524-2.0.0'
+ implementation 'com.google.http-client:google-http-client-gson:2.2.0'
+ implementation 'com.google.http-client:google-http-client-apache-v2:2.2.0'
+}
+sourceSets.main.java.srcDirs = ['.']
+java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+tasks.register('classpath') { doLast { println sourceSets.main.runtimeClasspath.asPath } }
+
+layout.buildDirectory = file('/tmp/java-remote-spike/build')
+tasks.register('runProbe', JavaExec) { classpath = sourceSets.main.runtimeClasspath; mainClass = 'RemoteProbe'; args providers.gradleProperty('outputRoot').getOrElse('/workspaces/swath-data/java-storage-spike-20261007/remote') }
+tasks.register('s3Smoke', JavaExec) {
+ classpath = sourceSets.main.runtimeClasspath
+ mainClass = 'S3Smoke'
+ args providers.gradleProperty('endpoint').getOrElse('http://127.0.0.1:4566'), '/workspaces/swath-data/java-storage-spike-20261007/remote/fixture.parquet'
+}
+
+tasks.register('jdkIdentity') {
+ doLast { println javaToolchains.launcherFor(java.toolchain).get().executablePath.asFile.absolutePath }
+}
