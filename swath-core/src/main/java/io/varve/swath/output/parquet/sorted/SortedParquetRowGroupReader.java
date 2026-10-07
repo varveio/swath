@@ -359,13 +359,20 @@ public final class SortedParquetRowGroupReader implements AutoCloseable {
      *
      * <p>Parquet already computes this as {@code BoundaryOrder} over the column index's per-page
      * min/max: a footer read, cached per row group, no I/O per request. It is <em>complementary</em>
-     * to the per-row check — a single page is trivially ascending whatever its rows do, so disorder
-     * inside a page is still caught by the rows being read. An absent column index is not disorder
-     * and is not reported as one; the read then fails on the offset index it also needs.
+     * to the per-row check — a single page has no neighboring page to order, so its boundary-order
+     * flag may be unordered or descending without contradicting sorted output. Accept that case only
+     * when both indexes agree there is exactly one page; disorder inside it is still caught by the
+     * rows being read. An absent column index is not disorder and is not reported as one; the read
+     * then fails on the offset index it also needs.
      */
     private static void requirePagesAscend(ColumnIndexStore indexStore, Path file, int blockIndex) {
         ColumnIndex keyIndex = indexStore.getColumnIndex(KEY_COLUMN_PATH);
         if (keyIndex == null || keyIndex.getBoundaryOrder() == BoundaryOrder.ASCENDING) {
+            return;
+        }
+        if (keyIndex.getNullPages().size() == 1 && keyIndex.getMinValues().size() == 1
+                && keyIndex.getMaxValues().size() == 1
+                && indexStore.getOffsetIndex(KEY_COLUMN_PATH).getPageCount() == 1) {
             return;
         }
         // row -1: the disorder is a property of the group's page boundaries, not of any one row.
