@@ -172,7 +172,7 @@ func inspectFile(file *parquet.File, expected []Row) (fileReport, error) {
 
 func checkGeometry(report fileReport, config writerConfig) error {
 	for group, geometry := range report.RowGroups {
-		if geometry.Rows <= 0 || geometry.Rows > int64(config.GroupRows) || group+1 < len(report.RowGroups) && geometry.Rows != int64(config.GroupRows) {
+		if geometry.Rows <= 0 || geometry.Rows > int64(config.GroupRows) || config.GroupBytes == 0 && group+1 < len(report.RowGroups) && geometry.Rows != int64(config.GroupRows) {
 			return fmt.Errorf("group %d violates configured row limit", group)
 		}
 		for _, column := range geometry.Columns {
@@ -184,6 +184,46 @@ func checkGeometry(report fileReport, config writerConfig) error {
 					return fmt.Errorf("group %d column %s violates page row cap", group, column.Name)
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// checkFlushReports connects gate instrumentation to independently reopened
+// footer groups. It verifies measured one-batch overshoot in the library's
+// estimate; it cannot turn that estimate into a memory or wire-byte bound.
+func checkFlushReports(report fileReport, encoded encodeResult, config writerConfig) error {
+	if len(report.RowGroups) != len(encoded.Groups) {
+		return errors.New("flush report count differs from actual row groups")
+	}
+	for group, gate := range encoded.Groups {
+		if gate.Rows != report.RowGroups[group].Rows || gate.LastPageRows <= 0 || gate.LastPageRows > int64(config.PageRows) || gate.LastPageRows > gate.Rows {
+			return fmt.Errorf("group %d flush rows differ from actual geometry", group)
+		}
+		if gate.EstimatedBufferBytes < 0 || gate.PreviousPageEstimatedBytes < 0 || gate.LastPageGrowthBytes != gate.EstimatedBufferBytes-gate.PreviousPageEstimatedBytes {
+			return fmt.Errorf("group %d has inconsistent buffer measurements", group)
+		}
+		overshoot := int64(0)
+		if config.GroupBytes > 0 {
+			overshoot = max(0, gate.EstimatedBufferBytes-config.GroupBytes)
+		}
+		if gate.TargetOvershootBytes != overshoot {
+			return fmt.Errorf("group %d has inconsistent target overshoot", group)
+		}
+		switch gate.Reason {
+		case flushByteTarget:
+			if config.GroupBytes <= 0 || gate.EstimatedBufferBytes < config.GroupBytes || gate.PreviousPageEstimatedBytes >= config.GroupBytes || overshoot > gate.LastPageGrowthBytes {
+				return fmt.Errorf("group %d did not cross its byte target in the last batch", group)
+			}
+		case flushRowLimit, flushEnd:
+			if config.GroupBytes > 0 && gate.EstimatedBufferBytes >= config.GroupBytes {
+				return fmt.Errorf("group %d missed an engaged byte target", group)
+			}
+			if gate.Reason == flushRowLimit && gate.Rows != int64(config.GroupRows) || gate.Reason == flushEnd && (group+1 != len(encoded.Groups) || gate.Rows >= int64(config.GroupRows)) {
+				return fmt.Errorf("group %d has an inconsistent flush reason", group)
+			}
+		default:
+			return fmt.Errorf("group %d has an unknown flush reason", group)
 		}
 	}
 	return nil

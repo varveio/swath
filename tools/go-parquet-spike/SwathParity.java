@@ -261,6 +261,7 @@ public final class SwathParity {
                 SortConfig.DEFAULT.withFinalPageRows(pageRows).withFinalRowGroupBytes(groupBytes);
         for (int iteration = 0; iteration < iterations; iteration++) {
             Path path = iterations == 1 ? output : Path.of(output + "." + iteration + ".parquet");
+            long cpuStarted = processCpuNanos();
             long openStarted = System.nanoTime();
             SortedParquetWriter writer = new SortedParquetWriter(path, config, mode, 1);
             long encodeStarted = System.nanoTime();
@@ -291,11 +292,19 @@ public final class SwathParity {
             result.put("encode_nanos", encoded - encodeStarted);
             result.put("footer_close_nanos", closed - encoded);
             result.put("writer_total_nanos", closed - openStarted);
+            result.put("process_cpu_nanos", processCpuNanos() - cpuStarted);
             result.put("close_includes_file_and_parent_fsync", true);
             result.put("bytes", Files.size(path));
             result.put("path", path.toString());
             emit(result);
         }
+    }
+
+    private static long processCpuNanos() {
+        var bean =
+                (com.sun.management.OperatingSystemMXBean)
+                        java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        return bean.getProcessCpuTime();
     }
 
     private static void verify(Path input, Path file) throws IOException {

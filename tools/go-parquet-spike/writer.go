@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
-	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/parquet-go/parquet-go/encoding"
 )
 
@@ -30,6 +29,12 @@ type writerConfig struct {
 	PageStatistics  bool   `json:"page_statistics"`
 	PageRows        int    `json:"page_rows"`
 	GroupRows       int    `json:"group_rows"`
+	GroupBytes      int64  `json:"group_bytes"`
+	SortMode        string `json:"sort_mode"`
+	RowAPI          string `json:"row_api"`
+	Codec           string `json:"codec"`
+	SinglePageOrder string `json:"single_page_order"`
+	ETagEncoding    string `json:"etag_encoding"`
 }
 
 func (config writerConfig) validate() error {
@@ -44,6 +49,38 @@ func (config writerConfig) validate() error {
 	}
 	if config.PageRows <= 0 || config.GroupRows <= 0 {
 		return errors.New("page and group row limits must be positive")
+	}
+	if config.GroupBytes < 0 {
+		return errors.New("group byte target must not be negative")
+	}
+	switch config.SortMode {
+	case "", "auto", "objects", "versions", "none":
+	default:
+		return errors.New("sort mode must be auto, objects, versions or none")
+	}
+	switch config.RowAPI {
+	case "", "struct", "values", "columns":
+	default:
+		return errors.New("row API must be struct, values or columns")
+	}
+	switch config.Codec {
+	case "", "go", "go-entropy", "native":
+	default:
+		return errors.New("codec must be go, go-entropy or native")
+	}
+	switch config.SinglePageOrder {
+	case "", "library":
+	case "ascending":
+		if config.KeyEncoding != "delta" {
+			return errors.New("ascending single-page order requires delta key encoding; dictionary construction replaces the public indexer type")
+		}
+	default:
+		return errors.New("single-page order must be library or ascending")
+	}
+	switch config.ETagEncoding {
+	case "", "dict", "delta":
+	default:
+		return errors.New("ETag encoding must be dict or delta")
 	}
 	return nil
 }
@@ -70,7 +107,9 @@ func (config writerConfig) schema() *parquet.Schema {
 	}
 	tag := reflect.StructTag(fmt.Sprintf("parquet:%q", key))
 	root := parquet.SchemaOf(new(Row), parquet.StructTag(tag, "Key"))
-	return parquet.NewSchema("swath_listing", canonicalRoot{root})
+	return parquet.NewSchema("swath_listing", canonicalRoot{
+		Node: root, singlePageAscending: config.SinglePageOrder == "ascending", deltaETag: config.ETagEncoding == "delta",
+	})
 }
 
 type memoryReport struct {
@@ -81,16 +120,40 @@ type memoryReport struct {
 }
 
 type encodeResult struct {
-	Encode time.Duration `json:"encode_ns"`
-	Footer time.Duration `json:"footer_ns"`
-	Memory memoryReport  `json:"memory"`
+	Encode time.Duration      `json:"encode_ns"`
+	Footer time.Duration      `json:"footer_ns"`
+	Memory memoryReport       `json:"memory"`
+	Groups []groupFlushReport `json:"group_flushes"`
+}
+
+type groupFlushReason string
+
+const (
+	flushByteTarget groupFlushReason = "byte_target"
+	flushRowLimit   groupFlushReason = "row_limit"
+	flushEnd        groupFlushReason = "end"
+)
+
+// EstimatedBufferBytes is parquet-go's hybrid payload estimate after column
+// pages flush: compressed pages/headers, current column values, raw dictionary
+// values and filters. It excludes earlier groups via SizeBaselineBytes, and is
+// neither Java's exact accounting nor an uncompressed-byte or heap bound.
+type groupFlushReport struct {
+	Rows                       int64            `json:"rows"`
+	Reason                     groupFlushReason `json:"reason"`
+	EstimatedBufferBytes       int64            `json:"estimated_buffer_bytes"`
+	SizeBaselineBytes          int64            `json:"size_baseline_bytes"`
+	PreviousPageEstimatedBytes int64            `json:"previous_page_estimated_bytes"`
+	LastPageGrowthBytes        int64            `json:"last_page_growth_bytes"`
+	LastPageRows               int64            `json:"last_page_rows"`
+	TargetOvershootBytes       int64            `json:"target_overshoot_bytes"`
 }
 
 // encodeRows includes writer construction, page encoding and explicit group
-// flushes in Encode. Footer includes only Close, after all rows were flushed.
+// flushes in Encode. Footer includes Close and codec release after rows flush.
 // It never closes or syncs output. A write failure is terminal; Close is not
 // retried because parquet-go does not support continuing after a write error.
-func encodeRows(output io.Writer, rows []Row, config writerConfig) (encodeResult, error) {
+func encodeRows(output io.Writer, rows []Row, config writerConfig) (result encodeResult, err error) {
 	if err := config.validate(); err != nil {
 		return encodeResult{}, err
 	}
@@ -99,24 +162,32 @@ func encodeRows(output io.Writer, rows []Row, config writerConfig) (encodeResult
 	}
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	mode := "objects"
-	for _, row := range rows {
-		if row.VersionID != nil || row.RowType == "DELETE_MARKER" {
-			mode = "versions"
-			break
+	mode := config.SortMode
+	if mode == "" || mode == "auto" {
+		mode = "objects"
+		for _, row := range rows {
+			if row.VersionID != nil || row.RowType == "DELETE_MARKER" {
+				mode = "versions"
+				break
+			}
 		}
 	}
 	start := time.Now()
+	codec, cleanup, err := newWriterCodec(config.Codec)
+	if err != nil {
+		return encodeResult{}, err
+	}
+	defer finishCodec(&result, &err, cleanup)
 	var integerEncoding encoding.Encoding = &parquet.RLEDictionary
 	if config.IntegerEncoding == "delta" {
 		integerEncoding = &parquet.DeltaBinaryPacked
 	}
-	writer := parquet.NewGenericWriter[Row](output,
+	options := []parquet.WriterOption{
 		config.schema(),
-		parquet.Compression(&zstd.Codec{Level: zstd.SpeedDefault, Concurrency: 1}),
+		parquet.Compression(codec),
 		parquet.DataPageVersion(2),
 		parquet.DataPageStatistics(config.PageStatistics),
-		parquet.PageBufferSize(1<<20),
+		parquet.PageBufferSize(1 << 20),
 		parquet.WriteBufferSize(4096),
 		parquet.MaxRowsPerRowGroup(int64(config.GroupRows)),
 		parquet.DictionaryMaxBytes(config.dictionaryBytes()),
@@ -124,19 +195,48 @@ func encodeRows(output io.Writer, rows []Row, config writerConfig) (encodeResult
 		parquet.DefaultEncodingFor(parquet.ByteArray, &parquet.RLEDictionary),
 		parquet.DefaultEncodingFor(parquet.Int64, integerEncoding),
 		parquet.DefaultEncodingFor(parquet.Boolean, &parquet.Plain),
-		parquet.KeyValueMetadata("swath.sort.order", sortOrder),
-		parquet.KeyValueMetadata("swath.sort.mode", mode),
-		parquet.KeyValueMetadata("swath.sort.format_version", "1"),
-		parquet.KeyValueMetadata("swath.sort.file_index", "1"),
-		parquet.KeyValueMetadata("swath.sort.file_final", "true"),
-	)
+	}
+	if mode != "none" {
+		options = append(options,
+			parquet.KeyValueMetadata("swath.sort.order", sortOrder),
+			parquet.KeyValueMetadata("swath.sort.mode", mode),
+			parquet.KeyValueMetadata("swath.sort.format_version", "1"),
+			parquet.KeyValueMetadata("swath.sort.file_index", "1"),
+			parquet.KeyValueMetadata("swath.sort.file_final", "true"),
+		)
+	}
+	writer := parquet.NewGenericWriter[Row](output, options...)
+	var batch *rowValues
+	var columns *columnValues
+	if config.RowAPI == "values" {
+		batch = newRowValues(min(config.PageRows, config.GroupRows, len(rows)))
+	} else if config.RowAPI == "columns" {
+		// Direct columns bypass the generic writer's automatic row counter.
+		// This loop enforces the row ceiling; the footer counts column zero.
+		columns = newColumnValues(min(config.PageRows, config.GroupRows, len(rows)))
+	}
+	var groups []groupFlushReport
+	baseline := writer.Size()
 	for groupStart := 0; groupStart < len(rows); {
 		groupEnd := groupStart + min(config.GroupRows, len(rows)-groupStart)
+		var previousEstimate int64
+		var gate groupFlushReport
 		for pageStart := groupStart; pageStart < groupEnd; {
 			pageEnd := pageStart + min(config.PageRows, groupEnd-pageStart)
-			if n, err := writer.Write(rows[pageStart:pageEnd]); err != nil {
+			var n int
+			var err error
+			if columns != nil {
+				columns.fill(rows[pageStart:pageEnd])
+				n, err = columns.write(writer.ColumnWriters(), pageEnd-pageStart)
+			} else if batch != nil {
+				n, err = writer.WriteRows(batch.fill(rows[pageStart:pageEnd]))
+			} else {
+				n, err = writer.Write(rows[pageStart:pageEnd])
+			}
+			if err != nil {
 				return encodeResult{}, err
-			} else if n != pageEnd-pageStart {
+			}
+			if n != pageEnd-pageStart {
 				return encodeResult{}, io.ErrShortWrite
 			}
 			for _, column := range writer.ColumnWriters() {
@@ -144,12 +244,38 @@ func encodeRows(output io.Writer, rows []Row, config writerConfig) (encodeResult
 					return encodeResult{}, err
 				}
 			}
+			estimate := writer.Size() - baseline
+			var reason groupFlushReason
+			switch {
+			case config.GroupBytes > 0 && estimate >= config.GroupBytes:
+				reason = flushByteTarget
+			case pageEnd-groupStart == config.GroupRows:
+				reason = flushRowLimit
+			case pageEnd == len(rows):
+				reason = flushEnd
+			}
+			if reason != "" {
+				gate = groupFlushReport{
+					Rows: int64(pageEnd - groupStart), Reason: reason, EstimatedBufferBytes: estimate,
+					SizeBaselineBytes: baseline, PreviousPageEstimatedBytes: previousEstimate,
+					LastPageGrowthBytes: estimate - previousEstimate, LastPageRows: int64(pageEnd - pageStart),
+				}
+				if config.GroupBytes > 0 {
+					gate.TargetOvershootBytes = max(0, estimate-config.GroupBytes)
+				}
+				break
+			}
+			previousEstimate = estimate
 			pageStart = pageEnd
 		}
 		if err := writer.Flush(); err != nil {
 			return encodeResult{}, err
 		}
-		groupStart = groupEnd
+		groups = append(groups, gate)
+		// Size includes preceding groups and bytes accepted by the transport
+		// buffer. Capture its own post-Flush baseline, rather than output bytes.
+		baseline = writer.Size()
+		groupStart += int(gate.Rows)
 	}
 	encoded := time.Since(start)
 	start = time.Now()
@@ -158,7 +284,7 @@ func encodeRows(output io.Writer, rows []Row, config writerConfig) (encodeResult
 	}
 	footer := time.Since(start)
 	runtime.ReadMemStats(&after)
-	return encodeResult{Encode: encoded, Footer: footer, Memory: memoryReport{
+	return encodeResult{Encode: encoded, Footer: footer, Groups: groups, Memory: memoryReport{
 		HeapBefore: before.HeapAlloc, HeapAfter: after.HeapAlloc,
 		Allocated: after.TotalAlloc - before.TotalAlloc, GCs: after.NumGC - before.NumGC,
 	}}, nil

@@ -140,7 +140,7 @@ func TestEncodeRowsRejectsPartialBodyAndFooter(t *testing.T) {
 			if !errors.Is(err, failure) {
 				t.Fatalf("encode error = %v, want injected failure", err)
 			}
-			if result != (encodeResult{}) {
+			if !reflect.DeepEqual(result, encodeResult{}) {
 				t.Fatalf("failed encoding returned successful measurements: %+v", result)
 			}
 			if int64(partial.Len()) != cut.offset {

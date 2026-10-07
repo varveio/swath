@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
 )
 
@@ -36,22 +37,65 @@ type Row struct {
 }
 
 func canonicalSchema() *parquet.Schema {
-	return parquet.NewSchema("swath_listing", canonicalRoot{parquet.SchemaOf(new(Row))})
+	return parquet.NewSchema("swath_listing", canonicalRoot{Node: parquet.SchemaOf(new(Row))})
 }
 
 // SchemaOf annotates Go int64 as INTEGER(64,true). The Java contract's size
 // column is an unannotated physical INT64. This public Node/Field seam changes
 // only that type, preserving declared order and the struct's value accessors.
-type canonicalRoot struct{ parquet.Node }
+// The schemas then differ, so GenericWriter.Write uses its reflective fallback;
+// the public value and column arms supply canonical Values without that bridge.
+type canonicalRoot struct {
+	parquet.Node
+	singlePageAscending bool
+	deltaETag           bool
+}
 
 func (root canonicalRoot) Fields() []parquet.Field {
 	fields := append([]parquet.Field(nil), root.Node.Fields()...)
 	for i, field := range fields {
 		if field.Name() == "size" {
 			fields[i] = physicalSizeField{field}
+		} else if root.singlePageAscending && field.Name() == "key" {
+			fields[i] = ascendingKeyField{field}
+		} else if root.deltaETag && field.Name() == "etag" {
+			fields[i] = deltaETagField{field}
 		}
 	}
 	return fields
+}
+
+// The delta struct tag rejects *string in v0.32. This public field seam leaves
+// optionality, the STRING type and value access intact while selecting encoding.
+type deltaETagField struct{ parquet.Field }
+
+func (field deltaETagField) Encoding() encoding.Encoding { return &parquet.DeltaByteArray }
+
+// The writer constructs the key index through this public Type seam. This
+// adapter is used only with delta keys: dictionary construction replaces the
+// type with parquet-go's private indexedType and would lose this indexer.
+type ascendingKeyField struct{ parquet.Field }
+
+func (field ascendingKeyField) Type() parquet.Type {
+	return singlePageAscendingType{field.Field.Type()}
+}
+
+type singlePageAscendingType struct{ parquet.Type }
+
+func (typ singlePageAscendingType) NewColumnIndexer(sizeLimit int) parquet.ColumnIndexer {
+	return singlePageAscendingIndexer{typ.Type.NewColumnIndexer(sizeLimit)}
+}
+
+type singlePageAscendingIndexer struct{ parquet.ColumnIndexer }
+
+func (indexer singlePageAscendingIndexer) ColumnIndex() format.ColumnIndex {
+	index := indexer.ColumnIndexer.ColumnIndex()
+	if len(index.NullPages) == 1 {
+		// One page has no cross-page ordering relation. Preserve every bound
+		// and array while selecting the order accepted by older Java readers.
+		index.BoundaryOrder = format.Ascending
+	}
+	return index
 }
 
 type physicalSizeField struct{ parquet.Field }

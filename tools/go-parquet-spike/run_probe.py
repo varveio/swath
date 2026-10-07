@@ -27,6 +27,11 @@ def main():
     parser.add_argument("--page-statistics", choices=("true", "false"), default="true")
     parser.add_argument("--key-encoding", choices=("both", "dict", "delta"), default="both")
     parser.add_argument("--go-only", action="store_true", help="reuse the separately recorded Java benchmark")
+    parser.add_argument("--row-api", choices=("struct", "values", "columns"), default="struct")
+    parser.add_argument("--single-page-order", choices=("library", "ascending"), default="library")
+    parser.add_argument("--etag-encoding", choices=("dict", "delta"), default="dict")
+    parser.add_argument("--java-jar", type=Path, help="override the Java reader/writer artifact, for compatibility checks")
+    parser.add_argument("--codec", choices=("go", "go-entropy", "native"), default="go")
     args = parser.parse_args()
     output = args.output_dir.resolve()
     if not args.output_dir.is_absolute() or output.is_relative_to(REPO):
@@ -41,9 +46,15 @@ def main():
     receipts = []
     serving_results = []
     environment = dict(os.environ, GOMAXPROCS="2")
+    if args.codec == "native":
+        environment["CGO_ENABLED"] = "1"
     encodings = ("dict", "delta") if args.key_encoding == "both" else (args.key_encoding,)
+    if args.single_page_order == "ascending" and encodings != ("delta",):
+        parser.error("ascending single-page order requires --key-encoding delta")
     go_policy = ["-integer-encoding", args.integer_encoding,
-                 "-page-statistics=" + args.page_statistics]
+                 "-page-statistics=" + args.page_statistics, "-row-api", args.row_api,
+                 "-single-page-order", args.single_page_order, "-etag-encoding", args.etag_encoding,
+                 "-codec", args.codec]
 
     def run(label, command, cwd=HERE):
         started = time.monotonic()
@@ -65,13 +76,15 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="swath-go-parquet-") as temporary:
         build = Path(temporary)
-        jar = REPO / "swath-cli/build/libs/swath.jar"
+        jar = args.java_jar.resolve() if args.java_jar else REPO / "swath-cli/build/libs/swath.jar"
         if not jar.is_file():
             parser.error("build the current :swath-cli:shadowJar first")
+        java_jar_sha256 = hashlib.sha256(jar.read_bytes()).hexdigest()
         run("compile-java", [str(args.java_home / "bin/javac"), "-cp", str(jar),
                              "-d", str(build), str(HERE / "SwathParity.java")])
         go = str(build / "gowriter")
-        run("compile-go", ["go", "build", "-o", go, "."])
+        tags = ["-tags", "nativezstd"] if args.codec == "native" else []
+        run("compile-go", ["go", "build", *tags, "-o", go, "."])
         run("go-binary-versions", ["go", "version", "-m", go])
         run("java-version", [str(args.java_home / "bin/java"), "-version"])
         run("duckdb-version", ["duckdb", "--version"])
@@ -145,12 +158,16 @@ def main():
                 if result.get("tested") and result.get("compatible") is False]
     final = {"output": str(output), "commands": len(receipts),
              "file_contract_checks_passed": True, "serving_rejections": rejected,
-             "all_tested_files_serve_in_current_java": not rejected,
+             "selected_java_jar": str(jar), "selected_java_jar_sha256": java_jar_sha256,
+             "all_tested_files_serve_in_selected_java": not rejected,
+             "selected_java_jar_unchanged": java_jar_sha256 == hashlib.sha256(jar.read_bytes()).hexdigest(),
              "sources_unchanged_during_run": sources == source_hashes()}
     (output / "result.json").write_text(json.dumps(final, indent=2) + "\n")
     print(json.dumps(final))
     if not final["sources_unchanged_during_run"]:
         raise SystemExit("source files changed during this run; retain as exploratory evidence only")
+    if not final["selected_java_jar_unchanged"]:
+        raise SystemExit("Java artifact changed during this run; retain as exploratory evidence only")
 
 
 if __name__ == "__main__":

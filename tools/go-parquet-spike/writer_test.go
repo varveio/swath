@@ -5,10 +5,15 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -55,6 +60,9 @@ func TestCanonicalSchemaNullsAndGeometry(t *testing.T) {
 					t.Fatalf("unexpected geometry: %+v", report)
 				}
 				if err := checkGeometry(report, config); err != nil {
+					t.Fatal(err)
+				}
+				if err := checkFlushReports(report, part.Encoding, config); err != nil {
 					t.Fatal(err)
 				}
 				for group, expectedRows := range []int64{40, 40, 33} {
@@ -218,6 +226,493 @@ func TestIntegerEncodingAndPageStatistics(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func byteTargetRows(count int) []Row {
+	random := rand.New(rand.NewSource(9137))
+	rows := probeRows(count)
+	for i := range rows {
+		payload := make([]byte, 500)
+		_, _ = random.Read(payload)
+		rows[i].Key = fmt.Sprintf("%08d/%s", i, hex.EncodeToString(payload))
+		if rows[i].ETag != nil {
+			text := hex.EncodeToString(payload[:80])
+			rows[i].ETag, rows[i].StorageClass, rows[i].VersionID = &text, &text, &text
+			rows[i].OwnerID, rows[i].OwnerDisplayName = &text, &text
+			rows[i].ChecksumAlgorithm, rows[i].ChecksumType = &text, &text
+		}
+	}
+	return rows
+}
+
+func TestByteTargetGroupsAreDeterministicAndReopen(t *testing.T) {
+	for _, corpus := range []struct {
+		name string
+		rows []Row
+	}{
+		{"wide compressible nullable", probeRows(513)},
+		{"wide random nullable", byteTargetRows(513)},
+	} {
+		for _, keyEncoding := range []string{"dict", "delta"} {
+			t.Run(corpus.name+"/"+keyEncoding, func(t *testing.T) {
+				config := writerConfig{
+					Layout: "served", KeyEncoding: keyEncoding, IntegerEncoding: "delta",
+					PageStatistics: false, PageRows: 16, GroupRows: 256, GroupBytes: 96 << 10,
+				}
+				var previous []groupFlushReport
+				for pass := range 2 {
+					path := filepath.Join(t.TempDir(), "part.parquet")
+					part, err := writePart(path, corpus.rows, config, diskOps())
+					if err != nil {
+						t.Fatal(err)
+					}
+					report, err := verifyPart(path, corpus.rows)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := checkGeometry(report, config); err != nil {
+						t.Fatal(err)
+					}
+					if err := checkFlushReports(report, part.Encoding, config); err != nil {
+						t.Fatal(err)
+					}
+					engagedAfterEarlierPages := false
+					for _, gate := range part.Encoding.Groups {
+						engagedAfterEarlierPages = engagedAfterEarlierPages || gate.Reason == flushByteTarget && gate.PreviousPageEstimatedBytes > 0
+					}
+					if !engagedAfterEarlierPages && corpus.name == "wide random nullable" {
+						t.Fatal("wide random fixture did not cross the target after earlier pages")
+					}
+					if pass == 1 && !reflect.DeepEqual(previous, part.Encoding.Groups) {
+						t.Fatalf("same input produced different byte groups: %v vs %v", previous, part.Encoding.Groups)
+					}
+					previous = part.Encoding.Groups
+				}
+			})
+		}
+	}
+}
+
+func valueParityRows() []Row {
+	zero, maximum, negative := int64(0), int64(math.MaxInt64), int64(-1234567)
+	empty, version, text := "", "\U00010000", "\x00\n%+é\ue000\U00010000"
+	latest := false
+	rows := byteTargetRows(129)
+	rows = append(rows,
+		Row{Key: "", Size: &zero, LastModified: &zero, ETag: &empty, IsLatest: &latest, RowType: "OBJECT"},
+		Row{Key: text, Size: &maximum, LastModified: &negative, StorageClass: &text, OwnerID: &text, OwnerDisplayName: &text, ChecksumAlgorithm: &text, ChecksumType: &text, RowType: "OBJECT"},
+		Row{Key: "same", RowType: "OBJECT"},
+		Row{Key: "same", RowType: "COMMON_PREFIX"},
+		Row{Key: "same", IsDeleteMarker: true, RowType: "DELETE_MARKER"},
+		Row{Key: "same", Size: &zero, VersionID: &empty, IsLatest: &latest, RowType: "OBJECT"},
+		Row{Key: "same", LastModified: &negative, VersionID: &version, IsLatest: &latest, IsDeleteMarker: true, RowType: "DELETE_MARKER"},
+	)
+	sort.SliceStable(rows, func(i, j int) bool { return compareRows(rows[i], rows[j]) < 0 })
+	return rows
+}
+
+func TestValuesAPIPreservesExactParquetBytes(t *testing.T) {
+	for _, corpus := range []struct {
+		name string
+		rows []Row
+	}{
+		{"all fields and edge values", valueParityRows()},
+		{"long Unicode", probeRows(113)},
+		{"single page", valueParityRows()[:1]},
+		{"empty", nil},
+	} {
+		for _, policy := range []writerConfig{
+			{Layout: "served", KeyEncoding: "dict", IntegerEncoding: "dict", PageStatistics: true, PageRows: 16, GroupRows: 40},
+			{Layout: "served", KeyEncoding: "delta", IntegerEncoding: "delta", PageStatistics: false, PageRows: 16, GroupRows: 64, GroupBytes: 32 << 10, SortMode: "versions"},
+			{Layout: "direct", KeyEncoding: "dict", IntegerEncoding: "delta", PageStatistics: true, PageRows: 32, GroupRows: 64, GroupBytes: 1, SortMode: "none"},
+			{Layout: "direct", KeyEncoding: "delta", IntegerEncoding: "delta", PageStatistics: true, PageRows: 16, GroupRows: 64, SortMode: "none", SinglePageOrder: "ascending"},
+			{Layout: "served", KeyEncoding: "delta", IntegerEncoding: "delta", PageStatistics: false, PageRows: 16, GroupRows: 64, ETagEncoding: "delta"},
+		} {
+			t.Run(fmt.Sprintf("%s/%s/%s/%s/stats=%t/bytes=%d", corpus.name, policy.Layout, policy.KeyEncoding, policy.IntegerEncoding, policy.PageStatistics, policy.GroupBytes), func(t *testing.T) {
+				var structure bytes.Buffer
+				policy.RowAPI = "struct"
+				structResult, err := encodeRows(&structure, corpus.rows, policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, api := range []string{"values", "columns"} {
+					t.Run(api, func(t *testing.T) {
+						policy.RowAPI = api
+						checkPublicAPIParity(t, corpus.rows, policy, structure.Bytes(), structResult)
+					})
+				}
+			})
+		}
+	}
+}
+
+func TestExplicitDeltaETagPreservesNullableSchemaAndOtherEncodings(t *testing.T) {
+	rows := valueParityRows()
+	config := writerConfig{
+		Layout: "served", KeyEncoding: "delta", IntegerEncoding: "delta", PageStatistics: false,
+		PageRows: 16, GroupRows: 64, RowAPI: "columns", ETagEncoding: "delta",
+	}
+	path := filepath.Join(t.TempDir(), "delta-etag.parquet")
+	if _, err := writePart(path, rows, config, diskOps()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyPart(path, rows); err != nil {
+		t.Fatal(err)
+	}
+	data := mustReadFile(t, path)
+	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range file.Metadata().RowGroups {
+		for _, column := range []int{etagColumn, storageClassColumn, versionColumn, ownerColumn, ownerNameColumn, checksumAlgorithmColumn, checksumTypeColumn} {
+			metadata := group.Columns[column].MetaData
+			var header format.PageHeader
+			reader := bytes.NewReader(data[metadata.DataPageOffset:])
+			if err := thrift.NewDecoder((&thrift.CompactProtocol{}).NewReader(reader)).Decode(&header); err != nil {
+				t.Fatal(err)
+			}
+			want := format.RLEDictionary
+			if column == etagColumn {
+				want = format.DeltaByteArray
+				if metadata.DictionaryPageOffset != 0 {
+					t.Fatal("delta ETag unexpectedly acquired a dictionary")
+				}
+			}
+			if !header.DataPageHeaderV2.Valid || header.DataPageHeaderV2.V.Encoding != want {
+				t.Fatalf("column %s first page encoding=%s expected=%s", metadata.PathInSchema, header.DataPageHeaderV2.V.Encoding, want)
+			}
+		}
+	}
+}
+
+func TestSinglePageIndexerPreservesBoundsAndMultiPageOrders(t *testing.T) {
+	for _, sequence := range [][]string{
+		nil,
+		{"a"},
+		{"a", "b"},
+		{"b", "a"},
+		{"a", "c", "b"},
+	} {
+		base := parquet.String().Type().NewColumnIndexer(1024)
+		normalized := singlePageAscendingType{parquet.String().Type()}.NewColumnIndexer(1024)
+		for _, key := range sequence {
+			value := parquet.ValueOf(key)
+			base.IndexPage(1, 0, value, value)
+			normalized.IndexPage(1, 0, value, value)
+		}
+		original, actual := base.ColumnIndex(), normalized.ColumnIndex()
+		if len(sequence) == 1 {
+			if actual.BoundaryOrder != format.Ascending || original.BoundaryOrder != format.Unordered {
+				t.Fatalf("single page order: original=%s actual=%s", original.BoundaryOrder, actual.BoundaryOrder)
+			}
+			actual.BoundaryOrder = original.BoundaryOrder
+		}
+		if !reflect.DeepEqual(original, actual) {
+			t.Fatalf("index arrays, bounds or multipage order changed for %v", sequence)
+		}
+		normalized.Reset()
+		if len(normalized.ColumnIndex().NullPages) != 0 {
+			t.Fatal("index reset did not preserve empty state")
+		}
+	}
+}
+
+func TestSinglePageOrderChangesOnlyKeyIndex(t *testing.T) {
+	rows := probeRows(1)
+	config := writerConfig{
+		Layout: "direct", KeyEncoding: "delta", IntegerEncoding: "dict", PageStatistics: true,
+		PageRows: 16, GroupRows: 40, SortMode: "none", SinglePageOrder: "ascending",
+	}
+	path := filepath.Join(t.TempDir(), "normalized.parquet")
+	if _, err := writePart(path, rows, config, diskOps()); err != nil {
+		t.Fatal(err)
+	}
+	report, err := verifyPart(path, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Stamps) != 0 {
+		t.Fatal("direct normalization introduced a sorted stamp")
+	}
+	for column, geometry := range report.RowGroups[0].Columns {
+		want := "UNORDERED"
+		if column == 0 {
+			want = "ASCENDING"
+		}
+		if geometry.BoundsOrder != want {
+			t.Fatalf("column %s order=%s expected=%s", geometry.Name, geometry.BoundsOrder, want)
+		}
+	}
+	config.KeyEncoding = "dict"
+	created := false
+	ops := fileOps{create: func(string) (durableFile, error) { created = true; return nil, io.ErrClosedPipe }}
+	if result, err := writePart("unused", rows, config, ops); err == nil || created || !reflect.DeepEqual(result, partResult{}) {
+		t.Fatalf("unsupported dictionary normalization reached file creation: result=%+v created=%t error=%v", result, created, err)
+	}
+}
+
+func checkPublicAPIParity(t *testing.T, rows []Row, config writerConfig, reference []byte, referenceResult encodeResult) {
+	t.Helper()
+	var candidate bytes.Buffer
+	encoded, err := encodeRows(&candidate, rows, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reference, candidate.Bytes()) {
+		t.Fatalf("public %s API changed Parquet bytes: struct=%d candidate=%d", config.RowAPI, len(reference), candidate.Len())
+	}
+	if !reflect.DeepEqual(referenceResult.Groups, encoded.Groups) {
+		t.Fatalf("public %s API changed flush gates: %v vs %v", config.RowAPI, referenceResult.Groups, encoded.Groups)
+	}
+	path := filepath.Join(t.TempDir(), config.RowAPI+".parquet")
+	part, err := writePart(path, rows, config, diskOps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(candidate.Bytes(), mustReadFile(t, path)) {
+		t.Fatal("durable output differs from byte-identical reference")
+	}
+	geometry, err := verifyPart(path, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGeometry(geometry, config); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkFlushReports(geometry, part.Encoding, config); err != nil {
+		t.Fatal(err)
+	}
+	file, err := parquet.OpenFile(bytes.NewReader(candidate.Bytes()), int64(candidate.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.NumRows() != int64(len(rows)) {
+		t.Fatal("public API reported the wrong file row count")
+	}
+	for _, group := range file.Metadata().RowGroups {
+		for _, column := range group.Columns {
+			if column.MetaData.NumValues != group.NumRows {
+				t.Fatalf("column %s values=%d, group rows=%d", column.MetaData.PathInSchema, column.MetaData.NumValues, group.NumRows)
+			}
+		}
+	}
+}
+
+func TestColumnAPIPreservesAutomaticBytePageGeometry(t *testing.T) {
+	// This wide direct-layout input crosses the 1 MiB page buffer before its
+	// 20,000-row cap, making a lost 64-row write quantum observable on disk.
+	rows := byteTargetRows(2177)
+	config := writerConfig{
+		Layout: "direct", KeyEncoding: "delta", IntegerEncoding: "delta", PageStatistics: false,
+		PageRows: 20000, GroupRows: 4096, RowAPI: "struct",
+	}
+	var reference bytes.Buffer
+	encoded, err := encodeRows(&reference, rows, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := parquet.OpenFile(bytes.NewReader(reference.Bytes()), int64(reference.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := file.RowGroups()[0].ColumnChunks()[0].OffsetIndex()
+	if err != nil || index.NumPages() < 2 {
+		t.Fatalf("fixture did not engage automatic byte pages: index=%v error=%v", index, err)
+	}
+	for _, api := range []string{"values", "columns"} {
+		t.Run(api, func(t *testing.T) {
+			config.RowAPI = api
+			checkPublicAPIParity(t, rows, config, reference.Bytes(), encoded)
+		})
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestValuesAPIOutputFailuresReturnNoMeasurements(t *testing.T) {
+	rows := valueParityRows()
+	for _, api := range []string{"values", "columns"} {
+		t.Run(api, func(t *testing.T) {
+			config := writerConfig{
+				Layout: "served", KeyEncoding: "dict", IntegerEncoding: "dict", PageStatistics: true,
+				PageRows: 16, GroupRows: 40, RowAPI: api,
+			}
+			_, cuts := referenceCuts(t, rows, config)
+			for _, cut := range cuts {
+				t.Run(cut.name, func(t *testing.T) {
+					var partial bytes.Buffer
+					failure := &prefixFailure{output: &partial, cut: cut.offset, err: io.ErrClosedPipe}
+					result, err := encodeRows(failure, rows, config)
+					if err == nil || !reflect.DeepEqual(result, encodeResult{}) {
+						t.Fatalf("failed %s output returned measurements: %+v, %v", api, result, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+var benchmarkValueRows []parquet.Row
+
+func BenchmarkFillCanonicalValues(b *testing.B) {
+	input := valueParityRows()
+	batch := newRowValues(len(input))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkValueRows = batch.fill(input)
+	}
+}
+
+func TestByteTargetLowLimitOvershootAndRowCeiling(t *testing.T) {
+	rows := byteTargetRows(129)
+	config := writerConfig{
+		Layout: "served", KeyEncoding: "dict", IntegerEncoding: "dict",
+		PageStatistics: true, PageRows: 16, GroupRows: 64, GroupBytes: 1,
+	}
+	path := filepath.Join(t.TempDir(), "part.parquet")
+	part, err := writePart(path, rows, config, diskOps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := verifyPart(path, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkFlushReports(report, part.Encoding, config); err != nil {
+		t.Fatal(err)
+	}
+	if len(part.Encoding.Groups) != 9 {
+		t.Fatalf("low target produced %d groups, expected one per batch", len(part.Encoding.Groups))
+	}
+	for group, gate := range part.Encoding.Groups {
+		if gate.Reason != flushByteTarget || gate.PreviousPageEstimatedBytes != 0 || gate.TargetOvershootBytes != gate.EstimatedBufferBytes-1 || gate.Rows > 16 {
+			t.Fatalf("group %d did not capture single-batch overshoot: %+v", group, gate)
+		}
+		if group > 0 && gate.SizeBaselineBytes <= part.Encoding.Groups[group-1].SizeBaselineBytes {
+			t.Fatal("post-Flush baseline did not advance across preceding groups")
+		}
+	}
+	config.GroupBytes = 1 << 60
+	part, err = writePart(filepath.Join(t.TempDir(), "high.parquet"), rows, config, diskOps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := part.Encoding.Groups; len(got) != 3 || got[0].Rows != 64 || got[0].Reason != flushRowLimit || got[1].Rows != 64 || got[1].Reason != flushRowLimit || got[2].Rows != 1 || got[2].Reason != flushEnd {
+		t.Fatalf("high target changed row ceiling behavior: %+v", got)
+	}
+}
+
+func TestByteTargetFlushFailuresReturnNoMeasurements(t *testing.T) {
+	config := writerConfig{
+		Layout: "served", KeyEncoding: "dict", IntegerEncoding: "dict",
+		PageStatistics: true, PageRows: 16, GroupRows: 64, GroupBytes: 1,
+	}
+	if result, err := encodeRows(io.Discard, nil, config); err != nil || len(result.Groups) != 0 {
+		t.Fatalf("empty input emitted a group: %+v, %v", result, err)
+	}
+	config.GroupBytes = -1
+	var output bytes.Buffer
+	if result, err := encodeRows(&output, byteTargetRows(17), config); err == nil || !reflect.DeepEqual(result, encodeResult{}) || output.Len() != 0 {
+		t.Fatal("negative target accepted or emitted output")
+	}
+	config.GroupBytes = 1
+	rows := byteTargetRows(129)
+	var reference bytes.Buffer
+	if _, err := encodeRows(&reference, rows, config); err != nil {
+		t.Fatal(err)
+	}
+	file, err := parquet.OpenFile(bytes.NewReader(reference.Bytes()), int64(reference.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.RowGroups()) < 2 {
+		t.Fatal("fixture did not create multiple byte-target groups")
+	}
+	// Fail inside a later physically emitted group, after earlier byte gates
+	// succeeded, and independently in the final trailer.
+	cuts := []int64{file.Metadata().RowGroups[1].Columns[0].MetaData.DataPageOffset + 1, int64(reference.Len() - 2)}
+	for _, cut := range cuts {
+		var partial bytes.Buffer
+		failure := &prefixFailure{output: &partial, cut: cut, err: io.ErrClosedPipe}
+		result, err := encodeRows(failure, rows, config)
+		if err == nil || !reflect.DeepEqual(result, encodeResult{}) {
+			t.Fatalf("failed byte target output returned measurements: %+v, %v", result, err)
+		}
+	}
+}
+
+func TestFlushReportMustMatchActualGroups(t *testing.T) {
+	rows := byteTargetRows(129)
+	config := writerConfig{
+		Layout: "served", KeyEncoding: "dict", IntegerEncoding: "dict",
+		PageStatistics: true, PageRows: 16, GroupRows: 64, GroupBytes: 1,
+	}
+	part, err := writePart(filepath.Join(t.TempDir(), "part.parquet"), rows, config, diskOps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := inspectPart(part.Path, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := part.Encoding
+	wrong.Groups = append([]groupFlushReport(nil), part.Encoding.Groups...)
+	wrong.Groups[0].Rows++
+	if err := checkFlushReports(report, wrong, config); err == nil {
+		t.Fatal("flush report accepted incorrect physical group rows")
+	}
+	wrong = part.Encoding
+	wrong.Groups = wrong.Groups[:len(wrong.Groups)-1]
+	if err := checkFlushReports(report, wrong, config); err == nil {
+		t.Fatal("flush report accepted missing physical group")
+	}
+}
+
+func TestDirectOutputOmitsSortedStampAndExplicitVersionMode(t *testing.T) {
+	rows := probeRows(17)
+	for i := range rows {
+		rows[i].VersionID, rows[i].IsLatest = nil, nil
+	}
+	config := writerConfig{
+		Layout: "direct", KeyEncoding: "dict", IntegerEncoding: "dict",
+		PageStatistics: true, PageRows: 16, GroupRows: 64, SortMode: "none",
+	}
+	path := filepath.Join(t.TempDir(), "direct.parquet")
+	part, err := writePart(path, rows, config, diskOps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := verifyPart(path, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Stamps) != 0 {
+		t.Fatalf("direct part has sorted footer keys: %v", report.Stamps)
+	}
+	if err := checkFlushReports(report, part.Encoding, config); err != nil {
+		t.Fatal(err)
+	}
+	config.SortMode = "versions"
+	path = filepath.Join(t.TempDir(), "explicit-versions.parquet")
+	if _, err := writePart(path, rows, config, diskOps()); err != nil {
+		t.Fatal(err)
+	}
+	report, err = verifyPart(path, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Stamps) != 5 || report.Stamps["swath.sort.mode"] != "versions" {
+		t.Fatalf("explicit mode was inferred from part contents instead: %v", report.Stamps)
 	}
 }
 
