@@ -15,6 +15,7 @@ import java.util.*;
 
 /** Candidate process: intentionally has no Apache Parquet or Hadoop linkage. */
 public final class HardwoodCore {
+    private static String activeProfile="auto";
     public static FileSchema schema() {
         var b=FileSchema.builder("swath_listing");
         for(int i=0;i<13;i++) {
@@ -26,21 +27,21 @@ public final class HardwoodCore {
         }
         return b.build();
     }
-    public static WriterConfig config(long rows) {
-        return WriterConfig.builder().pageTargetRows(128).pageTargetBytes(16*1024).rowGroupTargetRows(rows)
+    public static WriterConfig config(long rows) {return config(rows,activeProfile);}
+    public static WriterConfig config(long rows,String profile) {
+        return EncodingProfiles.apply(WriterConfig.builder(),profile).pageTargetRows(128).pageTargetBytes(16*1024).rowGroupTargetRows(rows)
             .rowGroupBufferTargetBytes(8L*1024*1024).statisticsTruncationLength(1024).codec(CompressionCodec.ZSTD).build();
     }
     public static void row(ParquetFileWriter w, Object[] row) throws IOException {
         w.rowWriter().writeRow(b->{for(int i=0;i<13;i++) {
             Object v=row[i]; if(v==null)b.setNull(i);
-            else if(i==1)b.setLong(i,(Long)v);
-            else if(i==2){long micros=(Long)v;b.setTimestamp(i,Instant.ofEpochSecond(Math.floorDiv(micros,1_000_000), Math.floorMod(micros,1_000_000)*1000));}
+            else if(i==1||i==2)b.setLong(i,(Long)v); // raw epoch-microseconds: documented physical setter preserves logical annotation
             else if(i==6||i==7)b.setBoolean(i,(Boolean)v);
             else b.setBinary(i,Fixture.bytes((String)v));
         }});
     }
     public static void write(Path path,String kind) throws Exception {
-        var cfg=kind.startsWith("boundaries")?WriterConfig.builder().pageTargetRows(2).pageTargetBytes(16384).rowGroupTargetRows(7).rowGroupBufferTargetBytes(8L*1024*1024).statisticsTruncationLength(kind.endsWith("truncated")?64:1024).codec(CompressionCodec.ZSTD).build():config(kind.equals("dense")?8192:kind.equals("equal")?10000:257);
+        var cfg=kind.startsWith("boundaries")?EncodingProfiles.apply(WriterConfig.builder(),activeProfile).pageTargetRows(2).pageTargetBytes(16384).rowGroupTargetRows(7).rowGroupBufferTargetBytes(8L*1024*1024).statisticsTruncationLength(kind.endsWith("truncated")?64:1024).codec(CompressionCodec.ZSTD).build():config(kind.equals("dense")?8192:kind.equals("equal")?10000:kind.equals("dictionary-transitions")?1024:257);
         try(var w=ParquetFileWriter.create(OutputFile.of(path),schema(),cfg)) {
             // Stamp last to prove metadata remains mutable through buffered row writes.
             for(Object[] r:Fixture.rows(kind))row(w,r);
@@ -81,11 +82,22 @@ public final class HardwoodCore {
     }
     public static void byteGeometry(Path dir)throws Exception {
         Path p=dir.resolve("byte-target-rowgroups.parquet");var fixture=Fixture.rows("semantic");
-        var cfg=WriterConfig.builder().pageTargetRows(32).pageTargetBytes(8192).rowGroupBufferTargetBytes(16384).rowGroupTargetRows(1_000_000).codec(CompressionCodec.ZSTD).build();
+        var cfg=EncodingProfiles.apply(WriterConfig.builder(),activeProfile).pageTargetRows(32).pageTargetBytes(8192).rowGroupBufferTargetBytes(16384).rowGroupTargetRows(1_000_000).codec(CompressionCodec.ZSTD).build();
         try(var w=ParquetFileWriter.create(OutputFile.of(p),schema(),cfg)){
             for(int i=0;i<512;i++){var r=fixture.get(i).clone();r[0]=String.format(Locale.ROOT,"bytes/%08d",i)+"x".repeat(1010);row(w,r);}
         }
         try(var f=dev.hardwood.reader.ParquetFileReader.open(InputFile.of(p))){var gs=f.getFileMetaData().rowGroups();Fixture.check(gs.size()>1,"byte budget engages before huge row target");long rows=0,max=0;for(var g:gs){rows+=g.numRows();max=Math.max(max,g.numRows());}Fixture.check(rows==512&&max<512,"byte target geometry rows");System.out.println(Fixture.json(Map.of("check","byte_target_rowgroup_cut","status","PASS","buffer_target_bytes",16384,"row_target",1000000,"row_groups",gs.size(),"max_group_rows",max,"rows",rows,"hard_rss_bound_proven",false)));}
+    }
+    /** Retain a bounded repro for the release's convenience conversion lower-bound overflow. */
+    public static void timestampConvenienceBoundary(Path dir)throws Exception {
+        long micros=Long.MIN_VALUE;Instant instant=Instant.ofEpochSecond(Math.floorDiv(micros,1_000_000),Math.floorMod(micros,1_000_000)*1000);
+        Fixture.check(java.math.BigInteger.valueOf(instant.getEpochSecond()).multiply(java.math.BigInteger.valueOf(1_000_000)).add(java.math.BigInteger.valueOf(instant.getNano()/1000)).equals(java.math.BigInteger.valueOf(micros)),"mathematically exact INT64 microsecond boundary");
+        Path path=dir.resolve("timestamp-convenience-lower-bound.parquet");var writer=ParquetFileWriter.create(OutputFile.of(path),schema(),config(128));boolean rejected=false;String message="";
+        try{writer.rowWriter().writeRow(b->b.setString("key","timestamp-boundary").setBoolean("is_delete_marker",false).setTimestamp("last_modified",instant).setString("row_type","OBJECT"));}
+        catch(IllegalArgumentException e){Fixture.check(e.getCause() instanceof ArithmeticException&&e.getMessage().contains("outside the range"),"unexpected convenience rejection");rejected=true;message=e.getMessage();}
+        finally{writer.close();}
+        Fixture.check(rejected&&!Files.exists(path)&&!Files.exists(Path.of(path+".hardwood-tmp")),"known valid-range convenience conversion rejected and discarded");
+        System.out.println(Fixture.json(Map.of("check","timestamp_convenience_lower_bound","status","UNSUPPORTED","profile",activeProfile,"epoch_micros",micros,"instant",instant.toString(),"reason",message,"adapter_policy","setLong raw physical INT64; logical TIMESTAMP(MICROS,UTC) schema retained","scope","convenience conversion only; raw delta/adversarial values independently checked")));
     }
     public static void lifecycle(Path dir) throws Exception {
         Path replacing=dir.resolve("builtin-replaces-existing.parquet");Files.writeString(replacing,"existing-output");
@@ -116,7 +128,7 @@ public final class HardwoodCore {
         System.out.println(Fixture.json(Map.of("check","close_idempotence_and_write_guard","status","PASS")));
         for(String phase:List.of("before-close","after-close","after-force","before-move")) {
             Path target=dir.resolve("crash-"+phase+".parquet");
-            Process child=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin/java").toString(),"--enable-native-access=ALL-UNNAMED","-cp",System.getProperty("java.class.path"),HardwoodCore.class.getName(),"crash-child",target.toString(),phase).redirectErrorStream(true).redirectOutput(dir.resolve("crash-"+phase+".log").toFile()).start();
+            Process child=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin/java").toString(),"--enable-native-access=ALL-UNNAMED","-cp",System.getProperty("java.class.path"),HardwoodCore.class.getName(),"crash-child",target.toString(),phase,activeProfile).redirectErrorStream(true).redirectOutput(dir.resolve("crash-"+phase+".log").toFile()).start();
             Fixture.check(child.waitFor(90,java.util.concurrent.TimeUnit.SECONDS),"child timeout");Fixture.check(child.exitValue()==73,"child must halt at selected phase");
             boolean published=Files.exists(target);Fixture.check(published==(phase.equals("after-close")),"crash publication phase="+phase);
             System.out.println(Fixture.json(Map.of("check","subprocess_crash","status","PASS","phase",phase,"published",published,"temp_exists",Files.exists(Path.of(target+".hardwood-tmp")),"exit",73,"power_loss_test",false)));
@@ -150,7 +162,7 @@ public final class HardwoodCore {
         Path dirFailed=dir.resolve("owned-directory-force-failure.parquet");var dirOut=new OwnedOutput(dirFailed,null);dirOut.injectDirectoryForceFailure=true;var dirWriter=ParquetFileWriter.create(dirOut,schema(),config(128));row(dirWriter,expected.getFirst());boolean parentFailed=false;try{dirWriter.close();}catch(IOException e){parentFailed=e.getMessage().contains("injected directory");}dirWriter.close();Fixture.check(parentFailed&&dirOut.poisoned&&dirOut.md5()==null&&!Files.exists(dirFailed),"directory force failure cannot expose durable digest or finalized output");
         System.out.println(Fixture.json(Map.of("check","owned_directory_force_failure_poison","status","PASS","file_forced",dirOut.fileForced,"parent_forced",dirOut.directoryForced,"durable_digest_visible",dirOut.md5()!=null,"target_exists",Files.exists(dirFailed))));
         for(String phase:List.of("owned-before-close","owned-after-force","owned-before-parent-force","owned-after-parent-force")) {
-            Path target=dir.resolve("crash-"+phase+".parquet");Process child=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin/java").toString(),"--enable-native-access=ALL-UNNAMED","-cp",System.getProperty("java.class.path"),HardwoodCore.class.getName(),"owned-crash-child",target.toString(),phase).redirectErrorStream(true).redirectOutput(dir.resolve("crash-"+phase+".log").toFile()).start();
+            Path target=dir.resolve("crash-"+phase+".parquet");Process child=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin/java").toString(),"--enable-native-access=ALL-UNNAMED","-cp",System.getProperty("java.class.path"),HardwoodCore.class.getName(),"owned-crash-child",target.toString(),phase,activeProfile).redirectErrorStream(true).redirectOutput(dir.resolve("crash-"+phase+".log").toFile()).start();
             Fixture.check(child.waitFor(90,java.util.concurrent.TimeUnit.SECONDS),"child timeout");Fixture.check(child.exitValue()==73,"owned child phase reached");
             boolean readable=false;try(var f=dev.hardwood.reader.ParquetFileReader.open(InputFile.of(target))){readable=true;}catch(IOException|dev.hardwood.reader.ParquetReadException e){Fixture.check(phase.equals("owned-before-close"),"unexpected invalid footer after finish");}
             Fixture.check(readable!=phase.equals("owned-before-close"),"footer readable state");
@@ -202,9 +214,11 @@ public final class HardwoodCore {
         for(String forbidden:List.of("org.apache.hadoop.conf.Configuration","org.apache.parquet.hadoop.ParquetFileReader")){try{Class.forName(forbidden);throw new AssertionError("forbidden class resolves: "+forbidden);}catch(ClassNotFoundException expected){}}
         Fixture.check(ClassLoader.getSystemResource("org/apache/hadoop/conf/Configuration.class")==null && ClassLoader.getSystemResource("org/apache/parquet/hadoop/ParquetFileReader.class")==null,"candidate process cannot resolve Apache or Hadoop classes");
         Fixture.check(!System.getProperty("java.class.path").toLowerCase(Locale.ROOT).contains("hadoop"),"candidate classpath must be Hadoop-free");
-        String mode=args[0];Path p=Path.of(args[1]);
+        String mode=args[0];Path p=Path.of(args[1]);int profileIndex=(mode.equals("geometry")||mode.equals("lifecycle"))?2:3;activeProfile=args.length>profileIndex?args[profileIndex]:"auto";
+        Fixture.check(activeProfile.equals("auto")||activeProfile.equals("delta"),"known encoding profile");
+        System.out.println(Fixture.json(Map.of("check","encoding_profile","status","PASS","profile",activeProfile,"mode",mode)));
         switch(mode) {
-            case "write" -> write(p,args[2]);case "read"->read(p,args[2]);case "geometry"->{geometry(p);byteGeometry(p);}case "lifecycle"->lifecycle(p);
+            case "write" -> write(p,args[2]);case "read"->read(p,args[2]);case "geometry"->{geometry(p);byteGeometry(p);timestampConvenienceBoundary(p);}case "lifecycle"->lifecycle(p);
             case "owned-crash-child"->{String phase=args[2];var out=new OwnedOutput(p,phase);var w=ParquetFileWriter.create(out,schema(),config(128));var fixture=Fixture.rows("semantic");for(var r:fixture)row(w,r);w.endRowGroup();if(phase.equals("owned-before-close"))Runtime.getRuntime().halt(73);w.close();throw new AssertionError("phase not reached");}
             case "crash-child"->{String phase=args[2];OutputFile sink=(phase.equals("after-force")||phase.equals("before-move"))?new DurableOutput(p,phase):OutputFile.of(p);var w=ParquetFileWriter.create(sink,schema(),config(128));var fixture=Fixture.rows("canonical");for(int i=0;i<1000;i++)row(w,fixture.get(i));w.endRowGroup();if(phase.equals("before-close"))Runtime.getRuntime().halt(73);w.close();Runtime.getRuntime().halt(73);}
             default->throw new IllegalArgumentException(mode);

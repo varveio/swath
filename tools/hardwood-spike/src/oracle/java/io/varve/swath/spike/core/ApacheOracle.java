@@ -26,6 +26,7 @@ import org.apache.parquet.schema.MessageType;
 
 /** Independent Apache decoding + production swath index/range entrypoints. No candidate linkage. */
 public final class ApacheOracle {
+    private static String expectedProfile;
     static void write(Path path,String kind)throws Exception {
         var conf=new Configuration(false);conf.setInt("parquet.compression.codec.zstd.level",3);
         try(var w=ExampleParquetWriter.builder(new LocalOutputFile(path)).withConf(conf).withType(ParquetSchema.canonical())
@@ -67,6 +68,7 @@ public final class ApacheOracle {
         }
         Fixture.check(n==expected.size(),"row count");
         validateBounds(path,actualRows);
+        if(expectedProfile!=null)validateEncodingProfile(path,kind,expectedProfile);
         if(requireStamp){var stamp=SortedParquetStamp.read(path).orElseThrow();Fixture.check(stamp.isKnownFormatVersion()&&stamp.fileFinal()&&stamp.fileIndex()==1,"production stamp detection");}
         var keys=SortedParquetIndex.firstKeysPerRowGroup(path);Fixture.check(keys.size()==groups,"index groups");int at=0;
         for(int i=0;i<keys.size();i++) {Fixture.check(Arrays.equals(keys.get(i).firstKey(),Fixture.bytes((String)expected.get(at)[0])),"actual row-group first key "+i);Fixture.check(keys.get(i).rowCount()==groupRows.get(i),"index group count");at+=Math.toIntExact(groupRows.get(i));}
@@ -78,6 +80,31 @@ public final class ApacheOracle {
         if(kind.startsWith("boundaries"))unicodeRanges(path,expected,groupRows);
         if(kind.equals("dense")) {bounded(path,expected,groupRows);randomRanges(path,expected,groupRows);}
         if(kind.equals("single")||kind.equals("equal")){try(var reader=new SortedParquetRowGroupReader(path)){assertObjects(reader.objectRange(0,Fixture.bytes("same-key"),true,null,expected.size(),true),expected,0,expected.size());}System.out.println(Fixture.json(Map.of("check","single_or_equal_key_page_boundary","status","PASS","kind",kind)));}
+    }
+    /** Independently pinned policy expectations; intentionally does not use EncodingProfiles. */
+    static void validateEncodingProfile(Path path,String kind,String profile)throws Exception {
+        Map<String,org.apache.parquet.column.Encoding> delta=Map.of("key",org.apache.parquet.column.Encoding.DELTA_BYTE_ARRAY,"etag",org.apache.parquet.column.Encoding.DELTA_BYTE_ARRAY,"version_id",org.apache.parquet.column.Encoding.DELTA_BYTE_ARRAY,"size",org.apache.parquet.column.Encoding.DELTA_BINARY_PACKED,"last_modified",org.apache.parquet.column.Encoding.DELTA_BINARY_PACKED);
+        Fixture.check(profile.equals("auto")||profile.equals("delta"),"oracle known profile");
+        Map<String,Long> pageEncodings=new TreeMap<>();int groups=0;List<Boolean> ownerDictionary=new ArrayList<>();
+        try(var f=ParquetFileReader.open(new LocalInputFile(path))){
+            for(var block:f.getFooter().getBlocks()){
+                ownerDictionary.add(block.getColumns().get(9).getEncodings().contains(org.apache.parquet.column.Encoding.RLE_DICTIONARY));
+                for(var chunk:block.getColumns())if(delta.containsKey(chunk.getPath().toDotString())){
+                    if(profile.equals("delta")){Fixture.check(chunk.getEncodings().contains(delta.get(chunk.getPath().toDotString())),"forced delta footer encoding "+chunk.getPath());Fixture.check(!chunk.getEncodings().contains(org.apache.parquet.column.Encoding.RLE_DICTIONARY),"forced delta cannot carry dictionary");}
+                    else Fixture.check(chunk.getEncodings().stream().noneMatch(e->e.name().startsWith("DELTA")),"AUTO control must remain PLAIN/dictionary");
+                }
+            }
+            PageReadStore pages;while((pages=f.readNextRowGroup())!=null){groups++;try(var p=pages){for(var column:f.getFooter().getFileMetaData().getSchema().getColumns()){
+                String name=column.getPath()[0];if(!delta.containsKey(name))continue;var reader=p.getPageReader(column);org.apache.parquet.column.page.DataPage page;
+                while((page=reader.readPage())!=null){var encoding=page instanceof org.apache.parquet.column.page.DataPageV1 v1?v1.getValueEncoding():((org.apache.parquet.column.page.DataPageV2)page).getDataEncoding();
+                    if(profile.equals("delta"))Fixture.check(encoding==delta.get(name),"actual forced delta page "+name+" got="+encoding);
+                    else Fixture.check(encoding==org.apache.parquet.column.Encoding.PLAIN||encoding==org.apache.parquet.column.Encoding.RLE_DICTIONARY,"AUTO page encoding control");
+                    pageEncodings.merge(name+":"+encoding.name(),1L,Long::sum);
+                }
+            }}}
+        }
+        if(kind.equals("dictionary-transitions"))Fixture.check(ownerDictionary.equals(List.of(true,false,true)),"AUTO unforced column must transition dictionary/plain/dictionary across groups: "+ownerDictionary);
+        System.out.println(Fixture.json(Map.of("check","independent_actual_encoding_profile","status","PASS","profile",profile,"row_groups",groups,"target_page_encodings",pageEncodings.toString(),"owner_display_dictionary_by_group",ownerDictionary.toString(),"expectation_source","independent five-column encoding map")));
     }
     static int compareBound(java.nio.ByteBuffer encoded,Object value,int col){
         var bytes=encoded.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
@@ -112,8 +139,8 @@ public final class ApacheOracle {
             }
         }
         String filename=path.getFileName().toString();
-        if(filename.equals("native-resource-ZSTD.parquet"))Fixture.check(codecs.equals(Set.of("ZSTD")),"native ZSTD codec metadata");
-        if(filename.equals("native-resource-UNCOMPRESSED.parquet"))Fixture.check(codecs.equals(Set.of("UNCOMPRESSED")),"native uncompressed codec metadata");
+        if(filename.startsWith("native-resource-")&&filename.endsWith("-ZSTD.parquet"))Fixture.check(codecs.equals(Set.of("ZSTD")),"native ZSTD codec metadata");
+        if(filename.startsWith("native-resource-")&&filename.endsWith("-UNCOMPRESSED.parquet"))Fixture.check(codecs.equals(Set.of("UNCOMPRESSED")),"native uncompressed codec metadata");
         System.out.println(Fixture.json(Map.of("check","actual_value_footer_and_page_bounds","status","PASS","comparisons",comparisons,"physical_column_pages",pagesChecked,"codecs",codecs.toString(),"string_comparison","unsigned UTF-8","numeric_comparison","physical INT64 little-endian decoded to signed long")));
     }
     static void unicodeRanges(Path path,List<Object[]> expected,List<Long> groupRows)throws Exception {
@@ -181,5 +208,5 @@ public final class ApacheOracle {
         Fixture.check(actual.size()==count,"range count actual="+actual.size()+" expected="+count);
         for(int i=0;i<count;i++){var a=actual.get(i);var e=expected.get(start+i);Fixture.check(Arrays.equals(a.key(),Fixture.bytes((String)e[0])),"range key "+i);Fixture.check(a.size()==(e[1]==null?0:(Long)e[1]),"range size");Fixture.check(a.lastModifiedEpochMicros()==(e[2]==null?0:(Long)e[2]),"range micros");Fixture.check(Objects.equals(a.etag(),e[3])&&Objects.equals(a.storageClass(),e[4])&&Objects.equals(a.ownerId(),e[8])&&Objects.equals(a.ownerDisplayName(),e[9])&&Objects.equals(a.checksumAlgorithm(),e[10])&&Objects.equals(a.checksumType(),e[11]),"range projected values");}
     }
-    public static void main(String[] args)throws Exception{if(args[0].equals("write-production"))writeProduction(Path.of(args[1]));else if(args[0].equals("write"))write(Path.of(args[1]),args[2]);else if(args[0].equals("read"))read(Path.of(args[1]),args[2]);else if(args[0].equals("read-unstamped"))read(Path.of(args[1]),args[2],false);else throw new IllegalArgumentException(args[0]);}
+    public static void main(String[] args)throws Exception{expectedProfile=args.length>3?args[3]:null;if(args[0].equals("write-production"))writeProduction(Path.of(args[1]));else if(args[0].equals("write"))write(Path.of(args[1]),args[2]);else if(args[0].equals("read"))read(Path.of(args[1]),args[2]);else if(args[0].equals("read-unstamped"))read(Path.of(args[1]),args[2],false);else throw new IllegalArgumentException(args[0]);}
 }

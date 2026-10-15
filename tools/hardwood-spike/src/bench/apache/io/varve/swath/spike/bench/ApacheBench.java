@@ -9,22 +9,36 @@ import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.ColumnIOFactory;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
 import org.apache.parquet.example.data.Group;
+import io.varve.swath.output.parquet.fixture.ParquetEntryReader;
+import java.nio.charset.StandardCharsets;
 
 public final class ApacheBench {
     public static void main(String[] args) throws Exception {
         String mode=args[0];Path path=Path.of(args[1]);long rows=Long.parseLong(args[2]);
         long target=Long.parseLong(args[3]);
+        String corpus=args.length>5?args[5]:"legacy",profile=args.length>6?args[6]:"auto";
         try(var heap=new Corpus.Heap()) {
             long start=System.nanoTime();
+            var digest=new Corpus.Digest(corpus.equals("irregular"));
             if(mode.equals("write")) {
                 var spec=new ListEntryParquetWriters.TrackedSpec(target,ListEntryParquetWriters.PageLayout.served(20000),0,null);
                 var w=ListEntryParquetWriters.buildTracked(path,new ListEntryWriteSupport(ParquetSchema.canonical()),spec);
-                for(long i=0;i<rows;i++) {Object[] r=Corpus.row(i);
+                for(long i=0;i<rows;i++) {Object[] r=Corpus.row(corpus,i);digest.row(r);
                     w.write(new ObjectEntry(KeyBytes.ofUtf8((String)r[0]),(Long)r[1],(Long)r[2],(String)r[3],(String)r[4],(String)r[5],Boolean.TRUE.equals(r[6]),(String)r[8],(String)r[9],(String)r[10],(String)r[11]));
                 }
                 // Both writer measurements finalize the footer. The candidate's built-in output
                 // does not fsync, so use close here and expose that mismatch in the report.
                 w.writer().close();
+            } else if(mode.equals("read-production")) {
+                long n=0;
+                try(var reader=new ParquetEntryReader(path)) {
+                    while(reader.hasNext()) {
+                        ObjectEntry entry=(ObjectEntry)reader.next();
+                        Object[] a={new String(entry.key().rawUnsafe(),StandardCharsets.UTF_8),entry.size(),entry.lastModifiedEpochMicros(),entry.etag(),entry.storageClass(),entry.versionId(),entry.versionId()==null?null:entry.isLatest(),false,entry.ownerId(),entry.ownerDisplayName(),entry.checksumAlgorithm(),entry.checksumType(),"OBJECT"};
+                        Corpus.equal(a,corpus,n++);digest.row(a);
+                    }
+                }
+                if(n!=rows)throw new AssertionError("row count="+n+" expected="+rows);
             } else {
                 long n=0;
                 try(var reader=ParquetFileReader.open(new LocalInputFile(path))) {
@@ -39,12 +53,12 @@ public final class ApacheBench {
                             else if(j==6||j==7)a[j]=g.getBoolean(j,0);
                             else a[j]=g.getBinary(j,0).toStringUsingUTF8();
                         }
-                        Corpus.equal(a,n++);
+                        Corpus.equal(a,corpus,n++);digest.row(a);
                     }}
                 }
                 if(n!=rows)throw new AssertionError("row count="+n+" expected="+rows);
             }
-            Corpus.report("apache",mode,rows,start,Files.size(path),heap,target);
+            Corpus.report("apache",mode,rows,start,Files.size(path),heap,target,corpus,"production",digest.finish());
         }
     }
 }

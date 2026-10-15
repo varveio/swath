@@ -99,88 +99,189 @@ Measured resolved runtime dependency JARs (not shaded distribution sizes):
 Every audited candidate closure has zero Hadoop class definitions and zero
 Hadoop class-name references. SHA-256 values for each artifact are in the TSVs.
 
-## Performance and memory
+## Encoding, performance and memory
 
-The shared corpus streams one object row at a time. It exercises all thirteen
-canonical fields, optional values, UTF-8 keys, repeated metadata, distinct etags,
-and occasional keys near S3's maximum length. It retains no corpus-sized list.
-Both readers validate every field and row count against independently generated
-expected values, including when reading the other writer's output.
+`EncodingProfiles` uses the released writer API. The `auto` profile leaves every
+column at AUTO; in Beta2 that policy chooses plain or dictionary encoding. The
+`delta` profile explicitly selects `DELTA_BYTE_ARRAY` for key, etag and version_id,
+and `DELTA_BINARY_PACKED` for size and last_modified. Other columns remain AUTO.
+This is configuration, with no library patch or production migration.
+
+Two independent corpus manifests define the expected thirteen-field row stream:
+
+- `legacy` preserves the original synthetic corpus, including its unsorted hex
+  keys and linear size/timestamp values. It deliberately retains the case that
+  made the original AUTO file-size difference look especially large.
+- `irregular` is a deterministic, realistic-shaped synthetic stress corpus. It
+  has nonlinear sizes, shuffled timestamps, high-entropy etags, nullable metadata,
+  shared-prefix keys, embedded controls, supplementary Unicode and long keys. Its
+  completed keys are strictly sorted by unsigned UTF-8 bytes. It is not a sampled
+  bucket and establishes no claim about production workload distributions.
+
+`CorpusManifest` establishes the expected values, typed length-delimited SHA-256,
+key length, null counts and key ordering without reading any output file. Each
+writer hashes its input. Each independent reader checks every decoded field and
+row count, hashes the decoded stream, and checks actual key order for `irregular`.
+The driver requires every hash to equal the separate manifest. No corpus-sized
+row list is retained.
+
+To reproduce the matched encoding comparison in a fresh directory:
 
 ```bash
-python3 tools/hardwood-spike/bench.py --phase smoke \
-  --evidence "$EVIDENCE/bench/smoke" --classpath-dir "$EVIDENCE/harness"
-python3 tools/hardwood-spike/bench.py --phase performance \
-  --apache-target 2097152 --hardwood-row-group-rows 14000 \
-  --evidence "$EVIDENCE/bench/controlled" --classpath-dir "$EVIDENCE/harness"
-python3 tools/hardwood-spike/summarize.py "$EVIDENCE/bench/controlled"
-python3 tools/hardwood-spike/bench.py --phase memory \
-  --evidence "$EVIDENCE/bench" --classpath-dir "$EVIDENCE/harness"
+./gradlew -p tools/hardwood-spike writeClasspaths \
+  -PevidenceDir="$EVIDENCE/iteration-2/encoding"
+for corpus in legacy irregular; do
+  if [ "$corpus" = legacy ]; then
+    apache_target=2097152
+    hardwood_rows=14000
+  else
+    apache_target=2359296
+    hardwood_rows=16300
+  fi
+  for profile in delta auto; do
+    python3 tools/hardwood-spike/bench.py --phase performance \
+      --corpus "$corpus" --encoding-profile "$profile" \
+      --apache-target "$apache_target" --hardwood-row-group-rows "$hardwood_rows" \
+      --evidence "$EVIDENCE/iteration-2/bench/$corpus/$profile" \
+      --classpath-dir "$EVIDENCE/iteration-2/encoding"
+  done
+done
+python3 tools/hardwood-spike/encoding-report.py "$EVIDENCE/iteration-2"
 ```
 
-Performance runs use 100,000 and 1,000,000 rows, three fresh JVMs per writer at
-each size, both readers for every output, `-Xms32m -Xmx256m`, and alternate engine
-order. These are **cold fresh-JVM runs without an in-process warmup**. Operation
-time includes setup, class loading, JIT activity, corpus generation or complete
-read validation, and footer close. `/usr/bin/time` additionally records process
-wall time and maximum RSS. Heap sampling every 10 ms is approximate and may miss
-short peaks. Files are read immediately after creation; this measures warm OS
-cache behavior and does not establish cold-storage throughput. The shared host
-is not an isolated performance laboratory.
+Each corpus/profile runs 100,000 and 1,000,000 rows, three fresh JVMs per writer at
+each size, and both readers on every output: 144 successful processes in total.
+The process limit is three minutes. `run-provenance.json` captures exact commands,
+source hashes, runtime class/JAR hashes and the starting commit. The driver
+refuses to append to an existing phase. `comparison-summary.json` checks all
+144 receipts, hashes, logical row counts and unchanged candidate row-group
+boundaries between AUTO and delta, then records timings, file hashes and each
+column's compressed/uncompressed bytes, encodings and pages.
 
-Both writers use ZSTD's default level 3, the same zstd-jni version, 1 MiB page
-targets, 20,000-row page targets, 1,024-byte statistics truncation, and streaming
-MD5 over the emitted file. Both finalize a footer. **Neither measured path
-performs a file or directory fsync.** The Apache arm calls the current canonical
-`ListEntryParquetWriters.buildTracked` with `ListEntryWriteSupport`; the reader
-uses the production-style `LocalInputFile` / row-group / `GroupRecordConverter`
-path. The candidate uses its row API. Expected end-to-end mapping costs differ:
-Apache constructs `ObjectEntry`, while Hardwood accepts a typed row builder.
+The measured swath module archives carry production commit `69cb809`; the spike
+commit changes their manifest stamp. A scoped rebuild reproduced the original
+measured JAR hashes exactly and proved that only `META-INF/MANIFEST.MF` differs
+from the current archives: every class/resource entry is identical. The receipt
+is `iteration-2/encoding/artifact-provenance-verification.json`.
 
-Equal byte targets do not give equal row groups. An exploratory 8 MiB/8 MiB run
-produced one Apache group versus sixteen Hardwood groups at one million rows.
-The controlled follow-up instead uses the calibrated Apache 2 MiB target and
-Hardwood's 14,000-row limit with an 8 MiB buffer target, producing about seventy
-groups in both arms. This aligns geometry approximately, not byte for byte.
-Encoding choices still differ: Apache uses delta encodings on keys/integers;
-Hardwood AUTO selects plain/dictionary encodings for this corpus. Apache's served
-dictionary budget is 8 KiB; Hardwood exposes no identical dictionary cap.
-`Geometry` records actual row counts, page totals, uncompressed chunk sizes,
-encodings and codecs. File sizes and reader memory must accompany timings.
+These are **cold fresh-JVM runs without an in-process warmup**, with
+`-Xms32m -Xmx256m`. Engine order alternates within each three-fork set. Operation
+time includes setup, class loading, JIT activity, generation or complete read
+validation, logical SHA-256 and footer close. Hashing was added for iteration 2;
+**timings cannot be compared directly to iteration 1**. `/usr/bin/time` records
+process wall time and maximum RSS. A 10 ms heap sampler can miss short peaks.
+Reads immediately follow writes, so OS cache is warm. The shared host is not an
+isolated performance laboratory.
 
-The bounded-memory phase writes one million rows at 8 and 32 MiB group targets,
-with 64 and 128 MiB heaps. Each process has a three-minute deadline. Passing
-these cases is empirical evidence only, not a memory proof for arbitrary widths,
-schema sizes, parallelism, concurrent files, malformed inputs or larger keys.
-The initial default-reader case at an 8 MiB target failed at 64 MiB heap and
-passed at 128 MiB; the 32 MiB writer target failed at 64 MiB. Those failures are
-retained. Default reader concurrency follows available processors and is not an
-application memory admission policy.
+Both writers use ZSTD level 3 with zstd-jni 1.5.7-9, 1 MiB page targets,
+20,000-row page targets, 1,024-byte statistics truncation and streaming MD5.
+**Neither measured path fsyncs the file or directory.** Apache uses the actual
+canonical `ListEntryParquetWriters.buildTracked` and `ListEntryWriteSupport`.
+Its primary reader uses `LocalInputFile`, row-group pages and
+`GroupRecordConverter`, the same physical path used by
+[ParquetEntryReader](../../swath-core/src/main/java/io/varve/swath/output/parquet/fixture/ParquetEntryReader.java)
+and the sorted reader. It preserves raw physical nulls; it does not include
+production model construction. Apache writer mapping constructs `ObjectEntry`;
+Hardwood uses its row builder. Apache's served dictionary budget is 8 KiB;
+Hardwood exposes no identical cap. Apache receipts correctly label their policy
+`production`; the requested profile only changes Hardwood.
 
-The controlled one-million-row comparison produced these medians over three
-fresh JVMs; read times include complete value validation:
+Byte thresholds do not denote the same memory/encoding accounting. Geometry was
+calibrated before timing, using row counts rather than a favorable timing result:
+legacy uses Apache 2 MiB / Hardwood 14,000 rows, while irregular uses Apache
+2.25 MiB / Hardwood 16,300 rows. Hardwood retains an 8 MiB buffer target in both.
+AUTO and delta use identical settings within a corpus. At one million rows,
+legacy has Apache 71 groups / 923 column pages versus Hardwood 72 / 936;
+irregular has 62 / 867 in both arms. Candidate AUTO and delta boundaries match
+exactly. These are approximate engine-to-engine geometry controls.
 
-| Operation | Hardwood | Apache |
+Confirmed file sizes at one million rows:
+
+| Corpus | Hardwood AUTO | Hardwood delta | Apache production |
+| --- | ---: | ---: | ---: |
+| Legacy | 12,525,793 | 4,357,074 | 4,771,155 |
+| Irregular | 49,882,386 | 45,416,941 | 46,344,197 |
+
+The public encoding profile removes the initial file-size objection: delta cuts
+legacy AUTO by 65.22% and irregular AUTO by 8.95%. The effect is corpus dependent.
+On the linear legacy values, compressed size/last_modified columns drop from
+3,036,653 / 2,051,405 bytes to 4,947 / 5,036. On irregular sizes, delta instead
+**increases** that one column from 3,744,743 to 4,040,457 bytes (+7.9%), while other
+columns make the whole file smaller. No adaptive encoding heuristic is inferred
+from these two corpora.
+
+Observed median operation seconds over three fresh JVMs, including hashing and
+value validation:
+
+| Corpus | Hardwood AUTO write | Hardwood delta write | Apache write in delta comparison |
+| --- | ---: | ---: | ---: |
+| Legacy | 1.103 | 0.977 | 1.408 |
+| Irregular | 1.696 | 1.489 | 2.101 |
+
+| Read the same Apache-produced file | Hardwood delta comparison | Apache physical decoder |
 | --- | ---: | ---: |
-| Write including MD5 and footer, seconds | 0.862 | 1.216 |
-| Read Apache-produced file, seconds | 0.711 | 1.120 |
-| Read Hardwood-produced file, seconds | 0.729 | 1.056 |
-| Produced file, bytes | 12,525,793 | 4,771,155 |
-| Row groups / total column pages | 72 / 936 | 71 / 923 |
-| Writer maximum RSS, MiB | 154 | 204 |
-| Reader RSS on Apache-produced file, MiB | 313 | 198 |
-| Reader RSS on Hardwood-produced file, MiB | 325 | 190 |
+| Legacy | 1.010 | 1.352 |
+| Irregular | 1.257 | 1.629 |
 
-These observations support further evaluation, while exposing a substantial
-file-size and read-memory tradeoff for this corpus. They do not establish a
-general speedup. The first exploratory smoke failures are explicitly retained
-under `bench/failed-trial/`; they are superseded by `aligned-smoke/` and the
-controlled comparison.
+These are bounded observations, not a general throughput claim. Default Hardwood
+reader contexts used all 18 available processors. On irregular delta's own file,
+median maximum RSS was about 368 MiB for Hardwood versus 212 MiB for Apache on
+its own output, despite the 256 MiB Java heap cap. Heap and process RSS differ.
 
-A follow-up `HardwoodContext.create(1)` read passed at a 64 MiB heap on the
-sixteen-group candidate file, but still exhausted that heap on the one-group
-Apache exploratory file. Reducing concurrency helps; decoded row-group size
-still matters. This is an adapter sizing requirement, not a proven upper bound.
+A secondary comparator invokes the actual `ParquetEntryReader`, including typed
+model construction, on the valid object corpus:
+
+```bash
+python3 tools/hardwood-spike/bench.py --phase production-reader \
+  --corpus irregular --encoding-profile delta \
+  --evidence "$EVIDENCE/iteration-2/bench/irregular/delta/production-reader" \
+  --classpath-dir "$EVIDENCE/iteration-2/encoding"
+```
+
+All six secondary processes pass complete field/hash checks. Medians were
+1.719 seconds on Hardwood delta files and 1.741 seconds on Apache files. The
+primary physical comparator remains separate so its costs and null semantics
+stay explicit.
+
+For memory diagnosis, `--phase stress-fixture --corpus CORPUS --encoding-profile
+delta` produces a one-million-row, one-group candidate file with a 512 MiB writer
+heap and 1 GiB group target, then independently decodes it with Apache. This is
+fixture generation, not a recommended writer configuration. Small-group and
+one-group files are retained for `memory.py`. The original 64 MiB/default-reader
+failures remain evidence; default concurrency is not an admission policy, and
+passing a matrix is not a proof for arbitrary schema widths, malformed input,
+concurrent readers or keys. See the separate memory probe's recorded settings
+and results for the row API versus explicitly sized column batches.
+
+For example, generate an independently validated stress file, then bracket row
+and explicit column-batch memory on immutable files:
+
+```bash
+python3 tools/hardwood-spike/bench.py --phase stress-fixture \
+  --corpus legacy --encoding-profile delta \
+  --evidence "$EVIDENCE/iteration-2/encoding/stress-legacy-delta" \
+  --classpath-dir "$EVIDENCE/iteration-2/encoding"
+python3 tools/hardwood-spike/memory.py --phase bracket --corpus legacy \
+  --small "$EVIDENCE/iteration-2/bench/legacy/delta/hardwood-1000000-0.parquet" \
+  --stress "$EVIDENCE/iteration-2/encoding/stress-legacy-delta/hardwood-onegroup.parquet" \
+  --classpath-file "$EVIDENCE/iteration-2/encoding/hardwoodBench.classpath" \
+  --evidence "$EVIDENCE/iteration-2/memory/legacy-bracket"
+python3 tools/hardwood-spike/memory.py --phase warm --warm-heap 64 --warm-api column \
+  --corpus legacy \
+  --small "$EVIDENCE/iteration-2/bench/legacy/delta/hardwood-1000000-0.parquet" \
+  --stress "$EVIDENCE/iteration-2/encoding/stress-legacy-delta/hardwood-onegroup.parquet" \
+  --classpath-file "$EVIDENCE/iteration-2/encoding/hardwoodBench.classpath" \
+  --evidence "$EVIDENCE/iteration-2/memory/legacy-selected-warm"
+```
+
+The selected public configuration is `HardwoodContext.create(1)` plus
+`ColumnReadersBuilder.batchSize(1024)`, materializing and validating all thirteen
+fields. At a 64 MiB heap it passed both corpora with both small groups and a
+single million-row group, including one warmup and two measured passes per file.
+The row API at that heap failed on legacy's one-group file and both irregular
+files. Explicit column batch sizing improves the tested heap admission envelope;
+it does not make process RSS uniformly lower, and it is not a proof for arbitrary
+inputs or concurrent readers. The memory report retains the failures and limits.
 
 ## Native feasibility
 
@@ -190,9 +291,12 @@ multiple row groups. Run with a GraalVM 25 installation on Linux aarch64:
 
 ```bash
 python3 tools/hardwood-spike/native.py --graal-home /path/to/graalvm-25 \
-  --classpath-dir "$EVIDENCE/harness" --evidence "$EVIDENCE/harness"
+  --classpath-dir "$EVIDENCE/iteration-2/encoding" \
+  --evidence "$EVIDENCE/iteration-2/encoding/native" --profiles auto delta
 python3 tools/hardwood-spike/src/core/run-core.py \
-  --evidence-root "$EVIDENCE" --run-name final-reviewed --native
+  --evidence-root "$EVIDENCE/iteration-2" --run-name delta-with-native --profile delta \
+  --classpath-root "$EVIDENCE/iteration-2/encoding" \
+  --native-root "$EVIDENCE/iteration-2/encoding/native" --native
 ```
 
 The bounded compilation is `--no-fallback`, a 4 GiB compiler heap, two compiler
@@ -200,8 +304,9 @@ threads, and a 180-second deadline. It explicitly includes
 `-H:IncludeResources=linux/aarch64/libzstd-jni.*`. The first plain build proved an
 uncompressed roundtrip but failed to load ZSTD's native library; the resource
 include made both roundtrips pass. Oracle GraalVM 25.0.4+7.1 completed that build
-in 46.9 seconds with 2.04 GB reported peak RSS on this machine. Apache independently
-validated both native-produced files.
+in 39.5 seconds with 2.04 GB reported peak RSS in iteration 2. The same native
+binary passes AUTO and delta with both codecs: four complete native roundtrips
+and four independent Apache validations of values, actual encodings and codecs.
 
 `native.py` also runs the independent oracle, emits `native-geometry.jsonl`
 through the Apache geometry reader, and records compiler version and binary
@@ -210,10 +315,10 @@ calibration and smoke runs. The standalone equivalent is:
 
 ```bash
 "$JAVA_HOME/bin/java" --enable-native-access=ALL-UNNAMED \
-  -cp "$(cat "$EVIDENCE/harness/apacheBench.classpath")" \
+  -cp "$(cat "$EVIDENCE/iteration-2/encoding/apacheBench.classpath")" \
   io.varve.swath.spike.bench.Geometry \
-  "$EVIDENCE/harness/native-resource-UNCOMPRESSED.parquet" \
-  "$EVIDENCE/harness/native-resource-ZSTD.parquet"
+  "$EVIDENCE/iteration-2/encoding/native/native-resource-delta-UNCOMPRESSED.parquet" \
+  "$EVIDENCE/iteration-2/encoding/native/native-resource-delta-ZSTD.parquet"
 ```
 
 This demonstrates a native core+ZSTD artifact on this architecture. It does not
@@ -224,5 +329,6 @@ the investigation evidence directory.
 
 Recorded investigation outputs live under
 `/workspaces/data/swath/hardwood-spike-20261015/{harness,bench,core,remote}`.
-The first performance/memory results at `bench/` are exploratory; the digest-
-and geometry-controlled performance results are under `bench/controlled/`.
+Iteration 1 remains under those original roots. Current matched encoding evidence
+is under `iteration-2/{encoding,bench}`; its exact corpus, policy, file geometry
+and instrumentation must accompany any quoted numbers.

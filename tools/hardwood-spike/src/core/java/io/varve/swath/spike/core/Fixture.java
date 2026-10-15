@@ -12,7 +12,23 @@ public final class Fixture {
     private Fixture() {}
     public static List<Object[]> rows(String kind) {
         ArrayList<Object[]> rows = new ArrayList<>();
-        if (kind.startsWith("boundaries")) {
+        if (kind.equals("delta-adversarial")) {
+            long[] extremes={Long.MIN_VALUE,Long.MAX_VALUE,-1L,0L,1L,-1_000_001L,1_700_000_000_123_456L};
+            for(int i=0;i<2056;i++){
+                String key=String.format(Locale.ROOT,"delta/%08d/",i)+"x".repeat(1009); // 1024 UTF-8 bytes
+                Object[] r=row(key,i,i<257?0:i<514?1023:i&1023,"OBJECT");
+                if(r[1]!=null)r[1]=extremes[i%extremes.length];if(r[2]!=null)r[2]=extremes[(i+1)%extremes.length];
+                if(r[3]!=null)r[3]=switch(i%4){case 0->"";case 1->"shared-etag/"+"z".repeat(1000)+i;case 2->"\u0000é\uffff\ud800\udc00";default->"etag/"+Integer.toHexString(i*7919);};
+                if(r[5]!=null)r[5]=switch(i%4){case 0->"";case 1->"v\uffff";case 2->"v\ud800\udc00";default->"v\u0000"+i;};
+                rows.add(r);
+            }
+        } else if(kind.equals("dictionary-transitions")) {
+            for(int i=0;i<3072;i++){
+                Object[] r=row(String.format(Locale.ROOT,"transition/%08d",i),i,i&1023,"OBJECT");r[1]=(long)i;
+                r[9]=i%7==0?null:i/1024==1?"unique-owner-"+i+"-"+Integer.toHexString(i*7919):"repeated-owner";
+                rows.add(r);
+            }
+        } else if (kind.startsWith("boundaries")) {
             String[] edges={"~", "\u007f", "\u0080", "é", "\ud7ff", "\ue000", "\uffff", "\ud800\udc00", "\udbff\udfff"};
             int id=0;for(int block=0;block<4;block++)for(String edge:edges)for(int neighbour=0;neighbour<3;neighbour++)rows.add(row(String.format(Locale.ROOT,"u%02d/",block)+edge+neighbour,id++,1023,"OBJECT"));
             for(String edge:edges)for(int neighbour=0;neighbour<3;neighbour++)rows.add(row("long/"+"x".repeat(1011)+edge+neighbour,id++,1023,"OBJECT"));

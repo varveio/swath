@@ -9,6 +9,7 @@ import dev.hardwood.reader.ParquetFileReader;
 import dev.hardwood.writer.ParquetFileWriter;
 import dev.hardwood.writer.WriterConfig;
 import io.varve.swath.spike.core.HardwoodCore;
+import io.varve.swath.spike.core.EncodingProfiles;
 import java.nio.file.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
@@ -20,14 +21,16 @@ public final class HardwoodBench {
         String mode=args[0]; Path path=Path.of(args[1]); long rows=Long.parseLong(args[2]);
         long target=Long.parseLong(args[3]);
         long targetRows=args.length>4?Long.parseLong(args[4]):Long.MAX_VALUE;
+        String corpus=args.length>5?args[5]:"legacy",profile=args.length>6?args[6]:"auto";
         try(var heap=new Corpus.Heap()) {
             long start=System.nanoTime();
+            var digest=new Corpus.Digest(corpus.equals("irregular"));
             if(mode.equals("write")) {
-                var config=WriterConfig.builder().codec(CompressionCodec.ZSTD).pageTargetBytes(1024*1024)
+                var config=EncodingProfiles.apply(WriterConfig.builder(),profile).codec(CompressionCodec.ZSTD).pageTargetBytes(1024*1024)
                         .pageTargetRows(20000).rowGroupTargetRows(targetRows)
                         .rowGroupBufferTargetBytes(target).statisticsTruncationLength(1024).build();
                 try(var w=ParquetFileWriter.create(new DigestOutput(OutputFile.of(path)), HardwoodCore.schema(),config)) {
-                    for(long i=0;i<rows;i++) HardwoodCore.row(w,Corpus.row(i));
+                    for(long i=0;i<rows;i++){Object[] row=Corpus.row(corpus,i);digest.row(row);HardwoodCore.row(w,row);}
                 }
             } else {
                 long n=0;
@@ -39,12 +42,12 @@ public final class HardwoodBench {
                             else if(j==6||j==7)a[j]=rr.getBoolean(j);
                             else a[j]=new String(rr.getBinary(j),StandardCharsets.UTF_8);
                         }
-                        Corpus.equal(a,n++);
+                        Corpus.equal(a,corpus,n++);digest.row(a);
                     }
                 }
                 if(n!=rows)throw new AssertionError("row count="+n+" expected="+rows);
             }
-            Corpus.report("hardwood",mode,rows,start,Files.size(path),heap,target);
+            Corpus.report("hardwood",mode,rows,start,Files.size(path),heap,target,corpus,profile,digest.finish());
         }
     }
     /** Same streaming MD5 work as the current swath physical writer, without Hadoop. */

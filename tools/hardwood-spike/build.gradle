@@ -54,7 +54,10 @@ dependencies {
     }
 }
 ['core','oracle','remote','hardwoodBench','apacheBench','nativeBench'].each { setName ->
-    tasks.named('assemble') { dependsOn tasks.named(sourceSets[setName].classesTaskName) }
+    tasks.named('assemble') {
+        dependsOn tasks.named(sourceSets[setName].classesTaskName)
+        dependsOn sourceSets[setName].runtimeClasspath
+    }
     tasks.register("${setName}Run", JavaExec) {
         classpath = sourceSets[setName].runtimeClasspath
         mainClass = providers.gradleProperty('mainClass')
@@ -65,6 +68,10 @@ dependencies {
 }
 tasks.register('writeClasspaths') {
     dependsOn 'coreClasses','oracleClasses','remoteClasses','hardwoodBenchClasses','apacheBenchClasses','nativeBenchClasses'
+    // Runtime variants use included-build JARs, whereas Java compilation can use
+    // only class directories. Build those JARs before emitting runnable paths on
+    // a clean checkout rather than relying on a previous production build.
+    dependsOn sourceSets.collect { it.runtimeClasspath }
     doLast {
         def out = file(providers.gradleProperty('evidenceDir').getOrElse('/tmp/hardwood-spike-harness'))
         out.mkdirs()
