@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: Apache-2.0
+// Run against the production root; records its resolved closures without changing them.
+gradle.projectsEvaluated {
+    [':swath-core', ':swath-cli'].each { projectPath ->
+        def p=gradle.rootProject.findProject(projectPath)
+        if(p==null)return
+        p.tasks.register('spikeRuntimeAudit') {
+            doLast {
+                def out=new File(gradle.rootProject.findProperty('evidenceDir') ?: '/tmp/hardwood-spike-harness')
+                out.mkdirs()
+                def rows=p.configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.sort { it.moduleVersion.id.toString() }.collect { a ->
+                    def sha=java.security.MessageDigest.getInstance('SHA-256').digest(a.file.bytes).encodeHex()
+                    [a.moduleVersion.id.toString(),a.file.length(),sha,a.file.absolutePath].join('\t')
+                }
+                new File(out,p.name+'-production.tsv').text='coordinate\tbytes\tsha256\tpath\n'+rows.join('\n')+'\n'
+            }
+        }
+    }
+}

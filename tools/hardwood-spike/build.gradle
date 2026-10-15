@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: Apache-2.0
+plugins { id 'java' }
+repositories { mavenCentral() }
+java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+sourceSets {
+    core { java.srcDirs = ['src/core/java'] }
+    oracle { java.srcDirs = ['src/oracle/java']; compileClasspath += sourceSets.core.output; runtimeClasspath += sourceSets.core.output }
+    remote { java.srcDirs = ['src/remote/java']; compileClasspath += sourceSets.core.output; runtimeClasspath += sourceSets.core.output }
+    hardwoodBench { java.srcDirs = ['src/bench/common', 'src/bench/hardwood']; compileClasspath += sourceSets.core.output; runtimeClasspath += sourceSets.core.output }
+    apacheBench { java.srcDirs = ['src/bench/common', 'src/bench/apache'] }
+    nativeBench { java.srcDirs = ['src/bench/native']; compileClasspath += sourceSets.core.output; runtimeClasspath += sourceSets.core.output }
+}
+configurations {
+    hardwoodPlain
+    hardwoodS3
+    hardwoodAwsAuth
+    hardwoodAllCodecs
+    hardwoodSources
+    hardwoodPoms
+    remoteImplementation.extendsFrom(coreImplementation)
+    hardwoodBenchImplementation.extendsFrom(coreImplementation)
+    apacheBenchImplementation.extendsFrom(oracleImplementation)
+    apacheBenchCompileOnly.extendsFrom(oracleCompileOnly)
+    nativeBenchImplementation.extendsFrom(coreImplementation)
+}
+// Hardwood requires the newer ByteBuffer decompress overload (the existing swath
+// JNI version fails at runtime). Align both benchmark arms; leave the oracle's
+// real production runtime unchanged and disclose this isolated comparison upgrade.
+configurations.matching { it.name.startsWith('hardwoodBench') || it.name.startsWith('apacheBench') }.configureEach {
+    resolutionStrategy.force "com.github.luben:zstd-jni:${providers.gradleProperty('spikeCodecVersion').getOrElse('1.5.7-9')}"
+}
+def hardwoodVersion = '1.1.0.Beta2'
+dependencies {
+    coreImplementation "dev.hardwood:hardwood-core:$hardwoodVersion"
+    coreImplementation 'com.github.luben:zstd-jni:1.5.7-9'
+    remoteImplementation "dev.hardwood:hardwood-s3:$hardwoodVersion"
+    oracleImplementation 'io.varve.swath:swath-core:0.3.3-SNAPSHOT'
+    oracleImplementation 'org.apache.parquet:parquet-hadoop:1.15.1'
+    oracleCompileOnly('org.apache.hadoop:hadoop-common:3.4.1') { transitive = false }
+    hardwoodPlain "dev.hardwood:hardwood-core:$hardwoodVersion"
+    hardwoodS3 "dev.hardwood:hardwood-s3:$hardwoodVersion"
+    hardwoodAwsAuth "dev.hardwood:hardwood-aws-auth:$hardwoodVersion"
+    hardwoodAllCodecs "dev.hardwood:hardwood-core:$hardwoodVersion"
+    hardwoodAllCodecs 'com.github.luben:zstd-jni:1.5.7-9'
+    hardwoodAllCodecs 'org.xerial.snappy:snappy-java:1.1.10.8'
+    hardwoodAllCodecs 'at.yawk.lz4:lz4-java:1.11.0'
+    hardwoodAllCodecs 'com.aayushatharva.brotli4j:brotli4j:1.23.0'
+    // Native companion is a platform-specific runtime requirement, not supplied by
+    // Gradle's resolution of the Maven profile in brotli4j's POM.
+    hardwoodAllCodecs 'com.aayushatharva.brotli4j:native-linux-aarch64:1.23.0'
+    ['hardwood-core', 'hardwood-s3', 'hardwood-aws-auth'].each {
+        hardwoodSources "dev.hardwood:$it:$hardwoodVersion:sources@jar"
+        hardwoodPoms "dev.hardwood:$it:$hardwoodVersion@pom"
+    }
+}
+['core','oracle','remote','hardwoodBench','apacheBench','nativeBench'].each { setName ->
+    tasks.named('assemble') { dependsOn tasks.named(sourceSets[setName].classesTaskName) }
+    tasks.register("${setName}Run", JavaExec) {
+        classpath = sourceSets[setName].runtimeClasspath
+        mainClass = providers.gradleProperty('mainClass')
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+        if (project.hasProperty('appArgs')) args project.property('appArgs').split(' ')
+        if (project.hasProperty('jvmArgs')) jvmArgs project.property('jvmArgs').split(' ')
+    }
+}
+tasks.register('writeClasspaths') {
+    dependsOn 'coreClasses','oracleClasses','remoteClasses','hardwoodBenchClasses','apacheBenchClasses','nativeBenchClasses'
+    doLast {
+        def out = file(providers.gradleProperty('evidenceDir').getOrElse('/tmp/hardwood-spike-harness'))
+        out.mkdirs()
+        ['core','oracle','remote','hardwoodBench','apacheBench','nativeBench'].each { name ->
+            new File(out, "${name}.classpath").text = sourceSets[name].runtimeClasspath.asPath + '\n'
+        }
+    }
+}
+tasks.register('auditDependencies') {
+    doLast {
+        def out = file(providers.gradleProperty('evidenceDir').getOrElse('/tmp/hardwood-spike-harness'))
+        out.mkdirs()
+        ['hardwoodPlain','coreRuntimeClasspath','hardwoodS3','remoteRuntimeClasspath','hardwoodAwsAuth','hardwoodAllCodecs','oracleRuntimeClasspath'].each { name ->
+            def conf = configurations[name]
+            def rows = conf.resolvedConfiguration.resolvedArtifacts.sort { it.moduleVersion.id.toString() }.collect { a ->
+                def sha = java.security.MessageDigest.getInstance('SHA-256').digest(a.file.bytes).encodeHex()
+                [a.moduleVersion.id.toString(), a.file.length(), sha, a.file.absolutePath].join('\t')
+            }
+            new File(out,"${name}.tsv").text = 'coordinate\tbytes\tsha256\tpath\n' + rows.join('\n') + '\n'
+        }
+        copy { from configurations.hardwoodSources; into new File(out,'sources') }
+        copy { from configurations.hardwoodPoms; into new File(out,'poms') }
+    }
+}

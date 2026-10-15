@@ -1,0 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+rootProject.name = 'hardwood-spike'
+// Composite substitution exposes swath's real current runtime, including its exclusions and
+// constraints. No production build file or dependency is changed by this experiment.
+includeBuild('../..')
