@@ -25,6 +25,28 @@ val benchmarkSourceSet = sourceSets.create("benchmark") {
     runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath.get()
 }
 
+// Official-SDK capture driver for live provider conformance campaigns. The campaign scripts
+// run it and replay tests reuse it; it is not part of the replay distribution.
+val providerCaptureSourceSet = sourceSets.create("providerCapture") {
+    java.srcDir(rootProject.file("scripts/provider-conformance/java"))
+}
+
+val providerCaptureClasspathFile = layout.buildDirectory.file("provider-capture/classpath.txt")
+
+val writeProviderCaptureClasspath by tasks.registering {
+    group = "build"
+    description = "Writes the runtime classpath of the official-SDK provider capture driver."
+    val runtimeClasspath = providerCaptureSourceSet.runtimeClasspath
+    dependsOn(tasks.named(providerCaptureSourceSet.classesTaskName))
+    inputs.files(runtimeClasspath)
+    outputs.file(providerCaptureClasspathFile)
+    doLast {
+        val output = providerCaptureClasspathFile.get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(runtimeClasspath.files.joinToString(File.pathSeparator) { it.absolutePath } + "\n")
+    }
+}
+
 val replayBenchmarkSelfTest by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Runs adversarial parser and HTTP checks for the standalone replay benchmark."
@@ -97,6 +119,12 @@ dependencies {
     runtimeOnly(libs.logback.classic)
 
     add(conformanceSourceSet.implementationConfigurationName, libs.jackson.databind)
+    add(providerCaptureSourceSet.implementationConfigurationName, libs.jackson.databind)
+    add(providerCaptureSourceSet.implementationConfigurationName, libs.google.cloud.storage)
+    add(providerCaptureSourceSet.implementationConfigurationName, libs.azure.storage.blob)
+    add(providerCaptureSourceSet.implementationConfigurationName, libs.azure.core.http.jdk)
+    add(providerCaptureSourceSet.implementationConfigurationName, platform(libs.awssdk.bom))
+    add(providerCaptureSourceSet.implementationConfigurationName, libs.awssdk.s3)
 
     // testkit fixtures expose swath-core/swath-model types on their own surface (ParquetFixtures
     // returns a PartWriter, ObjectEntries an ObjectEntry), so consumers need them on the compile
@@ -117,6 +145,7 @@ dependencies {
     testImplementation(platform(libs.junit.bom))
     testImplementation(platform(libs.awssdk.bom))
     testImplementation(conformanceSourceSet.output)
+    testImplementation(providerCaptureSourceSet.output)
     testImplementation(libs.awssdk.s3)
     testImplementation(libs.awssdk.apache.client)
     testImplementation(libs.google.cloud.storage)
@@ -263,4 +292,10 @@ tasks.named("check") {
 // smaller/faster; kept at its pre-reorg 5-minute budget.
 tasks.withType<Test>().configureEach {
     timeout.set(Duration.ofMinutes(5))
+    // NativeEvidenceReplayTest writes provider match receipts and an outcome report only on request.
+    mapOf("providerReceipts" to "swath.provider.receipts",
+            "providerDistribution" to "swath.provider.distribution",
+            "providerReport" to "swath.provider.report").forEach { (property, key) ->
+        providers.gradleProperty(property).orNull?.let { systemProperty(key, it) }
+    }
 }

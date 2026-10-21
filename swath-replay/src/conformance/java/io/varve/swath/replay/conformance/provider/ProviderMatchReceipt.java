@@ -25,6 +25,10 @@ import java.util.Map;
 /** Emits a source- and distribution-bound receipt after checking the captured request and response. */
 public final class ProviderMatchReceipt {
     private static final ObjectMapper JSON = new ObjectMapper();
+    /** Rows whose subject is a duplicated query field; evidence.py names the same rows. */
+    public static final java.util.Set<String> DUPLICATE_QUERY_PROBES = java.util.Set.of("gcs-05", "azure-08",
+            "gcs-05h", "gcs-05i", "gcs-06m", "azure-07h", "azure-07i", "azure-08m", "azure-08p",
+            "s3-05h", "s3-05i", "s3-06m", "s3-12d");
 
     private ProviderMatchReceipt() { }
 
@@ -50,14 +54,23 @@ public final class ProviderMatchReceipt {
                            Map<String, String> replayTokenToNativeToken, String replayBucket,
                            boolean fullProjection, Path repoRoot, Path distribution,
                            Path testSource, String testName, Path receipt) throws IOException {
+        verifyGcs(captureFile, replayRequest, replayResponse, replayTokenToNativeToken, replayBucket,
+                fullProjection);
+        writeReceipt(captureFile, repoRoot, distribution, testSource, testName, receipt);
+    }
+
+    /** Every check {@link #gcs} makes, without writing a receipt. */
+    public static void verifyGcs(Path captureFile, Request replayRequest,
+                                 ProviderExchangeComparator.Exchange replayResponse,
+                                 Map<String, String> replayTokenToNativeToken, String replayBucket,
+                                 boolean fullProjection) throws IOException {
         Capture capture = read(captureFile, "gcs");
         require(capture.kind().equals("exchange"), "GCS exchange receipt needs one exchange");
         Step nativeStep = capture.steps().getFirst();
         assertRequest(nativeStep.request(), replayRequest, "/storage/v1/b/" + replayBucket + "/o",
-                replayTokenToNativeToken, "pageToken", false, capture.probeId());
+                replayTokenToNativeToken, Dialect.GCS, capture.probeId());
         ProviderExchangeComparator.assertGcs(nativeStep.exchange(), replayResponse,
                 "{bucket}", replayBucket, fullProjection);
-        write(capture, captureFile, repoRoot, distribution, testSource, testName, receipt);
     }
 
     public static void azure(Path captureFile, Request replayRequest,
@@ -66,13 +79,24 @@ public final class ProviderMatchReceipt {
                              AzureNamespaceMapping mapping, String nativeEndpoint,
                              String replayEndpoint, Path repoRoot, Path distribution,
                              Path testSource, String testName, Path receipt) throws IOException {
+        verifyAzure(captureFile, replayRequest, replayResponse, replayTokenToNativeToken, mapping,
+                nativeEndpoint, replayEndpoint);
+        writeReceipt(captureFile, repoRoot, distribution, testSource, testName, receipt);
+    }
+
+    /** Every check {@link #azure} makes, without writing a receipt. */
+    public static void verifyAzure(Path captureFile, Request replayRequest,
+                                   ProviderExchangeComparator.Exchange replayResponse,
+                                   Map<String, String> replayTokenToNativeToken,
+                                   AzureNamespaceMapping mapping, String nativeEndpoint,
+                                   String replayEndpoint) throws IOException {
         Capture capture = read(captureFile, "azure");
         require(capture.kind().equals("exchange"), "Azure exchange receipt needs one exchange");
         Step nativeStep = capture.steps().getFirst();
         mapping.assertMapped(nativeStep.request().path(), replayRequest.path(),
                 nativeEndpoint, replayEndpoint);
         assertRequest(nativeStep.request(), replayRequest, replayRequest.path(),
-                replayTokenToNativeToken, "marker", true, capture.probeId());
+                replayTokenToNativeToken, Dialect.AZURE, capture.probeId());
         String version = header(nativeStep.request(), "x-ms-version");
         String clientId = header(nativeStep.request(), "x-ms-client-request-id");
         ProviderExchangeComparator.assertAzure(nativeStep.exchange(),
@@ -80,17 +104,24 @@ public final class ProviderMatchReceipt {
                 mapping.nativeContainer(), mapping.replayContainer(), version, clientId,
                 token(nativeStep.request().query(), "marker"), mappedToken(replayRequest.query(),
                         "marker", replayTokenToNativeToken), nativeStep.request().method());
-        write(capture, captureFile, repoRoot, distribution, testSource, testName, receipt);
     }
 
     public static void gcsRun(Path captureFile, List<ReplayStep> replay,
                               Map<String, String> replayTokenToNativeToken, String replayBucket,
                               boolean fullProjection, Path repoRoot, Path distribution,
                               Path testSource, String testName, Path receipt) throws IOException {
+        verifyGcsRun(captureFile, replay, replayTokenToNativeToken, replayBucket, fullProjection);
+        writeReceipt(captureFile, repoRoot, distribution, testSource, testName, receipt);
+    }
+
+    /** Every check {@link #gcsRun} makes, without writing a receipt. */
+    public static void verifyGcsRun(Path captureFile, List<ReplayStep> replay,
+                                    Map<String, String> replayTokenToNativeToken, String replayBucket,
+                                    boolean fullProjection) throws IOException {
         Capture capture = read(captureFile, "gcs");
         require(!capture.kind().equals("exchange"), "GCS run receipt needs typed run capture");
         assertRunRequests(capture, replay, "/storage/v1/b/" + replayBucket + "/o",
-                replayTokenToNativeToken, "pageToken", false);
+                replayTokenToNativeToken, Dialect.GCS);
         if (capture.kind().equals("retry_run")) {
             for (int i = 0; i < replay.size(); i++) {
                 ProviderExchangeComparator.assertGcs(capture.steps().get(i).exchange(),
@@ -109,7 +140,6 @@ public final class ProviderMatchReceipt {
             ProviderExchangeComparator.assertGcsWalk(nativePages, replayPages, "{bucket}",
                     replayBucket, fullProjection, 1024, 1_000_000);
         }
-        write(capture, captureFile, repoRoot, distribution, testSource, testName, receipt);
     }
 
     public static void azureRun(Path captureFile, List<ReplayStep> replay,
@@ -117,6 +147,16 @@ public final class ProviderMatchReceipt {
                                 AzureNamespaceMapping mapping, String nativeEndpoint,
                                 String replayEndpoint, Path repoRoot, Path distribution,
                                 Path testSource, String testName, Path receipt) throws IOException {
+        verifyAzureRun(captureFile, replay, replayTokenToNativeToken, mapping, nativeEndpoint,
+                replayEndpoint);
+        writeReceipt(captureFile, repoRoot, distribution, testSource, testName, receipt);
+    }
+
+    /** Every check {@link #azureRun} makes, without writing a receipt. */
+    public static void verifyAzureRun(Path captureFile, List<ReplayStep> replay,
+                                      Map<String, String> replayTokenToNativeToken,
+                                      AzureNamespaceMapping mapping, String nativeEndpoint,
+                                      String replayEndpoint) throws IOException {
         Capture capture = read(captureFile, "azure");
         require(!capture.kind().equals("exchange"), "Azure run receipt needs typed run capture");
         require(!replay.isEmpty(), "Azure replay run is empty");
@@ -125,7 +165,7 @@ public final class ProviderMatchReceipt {
                     nativeEndpoint, replayEndpoint);
         }
         assertRunRequests(capture, replay, replay.getFirst().request().path(),
-                replayTokenToNativeToken, "marker", true);
+                replayTokenToNativeToken, Dialect.AZURE);
         String version = header(capture.steps().getFirst().request(), "x-ms-version");
         if (capture.kind().equals("retry_run")) {
             for (int i = 0; i < replay.size(); i++) {
@@ -152,7 +192,76 @@ public final class ProviderMatchReceipt {
                     replayEndpoint, mapping.nativeContainer(), mapping.replayContainer(),
                     version, 1024, 1_000_000);
         }
-        write(capture, captureFile, repoRoot, distribution, testSource, testName, receipt);
+    }
+
+    public static void s3(Path captureFile, Request replayRequest, ProviderExchangeComparator.Exchange replayResponse,
+                          Map<String, String> replayTokenToNativeToken, String replayBucket, Path repoRoot,
+                          Path distribution, Path testSource, String testName, Path receipt) throws IOException {
+        verifyS3(captureFile, replayRequest, replayResponse, replayTokenToNativeToken, replayBucket);
+        writeReceipt(captureFile, repoRoot, distribution, testSource, testName, receipt);
+    }
+
+    /** Every check {@link #s3} makes, without writing a receipt. */
+    public static void verifyS3(Path captureFile, Request replayRequest,
+                                ProviderExchangeComparator.Exchange replayResponse,
+                                Map<String, String> replayTokenToNativeToken, String replayBucket) throws IOException {
+        Capture capture = read(captureFile, "s3");
+        require(capture.kind().equals("exchange"), "S3 exchange receipt needs one exchange");
+        Step nativeStep = capture.steps().getFirst();
+        assertRequest(nativeStep.request(), replayRequest, "/" + replayBucket, replayTokenToNativeToken,
+                Dialect.S3, capture.probeId());
+        ProviderExchangeComparator.assertS3(nativeStep.exchange(), replayResponse, "{bucket}", replayBucket,
+                token(nativeStep.request().query(), Dialect.S3.tokenField),
+                token(replayRequest.query(), Dialect.S3.tokenField));
+    }
+
+    public static void s3Run(Path captureFile, List<ReplayStep> replay, Map<String, String> replayTokenToNativeToken,
+                             String replayBucket, Path repoRoot, Path distribution, Path testSource,
+                             String testName, Path receipt) throws IOException {
+        verifyS3Run(captureFile, replay, replayTokenToNativeToken, replayBucket);
+        writeReceipt(captureFile, repoRoot, distribution, testSource, testName, receipt);
+    }
+
+    /** Every check {@link #s3Run} makes, without writing a receipt. */
+    public static void verifyS3Run(Path captureFile, List<ReplayStep> replay,
+                                   Map<String, String> replayTokenToNativeToken, String replayBucket)
+            throws IOException {
+        Capture capture = read(captureFile, "s3");
+        require(!capture.kind().equals("exchange"), "S3 run receipt needs typed run capture");
+        assertRunRequests(capture, replay, "/" + replayBucket, replayTokenToNativeToken, Dialect.S3);
+        String field = Dialect.S3.tokenField;
+        if (capture.kind().equals("retry_run")) {
+            for (int i = 0; i < replay.size(); i++) {
+                ProviderExchangeComparator.assertS3(capture.steps().get(i).exchange(), replay.get(i).exchange(),
+                        "{bucket}", replayBucket, token(capture.steps().get(i).request().query(), field),
+                        token(replay.get(i).request().query(), field));
+            }
+            return;
+        }
+        List<ProviderExchangeComparator.CapturedExchangePage> nativePages = new ArrayList<>();
+        List<ProviderExchangeComparator.CapturedExchangePage> replayPages = new ArrayList<>();
+        for (int i = 0; i < replay.size(); i++) {
+            nativePages.add(new ProviderExchangeComparator.CapturedExchangePage(
+                    token(capture.steps().get(i).request().query(), field), capture.steps().get(i).exchange()));
+            replayPages.add(new ProviderExchangeComparator.CapturedExchangePage(
+                    token(replay.get(i).request().query(), field), replay.get(i).exchange()));
+        }
+        ProviderExchangeComparator.assertS3Walk(nativePages, replayPages, "{bucket}", replayBucket, 1024, 1_000_000);
+    }
+
+    /** Per-protocol request shape: the sanitized native path and the continuation-token field. */
+    private enum Dialect {
+        GCS("/storage/v1/b/{bucket}/o", "pageToken"),
+        AZURE(null, "marker"),
+        S3("/{bucket}", "continuation-token");
+
+        private final String nativePath;
+        private final String tokenField;
+
+        Dialect(String nativePath, String tokenField) {
+            this.nativePath = nativePath;
+            this.tokenField = tokenField;
+        }
     }
 
     private static ProviderExchangeComparator.CapturedExchangePage azurePage(
@@ -168,19 +277,17 @@ public final class ProviderMatchReceipt {
     }
 
     private static void assertRunRequests(Capture capture, List<ReplayStep> replay, String replayPath,
-                                          Map<String, String> tokenMapping, String tokenName,
-                                          boolean azure) {
+                                          Map<String, String> tokenMapping, Dialect dialect) {
         require(capture.steps().size() == replay.size(), "replay run exchange count differs");
         for (int i = 0; i < replay.size(); i++) {
             Step step = capture.steps().get(i);
             ReplayStep actual = replay.get(i);
             require(step.phase().equals(actual.phase()), "replay run phase differs");
-            assertRequest(step.request(), actual.request(), replayPath, tokenMapping, tokenName,
-                    azure, capture.probeId());
+            assertRequest(step.request(), actual.request(), replayPath, tokenMapping, dialect, capture.probeId());
             if (capture.kind().equals("sdk_run") || capture.kind().equals("retry_run")) {
                 assertSdkHeaders(step.request(), actual.request());
             }
-            if (azure) {
+            if (dialect == Dialect.AZURE) {
                 String clientId = header(step.request(), "x-ms-client-request-id");
                 String nativeEcho = step.exchange().headers().containsKey("x-ms-client-request-id")
                         ? step.exchange().headers().get("x-ms-client-request-id").getFirst() : null;
@@ -192,19 +299,18 @@ public final class ProviderMatchReceipt {
     }
 
     private static void assertRequest(Request nativeRequest, Request replay, String replayPath,
-                                      Map<String, String> tokenMapping, String tokenName,
-                                      boolean azure, String probeId) {
+                                      Map<String, String> tokenMapping, Dialect dialect, String probeId) {
         require(nativeRequest.method().equals(replay.method()) && replay.path().equals(replayPath),
                 "replay request method/path differs from captured probe");
-        String expectedNativePath = azure ? nativeRequest.path() : "/storage/v1/b/{bucket}/o";
+        String expectedNativePath = dialect.nativePath == null ? nativeRequest.path() : dialect.nativePath;
         require(nativeRequest.path().equals(expectedNativePath), "native request path differs");
-        require(nativeRequest.query().equals(mappedQuery(replay.query(), tokenName, tokenMapping)),
+        require(nativeRequest.query().equals(mappedQuery(replay.query(), dialect.tokenField, tokenMapping)),
                 "replay request query differs from captured probe");
-        boolean duplicateProbe = probeId.equals("gcs-05") || probeId.equals("azure-08");
+        boolean duplicateProbe = DUPLICATE_QUERY_PROBES.contains(probeId);
         require(noUnexpectedDuplicates(nativeRequest.query(), duplicateProbe)
                 && noUnexpectedDuplicates(replay.query(), duplicateProbe),
                 "duplicate query field outside duplicate-parameter probe");
-        if (azure) {
+        if (dialect == Dialect.AZURE) {
             require(header(nativeRequest, "x-ms-version") != null
                     && header(nativeRequest, "x-ms-version").equals(header(replay, "x-ms-version")),
                     "replay request service version differs");
@@ -290,8 +396,17 @@ public final class ProviderMatchReceipt {
         return new ProviderExchangeComparator.Exchange(response.status(), normalized, response.body());
     }
 
+    /** Evidence bytes; a {@code .gz} file stores deterministic gzip of the checksummed bytes. */
+    public static byte[] evidenceBytes(Path file) throws IOException {
+        byte[] stored = Files.readAllBytes(file);
+        if (!file.getFileName().toString().endsWith(".gz")) return stored;
+        try (var input = new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(stored))) {
+            return input.readAllBytes();
+        }
+    }
+
     private static Capture read(Path file, String provider) throws IOException {
-        JsonNode root = JSON.readTree(Files.readAllBytes(file));
+        JsonNode root = JSON.readTree(evidenceBytes(file));
         require(provider.equals(root.path("provider").asText()), "capture provider differs");
         String schema = root.path("schema_version").asText();
         String kind = schema.equals("provider-capture-v1") ? "exchange"
@@ -325,8 +440,11 @@ public final class ProviderMatchReceipt {
         return new Step(phase, scope, exchange);
     }
 
-    private static void write(Capture capture, Path captureFile, Path repoRoot, Path distribution,
-                              Path testSource, String testName, Path receipt) throws IOException {
+    /** Write a PASS receipt for a capture whose verification already succeeded. */
+    public static void writeReceipt(Path captureFile, Path repoRoot, Path distribution, Path testSource,
+                                    String testName, Path receipt) throws IOException {
+        JsonNode root = JSON.readTree(evidenceBytes(captureFile));
+        Capture capture = read(captureFile, root.path("provider").asText());
         require(testName != null && !testName.isBlank(), "test method is required");
         String commit = git(repoRoot, "rev-parse", "HEAD");
         require(git(repoRoot, "status", "--porcelain", "--untracked-files=all").isEmpty(),
@@ -340,13 +458,13 @@ public final class ProviderMatchReceipt {
         fields.put("status", "PASS");
         fields.put("test", testName);
         fields.put("test_path", relative.toString().replace('\\', '/'));
-        fields.put("test_source_sha256", sha256(testSource));
+        fields.put("test_source_sha256", sha256(Files.readAllBytes(testSource)));
         fields.put("api_version", capture.apiVersion());
         fields.put("evidence_kind", capture.kind());
         fields.put("compared_steps", capture.steps().size());
-        fields.put("capture_sha256", sha256(captureFile));
+        fields.put("capture_sha256", sha256(evidenceBytes(captureFile)));
         fields.put("replay_commit", commit);
-        fields.put("distribution_sha256", sha256(distribution));
+        fields.put("distribution_sha256", sha256(Files.readAllBytes(distribution)));
         fields.put("distribution_name", distribution.getFileName().toString());
         Files.createDirectories(receipt.getParent());
         Files.writeString(receipt, JSON.writeValueAsString(fields) + "\n", StandardCharsets.UTF_8);
@@ -366,15 +484,9 @@ public final class ProviderMatchReceipt {
         return output;
     }
 
-    private static String sha256(Path file) throws IOException {
+    private static String sha256(byte[] bytes) {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            try (var input = Files.newInputStream(file)) {
-                byte[] buffer = new byte[8192];
-                int count;
-                while ((count = input.read(buffer)) >= 0) digest.update(buffer, 0, count);
-            }
-            return HexFormat.of().formatHex(digest.digest());
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }

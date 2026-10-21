@@ -2,9 +2,9 @@
   "schema_version": "provider-evidence-ledger-v1",
   "rows": [
     {
-      "id": "gcs-01",
+      "id": "gcs-01a",
       "provider": "gcs",
-      "feature": "`startOffset` inclusive and `endOffset` exclusive, including equality",
+      "feature": "`startOffset` equal to an existing name is inclusive",
       "profile_promise": "Provisional bounded list",
       "status": "UNMEASURED",
       "api_versions": [
@@ -13,9 +13,9 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "gcs-02",
+      "id": "gcs-01b",
       "provider": "gcs",
-      "feature": "Prefix intersection with both offsets",
+      "feature": "`endOffset` equal to an existing name is exclusive",
       "profile_promise": "Provisional bounded list",
       "status": "UNMEASURED",
       "api_versions": [
@@ -24,9 +24,174 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "gcs-03",
+      "id": "gcs-01c",
       "provider": "gcs",
-      "feature": "Delimiter with offset at, inside, and after a subtree",
+      "feature": "Equal `startOffset` and `endOffset` on an existing name",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-01d",
+      "provider": "gcs",
+      "feature": "`startOffset` in a gap between names",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-01e",
+      "provider": "gcs",
+      "feature": "`endOffset` in a gap between names",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-01f",
+      "provider": "gcs",
+      "feature": "Inverted bounds with `startOffset` after `endOffset`",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-01g",
+      "provider": "gcs",
+      "feature": "Both offsets without a prefix",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-01h",
+      "provider": "gcs",
+      "feature": "Offsets before and after every corpus name",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-01i",
+      "provider": "gcs",
+      "feature": "Empty `startOffset` and `endOffset` values",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-01j",
+      "provider": "gcs",
+      "feature": "`startOffset` equal to the prefix",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-01k",
+      "provider": "gcs",
+      "feature": "`endOffset` equal to the prefix",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-02a",
+      "provider": "gcs",
+      "feature": "Prefix with `startOffset` before it and `endOffset` inside it",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-02b",
+      "provider": "gcs",
+      "feature": "Prefix with `startOffset` inside it and `endOffset` after it",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-02c",
+      "provider": "gcs",
+      "feature": "Prefix with both offsets before it",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-02d",
+      "provider": "gcs",
+      "feature": "Prefix with both offsets after it",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-02e",
+      "provider": "gcs",
+      "feature": "Prefix that is a string prefix of longer names",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-02f",
+      "provider": "gcs",
+      "feature": "Prefix equal to a full name with `endOffset` equal to that name",
+      "profile_promise": "Provisional bounded list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03a",
+      "provider": "gcs",
+      "feature": "Delimiter `/` baseline over objects, subtrees, a folder marker and an empty segment",
       "profile_promise": "Provisional; fast path gated",
       "status": "UNMEASURED",
       "api_versions": [
@@ -35,9 +200,185 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "gcs-04",
+      "id": "gcs-03b",
       "provider": "gcs",
-      "feature": "BMP versus supplementary Unicode ordering",
+      "feature": "Delimiter with `startOffset` equal to a subtree prefix",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03c",
+      "provider": "gcs",
+      "feature": "Delimiter with `startOffset` inside a subtree with remaining descendants",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03d",
+      "provider": "gcs",
+      "feature": "Delimiter with `startOffset` inside a subtree after its last descendant",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03e",
+      "provider": "gcs",
+      "feature": "Delimiter with `startOffset` after a subtree, equal to an object",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03f",
+      "provider": "gcs",
+      "feature": "Delimiter with `endOffset` inside a subtree",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03g",
+      "provider": "gcs",
+      "feature": "Delimiter with `endOffset` equal to a subtree prefix",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03h",
+      "provider": "gcs",
+      "feature": "Delimiter with `endOffset` just after a folder marker",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03i",
+      "provider": "gcs",
+      "feature": "Delimiter `/` with a prefix ending in the delimiter",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03j",
+      "provider": "gcs",
+      "feature": "Delimiter `/` with a prefix that stops before the delimiter",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03k",
+      "provider": "gcs",
+      "feature": "Pipe delimiter that never occurs in names",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03l",
+      "provider": "gcs",
+      "feature": "Two-character delimiter `/1`",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03m",
+      "provider": "gcs",
+      "feature": "Two-character delimiter `-g`",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03n",
+      "provider": "gcs",
+      "feature": "Delimiter with both offsets cutting two subtrees",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03o",
+      "provider": "gcs",
+      "feature": "Empty `delimiter` value",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03p",
+      "provider": "gcs",
+      "feature": "`includeTrailingDelimiter=true` with delimiter `/`",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-03q",
+      "provider": "gcs",
+      "feature": "Delimiter without a prefix from a mid-corpus `startOffset`",
+      "profile_promise": "Provisional; fast path gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-04a",
+      "provider": "gcs",
+      "feature": "BMP, surrogate-neighbor and supplementary names in list order",
       "profile_promise": "Provisional unsigned UTF-8 order",
       "status": "UNMEASURED",
       "api_versions": [
@@ -46,9 +387,64 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "gcs-05",
+      "id": "gcs-04b",
       "provider": "gcs",
-      "feature": "Literal plus, percent escapes, duplicate query fields",
+      "feature": "`startOffset` at U+E000",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-04c",
+      "provider": "gcs",
+      "feature": "`endOffset` at U+10000",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-04d",
+      "provider": "gcs",
+      "feature": "Prefix in NFC form with an NFD sibling",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-04e",
+      "provider": "gcs",
+      "feature": "Prefix differing only in case",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-04f",
+      "provider": "gcs",
+      "feature": "Supplementary-character `startOffset` percent-encoded in lowercase hex",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05a",
+      "provider": "gcs",
+      "feature": "Raw `+` in a `prefix` value",
       "profile_promise": "Strict native parser; duplicate policy gated",
       "status": "UNMEASURED",
       "api_versions": [
@@ -57,9 +453,196 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "gcs-06",
+      "id": "gcs-05b",
       "provider": "gcs",
-      "feature": "Zero and overflow `maxResults`",
+      "feature": "`%2B` in a `prefix` value",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05c",
+      "provider": "gcs",
+      "feature": "`%20` in a `prefix` value",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05d",
+      "provider": "gcs",
+      "feature": "`%25` before `2B`",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05e",
+      "provider": "gcs",
+      "feature": "Malformed percent escape `%ZZ` beside a literal `a%ZZ` name",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05f",
+      "provider": "gcs",
+      "feature": "Trailing lone `%`",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05g",
+      "provider": "gcs",
+      "feature": "Escape decoding to invalid UTF-8 beside a U+FFFD name",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05h",
+      "provider": "gcs",
+      "feature": "Duplicate `prefix` with identical values",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05i",
+      "provider": "gcs",
+      "feature": "Duplicate `prefix` with different values",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05j",
+      "provider": "gcs",
+      "feature": "Percent-encoded `&`, `=` and `#`",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05k",
+      "provider": "gcs",
+      "feature": "Raw `?` inside a value",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05l",
+      "provider": "gcs",
+      "feature": "Fully encoded slashes `%2F`",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05m",
+      "provider": "gcs",
+      "feature": "Lowercase hex escape `%2b`",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05n",
+      "provider": "gcs",
+      "feature": "Parameter name without `=`",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05o",
+      "provider": "gcs",
+      "feature": "Every reserved ASCII character in names under one prefix",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05p",
+      "provider": "gcs",
+      "feature": "Trailing space in a prefix",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05q",
+      "provider": "gcs",
+      "feature": "Raw `=` inside a value",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-05r",
+      "provider": "gcs",
+      "feature": "Raw `=` inside a `startOffset` value",
+      "profile_promise": "Strict native parser; duplicate policy gated",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06a",
+      "provider": "gcs",
+      "feature": "`maxResults=0` on a three-object scope",
       "profile_promise": "Zero refused pending evidence",
       "status": "UNMEASURED",
       "api_versions": [
@@ -68,9 +651,163 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "gcs-07",
+      "id": "gcs-06b",
       "provider": "gcs",
-      "feature": "Short/empty pages and repeated prefixes",
+      "feature": "`maxResults=0` on a 1,001-object scope",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-06c",
+      "provider": "gcs",
+      "feature": "`maxResults=1` walk",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-06d",
+      "provider": "gcs",
+      "feature": "`maxResults=1000` walk over exactly 1,000 objects",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-06e",
+      "provider": "gcs",
+      "feature": "`maxResults=1001` over 1,001 objects",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06f",
+      "provider": "gcs",
+      "feature": "`maxResults=-1`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06g",
+      "provider": "gcs",
+      "feature": "`maxResults=abc`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06h",
+      "provider": "gcs",
+      "feature": "`maxResults=2147483648`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06i",
+      "provider": "gcs",
+      "feature": "`maxResults=9223372036854775808`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06j",
+      "provider": "gcs",
+      "feature": "`maxResults=1.5`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06k",
+      "provider": "gcs",
+      "feature": "`maxResults=+2` with a raw plus",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06l",
+      "provider": "gcs",
+      "feature": "`maxResults=002`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06m",
+      "provider": "gcs",
+      "feature": "Duplicate `maxResults` values",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06n",
+      "provider": "gcs",
+      "feature": "Empty `maxResults` value",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-06o",
+      "provider": "gcs",
+      "feature": "`maxResults=2147483647`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07a",
+      "provider": "gcs",
+      "feature": "Delimiter walk with one entry per page over top-level subtrees",
       "profile_promise": "Complete native-token walk required",
       "status": "UNMEASURED",
       "api_versions": [
@@ -79,9 +816,229 @@
       "evidence_kind": "walk"
     },
     {
-      "id": "gcs-08",
+      "id": "gcs-07b",
       "provider": "gcs",
-      "feature": "Name length/encoding and raw wire spelling",
+      "feature": "Default page size walk over 1,001 objects",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-07c",
+      "provider": "gcs",
+      "feature": "Delimiter walk with two entries per page",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-07d",
+      "provider": "gcs",
+      "feature": "Delimiter walk with offsets and one entry per page",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-07e",
+      "provider": "gcs",
+      "feature": "Flat walk with four entries per page over six names",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-07f",
+      "provider": "gcs",
+      "feature": "Prefix with no matching names",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07g",
+      "provider": "gcs",
+      "feature": "Malformed constant `pageToken`",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07h",
+      "provider": "gcs",
+      "feature": "Reused `pageToken` for the same query",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07i",
+      "provider": "gcs",
+      "feature": "`pageToken` from a different prefix",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07j",
+      "provider": "gcs",
+      "feature": "`pageToken` with a changed page size",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07k",
+      "provider": "gcs",
+      "feature": "`pageToken` from a flat walk with an added delimiter",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07l",
+      "provider": "gcs",
+      "feature": "`pageToken` with an added `startOffset` past the token position",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07m",
+      "provider": "gcs",
+      "feature": "Empty `pageToken` value",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07n",
+      "provider": "gcs",
+      "feature": "Flat walk with two entries per page over delimited names",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-07o",
+      "provider": "gcs",
+      "feature": "`pageToken` from a delimiter walk with the delimiter removed",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07q",
+      "provider": "gcs",
+      "feature": "Flat walk with two entries per page over six names",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "gcs-07r",
+      "provider": "gcs",
+      "feature": "Issued `pageToken` with its last character changed",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07s",
+      "provider": "gcs",
+      "feature": "Issued `pageToken` truncated by four characters",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07t",
+      "provider": "gcs",
+      "feature": "`pageToken` with an `endOffset` excluding every remaining name",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07u",
+      "provider": "gcs",
+      "feature": "`pageToken` with a prefix matching only names before it",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-07v",
+      "provider": "gcs",
+      "feature": "Issued `pageToken` with one decoded byte changed and re-encoded",
+      "profile_promise": "Complete native-token walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-08a",
+      "provider": "gcs",
+      "feature": "Names with control, whitespace, dot, markup and 1,024-byte length",
       "profile_promise": "Strict UTF-8 subset",
       "status": "UNMEASURED",
       "api_versions": [
@@ -90,9 +1047,53 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "gcs-09",
+      "id": "gcs-08b",
       "provider": "gcs",
-      "feature": "HTTP Java SDK default projection, fields, and auto-pagination",
+      "feature": "Delimiter listing over dot segments and trailing-slash names",
+      "profile_promise": "Strict UTF-8 subset",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-08c",
+      "provider": "gcs",
+      "feature": "Listing of exploratory creation-probe names",
+      "profile_promise": "Strict UTF-8 subset",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-09a",
+      "provider": "gcs",
+      "feature": "HTTP Java SDK flat auto-pagination over Unicode names",
+      "profile_promise": "Must run unmodified with endpoint override",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "sdk_run"
+    },
+    {
+      "id": "gcs-09b",
+      "provider": "gcs",
+      "feature": "HTTP Java SDK hierarchy auto-pagination",
+      "profile_promise": "Must run unmodified with endpoint override",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "sdk_run"
+    },
+    {
+      "id": "gcs-09c",
+      "provider": "gcs",
+      "feature": "HTTP Java SDK offsets with auto-pagination",
       "profile_promise": "Must run unmodified with endpoint override",
       "status": "UNMEASURED",
       "api_versions": [
@@ -110,6 +1111,116 @@
         "json-v1"
       ],
       "evidence_kind": "retry_run"
+    },
+    {
+      "id": "gcs-11a",
+      "provider": "gcs",
+      "feature": "Explicit `projection=full` under uniform bucket-level access",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11b",
+      "provider": "gcs",
+      "feature": "Explicit `projection=noAcl`",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11c",
+      "provider": "gcs",
+      "feature": "Unknown projection value",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11d",
+      "provider": "gcs",
+      "feature": "`prettyPrint=false` and `alt=json`",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11e",
+      "provider": "gcs",
+      "feature": "Nonempty `fields` partial response",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11f",
+      "provider": "gcs",
+      "feature": "`versions=true`",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11g",
+      "provider": "gcs",
+      "feature": "`matchGlob`",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11h",
+      "provider": "gcs",
+      "feature": "`softDeleted=true` with soft delete disabled",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11i",
+      "provider": "gcs",
+      "feature": "`includeFoldersAsPrefixes=true` on a flat bucket",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "gcs-11j",
+      "provider": "gcs",
+      "feature": "Named false forms of boolean options",
+      "profile_promise": "Named defaults and transport forms only; other options refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "json-v1"
+      ],
+      "evidence_kind": "exchange"
     },
     {
       "id": "azure-01",
@@ -134,9 +1245,9 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "azure-03",
+      "id": "azure-03a",
       "provider": "azure",
-      "feature": "`startFrom` inclusive and prefix intersection",
+      "feature": "`startFrom` equal to an existing name is inclusive",
       "profile_promise": "Provisional flat list",
       "status": "UNMEASURED",
       "api_versions": [
@@ -146,9 +1257,129 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "azure-04",
+      "id": "azure-03b",
       "provider": "azure",
-      "feature": "Delimiter with `startFrom` at, inside, after subtree",
+      "feature": "`startFrom` in a gap between names",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03c",
+      "provider": "azure",
+      "feature": "`startFrom` before the prefix",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03d",
+      "provider": "azure",
+      "feature": "`startFrom` after the prefix",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03e",
+      "provider": "azure",
+      "feature": "`startFrom` equal to the prefix",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03f",
+      "provider": "azure",
+      "feature": "`startFrom` without a prefix",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03g",
+      "provider": "azure",
+      "feature": "Empty `startFrom` value",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03h",
+      "provider": "azure",
+      "feature": "`endBefore`",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03i",
+      "provider": "azure",
+      "feature": "`startFrom` with `endBefore`",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03j",
+      "provider": "azure",
+      "feature": "Prefix that is a string prefix of longer names",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-03k",
+      "provider": "azure",
+      "feature": "`startFrom` inside a prefix that is a string prefix",
+      "profile_promise": "Provisional flat list",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04a",
+      "provider": "azure",
+      "feature": "Delimiter `/` baseline over objects, subtrees, a folder marker and an empty segment",
       "profile_promise": "**Unsupported until native evidence**",
       "status": "UNMEASURED",
       "api_versions": [
@@ -158,9 +1389,165 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "azure-05",
+      "id": "azure-04b",
       "provider": "azure",
-      "feature": "`marker` plus `startFrom` precedence",
+      "feature": "Delimiter with `startFrom` equal to a subtree prefix",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04c",
+      "provider": "azure",
+      "feature": "Delimiter with `startFrom` inside a subtree with remaining descendants",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04d",
+      "provider": "azure",
+      "feature": "Delimiter with `startFrom` inside a subtree after its last descendant",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04e",
+      "provider": "azure",
+      "feature": "Delimiter with `startFrom` after a subtree, equal to an object",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04f",
+      "provider": "azure",
+      "feature": "Delimiter `/` with a prefix ending in the delimiter",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04g",
+      "provider": "azure",
+      "feature": "Delimiter `/` with a prefix that stops before the delimiter",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04h",
+      "provider": "azure",
+      "feature": "Pipe delimiter that never occurs in names",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04i",
+      "provider": "azure",
+      "feature": "Two-character delimiter `/1`",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04j",
+      "provider": "azure",
+      "feature": "Two-character delimiter `-g`",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04k",
+      "provider": "azure",
+      "feature": "Empty `delimiter` value",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04l",
+      "provider": "azure",
+      "feature": "Delimiter without a prefix from a mid-corpus `startFrom`",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-04m",
+      "provider": "azure",
+      "feature": "Delimiter walk with `startFrom` inside a subtree",
+      "profile_promise": "**Unsupported until native evidence**",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-05a",
+      "provider": "azure",
+      "feature": "Walk with `startFrom` and one entry per page",
+      "profile_promise": "Matching `startFrom` retained on continuation; other combinations refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-05b",
+      "provider": "azure",
+      "feature": "`marker` with a later `startFrom`",
       "profile_promise": "Matching `startFrom` retained on continuation; other combinations refused pending evidence",
       "status": "UNMEASURED",
       "api_versions": [
@@ -170,9 +1557,33 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "azure-06",
+      "id": "azure-05c",
       "provider": "azure",
-      "feature": "BMP versus supplementary Unicode ordering",
+      "feature": "`marker` with an earlier `startFrom`",
+      "profile_promise": "Matching `startFrom` retained on continuation; other combinations refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-05d",
+      "provider": "azure",
+      "feature": "`marker` issued under `startFrom` used without it",
+      "profile_promise": "Matching `startFrom` retained on continuation; other combinations refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-06a",
+      "provider": "azure",
+      "feature": "BMP, surrogate-neighbor and supplementary names in list order",
       "profile_promise": "Provisional unsigned UTF-8 order",
       "status": "UNMEASURED",
       "api_versions": [
@@ -182,9 +1593,69 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "azure-07",
+      "id": "azure-06b",
       "provider": "azure",
-      "feature": "Encoded names, raw plus/percent escapes, exact XML text/attributes",
+      "feature": "`startFrom` at U+E000",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-06c",
+      "provider": "azure",
+      "feature": "Prefix in NFC form with an NFD sibling",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-06d",
+      "provider": "azure",
+      "feature": "Prefix differing only in case",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-06e",
+      "provider": "azure",
+      "feature": "Supplementary-character `startFrom` in lowercase hex escapes",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-06f",
+      "provider": "azure",
+      "feature": "Delimiter `é` over Unicode names",
+      "profile_promise": "Provisional unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07a",
+      "provider": "azure",
+      "feature": "Raw `+` in a `prefix` value",
       "profile_promise": "Explicit encoding; raw-wire assertion required",
       "status": "UNMEASURED",
       "api_versions": [
@@ -194,9 +1665,237 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "azure-08",
+      "id": "azure-07b",
       "provider": "azure",
-      "feature": "Duplicate parameters; zero/overflow `maxresults`",
+      "feature": "`%2B` in a `prefix` value",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07c",
+      "provider": "azure",
+      "feature": "`%20` in a `prefix` value",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07d",
+      "provider": "azure",
+      "feature": "`%25` before `2B`",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07e",
+      "provider": "azure",
+      "feature": "Malformed percent escape `%ZZ` beside a literal `a%ZZ` name",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07f",
+      "provider": "azure",
+      "feature": "Trailing lone `%`",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07g",
+      "provider": "azure",
+      "feature": "Escape decoding to invalid UTF-8 beside a U+FFFD name",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07h",
+      "provider": "azure",
+      "feature": "Duplicate `prefix` with identical values",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07i",
+      "provider": "azure",
+      "feature": "Duplicate `prefix` with different values",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07j",
+      "provider": "azure",
+      "feature": "Percent-encoded `&`, `=` and `#`",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07k",
+      "provider": "azure",
+      "feature": "Raw `?` inside a value",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07l",
+      "provider": "azure",
+      "feature": "Fully encoded slashes `%2F`",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07m",
+      "provider": "azure",
+      "feature": "Lowercase hex escape `%2b`",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07n",
+      "provider": "azure",
+      "feature": "Parameter name without `=`",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07o",
+      "provider": "azure",
+      "feature": "Every reserved ASCII character in names under one prefix",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07p",
+      "provider": "azure",
+      "feature": "Trailing space in a prefix",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07q",
+      "provider": "azure",
+      "feature": "Raw `=` inside a value",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07r",
+      "provider": "azure",
+      "feature": "Names with control, XML-invalid, whitespace and dot characters",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07s",
+      "provider": "azure",
+      "feature": "Delimiter listing over dot segments and trailing-slash names",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-07t",
+      "provider": "azure",
+      "feature": "Raw `+` in a `startFrom` value",
+      "profile_promise": "Explicit encoding; raw-wire assertion required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08a",
+      "provider": "azure",
+      "feature": "`maxresults=0`",
       "profile_promise": "Zero refused pending evidence",
       "status": "UNMEASURED",
       "api_versions": [
@@ -206,9 +1905,177 @@
       "evidence_kind": "exchange"
     },
     {
-      "id": "azure-09",
+      "id": "azure-08c",
       "provider": "azure",
-      "feature": "Short/empty pages, repeated prefixes, native 5k pages",
+      "feature": "`maxresults=1` walk",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-08d",
+      "provider": "azure",
+      "feature": "`maxresults=5000` walk over exactly 5,000 blobs",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-08e",
+      "provider": "azure",
+      "feature": "`maxresults=5001` walk over 5,001 blobs",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-08f",
+      "provider": "azure",
+      "feature": "`maxresults=-1`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08g",
+      "provider": "azure",
+      "feature": "`maxresults=abc`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08h",
+      "provider": "azure",
+      "feature": "`maxresults=2147483648`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08i",
+      "provider": "azure",
+      "feature": "`maxresults=9223372036854775808`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08j",
+      "provider": "azure",
+      "feature": "`maxresults=1.5`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08k",
+      "provider": "azure",
+      "feature": "`maxresults=+2` with a raw plus",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08l",
+      "provider": "azure",
+      "feature": "`maxresults=002`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08m",
+      "provider": "azure",
+      "feature": "Duplicate `maxresults` values",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08n",
+      "provider": "azure",
+      "feature": "Empty `maxresults` value",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08o",
+      "provider": "azure",
+      "feature": "`maxresults=2147483647`",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-08p",
+      "provider": "azure",
+      "feature": "Duplicate `restype` selector",
+      "profile_promise": "Zero refused pending evidence",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09a",
+      "provider": "azure",
+      "feature": "Delimiter walk with one entry per page over top-level subtrees",
       "profile_promise": "Complete native-marker walk required",
       "status": "UNMEASURED",
       "api_versions": [
@@ -218,16 +2085,264 @@
       "evidence_kind": "walk"
     },
     {
-      "id": "azure-10",
+      "id": "azure-09b",
       "provider": "azure",
-      "feature": "Java SDK flat/hierarchy auto-pagination and `setStartFrom`",
-      "profile_promise": "Must run unmodified with endpoint override",
+      "feature": "Default page size walk over 5,001 blobs",
+      "profile_promise": "Complete native-marker walk required",
       "status": "UNMEASURED",
       "api_versions": [
         "2026-06-06",
         "2026-10-06"
       ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-09c",
+      "provider": "azure",
+      "feature": "Delimiter walk with two entries per page",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-09e",
+      "provider": "azure",
+      "feature": "Flat walk with four entries per page over six names",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-09f",
+      "provider": "azure",
+      "feature": "Prefix with no matching names",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09g",
+      "provider": "azure",
+      "feature": "Malformed constant `marker`",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09h",
+      "provider": "azure",
+      "feature": "Reused `marker` for the same query",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09i",
+      "provider": "azure",
+      "feature": "`marker` from a different prefix",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09j",
+      "provider": "azure",
+      "feature": "`marker` with a changed page size",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09k",
+      "provider": "azure",
+      "feature": "`marker` from a flat walk with an added delimiter",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09l",
+      "provider": "azure",
+      "feature": "Empty `marker` value",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09n",
+      "provider": "azure",
+      "feature": "Flat walk with two entries per page over delimited names",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-09o",
+      "provider": "azure",
+      "feature": "`marker` from a delimiter walk with the delimiter removed",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09q",
+      "provider": "azure",
+      "feature": "Flat walk with two entries per page over six names",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "azure-09r",
+      "provider": "azure",
+      "feature": "Issued `marker` with its last character changed",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09s",
+      "provider": "azure",
+      "feature": "Issued `marker` truncated by four characters",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09t",
+      "provider": "azure",
+      "feature": "`marker` with a prefix matching only names before it",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09u",
+      "provider": "azure",
+      "feature": "`marker` with an `endBefore` excluding every remaining name",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-09v",
+      "provider": "azure",
+      "feature": "Issued `marker` with one decoded byte changed and re-encoded",
+      "profile_promise": "Complete native-marker walk required",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-10a",
+      "provider": "azure",
+      "feature": "Java SDK flat auto-pagination",
+      "profile_promise": "Must run unmodified with endpoint override",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06"
+      ],
       "evidence_kind": "sdk_run"
+    },
+    {
+      "id": "azure-10b",
+      "provider": "azure",
+      "feature": "Java SDK hierarchy auto-pagination",
+      "profile_promise": "Must run unmodified with endpoint override",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06"
+      ],
+      "evidence_kind": "sdk_run"
+    },
+    {
+      "id": "azure-10c",
+      "provider": "azure",
+      "feature": "Java SDK `setStartFrom` auto-pagination",
+      "profile_promise": "Must run unmodified with endpoint override",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06"
+      ],
+      "evidence_kind": "sdk_run"
+    },
+    {
+      "id": "azure-10d",
+      "provider": "azure",
+      "feature": "Java SDK auto-pagination at 2026-10-06",
+      "profile_promise": "Requires a pinned SDK that names the version",
+      "api_versions": [
+        "2026-10-06"
+      ],
+      "evidence_kind": "sdk_run",
+      "status": "UNMEASURED"
     },
     {
       "id": "azure-11",
@@ -242,15 +2357,1201 @@
       "evidence_kind": "retry_run"
     },
     {
-      "id": "azure-12",
+      "id": "azure-12a",
       "provider": "azure",
-      "feature": "Name length units and slash-segment boundary cases",
+      "feature": "Listing of length and segment creation-probe names",
       "profile_promise": "Provisional 1,024 UTF-16 units and 254 segments; native creation probes required",
+      "status": "UNMEASURED",
       "api_versions": [
         "2026-06-06",
         "2026-10-06"
       ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-13a",
+      "provider": "azure",
+      "feature": "Explicit client request ID echo",
+      "profile_promise": "Echo explicit client request ID; XML accept only",
       "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-13b",
+      "provider": "azure",
+      "feature": "Explicit `Accept: application/xml`",
+      "profile_promise": "Echo explicit client request ID; XML accept only",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-14a",
+      "provider": "azure",
+      "feature": "`include=metadata`",
+      "profile_promise": "Empty or omitted options only; expansions refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-14b",
+      "provider": "azure",
+      "feature": "Empty `include` value",
+      "profile_promise": "Empty or omitted options only; expansions refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-14c",
+      "provider": "azure",
+      "feature": "`include=deleted` with soft delete disabled",
+      "profile_promise": "Empty or omitted options only; expansions refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-14d",
+      "provider": "azure",
+      "feature": "`timeout=1`",
+      "profile_promise": "Empty or omitted options only; expansions refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-14e",
+      "provider": "azure",
+      "feature": "`timeout=0`",
+      "profile_promise": "Empty or omitted options only; expansions refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-14f",
+      "provider": "azure",
+      "feature": "`timeout=abc`",
+      "profile_promise": "Empty or omitted options only; expansions refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "azure-14g",
+      "provider": "azure",
+      "feature": "`showonly=files` on a flat account",
+      "profile_promise": "Empty or omitted options only; expansions refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2026-06-06",
+        "2026-10-06"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-01a",
+      "provider": "s3",
+      "feature": "`start-after` equal to an existing key is exclusive",
+      "profile_promise": "Exclusive `start-after`, intersected with prefix",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-01b",
+      "provider": "s3",
+      "feature": "`start-after` in a gap between keys",
+      "profile_promise": "Exclusive `start-after`, intersected with prefix",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-01c",
+      "provider": "s3",
+      "feature": "`start-after` before the prefix",
+      "profile_promise": "Exclusive `start-after`, intersected with prefix",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-01d",
+      "provider": "s3",
+      "feature": "`start-after` after the prefix",
+      "profile_promise": "Exclusive `start-after`, intersected with prefix",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-01e",
+      "provider": "s3",
+      "feature": "`start-after` equal to the prefix",
+      "profile_promise": "Exclusive `start-after`, intersected with prefix",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-01f",
+      "provider": "s3",
+      "feature": "`start-after` without a prefix",
+      "profile_promise": "Exclusive `start-after`, intersected with prefix",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-01g",
+      "provider": "s3",
+      "feature": "Empty `start-after` value",
+      "profile_promise": "Exclusive `start-after`, intersected with prefix",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-02a",
+      "provider": "s3",
+      "feature": "Prefix that is a string prefix of longer keys",
+      "profile_promise": "Byte prefix match",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-02b",
+      "provider": "s3",
+      "feature": "Prefix with no matching keys",
+      "profile_promise": "Byte prefix match",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03a",
+      "provider": "s3",
+      "feature": "Delimiter `/` baseline over keys, subtrees, a folder marker and an empty segment",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03b",
+      "provider": "s3",
+      "feature": "Delimiter with `start-after` equal to a subtree prefix",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03c",
+      "provider": "s3",
+      "feature": "Delimiter with `start-after` inside a subtree with remaining descendants",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03d",
+      "provider": "s3",
+      "feature": "Delimiter with `start-after` inside a subtree after its last descendant",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03e",
+      "provider": "s3",
+      "feature": "Delimiter with `start-after` after a subtree, equal to a key",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03f",
+      "provider": "s3",
+      "feature": "Delimiter `/` with a prefix ending in the delimiter",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03g",
+      "provider": "s3",
+      "feature": "Delimiter `/` with a prefix that stops before the delimiter",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03h",
+      "provider": "s3",
+      "feature": "Pipe delimiter that never occurs in keys",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03i",
+      "provider": "s3",
+      "feature": "Two-character delimiter `/1`",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03j",
+      "provider": "s3",
+      "feature": "Two-character delimiter `-g`",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03k",
+      "provider": "s3",
+      "feature": "Empty `delimiter` value",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-03l",
+      "provider": "s3",
+      "feature": "Delimiter without a prefix from a mid-corpus `start-after`",
+      "profile_promise": "CommonPrefixes rollup; start-after suppression per existing S3 goldens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-04a",
+      "provider": "s3",
+      "feature": "BMP, surrogate-neighbor and supplementary keys in list order",
+      "profile_promise": "Unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-04b",
+      "provider": "s3",
+      "feature": "`start-after` at U+E000",
+      "profile_promise": "Unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-04c",
+      "provider": "s3",
+      "feature": "Prefix in NFC form with an NFD sibling",
+      "profile_promise": "Unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-04d",
+      "provider": "s3",
+      "feature": "Prefix differing only in case",
+      "profile_promise": "Unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-04e",
+      "provider": "s3",
+      "feature": "Unicode keys with `encoding-type=url`",
+      "profile_promise": "Unsigned UTF-8 order",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05a",
+      "provider": "s3",
+      "feature": "Raw `+` in a `prefix` value",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05b",
+      "provider": "s3",
+      "feature": "`%2B` in a `prefix` value",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05c",
+      "provider": "s3",
+      "feature": "`%20` in a `prefix` value",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05d",
+      "provider": "s3",
+      "feature": "`%25` before `2B`",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05e",
+      "provider": "s3",
+      "feature": "Malformed percent escape `%ZZ` beside a literal `a%ZZ` name",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05f",
+      "provider": "s3",
+      "feature": "Trailing lone `%`",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05g",
+      "provider": "s3",
+      "feature": "Escape decoding to invalid UTF-8 beside a U+FFFD name",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05h",
+      "provider": "s3",
+      "feature": "Duplicate `prefix` with identical values",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05i",
+      "provider": "s3",
+      "feature": "Duplicate `prefix` with different values",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05j",
+      "provider": "s3",
+      "feature": "Percent-encoded `&`, `=` and `#`",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05k",
+      "provider": "s3",
+      "feature": "Raw `?` inside a value",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05l",
+      "provider": "s3",
+      "feature": "Fully encoded slashes `%2F`",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05m",
+      "provider": "s3",
+      "feature": "Lowercase hex escape `%2b`",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05n",
+      "provider": "s3",
+      "feature": "Parameter name without `=`",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05o",
+      "provider": "s3",
+      "feature": "Every reserved ASCII character in names under one prefix",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05p",
+      "provider": "s3",
+      "feature": "Trailing space in a prefix",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05q",
+      "provider": "s3",
+      "feature": "Raw `=` inside a value",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-05r",
+      "provider": "s3",
+      "feature": "Raw `+` in a `start-after` value",
+      "profile_promise": "Lenient S3 query decoding preserved from existing replay",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06a",
+      "provider": "s3",
+      "feature": "`max-keys=0`",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06b",
+      "provider": "s3",
+      "feature": "`max-keys=0` over 1,001 keys",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06c",
+      "provider": "s3",
+      "feature": "`max-keys=1` walk",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-06d",
+      "provider": "s3",
+      "feature": "`max-keys=1000` walk over exactly 1,000 keys",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-06e",
+      "provider": "s3",
+      "feature": "`max-keys=1001` over 1,001 keys",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06f",
+      "provider": "s3",
+      "feature": "`max-keys=-1`",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06g",
+      "provider": "s3",
+      "feature": "`max-keys=abc`",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06h",
+      "provider": "s3",
+      "feature": "`max-keys=2147483648`",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06i",
+      "provider": "s3",
+      "feature": "`max-keys=9223372036854775808`",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06j",
+      "provider": "s3",
+      "feature": "`max-keys=1.5`",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06k",
+      "provider": "s3",
+      "feature": "`max-keys=+2` with a raw plus",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06l",
+      "provider": "s3",
+      "feature": "`max-keys=002`",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06m",
+      "provider": "s3",
+      "feature": "Duplicate `max-keys` values",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06n",
+      "provider": "s3",
+      "feature": "Empty `max-keys` value",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-06o",
+      "provider": "s3",
+      "feature": "`max-keys=2147483647`",
+      "profile_promise": "max-keys 0 to 1,000 with cap; malformed values refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07a",
+      "provider": "s3",
+      "feature": "Delimiter walk with one entry per page over top-level subtrees",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-07b",
+      "provider": "s3",
+      "feature": "Default page size walk over 1,001 keys",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-07c",
+      "provider": "s3",
+      "feature": "Delimiter walk with two entries per page",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-07d",
+      "provider": "s3",
+      "feature": "Delimiter walk with `start-after` and one entry per page",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-07e",
+      "provider": "s3",
+      "feature": "Flat walk with four entries per page over six keys",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-07g",
+      "provider": "s3",
+      "feature": "Malformed constant `continuation-token`",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07h",
+      "provider": "s3",
+      "feature": "Reused `continuation-token` for the same query",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07i",
+      "provider": "s3",
+      "feature": "`continuation-token` from a different prefix",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07j",
+      "provider": "s3",
+      "feature": "`continuation-token` with a changed page size",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07k",
+      "provider": "s3",
+      "feature": "`continuation-token` from a flat walk with an added delimiter",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07n",
+      "provider": "s3",
+      "feature": "Flat walk with two entries per page over delimited keys",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-07o",
+      "provider": "s3",
+      "feature": "`continuation-token` from a delimiter walk with the delimiter removed",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07q",
+      "provider": "s3",
+      "feature": "Flat walk with two entries per page over six keys",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-07r",
+      "provider": "s3",
+      "feature": "Issued `continuation-token` with its last character changed",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07s",
+      "provider": "s3",
+      "feature": "Issued `continuation-token` truncated by four characters",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07t",
+      "provider": "s3",
+      "feature": "`continuation-token` with a prefix matching only keys before it",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07u",
+      "provider": "s3",
+      "feature": "`continuation-token` with a `start-after` before the token position",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07v",
+      "provider": "s3",
+      "feature": "`continuation-token` with a `start-after` after the token position",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07w",
+      "provider": "s3",
+      "feature": "Empty `continuation-token` value",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-07x",
+      "provider": "s3",
+      "feature": "Issued `continuation-token` with one decoded byte changed and re-encoded",
+      "profile_promise": "Complete native-token walk; replay-owned continuation tokens",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-08a",
+      "provider": "s3",
+      "feature": "Keys with control, XML-invalid, whitespace and dot characters without encoding",
+      "profile_promise": "encoding-type=url encodes Key, Prefix, Delimiter, StartAfter and CommonPrefixes",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-08b",
+      "provider": "s3",
+      "feature": "The same keys with `encoding-type=url`",
+      "profile_promise": "encoding-type=url encodes Key, Prefix, Delimiter, StartAfter and CommonPrefixes",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-08c",
+      "provider": "s3",
+      "feature": "Delimiter listing with `encoding-type=url` and special-character prefix and start-after",
+      "profile_promise": "encoding-type=url encodes Key, Prefix, Delimiter, StartAfter and CommonPrefixes",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "walk"
+    },
+    {
+      "id": "s3-08d",
+      "provider": "s3",
+      "feature": "Unknown `encoding-type` value",
+      "profile_promise": "encoding-type=url encodes Key, Prefix, Delimiter, StartAfter and CommonPrefixes",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-08e",
+      "provider": "s3",
+      "feature": "Reserved-character keys with `encoding-type=url`",
+      "profile_promise": "encoding-type=url encodes Key, Prefix, Delimiter, StartAfter and CommonPrefixes",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-08f",
+      "provider": "s3",
+      "feature": "Creation-probe keys at and over length limits",
+      "profile_promise": "encoding-type=url encodes Key, Prefix, Delimiter, StartAfter and CommonPrefixes",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-09a",
+      "provider": "s3",
+      "feature": "Java SDK v2 ListObjectsV2 paginator over Unicode keys",
+      "profile_promise": "Must run unmodified with endpoint override",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "sdk_run"
+    },
+    {
+      "id": "s3-09b",
+      "provider": "s3",
+      "feature": "Java SDK v2 paginator with a delimiter",
+      "profile_promise": "Must run unmodified with endpoint override",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "sdk_run"
+    },
+    {
+      "id": "s3-09c",
+      "provider": "s3",
+      "feature": "Java SDK v2 paginator with `startAfter`",
+      "profile_promise": "Must run unmodified with endpoint override",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "sdk_run"
+    },
+    {
+      "id": "s3-10",
+      "provider": "s3",
+      "feature": "Retry-disabled one-attempt errors; normal SDK retries",
+      "profile_promise": "Separate request counts",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "retry_run",
+      "status": "UNMEASURED"
+    },
+    {
+      "id": "s3-11a",
+      "provider": "s3",
+      "feature": "`fetch-owner=true`",
+      "profile_promise": "Synthetic owner when requested; optional attributes refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-11b",
+      "provider": "s3",
+      "feature": "`fetch-owner=false`",
+      "profile_promise": "Synthetic owner when requested; optional attributes refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-11c",
+      "provider": "s3",
+      "feature": "`fetch-owner=yes`",
+      "profile_promise": "Synthetic owner when requested; optional attributes refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-11d",
+      "provider": "s3",
+      "feature": "`x-amz-optional-object-attributes: RestoreStatus` header",
+      "profile_promise": "Synthetic owner when requested; optional attributes refused",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-12a",
+      "provider": "s3",
+      "feature": "ListObjects V1 with `marker` equal to an existing key",
+      "profile_promise": "ListObjectsV2 only; V1 recorded for discrimination",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-12b",
+      "provider": "s3",
+      "feature": "ListObjects V1 delimiter page with `max-keys=1`",
+      "profile_promise": "ListObjectsV2 only; V1 recorded for discrimination",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-12c",
+      "provider": "s3",
+      "feature": "`list-type=3`",
+      "profile_promise": "ListObjectsV2 only; V1 recorded for discrimination",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-12d",
+      "provider": "s3",
+      "feature": "Duplicate `list-type`",
+      "profile_promise": "ListObjectsV2 only; V1 recorded for discrimination",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
+      "evidence_kind": "exchange"
+    },
+    {
+      "id": "s3-12e",
+      "provider": "s3",
+      "feature": "V2 with `marker`",
+      "profile_promise": "ListObjectsV2 only; V1 recorded for discrimination",
+      "status": "UNMEASURED",
+      "api_versions": [
+        "2006-03-01"
+      ],
       "evidence_kind": "exchange"
     }
   ]
