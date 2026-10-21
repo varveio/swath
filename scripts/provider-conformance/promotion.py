@@ -213,7 +213,13 @@ def promote(ledger: dict, evidence_root: Path, receipts: dict[str, dict]) -> dic
             indexes[provider] = evidence.strict_json(path.read_text(encoding="utf-8"))
     for row in ledger["rows"]:
         index = indexes.get(row["provider"])
-        if index is None or row["id"] in {u["id"] for u in UNPROBED_ROWS}:
+        if row["id"] in {u["id"] for u in UNPROBED_ROWS}:
+            continue
+        if index is None or index["receipt"]["status"] != "COMPLETE":
+            # Evidence from an INCOMPLETE campaign is kept for reference but promotes nothing.
+            for key in ("evidence",):
+                row.pop(key, None)
+            row["status"] = "UNMEASURED"
             continue
         proofs = {}
         kinds = set()

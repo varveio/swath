@@ -130,12 +130,13 @@ public final class ProviderMatchReceipt {
         } else {
             List<ProviderExchangeComparator.CapturedExchangePage> nativePages = new ArrayList<>();
             List<ProviderExchangeComparator.CapturedExchangePage> replayPages = new ArrayList<>();
-            for (int i = 0; i < replay.size(); i++) {
+            for (Step step : capture.steps()) {
                 nativePages.add(new ProviderExchangeComparator.CapturedExchangePage(
-                        token(capture.steps().get(i).request().query(), "pageToken"),
-                        capture.steps().get(i).exchange()));
+                        token(step.request().query(), "pageToken"), step.exchange()));
+            }
+            for (ReplayStep step : replay) {
                 replayPages.add(new ProviderExchangeComparator.CapturedExchangePage(
-                        token(replay.get(i).request().query(), "pageToken"), replay.get(i).exchange()));
+                        token(step.request().query(), "pageToken"), step.exchange()));
             }
             ProviderExchangeComparator.assertGcsWalk(nativePages, replayPages, "{bucket}",
                     replayBucket, fullProjection, 1024, 1_000_000);
@@ -160,8 +161,8 @@ public final class ProviderMatchReceipt {
         Capture capture = read(captureFile, "azure");
         require(!capture.kind().equals("exchange"), "Azure run receipt needs typed run capture");
         require(!replay.isEmpty(), "Azure replay run is empty");
-        for (int i = 0; i < replay.size(); i++) {
-            mapping.assertMapped(capture.steps().get(i).request().path(), replay.get(i).request().path(),
+        for (ReplayStep step : replay) {
+            mapping.assertMapped(capture.steps().getFirst().request().path(), step.request().path(),
                     nativeEndpoint, replayEndpoint);
         }
         assertRunRequests(capture, replay, replay.getFirst().request().path(),
@@ -182,11 +183,13 @@ public final class ProviderMatchReceipt {
         } else {
             List<ProviderExchangeComparator.CapturedExchangePage> nativePages = new ArrayList<>();
             List<ProviderExchangeComparator.CapturedExchangePage> replayPages = new ArrayList<>();
-            for (int i = 0; i < replay.size(); i++) {
-                Step nativeStep = capture.steps().get(i);
-                ReplayStep replayStep = replay.get(i);
+            for (Step nativeStep : capture.steps()) {
                 nativePages.add(azurePage(nativeStep.request(), nativeStep.exchange()));
-                replayPages.add(azurePage(replayStep.request(), replayStep.exchange()));
+            }
+            for (ReplayStep replayStep : replay) {
+                String clientId = header(replayStep.request(), "x-ms-client-request-id");
+                replayPages.add(azurePage(replayStep.request(), normalizedAzureResponse(replayStep.exchange(),
+                        clientId == null ? null : opaqueDigest(clientId))));
             }
             ProviderExchangeComparator.assertAzureWalk(nativePages, replayPages, nativeEndpoint,
                     replayEndpoint, mapping.nativeContainer(), mapping.replayContainer(),
@@ -240,11 +243,13 @@ public final class ProviderMatchReceipt {
         }
         List<ProviderExchangeComparator.CapturedExchangePage> nativePages = new ArrayList<>();
         List<ProviderExchangeComparator.CapturedExchangePage> replayPages = new ArrayList<>();
-        for (int i = 0; i < replay.size(); i++) {
+        for (Step step : capture.steps()) {
             nativePages.add(new ProviderExchangeComparator.CapturedExchangePage(
-                    token(capture.steps().get(i).request().query(), field), capture.steps().get(i).exchange()));
+                    token(step.request().query(), field), step.exchange()));
+        }
+        for (ReplayStep step : replay) {
             replayPages.add(new ProviderExchangeComparator.CapturedExchangePage(
-                    token(replay.get(i).request().query(), field), replay.get(i).exchange()));
+                    token(step.request().query(), field), step.exchange()));
         }
         ProviderExchangeComparator.assertS3Walk(nativePages, replayPages, "{bucket}", replayBucket, 1024, 1_000_000);
     }
@@ -278,6 +283,11 @@ public final class ProviderMatchReceipt {
 
     private static void assertRunRequests(Capture capture, List<ReplayStep> replay, String replayPath,
                                           Map<String, String> tokenMapping, Dialect dialect) {
+        require(!replay.isEmpty(), "replay run is empty");
+        if (!capture.kind().equals("retry_run")) {
+            assertWalkRequests(capture, replay, replayPath, dialect);
+            return;
+        }
         require(capture.steps().size() == replay.size(), "replay run exchange count differs");
         for (int i = 0; i < replay.size(); i++) {
             Step step = capture.steps().get(i);
@@ -296,6 +306,68 @@ public final class ProviderMatchReceipt {
                 normalizedAzureResponse(actual.exchange(), clientId);
             }
         }
+    }
+
+    /**
+     * Walks and SDK runs: each endpoint follows its own tokens, so page boundaries and page
+     * counts may differ. Every replay request must carry the captured scope (method, path,
+     * query without the token, service version and SDK identity); token chains and the
+     * complete ordered inventory are checked by the walk comparators.
+     */
+    private static void assertWalkRequests(Capture capture, List<ReplayStep> replay, String replayPath,
+                                           Dialect dialect) {
+        Request nativeFirst = capture.steps().getFirst().request();
+        String nativeScope = withoutField(nativeFirst.query(), dialect.tokenField);
+        for (Step step : capture.steps()) {
+            require(withoutField(step.request().query(), dialect.tokenField).equals(nativeScope),
+                    "native walk scope changed between pages");
+            if (dialect == Dialect.AZURE) {
+                String clientId = header(step.request(), "x-ms-client-request-id");
+                String nativeEcho = step.exchange().headers().containsKey("x-ms-client-request-id")
+                        ? step.exchange().headers().get("x-ms-client-request-id").getFirst() : null;
+                require(java.util.Objects.equals(clientId, nativeEcho),
+                        "native response client ID differs from captured request");
+            }
+        }
+        require(token(nativeFirst.query(), dialect.tokenField) == null
+                && token(replay.getFirst().request().query(), dialect.tokenField) == null,
+                "a walk must start without a continuation token");
+        for (int i = 0; i < replay.size(); i++) {
+            ReplayStep actual = replay.get(i);
+            require(actual.phase().equals("walk"), "replay run phase differs");
+            Request request = actual.request();
+            require(nativeFirst.method().equals(request.method()) && request.path().equals(replayPath),
+                    "replay request method/path differs from captured probe");
+            require(withoutField(request.query(), dialect.tokenField).equals(nativeScope),
+                    "replay request query differs from captured probe");
+            boolean duplicateProbe = DUPLICATE_QUERY_PROBES.contains(capture.probeId());
+            require(noUnexpectedDuplicates(request.query(), duplicateProbe),
+                    "duplicate query field outside duplicate-parameter probe");
+            if (capture.kind().equals("sdk_run")) assertSdkHeaders(nativeFirst, request);
+            if (dialect == Dialect.AZURE) {
+                require(java.util.Objects.equals(header(nativeFirst, "x-ms-version"), header(request, "x-ms-version")),
+                        "replay request service version differs");
+                // SDK client request IDs are deterministic per call, so call i carries the same ID
+                // on both endpoints while both walks still have a call i.
+                if (i < capture.steps().size()) {
+                    String nativeClientId = header(capture.steps().get(i).request(), "x-ms-client-request-id");
+                    String replayClientId = header(request, "x-ms-client-request-id");
+                    require(java.util.Objects.equals(nativeClientId,
+                            replayClientId == null ? null : opaqueDigest(replayClientId)),
+                            "replay request client ID differs");
+                }
+                normalizedAzureResponse(actual.exchange(), header(request, "x-ms-client-request-id") == null
+                        ? null : opaqueDigest(header(request, "x-ms-client-request-id")));
+            }
+        }
+    }
+
+    private static String withoutField(String query, String field) {
+        List<String> parts = new ArrayList<>();
+        for (String part : query.split("&", -1)) {
+            if (!part.startsWith(field + "=")) parts.add(part);
+        }
+        return String.join("&", parts);
     }
 
     private static void assertRequest(Request nativeRequest, Request replay, String replayPath,

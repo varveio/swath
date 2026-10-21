@@ -135,8 +135,8 @@ class S3ProfileComparatorTest {
         ProviderMatchReceipt.s3Run(capture, replay, Map.of("r1%2B%2F%3D", NATIVE_TOKEN), "replay-bucket", dir,
                 dir.resolve("dist.jar"), source, "exactTest", dir.resolve("receipt.json"));
         assertThat(JSON.readTree(dir.resolve("receipt.json").toFile()).path("compared_steps").asInt()).isEqualTo(2);
-        assertThatThrownBy(() -> ProviderMatchReceipt.verifyS3Run(capture, replay, Map.of(), "replay-bucket"))
-                .hasMessageContaining("explicit mapping");
+        // Walks follow each endpoint's own tokens; no cross-endpoint token mapping is needed.
+        ProviderMatchReceipt.verifyS3Run(capture, replay, Map.of(), "replay-bucket");
         var wrongSdk = List.of(replay.getFirst(), new ProviderMatchReceipt.ReplayStep("walk",
                 new ProviderMatchReceipt.Request("GET", "/replay-bucket",
                         "list-type=2&prefix=p%2F&continuation-token=r1%2B%2F%3D",

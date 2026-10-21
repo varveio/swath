@@ -6,6 +6,7 @@
 package io.varve.swath.replay.conformance.provider;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -78,11 +79,28 @@ class NativeEvidenceReplayTest {
         replayProvider("s3", "s3NativeCapturesMatchReplay", dir);
     }
 
-    private void replayProvider(String provider, String testName, Path dir) throws Exception {
+    /** Committed evidence for one provider and a replay server serving its corpus. */
+    private record ReplayContext(Path root, JsonNode index, Map<String, JsonNode> cases, ReplayServer server)
+            implements AutoCloseable {
+        Endpoint endpoint(boolean restoreBom, Mutation mutation) {
+            return new Endpoint(index.path("provider").asText(), server.port(), cases, restoreBom, mutation);
+        }
+
+        Path capture(String key) {
+            return root.resolve(index.path("captures").path(key).path("file").asText());
+        }
+
+        @Override
+        public void close() throws Exception {
+            server.close();
+        }
+    }
+
+    private static ReplayContext open(String provider, Path dir) throws Exception {
+        Files.createDirectories(dir);
         Path root = EVIDENCE.resolve(provider);
         assumeTrue(Files.isRegularFile(root.resolve("index.json")), "no committed " + provider + " evidence");
         JsonNode index = JSON.readTree(root.resolve("index.json").toFile());
-        JsonNode expectations = JSON.readTree(root.resolve("replay-expectations.json").toFile());
         Map<String, JsonNode> cases = new HashMap<>();
         index.path("cases").forEach(node -> cases.put(node.path("id").asText(), node));
         String firstManifest = index.path("manifests").fieldNames().next();
@@ -107,12 +125,23 @@ class NativeEvidenceReplayTest {
                 2, 16, s3 ? Set.of(Protocol.S3) : Set.of(Protocol.GCS, Protocol.AZURE), s3 ? null : REPLAY_ACCOUNT,
                 256L * 1024 * 1024, 64 * 1024 * 1024, Duration.ofSeconds(10), Duration.ofSeconds(30),
                 Duration.ofSeconds(30), null, s3 ? (request, result) -> Duration.ZERO : null);
+        ReplayServer server = ReplayServer.open(config);
+        server.start();
+        return new ReplayContext(root, index, cases, server);
+    }
+
+    private void replayProvider(String provider, String testName, Path dir) throws Exception {
+        Path root = EVIDENCE.resolve(provider);
+        assumeTrue(Files.isRegularFile(root.resolve("index.json")), "no committed " + provider + " evidence");
+        JsonNode expectations = JSON.readTree(root.resolve("replay-expectations.json").toFile());
         String receipts = System.getProperty("swath.provider.receipts");
         String distribution = System.getProperty("swath.provider.distribution");
         Map<String, String> outcomes = new TreeMap<>();
-        try (ReplayServer server = ReplayServer.open(config)) {
-            server.start();
-            Endpoint endpoint = new Endpoint(provider, server.port(), cases);
+        try (ReplayContext context = open(provider, dir)) {
+            ReplayServer server = context.server();
+            JsonNode index = context.index();
+            Map<String, JsonNode> cases = context.cases();
+            Endpoint endpoint = context.endpoint(false, Mutation.NONE);
             for (var capture : index.path("captures").properties()) {
                 String key = capture.getKey();
                 Path file = root.resolve(capture.getValue().path("file").asText());
@@ -125,7 +154,7 @@ class NativeEvidenceReplayTest {
                     if (error.getMessage() != null && error.getMessage().startsWith("Azure BOM/prolog")) {
                         String rest;
                         try {
-                            new Endpoint(provider, server.port(), cases, true).verify(key, file, capture.getValue());
+                            context.endpoint(true, Mutation.NONE).verify(key, file, capture.getValue());
                             rest = "nothing else";
                         } catch (IllegalArgumentException | IllegalStateException | IOException other) {
                             rest = other.getMessage();
@@ -190,10 +219,8 @@ class NativeEvidenceReplayTest {
      * mismatch, it re-compares with the BOM restored to report whatever else differs. It never
      * produces a match verdict or a receipt.
      */
-    private record Endpoint(String provider, int port, Map<String, JsonNode> cases, boolean restoreBom) {
-        Endpoint(String provider, int port, Map<String, JsonNode> cases) {
-            this(provider, port, cases, false);
-        }
+    private record Endpoint(String provider, int port, Map<String, JsonNode> cases, boolean restoreBom,
+                            Mutation mutation) {
 
         ProviderExchangeComparator.Exchange replayExchange(int status, Map<String, List<String>> headers,
                                                            byte[] body) {
@@ -264,7 +291,8 @@ class NativeEvidenceReplayTest {
             RawHttp.Response response = send(request.path("method").asText(), query, headers);
             var replayRequest = new ProviderMatchReceipt.Request(request.path("method").asText(), replayPath(),
                     query, headerMap(headers));
-            var exchange = replayExchange(response.status(), response.headers(), response.body());
+            var exchange = mutation.apply(provider, List.of(
+                    replayExchange(response.status(), response.headers(), response.body()))).getFirst();
             if (s3()) {
                 ProviderMatchReceipt.verifyS3(file, replayRequest, exchange, tokens, REPLAY_BUCKET);
             } else if (gcs()) {
@@ -298,6 +326,14 @@ class NativeEvidenceReplayTest {
                 token = response.status() == 200 ? nextToken(response.body()) : null;
                 if (token == null) break;
             }
+            List<ProviderExchangeComparator.Exchange> mutated = mutation.apply(provider,
+                    replay.stream().map(ProviderMatchReceipt.ReplayStep::exchange).toList());
+            List<ProviderMatchReceipt.ReplayStep> walked = new ArrayList<>();
+            for (int i = 0; i < mutated.size(); i++) {
+                walked.add(new ProviderMatchReceipt.ReplayStep("walk", replay.get(Math.min(i, replay.size() - 1))
+                        .request(), mutated.get(i)));
+            }
+            replay = walked;
             if (s3()) {
                 ProviderMatchReceipt.verifyS3Run(file, replay, tokens, REPLAY_BUCKET);
             } else if (gcs()) {
@@ -509,6 +545,183 @@ class NativeEvidenceReplayTest {
                     .digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (java.security.NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Corrupts a replay result that matched its native capture; every corruption must be
+     * rejected, so a comparator that tolerates lost, repeated, reordered or re-decoded keys,
+     * early termination, repeated prefixes or a wrong error is caught here.
+     */
+    @Test
+    void evidencePipelineRejectsCorruptedReplayResults(@TempDir Path dir) throws Exception {
+        Map<String, List<String[]>> plan = Map.of(
+                "gcs", List.of(new String[] {"gcs-01a", "drop-first"}, new String[] {"gcs-01a", "duplicate-last"},
+                        new String[] {"gcs-04a", "swap-order-pair"}, new String[] {"gcs-05o", "double-decode"},
+                        new String[] {"gcs-07q", "terminate-early"}, new String[] {"gcs-07c", "repeat-prefix"},
+                        new String[] {"gcs-07g", "wrong-status"}, new String[] {"gcs-07g", "wrong-error"}),
+                "s3", List.of(new String[] {"s3-01a", "drop-first"}, new String[] {"s3-01a", "duplicate-last"},
+                        new String[] {"s3-04a", "swap-order-pair"}, new String[] {"s3-05o", "double-decode"},
+                        new String[] {"s3-07q", "terminate-early"}, new String[] {"s3-07c", "repeat-prefix"},
+                        new String[] {"s3-06f", "wrong-status"}, new String[] {"s3-06f", "wrong-error"}),
+                // Azure baselines restore the BOM replay omits (a pinned finding), so the
+                // corruption under test is the only remaining difference.
+                "azure", List.of(new String[] {"azure-03a~2026-06-06", "drop-first"},
+                        new String[] {"azure-03a~2026-06-06", "duplicate-last"},
+                        new String[] {"azure-03a~2026-06-06", "swap-order-pair"},
+                        new String[] {"azure-07o~2026-06-06", "double-decode"},
+                        new String[] {"azure-09q~2026-06-06", "terminate-early"},
+                        new String[] {"azure-09c~2026-06-06", "repeat-prefix"},
+                        new String[] {"azure-08f~2026-06-06", "wrong-status"},
+                        new String[] {"azure-08f~2026-06-06", "wrong-error"}));
+        int checked = 0;
+        for (var entry : plan.entrySet()) {
+            String provider = entry.getKey();
+            if (!Files.isRegularFile(EVIDENCE.resolve(provider).resolve("index.json"))) continue;
+            boolean azure = provider.equals("azure");
+            try (ReplayContext context = open(provider, dir.resolve(provider))) {
+                for (String[] corruption : entry.getValue()) {
+                    String key = corruption[0];
+                    JsonNode capture = context.index().path("captures").path(key);
+                    Path file = context.capture(key);
+                    context.endpoint(azure, Mutation.NONE).verify(key, file, capture);
+                    Endpoint corrupted = context.endpoint(azure, Mutation.named(corruption[1]));
+                    assertThatThrownBy(() -> corrupted.verify(key, file, capture))
+                            .as(key + " with " + corruption[1])
+                            .isInstanceOfAny(IllegalArgumentException.class, IllegalStateException.class);
+                    checked++;
+                }
+            }
+        }
+        assumeTrue(checked > 0, "no committed provider evidence");
+    }
+
+    /** A deterministic corruption of replay exchanges, in page order. */
+    @FunctionalInterface
+    interface Mutation {
+        Mutation NONE = (provider, pages) -> pages;
+
+        List<ProviderExchangeComparator.Exchange> apply(String provider, List<ProviderExchangeComparator.Exchange> pages);
+
+        static Mutation named(String name) {
+            return switch (name) {
+                case "drop-first" -> (provider, pages) -> onFirst(pages, body -> entries(provider, body, list -> list.remove(0)));
+                case "duplicate-last" -> (provider, pages) -> onFirst(pages,
+                        body -> entries(provider, body, list -> list.add(list.getLast())));
+                case "swap-order-pair" -> (provider, pages) -> onFirst(pages, body -> entries(provider, body, list -> {
+                    // The last two entries of a Unicode scope are the order-discriminating pair.
+                    int last = list.size() - 1;
+                    String item = list.get(last);
+                    list.set(last, list.get(last - 1));
+                    list.set(last - 1, item);
+                }));
+                case "double-decode" -> (provider, pages) -> onFirst(pages, body -> replaceOnce(body, "a%2Bb", "a+b"));
+                case "terminate-early" -> (provider, pages) -> {
+                    List<ProviderExchangeComparator.Exchange> shorter = new ArrayList<>(pages.subList(0, pages.size() - 1));
+                    int last = shorter.size() - 1;
+                    shorter.set(last, withBody(shorter.get(last), withoutToken(provider, bodyText(shorter.get(last)))));
+                    return shorter;
+                };
+                case "repeat-prefix" -> (provider, pages) -> {
+                    String repeated = firstPrefix(provider, bodyText(pages.getFirst()));
+                    List<ProviderExchangeComparator.Exchange> out = new ArrayList<>(pages);
+                    out.set(1, withBody(out.get(1), withPrefix(provider, bodyText(out.get(1)), repeated)));
+                    return out;
+                };
+                case "wrong-status" -> (provider, pages) -> List.of(new ProviderExchangeComparator.Exchange(
+                        pages.getFirst().status() == 400 ? 409 : 400, pages.getFirst().headers(), pages.getFirst().body()));
+                case "wrong-error" -> (provider, pages) -> onFirst(pages, body -> body
+                        .replaceFirst("\"reason\":\"[A-Za-z]+\"", "\"reason\":\"conflict\"")
+                        .replaceFirst("<Code>[A-Za-z]+</Code>", "<Code>InternalError</Code>"));
+                default -> throw new IllegalArgumentException("unknown mutation " + name);
+            };
+        }
+
+        private static List<ProviderExchangeComparator.Exchange> onFirst(List<ProviderExchangeComparator.Exchange> pages,
+                                                                     java.util.function.UnaryOperator<String> edit) {
+            List<ProviderExchangeComparator.Exchange> out = new ArrayList<>(pages);
+            out.set(0, withBody(out.getFirst(), edit.apply(bodyText(out.getFirst()))));
+            return out;
+        }
+
+        private static String bodyText(ProviderExchangeComparator.Exchange exchange) {
+            return new String(exchange.body(), StandardCharsets.UTF_8);
+        }
+
+        private static ProviderExchangeComparator.Exchange withBody(ProviderExchangeComparator.Exchange exchange,
+                                                                    String body) {
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            Map<String, List<String>> headers = new LinkedHashMap<>(exchange.headers());
+            if (headers.containsKey("content-length")) headers.put("content-length", List.of(Integer.toString(bytes.length)));
+            return new ProviderExchangeComparator.Exchange(exchange.status(), headers, bytes);
+        }
+
+        private static String replaceOnce(String body, String from, String to) {
+            if (!body.contains(from)) throw new IllegalStateException("mutation target " + from + " is absent");
+            return body.replaceFirst(java.util.regex.Pattern.quote(from), java.util.regex.Matcher.quoteReplacement(to));
+        }
+
+        /** Applies an edit to the ordered object entries of one page and re-renders it. */
+        private static String entries(String provider, String body, java.util.function.Consumer<List<String>> edit) {
+            if (provider.equals("gcs")) {
+                try {
+                    ObjectNode page = (ObjectNode) JSON.readTree(body);
+                    List<String> items = new ArrayList<>();
+                    page.path("items").forEach(item -> items.add(item.toString()));
+                    edit.accept(items);
+                    var array = JSON.createArrayNode();
+                    for (String item : items) array.add(JSON.readTree(item));
+                    page.set("items", array);
+                    return JSON.writeValueAsString(page);
+                } catch (IOException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+            String tag = provider.equals("s3") ? "Contents" : "Blob";
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("<" + tag + ">.*?</" + tag + ">",
+                    java.util.regex.Pattern.DOTALL).matcher(body);
+            List<String> items = new ArrayList<>();
+            int start = -1;
+            int end = -1;
+            while (matcher.find()) {
+                if (start < 0) start = matcher.start();
+                end = matcher.end();
+                items.add(matcher.group());
+            }
+            if (items.size() < 2) throw new IllegalStateException("mutation needs two entries");
+            String between = body.substring(start, end);
+            if (!between.equals(String.join("", items))) throw new IllegalStateException("entries are not contiguous");
+            edit.accept(items);
+            return body.substring(0, start) + String.join("", items) + body.substring(end);
+        }
+
+        private static String withoutToken(String provider, String body) {
+            return switch (provider) {
+                case "gcs" -> body.replaceFirst(",?\"nextPageToken\":\"[^\"]*\"", "");
+                case "s3" -> body.replaceFirst("<NextContinuationToken>[^<]*</NextContinuationToken>", "")
+                        .replace("<IsTruncated>true</IsTruncated>", "<IsTruncated>false</IsTruncated>");
+                default -> body.replaceFirst("<NextMarker>[^<]*</NextMarker>", "<NextMarker />");
+            };
+        }
+
+        private static String firstPrefix(String provider, String body) {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(switch (provider) {
+                case "gcs" -> "\"prefixes\":\\[(\"[^\"]*\")";
+                case "s3" -> "(<CommonPrefixes>.*?</CommonPrefixes>)";
+                default -> "(<BlobPrefix>.*?</BlobPrefix>)";
+            }, java.util.regex.Pattern.DOTALL).matcher(body);
+            if (!matcher.find()) throw new IllegalStateException("first page has no prefix to repeat");
+            return matcher.group(1);
+        }
+
+        private static String withPrefix(String provider, String body, String prefix) {
+            return switch (provider) {
+                case "gcs" -> body.contains("\"prefixes\":[") ? body.replaceFirst("\"prefixes\":\\[",
+                        java.util.regex.Matcher.quoteReplacement("\"prefixes\":[" + prefix + ","))
+                        : body.replaceFirst("\\}$", java.util.regex.Matcher.quoteReplacement(",\"prefixes\":[" + prefix + "]}"));
+                case "s3" -> body.replace("</ListBucketResult>", prefix + "</ListBucketResult>");
+                default -> body.replace("</Blobs>", prefix + "</Blobs>");
+            };
         }
     }
 }

@@ -144,10 +144,10 @@
     "mismatch": "Azure HTTP status differs: expected=200 actual=400"
   },
   "azure-04m~2026-06-06": {
-    "mismatch": "replay run exchange count differs"
+    "mismatch": "walk page has non-200 HTTP status"
   },
   "azure-04m~2026-10-06": {
-    "mismatch": "replay run exchange count differs"
+    "mismatch": "walk page has non-200 HTTP status"
   },
   "azure-05a~2026-06-06": {
     "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
@@ -420,10 +420,10 @@
     "mismatch": "Azure HTTP status differs: expected=403 actual=400"
   },
   "azure-09a~2026-06-06": {
-    "mismatch": "replay run exchange count differs"
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=10 actual=9"
   },
   "azure-09a~2026-10-06": {
-    "mismatch": "replay run exchange count differs"
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=10 actual=9"
   },
   "azure-09b~2026-06-06": {
     "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
