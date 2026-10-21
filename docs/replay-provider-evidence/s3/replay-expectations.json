@@ -1,0 +1,142 @@
+{
+  "s3-01a": "match",
+  "s3-01b": "match",
+  "s3-01c": "match",
+  "s3-01d": "match",
+  "s3-01e": "match",
+  "s3-01f": "match",
+  "s3-01g": {
+    "mismatch": "top-level element sequence differs: expected=[Name, Prefix, StartAfter, KeyCount, MaxKeys, IsTruncated, Contents, Contents, Contents, Contents, Contents, Contents] actual=[Name, Prefix, KeyCount, MaxKeys, IsTruncated, Contents, Contents, Co"
+  },
+  "s3-02a": "match",
+  "s3-02b": "match",
+  "s3-03a": "match",
+  "s3-03b": "match",
+  "s3-03c": "match",
+  "s3-03d": "match",
+  "s3-03e": "match",
+  "s3-03f": "match",
+  "s3-03g": "match",
+  "s3-03h": "match",
+  "s3-03i": "match",
+  "s3-03j": "match",
+  "s3-03k": "match",
+  "s3-03l": "match",
+  "s3-04a": "match",
+  "s3-04b": "match",
+  "s3-04c": "match",
+  "s3-04d": "match",
+  "s3-04e": "match",
+  "s3-05a": {
+    "mismatch": "S3 HTTP status differs: expected=403 actual=200"
+  },
+  "s3-05b": "match",
+  "s3-05c": "match",
+  "s3-05d": "match",
+  "s3-05e": {
+    "mismatch": "S3 HTTP status differs: expected=403 actual=200"
+  },
+  "s3-05f": {
+    "mismatch": "S3 HTTP status differs: expected=403 actual=200"
+  },
+  "s3-05g": {
+    "mismatch": "S3 HTTP status differs: expected=403 actual=200"
+  },
+  "s3-05h": "match",
+  "s3-05i": {
+    "mismatch": "top-level element sequence differs: expected=[Name, Prefix, KeyCount, MaxKeys, IsTruncated, Contents, Contents, Contents, Contents, Contents, Contents, Contents, Contents, Contents] actual=[Name, Prefix, KeyCount, MaxKeys, IsTruncated, Cont"
+  },
+  "s3-05j": "match",
+  "s3-05k": "match",
+  "s3-05l": "match",
+  "s3-05m": "match",
+  "s3-05n": "match",
+  "s3-05o": "match",
+  "s3-05p": "match",
+  "s3-05q": "match",
+  "s3-05r": {
+    "mismatch": "S3 HTTP status differs: expected=403 actual=200"
+  },
+  "s3-06a": "match",
+  "s3-06b": "match",
+  "s3-06c": "match",
+  "s3-06d": "match",
+  "s3-06e": "match",
+  "s3-06f": "match",
+  "s3-06g": "match",
+  "s3-06h": "match",
+  "s3-06i": "match",
+  "s3-06j": "match",
+  "s3-06k": {
+    "mismatch": "S3 HTTP status differs: expected=400 actual=200"
+  },
+  "s3-06l": "match",
+  "s3-06m": {
+    "mismatch": "top-level element sequence differs: expected=[Name, Prefix, NextContinuationToken, KeyCount, MaxKeys, IsTruncated, Contents] actual=[Name, Prefix, NextContinuationToken, KeyCount, MaxKeys, IsTruncated, Contents, Contents]"
+  },
+  "s3-06n": "match",
+  "s3-06o": "match",
+  "s3-07a": "match",
+  "s3-07b": "match",
+  "s3-07c": "match",
+  "s3-07d": "match",
+  "s3-07e": "match",
+  "s3-07g": "match",
+  "s3-07h": "match",
+  "s3-07i": "match",
+  "s3-07j": "match",
+  "s3-07k": {
+    "mismatch": "CommonPrefixes differs: expected=[probe/r20261021t171759z-fdb77bec/d/a/] actual=[probe/r20261021t171759z-fdb77bec/d/b/]"
+  },
+  "s3-07n": "match",
+  "s3-07o": "match",
+  "s3-07q": "match",
+  "s3-07r": {
+    "mismatch": "S3 HTTP status differs: expected=400 actual=200"
+  },
+  "s3-07s": {
+    "mismatch": "S3 HTTP status differs: expected=400 actual=200"
+  },
+  "s3-07t": "match",
+  "s3-07u": "match",
+  "s3-07v": "match",
+  "s3-07w": {
+    "mismatch": "S3 HTTP status differs: expected=400 actual=200"
+  },
+  "s3-07x": {
+    "mismatch": "replay token is not base64; the native mutation has no analogue"
+  },
+  "s3-08a": "match",
+  "s3-08b": "match",
+  "s3-08c": {
+    "mismatch": "walk Delimiter differs: expected=+ actual=%20"
+  },
+  "s3-08d": {
+    "mismatch": "S3 HTTP status differs: expected=400 actual=200"
+  },
+  "s3-08e": {
+    "mismatch": "Contents 0 Key differs: expected=probe/r20261021t171759z-fdb77bec/p/+lead actual=probe/r20261021t171759z-fdb77bec/p/%20lead"
+  },
+  "s3-08f": "match",
+  "s3-09b": "match",
+  "s3-09c": "match",
+  "s3-11a": {
+    "mismatch": "Contents 0 field sequence differs: expected=[Key, LastModified, ETag, ChecksumAlgorithm, ChecksumType, Size, Owner, StorageClass] actual=[Key, LastModified, ETag, ChecksumAlgorithm, ChecksumType, Size, StorageClass]"
+  },
+  "s3-11b": "match",
+  "s3-11c": "match",
+  "s3-11d": "match",
+  "s3-12a": {
+    "mismatch": "S3 HTTP status differs: expected=200 actual=400"
+  },
+  "s3-12b": {
+    "mismatch": "S3 HTTP status differs: expected=200 actual=400"
+  },
+  "s3-12c": {
+    "mismatch": "S3 HTTP status differs: expected=200 actual=400"
+  },
+  "s3-12d": "match",
+  "s3-12e": {
+    "mismatch": "S3 HTTP status differs: expected=400 actual=200"
+  }
+}

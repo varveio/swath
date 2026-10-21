@@ -1,0 +1,605 @@
+{
+  "azure-01~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-02~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03a~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03a~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03b~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03b~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03c~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03c~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03d~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03d~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03e~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03e~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03f~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03f~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03g~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03g~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03h~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-03h~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-03i~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-03i~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-03j~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03j~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03k~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-03k~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04a~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04a~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04b~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04b~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04c~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04c~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04d~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04d~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04e~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04e~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04f~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04f~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04g~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04g~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04h~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04h~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04i~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04i~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04j~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04j~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-04k~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Delimiter echo differs: expected=null actual="
+  },
+  "azure-04k~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Delimiter echo differs: expected=null actual="
+  },
+  "azure-04l~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04l~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-04m~2026-06-06": {
+    "mismatch": "replay run exchange count differs"
+  },
+  "azure-04m~2026-10-06": {
+    "mismatch": "replay run exchange count differs"
+  },
+  "azure-05a~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-05a~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-05b~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-05b~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-05c~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-05c~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-05d~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-05d~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-06a~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry Name text 7 differs: expected=probe/r20261021t172702z-4109e13b/u/𐀀 actual=probe/r2026102"
+  },
+  "azure-06a~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry Name text 7 differs: expected=probe/r20261021t172702z-4109e13b/u/𐀀 actual=probe/r2026102"
+  },
+  "azure-06b~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=4 actual=7"
+  },
+  "azure-06b~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=4 actual=7"
+  },
+  "azure-06c~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-06c~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-06d~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-06d~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-06e~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=6 actual=2"
+  },
+  "azure-06e~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=6 actual=2"
+  },
+  "azure-06f~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry Name text 7 differs: expected=probe/r20261021t172702z-4109e13b/u/𐀀 actual=probe/r2026102"
+  },
+  "azure-06f~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry Name text 7 differs: expected=probe/r20261021t172702z-4109e13b/u/𐀀 actual=probe/r2026102"
+  },
+  "azure-07a~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Prefix echo differs: expected=probe/r20261021t172702z-4109e13b/p/a b actual=probe/r20261021t17"
+  },
+  "azure-07a~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Prefix echo differs: expected=probe/r20261021t172702z-4109e13b/p/a b actual=probe/r20261021t17"
+  },
+  "azure-07b~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07b~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07c~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07c~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07d~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07d~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07e~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07e~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07f~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07f~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07g~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07g~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07h~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07h~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07i~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07i~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-07j~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07j~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07k~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07k~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07l~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07l~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07m~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07m~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07n~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Delimiter echo differs: expected=null actual="
+  },
+  "azure-07n~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Delimiter echo differs: expected=null actual="
+  },
+  "azure-07o~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07o~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07p~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07p~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07q~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07q~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-07r~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=14 actual=12"
+  },
+  "azure-07r~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=14 actual=12"
+  },
+  "azure-07s~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=14 actual=12"
+  },
+  "azure-07s~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=14 actual=12"
+  },
+  "azure-07t~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=27 actual=21"
+  },
+  "azure-07t~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry count differs: expected=27 actual=21"
+  },
+  "azure-08a~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08a~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08c~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08c~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08d~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08d~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08e~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Azure MaxResults echo at page 0 differs: expected=5001 actual=5000"
+  },
+  "azure-08e~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Azure MaxResults echo at page 0 differs: expected=5001 actual=5000"
+  },
+  "azure-08f~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08f~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08g~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08g~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08h~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Azure error code differs: expected=OutOfRangeQueryParameterValue actual=InvalidQueryParameterV"
+  },
+  "azure-08h~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Azure error code differs: expected=OutOfRangeQueryParameterValue actual=InvalidQueryParameterV"
+  },
+  "azure-08i~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Azure error code differs: expected=OutOfRangeQueryParameterValue actual=InvalidQueryParameterV"
+  },
+  "azure-08i~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: Azure error code differs: expected=OutOfRangeQueryParameterValue actual=InvalidQueryParameterV"
+  },
+  "azure-08j~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08j~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08k~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-08k~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-08l~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: MaxResults echo differs: expected=2 actual=002"
+  },
+  "azure-08l~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: MaxResults echo differs: expected=2 actual=002"
+  },
+  "azure-08m~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08m~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-08n~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-08n~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-08o~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: MaxResults echo differs: expected=5000 actual=2147483647"
+  },
+  "azure-08o~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: MaxResults echo differs: expected=5000 actual=2147483647"
+  },
+  "azure-08p~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=403 actual=400"
+  },
+  "azure-08p~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=403 actual=400"
+  },
+  "azure-09a~2026-06-06": {
+    "mismatch": "replay run exchange count differs"
+  },
+  "azure-09a~2026-10-06": {
+    "mismatch": "replay run exchange count differs"
+  },
+  "azure-09b~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09b~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09c~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09c~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09e~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09e~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09f~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09f~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09g~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09g~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09h~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: replay marker echo differs: expected=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b5"
+  },
+  "azure-09h~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: replay marker echo differs: expected=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b5"
+  },
+  "azure-09i~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09i~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09j~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: replay marker echo differs: expected=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b5"
+  },
+  "azure-09j~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: replay marker echo differs: expected=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b5"
+  },
+  "azure-09k~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09k~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09l~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: native marker echo differs: expected= actual=null"
+  },
+  "azure-09l~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: native marker echo differs: expected= actual=null"
+  },
+  "azure-09n~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09n~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09o~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09o~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09q~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09q~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-09r~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=400 actual=200"
+  },
+  "azure-09r~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=400 actual=200"
+  },
+  "azure-09s~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=400 actual=200"
+  },
+  "azure-09s~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=400 actual=200"
+  },
+  "azure-09t~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09t~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09u~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09u~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-09v~2026-06-06": {
+    "mismatch": "replay token is not base64; the native mutation has no analogue"
+  },
+  "azure-09v~2026-10-06": {
+    "mismatch": "replay token is not base64; the native mutation has no analogue"
+  },
+  "azure-10a~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: entry Name text 7 differs: expected=probe/r20261021t172702z-4109e13b/u/𐀀 actual=probe/r2026102"
+  },
+  "azure-10b~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-10c~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-12a~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=500"
+  },
+  "azure-12a~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=500"
+  },
+  "azure-13a~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-13a~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-13b~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-13b~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-14a~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-14a~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-14b~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-14b~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-14c~2026-06-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-14c~2026-10-06": {
+    "mismatch": "Azure HTTP status differs: expected=200 actual=400"
+  },
+  "azure-14d~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-14d~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-14e~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: native x-ms-error-code differs: expected=InvalidQueryParameterValue actual=null"
+  },
+  "azure-14e~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: native x-ms-error-code differs: expected=InvalidQueryParameterValue actual=null"
+  },
+  "azure-14f~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: native x-ms-error-code differs: expected=InvalidQueryParameterValue actual=null"
+  },
+  "azure-14f~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: native x-ms-error-code differs: expected=InvalidQueryParameterValue actual=null"
+  },
+  "azure-14g~2026-06-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  },
+  "azure-14g~2026-10-06": {
+    "mismatch": "Azure BOM/prolog differs: expected=﻿<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"
+  }
+}
