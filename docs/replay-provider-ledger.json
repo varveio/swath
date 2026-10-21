@@ -6,7 +6,7 @@
       "provider": "gcs",
       "feature": "`startOffset` equal to an existing name is inclusive",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -16,7 +16,11 @@
           "capture_file": "gcs/captures/gcs-01a.json",
           "capture_sha256": "d9a6aa7bc53104ce2ad6941906115309bf644d05f97c22f0a713e143ff8b5035",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&startOffset=probe/r20261021t172056z-987e3b56/r/k02",
-          "expected_result": "page 1: HTTP 200, 5 entries [item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 5 entries [item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01a.json",
+          "replay_result_sha256": "5e3084f74652bd1820c00b5bd11d9ff9421e468d87da091fce425dc811d84eba"
         }
       }
     },
@@ -25,7 +29,7 @@
       "provider": "gcs",
       "feature": "`endOffset` equal to an existing name is exclusive",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -35,7 +39,11 @@
           "capture_file": "gcs/captures/gcs-01b.json",
           "capture_sha256": "f1e9f4678f6ba380d073afd1ca5df2b2d348c9b33ddce1108d580efe18ac38e1",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&endOffset=probe/r20261021t172056z-987e3b56/r/k05",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k01', item:'r/k02', item:'r/k03'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k01', item:'r/k02', item:'r/k03'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01b.json",
+          "replay_result_sha256": "c53874fd85797d68916116a03d8f9f1042c9f39d4273e6653888bbaf5dfba83b"
         }
       }
     },
@@ -44,7 +52,7 @@
       "provider": "gcs",
       "feature": "Equal `startOffset` and `endOffset` on an existing name",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -54,7 +62,11 @@
           "capture_file": "gcs/captures/gcs-01c.json",
           "capture_sha256": "4bd4bfb351f845f9793a459e66a38ba437b43f49e2aeaef80685af3925a229b2",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&startOffset=probe/r20261021t172056z-987e3b56/r/k03&endOffset=probe/r20261021t172056z-987e3b56/r/k03",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01c.json",
+          "replay_result_sha256": "66d2acab4a321dfdfd29bc7dc4900ae6ab163b0ae2f22d3f2d85913b592005b1"
         }
       }
     },
@@ -63,7 +75,7 @@
       "provider": "gcs",
       "feature": "`startOffset` in a gap between names",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -73,7 +85,11 @@
           "capture_file": "gcs/captures/gcs-01d.json",
           "capture_sha256": "516bd1292005bc92410728dc6671a25525b8a2832ba7696d636a3587c908619e",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&startOffset=probe/r20261021t172056z-987e3b56/r/k04",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01d.json",
+          "replay_result_sha256": "9590c995766dfc31724a2f666d80d83cc32675f9085d502d7d6dcd8607628218"
         }
       }
     },
@@ -82,7 +98,7 @@
       "provider": "gcs",
       "feature": "`endOffset` in a gap between names",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -92,7 +108,11 @@
           "capture_file": "gcs/captures/gcs-01e.json",
           "capture_sha256": "dc983e626aeae6e1ec58dda471006a42917c19054342f16cc0b9844203bff4f9",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&endOffset=probe/r20261021t172056z-987e3b56/r/k04",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k01', item:'r/k02', item:'r/k03'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k01', item:'r/k02', item:'r/k03'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01e.json",
+          "replay_result_sha256": "474c3dc5ce29b63705fe4ba7b16001f0ad4742d4423f50d46914f641df4aad4a"
         }
       }
     },
@@ -101,7 +121,7 @@
       "provider": "gcs",
       "feature": "Inverted bounds with `startOffset` after `endOffset`",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -111,7 +131,11 @@
           "capture_file": "gcs/captures/gcs-01f.json",
           "capture_sha256": "ccc8505841a7f74304758f6a653df488da50508538150fbc6dfb28ee8bf29e05",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&startOffset=probe/r20261021t172056z-987e3b56/r/k06&endOffset=probe/r20261021t172056z-987e3b56/r/k02",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01f.json",
+          "replay_result_sha256": "cf049c1c3636f2526fc8b8f9891046bd1df782524ee156a716742e9ddf79a14c"
         }
       }
     },
@@ -120,7 +144,7 @@
       "provider": "gcs",
       "feature": "Both offsets without a prefix",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -130,7 +154,11 @@
           "capture_file": "gcs/captures/gcs-01g.json",
           "capture_sha256": "b9f8ec26553afb53482db123d0b6fc787794b6f4d87207f9d505cbb09699d500",
           "probe_request": "GET /storage/v1/b/{bucket}/o?startOffset=probe/r20261021t172056z-987e3b56/r/k02&endOffset=probe/r20261021t172056z-987e3b56/r/k06",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k02', item:'r/k03', item:'r/k05'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k02', item:'r/k03', item:'r/k05'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01g.json",
+          "replay_result_sha256": "5db6cc2912f3124f955194713a9439b69c41bc4bfab9e9e1e5223966c9035d0f"
         }
       }
     },
@@ -139,7 +167,7 @@
       "provider": "gcs",
       "feature": "Offsets before and after every corpus name",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -149,7 +177,11 @@
           "capture_file": "gcs/captures/gcs-01h.json",
           "capture_sha256": "72ca437d7448e991f76f3a73d44607a2869ae1b8ec46af504173f0ac25b4f38b",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&startOffset=probe/r20261021t172056z-987e3b56/&endOffset=probe/r20261021t172056z-987e3b56/zzz",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01h.json",
+          "replay_result_sha256": "f03b6046fe72337e9aeb42268f26d110057bab5e993f2dbf63e1c948c2142051"
         }
       }
     },
@@ -158,7 +190,7 @@
       "provider": "gcs",
       "feature": "Empty `startOffset` and `endOffset` values",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -168,7 +200,11 @@
           "capture_file": "gcs/captures/gcs-01i.json",
           "capture_sha256": "b9739b00affb63e63ad999bda5d5112ff6776498ea228505262d09b0949c898f",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&startOffset=&endOffset=",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01i.json",
+          "replay_result_sha256": "cf4a3c84702d60aaf4cd96ea6ac9e699030e61b1775e8cbcbc61e0a09cacf5d6"
         }
       }
     },
@@ -177,7 +213,7 @@
       "provider": "gcs",
       "feature": "`startOffset` equal to the prefix",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -187,7 +223,11 @@
           "capture_file": "gcs/captures/gcs-01j.json",
           "capture_sha256": "fcb64a4d429d025ceb57476b583cae8502c9fd543c30388accb3f702e4356d76",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&startOffset=probe/r20261021t172056z-987e3b56/r/",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01j.json",
+          "replay_result_sha256": "6b6fc2850ed763898efb725a5aa4f9f3cabb51cd60ed600e872d1773465f8cac"
         }
       }
     },
@@ -196,7 +236,7 @@
       "provider": "gcs",
       "feature": "`endOffset` equal to the prefix",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -206,7 +246,11 @@
           "capture_file": "gcs/captures/gcs-01k.json",
           "capture_sha256": "7238b10c02e7ec45add0d055180619cb8907190400e9d23891edcebc819f8784",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&endOffset=probe/r20261021t172056z-987e3b56/r/",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-01k.json",
+          "replay_result_sha256": "f6cf31039a54346e5db1b1bd122fb6f38f5375d51de58dce5eb1c1af34a899ad"
         }
       }
     },
@@ -215,7 +259,7 @@
       "provider": "gcs",
       "feature": "Prefix with `startOffset` before it and `endOffset` inside it",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -225,7 +269,11 @@
           "capture_file": "gcs/captures/gcs-02a.json",
           "capture_sha256": "d55690dea6a1361ec4440ec7083c5a91c8a3a1242b8b1a3e28f43bc64614dd68",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/x/a&startOffset=probe/r20261021t172056z-987e3b56/w&endOffset=probe/r20261021t172056z-987e3b56/x/abc",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/a', item:'x/ab'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/a', item:'x/ab'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-02a.json",
+          "replay_result_sha256": "6de32a0f366111b277218c000dd5f2ece330bfc0ae9f350b8f2656cb30fbba32"
         }
       }
     },
@@ -234,7 +282,7 @@
       "provider": "gcs",
       "feature": "Prefix with `startOffset` inside it and `endOffset` after it",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -244,7 +292,11 @@
           "capture_file": "gcs/captures/gcs-02b.json",
           "capture_sha256": "e81e556774e95961daf6a3c280467285be83b0a2d777f6f14d135b8de2e838ac",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/x/a&startOffset=probe/r20261021t172056z-987e3b56/x/ab&endOffset=probe/r20261021t172056z-987e3b56/y",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/ab', item:'x/abc'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/ab', item:'x/abc'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-02b.json",
+          "replay_result_sha256": "34b9a3ab4a8eb78bbd720cf1cbdbee35162571fb7a31a504232dcee5260cc904"
         }
       }
     },
@@ -253,7 +305,7 @@
       "provider": "gcs",
       "feature": "Prefix with both offsets before it",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -263,7 +315,11 @@
           "capture_file": "gcs/captures/gcs-02c.json",
           "capture_sha256": "2e283f8d29a764fe5edcb52bab5c1dc80ecf084999137a01077a521969356cee",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/x/a&startOffset=probe/r20261021t172056z-987e3b56/r/&endOffset=probe/r20261021t172056z-987e3b56/s",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-02c.json",
+          "replay_result_sha256": "a5dfdb284a06fd5a0b305d8ee29c57cd1fe88f8eea5915a0fa26de9e07902008"
         }
       }
     },
@@ -272,7 +328,7 @@
       "provider": "gcs",
       "feature": "Prefix with both offsets after it",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -282,7 +338,11 @@
           "capture_file": "gcs/captures/gcs-02d.json",
           "capture_sha256": "3d93a4b2b787f3a2c9f359fc2d6da3a896c3db8160f32dfd1eb8a4b7af647566",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/x/a&startOffset=probe/r20261021t172056z-987e3b56/y&endOffset=probe/r20261021t172056z-987e3b56/z",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-02d.json",
+          "replay_result_sha256": "3f59e53822852d8a0797d2e9993fcf54e6713c4ae576f35b77b510c9370f819f"
         }
       }
     },
@@ -291,7 +351,7 @@
       "provider": "gcs",
       "feature": "Prefix that is a string prefix of longer names",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -301,7 +361,11 @@
           "capture_file": "gcs/captures/gcs-02e.json",
           "capture_sha256": "fd52c7d1a3eb8b6bd946fffe576dacc42f4ba2124d0ffa920c74099d87619afb",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/x/a",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'x/a', item:'x/ab', item:'x/abc'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'x/a', item:'x/ab', item:'x/abc'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-02e.json",
+          "replay_result_sha256": "4bfef5fba8b07d555bc4d7dc497f688689b0d62852c2e1455897e21417a830b9"
         }
       }
     },
@@ -310,7 +374,7 @@
       "provider": "gcs",
       "feature": "Prefix equal to a full name with `endOffset` equal to that name",
       "profile_promise": "Provisional bounded list",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -320,7 +384,11 @@
           "capture_file": "gcs/captures/gcs-02f.json",
           "capture_sha256": "76c97912d6d00ff95be2daf28b520536d8a1d96784f68951589f1469098a2b34",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/x/ab&endOffset=probe/r20261021t172056z-987e3b56/x/ab",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-02f.json",
+          "replay_result_sha256": "49df2da92b57cb0d5823c0f1bb6f227f63dad91218209e6b5581081cdb9969f9"
         }
       }
     },
@@ -329,7 +397,7 @@
       "provider": "gcs",
       "feature": "Delimiter `/` baseline over objects, subtrees, a folder marker and an empty segment",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -339,7 +407,11 @@
           "capture_file": "gcs/captures/gcs-03a.json",
           "capture_sha256": "850050950dd5efb26bf03257a784b1574138be77ae9965d00020c7825266aa30",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 8 entries [item:'d/a0', item:'d/c', item:'d/f-g-h', prefix:'d//', prefix:'d/a/', prefix:'d/b/', prefix:'d/e/', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 8 entries [item:'d/a0', item:'d/c', item:'d/f-g-h', prefix:'d//', prefix:'d/a/', prefix:'d/b/', prefix:'d/e/', prefix:'d/f-g/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03a.json",
+          "replay_result_sha256": "b20ee16675639d9ea26f79a7a9e79e1ef94f4d5e19415ca6f9a632d52aa913ab"
         }
       }
     },
@@ -348,7 +420,7 @@
       "provider": "gcs",
       "feature": "Delimiter with `startOffset` equal to a subtree prefix",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -358,7 +430,11 @@
           "capture_file": "gcs/captures/gcs-03b.json",
           "capture_sha256": "6954246c5924b426987e8ab52afc4c2cfd6890c506c774ff5e8bfcc4e0990d7b",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&startOffset=probe/r20261021t172056z-987e3b56/d/a/",
-          "expected_result": "page 1: HTTP 200, 7 entries [item:'d/a0', item:'d/c', item:'d/f-g-h', prefix:'d/a/', prefix:'d/b/', prefix:'d/e/', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 7 entries [item:'d/a0', item:'d/c', item:'d/f-g-h', prefix:'d/a/', prefix:'d/b/', prefix:'d/e/', prefix:'d/f-g/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03b.json",
+          "replay_result_sha256": "42ef54cf0d40633beecef2a7df7b3586dd1f5209a6171dd0045eb1e9836db61c"
         }
       }
     },
@@ -367,7 +443,7 @@
       "provider": "gcs",
       "feature": "Delimiter with `startOffset` inside a subtree with remaining descendants",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -377,7 +453,11 @@
           "capture_file": "gcs/captures/gcs-03c.json",
           "capture_sha256": "af49a57722f8fbedefe981ae6c32c7d3fee32ae5754e118bbd9ed7ef0b00065f",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&startOffset=probe/r20261021t172056z-987e3b56/d/a/m",
-          "expected_result": "page 1: HTTP 200, 7 entries [item:'d/a0', item:'d/c', item:'d/f-g-h', prefix:'d/a/', prefix:'d/b/', prefix:'d/e/', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 7 entries [item:'d/a0', item:'d/c', item:'d/f-g-h', prefix:'d/a/', prefix:'d/b/', prefix:'d/e/', prefix:'d/f-g/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03c.json",
+          "replay_result_sha256": "1e617fa61931082e46c338035eaf7c2dd98636220a6943591c135e1820f74876"
         }
       }
     },
@@ -386,7 +466,7 @@
       "provider": "gcs",
       "feature": "Delimiter with `startOffset` inside a subtree after its last descendant",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -396,7 +476,11 @@
           "capture_file": "gcs/captures/gcs-03d.json",
           "capture_sha256": "37bfbbbbf2b27fa5e23fbee3bdd2d50b7165bff82b5f30ccb50fca80945d76a2",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&startOffset=probe/r20261021t172056z-987e3b56/d/b/3",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/c', item:'d/f-g-h', prefix:'d/e/', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/c', item:'d/f-g-h', prefix:'d/e/', prefix:'d/f-g/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03d.json",
+          "replay_result_sha256": "581f1d7998a37ac7f4c8fa8e0c8deb991b4854d0810873c94e52575526b8e12c"
         }
       }
     },
@@ -405,7 +489,7 @@
       "provider": "gcs",
       "feature": "Delimiter with `startOffset` after a subtree, equal to an object",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -415,7 +499,11 @@
           "capture_file": "gcs/captures/gcs-03e.json",
           "capture_sha256": "8ede4e32d5615d8425d37d62dac5c16bd4c8436e707f5264fb4467358f0b05a1",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&startOffset=probe/r20261021t172056z-987e3b56/d/a0",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'d/a0', item:'d/c', item:'d/f-g-h', prefix:'d/b/', prefix:'d/e/', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'d/a0', item:'d/c', item:'d/f-g-h', prefix:'d/b/', prefix:'d/e/', prefix:'d/f-g/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03e.json",
+          "replay_result_sha256": "74580eb2345ef82ddfb0158a0bb6c1fceba5184cd2969f69258cb4539b0d92ec"
         }
       }
     },
@@ -424,7 +512,7 @@
       "provider": "gcs",
       "feature": "Delimiter with `endOffset` inside a subtree",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -434,7 +522,11 @@
           "capture_file": "gcs/captures/gcs-03f.json",
           "capture_sha256": "3e39e4d7ea32e7bd65b64df636156b80ecaa79bf9a185b83a6efc70987aee90a",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&endOffset=probe/r20261021t172056z-987e3b56/d/a/m",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03f.json",
+          "replay_result_sha256": "c7ffdfd84cf35617415d2ff482c3c97217c2917e1b33ac94e948965062c0f72a"
         }
       }
     },
@@ -443,7 +535,7 @@
       "provider": "gcs",
       "feature": "Delimiter with `endOffset` equal to a subtree prefix",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -453,7 +545,11 @@
           "capture_file": "gcs/captures/gcs-03g.json",
           "capture_sha256": "90780d4845d93077fdd6ad24b38366e342ff308ed5775b1b196ff70cf75e3660",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&endOffset=probe/r20261021t172056z-987e3b56/d/a/",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d//'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d//'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03g.json",
+          "replay_result_sha256": "9fe99231e0a6b93d7e55e621d4075457b6f8786fd022d8b94cbbea136e35f0a3"
         }
       }
     },
@@ -462,7 +558,7 @@
       "provider": "gcs",
       "feature": "Delimiter with `endOffset` just after a folder marker",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -472,7 +568,11 @@
           "capture_file": "gcs/captures/gcs-03h.json",
           "capture_sha256": "e537312ec3aaec6e78d58666556f50cf72f84ffd49bc944141df15aeb56a4d2a",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&endOffset=probe/r20261021t172056z-987e3b56/d/a/1",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03h.json",
+          "replay_result_sha256": "81590e264124b4f8e6592f2e0fad364a305068208474778cd4c376ad4126ad10"
         }
       }
     },
@@ -481,7 +581,7 @@
       "provider": "gcs",
       "feature": "Delimiter `/` with a prefix ending in the delimiter",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -491,7 +591,11 @@
           "capture_file": "gcs/captures/gcs-03i.json",
           "capture_sha256": "d0463290e0237bcf28ad6cc4fc0c034cb3997a3f7d3692c1f54bd2c240e3872b",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/a/&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/a/', item:'d/a/1', item:'d/a/z', prefix:'d/a/m/'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/a/', item:'d/a/1', item:'d/a/z', prefix:'d/a/m/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03i.json",
+          "replay_result_sha256": "3f5358e6395a7d94e30edd86a966ed037f6721f77ef5ae7abc03dac3c2f57052"
         }
       }
     },
@@ -500,7 +604,7 @@
       "provider": "gcs",
       "feature": "Delimiter `/` with a prefix that stops before the delimiter",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -510,7 +614,11 @@
           "capture_file": "gcs/captures/gcs-03j.json",
           "capture_sha256": "481168aaad505c7adae3c87ebd1584153c6b697c1fd97a00f3ea00d948ca93fa",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/a&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'d/a0', prefix:'d/a/'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'d/a0', prefix:'d/a/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03j.json",
+          "replay_result_sha256": "375e2ba5f339f9e774dbeb550f688c1b6342a0cc761273b19efa881ffde87ec6"
         }
       }
     },
@@ -519,7 +627,7 @@
       "provider": "gcs",
       "feature": "Pipe delimiter that never occurs in names",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -529,7 +637,11 @@
           "capture_file": "gcs/captures/gcs-03k.json",
           "capture_sha256": "466458692584e7a6941010a36c5acdfa2059c20bc269ff3e6053e97f2fdc32dd",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=%7C",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03k.json",
+          "replay_result_sha256": "5f2b25a4159c35d7ee72ca375858a876cd8e3cd0399c553eebc387b127075970"
         }
       }
     },
@@ -538,7 +650,7 @@
       "provider": "gcs",
       "feature": "Two-character delimiter `/1`",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -548,7 +660,11 @@
           "capture_file": "gcs/captures/gcs-03l.json",
           "capture_sha256": "2ae2112e6711b27d9ab3eb0151dc31248b85089250372301a7acf8be16f2d225",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/1",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/z', item:'d/a0', item:'d/b/2', item:'d/c', item:'d/f-g-h', prefix:'d/a/1', prefix:'d/a/m/1', prefix:'d/b/1', prefix:'d/e/1', prefix:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/z', item:'d/a0', item:'d/b/2', item:'d/c', item:'d/f-g-h', prefix:'d/a/1', prefix:'d/a/m/1', prefix:'d/b/1', prefix:'d/e/1', prefix:'d/f-g/1'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03l.json",
+          "replay_result_sha256": "27332ceb1a8eacdcfaebeb312bb22572d22d5ee18afd80798a351e44d3797676"
         }
       }
     },
@@ -557,7 +673,7 @@
       "provider": "gcs",
       "feature": "Two-character delimiter `-g`",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -567,7 +683,11 @@
           "capture_file": "gcs/captures/gcs-03m.json",
           "capture_sha256": "7c86197b2e8876c1d6536b4609d5e347e8002046967e9e9fab653d372f5f4f03",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=-g",
-          "expected_result": "page 1: HTTP 200, 11 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', prefix:'d/f-g'], terminal"
+          "expected_result": "page 1: HTTP 200, 11 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', prefix:'d/f-g'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03m.json",
+          "replay_result_sha256": "b3da9a9d0d5505a22b3cdf8720968a1fe68244025c8f014dcdd42a4f57d88ca5"
         }
       }
     },
@@ -576,7 +696,7 @@
       "provider": "gcs",
       "feature": "Delimiter with both offsets cutting two subtrees",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -586,7 +706,11 @@
           "capture_file": "gcs/captures/gcs-03n.json",
           "capture_sha256": "a81d4c77b9001caeedf82febd2c362078cb992ac705ad4fc872ff2d00622ea2e",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&startOffset=probe/r20261021t172056z-987e3b56/d/a/m&endOffset=probe/r20261021t172056z-987e3b56/d/b/2",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'d/a0', prefix:'d/a/', prefix:'d/b/'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'d/a0', prefix:'d/a/', prefix:'d/b/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03n.json",
+          "replay_result_sha256": "dd9be407f239b4f70e4335d3ec606a29c978a64675818dcef6e3a81c5d519189"
         }
       }
     },
@@ -595,7 +719,7 @@
       "provider": "gcs",
       "feature": "Empty `delimiter` value",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -605,7 +729,11 @@
           "capture_file": "gcs/captures/gcs-03o.json",
           "capture_sha256": "0b561b7ecc5b077400fdd01f300c28138179f71d93b19a4dc41057d9162e0d4b",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03o.json",
+          "replay_result_sha256": "9303f4fef9d6fb59f74385c3cdba185a0ea6b5e1eb46c98b83858edb4962f50b"
         }
       }
     },
@@ -633,7 +761,7 @@
       "provider": "gcs",
       "feature": "Delimiter without a prefix from a mid-corpus `startOffset`",
       "profile_promise": "Provisional; fast path gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -643,7 +771,11 @@
           "capture_file": "gcs/captures/gcs-03q.json",
           "capture_sha256": "ef2c3bb6242010072a3e75a8013b6ad0fddc2c8183de85bfbb3aae04e741d336",
           "probe_request": "GET /storage/v1/b/{bucket}/o?delimiter=/&startOffset=probe/r20261021t172056z-987e3b56/d/&endOffset=probe/r20261021t172056z-987e3b56/e",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'probe/'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'probe/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-03q.json",
+          "replay_result_sha256": "527eff8a6d8f1f3f9e60e5debbd93eb0c198b29b309d35b12fd01a51b2e79d89"
         }
       }
     },
@@ -652,7 +784,7 @@
       "provider": "gcs",
       "feature": "BMP, surrogate-neighbor and supplementary names in list order",
       "profile_promise": "Provisional unsigned UTF-8 order",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -664,7 +796,11 @@
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/u/",
           "expected_result": "page 1: HTTP 200, 12 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\ue000', item:'u/\\ufffd', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd'], terminal",
           "raw_wire_file": "gcs/raw-wire/gcs-04a.json",
-          "raw_wire_sha256": "5601b0ca7f44ded3b258d61a5b687e02b3bf27740c0b75489a083bcc3e5a2a3f"
+          "raw_wire_sha256": "5601b0ca7f44ded3b258d61a5b687e02b3bf27740c0b75489a083bcc3e5a2a3f",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-04a.json",
+          "replay_result_sha256": "b7dc613d43b605abe521675230bd8e99a24f1e7d193d207634e2142f2e734b3e"
         }
       }
     },
@@ -673,7 +809,7 @@
       "provider": "gcs",
       "feature": "`startOffset` at U+E000",
       "profile_promise": "Provisional unsigned UTF-8 order",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -683,7 +819,11 @@
           "capture_file": "gcs/captures/gcs-04b.json",
           "capture_sha256": "8c87dcf9cf235ff212a3336336eda806af34af20d703df7d021e9da35bf6a84b",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/u/&startOffset=probe/r20261021t172056z-987e3b56/u/%EE%80%80",
-          "expected_result": "page 1: HTTP 200, 5 entries [item:'u/\\ue000', item:'u/\\ufffd', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 5 entries [item:'u/\\ue000', item:'u/\\ufffd', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-04b.json",
+          "replay_result_sha256": "35788cf16fa9573b08c3bb538fefec178bac67df2e7d3d344c5007d68e4fa641"
         }
       }
     },
@@ -692,7 +832,7 @@
       "provider": "gcs",
       "feature": "`endOffset` at U+10000",
       "profile_promise": "Provisional unsigned UTF-8 order",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -702,7 +842,11 @@
           "capture_file": "gcs/captures/gcs-04c.json",
           "capture_sha256": "dc134fd6731df591f3417e3d427bcfa6afded5158e62b0298db9817e9edaad21",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/u/&endOffset=probe/r20261021t172056z-987e3b56/u/%F0%90%80%80",
-          "expected_result": "page 1: HTTP 200, 9 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\ue000', item:'u/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 9 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\ue000', item:'u/\\ufffd'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-04c.json",
+          "replay_result_sha256": "3c76e6e8928df52b0c1ae6f7ee3a3ab51993c4566571eecf3a32492779e62e8c"
         }
       }
     },
@@ -711,7 +855,7 @@
       "provider": "gcs",
       "feature": "Prefix in NFC form with an NFD sibling",
       "profile_promise": "Provisional unsigned UTF-8 order",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -721,7 +865,11 @@
           "capture_file": "gcs/captures/gcs-04d.json",
           "capture_sha256": "2242c42bcd1a73f3344e59a023b0ceeabd86219e05e48cf9c9e74d77a3b9b426",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/u/%C3%A9",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/\\xe9'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/\\xe9'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-04d.json",
+          "replay_result_sha256": "8241f77e60ae359974fef1c6ce6300270d5b7d6614b933964b1c914b93c91a8c"
         }
       }
     },
@@ -730,7 +878,7 @@
       "provider": "gcs",
       "feature": "Prefix differing only in case",
       "profile_promise": "Provisional unsigned UTF-8 order",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -740,7 +888,11 @@
           "capture_file": "gcs/captures/gcs-04e.json",
           "capture_sha256": "33c441151f11492743f01e109d5d04a38edcf53e31bdb74484a69878459ee9c4",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/u/E",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/E'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/E'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-04e.json",
+          "replay_result_sha256": "82fbe5adb13363ac0c3af96ad7f7d997d346e435d59f6916283bca0ea99e0d2e"
         }
       }
     },
@@ -749,7 +901,7 @@
       "provider": "gcs",
       "feature": "Supplementary-character `startOffset` percent-encoded in lowercase hex",
       "profile_promise": "Provisional unsigned UTF-8 order",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -759,7 +911,11 @@
           "capture_file": "gcs/captures/gcs-04f.json",
           "capture_sha256": "4de0b311ea1634a1ffe144a4fecc3886819699d40e87bdbf111b32b33567aa32",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/u/&startOffset=probe/r20261021t172056z-987e3b56/u/%f0%9f%98%80",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-04f.json",
+          "replay_result_sha256": "f8bcf18ebe83f2b38f30b63e400f8a0811b2427482a5cb2e7a7746876e852d00"
         }
       }
     },
@@ -787,7 +943,7 @@
       "provider": "gcs",
       "feature": "`%2B` in a `prefix` value",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -797,7 +953,11 @@
           "capture_file": "gcs/captures/gcs-05b.json",
           "capture_sha256": "a614a08c00a9eec51fed053cd90eea55c85ec99dda0cdd166263683dc7e295dd",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/a%2Bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05b.json",
+          "replay_result_sha256": "bde905b42f49598424e72e2aa1b37a337c13657ace8191d11e88a8813d95bd93"
         }
       }
     },
@@ -806,7 +966,7 @@
       "provider": "gcs",
       "feature": "`%20` in a `prefix` value",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -816,7 +976,11 @@
           "capture_file": "gcs/captures/gcs-05c.json",
           "capture_sha256": "a5632f7a08f6c3ee9a671ea37810c1cec10d65ee50db33dc16adb24e79317318",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/a%20b",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05c.json",
+          "replay_result_sha256": "ebb89ee84d0fa119650fdfb22dc8ae8b881c1f7ce6dfc407b2aadc79dcd0c883"
         }
       }
     },
@@ -825,7 +989,7 @@
       "provider": "gcs",
       "feature": "`%25` before `2B`",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -835,7 +999,11 @@
           "capture_file": "gcs/captures/gcs-05d.json",
           "capture_sha256": "51527430d27b5c9e7a165ba871aa738cc764879763ef60971a3de2c9fef663a4",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/a%252Bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%2Bb'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%2Bb'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05d.json",
+          "replay_result_sha256": "243d896ccfaab9158f7a497a7f2f6c8e1adda7f7881ae36d8cf8fab5f81cb733"
         }
       }
     },
@@ -939,7 +1107,7 @@
       "provider": "gcs",
       "feature": "Percent-encoded `&`, `=` and `#`",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -949,7 +1117,11 @@
           "capture_file": "gcs/captures/gcs-05j.json",
           "capture_sha256": "94cb1faaba0611a021c17d7378d8dbaad49a7f8d4d4f127dfa8374741304cc76",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/k%26v%3D1",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/k&v=1'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/k&v=1'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05j.json",
+          "replay_result_sha256": "f05ec31a3847c4fb1fc91f905e20e3eee8b341874d009d80a66a5de97fb4fc42"
         }
       }
     },
@@ -958,7 +1130,7 @@
       "provider": "gcs",
       "feature": "Raw `?` inside a value",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -968,7 +1140,11 @@
           "capture_file": "gcs/captures/gcs-05k.json",
           "capture_sha256": "2e65c6747043cb0b9199185f2da50d1f662bbebb322e554536df343ac34f01ac",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/q?x",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/q?x'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/q?x'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05k.json",
+          "replay_result_sha256": "b27416f7c6448a8188f922d11290ef44b0311ada06b4064e4bad8617e77f9dc1"
         }
       }
     },
@@ -977,7 +1153,7 @@
       "provider": "gcs",
       "feature": "Fully encoded slashes `%2F`",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -987,7 +1163,11 @@
           "capture_file": "gcs/captures/gcs-05l.json",
           "capture_sha256": "2630126e66b0f119536d6613fd53a5f37d2ca2e32b5f45cc48234ffc26c29b78",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe%2Fr20261021t172056z-987e3b56%2Fp%2F",
-          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05l.json",
+          "replay_result_sha256": "062f67d886742237e045421164f24326655f81c9aa961af2cd9a84a559c9c273"
         }
       }
     },
@@ -996,7 +1176,7 @@
       "provider": "gcs",
       "feature": "Lowercase hex escape `%2b`",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1006,7 +1186,11 @@
           "capture_file": "gcs/captures/gcs-05m.json",
           "capture_sha256": "162647bb2d1f0b0e83da49d07d76026391104a4d7b94c0d300f4def17098dbf7",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/a%2bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05m.json",
+          "replay_result_sha256": "0ffea8e2bde497c9681819a4a33aeb61b5a5d179d29a20b94dfed6a6799286ee"
         }
       }
     },
@@ -1015,7 +1199,7 @@
       "provider": "gcs",
       "feature": "Parameter name without `=`",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1025,7 +1209,11 @@
           "capture_file": "gcs/captures/gcs-05n.json",
           "capture_sha256": "5e0b20bb57e6c256a0702b49560190014c001fc385d307d18bb8e3cae9e4534f",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/&delimiter",
-          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05n.json",
+          "replay_result_sha256": "a15493c66829dc041b42dff01a0c16bccebe1b9f69520c6a88b1c571aa7ac9c0"
         }
       }
     },
@@ -1034,7 +1222,7 @@
       "provider": "gcs",
       "feature": "Every reserved ASCII character in names under one prefix",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1044,7 +1232,11 @@
           "capture_file": "gcs/captures/gcs-05o.json",
           "capture_sha256": "fe56318b0bf1c3afd5ce11711085e09a65098076af33dd3fe4b004edb82ac95e",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/",
-          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05o.json",
+          "replay_result_sha256": "8fd82298c6ed79ea20b2c3b98dc9bb29bb206bd3d27b13ffc6d305bc3783a550"
         }
       }
     },
@@ -1053,7 +1245,7 @@
       "provider": "gcs",
       "feature": "Trailing space in a prefix",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1063,7 +1255,11 @@
           "capture_file": "gcs/captures/gcs-05p.json",
           "capture_sha256": "26b8fbe2923e35f536ea6f3603a07d72f8a669f3e6a76572ac7209a63bd39207",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/end%20",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/end '], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/end '], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05p.json",
+          "replay_result_sha256": "371f955a9e2ca2715df51a8cdfaf194103eb37fb2917776ec1adf3a952330b9f"
         }
       }
     },
@@ -1072,7 +1268,7 @@
       "provider": "gcs",
       "feature": "Raw `=` inside a value",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1082,7 +1278,11 @@
           "capture_file": "gcs/captures/gcs-05q.json",
           "capture_sha256": "9bca31a9a3084c92b62a03cc8d5f50634ad798cf34f625a84e5b97b5f0d208d5",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/eq=x",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/eq=x'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/eq=x'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05q.json",
+          "replay_result_sha256": "9e11a81c7cdc4a857d328e618fb9d6097a0f92c7bc795e3e30b32e5a9452919a"
         }
       }
     },
@@ -1091,7 +1291,7 @@
       "provider": "gcs",
       "feature": "Raw `=` inside a `startOffset` value",
       "profile_promise": "Strict native parser; duplicate policy gated",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1101,7 +1301,11 @@
           "capture_file": "gcs/captures/gcs-05r.json",
           "capture_sha256": "36b1c808cebc12067af4f3fb9f5f0339a1d9b76da33b4249be184e2ef63cba42",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/p/&startOffset=probe/r20261021t172056z-987e3b56/p/eq=x",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'p/eq=x', item:'p/exc!x', item:'p/h#x', item:'p/k&v=1', item:'p/par(x)', item:'p/pct%', item:'p/q?x', item:'p/quot\"x', item:'p/semi;x', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'p/eq=x', item:'p/exc!x', item:'p/h#x', item:'p/k&v=1', item:'p/par(x)', item:'p/pct%', item:'p/q?x', item:'p/quot\"x', item:'p/semi;x', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-05r.json",
+          "replay_result_sha256": "b359be211202af798615904e0b55305533f13396ec55ebfcbd43a748c7c930ac"
         }
       }
     },
@@ -1148,7 +1352,7 @@
       "provider": "gcs",
       "feature": "`maxResults=1` walk",
       "profile_promise": "Zero refused pending evidence",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1158,7 +1362,11 @@
           "capture_file": "gcs/captures/gcs-06c.json",
           "capture_sha256": "c313a73553523af112b336326baee71d9f0c0bf94137d4fa4281b2bf2180deac",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/s/&maxResults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'s/1'], continues; page 2: HTTP 200, 1 entries [item:'s/2'], continues; page 3: HTTP 200, 1 entries [item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'s/1'], continues; page 2: HTTP 200, 1 entries [item:'s/2'], continues; page 3: HTTP 200, 1 entries [item:'s/3'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-06c.json",
+          "replay_result_sha256": "cac2ba6c179c3eda766900c68e2b823e53f977f0413bb10377ecd1c5cf079714"
         }
       }
     },
@@ -1167,7 +1375,7 @@
       "provider": "gcs",
       "feature": "`maxResults=1000` walk over exactly 1,000 objects",
       "profile_promise": "Zero refused pending evidence",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1177,7 +1385,11 @@
           "capture_file": "gcs/captures/gcs-06d.json.gz",
           "capture_sha256": "930425ada8a817df08183e54cc0d8a811c21be631e30fbd190e95f4edf70ce0f",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/b/0&maxResults=1000",
-          "expected_result": "page 1: HTTP 200, 1000 entries [item:'b/0000', item:'b/0001', item:'b/0002', …:'994 more', item:'b/0997', item:'b/0998', item:'b/0999'], terminal"
+          "expected_result": "page 1: HTTP 200, 1000 entries [item:'b/0000', item:'b/0001', item:'b/0002', …:'994 more', item:'b/0997', item:'b/0998', item:'b/0999'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-06d.json",
+          "replay_result_sha256": "1d5a1d66ce4757cdfb904086afe33a2716624b29ed298f8f4f85e8e8561a19af"
         }
       }
     },
@@ -1243,7 +1455,7 @@
       "provider": "gcs",
       "feature": "`maxResults=2147483648`",
       "profile_promise": "Zero refused pending evidence",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1253,7 +1465,11 @@
           "capture_file": "gcs/captures/gcs-06h.json",
           "capture_sha256": "f36263d682555ad13490a8bf2988783f8f3692c314be1239aee6526711a29f13",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/s/&maxResults=2147483648",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-06h.json",
+          "replay_result_sha256": "c4446b27168ca7a733a291bc5cd195697cb3d2d069381fc6ea04cca8a38060a5"
         }
       }
     },
@@ -1376,7 +1592,7 @@
       "provider": "gcs",
       "feature": "`maxResults=2147483647`",
       "profile_promise": "Zero refused pending evidence",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1386,7 +1602,11 @@
           "capture_file": "gcs/captures/gcs-06o.json",
           "capture_sha256": "f68228b9b9bb42f13b32cdeba09f052b884f67b4ca7fb29757147eb445522d5f",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/s/&maxResults=2147483647",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-06o.json",
+          "replay_result_sha256": "a2153545403197ee2b1a2f0d96de98c83dbff85973a28071deb55c8fc15f4bd3"
         }
       }
     },
@@ -1395,7 +1615,7 @@
       "provider": "gcs",
       "feature": "Delimiter walk with one entry per page over top-level subtrees",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1405,7 +1625,11 @@
           "capture_file": "gcs/captures/gcs-07a.json",
           "capture_sha256": "e5683309cf2bd12c56568d846a00000f2d18e7c852dbe2b2237bd2d098e546ab",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/&delimiter=/&maxResults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'b/'], continues; page 2: HTTP 200, 1 entries [prefix:'d/'], continues; page 3: HTTP 200, 1 entries [prefix:'n/'], continues; page 4: HTTP 200, 1 entries [prefix:'p/'], continues; page 5: HTTP 200, 1 entries [prefix:'q/'], continues; page 6: HTTP 200, 1 entries [prefix:'r/'], continues; page 7: HTTP 200, 1 entries [prefix:'s/'], continues; page 8: HTTP 200, 1 entries [prefix:'u/'], continues; page 9: HTTP 200, 1 entries [prefix:'x/'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'b/'], continues; page 2: HTTP 200, 1 entries [prefix:'d/'], continues; page 3: HTTP 200, 1 entries [prefix:'n/'], continues; page 4: HTTP 200, 1 entries [prefix:'p/'], continues; page 5: HTTP 200, 1 entries [prefix:'q/'], continues; page 6: HTTP 200, 1 entries [prefix:'r/'], continues; page 7: HTTP 200, 1 entries [prefix:'s/'], continues; page 8: HTTP 200, 1 entries [prefix:'u/'], continues; page 9: HTTP 200, 1 entries [prefix:'x/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07a.json",
+          "replay_result_sha256": "cfc4ea63b4bd8f59089a16f5d910cf23e62d47316f45dd3826f9bdfe163ef219"
         }
       }
     },
@@ -1414,7 +1638,7 @@
       "provider": "gcs",
       "feature": "Default page size walk over 1,001 objects",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1424,7 +1648,11 @@
           "capture_file": "gcs/captures/gcs-07b.json.gz",
           "capture_sha256": "a0e44c509747305405fab39457db52f9cae24f14880f6a9c366235505cda4ab6",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/b/",
-          "expected_result": "page 1: HTTP 200, 1000 entries [item:'b/0000', item:'b/0001', item:'b/0002', …:'994 more', item:'b/0997', item:'b/0998', item:'b/0999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzz'], terminal"
+          "expected_result": "page 1: HTTP 200, 1000 entries [item:'b/0000', item:'b/0001', item:'b/0002', …:'994 more', item:'b/0997', item:'b/0998', item:'b/0999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzz'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07b.json",
+          "replay_result_sha256": "41ecec2f7362ea9e23b2853b11f6c7bada6ecce3d54719ca6f9afc7d5e27a7c5"
         }
       }
     },
@@ -1433,7 +1661,7 @@
       "provider": "gcs",
       "feature": "Delimiter walk with two entries per page",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1443,7 +1671,11 @@
           "capture_file": "gcs/captures/gcs-07c.json",
           "capture_sha256": "8f61d4051bc5486bf967d773e596608522f8a60a90d7617182308d2232e3f3a6",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&maxResults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07c.json",
+          "replay_result_sha256": "fccf1be71768769046992399fdfa26b580722fa7085c81f185ccb1294d9d385f"
         }
       }
     },
@@ -1452,7 +1684,7 @@
       "provider": "gcs",
       "feature": "Delimiter walk with offsets and one entry per page",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1462,7 +1694,11 @@
           "capture_file": "gcs/captures/gcs-07d.json",
           "capture_sha256": "845e01e42700cc04a6fc500a0ace6daa030f9871b1de96c97f76ac7df7e45a55",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&delimiter=/&startOffset=probe/r20261021t172056z-987e3b56/d/a/m&endOffset=probe/r20261021t172056z-987e3b56/d/e&maxResults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d/a/'], continues; page 2: HTTP 200, 1 entries [item:'d/a0'], continues; page 3: HTTP 200, 1 entries [prefix:'d/b/'], continues; page 4: HTTP 200, 1 entries [item:'d/c'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d/a/'], continues; page 2: HTTP 200, 1 entries [item:'d/a0'], continues; page 3: HTTP 200, 1 entries [prefix:'d/b/'], continues; page 4: HTTP 200, 1 entries [item:'d/c'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07d.json",
+          "replay_result_sha256": "c157575ca13e4e6f7129d7f6e8b364bd59a3ea8a5c233f045a6968d843c55ab9"
         }
       }
     },
@@ -1471,7 +1707,7 @@
       "provider": "gcs",
       "feature": "Flat walk with four entries per page over six names",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1481,7 +1717,11 @@
           "capture_file": "gcs/captures/gcs-07e.json",
           "capture_sha256": "52e976b9b21738b2488452dd296359a337e697db7385790ee9363e13a1b7f541",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&maxResults=4",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05'], continues; page 2: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05'], continues; page 2: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07e.json",
+          "replay_result_sha256": "eec8f6333a5839716bd15ca1087cfe93fd228bea4da17a35c222a16b24d1536c"
         }
       }
     },
@@ -1490,7 +1730,7 @@
       "provider": "gcs",
       "feature": "Prefix with no matching names",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1500,7 +1740,11 @@
           "capture_file": "gcs/captures/gcs-07f.json",
           "capture_sha256": "dd79ebc9fdd26bdb0366394775e91ed2493ce1e1c74b5e2cbea047dd5bf61f20",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/none/",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07f.json",
+          "replay_result_sha256": "7ef4f4ef4fd247b84ab3f83995e9910214e9f976900be9b8a8f068f88432c777"
         }
       }
     },
@@ -1509,7 +1753,7 @@
       "provider": "gcs",
       "feature": "Malformed constant `pageToken`",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1519,7 +1763,11 @@
           "capture_file": "gcs/captures/gcs-07g.json",
           "capture_sha256": "d8feac55e037e320852b6b50a5355090422e3450b3e4a3e9c3c4b6aab9f9b207",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&maxResults=2&pageToken=token-sha256-4e2ce20e038a8ff2acc21d6bbfc1ef550f47abb158a35f38ed5d50bba3e9a9b0",
-          "expected_result": "HTTP 400 invalid"
+          "expected_result": "HTTP 400 invalid",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07g.json",
+          "replay_result_sha256": "8b614fcf563e6a702beb31f43da91a96654200f1bb7755161103ab11a33b2ae0"
         }
       }
     },
@@ -1528,7 +1776,7 @@
       "provider": "gcs",
       "feature": "Reused `pageToken` for the same query",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1538,7 +1786,11 @@
           "capture_file": "gcs/captures/gcs-07h.json",
           "capture_sha256": "c1d1a42c5e655a26d931149d0398349ce2acb58d70bcdc7f120fac8fed5a7474",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&maxResults=2&pageToken=token-sha256-4b3368fbbf41c95cd94a154c211f899fd1fa8dbda6ae9186973e2182701a05a8",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07h.json",
+          "replay_result_sha256": "ca7386d7b6bc33c5020d1f8b86d4b361e00b7484e15da4ea4cb68e1b9e533178"
         }
       }
     },
@@ -1566,7 +1818,7 @@
       "provider": "gcs",
       "feature": "`pageToken` with a changed page size",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1576,7 +1828,11 @@
           "capture_file": "gcs/captures/gcs-07j.json",
           "capture_sha256": "a56f16c7e7e5bb73051c31191f43fd63a595d31a85c1299bdbad96480639d6e7",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&maxResults=3&pageToken=token-sha256-4b3368fbbf41c95cd94a154c211f899fd1fa8dbda6ae9186973e2182701a05a8",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k03', item:'r/k05', item:'r/k06'], continues"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k03', item:'r/k05', item:'r/k06'], continues",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07j.json",
+          "replay_result_sha256": "9c5a2a00675c9d9d6dd722ef814bc5dda687161ed5e9dba50c7ce8acd294b62d"
         }
       }
     },
@@ -1623,7 +1879,7 @@
       "provider": "gcs",
       "feature": "Empty `pageToken` value",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1633,7 +1889,11 @@
           "capture_file": "gcs/captures/gcs-07m.json",
           "capture_sha256": "d4e88d5b60b8b515e010887903dccdb2ebd07872c35bce30fea84e7200ca24ab",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&maxResults=2&pageToken=",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07m.json",
+          "replay_result_sha256": "dbffb9547099c56c0ecf3bdf9eff110dbb9f9d1c3d91ca81013c4870ccd7f6fa"
         }
       }
     },
@@ -1642,7 +1902,7 @@
       "provider": "gcs",
       "feature": "Flat walk with two entries per page over delimited names",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1652,7 +1912,11 @@
           "capture_file": "gcs/captures/gcs-07n.json",
           "capture_sha256": "0e574481b555a979b88d8f88655ef05ebfe46974233f523bb1805b256fd2249b",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/d/&maxResults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'d//x', item:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a/1', item:'d/a/m/1'], continues; page 3: HTTP 200, 2 entries [item:'d/a/z', item:'d/a0'], continues; page 4: HTTP 200, 2 entries [item:'d/b/1', item:'d/b/2'], continues; page 5: HTTP 200, 2 entries [item:'d/c', item:'d/e/1'], continues; page 6: HTTP 200, 2 entries [item:'d/f-g-h', item:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'d//x', item:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a/1', item:'d/a/m/1'], continues; page 3: HTTP 200, 2 entries [item:'d/a/z', item:'d/a0'], continues; page 4: HTTP 200, 2 entries [item:'d/b/1', item:'d/b/2'], continues; page 5: HTTP 200, 2 entries [item:'d/c', item:'d/e/1'], continues; page 6: HTTP 200, 2 entries [item:'d/f-g-h', item:'d/f-g/1'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07n.json",
+          "replay_result_sha256": "5e075875ae61d3f5ab1a354ff476201cfc296030988a92c3ab3b98d65c0a708b"
         }
       }
     },
@@ -1680,7 +1944,7 @@
       "provider": "gcs",
       "feature": "Flat walk with two entries per page over six names",
       "profile_promise": "Complete native-token walk required",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1690,7 +1954,11 @@
           "capture_file": "gcs/captures/gcs-07q.json",
           "capture_sha256": "d31188a3000367bffb7393e3c99857c433c3d5eab6e50a27fd645391a916bee9",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/r/&maxResults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues; page 2: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues; page 3: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues; page 2: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues; page 3: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-07q.json",
+          "replay_result_sha256": "c2dd30975ea4bb0970ace3ce3e5cc66ff0bb6c7528d364ac2e4007c6f3f15cd8"
         }
       }
     },
@@ -1794,7 +2062,7 @@
       "provider": "gcs",
       "feature": "Names with control, whitespace, dot, markup and 1,024-byte length",
       "profile_promise": "Strict UTF-8 subset",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1806,7 +2074,11 @@
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/n/",
           "expected_result": "page 1: HTTP 200, 15 entries [item:'n/../x', item:'n/./x', item:'n/Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', item:'n/bom\\ufeffx', item:'n/ctl\\x01x', item:'n/del\\x7fx', item:'n/dots..', item:'n/end.', item:'n/ls\\u2028x', item:'n/nbsp\\xa0x', item:'n/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg', item:'n/tab\\tx', item:'n/trail/', item:'n/xml<&>x', item:'n/zwj\\u200dx'], terminal",
           "raw_wire_file": "gcs/raw-wire/gcs-08a.json",
-          "raw_wire_sha256": "dedff513276568c07b1dcd5444dfc5fb7c2bccb0f9642edcb288d35bdb618469"
+          "raw_wire_sha256": "dedff513276568c07b1dcd5444dfc5fb7c2bccb0f9642edcb288d35bdb618469",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-08a.json",
+          "replay_result_sha256": "2d4eab233ce41e53bd9ac1307eb44003dbdc6a971fedb396a3780560827da1ac"
         }
       }
     },
@@ -1815,7 +2087,7 @@
       "provider": "gcs",
       "feature": "Delimiter listing over dot segments and trailing-slash names",
       "profile_promise": "Strict UTF-8 subset",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1827,7 +2099,11 @@
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/n/&delimiter=/",
           "expected_result": "page 1: HTTP 200, 15 entries [item:'n/Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', item:'n/bom\\ufeffx', item:'n/ctl\\x01x', item:'n/del\\x7fx', item:'n/dots..', item:'n/end.', item:'n/ls\\u2028x', item:'n/nbsp\\xa0x', item:'n/tab\\tx', item:'n/xml<&>x', item:'n/zwj\\u200dx', prefix:'n/../', prefix:'n/./', prefix:'n/seg/', prefix:'n/trail/'], terminal",
           "raw_wire_file": "gcs/raw-wire/gcs-08b.json",
-          "raw_wire_sha256": "063f52fe17a67abbe21a3fefb3e54eb79062fa104cd2c02b7eee66493294d866"
+          "raw_wire_sha256": "063f52fe17a67abbe21a3fefb3e54eb79062fa104cd2c02b7eee66493294d866",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-08b.json",
+          "replay_result_sha256": "9a63bf5a9d3ae27d105f40ffd74cd29a2920aa4762cd5e632d7067cd0329be6b"
         }
       }
     },
@@ -1855,7 +2131,7 @@
       "provider": "gcs",
       "feature": "HTTP Java SDK flat auto-pagination over Unicode names",
       "profile_promise": "Must run unmodified with endpoint override",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1865,7 +2141,11 @@
           "capture_file": "gcs/captures/gcs-09a.json",
           "capture_sha256": "ad2c05952a4affae4fe5484a98ba6ef70f81dc1dc67e4e1add4f4ac6a494c5f1",
           "probe_request": "GET /storage/v1/b/{bucket}/o?maxResults=5&prefix=probe/r20261021t172056z-987e3b56/u/&projection=full",
-          "expected_result": "page 1: HTTP 200, 5 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9'], continues; page 2: HTTP 200, 5 entries [item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\ue000', item:'u/\\ufffd', item:'u/\\U00010000'], continues; page 3: HTTP 200, 2 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 5 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9'], continues; page 2: HTTP 200, 5 entries [item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\ue000', item:'u/\\ufffd', item:'u/\\U00010000'], continues; page 3: HTTP 200, 2 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-09a.json",
+          "replay_result_sha256": "ae8b3d52a12518fcbfd72fa9644d1f63287e81314cc98eec9f63e4dbedff4ca8"
         }
       }
     },
@@ -1874,7 +2154,7 @@
       "provider": "gcs",
       "feature": "HTTP Java SDK hierarchy auto-pagination",
       "profile_promise": "Must run unmodified with endpoint override",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1884,7 +2164,11 @@
           "capture_file": "gcs/captures/gcs-09b.json",
           "capture_sha256": "aa786755d0dcb4a6d6a7474282bdc65ce738ddf6fffaf62038029cabb9fc3cbb",
           "probe_request": "GET /storage/v1/b/{bucket}/o?delimiter=/&maxResults=2&prefix=probe/r20261021t172056z-987e3b56/d/&projection=full",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-09b.json",
+          "replay_result_sha256": "129dca683fedaead411fd975b8fb6d33bf001303219e5b5f2546fb78ef0944e9"
         }
       }
     },
@@ -1893,7 +2177,7 @@
       "provider": "gcs",
       "feature": "HTTP Java SDK offsets with auto-pagination",
       "profile_promise": "Must run unmodified with endpoint override",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1903,7 +2187,11 @@
           "capture_file": "gcs/captures/gcs-09c.json",
           "capture_sha256": "914452dd91690229f5f121d410d1b9e6e5888c1d38abbf922e590d61eb8a61db",
           "probe_request": "GET /storage/v1/b/{bucket}/o?endOffset=probe/r20261021t172056z-987e3b56/r/k07&maxResults=2&prefix=probe/r20261021t172056z-987e3b56/r/&projection=full&startOffset=probe/r20261021t172056z-987e3b56/r/k02",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k02', item:'r/k03'], continues; page 2: HTTP 200, 2 entries [item:'r/k05', item:'r/k06'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k02', item:'r/k03'], continues; page 2: HTTP 200, 2 entries [item:'r/k05', item:'r/k06'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-09c.json",
+          "replay_result_sha256": "d7065e40224c12ca6af4e995f97048f4b46f86cbf250fb319699a51499847289"
         }
       }
     },
@@ -1923,7 +2211,7 @@
       "provider": "gcs",
       "feature": "Explicit `projection=full` under uniform bucket-level access",
       "profile_promise": "Named defaults and transport forms only; other options refused",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1933,7 +2221,11 @@
           "capture_file": "gcs/captures/gcs-11a.json",
           "capture_sha256": "9a90c3792fb424aba9d6f680baa37a67012eeb9ff3483908a254b03e655b22f7",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/s/&projection=full",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-11a.json",
+          "replay_result_sha256": "a059b3e93652693959f8ca30bb5f485788aace6ab512666776518e6577f33b8f"
         }
       }
     },
@@ -1942,7 +2234,7 @@
       "provider": "gcs",
       "feature": "Explicit `projection=noAcl`",
       "profile_promise": "Named defaults and transport forms only; other options refused",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1952,7 +2244,11 @@
           "capture_file": "gcs/captures/gcs-11b.json",
           "capture_sha256": "2d628ccfabb348bc33e2ec8e8e721fd9f4ce90e755aa62d440ec11904f69e1c6",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/s/&projection=noAcl",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-11b.json",
+          "replay_result_sha256": "913ac84130addac2ca3c4d19d56b11c4ccdb23ef09c9acf3235647120941e59d"
         }
       }
     },
@@ -1980,7 +2276,7 @@
       "provider": "gcs",
       "feature": "`prettyPrint=false` and `alt=json`",
       "profile_promise": "Named defaults and transport forms only; other options refused",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -1990,7 +2286,11 @@
           "capture_file": "gcs/captures/gcs-11d.json",
           "capture_sha256": "4b554c0fdf7b3b52ea93b318258a3f193133349dac2b86790d447d1668882860",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/s/&prettyPrint=false&alt=json",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-11d.json",
+          "replay_result_sha256": "be4585d1bea6bd1275d20df37f30ddec985d8b7c92cbf8fd9cb2d11221e1736d"
         }
       }
     },
@@ -2056,7 +2356,7 @@
       "provider": "gcs",
       "feature": "`softDeleted=true` with soft delete disabled",
       "profile_promise": "Named defaults and transport forms only; other options refused",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -2066,7 +2366,11 @@
           "capture_file": "gcs/captures/gcs-11h.json",
           "capture_sha256": "415e98e73f8a380ed7833204ca24e5ea53ef03c0161e42dcd8a2892c5fdf704b",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/s/&softDeleted=true",
-          "expected_result": "HTTP 400 invalid"
+          "expected_result": "HTTP 400 invalid",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-11h.json",
+          "replay_result_sha256": "ec4ac663f3227f93f1306aa4e03362e3889bd0d7595b95fe63c86dfaf7830a94"
         }
       }
     },
@@ -2094,7 +2398,7 @@
       "provider": "gcs",
       "feature": "Named false forms of boolean options",
       "profile_promise": "Named defaults and transport forms only; other options refused",
-      "status": "OBSERVED",
+      "status": "REPLAY_MATCH",
       "api_versions": [
         "json-v1"
       ],
@@ -2104,7 +2408,11 @@
           "capture_file": "gcs/captures/gcs-11j.json",
           "capture_sha256": "243de8cfd1b61bed5b4c314a61822364c7b2beb948700c1b2c5d4791131a7e08",
           "probe_request": "GET /storage/v1/b/{bucket}/o?prefix=probe/r20261021t172056z-987e3b56/s/&versions=false&includeTrailingDelimiter=false&softDeleted=false",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "replay_test": "gcsNativeCapturesMatchReplay",
+          "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
+          "replay_result_file": "gcs/receipts/gcs-11j.json",
+          "replay_result_sha256": "fb5a13ccbebe05b7ded27ca46335e8b8bbb8cd7ad30e12320b45437d19051a86"
         }
       }
     },
@@ -5300,7 +5608,7 @@
       "api_versions": [
         "2006-03-01"
       ],
-      "evidence_kind": "exchange"
+      "evidence_kind": "walk"
     },
     {
       "id": "s3-06e",
