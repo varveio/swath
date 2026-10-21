@@ -518,6 +518,10 @@ JVM, connection pool, and filesystem cache before recording a benchmark.
 
 - Only object rows and the documented S3, GCS, and Azure listing subsets are served;
   version listing is unsupported.
+- Every route lists in unsigned UTF-8 byte order. Live Azure Blob lists, and applies
+  `startFrom`, in UTF-16 code-unit order, so names with characters at U+10000 and above
+  sort before names with U+E000–U+FFFF there. Azure results that mix those ranges differ
+  from Azure until #239.
 - The server is usually faster than S3 unless a target profile is injected.
 - One local process does not reproduce distributed service capacity or real network faults.
 - In-server injection adds latency, not API errors, resets, malformed bodies, or partial
