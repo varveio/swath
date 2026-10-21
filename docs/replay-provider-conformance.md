@@ -4,23 +4,23 @@ This is the human-readable matrix for [issue #221](https://github.com/varveio/sw
 within [epic #220](https://github.com/varveio/swath/issues/220). The
 [machine-readable ledger](replay-provider-ledger.json) owns row IDs and evidence status;
 the offline validator requires this matrix to match it.
-`UNMEASURED` means no native-provider capture exists. `OBSERVED` requires a sanitized
-native capture and its SHA-256 checksum. `REPLAY_MATCH` additionally requires an
-independent replay test against that capture. Documentation, model reviews, local
-emulators, and agreement with a future swath fetcher do not advance a row.
+`UNMEASURED` means no published native-provider capture backs the row. `OBSERVED`
+requires a sanitized native capture and its SHA-256 checksum. `REPLAY_MATCH`
+additionally requires an independent replay test against that capture. Documentation,
+model reviews, local emulators, and agreement with a future swath fetcher do not advance
+a row.
 
-**Current release gate:** a bounded live campaign captured every case below against
-dedicated GCS, Azure and S3 resources (see [Live campaign](#live-campaign)). A row is
-`OBSERVED` when its sanitized capture is committed and `REPLAY_MATCH` only when replay,
-serving the same corpus and walked with its own tokens, matched that capture. Every
-other observed row is a pinned replay discrepancy in
-`replay-provider-evidence/<provider>/replay-expectations.json`; the GCS and Azure
-profiles stay provisional until those rows match. The S3 campaign is recorded as
-INCOMPLETE (one official-SDK walk failed and S3 work stopped there), so its captures and
-pinned replay outcomes are kept for reference but promote no S3 row; promotion requires a
-COMPLETE campaign receipt. Each row is one case: one request
-shape that settles one question. Azure rows name their service versions, and each
-version is evidenced separately.
+**Current release gate:** a bounded [live campaign](#live-campaign) captured every case
+below against a dedicated GCS bucket and Azure container. A row is `OBSERVED` when its
+sanitized capture is in the [evidence archive](#evidence-archive) and `REPLAY_MATCH` only
+when replay, serving the same corpus and walked with its own tokens, matched that capture.
+Every other observed row is a pinned replay discrepancy in the archive's
+`<provider>/replay-expectations.json`; the GCS and Azure profiles stay provisional until
+those rows match. S3 is out of scope for this evidence: the S3 campaign stopped before it
+completed, so no S3 capture is published and every S3 row stays `UNMEASURED`. Promotion
+requires a COMPLETE campaign receipt. Each row is one case: one request shape that
+settles one question. Azure rows name their service versions, and each version is
+evidenced separately.
 
 | ID | Provider | Feature or probe | Profile promise pending evidence | Capture SHA-256 | Replay test | State |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -463,12 +463,13 @@ fails for manual review. Review the sanitized output for additional private data
 publishing it; the printed SHA-256 identifies those exact sanitized bytes.
 
 Run `evidence.py validate --ledger docs/replay-provider-ledger.json
---matrix docs/replay-provider-conformance.md` to check the current UNMEASURED rows.
-Promotion to OBSERVED also requires the provider's `--manifest MANIFEST`, a capture
-under `--captures DIR`, exact probe request and expected result, and a checksum that
-matches that capture's bytes and manifest link. REPLAY_MATCH additionally requires
-`--repo-root DIR`, an existing test method, and a checksummed passing result receipt
-linked to the same capture. `ProviderMatchReceipt` emits a PASS receipt only after
+--matrix docs/replay-provider-conformance.md --captures docs/replay-provider-evidence.tar.gz`
+to check every row. `--captures` takes the archive or an evidence directory and reads its
+manifests unless `--manifest MANIFEST` is given. Promotion to OBSERVED requires the
+provider's manifest, a capture under the evidence root, exact probe request and expected
+result, and a checksum that matches that capture's bytes and manifest link.
+REPLAY_MATCH additionally requires `--repo-root DIR`, an existing test method, and a
+checksummed passing result receipt linked to the same capture. `ProviderMatchReceipt` emits a PASS receipt only after
 its GCS, Azure or S3 comparison succeeds. A single exchange is paired strictly with its
 replay request after explicit namespace and continuation-token mapping. A walk or SDK
 run is compared as a complete ordered inventory with multiplicities and terminal state:
@@ -488,19 +489,21 @@ This is a replay encoding bound, not an observation about native Azure limits.
 
 ## Live campaign
 
-`scripts/provider-conformance/campaign.py` provisions a corpus inside a fresh random
-`probe/r<UTC time>-<hex>/` prefix of a dedicated bucket or container, captures every
-case of the provider's matrix (`gcs_live.py`, `azure_live.py`, `s3_live.py`), runs the
-official SDK walks through `scripts/provider-conformance/java`, and cleans up. It sends
-no request until `plan` validates the corpus and a conservative cost bound against the
-caps, and each run needs `--confirm-live`:
+The live campaign measures native provider behavior once, under hard caps, so that every
+later check runs offline. `scripts/provider-conformance/campaign.py` provisions a corpus
+inside a fresh random `probe/r<UTC time>-<hex>/` prefix of a dedicated bucket or
+container, captures every case of the provider's matrix (`gcs_live.py`, `azure_live.py`,
+`s3_live.py`), runs the official SDK walks through `scripts/provider-conformance/java`,
+and cleans up. It sends no request until `plan` validates the corpus and a conservative
+cost bound against the caps, and each run needs `--confirm-live`. Raw captures stay in a
+private campaign directory; `sanitize` writes one provider's publishable evidence:
 
 ```bash
 python3 scripts/provider-conformance/campaign.py plan --provider gcs --markdown
 python3 scripts/provider-conformance/campaign.py run --provider gcs --profile full \
     --campaign-dir PRIVATE_DIR --confirm-live
 python3 scripts/provider-conformance/campaign.py sanitize --provider gcs \
-    --campaign-dir PRIVATE_DIR --run RUN --out docs/replay-provider-evidence/gcs
+    --campaign-dir PRIVATE_DIR --run RUN --out EVIDENCE_DIR/gcs
 ```
 
 The runner enforces its own hard caps per provider campaign: at most 6,000 objects,
@@ -517,6 +520,67 @@ run. Credentials and account identifiers are redacted before anything is written
 credential, email or ACL entity.
 
 `promotion.py rows` regenerates the ledger rows and the table above from the case
-matrices; `promotion.py promote` attaches captures and receipts, then runs the
-fail-closed validator. `NativeEvidenceReplayTest` replays every committed capture against
-replay in the normal build and fails if any outcome differs from its pinned expectation.
+matrices; `promotion.py promote` attaches captures and receipts from the evidence
+archive, then runs the fail-closed validator.
+
+## Evidence archive
+
+`docs/replay-provider-evidence.tar.gz` holds the published evidence: one directory per
+provider (`gcs/`, `azure/`) with the campaign index, corpus manifest, sanitized captures,
+GCS raw-wire artifacts, replay match receipts, and `replay-expectations.json`. Ledger
+paths such as `gcs/captures/gcs-01a.json` are relative to the archive root, and each
+checksum names the stored file's bytes, after decompression for a `.json.gz` capture.
+Inspect it with `tar -tzf` or `tar -xzf`.
+
+It leaves out two things:
+
+- **S3.** The S3 campaign stopped before it completed, so no S3 capture is published.
+- **A second copy of each Azure case.** Azure keeps its `2026-06-06` captures. Each
+  `2026-10-06` capture was compared with the `2026-06-06` capture of the same case after
+  normalizing the service-version echo, `Date`, request and client request IDs, capture
+  provenance, and an error's raw-body digest (the provider's error message carries the
+  request ID and time). `azure/version-equivalence.json` records the digests of both
+  sides for every compared case. A `2026-10-06` ledger entry cites the `2026-06-06`
+  capture and that record, and the validator recomputes the cited capture's normalized
+  digest. A case that differs keeps its `2026-10-06` capture; in this campaign all 98
+  compared cases matched. `azure-02` exists only at `2026-10-06` and keeps its capture.
+  The `2026-10-06` manifest is the `2026-06-06` manifest with its version changed, so the
+  index keeps only its digest.
+
+The normal build reads the archive directly. `NativeEvidenceReplayTest` extracts it into
+a temporary directory and replays every capture against replay serving the same corpus;
+each outcome must equal its pinned expectation. The Python tests validate the ledger and
+this matrix against the archive and check that it rebuilds byte for byte.
+
+`scripts/provider-conformance/evidence_archive.py` builds the archive from an evidence
+directory with sorted entries, zero timestamps and owners, mode 0644, and gzip level 9
+without a name or time, so the same files always give the same bytes. To publish a new
+campaign:
+
+1. Build the archive from the sanitized evidence and commit it:
+
+   ```bash
+   python3 scripts/provider-conformance/evidence_archive.py build --evidence EVIDENCE_DIR \
+       --provider gcs --provider azure --fold azure=2026-06-06
+   python3 scripts/provider-conformance/evidence_archive.py check
+   ```
+
+2. On that clean commit, write receipts for the captures replay matches into the evidence
+   directory. Keep the jar: it records the commit, and the receipts name its checksum.
+
+   ```bash
+   ./gradlew :swath-replay:jar
+   ./gradlew :swath-replay:test --tests '*NativeEvidenceReplayTest' \
+       -PproviderReceipts=EVIDENCE_DIR -PproviderDistribution=REPLAY_JAR
+   ```
+
+3. Rebuild the archive as in step 1, promote, and commit both:
+
+   ```bash
+   python3 scripts/provider-conformance/promotion.py promote \
+       --ledger docs/replay-provider-ledger.json --matrix docs/replay-provider-conformance.md \
+       --repo-root . --distribution REPLAY_JAR
+   ```
+
+Change the archive only with a re-capture. Git keeps every committed version, so each
+rebuild adds a full copy, about 1.2 MB, to the repository history.
