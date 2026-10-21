@@ -83,6 +83,14 @@ RAW_WIRE_ROWS = {"gcs-08", "gcs-08a", "gcs-08b"}
 TOKEN_FIELDS = {"gcs": "pageToken", "azure": "marker", "s3": "continuation-token"}
 PROVIDER_QUERIES = {"gcs": GCS_QUERY, "azure": AZURE_QUERY, "s3": S3_QUERY}
 API_VERSIONS = {"gcs": {"json-v1"}, "azure": {"2026-06-06", "2026-10-06"}, "s3": {"2006-03-01"}}
+# A provider's record of which captures at other service versions equal its reference version's.
+VERSION_EQUIVALENCE_FILE = "version-equivalence.json"
+VERSION_EQUIVALENCE_SCHEMA = "provider-version-equivalence-v1"
+# Response or request header values that differ between two captures of one case without changing
+# the listing: the service version echo, HTTP dates, and request and client request IDs.
+VERSION_NORMALIZED_HEADERS = VOLATILE_ID_HEADERS | {"x-ms-version", "x-ms-client-request-id", "date", "expires"}
+# Capture provenance that names its own version, manifest and capture time.
+VERSION_PROVENANCE_FIELDS = ("api_version", "manifest_sha256", "captured_at")
 
 
 def canonical(value: object) -> bytes:
@@ -117,13 +125,17 @@ def evidence_root(path: Path) -> Iterator[Path]:
 
 
 def load_manifests(root: Path) -> dict[tuple[str, str], dict]:
-    """Every provider/version manifest an evidence root's indexes name, checked against its digest."""
+    """Every provider/version manifest an evidence root's indexes name, checked against its digest.
+    A version stored without a file is its `derived_from` manifest with only the version changed."""
     manifests = {}
     for index_path in sorted(root.glob("*/index.json")):
         index = strict_json(index_path.read_text(encoding="utf-8"))
-        for version, entry in sorted(index["manifests"].items()):
-            payload = checked_child(index_path.parent, entry["file"]).read_bytes()
-            manifest = strict_json(payload.decode("utf-8"))
+        for version, entry in sorted(index["manifests"].items(), key=lambda item: "derived_from" in item[1]):
+            if "derived_from" in entry:
+                manifest = dict(manifests[(index["provider"], entry["derived_from"])], api_version=version)
+            else:
+                payload = checked_child(index_path.parent, entry["file"]).read_bytes()
+                manifest = strict_json(payload.decode("utf-8"))
             if hashlib.sha256(canonical(manifest)).hexdigest() != entry["sha256"]:
                 raise ValueError("manifest differs from its index checksum")
             validate_manifest(manifest)
@@ -131,6 +143,34 @@ def load_manifests(root: Path) -> dict[tuple[str, str], dict]:
                 raise ValueError("manifest provider/version differs from its index")
             manifests[(index["provider"], version)] = manifest
     return manifests
+
+
+def version_normalized(capture: dict) -> dict:
+    """A capture without its version provenance and with volatile header values replaced.
+
+    Two captures of one case at different service versions normalize equal exactly when their
+    requests and responses differ only in those values. An error's raw-body digest is dropped:
+    the raw error message carries the request ID and time, which sanitization redacts.
+    """
+    def exchange(value: dict) -> dict:
+        value = {key: item for key, item in value.items() if key not in VERSION_PROVENANCE_FIELDS}
+        if value["response"]["status"] >= 400:
+            value.pop("raw_body_sha256", None)
+        for side in ("request", "response"):
+            value[side] = dict(value[side], headers=[
+                {"name": header["name"], "value": "{normalized}"}
+                if header["name"] in VERSION_NORMALIZED_HEADERS else header
+                for header in value[side]["headers"]])
+        return value
+
+    if capture.get("schema_version") == "provider-capture-v1":
+        return exchange(capture)
+    return dict({key: item for key, item in capture.items() if key not in VERSION_PROVENANCE_FIELDS},
+                steps=[dict(step, exchange=exchange(step["exchange"])) for step in capture["steps"]])
+
+
+def normalized_sha256(capture: dict) -> str:
+    return hashlib.sha256(canonical(version_normalized(capture))).hexdigest()
 
 
 def headers(items: list[dict[str, str]], allowed: set[str], reject_unknown: bool = False) -> list[dict[str, str]]:
@@ -628,11 +668,43 @@ def validate_ledger(ledger: dict, manifests: dict[tuple[str, str], dict] | None 
         if not isinstance(proofs, dict) or set(proofs) != set(versions):
             raise ValueError("promoted row needs separate evidence for every API version")
         for version in versions:
-            manifest = manifests.get((row["provider"], version))
-            if manifest is None:
+            if (row["provider"], version) not in manifests:
                 raise ValueError("promoted row requires its provider/version manifest")
-            validate_promotion(row, version, proofs[version], manifest, status, captures,
-                               repo_root, replay_commit, distribution)
+            evidenced = version
+            if "version_equivalence_file" in proofs[version]:
+                evidenced = validate_version_equivalence(row, version, proofs[version], manifests, captures)
+            validate_promotion(row, evidenced, proofs[version], manifests[(row["provider"], evidenced)], status,
+                               captures, repo_root, replay_commit, distribution)
+
+
+def validate_version_equivalence(row: dict, version: str, proof: dict,
+                                 manifests: dict[tuple[str, str], dict], captures: Path | None) -> str:
+    """The reference version whose capture evidences `version` through the provider's equivalence
+    record; the cited capture is then validated at that reference version."""
+    if captures is None:
+        raise ValueError("version equivalence needs the evidence directory")
+    if "replay_test" in proof:
+        # The record shows the two native versions agree; replay was only run at the reference.
+        raise ValueError("version equivalence cannot carry a replay match")
+    record = strict_json(checked_child(captures, proof["version_equivalence_file"]).read_text(encoding="utf-8"))
+    reference = record.get("reference_version")
+    if record.get("schema_version") != VERSION_EQUIVALENCE_SCHEMA or record.get("provider") != row["provider"] \
+            or reference == version or (row["provider"], reference) not in manifests:
+        raise ValueError("version equivalence record is not for this provider and version")
+    if dict(manifests[(row["provider"], reference)], api_version=version) != manifests[(row["provider"], version)]:
+        raise ValueError("equivalent versions need the same corpus manifest")
+    entry = record.get("cases", {}).get(f"{row['id']}~{version}")
+    if not isinstance(entry, dict) or entry.get("equivalent") is not True:
+        raise ValueError("version equivalence record does not cover this case")
+    cited = entry["reference"]
+    if proof.get("capture_file") != f"{row['provider']}/{cited['file']}" \
+            or proof.get("capture_sha256") != cited["sha256"]:
+        raise ValueError("ledger cites another capture than its version equivalence record")
+    capture = strict_json(read_evidence(checked_child(captures, proof["capture_file"])).decode("utf-8"))
+    if normalized_sha256(capture) != cited["normalized_sha256"] \
+            or entry["version"]["normalized_sha256"] != cited["normalized_sha256"]:
+        raise ValueError("version equivalence digests differ")
+    return reference
 
 
 def validate_promotion(row: dict, version: str, proof: dict, manifest: dict,

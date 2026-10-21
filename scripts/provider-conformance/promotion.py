@@ -209,10 +209,14 @@ def expected_result(provider: str, capture: dict, run_prefix: str) -> str:
 
 def promote(ledger: dict, evidence_root: Path, receipts: dict[str, dict]) -> dict:
     indexes = {}
+    equivalences = {}
     for provider in ("gcs", "azure", "s3"):
         path = evidence_root / provider / "index.json"
         if path.exists():
             indexes[provider] = evidence.strict_json(path.read_text(encoding="utf-8"))
+        record = evidence_root / provider / evidence.VERSION_EQUIVALENCE_FILE
+        if record.exists():
+            equivalences[provider] = evidence.strict_json(record.read_text(encoding="utf-8"))["cases"]
     for row in ledger["rows"]:
         index = indexes.get(row["provider"])
         if row["id"] in {u["id"] for u in UNPROBED_ROWS}:
@@ -228,6 +232,11 @@ def promote(ledger: dict, evidence_root: Path, receipts: dict[str, dict]) -> dic
         for version in row["api_versions"]:
             key = safe_file_id(row["id"], version if row["provider"] == "azure" else None)
             entry = index["captures"].get(key)
+            # A version folded into its reference version cites that capture and the record.
+            equivalence = equivalences.get(row["provider"], {}).get(key)
+            cites_reference = entry is None and equivalence is not None and equivalence["equivalent"]
+            if cites_reference:
+                entry = index["captures"][equivalence["reference"]["capture"]]
             if entry is None:
                 break
             capture_path = evidence_root / row["provider"] / entry["file"]
@@ -241,6 +250,8 @@ def promote(ledger: dict, evidence_root: Path, receipts: dict[str, dict]) -> dic
                      "probe_request": request["method"] + " " + request["path"]
                      + ("?" + request["query"] if request["query"] else ""),
                      "expected_result": expected_result(row["provider"], capture, index["run_prefix"])}
+            if cites_reference:
+                proof["version_equivalence_file"] = f"{row['provider']}/{evidence.VERSION_EQUIVALENCE_FILE}"
             if "raw_wire" in entry:
                 proof["raw_wire_file"] = f"{row['provider']}/{entry['raw_wire']['file']}"
                 proof["raw_wire_sha256"] = entry["raw_wire"]["sha256"]

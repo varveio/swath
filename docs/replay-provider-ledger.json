@@ -20,7 +20,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01a.json",
-          "replay_result_sha256": "5e3084f74652bd1820c00b5bd11d9ff9421e468d87da091fce425dc811d84eba"
+          "replay_result_sha256": "98dfbd3fee8b69f361c963fc675104956da995195baeed3a7e8ba3d70a6416fd"
         }
       }
     },
@@ -43,7 +43,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01b.json",
-          "replay_result_sha256": "c53874fd85797d68916116a03d8f9f1042c9f39d4273e6653888bbaf5dfba83b"
+          "replay_result_sha256": "244fd897280b50f0bf6094069a07d748d0e5b074f54b25bc26f639f174b73a42"
         }
       }
     },
@@ -66,7 +66,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01c.json",
-          "replay_result_sha256": "66d2acab4a321dfdfd29bc7dc4900ae6ab163b0ae2f22d3f2d85913b592005b1"
+          "replay_result_sha256": "89f231dbe675930e3844ab36f8df76bb92d8ef71015cf054ae0a8f15cfb88558"
         }
       }
     },
@@ -89,7 +89,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01d.json",
-          "replay_result_sha256": "9590c995766dfc31724a2f666d80d83cc32675f9085d502d7d6dcd8607628218"
+          "replay_result_sha256": "e226a8bb4b6f73fa389cfa07f62cbde1acb14ead1926200b4656334f63a09142"
         }
       }
     },
@@ -112,7 +112,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01e.json",
-          "replay_result_sha256": "474c3dc5ce29b63705fe4ba7b16001f0ad4742d4423f50d46914f641df4aad4a"
+          "replay_result_sha256": "7bee0d481d40b18250a69b4f4442f75ff3b62b57e714a27b649de729f826254a"
         }
       }
     },
@@ -135,7 +135,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01f.json",
-          "replay_result_sha256": "cf049c1c3636f2526fc8b8f9891046bd1df782524ee156a716742e9ddf79a14c"
+          "replay_result_sha256": "d4917e6f3ab0cbe7789fc1f0529f9791f7793c73867e52c7cf7c7cc58f2f2a25"
         }
       }
     },
@@ -158,7 +158,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01g.json",
-          "replay_result_sha256": "5db6cc2912f3124f955194713a9439b69c41bc4bfab9e9e1e5223966c9035d0f"
+          "replay_result_sha256": "abd542f21996be00dc555f586e05199a6a74f1abfa1137c9b7de7e4af140ccfd"
         }
       }
     },
@@ -181,7 +181,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01h.json",
-          "replay_result_sha256": "f03b6046fe72337e9aeb42268f26d110057bab5e993f2dbf63e1c948c2142051"
+          "replay_result_sha256": "e82e11bde15fabbe3a2f92b9cd1926e405913caf7bcaa2e58733f9165c39e8a9"
         }
       }
     },
@@ -204,7 +204,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01i.json",
-          "replay_result_sha256": "cf4a3c84702d60aaf4cd96ea6ac9e699030e61b1775e8cbcbc61e0a09cacf5d6"
+          "replay_result_sha256": "f2e78e0fba0cb82d833f2096fc7e9ac3d67b0d5509f5087744c6a010fe644e98"
         }
       }
     },
@@ -227,7 +227,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01j.json",
-          "replay_result_sha256": "6b6fc2850ed763898efb725a5aa4f9f3cabb51cd60ed600e872d1773465f8cac"
+          "replay_result_sha256": "141ae9acf5923c45e80e1ad000d01642e2c68e62618b36b74bc814baddc1b8cb"
         }
       }
     },
@@ -250,7 +250,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01k.json",
-          "replay_result_sha256": "f6cf31039a54346e5db1b1bd122fb6f38f5375d51de58dce5eb1c1af34a899ad"
+          "replay_result_sha256": "93ab02b1c45824e489d4e7337863c427a4fb55ed926a002e259837341b95e340"
         }
       }
     },
@@ -273,7 +273,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02a.json",
-          "replay_result_sha256": "6de32a0f366111b277218c000dd5f2ece330bfc0ae9f350b8f2656cb30fbba32"
+          "replay_result_sha256": "61f405b213e8409548eda78ad97eac617a0a3a94bce2b1a671b37a4fc7b72b25"
         }
       }
     },
@@ -296,7 +296,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02b.json",
-          "replay_result_sha256": "34b9a3ab4a8eb78bbd720cf1cbdbee35162571fb7a31a504232dcee5260cc904"
+          "replay_result_sha256": "fe40052242f5f2c391d1ce2fcc401a58fa0d20701d98584cde84a91c664dfd54"
         }
       }
     },
@@ -319,7 +319,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02c.json",
-          "replay_result_sha256": "a5dfdb284a06fd5a0b305d8ee29c57cd1fe88f8eea5915a0fa26de9e07902008"
+          "replay_result_sha256": "b91561f5f081acc737a1fba16e7f7381dece87d997e422ec8d2e4d47700ad350"
         }
       }
     },
@@ -342,7 +342,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02d.json",
-          "replay_result_sha256": "3f59e53822852d8a0797d2e9993fcf54e6713c4ae576f35b77b510c9370f819f"
+          "replay_result_sha256": "5cf6d7ae022dc6c3d2572ea4f51405e8f3105aede575bdc9d25c95a9a888b2e6"
         }
       }
     },
@@ -365,7 +365,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02e.json",
-          "replay_result_sha256": "4bfef5fba8b07d555bc4d7dc497f688689b0d62852c2e1455897e21417a830b9"
+          "replay_result_sha256": "b0b6a9a229d3c8ac6a6dc8321341af25cd1e85096373a5c22fb7e208a8d79e6d"
         }
       }
     },
@@ -388,7 +388,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02f.json",
-          "replay_result_sha256": "49df2da92b57cb0d5823c0f1bb6f227f63dad91218209e6b5581081cdb9969f9"
+          "replay_result_sha256": "2ad997737b972b70ebd85ec9f80a16959cc664190c197caa13e308a709afad88"
         }
       }
     },
@@ -411,7 +411,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03a.json",
-          "replay_result_sha256": "b20ee16675639d9ea26f79a7a9e79e1ef94f4d5e19415ca6f9a632d52aa913ab"
+          "replay_result_sha256": "2c9d889a2136b9cc589f6eab0eec4062e639d417f40b802e7327ad59111031f7"
         }
       }
     },
@@ -434,7 +434,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03b.json",
-          "replay_result_sha256": "42ef54cf0d40633beecef2a7df7b3586dd1f5209a6171dd0045eb1e9836db61c"
+          "replay_result_sha256": "7dc2160021a6636029403adf28f4ce81b309f314b363abccd615f9b638cf3d3b"
         }
       }
     },
@@ -457,7 +457,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03c.json",
-          "replay_result_sha256": "1e617fa61931082e46c338035eaf7c2dd98636220a6943591c135e1820f74876"
+          "replay_result_sha256": "9d4746a2ff92a2c2b06d0c8d284d12cbc6f643d21fe19bf9009d4e85a6b15382"
         }
       }
     },
@@ -480,7 +480,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03d.json",
-          "replay_result_sha256": "581f1d7998a37ac7f4c8fa8e0c8deb991b4854d0810873c94e52575526b8e12c"
+          "replay_result_sha256": "b2bc010af04ffe760d89964738529b88d79eb9f327c57c677426f1eb97c1271c"
         }
       }
     },
@@ -503,7 +503,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03e.json",
-          "replay_result_sha256": "74580eb2345ef82ddfb0158a0bb6c1fceba5184cd2969f69258cb4539b0d92ec"
+          "replay_result_sha256": "e529500d0d25bc284c131e9bde8b50ee7742458eeaf2b032bf047d0f80c3662e"
         }
       }
     },
@@ -526,7 +526,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03f.json",
-          "replay_result_sha256": "c7ffdfd84cf35617415d2ff482c3c97217c2917e1b33ac94e948965062c0f72a"
+          "replay_result_sha256": "3109089e8484750ceb663039f40110ffbaa315eb4ecb3fb2f97c6ff30792132a"
         }
       }
     },
@@ -549,7 +549,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03g.json",
-          "replay_result_sha256": "9fe99231e0a6b93d7e55e621d4075457b6f8786fd022d8b94cbbea136e35f0a3"
+          "replay_result_sha256": "8f54d6773a79f9dff1569a535de6d3fc06b9d5268e8cdac8705f6b1f2c13cb76"
         }
       }
     },
@@ -572,7 +572,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03h.json",
-          "replay_result_sha256": "81590e264124b4f8e6592f2e0fad364a305068208474778cd4c376ad4126ad10"
+          "replay_result_sha256": "603ae33cdca9c6f465991e30b2a19f0a92f0fbaa7ec0f710f8bc87f097bf4bc9"
         }
       }
     },
@@ -595,7 +595,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03i.json",
-          "replay_result_sha256": "3f5358e6395a7d94e30edd86a966ed037f6721f77ef5ae7abc03dac3c2f57052"
+          "replay_result_sha256": "cc8fbc25d18788f2434c47efc45c4b854137e9c800b703568c1668636d7b1f55"
         }
       }
     },
@@ -618,7 +618,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03j.json",
-          "replay_result_sha256": "375e2ba5f339f9e774dbeb550f688c1b6342a0cc761273b19efa881ffde87ec6"
+          "replay_result_sha256": "17d6f1430ffdd239fcf47a0985745795f733ef79620a1a758808550c270ff31e"
         }
       }
     },
@@ -641,7 +641,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03k.json",
-          "replay_result_sha256": "5f2b25a4159c35d7ee72ca375858a876cd8e3cd0399c553eebc387b127075970"
+          "replay_result_sha256": "009deaef8fe72ae68766b2ddf67e5be7ca2a91890b89216a1c2ebaa437b80ec7"
         }
       }
     },
@@ -664,7 +664,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03l.json",
-          "replay_result_sha256": "27332ceb1a8eacdcfaebeb312bb22572d22d5ee18afd80798a351e44d3797676"
+          "replay_result_sha256": "9f4688e4c53d0eb052243d66ae323c1be16d82366700ddcd6eff44e394175634"
         }
       }
     },
@@ -687,7 +687,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03m.json",
-          "replay_result_sha256": "b3da9a9d0d5505a22b3cdf8720968a1fe68244025c8f014dcdd42a4f57d88ca5"
+          "replay_result_sha256": "3522d1d6d5969aee63c961692538d1ce74d87d3746b7c1ebd44741a31edce3e7"
         }
       }
     },
@@ -710,7 +710,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03n.json",
-          "replay_result_sha256": "dd9be407f239b4f70e4335d3ec606a29c978a64675818dcef6e3a81c5d519189"
+          "replay_result_sha256": "1af9993ee2d0f42f1ca533ca0deae4f07c3b665bf6a79fec2b1afaafd329d3cf"
         }
       }
     },
@@ -733,7 +733,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03o.json",
-          "replay_result_sha256": "9303f4fef9d6fb59f74385c3cdba185a0ea6b5e1eb46c98b83858edb4962f50b"
+          "replay_result_sha256": "0ad40ac5366d9bf466922bd99af961d90be721182b5353d9098ea18df2b11d37"
         }
       }
     },
@@ -775,7 +775,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03q.json",
-          "replay_result_sha256": "527eff8a6d8f1f3f9e60e5debbd93eb0c198b29b309d35b12fd01a51b2e79d89"
+          "replay_result_sha256": "0dac8471ba30db49b63724c14f6d979bf7520b979e974e321abc863b6a366417"
         }
       }
     },
@@ -800,7 +800,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04a.json",
-          "replay_result_sha256": "b7dc613d43b605abe521675230bd8e99a24f1e7d193d207634e2142f2e734b3e"
+          "replay_result_sha256": "85184185622a046817e00ce286ff608924fab4c6155d67eaa501d11e5c0d0289"
         }
       }
     },
@@ -823,7 +823,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04b.json",
-          "replay_result_sha256": "35788cf16fa9573b08c3bb538fefec178bac67df2e7d3d344c5007d68e4fa641"
+          "replay_result_sha256": "0e7b78cf6c6dc9ac91b51eb1267f4bba8c0ca14f2cb84097a208af91bec7f8c9"
         }
       }
     },
@@ -846,7 +846,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04c.json",
-          "replay_result_sha256": "3c76e6e8928df52b0c1ae6f7ee3a3ab51993c4566571eecf3a32492779e62e8c"
+          "replay_result_sha256": "8c86216e9aba92b7f1aff7f41cec3426f4a86bf00ba2297afaee790343c7705e"
         }
       }
     },
@@ -869,7 +869,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04d.json",
-          "replay_result_sha256": "8241f77e60ae359974fef1c6ce6300270d5b7d6614b933964b1c914b93c91a8c"
+          "replay_result_sha256": "0e349e38e1ea9f7322cc3f0ac74f06088e9d8e13558f864015a6c40372c0075a"
         }
       }
     },
@@ -892,7 +892,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04e.json",
-          "replay_result_sha256": "82fbe5adb13363ac0c3af96ad7f7d997d346e435d59f6916283bca0ea99e0d2e"
+          "replay_result_sha256": "c9d9e3f706c78ab7e497412d73b511ef4d391a2f7e4c88a47523e52dcf3aef76"
         }
       }
     },
@@ -915,7 +915,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04f.json",
-          "replay_result_sha256": "f8bcf18ebe83f2b38f30b63e400f8a0811b2427482a5cb2e7a7746876e852d00"
+          "replay_result_sha256": "51882084509adf9ee9b8f569e4efc807c305b4a536c55f0cf276baf2483eb64b"
         }
       }
     },
@@ -957,7 +957,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05b.json",
-          "replay_result_sha256": "bde905b42f49598424e72e2aa1b37a337c13657ace8191d11e88a8813d95bd93"
+          "replay_result_sha256": "e6d60810f25a062611e4e7422ed7c91469331db6496651dc07ddc90d26970d43"
         }
       }
     },
@@ -980,7 +980,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05c.json",
-          "replay_result_sha256": "ebb89ee84d0fa119650fdfb22dc8ae8b881c1f7ce6dfc407b2aadc79dcd0c883"
+          "replay_result_sha256": "97986959d51b28b776a6eb12b06d6a1e15578605f7449ddc04fddb700f5fe653"
         }
       }
     },
@@ -1003,7 +1003,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05d.json",
-          "replay_result_sha256": "243d896ccfaab9158f7a497a7f2f6c8e1adda7f7881ae36d8cf8fab5f81cb733"
+          "replay_result_sha256": "6c633d2747a35e7c668dea1e3237790d15c101086a9d14d083828d7dd20afcc9"
         }
       }
     },
@@ -1121,7 +1121,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05j.json",
-          "replay_result_sha256": "f05ec31a3847c4fb1fc91f905e20e3eee8b341874d009d80a66a5de97fb4fc42"
+          "replay_result_sha256": "98306c380b1448fb333161f9296bd2fc2bacb56ddda36fb674034e70ba8f26c5"
         }
       }
     },
@@ -1144,7 +1144,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05k.json",
-          "replay_result_sha256": "b27416f7c6448a8188f922d11290ef44b0311ada06b4064e4bad8617e77f9dc1"
+          "replay_result_sha256": "8bba44e109d6d46ea9aa19709ef0d9ae76497aa620db380eb9caf56c0e2275be"
         }
       }
     },
@@ -1167,7 +1167,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05l.json",
-          "replay_result_sha256": "062f67d886742237e045421164f24326655f81c9aa961af2cd9a84a559c9c273"
+          "replay_result_sha256": "39b2379f40c01c9c08ba9876cb97af005a75cf8323ce47246b08a63ad92343f4"
         }
       }
     },
@@ -1190,7 +1190,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05m.json",
-          "replay_result_sha256": "0ffea8e2bde497c9681819a4a33aeb61b5a5d179d29a20b94dfed6a6799286ee"
+          "replay_result_sha256": "3e7c85aef4de297abe5901bd347637d3d40461fad6eebc7c692caece7af6f99a"
         }
       }
     },
@@ -1213,7 +1213,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05n.json",
-          "replay_result_sha256": "a15493c66829dc041b42dff01a0c16bccebe1b9f69520c6a88b1c571aa7ac9c0"
+          "replay_result_sha256": "689a743f08bdc1d760e0f1f2469a9f633b5fb774c2162aac778c5bcde41cea64"
         }
       }
     },
@@ -1236,7 +1236,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05o.json",
-          "replay_result_sha256": "8fd82298c6ed79ea20b2c3b98dc9bb29bb206bd3d27b13ffc6d305bc3783a550"
+          "replay_result_sha256": "965c6157b79642e10358ff0d27e011e1b21a6c1bbc1066f79383b30cc6d80a9a"
         }
       }
     },
@@ -1259,7 +1259,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05p.json",
-          "replay_result_sha256": "371f955a9e2ca2715df51a8cdfaf194103eb37fb2917776ec1adf3a952330b9f"
+          "replay_result_sha256": "71b14c5697c674d7230439e0501b0bc72594a9ef315a5b30e2e881e64f10844b"
         }
       }
     },
@@ -1282,7 +1282,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05q.json",
-          "replay_result_sha256": "9e11a81c7cdc4a857d328e618fb9d6097a0f92c7bc795e3e30b32e5a9452919a"
+          "replay_result_sha256": "a1d38b4e64de1e5debc4bcb525fba44c4eca65392744b872eaaa34a7572a3b40"
         }
       }
     },
@@ -1305,7 +1305,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05r.json",
-          "replay_result_sha256": "b359be211202af798615904e0b55305533f13396ec55ebfcbd43a748c7c930ac"
+          "replay_result_sha256": "a92202cc549349cbfb00ec3051779024506f83a9bd6dfa1c102a3de4e113e90a"
         }
       }
     },
@@ -1366,7 +1366,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-06c.json",
-          "replay_result_sha256": "cac2ba6c179c3eda766900c68e2b823e53f977f0413bb10377ecd1c5cf079714"
+          "replay_result_sha256": "d1d6d0ff1589fcdd3acadc4502b910044ae5a97bbf343ae6d062c2bb05eefb15"
         }
       }
     },
@@ -1389,7 +1389,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-06d.json",
-          "replay_result_sha256": "1d5a1d66ce4757cdfb904086afe33a2716624b29ed298f8f4f85e8e8561a19af"
+          "replay_result_sha256": "f0c0ba7b01648117c1688de4481d5755d498a4bc4e41ee8bfa537a230b361fd9"
         }
       }
     },
@@ -1469,7 +1469,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-06h.json",
-          "replay_result_sha256": "c4446b27168ca7a733a291bc5cd195697cb3d2d069381fc6ea04cca8a38060a5"
+          "replay_result_sha256": "be6a69bfd508840115a70217cfe88eebc0e4145d05a61aa34446875e8486dc89"
         }
       }
     },
@@ -1606,7 +1606,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-06o.json",
-          "replay_result_sha256": "a2153545403197ee2b1a2f0d96de98c83dbff85973a28071deb55c8fc15f4bd3"
+          "replay_result_sha256": "283f7f06388fd9e23a98e142faff16bd8ec989ad56424d5fbbc3833ea964d584"
         }
       }
     },
@@ -1629,7 +1629,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07a.json",
-          "replay_result_sha256": "cfc4ea63b4bd8f59089a16f5d910cf23e62d47316f45dd3826f9bdfe163ef219"
+          "replay_result_sha256": "76d6001e350d884aea778dbf3f2dbfc068f4c45966b55e1201af4a9edddadfc4"
         }
       }
     },
@@ -1652,7 +1652,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07b.json",
-          "replay_result_sha256": "41ecec2f7362ea9e23b2853b11f6c7bada6ecce3d54719ca6f9afc7d5e27a7c5"
+          "replay_result_sha256": "e76f581d7317554020856f3764ffca9365cb608e8d61d38953b8d1d368be76a9"
         }
       }
     },
@@ -1675,7 +1675,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07c.json",
-          "replay_result_sha256": "fccf1be71768769046992399fdfa26b580722fa7085c81f185ccb1294d9d385f"
+          "replay_result_sha256": "e91c0bcf4c49fd5925fe565cbb3e5a19a5060ab4b09ecaa06c0d485a9cedeb7d"
         }
       }
     },
@@ -1698,7 +1698,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07d.json",
-          "replay_result_sha256": "c157575ca13e4e6f7129d7f6e8b364bd59a3ea8a5c233f045a6968d843c55ab9"
+          "replay_result_sha256": "fa715ebd7b4f5d217cafa8653b98ee06b9635f121ebdab60336df94957379557"
         }
       }
     },
@@ -1721,7 +1721,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07e.json",
-          "replay_result_sha256": "eec8f6333a5839716bd15ca1087cfe93fd228bea4da17a35c222a16b24d1536c"
+          "replay_result_sha256": "21726c0b730d5998504abba5b3861f859a920b410be7c29df42599d76d2f4ea6"
         }
       }
     },
@@ -1744,7 +1744,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07f.json",
-          "replay_result_sha256": "7ef4f4ef4fd247b84ab3f83995e9910214e9f976900be9b8a8f068f88432c777"
+          "replay_result_sha256": "4ea47e2df39eb6ebee153b98cd491a3fa9de7c6e0d94142edd716463bbeb9a7d"
         }
       }
     },
@@ -1767,7 +1767,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07g.json",
-          "replay_result_sha256": "8b614fcf563e6a702beb31f43da91a96654200f1bb7755161103ab11a33b2ae0"
+          "replay_result_sha256": "cce5ab47486c8703de462fa08259594a194f700ab9e30b2d336f20c8025920b3"
         }
       }
     },
@@ -1790,7 +1790,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07h.json",
-          "replay_result_sha256": "ca7386d7b6bc33c5020d1f8b86d4b361e00b7484e15da4ea4cb68e1b9e533178"
+          "replay_result_sha256": "60ff4c45f842aae27d3441819c8c8fb7582dbfa603aaec3f91e4fe630f42149d"
         }
       }
     },
@@ -1832,7 +1832,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07j.json",
-          "replay_result_sha256": "9c5a2a00675c9d9d6dd722ef814bc5dda687161ed5e9dba50c7ce8acd294b62d"
+          "replay_result_sha256": "6ab6160bc3cbcdb87e26fa57c0399d82f5b4fdb9d139801a6e2ea485b978e99e"
         }
       }
     },
@@ -1893,7 +1893,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07m.json",
-          "replay_result_sha256": "dbffb9547099c56c0ecf3bdf9eff110dbb9f9d1c3d91ca81013c4870ccd7f6fa"
+          "replay_result_sha256": "b7e6f0498db08fb456b8d1dd0b7b6924bcbe31db4babcbe4250fff16280d97d1"
         }
       }
     },
@@ -1916,7 +1916,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07n.json",
-          "replay_result_sha256": "5e075875ae61d3f5ab1a354ff476201cfc296030988a92c3ab3b98d65c0a708b"
+          "replay_result_sha256": "4e8adf6d37a1ba3e9e386e36f43c4c0ab3afe9c809b74e6902b0010fdec58c02"
         }
       }
     },
@@ -1958,7 +1958,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07q.json",
-          "replay_result_sha256": "c2dd30975ea4bb0970ace3ce3e5cc66ff0bb6c7528d364ac2e4007c6f3f15cd8"
+          "replay_result_sha256": "d4279753c3ceaa9243b3166d879307912be4db9c64c20e1a7108de6cb4a4045f"
         }
       }
     },
@@ -2078,7 +2078,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-08a.json",
-          "replay_result_sha256": "2d4eab233ce41e53bd9ac1307eb44003dbdc6a971fedb396a3780560827da1ac"
+          "replay_result_sha256": "1d5026d5b0787e35c20f9c6d2db7f1e4db82d0de0dec95359d84499d2aa3d4ac"
         }
       }
     },
@@ -2103,7 +2103,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-08b.json",
-          "replay_result_sha256": "9a63bf5a9d3ae27d105f40ffd74cd29a2920aa4762cd5e632d7067cd0329be6b"
+          "replay_result_sha256": "caf126c57f9aa24d101b16db40bce716f4663ffb9c54d575e3dd0f157840cedb"
         }
       }
     },
@@ -2145,7 +2145,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-09a.json",
-          "replay_result_sha256": "ae8b3d52a12518fcbfd72fa9644d1f63287e81314cc98eec9f63e4dbedff4ca8"
+          "replay_result_sha256": "d01b503bed25cf56a9c5eb5f46fbad8a61989d4ef5b12c34b40f4759b6ac842d"
         }
       }
     },
@@ -2168,7 +2168,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-09b.json",
-          "replay_result_sha256": "129dca683fedaead411fd975b8fb6d33bf001303219e5b5f2546fb78ef0944e9"
+          "replay_result_sha256": "0a396ec81e6a3b920f5bf556c97e51b5686f4a33a8ded4084ebee9b4c8b803de"
         }
       }
     },
@@ -2191,7 +2191,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-09c.json",
-          "replay_result_sha256": "d7065e40224c12ca6af4e995f97048f4b46f86cbf250fb319699a51499847289"
+          "replay_result_sha256": "d54884d9a8eaf5d209371c1b6494b9d67a50469a9921ffe177c5bfcd1adc0672"
         }
       }
     },
@@ -2225,7 +2225,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11a.json",
-          "replay_result_sha256": "a059b3e93652693959f8ca30bb5f485788aace6ab512666776518e6577f33b8f"
+          "replay_result_sha256": "664de12c013030f2d914a9f2c85f88a2d0f51240efe876274f5faec1691739ed"
         }
       }
     },
@@ -2248,7 +2248,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11b.json",
-          "replay_result_sha256": "913ac84130addac2ca3c4d19d56b11c4ccdb23ef09c9acf3235647120941e59d"
+          "replay_result_sha256": "f572de30ff5357da0bcd8e4f3b7a817d9f5dacb4bf6edea7a63407f65821e1b8"
         }
       }
     },
@@ -2290,7 +2290,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11d.json",
-          "replay_result_sha256": "be4585d1bea6bd1275d20df37f30ddec985d8b7c92cbf8fd9cb2d11221e1736d"
+          "replay_result_sha256": "a03a023618b38922d79cb39991f85e7f26e3d94877e8f7bc0219f414f040c4ed"
         }
       }
     },
@@ -2370,7 +2370,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11h.json",
-          "replay_result_sha256": "ec4ac663f3227f93f1306aa4e03362e3889bd0d7595b95fe63c86dfaf7830a94"
+          "replay_result_sha256": "c00253e1b20591f7dd9e381f7bc83ee7528a9628d30d20642ad0347021de1d90"
         }
       }
     },
@@ -2412,7 +2412,7 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11j.json",
-          "replay_result_sha256": "fb5a13ccbebe05b7ded27ca46335e8b8bbb8cd7ad30e12320b45437d19051a86"
+          "replay_result_sha256": "ac19f8b309b1c9570960a0194692ed03ab9520131b245fc73821a30f0f3b8a68"
         }
       }
     },
@@ -2473,10 +2473,11 @@
           "expected_result": "page 1: HTTP 200, 5 entries [item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03a~2026-10-06.json",
-          "capture_sha256": "799d3d0e8d1dca086e78e7845847a2f69bc14ffded6fbad58cfee784150cf408",
+          "capture_file": "azure/captures/azure-03a~2026-06-06.json",
+          "capture_sha256": "d0fb8d97bbb83c94077de3b161478a3c98272a69242a292fc29d220afe11a99a",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k02",
-          "expected_result": "page 1: HTTP 200, 5 entries [item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 5 entries [item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2499,10 +2500,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03b~2026-10-06.json",
-          "capture_sha256": "01999034e84550b76f2a49e80b2e88995fcfab29f5e332df0fae1ddeefbec81f",
+          "capture_file": "azure/captures/azure-03b~2026-06-06.json",
+          "capture_sha256": "9128e1ec99de085e2871e0cb2f4f106370316c539d9930b461034f0ed6b188ea",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k04",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2525,10 +2527,11 @@
           "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03c~2026-10-06.json",
-          "capture_sha256": "d230f15429cd3f02dd9a1d2c53a1094bae447ece98856b17d971d613f666f9bd",
+          "capture_file": "azure/captures/azure-03c~2026-06-06.json",
+          "capture_sha256": "bf7205bf68765aa8162a96546645aa8b211dd7fc28162a42e50dcd17d0696219",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2551,10 +2554,11 @@
           "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03d~2026-10-06.json",
-          "capture_sha256": "fa5080c7134ca8ef436a31962dd7ce2d22b5249ca1aaafe455d4152a2abcb56b",
+          "capture_file": "azure/captures/azure-03d~2026-06-06.json",
+          "capture_sha256": "197ded61ee74eccc75aca8e74bea283af2f815fe4deeac3ee4adf4091af29486",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/s",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2577,10 +2581,11 @@
           "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03e~2026-10-06.json",
-          "capture_sha256": "0767d9b2d234c86cd3560d8e0963ecc57c79511e87577a9c0c16aa7fc7b7b0cf",
+          "capture_file": "azure/captures/azure-03e~2026-06-06.json",
+          "capture_sha256": "1e7ad5561fd6c5330c139f69c23349e1051c60d840a978cd1550f43fda884c2a",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2603,10 +2608,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k06', item:'r/k07', item:'s/1'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03f~2026-10-06.json",
-          "capture_sha256": "11d371607b56d946eb79bfb9daaf3d2d7b05752ff35c5e02b4ed61130f5aa46a",
+          "capture_file": "azure/captures/azure-03f~2026-06-06.json",
+          "capture_sha256": "5be875b6dc4f5aaee6cbf1287ad3a1c96e8eddd10bb99b193cc928541f2046d5",
           "probe_request": "GET /{container}?restype=container&comp=list&startFrom=probe/r20261021t172702z-4109e13b/r/k06&maxresults=3",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k06', item:'r/k07', item:'s/1'], continues"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k06', item:'r/k07', item:'s/1'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2629,10 +2635,11 @@
           "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03g~2026-10-06.json",
-          "capture_sha256": "bf37a6247d95945feb7f2db4b8d7f8e7135409519c53b651a7cbd3060f254650",
+          "capture_file": "azure/captures/azure-03g~2026-06-06.json",
+          "capture_sha256": "047972333bdff2b2cc4f60dea1ada13d03546133758f332f23558ce61db9a1b0",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2655,10 +2662,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k01', item:'r/k02', item:'r/k03'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03h~2026-10-06.json",
-          "capture_sha256": "ffa76183e5a221c2493fd53fe7e139a7a2f087a5b66cb6165633bcb743d50484",
+          "capture_file": "azure/captures/azure-03h~2026-06-06.json",
+          "capture_sha256": "72c2615eb83500e319536a1be7addb882e634e9f4151db04827ea59e10ef7eda",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&endBefore=probe/r20261021t172702z-4109e13b/r/k05",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k01', item:'r/k02', item:'r/k03'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k01', item:'r/k02', item:'r/k03'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2681,10 +2689,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k02', item:'r/k03', item:'r/k05'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03i~2026-10-06.json",
-          "capture_sha256": "98671c684e9ab83260031c4d4ba1ccd2c1d8f1ac4da05b8ae47a69771aa5dc1f",
+          "capture_file": "azure/captures/azure-03i~2026-06-06.json",
+          "capture_sha256": "1e479ee78b176fa57ac0c1310a5d187ef89ade297309560aeadfffc66f6b30d7",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k02&endBefore=probe/r20261021t172702z-4109e13b/r/k06",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k02', item:'r/k03', item:'r/k05'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k02', item:'r/k03', item:'r/k05'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2707,10 +2716,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'x/a', item:'x/ab', item:'x/abc'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03j~2026-10-06.json",
-          "capture_sha256": "a5570eaae1dd3d7765ae0da413d360dcbd8042f59a190f14d0ba3f5cdcfd1a06",
+          "capture_file": "azure/captures/azure-03j~2026-06-06.json",
+          "capture_sha256": "eb2fd8d04111492d64077c8e93e9c85dbf645d8634b757fe8b585a24edcd8cd1",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/x/a",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'x/a', item:'x/ab', item:'x/abc'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'x/a', item:'x/ab', item:'x/abc'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2733,10 +2743,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'x/ab', item:'x/abc'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-03k~2026-10-06.json",
-          "capture_sha256": "fe5f3f672a824959eca94c2b0d7f58b095be9edf21066b785ef6e7d7dec61a48",
+          "capture_file": "azure/captures/azure-03k~2026-06-06.json",
+          "capture_sha256": "f6085760d852d7484a460a009683f24bbe379ce31b6c667ccc05fbf192101ded",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/x/a&startFrom=probe/r20261021t172702z-4109e13b/x/ab",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/ab', item:'x/abc'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/ab', item:'x/abc'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2759,10 +2770,11 @@
           "expected_result": "page 1: HTTP 200, 8 entries [prefix:'d//', prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04a~2026-10-06.json",
-          "capture_sha256": "ffcd67df0ee003839045ea5f22b1a8f70790e12e944fe0b393a0ffe3fc2cc500",
+          "capture_file": "azure/captures/azure-04a~2026-06-06.json",
+          "capture_sha256": "76698d2d7e1a542fcf74a2024ab69ab075a2123b5130c436ff2fc840d8dacb13",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 8 entries [prefix:'d//', prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 8 entries [prefix:'d//', prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2785,10 +2797,11 @@
           "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04b~2026-10-06.json",
-          "capture_sha256": "bba348ceaa5647d7a0c66d55abe11a2cb8063b3d16a3e9bccc3b508a82775bcb",
+          "capture_file": "azure/captures/azure-04b~2026-06-06.json",
+          "capture_sha256": "4b9d417f5a6c961b7e66a4331899dc940852d46778c25d528be5934bf286d06b",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/a/",
-          "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2811,10 +2824,11 @@
           "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04c~2026-10-06.json",
-          "capture_sha256": "308a2ba327c3fef9c03ce5a431fc0f29db1885c5bd96a013f7acbc32e88cf885",
+          "capture_file": "azure/captures/azure-04c~2026-06-06.json",
+          "capture_sha256": "cbb25c03e24d970ed73ca435b423167332163817ccf7fa732b8fef4e56586105",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/a/m",
-          "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2837,10 +2851,11 @@
           "expected_result": "page 1: HTTP 200, 4 entries [item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04d~2026-10-06.json",
-          "capture_sha256": "ab4288ca6bb123aeca86434ecd257863995aebb6d7ff04f8541e75547e7439df",
+          "capture_file": "azure/captures/azure-04d~2026-06-06.json",
+          "capture_sha256": "f7027eb607dd6f2186012dd982e9a67cdf7e347a8164761b5de16e598a0cb41b",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/b/3",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2863,10 +2878,11 @@
           "expected_result": "page 1: HTTP 200, 6 entries [item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04e~2026-10-06.json",
-          "capture_sha256": "77e11f3f9e078c4abfb7e74ad5762ff100bdc5fdb2745f82b12081abc2e7b1b1",
+          "capture_file": "azure/captures/azure-04e~2026-06-06.json",
+          "capture_sha256": "cc5c54628fe7315a1ec5d845b658a791a392b60819ec8ac1cb69b5090d7d7c55",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/a0",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2889,10 +2905,11 @@
           "expected_result": "page 1: HTTP 200, 4 entries [item:'d/a/', item:'d/a/1', prefix:'d/a/m/', item:'d/a/z'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04f~2026-10-06.json",
-          "capture_sha256": "70ab0d666f9233216386a0f929e0bd4782e2e14a3a86e4ccf1f47641fe4a641f",
+          "capture_file": "azure/captures/azure-04f~2026-06-06.json",
+          "capture_sha256": "7c4333fbaac5384dcb6aa0a8ada842b62f2bda52ae35fd4696e87a7c6650a757",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/a/&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/a/', item:'d/a/1', prefix:'d/a/m/', item:'d/a/z'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/a/', item:'d/a/1', prefix:'d/a/m/', item:'d/a/z'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2915,10 +2932,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d/a/', item:'d/a0'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04g~2026-10-06.json",
-          "capture_sha256": "8bbc3a3f5fe8a05cf3c71648601952d44d324e1a8ffb48adeb321276ef5abf64",
+          "capture_file": "azure/captures/azure-04g~2026-06-06.json",
+          "capture_sha256": "e52a7fda6725b45d0870af84829d3923b8e9fb0617e26b38ef50032627776ede",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/a&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d/a/', item:'d/a0'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d/a/', item:'d/a0'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2941,10 +2959,11 @@
           "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04h~2026-10-06.json",
-          "capture_sha256": "eb911183bb28c7df0121eeddfd91fa3dce9ad2c21ab492f30f14719201e08140",
+          "capture_file": "azure/captures/azure-04h~2026-06-06.json",
+          "capture_sha256": "a38da1ca05b1b6550e36e81aea9a811a3baf4b00a1a6b7aa03578c07e70a1a19",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=%7C",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2967,10 +2986,11 @@
           "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', prefix:'d/a/1', prefix:'d/a/m/1', item:'d/a/z', item:'d/a0', prefix:'d/b/1', item:'d/b/2', item:'d/c', prefix:'d/e/1', item:'d/f-g-h', prefix:'d/f-g/1'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04i~2026-10-06.json",
-          "capture_sha256": "aca4a5dc806228962d9b302c8b03a312b00a8dcec2c84e32d95c30a4d481fe9d",
+          "capture_file": "azure/captures/azure-04i~2026-06-06.json",
+          "capture_sha256": "9d383ec7959bbfcfecfff9c06dd1d972f1d57203f1d89640cb37c46613dc0707",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/1",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', prefix:'d/a/1', prefix:'d/a/m/1', item:'d/a/z', item:'d/a0', prefix:'d/b/1', item:'d/b/2', item:'d/c', prefix:'d/e/1', item:'d/f-g-h', prefix:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', prefix:'d/a/1', prefix:'d/a/m/1', item:'d/a/z', item:'d/a0', prefix:'d/b/1', item:'d/b/2', item:'d/c', prefix:'d/e/1', item:'d/f-g-h', prefix:'d/f-g/1'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -2993,10 +3013,11 @@
           "expected_result": "page 1: HTTP 200, 11 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', prefix:'d/f-g'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04j~2026-10-06.json",
-          "capture_sha256": "b83818c466e4db7ca14e4fbe3b6316699063e0527ead4dd328eec614812d27da",
+          "capture_file": "azure/captures/azure-04j~2026-06-06.json",
+          "capture_sha256": "706e7e89698ec11ad948b8c0b58fc3e0231fd05712853ff7d703e5cd1d00bb29",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=-g",
-          "expected_result": "page 1: HTTP 200, 11 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', prefix:'d/f-g'], terminal"
+          "expected_result": "page 1: HTTP 200, 11 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', prefix:'d/f-g'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3019,10 +3040,11 @@
           "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04k~2026-10-06.json",
-          "capture_sha256": "c8c8c7b395d635f4d36f329a4ed33e8b686d88ddc0f15b757cfb1f0bdc529275",
+          "capture_file": "azure/captures/azure-04k~2026-06-06.json",
+          "capture_sha256": "b8bcfd82fba22b74b641f3aebe38f1909e0499ad38f1ac517076ef9e935d4b67",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3045,10 +3067,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [prefix:'probe/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04l~2026-10-06.json",
-          "capture_sha256": "481f422d0a29fa3dfbc7a82ff2068bd1d8efe72eb738eccb86eb9968cf8cfcbb",
+          "capture_file": "azure/captures/azure-04l~2026-06-06.json",
+          "capture_sha256": "54456f9e3b00b063a0e669e3b3c75df69cc587b1a4a38ecf1b70a32a319bd31d",
           "probe_request": "GET /{container}?restype=container&comp=list&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'probe/'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'probe/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3071,10 +3094,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d/a/'], continues; page 2: HTTP 200, 1 entries [item:'d/a0'], continues; page 3: HTTP 200, 1 entries [prefix:'d/b/'], continues; page 4: HTTP 200, 1 entries [item:'d/c'], continues; page 5: HTTP 200, 1 entries [prefix:'d/e/'], continues; page 6: HTTP 200, 1 entries [item:'d/f-g-h'], continues; page 7: HTTP 200, 1 entries [prefix:'d/f-g/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-04m~2026-10-06.json",
-          "capture_sha256": "6f13eb731134294bda47619087882e1147583b827353bf6a0e24fe72ea493486",
+          "capture_file": "azure/captures/azure-04m~2026-06-06.json",
+          "capture_sha256": "435f785bcda78e01dea9c000fe407a682da5dfde7222014308889e6a7bd8a4d1",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/a/m&maxresults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d/a/'], continues; page 2: HTTP 200, 1 entries [item:'d/a0'], continues; page 3: HTTP 200, 1 entries [prefix:'d/b/'], continues; page 4: HTTP 200, 1 entries [item:'d/c'], continues; page 5: HTTP 200, 1 entries [prefix:'d/e/'], continues; page 6: HTTP 200, 1 entries [item:'d/f-g-h'], continues; page 7: HTTP 200, 1 entries [prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d/a/'], continues; page 2: HTTP 200, 1 entries [item:'d/a0'], continues; page 3: HTTP 200, 1 entries [prefix:'d/b/'], continues; page 4: HTTP 200, 1 entries [item:'d/c'], continues; page 5: HTTP 200, 1 entries [prefix:'d/e/'], continues; page 6: HTTP 200, 1 entries [item:'d/f-g-h'], continues; page 7: HTTP 200, 1 entries [prefix:'d/f-g/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3097,10 +3121,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k02'], continues; page 2: HTTP 200, 1 entries [item:'r/k03'], continues; page 3: HTTP 200, 1 entries [item:'r/k05'], continues; page 4: HTTP 200, 1 entries [item:'r/k06'], continues; page 5: HTTP 200, 1 entries [item:'r/k07'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-05a~2026-10-06.json",
-          "capture_sha256": "613376985b646c82fb7f53d44ab24c2c6dac1b7d5cae2d1b16e38a361b69882f",
+          "capture_file": "azure/captures/azure-05a~2026-06-06.json",
+          "capture_sha256": "ebe5fcb2e9fa4428a1892ddef89e7c07d88d83434c53a0e585393140d65ee7ee",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k02&maxresults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k02'], continues; page 2: HTTP 200, 1 entries [item:'r/k03'], continues; page 3: HTTP 200, 1 entries [item:'r/k05'], continues; page 4: HTTP 200, 1 entries [item:'r/k06'], continues; page 5: HTTP 200, 1 entries [item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k02'], continues; page 2: HTTP 200, 1 entries [item:'r/k03'], continues; page 3: HTTP 200, 1 entries [item:'r/k05'], continues; page 4: HTTP 200, 1 entries [item:'r/k06'], continues; page 5: HTTP 200, 1 entries [item:'r/k07'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3123,10 +3148,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k03'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-05b~2026-10-06.json",
-          "capture_sha256": "7e79c1052af9e49216189aec1074fff068644600af9be05d9eec1a3ee051376a",
+          "capture_file": "azure/captures/azure-05b~2026-06-06.json",
+          "capture_sha256": "73adbde4d2a4bf4fe5236678d3671b55ca782827d48d11aca156b810c6f35775",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k06&maxresults=1&marker=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b56506156e5fb169d24d39",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k03'], continues"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k03'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3149,10 +3175,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-05c~2026-10-06.json",
-          "capture_sha256": "5e5d1d4ffac63e7041bb33e60e291a4c38a61b752823ef8a8322840d5a6f5d84",
+          "capture_file": "azure/captures/azure-05c~2026-06-06.json",
+          "capture_sha256": "8b6043e09bb55ed5140fa4bd7727e8b9f2a22c71b6b8b7af960164bf465d7b4f",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k01&maxresults=2&marker=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b56506156e5fb169d24d39",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3175,10 +3202,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k03'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-05d~2026-10-06.json",
-          "capture_sha256": "920a0c72060ef47f608168e24a9e5112971511077a71f68dd4a752f88fa8ac2f",
+          "capture_file": "azure/captures/azure-05d~2026-06-06.json",
+          "capture_sha256": "bef99edd63e11fa304cd22a3fd3e61029083c8d0a58b0de78df5d8d2bedf89f6",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=1&marker=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b56506156e5fb169d24d39",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k03'], continues"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k03'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3201,10 +3229,11 @@
           "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-06a~2026-10-06.json",
-          "capture_sha256": "2f667f633387053266471fc547e6dd719315cc6341d828900e39ac1173a2f3a0",
+          "capture_file": "azure/captures/azure-06a~2026-06-06.json",
+          "capture_sha256": "e8925d287db3728e4dca798a134b238895052af8c6717e55fe3403f8e4f1d80a",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/",
-          "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
+          "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3227,10 +3256,11 @@
           "expected_result": "page 1: HTTP 200, 4 entries [item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-06b~2026-10-06.json",
-          "capture_sha256": "54af6c3598764c13bda6dc7057f79e20269a21f7e274dbb8e71942d535e1da30",
+          "capture_file": "azure/captures/azure-06b~2026-06-06.json",
+          "capture_sha256": "58c222baea1d6a0fd05b119ea4387dfa50943913dddaea2f46b1e8bba752c8a8",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/&startFrom=probe/r20261021t172702z-4109e13b/u/%EE%80%80",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3253,10 +3283,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'u/\\xe9'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-06c~2026-10-06.json",
-          "capture_sha256": "f9ed5a46e69e2d2679c1f615b7632b223a89d0f5f6c1970605774aeca5aefc62",
+          "capture_file": "azure/captures/azure-06c~2026-06-06.json",
+          "capture_sha256": "8f51c266b4bb4ad9bf140ff59261e51249ea4713cbe91aadc15eb03b73f401a0",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/%C3%A9",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/\\xe9'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/\\xe9'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3279,10 +3310,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'u/E'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-06d~2026-10-06.json",
-          "capture_sha256": "7e0e5837c1555fed2b1290fb23e8438b9c105b6186f58c1d0451f0fb81f21789",
+          "capture_file": "azure/captures/azure-06d~2026-06-06.json",
+          "capture_sha256": "10934eaff3a208c194f781206d2439ed4f2a7c2be20812bc6ec9b4f92b602992",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/E",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/E'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/E'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3305,10 +3337,11 @@
           "expected_result": "page 1: HTTP 200, 6 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-06e~2026-10-06.json",
-          "capture_sha256": "e51a0ed94213fb72c0e8cc81684b94aa9834a765426f6f9696e94808eb4dbc53",
+          "capture_file": "azure/captures/azure-06e~2026-06-06.json",
+          "capture_sha256": "19fef0b90429161352a956eee0951680ee525185bf6d6a087a8761f07e369b02",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/&startFrom=probe/r20261021t172702z-4109e13b/u/%f0%9f%98%80",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3331,10 +3364,11 @@
           "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', prefix:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-06f~2026-10-06.json",
-          "capture_sha256": "b6f1d00dc02ae94e572e33c399924a0c58aab7ca50de566e677e32fff8a90f6d",
+          "capture_file": "azure/captures/azure-06f~2026-06-06.json",
+          "capture_sha256": "ff6ca80f46fa26247e0d37e4f2b9eb7106a0c5d488630b9a25272fc44e04e195",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/&delimiter=%C3%A9",
-          "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', prefix:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
+          "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', prefix:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3357,10 +3391,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07a~2026-10-06.json",
-          "capture_sha256": "d3cea9e87bf778d0c61a663a0c409e4ade755da842003bc6c2c686bf5265d09a",
+          "capture_file": "azure/captures/azure-07a~2026-06-06.json",
+          "capture_sha256": "0fdcf81044424fa01c4b1f57461a151b992b13f673534c85ddc378c926eb009f",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a+b",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3383,10 +3418,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07b~2026-10-06.json",
-          "capture_sha256": "b33f024ee34572206b88eb9a394881f4cbb4600a536dc44cedb1352c25ec2c2d",
+          "capture_file": "azure/captures/azure-07b~2026-06-06.json",
+          "capture_sha256": "e631e7612971e1c1db8adc00dfb89ae06aa7d95917ffa900b2a20bc29ad44254",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%2Bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3409,10 +3445,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07c~2026-10-06.json",
-          "capture_sha256": "8c43134051c825cea66f128227dc19d8b9457a02822a7d689766f0c335ba088b",
+          "capture_file": "azure/captures/azure-07c~2026-06-06.json",
+          "capture_sha256": "0cff59d8a2ae8c80a74f85cd1274026203175b1d07321155594c4d2af518fe75",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%20b",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3435,10 +3472,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%2Bb'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07d~2026-10-06.json",
-          "capture_sha256": "be87eef0169ba0166a053eacc9c7963d2e9e18748edb30015824bb6e9a7e71c6",
+          "capture_file": "azure/captures/azure-07d~2026-06-06.json",
+          "capture_sha256": "0d4d7c87bfdd235b95ab711d2035344a942fb5477e7ac99044d61df4fd214b7d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%252Bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%2Bb'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%2Bb'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3461,10 +3499,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%ZZ'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07e~2026-10-06.json",
-          "capture_sha256": "04f60aa11c5d4dc88d8ae3f25ea5d3ea77d3f434cf72bf3aab5acdc531b6b8ef",
+          "capture_file": "azure/captures/azure-07e~2026-06-06.json",
+          "capture_sha256": "119bc3a953ef2f2d6d3a82490aa0c2ccd8f2126895ad333788a4c1833b8a85cc",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%ZZ",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%ZZ'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%ZZ'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3487,10 +3526,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/pct%'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07f~2026-10-06.json",
-          "capture_sha256": "4c1cf63b08a7fe57761f48df0639beac925fbec3eebfd72445531001ecc4bbf9",
+          "capture_file": "azure/captures/azure-07f~2026-06-06.json",
+          "capture_sha256": "ec6036268610e8e8822fd12ee3876ad4fc3997eb7390ef0212ca0b6078676d81",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/pct%",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/pct%'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/pct%'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3513,10 +3553,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/\\ufffd'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07g~2026-10-06.json",
-          "capture_sha256": "a7d4010f0a86643b3ed2deeebab4a6b52ee55de03effbc28050d1af7dbe40a85",
+          "capture_file": "azure/captures/azure-07g~2026-06-06.json",
+          "capture_sha256": "c396fb082874a14276f40909c06499057bf1fb428bd0af0b1057996a4ba3adc8",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/%FF",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/\\ufffd'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3539,10 +3580,11 @@
           "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07h~2026-10-06.json",
-          "capture_sha256": "4f1fb63bef8dd9640d0a83538ba37a7e8eba7759507684ba6ef99661a6464c80",
+          "capture_file": "azure/captures/azure-07h~2026-06-06.json",
+          "capture_sha256": "c883bf388273c6c4ab15409d9031349da609489788d5e29863e9688369c27c5b",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a&prefix=probe/r20261021t172702z-4109e13b/p/a",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3565,10 +3607,11 @@
           "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07i~2026-10-06.json",
-          "capture_sha256": "a9fa797516c2c832168764c4ce505d59f1531d94abf5c56e12398a4262fe27a1",
+          "capture_file": "azure/captures/azure-07i~2026-06-06.json",
+          "capture_sha256": "fa8e876c5228cc3807189525cec129731f017c1516bddb98f8887a2707ea268d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a&prefix=probe/r20261021t172702z-4109e13b/p/k",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3591,10 +3634,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/k&v=1'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07j~2026-10-06.json",
-          "capture_sha256": "2bce471801c7dc5d894ba95b19acac776c9df3e06e8e8bc85e58f71876a114de",
+          "capture_file": "azure/captures/azure-07j~2026-06-06.json",
+          "capture_sha256": "02aac01d5197fc075ccd68d198d4cdfead1ef7a969f4f77acae67f87fc87b138",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/k%26v%3D1",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/k&v=1'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/k&v=1'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3617,10 +3661,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/q?x'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07k~2026-10-06.json",
-          "capture_sha256": "d5dce097e69948b015555a64d58767d94897a8b1dee172c4c91ce52aba22ed38",
+          "capture_file": "azure/captures/azure-07k~2026-06-06.json",
+          "capture_sha256": "298f02a2ae509731f77b7d0dd78da21ad8d8d4f218dbc146a36edeab18aa80c9",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/q?x",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/q?x'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/q?x'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3643,10 +3688,11 @@
           "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07l~2026-10-06.json",
-          "capture_sha256": "7dcf965c7d63b4e404532b23073cdccbd1f73ed70b9f63e2577636e7b1a457cf",
+          "capture_file": "azure/captures/azure-07l~2026-06-06.json",
+          "capture_sha256": "449f8175847e14d5cfad148a21a62351bd6c01baef1dd431ae9f40d4243adcb9",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe%2Fr20261021t172702z-4109e13b%2Fp%2F",
-          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3669,10 +3715,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07m~2026-10-06.json",
-          "capture_sha256": "5d51d7f91ce928776116676fac0baf88b988c19a6b1d3575fc9a9728f732681d",
+          "capture_file": "azure/captures/azure-07m~2026-06-06.json",
+          "capture_sha256": "fcbcc5a9b3b53688502a98d096b5e74b2e7635f82f4b8652387aa2c0ecfde910",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%2bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3695,10 +3742,11 @@
           "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07n~2026-10-06.json",
-          "capture_sha256": "d63a9796adb94030162617e97a4fa7ec67c241b0e4b23377f0cae941faea5214",
+          "capture_file": "azure/captures/azure-07n~2026-06-06.json",
+          "capture_sha256": "ee8b1bbe823fa7b05ab61f43df7b4246c5dd9b95b38424397070f089092b5667",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/&delimiter",
-          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3721,10 +3769,11 @@
           "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07o~2026-10-06.json",
-          "capture_sha256": "61bb3c247c0e917628cbe23daa79d459134faf0b38a3442fc4a354f10d3d4325",
+          "capture_file": "azure/captures/azure-07o~2026-06-06.json",
+          "capture_sha256": "c3ce8f464452cf9b9c2768813e2843bed218d7a18a57aa191a2868db5d6ecd53",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/",
-          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3747,10 +3796,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/end '], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07p~2026-10-06.json",
-          "capture_sha256": "1cc6aede692a19d57f266ebe0bcf25d5ede5ce6f3378097a55805175860afc57",
+          "capture_file": "azure/captures/azure-07p~2026-06-06.json",
+          "capture_sha256": "06cb6ba69d119b79139a82b63f0eb64b7d31fc23952cec7ee1f36d04423ecce1",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/end%20",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/end '], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/end '], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3773,10 +3823,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'p/eq=x'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07q~2026-10-06.json",
-          "capture_sha256": "88cfbafba69027992d878c7099cf366bfc7ed7a1020d138fc7cfda8400f47b71",
+          "capture_file": "azure/captures/azure-07q~2026-06-06.json",
+          "capture_sha256": "8cec1e6fe431cd9b0a10cbba01f44979c3000dd9f314e145498c3a49df785ef2",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/eq=x",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/eq=x'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/eq=x'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3799,10 +3850,11 @@
           "expected_result": "page 1: HTTP 200, 14 entries [item:'n/Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', item:'n/bom\\ufeffx', item:'n/dots..x', item:'n/end', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Ffffe%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Fffff%EF%BF%BF', item:'n/ls\\u2028x', item:'n/nbsp\\xa0x', item:'n/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg', item:'n/sp x', item:'n/trail/', item:'n/x', item:'n/xml<&>x', item:'n/zwj\\u200dx'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07r~2026-10-06.json",
-          "capture_sha256": "8f0be0457e2adb4aba4b76028158f5fa2aa819a43ce479b9023383538673fc7f",
+          "capture_file": "azure/captures/azure-07r~2026-06-06.json",
+          "capture_sha256": "dfb1fcaebb615f9fed440bcbdecbfbd55b52acd7c105b7fa7fd72506278d9574",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/n/",
-          "expected_result": "page 1: HTTP 200, 14 entries [item:'n/Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', item:'n/bom\\ufeffx', item:'n/dots..x', item:'n/end', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Ffffe%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Fffff%EF%BF%BF', item:'n/ls\\u2028x', item:'n/nbsp\\xa0x', item:'n/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg', item:'n/sp x', item:'n/trail/', item:'n/x', item:'n/xml<&>x', item:'n/zwj\\u200dx'], terminal"
+          "expected_result": "page 1: HTTP 200, 14 entries [item:'n/Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', item:'n/bom\\ufeffx', item:'n/dots..x', item:'n/end', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Ffffe%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Fffff%EF%BF%BF', item:'n/ls\\u2028x', item:'n/nbsp\\xa0x', item:'n/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg/seg', item:'n/sp x', item:'n/trail/', item:'n/x', item:'n/xml<&>x', item:'n/zwj\\u200dx'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3825,10 +3877,11 @@
           "expected_result": "page 1: HTTP 200, 14 entries [item:'n/Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', item:'n/bom\\ufeffx', item:'n/dots..x', item:'n/end', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Ffffe%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Fffff%EF%BF%BF', item:'n/ls\\u2028x', item:'n/nbsp\\xa0x', prefix:'n/seg/', item:'n/sp x', prefix:'n/trail/', item:'n/x', item:'n/xml<&>x', item:'n/zwj\\u200dx'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07s~2026-10-06.json",
-          "capture_sha256": "b3506cd9c4db6778ba1aac7d4903d96777d50e3515d22734fc94f67f5d5027df",
+          "capture_file": "azure/captures/azure-07s~2026-06-06.json",
+          "capture_sha256": "4e7f16b73c9ebcaf9bf443d67e85bbd8765fa6d1c90f6c6d6d9efc90317c03d2",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/n/&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 14 entries [item:'n/Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', item:'n/bom\\ufeffx', item:'n/dots..x', item:'n/end', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Ffffe%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Fffff%EF%BF%BF', item:'n/ls\\u2028x', item:'n/nbsp\\xa0x', prefix:'n/seg/', item:'n/sp x', prefix:'n/trail/', item:'n/x', item:'n/xml<&>x', item:'n/zwj\\u200dx'], terminal"
+          "expected_result": "page 1: HTTP 200, 14 entries [item:'n/Lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', item:'n/bom\\ufeffx', item:'n/dots..x', item:'n/end', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Ffffe%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fn%2Fffff%EF%BF%BF', item:'n/ls\\u2028x', item:'n/nbsp\\xa0x', prefix:'n/seg/', item:'n/sp x', prefix:'n/trail/', item:'n/x', item:'n/xml<&>x', item:'n/zwj\\u200dx'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3851,10 +3904,11 @@
           "expected_result": "page 1: HTTP 200, 27 entries [item:'p/a b', item:'p/a%20b', item:'p/a%25b', …:'21 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-07t~2026-10-06.json",
-          "capture_sha256": "8fb675673f60bacceb2a6af06486847f795491048fcdd150599331dddd60d7de",
+          "capture_file": "azure/captures/azure-07t~2026-06-06.json",
+          "capture_sha256": "6339dd1767c46e972be0687c9067ef55bbe56ee8014781f61cc390d31237e407",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/&startFrom=probe/r20261021t172702z-4109e13b/p/a+b",
-          "expected_result": "page 1: HTTP 200, 27 entries [item:'p/a b', item:'p/a%20b', item:'p/a%25b', …:'21 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 27 entries [item:'p/a b', item:'p/a%20b', item:'p/a%25b', …:'21 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3877,10 +3931,11 @@
           "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08a~2026-10-06.json",
-          "capture_sha256": "2ae102675aa6f65b54d0e81e6bce9ddda89b61251e74dfa65197d953e36488a8",
+          "capture_file": "azure/captures/azure-08a~2026-06-06.json",
+          "capture_sha256": "ae822f01f4df9317a18f7edc643b8e6165516b70b5960162632455bf1c5db524",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=0",
-          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
+          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3903,10 +3958,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [item:'s/1'], continues; page 2: HTTP 200, 1 entries [item:'s/2'], continues; page 3: HTTP 200, 1 entries [item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08c~2026-10-06.json",
-          "capture_sha256": "5517a01c06bc8ac387d67e2a5875135b7319014e618f66bb89e7b78d7e26ab20",
+          "capture_file": "azure/captures/azure-08c~2026-06-06.json",
+          "capture_sha256": "43b91ac4e0ad1e692e947f0f91b6c711eeadeaeedc7678730ef8cdeeb1e7ef5a",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'s/1'], continues; page 2: HTTP 200, 1 entries [item:'s/2'], continues; page 3: HTTP 200, 1 entries [item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'s/1'], continues; page 2: HTTP 200, 1 entries [item:'s/2'], continues; page 3: HTTP 200, 1 entries [item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3929,10 +3985,11 @@
           "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08d~2026-10-06.json.gz",
-          "capture_sha256": "5a5376dc6248da26a017a1f854531835dce837cace60aa1325985685af719ca7",
+          "capture_file": "azure/captures/azure-08d~2026-06-06.json.gz",
+          "capture_sha256": "f89a700f5f08fd966521c5fc44d8abb5719307ea9da47da41ddb107cb6b5fa1d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/b/0&maxresults=5000",
-          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], terminal"
+          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3955,10 +4012,11 @@
           "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzzz'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08e~2026-10-06.json.gz",
-          "capture_sha256": "64aeb16a7103f515084d6aeb35d97fc55c90be69c506c06b6795359123ae0535",
+          "capture_file": "azure/captures/azure-08e~2026-06-06.json.gz",
+          "capture_sha256": "1603ad04f551857da584a0f6da8ba40518163b8c8723a33e8cf3c4929a274275",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/b/&maxresults=5001",
-          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzzz'], terminal"
+          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzzz'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -3981,10 +4039,11 @@
           "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08f~2026-10-06.json",
-          "capture_sha256": "edfad2d9c8755bf734b37597a0ce78f65bd65f09dfd59bc83b1277274edf566b",
+          "capture_file": "azure/captures/azure-08f~2026-06-06.json",
+          "capture_sha256": "f23e2d515d30cc3e9942a812ccbf4251164d15032d24b69becbc1c6f52541934",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=-1",
-          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
+          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4007,10 +4066,11 @@
           "expected_result": "HTTP 400 InvalidQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08g~2026-10-06.json",
-          "capture_sha256": "4438365f5d65516a16b16fbba2d15b8dcbf389352ec7430d3c805bc581d60af5",
+          "capture_file": "azure/captures/azure-08g~2026-06-06.json",
+          "capture_sha256": "2e7a43b500f48751e3058aee1c85411ce29385463e6715c9691d6a7688e88c12",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=abc",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4033,10 +4093,11 @@
           "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08h~2026-10-06.json",
-          "capture_sha256": "9a668fe0ae24ebb64cc06af84d1fe11dc0b7edbd4a0bb817cf34cfb4d4c4247a",
+          "capture_file": "azure/captures/azure-08h~2026-06-06.json",
+          "capture_sha256": "98218df6a6a0d05108a11768a27bed9b18d643c5bafdf22aee1af971b1e1c3b0",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=2147483648",
-          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
+          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4059,10 +4120,11 @@
           "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08i~2026-10-06.json",
-          "capture_sha256": "87525b158334e136047024efb111f31525d7a71cafb190c1087cf4a1d988c9ee",
+          "capture_file": "azure/captures/azure-08i~2026-06-06.json",
+          "capture_sha256": "d9775afea7e3b157c5312051f2013930f1a9346fde111ccaf105712d1cd17238",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=9223372036854775808",
-          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
+          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4085,10 +4147,11 @@
           "expected_result": "HTTP 400 InvalidQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08j~2026-10-06.json",
-          "capture_sha256": "19b60676dc0688287b9e1e81f7dbcb52f157def72cab632953e4733c6a178313",
+          "capture_file": "azure/captures/azure-08j~2026-06-06.json",
+          "capture_sha256": "28080c85e99c8efab9b75475bc315ac0e6828710fa091f263a9b10a0ecbc277f",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=1.5",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4111,10 +4174,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'s/1', item:'s/2'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08k~2026-10-06.json",
-          "capture_sha256": "4cb7e38c301ca171e9c00049aa085a9f551d39a4dd322364a7ab35c1d4d0a157",
+          "capture_file": "azure/captures/azure-08k~2026-06-06.json",
+          "capture_sha256": "a222e5110cc130a78d8ea8d6abe657b1017ec45a1776fedcd1119ab3964a4d88",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=+2",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'s/1', item:'s/2'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'s/1', item:'s/2'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4137,10 +4201,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'s/1', item:'s/2'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08l~2026-10-06.json",
-          "capture_sha256": "092b36edde48f752fe6e3f999d3ddfcbe90265f9532b49b9b8b4af181a6d92ec",
+          "capture_file": "azure/captures/azure-08l~2026-06-06.json",
+          "capture_sha256": "5eb435f035096fb90d3a87e8ea846932e7e1338fc439e3569bdbd9cbcbf1f5f5",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=002",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'s/1', item:'s/2'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'s/1', item:'s/2'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4163,10 +4228,11 @@
           "expected_result": "HTTP 400 InvalidQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08m~2026-10-06.json",
-          "capture_sha256": "4538caef33f2254e16e7d711b0a977c6c502e4813ca35f9af89b96328e0021cd",
+          "capture_file": "azure/captures/azure-08m~2026-06-06.json",
+          "capture_sha256": "db9a9456b3f9dde70b258c31067721773877b2f5ad28185d04a15fdc3dc410ae",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=1&maxresults=2",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4189,10 +4255,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08n~2026-10-06.json",
-          "capture_sha256": "28d92c498cad0c31d0bede826b6c4a3389428f660814bf272f2579347a9e05ea",
+          "capture_file": "azure/captures/azure-08n~2026-06-06.json",
+          "capture_sha256": "846cebf7349538964a5aefad9f6f17652c7afe56e84a16ee636fe24ab4351d1d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4215,10 +4282,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08o~2026-10-06.json",
-          "capture_sha256": "fe53452648565da9bdfd7c50f1d79f77da4db864ac2489442496b28435358e04",
+          "capture_file": "azure/captures/azure-08o~2026-06-06.json",
+          "capture_sha256": "0762b28af073832745c1767d5d241f275c073c0d5b6b3b158f5eeb2ed3bcab42",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=2147483647",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4241,10 +4309,11 @@
           "expected_result": "HTTP 403 AuthenticationFailed"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-08p~2026-10-06.json",
-          "capture_sha256": "ac6e5b3c2bb0ad673d1326c9905ec227101a0c1bb209a8fcd39e594a69a538af",
+          "capture_file": "azure/captures/azure-08p~2026-06-06.json",
+          "capture_sha256": "1b54e09db68a172c689bef03c9afcd44269ee3eae501089c87385456e18133f8",
           "probe_request": "GET /{container}?restype=container&comp=list&restype=container&prefix=probe/r20261021t172702z-4109e13b/s/",
-          "expected_result": "HTTP 403 AuthenticationFailed"
+          "expected_result": "HTTP 403 AuthenticationFailed",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4267,10 +4336,11 @@
           "expected_result": "page 1: HTTP 200, 1 entries [prefix:'b/'], continues; page 2: HTTP 200, 1 entries [prefix:'d/'], continues; page 3: HTTP 200, 1 entries [prefix:'n/'], continues; page 4: HTTP 200, 1 entries [prefix:'p/'], continues; page 5: HTTP 200, 1 entries [prefix:'q/'], continues; page 6: HTTP 200, 1 entries [prefix:'r/'], continues; page 7: HTTP 200, 1 entries [prefix:'s/'], continues; page 8: HTTP 200, 1 entries [prefix:'u/'], continues; page 9: HTTP 200, 1 entries [item:'x'], continues; page 10: HTTP 200, 1 entries [prefix:'x/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09a~2026-10-06.json",
-          "capture_sha256": "c12998c040c8049af9f2d6720c61eb771b858309f3390617fdf1d637e44c24dd",
+          "capture_file": "azure/captures/azure-09a~2026-06-06.json",
+          "capture_sha256": "060c3e0c3c1eecd388fae3284dc1a004c6ab2eaceae8885555f3621f860df7a0",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/&delimiter=/&maxresults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'b/'], continues; page 2: HTTP 200, 1 entries [prefix:'d/'], continues; page 3: HTTP 200, 1 entries [prefix:'n/'], continues; page 4: HTTP 200, 1 entries [prefix:'p/'], continues; page 5: HTTP 200, 1 entries [prefix:'q/'], continues; page 6: HTTP 200, 1 entries [prefix:'r/'], continues; page 7: HTTP 200, 1 entries [prefix:'s/'], continues; page 8: HTTP 200, 1 entries [prefix:'u/'], continues; page 9: HTTP 200, 1 entries [item:'x'], continues; page 10: HTTP 200, 1 entries [prefix:'x/'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'b/'], continues; page 2: HTTP 200, 1 entries [prefix:'d/'], continues; page 3: HTTP 200, 1 entries [prefix:'n/'], continues; page 4: HTTP 200, 1 entries [prefix:'p/'], continues; page 5: HTTP 200, 1 entries [prefix:'q/'], continues; page 6: HTTP 200, 1 entries [prefix:'r/'], continues; page 7: HTTP 200, 1 entries [prefix:'s/'], continues; page 8: HTTP 200, 1 entries [prefix:'u/'], continues; page 9: HTTP 200, 1 entries [item:'x'], continues; page 10: HTTP 200, 1 entries [prefix:'x/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4293,10 +4363,11 @@
           "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzzz'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09b~2026-10-06.json.gz",
-          "capture_sha256": "474295dcc1021155e59be46ae651a5fcfee24ef0cce49dddf35576068a87356d",
+          "capture_file": "azure/captures/azure-09b~2026-06-06.json.gz",
+          "capture_sha256": "4b5357aaa113da038130c6c842b09f17bbe0cf99d1adf1b7601fab975b586cc9",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/b/",
-          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzzz'], terminal"
+          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzzz'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4319,10 +4390,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09c~2026-10-06.json",
-          "capture_sha256": "41264a3a0a803dfd4789c9b3020511a4518b53f50ffd1b4c1b7ac2b0cddd2904",
+          "capture_file": "azure/captures/azure-09c~2026-06-06.json",
+          "capture_sha256": "e60794ce62d1db445ce1f02db509030f86192764575f0abc664cf872ce09ab35",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&maxresults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4345,10 +4417,11 @@
           "expected_result": "page 1: HTTP 200, 4 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05'], continues; page 2: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09e~2026-10-06.json",
-          "capture_sha256": "247333f05a23ac98284430ee90b57d04b87f876ccc09a8ed657e8f99026a1c2a",
+          "capture_file": "azure/captures/azure-09e~2026-06-06.json",
+          "capture_sha256": "1eefa4042aa845e62a30f7573f92aa22d89b3891ceb705ed448dd4c2a59c6496",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=4",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05'], continues; page 2: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05'], continues; page 2: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4371,10 +4444,11 @@
           "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09f~2026-10-06.json",
-          "capture_sha256": "701df65caa88aa62b1b9c668d3197053490ee3109dc1c8ad251fb3fc18993784",
+          "capture_file": "azure/captures/azure-09f~2026-06-06.json",
+          "capture_sha256": "b3beba0a5e8bd7f3b55ee1cd7fa0cd5b59f982979dd2956ba3690bd173093213",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/none/",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4397,10 +4471,11 @@
           "expected_result": "HTTP 400 InvalidQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09g~2026-10-06.json",
-          "capture_sha256": "a5a29b43bcc7eab77dd22cc41bbf96ccc0ea3dad8e7f29b10852c0cb318bc8b9",
+          "capture_file": "azure/captures/azure-09g~2026-06-06.json",
+          "capture_sha256": "84e6273217d754a36dbeaf2ac2880becbcbba9cc8fc5aca58f6e63907aaedd19",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2&marker=token-sha256-4e2ce20e038a8ff2acc21d6bbfc1ef550f47abb158a35f38ed5d50bba3e9a9b0",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4423,10 +4498,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09h~2026-10-06.json",
-          "capture_sha256": "566792d26102bc46cbfd9de7f2b334aa6132809f5a5a4cce3007a0bedfaf7b5f",
+          "capture_file": "azure/captures/azure-09h~2026-06-06.json",
+          "capture_sha256": "fa480bf7388100bf2ed678b7aca69189ff4e74f2b27821334f4252ccb1d058e0",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2&marker=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b56506156e5fb169d24d39",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4449,10 +4525,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'x/a', item:'x/ab'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09i~2026-10-06.json",
-          "capture_sha256": "e5e6e9356b07eea90ab6d836e34bb874f7e316af2fab905aa756bab2b9146117",
+          "capture_file": "azure/captures/azure-09i~2026-06-06.json",
+          "capture_sha256": "064bab1942db0e9adedf7df73b307e95431c615ed161e9702a8d0e2e7550caed",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/x/&maxresults=2&marker=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b56506156e5fb169d24d39",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/a', item:'x/ab'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/a', item:'x/ab'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4475,10 +4552,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k03', item:'r/k05', item:'r/k06'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09j~2026-10-06.json",
-          "capture_sha256": "6a26b837cf188624b70980096a962e22a40ba5c3da846d262597ff2dec44e722",
+          "capture_file": "azure/captures/azure-09j~2026-06-06.json",
+          "capture_sha256": "d069368368eed163e47d44bbfc007f142469b346f82198382a518178ec8a16fb",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=3&marker=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b56506156e5fb169d24d39",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k03', item:'r/k05', item:'r/k06'], continues"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k03', item:'r/k05', item:'r/k06'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4501,10 +4579,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d/a/', item:'d/a0'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09k~2026-10-06.json",
-          "capture_sha256": "31dc821439f8720639b882747d00eafc246218193c4e82d4342737fd8a71f316",
+          "capture_file": "azure/captures/azure-09k~2026-06-06.json",
+          "capture_sha256": "318f2f3a9067418c2d13eab312d31dd2ce64aab6e1a99a0cf6b077b5773722ae",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&maxresults=2&marker=token-sha256-45f7fec42244c06c2e305b7cf9b754088a40c2d36969c56df29d0a8e4b8908a3",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d/a/', item:'d/a0'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d/a/', item:'d/a0'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4527,10 +4606,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09l~2026-10-06.json",
-          "capture_sha256": "42cf87a1876e096d0658264662f4c13b2bf543ed82fdd5de8271cf85a55f10ab",
+          "capture_file": "azure/captures/azure-09l~2026-06-06.json",
+          "capture_sha256": "65d6e0072e2d37da823727ecaac81a854223ba527b2d7ee8bba9038d441a06c5",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2&marker=",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4553,10 +4633,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'d//x', item:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a/1', item:'d/a/m/1'], continues; page 3: HTTP 200, 2 entries [item:'d/a/z', item:'d/a0'], continues; page 4: HTTP 200, 2 entries [item:'d/b/1', item:'d/b/2'], continues; page 5: HTTP 200, 2 entries [item:'d/c', item:'d/e/1'], continues; page 6: HTTP 200, 2 entries [item:'d/f-g-h', item:'d/f-g/1'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09n~2026-10-06.json",
-          "capture_sha256": "9b729bb512e6fc510cc93a75037e2400504af5e8df52c8d7752a4b3974d0842b",
+          "capture_file": "azure/captures/azure-09n~2026-06-06.json",
+          "capture_sha256": "7eb16ab3bc4fac516f952e2918c70d2b9262025fa9baf990bafc6303de37fd38",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&maxresults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'d//x', item:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a/1', item:'d/a/m/1'], continues; page 3: HTTP 200, 2 entries [item:'d/a/z', item:'d/a0'], continues; page 4: HTTP 200, 2 entries [item:'d/b/1', item:'d/b/2'], continues; page 5: HTTP 200, 2 entries [item:'d/c', item:'d/e/1'], continues; page 6: HTTP 200, 2 entries [item:'d/f-g-h', item:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'d//x', item:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a/1', item:'d/a/m/1'], continues; page 3: HTTP 200, 2 entries [item:'d/a/z', item:'d/a0'], continues; page 4: HTTP 200, 2 entries [item:'d/b/1', item:'d/b/2'], continues; page 5: HTTP 200, 2 entries [item:'d/c', item:'d/e/1'], continues; page 6: HTTP 200, 2 entries [item:'d/f-g-h', item:'d/f-g/1'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4579,10 +4660,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'d/a0', item:'d/b/1'], continues"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09o~2026-10-06.json",
-          "capture_sha256": "255eb96c91db6be19d10821a151b41ae1266ad73ede9d0349bd45979afc1b2ac",
+          "capture_file": "azure/captures/azure-09o~2026-06-06.json",
+          "capture_sha256": "115e59cc051e2c41165534fb8dcf332eeda1aff6a37f65e5b857d6eab51e88fa",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&maxresults=2&marker=token-sha256-248e1a258cb4abf5e1a7e57a46c3eac43de277faf2ea04b0c56de3f3f53a5390",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'d/a0', item:'d/b/1'], continues"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'d/a0', item:'d/b/1'], continues",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4605,10 +4687,11 @@
           "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues; page 2: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues; page 3: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09q~2026-10-06.json",
-          "capture_sha256": "6df6c43849e328f6813227c49e173690b0b6f32770b6be8be92aaaac9c2f9904",
+          "capture_file": "azure/captures/azure-09q~2026-06-06.json",
+          "capture_sha256": "095fb8288579f0eeecd877e68eec5c30affc2a193ef2d717d047a8aeacc717f5",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues; page 2: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues; page 3: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues; page 2: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues; page 3: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4631,10 +4714,11 @@
           "expected_result": "HTTP 400 InvalidInput"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09r~2026-10-06.json",
-          "capture_sha256": "4b8b3b575b2acf1dab06cd542bc1f2b92573a7ee699cf78025863b1875d1f72b",
+          "capture_file": "azure/captures/azure-09r~2026-06-06.json",
+          "capture_sha256": "47261ecc9af7a6d323a828ea62b883db91f270df6383f93d0d65d2aa0f8f7aee",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2&marker=token-sha256-f5290056a2e80c9c5b04c84f60028c908ce1d9caf7027ea4c3ae8c5ff2d706bf",
-          "expected_result": "HTTP 400 InvalidInput"
+          "expected_result": "HTTP 400 InvalidInput",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4657,10 +4741,11 @@
           "expected_result": "HTTP 400 InvalidInput"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09s~2026-10-06.json",
-          "capture_sha256": "5862c47200db1a237f2847e5628c7b63fed30d569a12251e583b398de0843b0d",
+          "capture_file": "azure/captures/azure-09s~2026-06-06.json",
+          "capture_sha256": "3ed557a9487125fef2ad31e92fec7a08833cc24692100d0414850fece456755b",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2&marker=token-sha256-ba5cfeaf988178d722978bb89d95011654d6a3fc59eca528ae2dd124be25fa4c",
-          "expected_result": "HTTP 400 InvalidInput"
+          "expected_result": "HTTP 400 InvalidInput",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4683,10 +4768,11 @@
           "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09t~2026-10-06.json",
-          "capture_sha256": "6455cd75d295a6c2597371d94b6279fbefa5e03600399cb55e1338387b066f42",
+          "capture_file": "azure/captures/azure-09t~2026-06-06.json",
+          "capture_sha256": "08ce82a18fd6635be4891124e962ad785f5082bcfd7db899e86dcd35dfacb69d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/k01&maxresults=2&marker=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b56506156e5fb169d24d39",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4709,10 +4795,11 @@
           "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09u~2026-10-06.json",
-          "capture_sha256": "d67d3d437eb8b5022aed41086e8e772336d8f21cc7cb752c645d44ab780a7f0f",
+          "capture_file": "azure/captures/azure-09u~2026-06-06.json",
+          "capture_sha256": "e21e85f6c90c5104901407544bf6c13cdfeedebce0c9a913375ee2cab425d5aa",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2&endBefore=probe/r20261021t172702z-4109e13b/r/k02&marker=token-sha256-96397256a3c4d32ecbe40fe4cc7aa3e104ee156e40b56506156e5fb169d24d39",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4735,10 +4822,11 @@
           "expected_result": "HTTP 400 InvalidQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-09v~2026-10-06.json",
-          "capture_sha256": "6ed87471aafe05e953d2d7229fd02b7ac164762e9a86d7687d5f7787ed6d373a",
+          "capture_file": "azure/captures/azure-09v~2026-06-06.json",
+          "capture_sha256": "b5a9df543b99f34d5bd6897f04abe8d58ca5e1cfbf17b8f2d08fd51fa2e0f9a3",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2&marker=token-sha256-ce1bf3441b1e59f6c81ee1e3155193d27e020b65b6c215a644f3d5ffeb9c900e",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4841,10 +4929,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'q/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s', item:'q/su\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600x', item:'q/t/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-12a~2026-10-06.json",
-          "capture_sha256": "f01d338c73da87c07e41a10c89866e2e740d90dfc2080e0c291d8932032552df",
+          "capture_file": "azure/captures/azure-12a~2026-06-06.json",
+          "capture_sha256": "2d9ffa102d78ec617f7911149c0d67f52bec6868f2c53d992a72878579ba7519",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/q/",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'q/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s', item:'q/su\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600x', item:'q/t/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'q/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s', item:'q/su\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600x', item:'q/t/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4867,10 +4956,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-13a~2026-10-06.json",
-          "capture_sha256": "9574952aa231ece7b04071ab8baf6a9ea8ea56d75bbfed5a4ee74c4112fdbcb8",
+          "capture_file": "azure/captures/azure-13a~2026-06-06.json",
+          "capture_sha256": "e9721bc7dd3a723aa024030f116a67d4c449fc098208703f1ecaa9df6e1b87ee",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4893,10 +4983,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-13b~2026-10-06.json",
-          "capture_sha256": "11136702212a8784bbf87468eeab97456a5e39b75853d1b0cac7b7771d905a93",
+          "capture_file": "azure/captures/azure-13b~2026-06-06.json",
+          "capture_sha256": "84ad6ab732236672963f51c8d007f58393531aab843ec3c3d6f91f576d425131",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4919,10 +5010,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-14a~2026-10-06.json",
-          "capture_sha256": "e7f99d0d548bbde1148a441eaa7e0a42a8d8b83f92708b7d8c1a1508a9e979fb",
+          "capture_file": "azure/captures/azure-14a~2026-06-06.json",
+          "capture_sha256": "318c0e65b16dc1628c1f2524ad3a77680a33a8ba20021b65da63eb96725a170c",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&include=metadata",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4945,10 +5037,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-14b~2026-10-06.json",
-          "capture_sha256": "2738387b51970f57b7da18f4b068313ab08c51c5859d2ef97f7f45b498c4904b",
+          "capture_file": "azure/captures/azure-14b~2026-06-06.json",
+          "capture_sha256": "258ff0d64f0ccb2f57bd730ab12e406a32b7e244a690cf64f468a3c21ece56ac",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&include=",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4971,10 +5064,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-14c~2026-10-06.json",
-          "capture_sha256": "7a9222059bdcffc50ced3c5984928644969404bedba8eef873abd9eaf09d13f4",
+          "capture_file": "azure/captures/azure-14c~2026-06-06.json",
+          "capture_sha256": "a1222459af72d968f08f1972dec04165ef2fb8312474a350224c648928596275",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&include=deleted",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -4997,10 +5091,11 @@
           "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-14d~2026-10-06.json",
-          "capture_sha256": "92787285071b2bffa555543b8c67a9a884827a16eb737436a259e5119f4f8fd3",
+          "capture_file": "azure/captures/azure-14d~2026-06-06.json",
+          "capture_sha256": "bef629c7a89fb105a5d0db642ba8ee26d16aeae839e2f88c0ce146328c5f002b",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&timeout=1",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -5023,10 +5118,11 @@
           "expected_result": "HTTP 400 InvalidQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-14e~2026-10-06.json",
-          "capture_sha256": "c84e46619cf5e9cabf7ff24612e6735fb2f891ebb266538731103c53f8f906a8",
+          "capture_file": "azure/captures/azure-14e~2026-06-06.json",
+          "capture_sha256": "4aafe1c924cc0ea94150106cb44f1b310e1505e4e0ac74e5389744383f7e2a18",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&timeout=0",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -5049,10 +5145,11 @@
           "expected_result": "HTTP 400 InvalidQueryParameterValue"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-14f~2026-10-06.json",
-          "capture_sha256": "9e9382b1bfb25447a094f981156458c4abbe8ab9777d8030177ccb96527be248",
+          "capture_file": "azure/captures/azure-14f~2026-06-06.json",
+          "capture_sha256": "31cb751dadd8df073546876630452725d90a5e8a29cc2a1171bab70d94a057c3",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&timeout=abc",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
@@ -5075,10 +5172,11 @@
           "expected_result": "HTTP 400 UnsupportedQueryParameter"
         },
         "2026-10-06": {
-          "capture_file": "azure/captures/azure-14g~2026-10-06.json",
-          "capture_sha256": "d1caa53a37b5997d3aad70856bb46eaeb1d0ff435ca918a44173126960be7060",
+          "capture_file": "azure/captures/azure-14g~2026-06-06.json",
+          "capture_sha256": "f486b0d01cab2688573b14a89c7436fd00900d245a90f4e036b59a11af72e29d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&showonly=files",
-          "expected_result": "HTTP 400 UnsupportedQueryParameter"
+          "expected_result": "HTTP 400 UnsupportedQueryParameter",
+          "version_equivalence_file": "azure/version-equivalence.json"
         }
       }
     },
