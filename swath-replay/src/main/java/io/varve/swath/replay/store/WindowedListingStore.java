@@ -5,11 +5,12 @@
  */
 package io.varve.swath.replay.store;
 
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListedObject;
-import io.varve.swath.replay.server.ReplayMetrics;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,20 +21,18 @@ import java.util.Objects;
  * delegate read costs ~the same on the engine as a single {@code LIMIT 1001} page — a ~54x
  * amortization — so a sequential walk can serve ~50 pages from one delegate touch.
  *
- * <p>On a range read this store looks up a cached <b>window</b> keyed by {@code (toExclusive,
- * projection)} — the invariants a sequential walk holds constant while {@code from} advances. A window
+ * <p>On a range read this store looks up a cached <b>window</b> with compatible upper bound and
+ * projection. A window
  * is the contiguous prefix of the sorted range {@code [windowLowerBound, toExclusive)} the delegate
  * returned for one {@code windowRows}-sized read; because the fixture is immutable there is no
  * staleness, so slicing {@code [from, from+limit)} out of it is <b>byte-identical</b> to a fresh
  * delegate call for the same bounds.
  *
- * <p><b>Hit condition.</b> A lookup hits iff (1) the request's lower bound is covered by the window
- * (the window's own lower bound is at or below the request's, so no earlier row is missing) and (2)
- * the window holds at least {@code limit} rows at/after {@code from}, <b>or</b> the window is
- * delegate-final (the delegate returned fewer than {@code windowRows}, so the range is exhausted and a
- * short tail is the true, complete answer). Any other case is a miss: the window is too short and
- * non-final, or the position is uncovered — a miss re-fills and is only ever a perf event, never a
- * correctness one.
+ * <p><b>Hit condition.</b> The cached range contains the requested lower and upper bounds and
+ * supplies {@code limit} qualifying rows, or proves a shorter answer by an observed key at/above
+ * the requested upper bound or by a delegate-final fill. A bounded join of two overlapping or
+ * touching contiguous windows can also satisfy one request. Any unproven suffix misses and reads
+ * the delegate; cache state never decides listing correctness.
  *
  * <p><b>Concurrency.</b> A small shared LRU of windows (default {@code max-windows}) is guarded by one
  * plain lock that protects only the map — windows are immutable lists, so a hit reads them lock-free
@@ -41,9 +40,9 @@ import java.util.Objects;
  * walks (the work-stealing scan's client) never serialize on a fill.
  *
  * <p>The cache is keyed by {@code (toExclusive, projection, windowLowerBound)} and looked up by
- * <b>coverage</b>, not by equality: a lookup scans the (at most {@code max-windows}) entries sharing
- * the request's {@code (toExclusive, projection)} and picks the covering window with the greatest
- * lower bound. Position <b>must</b> be part of the identity: a real S3 {@code ListObjectsV2} carries
+ * <b>coverage</b>, not by equality: a lookup scans the (at most {@code max-windows}) entries with
+ * compatible projection and upper bound, then tests the tightest lower bounds first. Position
+ * <b>must</b> be part of the identity: a real S3 {@code ListObjectsV2} carries
  * no upper bound, so every {@code worker_page} and every single-row pivot probe a work-stealing scan
  * issues arrives here with {@code toExclusive == null} and the same projection. Keying on the bounds
  * alone therefore funnels an entire 64-worker fleet — walkers and probes alike — through <b>one</b>
@@ -51,9 +50,10 @@ import java.util.Objects;
  * collapses to zero. The scan is over a knob-bounded, tiny map and costs microseconds against a
  * delegate read's milliseconds.
  *
- * <p><b>Eviction.</b> Eager: when a serve consumes through a delegate-final window's last row the
- * window is dead and is dropped immediately. LRU (bounded {@code max-windows}) is the backstop. Memory
- * is bounded by {@code max-windows × window-rows × row footprint}, a function of config and never of
+ * <p><b>Eviction.</b> Shared windows remain until ordinary LRU eviction. Entry count and aggregate
+ * cached rows are bounded by {@code max-windows} and {@code max-windows × window-rows}; a rounded
+ * continuation fill can exceed one window's nominal row count but never increases the global cap.
+ * Memory remains a function of config and never of
  * fixture size N (I11 spirit). The default permits 1.2M materialised rows and can therefore retain
  * hundreds of MiB, not merely a few tens: v1 holds full object graphs. A packed-window follow-up is a
  * deliberate, separately measured next rung, not built here.
@@ -95,9 +95,12 @@ public final class WindowedListingStore implements ListingStore {
     private final ListingStore delegate;
     private final ReplayMetrics metrics;
     private final int windowRows;
+    private final int maxWindows;
+    private final long maxCachedRows;
     private final Object lock = new Object();
     private final LinkedHashMap<WindowKey, Window> windows;
     private final LinkedHashMap<ByteKey, Integer> continuationAnchors;
+    private long cachedRows;
 
     public WindowedListingStore(ListingStore delegate, ReplayMetrics metrics, int windowRows, int maxWindows) {
         if (windowRows < 1) {
@@ -109,17 +112,10 @@ public final class WindowedListingStore implements ListingStore {
         this.delegate = delegate;
         this.metrics = metrics;
         this.windowRows = windowRows;
-        this.windows = new LinkedHashMap<>(16, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<WindowKey, Window> eldest) {
-                boolean evict = size() > maxWindows;
-                if (evict) {
-                    metrics.recordPrefetchWindowEviction();
-                }
-                return evict;
-            }
-        };
-        int maxAnchors = maxWindows * ANCHORS_PER_WINDOW;
+        this.maxWindows = maxWindows;
+        this.maxCachedRows = (long) windowRows * maxWindows;
+        this.windows = new LinkedHashMap<>(16, 0.75f, true);
+        int maxAnchors = (int) Math.min(Integer.MAX_VALUE, (long) maxWindows * ANCHORS_PER_WINDOW);
         this.continuationAnchors = new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<ByteKey, Integer> eldest) {
@@ -131,6 +127,7 @@ public final class WindowedListingStore implements ListingStore {
             }
         };
         metrics.registerPrefetchCacheGauges(this::liveWindows, this::liveAnchors);
+        metrics.registerPrefetchCachedRowsGauge(this::liveCachedRows);
     }
 
     /** Prefetch configuration resolved from {@code swath.replay.prefetch.*} system properties. */
@@ -155,6 +152,14 @@ public final class WindowedListingStore implements ListingStore {
     }
 
     @Override
+    public List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
+                                                byte[] prefix, byte[] delimiter, int limit, Projection projection,
+                                                boolean suppressPrefixAtOrBeforeFloor) {
+        return delegate.delimitedRollup(from, fromInclusive, toExclusive, prefix, delimiter, limit, projection,
+                suppressPrefixAtOrBeforeFloor);
+    }
+
+    @Override
     public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
                                    Projection projection) {
         return serve(from, fromInclusive, toExclusive, limit, projection);
@@ -162,70 +167,188 @@ public final class WindowedListingStore implements ListingStore {
 
     private List<ListedObject> serve(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
                                      Projection projection) {
-        WindowKey covering = null;
-        Window window = null;
-        synchronized (lock) {
-            covering = findCovering(toExclusive, projection, from, fromInclusive);
-            if (covering != null) {
-                window = windows.get(covering);   // re-get so the LRU records the access
-            }
+        if (limit < 1) {
+            return delegate.rows(from, fromInclusive, toExclusive, limit, projection);
         }
-        if (window != null) {
-            Served hit = window.tryServe(from, fromInclusive, limit);
-            if (hit != null) {
+        if (limit > windowRows) {
+            metrics.recordPrefetchUncached("request_exceeds_window");
+            metrics.recordPrefetchMiss(MISS_COLD);
+            metrics.recordPrefetchFillRows(limit);
+            return fill(from, fromInclusive, toExclusive, projection, limit);
+        }
+        List<WindowCandidate> all = snapshotCandidates();
+        List<WindowCandidate> candidates = new ArrayList<>();
+        for (WindowCandidate candidate : all) {
+            if (candidate.key().projection().equals(projection)
+                    && upperContains(candidate.key().toExclusive(), toExclusive)) candidates.add(candidate);
+        }
+        candidates.sort(Comparator.comparing(WindowCandidate::key, (a, b) ->
+                compareLower(b.lowerBound(), a.lowerBound())));
+        boolean hadCover = false;
+        List<WindowCandidate> partials = new ArrayList<>();
+        for (WindowCandidate candidate : candidates) {
+            if (!candidate.window().coversLowerBound(from, fromInclusive)) continue;
+            WindowProbe probe = candidate.window().probe(from, fromInclusive, toExclusive);
+            if (probe == null || probe.size() == 0 && !probe.complete()) continue;
+            hadCover = true;
+            if (probe.size() >= limit || probe.complete()) {
+                List<ListedObject> page = candidate.window().slice(probe.start(), probe.end(), limit);
+                metrics.recordPrefetchSelection(Objects.equals(candidate.key().toExclusive(), toExclusive)
+                        ? "single_exact_bound" : "single_contained_bound");
                 metrics.recordPrefetchHit();
                 synchronized (lock) {
-                    if (hit.exhausted()) {
-                        windows.remove(covering, window);
-                    }
-                    registerAnchors(hit.rows(), windowRows);
+                    touch(candidate);
+                    registerAnchors(page, ceilingRows(limit));
                 }
-                return hit.rows();
+                return page;
             }
+            partials.add(candidate);
         }
+        // Try joins only after every single candidate has had a chance to answer. A tighter short
+        // window must not hide an older but sufficient one or force an unnecessary allocation.
+        String joinDecline = null;
+        for (WindowCandidate candidate : partials) {
+            WindowProbe probe = candidate.window().probe(from, fromInclusive, toExclusive);
+            JoinAttempt attempt = tryJoin(candidate, probe, all, projection, toExclusive, limit);
+            Join joined = attempt.join();
+            if (joined != null) {
+                metrics.recordPrefetchJoin("hit");
+                metrics.recordPrefetchSelection("two_window_join");
+                metrics.recordPrefetchHit();
+                synchronized (lock) {
+                    touch(candidate);
+                    touch(joined.second());
+                    registerAnchors(joined.rows(), ceilingRows(limit));
+                }
+                return joined.rows();
+            }
+            if (joinDecline == null) joinDecline = attempt.declineReason();
+        }
+        if (joinDecline != null) metrics.recordPrefetchJoin(joinDecline);
+        metrics.recordPrefetchSelection(hadCover ? "insufficient" : "no_cover");
         // A miss carries its own reason: `continuation` when this position was registered as the
         // tail of a page we previously served (a paginating client walking forward, which is worth
         // prefetching for) versus `cold` (a one-shot probe or a seek into unvisited keyspace, which
         // is not). See rampedFill.
-        FillDecision decision = rampedFill(from, limit);
+        FillDecision decision = rampedFill(from, fromInclusive, limit);
         int requested = decision.requested();
+        if (decision.continuation() && ceilingRows(limit) > maxCachedRows) {
+            requested = limit;
+            metrics.recordPrefetchUncached("rounded_exceeds_row_budget");
+        }
         metrics.recordPrefetchMiss(decision.continuation() ? MISS_CONTINUATION : MISS_COLD);
         metrics.recordPrefetchFillRows(requested);
         List<ListedObject> filled = fill(from, fromInclusive, toExclusive, projection, requested);
         Window refreshed = new Window(filled, from, fromInclusive, filled.size() < requested);
-        Served served = refreshed.serveFromStart(limit);
+        List<ListedObject> served = refreshed.slice(0, refreshed.rows.size(), limit);
         synchronized (lock) {
-            // Cache only a window that has rows left to serve after this page. An exact-`limit` fill
-            // (every probe, and the first page of any walk) is fully consumed here, so retaining it
-            // would evict a live walker's window to hold a spent one — the pollution that makes a
-            // coverage lookup degrade back toward the single-slot behaviour it replaces.
-            if (!served.exhausted() && filled.size() > served.rows().size()) {
-                windows.put(new WindowKey(toExclusive, projection, from, fromInclusive), refreshed);
+            // A final window remains useful to lagging walkers, even after this caller consumes it.
+            // Ordinary cold reads with no surplus are one-shot probes and do not enter the LRU.
+            if (!filled.isEmpty() && (filled.size() > served.size() || refreshed.delegateFinal)) {
+                publish(new WindowKey(toExclusive, projection, from, fromInclusive), refreshed);
             }
-            registerAnchors(served.rows(), Math.min(requested * FILL_RAMP_FACTOR, windowRows));
+            registerAnchors(served, ceilingRows(limit) > maxCachedRows ? limit : nextFill(requested, limit));
         }
-        return served.rows();
+        return served;
     }
 
-    /**
-     * The covering window for {@code from} under {@code (toExclusive, projection)}: of the windows
-     * whose buffered range starts at or below the request, the one with the <b>greatest</b> lower
-     * bound, i.e. the tightest fit and so the one most likely to still hold {@code limit} rows ahead
-     * of {@code from}. Called under {@link #lock}; the scan is bounded by {@code max-windows}.
-     */
-    private WindowKey findCovering(ByteKey toExclusive, Projection projection, ByteKey from, boolean fromInclusive) {
-        WindowKey best = null;
-        for (Map.Entry<WindowKey, Window> entry : windows.entrySet()) {
-            WindowKey candidate = entry.getKey();
-            if (!candidate.sameBounds(toExclusive, projection)
-                    || !entry.getValue().coversLowerBound(from, fromInclusive)) {
-                continue;
-            }
-            if (best == null || best.precedes(candidate)) {
-                best = candidate;
+    /** Snapshot immutable candidates under the lock; qualifying and sorting happen outside it. */
+    private List<WindowCandidate> snapshotCandidates() {
+        List<WindowCandidate> candidates = new ArrayList<>();
+        synchronized (lock) {
+            for (Map.Entry<WindowKey, Window> entry : windows.entrySet()) {
+                candidates.add(new WindowCandidate(entry.getKey(), entry.getValue()));
             }
         }
-        return best;
+        return candidates;
+    }
+
+    private static int compareLower(ByteKey a, ByteKey b) {
+        return a == null ? (b == null ? 0 : -1) : (b == null ? 1 : a.compareTo(b));
+    }
+
+    private static boolean upperContains(ByteKey cached, ByteKey requested) {
+        return cached == null || requested != null && cached.compareTo(requested) >= 0;
+    }
+
+    private JoinAttempt tryJoin(WindowCandidate first, WindowProbe firstProbe, List<WindowCandidate> candidates,
+                                Projection projection, ByteKey toExclusive, int limit) {
+        if (firstProbe.size() == 0) {
+            throw new IllegalStateException("join needs a nonempty first window slice");
+        }
+        byte[] lastBytes = first.window().rows.get(firstProbe.end() - 1).key();
+        ByteKey last = ByteKey.copyOf(lastBytes);
+        int needed = limit - firstProbe.size();
+        WindowCandidate best = null;
+        WindowProbe bestProbe = null;
+        boolean gap = false, projectionMismatch = false, upperMismatch = false, insufficient = false;
+        for (WindowCandidate second : candidates) {
+            if (second == first) continue;
+            if (!second.window().coversLowerBound(last, false)) {
+                if (second.key().projection().equals(projection)
+                        && upperContains(second.key().toExclusive(), toExclusive)
+                        && compareLower(second.key().lowerBound(), last) > 0) gap = true;
+                continue;
+            }
+            if (!second.key().projection().equals(projection)) {
+                projectionMismatch = true;
+                continue;
+            }
+            if (!upperContains(second.key().toExclusive(), toExclusive)) {
+                upperMismatch = true;
+                continue;
+            }
+            WindowProbe probe = second.window().probe(last, false, toExclusive);
+            if (probe == null || probe.size() < needed && !probe.complete()) {
+                insufficient = true;
+                continue;
+            }
+            if (bestProbe == null || probe.size() > bestProbe.size()) {
+                best = second;
+                bestProbe = probe;
+            }
+        }
+        if (best == null) {
+            String reason = insufficient ? "insufficient_second" : upperMismatch ? "upper_bound"
+                    : projectionMismatch ? "projection" : gap ? "gap" : "no_second";
+            return new JoinAttempt(null, reason);
+        }
+        List<ListedObject> page = new ArrayList<>(Math.min(limit, firstProbe.size() + bestProbe.size()));
+        page.addAll(first.window().rows.subList(firstProbe.start(), firstProbe.end()));
+        int take = Math.min(needed, bestProbe.size());
+        page.addAll(best.window().rows.subList(bestProbe.start(), bestProbe.start() + take));
+        return new JoinAttempt(new Join(page, best), null);
+    }
+
+    private void touch(WindowCandidate candidate) {
+        // LinkedHashMap.get refreshes LRU. Immutable snapshots remain valid if concurrently evicted.
+        windows.get(candidate.key());
+    }
+
+    private void publish(WindowKey key, Window window) {
+        if (window.rows.size() > maxCachedRows) {
+            metrics.recordPrefetchUncached("window_exceeds_row_budget");
+            return;
+        }
+        Window replaced = windows.remove(key);
+        if (replaced != null) cachedRows -= replaced.rows.size();
+        while (!windows.isEmpty() && (windows.size() >= maxWindows
+                || cachedRows + window.rows.size() > maxCachedRows)) {
+            boolean rowBudgetExceeded = cachedRows + window.rows.size() > maxCachedRows;
+            Map.Entry<WindowKey, Window> eldest = windows.entrySet().iterator().next();
+            windows.remove(eldest.getKey());
+            cachedRows -= eldest.getValue().rows.size();
+            metrics.recordPrefetchWindowEviction();
+            if (rowBudgetExceeded) metrics.recordPrefetchRowBudgetEviction();
+        }
+        windows.put(key, window);
+        cachedRows += window.rows.size();
+    }
+
+    private long liveCachedRows() {
+        synchronized (lock) {
+            return cachedRows;
+        }
     }
 
     /**
@@ -255,17 +378,28 @@ public final class WindowedListingStore implements ListingStore {
      * {@code requested > limit}, so that config can't mislabel a continuation as {@code cold} — the
      * exact signal {@code MISS_CONTINUATION}/{@code MISS_COLD} exists to give.
      */
-    private FillDecision rampedFill(ByteKey from, int limit) {
+    private FillDecision rampedFill(ByteKey from, boolean fromInclusive, int limit) {
         Integer anchored;
         synchronized (lock) {
-            anchored = from == null ? null : continuationAnchors.remove(from);
+            anchored = from == null || fromInclusive ? null : continuationAnchors.remove(from);
         }
         if (anchored != null) {
             metrics.recordPrefetchAnchor("claimed");
+            metrics.recordPrefetchRampCeiling(ceilingRows(limit));
         }
         return anchored == null
                 ? new FillDecision(limit, false)
-                : new FillDecision(Math.max(limit, anchored), true);
+                : new FillDecision(Math.max(limit, Math.min(anchored, ceilingRows(limit))), true);
+    }
+
+    private int ceilingRows(int limit) {
+        long rounded = ((long) windowRows + limit - 1) / limit * limit;
+        return (int) Math.min(Integer.MAX_VALUE, rounded);
+    }
+
+    private int nextFill(int requested, int limit) {
+        return (int) Math.min(ceilingRows(limit), Math.min(Integer.MAX_VALUE,
+                (long) requested * FILL_RAMP_FACTOR));
     }
 
     /** A miss's fill size, plus whether a continuation anchor (not merely its size) drove it. */
@@ -325,32 +459,21 @@ public final class WindowedListingStore implements ListingStore {
             this.delegateFinal = delegateFinal;
         }
 
-        /** A hit at the top of this window (the just-filled or continuation case where {@code from} is
-         *  the window's own lower bound). */
-        Served serveFromStart(int limit) {
-            return slice(0, limit);
-        }
-
-        /** Serves {@code [from, from+limit)} from this window, or {@code null} on a miss. */
-        Served tryServe(ByteKey from, boolean fromInclusive, int limit) {
+        /** Identifies request-qualified rows and whether a short answer is proven final. */
+        WindowProbe probe(ByteKey from, boolean fromInclusive, ByteKey toExclusive) {
             if (!coversLowerBound(from, fromInclusive)) {
                 return null;
             }
             int start = startIndex(from, fromInclusive);
-            int available = rows.size() - start;
-            if (available >= limit || delegateFinal) {
-                return slice(start, limit);
-            }
-            return null;
+            int end = toExclusive == null ? rows.size() : startIndex(toExclusive, true);
+            return new WindowProbe(start, Math.max(start, end), end < rows.size() || delegateFinal);
         }
 
-        private Served slice(int start, int limit) {
-            int end = Math.min(start + limit, rows.size());
+        private List<ListedObject> slice(int start, int end, int limit) {
+            int sliceEnd = Math.min(start + limit, end);
             // Copy the ≤limit-row slice so the returned page never retains the whole window's backing
             // array (a subList view would keep all ~windowRows rows alive for the page's lifetime).
-            List<ListedObject> page = new ArrayList<>(rows.subList(start, end));
-            boolean exhausted = delegateFinal && end == rows.size();
-            return new Served(page, exhausted);
+            return new ArrayList<>(rows.subList(start, sliceEnd));
         }
 
         /** True iff every row this request would return is present in the window, i.e. the request's
@@ -395,9 +518,12 @@ public final class WindowedListingStore implements ListingStore {
         }
     }
 
-    /** A served page plus whether serving it consumed a delegate-final window through its last row. */
-    private record Served(List<ListedObject> rows, boolean exhausted) {
+    private record WindowCandidate(WindowKey key, Window window) { }
+    private record WindowProbe(int start, int end, boolean complete) {
+        int size() { return end - start; }
     }
+    private record Join(List<ListedObject> rows, WindowCandidate second) { }
+    private record JoinAttempt(Join join, String declineReason) { }
 
     /**
      * The window cache key: a sequential walk's constant bounds <b>plus its position</b>. The bounds
@@ -406,17 +532,6 @@ public final class WindowedListingStore implements ListingStore {
      */
     private record WindowKey(ByteKey toExclusive, Projection projection, ByteKey lowerBound, boolean lowerInclusive) {
 
-        boolean sameBounds(ByteKey otherToExclusive, Projection otherProjection) {
-            return Objects.equals(toExclusive, otherToExclusive) && projection.equals(otherProjection);
-        }
-
-        /** Whether {@code other} starts at or after this key, i.e. is the tighter fit of the two. */
-        boolean precedes(WindowKey other) {
-            if (lowerBound == null) {
-                return true;            // an open lower bound is the loosest fit there is
-            }
-            return other.lowerBound != null && lowerBound.compareTo(other.lowerBound) <= 0;
-        }
     }
 
     private static boolean boolProperty(String name, boolean fallback) {

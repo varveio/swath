@@ -5,6 +5,7 @@
  */
 package io.varve.swath.replay.server;
 
+import io.varve.swath.replay.metrics.RequestShape;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
@@ -60,13 +61,6 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
     /** No compression: the profile's delays are injected exactly as written. */
     public static final double UNSCALED = 1.0;
 
-    /** The three request shapes a work-stealing scan issues, in classification order. */
-    public enum Shape {
-        STRUCTURE_PROBE,
-        PIVOT_PROBE,
-        WORKER_PAGE
-    }
-
     /**
      * One shape's delay: a flat base plus an optional per-CommonPrefix term (structure probes only —
      * the parser rejects it elsewhere, since only a delimiter'd response has a fanout to count).
@@ -86,36 +80,36 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
      * the slope absorbs the rest. It reproduces both the absolute cost at full fanout and the
      * near-linear max-keys curve measured on the replay server's own seek loop.
      */
-    public static final Map<Shape, Delay> PROD_COMMONCRAWL = Map.of(
-            Shape.WORKER_PAGE, Delay.flat(Duration.ofMillis(223)),
-            Shape.PIVOT_PROBE, Delay.flat(Duration.ofMillis(121)),
-            Shape.STRUCTURE_PROBE, new Delay(Duration.ofMillis(223), Duration.ofMillis(55)));
+    public static final Map<RequestShape, Delay> PROD_COMMONCRAWL = Map.of(
+            RequestShape.WORKER_PAGE, Delay.flat(Duration.ofMillis(223)),
+            RequestShape.PIVOT_PROBE, Delay.flat(Duration.ofMillis(121)),
+            RequestShape.STRUCTURE_PROBE, new Delay(Duration.ofMillis(223), Duration.ofMillis(55)));
 
     private final Delay workerPage;
     private final Delay pivotProbe;
     private final Delay structureProbe;
     private final double jitter;
 
-    public ShapeLatency(Map<Shape, Delay> delays, double jitter) {
+    public ShapeLatency(Map<RequestShape, Delay> delays, double jitter) {
         // The negated in-range form so NaN (for which every comparison is false) is rejected too —
         // a NaN jitter would otherwise scale every delay to zero and silently disable injection.
         if (!(jitter >= 0.0 && jitter < 1.0)) {
             throw new IllegalArgumentException("jitter must be in [0, 1), got " + jitter);
         }
-        this.workerPage = delays.getOrDefault(Shape.WORKER_PAGE, Delay.flat(Duration.ZERO));
-        this.pivotProbe = delays.getOrDefault(Shape.PIVOT_PROBE, Delay.flat(Duration.ZERO));
-        this.structureProbe = delays.getOrDefault(Shape.STRUCTURE_PROBE, Delay.flat(Duration.ZERO));
+        this.workerPage = delays.getOrDefault(RequestShape.WORKER_PAGE, Delay.flat(Duration.ZERO));
+        this.pivotProbe = delays.getOrDefault(RequestShape.PIVOT_PROBE, Delay.flat(Duration.ZERO));
+        this.structureProbe = delays.getOrDefault(RequestShape.STRUCTURE_PROBE, Delay.flat(Duration.ZERO));
         this.jitter = jitter;
     }
 
-    static Shape classify(S3ListRequest req) {
+    static RequestShape classify(S3ListRequest req) {
         if (req.delimiter() != null && req.delimiter().length > 0) {
-            return Shape.STRUCTURE_PROBE;
+            return RequestShape.STRUCTURE_PROBE;
         }
         if (req.maxKeys() <= 1) {
-            return Shape.PIVOT_PROBE;
+            return RequestShape.PIVOT_PROBE;
         }
-        return Shape.WORKER_PAGE;
+        return RequestShape.WORKER_PAGE;
     }
 
     @Override
@@ -202,7 +196,7 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
         if (spec.trim().toLowerCase(Locale.ROOT).equals("prod-commoncrawl")) {
             return new ShapeLatency(scaled(PROD_COMMONCRAWL, scale), jitter);
         }
-        Map<Shape, Delay> delays = new LinkedHashMap<>();
+        Map<RequestShape, Delay> delays = new LinkedHashMap<>();
         for (String pair : spec.split(",")) {
             String trimmed = pair.trim();
             if (trimmed.isEmpty()) {
@@ -212,7 +206,7 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
             if (eq < 0) {
                 throw new IllegalArgumentException("latency spec entry must be shape=delay, got: " + trimmed);
             }
-            Shape shape = parseShape(trimmed.substring(0, eq).trim());
+            RequestShape shape = parseShape(trimmed.substring(0, eq).trim());
             delays.put(shape, parseDelay(shape, trimmed.substring(eq + 1).trim()));
         }
         return new ShapeLatency(scaled(delays, scale), jitter);
@@ -222,11 +216,11 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
      * Divides every delay in a profile by {@code scale}. {@link #UNSCALED} returns the profile
      * itself, so the default path cannot perturb a single nanosecond of the wire behavior.
      */
-    private static Map<Shape, Delay> scaled(Map<Shape, Delay> delays, double scale) {
+    private static Map<RequestShape, Delay> scaled(Map<RequestShape, Delay> delays, double scale) {
         if (scale == UNSCALED) {
             return delays;
         }
-        Map<Shape, Delay> compressed = new LinkedHashMap<>();
+        Map<RequestShape, Delay> compressed = new LinkedHashMap<>();
         delays.forEach((shape, delay) -> compressed.put(shape,
                 new Delay(divide(delay.base(), scale), divide(delay.perCommonPrefix(), scale))));
         return compressed;
@@ -236,17 +230,17 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
         return Duration.ofNanos((long) (delay.toNanos() / scale));
     }
 
-    private static Shape parseShape(String s) {
+    private static RequestShape parseShape(String s) {
         return switch (s.toLowerCase(Locale.ROOT)) {
-            case "worker_page", "page" -> Shape.WORKER_PAGE;
-            case "pivot_probe", "pivot" -> Shape.PIVOT_PROBE;
-            case "structure_probe", "structure" -> Shape.STRUCTURE_PROBE;
+            case "worker_page", "page" -> RequestShape.WORKER_PAGE;
+            case "pivot_probe", "pivot" -> RequestShape.PIVOT_PROBE;
+            case "structure_probe", "structure" -> RequestShape.STRUCTURE_PROBE;
             default -> throw new IllegalArgumentException(
                     "unknown latency shape '" + s + "' (worker_page|pivot_probe|structure_probe)");
         };
     }
 
-    private static Delay parseDelay(Shape shape, String s) {
+    private static Delay parseDelay(RequestShape shape, String s) {
         int plus = s.indexOf('+');
         if (plus < 0) {
             return Delay.flat(parseDuration(s));
@@ -256,7 +250,7 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
             throw new IllegalArgumentException(
                     "per-entry latency term must end in /cp (e.g. 55ms/cp), got: " + perCp);
         }
-        if (shape != Shape.STRUCTURE_PROBE) {
+        if (shape != RequestShape.STRUCTURE_PROBE) {
             throw new IllegalArgumentException(
                     "a /cp term only applies to structure_probe (only a delimiter'd response has a fanout)");
         }

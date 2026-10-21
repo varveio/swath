@@ -7,9 +7,9 @@ package io.varve.swath.replay.store;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListedObject;
-import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.replay.testkit.FakeListingStore;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -19,12 +19,13 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
  * UNIT coverage for the sequential-window prefetch decorator: hit byte-identity, the miss/refill and
- * end-of-listing hit conditions, {@code fromInclusive} boundaries, projection keying, LRU + eager
+ * end-of-listing hit conditions, {@code fromInclusive} boundaries, projection keying, bounded LRU
  * eviction, a concurrent-walk smoke, and system-property config parsing. Differential no-gap/no-overlap
  * coverage against the real store exercises the same window boundaries under the real implementation.
  */
@@ -56,22 +57,6 @@ class WindowedListingStoreTest {
         List<ListedObject> fresh = reference.rows(from, false, null, 10, KEYS);
         assertThat(keys(hit)).isEqualTo(keys(fresh));
         assertThat(rowsEqual(hit, fresh)).isTrue();
-    }
-
-    @Test
-    void insufficientTailOfANonFinalWindowMissesAndRefills() {
-        FakeListingStore delegate = store(100);
-        WindowedListingStore windowed = new WindowedListingStore(delegate, metrics(), 10, 8);
-
-        // windowRows == 10 and 100 rows exist ⇒ the fill returns exactly 10 rows ⇒ NON-final window.
-        windowed.rows(null, true, null, 10, KEYS);
-        assertThat(delegate.calls()).isEqualTo(1);
-        assertThat(delegate.lastLimit()).isEqualTo(10);     // fill used windowRows, not the page limit
-
-        // Past the window's last buffered row, non-final ⇒ must refill.
-        List<ListedObject> page = windowed.rows(key(9), false, null, 5, KEYS);
-        assertThat(delegate.calls()).isEqualTo(2);
-        assertThat(keys(page)).containsExactly("key-010", "key-011", "key-012", "key-013", "key-014");
     }
 
     @Test
@@ -160,24 +145,24 @@ class WindowedListingStoreTest {
         windowed.rows(key(9), false, key(60), 5, KEYS);
         assertThat(delegate.calls()).isEqualTo(6);
 
-        // A was evicted ⇒ re-requesting it misses and refills.
+        // A was evicted, but B's wider upper bound safely covers the narrower A request.
         windowed.rows(key(9), false, key(30), 5, KEYS);
-        assertThat(delegate.calls()).isEqualTo(7);
+        assertThat(delegate.calls()).isEqualTo(6);
     }
 
     @Test
-    void eagerlyEvictsAFinalWindowServedThroughItsLastRow() {
+    void finalWindowRemainsAvailableToLaggingWalkers() {
         FakeListingStore delegate = store(100);
         WindowedListingStore windowed = new WindowedListingStore(delegate, metrics(), 1000, 8);
 
-        // limit covers the whole final window ⇒ served through the last row ⇒ dead window, dropped.
+        // The first caller consumes the entire final window, but another walker can reuse it.
         List<ListedObject> all = windowed.rows(null, true, null, 1000, KEYS);
         assertThat(all).hasSize(100);
         assertThat(delegate.calls()).isEqualTo(1);
 
-        // The identical request must miss again — the window was eagerly evicted, not reused.
+        // The identical request is a hit until ordinary LRU eviction.
         windowed.rows(null, true, null, 1000, KEYS);
-        assertThat(delegate.calls()).isEqualTo(2);
+        assertThat(delegate.calls()).isEqualTo(1);
     }
 
     @Test
@@ -332,20 +317,397 @@ class WindowedListingStoreTest {
     }
 
     @Test
-    void continuationMissIsTaggedByAnchorNotFillSize() {
-        // window-rows below the page limit: a continuation anchor's ramped size saturates at
-        // window-rows (5) and clamps back up to limit (10), so `requested == limit` even on a real
-        // continuation. The miss reason must still read `continuation` (an anchor was consulted), not
-        // `cold` — which the old `requested > limit` tag would have wrongly reported here.
+    void oversizedReadDoesNotConsumeOrRegisterContinuationAnchor() {
+        // A caller above the nominal window size is served uncached at exactly its requested size.
         ReplayMetrics metrics = metrics();
         FakeListingStore delegate = store(100);
         WindowedListingStore windowed = new WindowedListingStore(delegate, metrics, 5, 8);  // window-rows < limit
 
         windowed.rows(null, true, null, 10, KEYS);        // cold miss
-        windowed.rows(key(9), false, null, 10, KEYS);     // continuation miss (anchor fill 5 <= limit 10)
+        windowed.rows(key(9), false, null, 10, KEYS);
 
-        assertThat(missCounter(metrics, "cold")).isEqualTo(1.0);
-        assertThat(missCounter(metrics, "continuation")).isEqualTo(1.0);
+        assertThat(missCounter(metrics, "cold")).isEqualTo(2.0);
+        assertThat(metrics.registry().find("swath.replay.prefetch.anchor")
+                .tag("event", "claimed").counter().count()).isZero();
+        assertThat(metrics.registry().find("swath.replay.prefetch.anchor")
+                .tag("event", "registered").counter().count()).isZero();
+        assertThat(metrics.registry().find("swath.replay.prefetch.anchors.live").gauge().value()).isZero();
+        assertThat(metrics.registry().find("swath.replay.prefetch.window.uncached")
+                .tag("reason", "request_exceeds_window").counter().count()).isEqualTo(2);
+        assertThat(delegate.lastLimit()).isEqualTo(10);
+    }
+
+    @Test
+    void continuationCeilingRoundsUpToWholeRequestedPages() {
+        FakeListingStore oneK = store(30_000);
+        CountingStore oneKWork = new CountingStore(oneK);
+        ReplayMetrics oneKMeters = metrics();
+        WindowedListingStore oneKCache = new WindowedListingStore(oneKWork, oneKMeters, 12_500, 8);
+        ByteKey cursor = null;
+        for (int i = 0; i < 6; i++) {
+            List<ListedObject> page = oneKCache.rows(cursor, cursor == null, null, 1001, KEYS);
+            // The pager emits 1,000 entries and uses the 1,001st only as lookahead.
+            cursor = ByteKey.copyOf(page.get(999).key());
+        }
+        assertThat(oneK.lastLimit()).isEqualTo(13_013);
+        assertThat(oneKWork.calls.get()).isEqualTo(3);
+        assertThat(oneKWork.rows.get()).isEqualTo(1_001 + 4_004 + 13_013);
+        assertThat(oneKMeters.registry().find("swath.replay.prefetch.window.ramp_ceiling_rows")
+                .summary().max()).isEqualTo(13_013);
+
+        FakeListingStore fiveK = store(30_000);
+        CountingStore fiveKWork = new CountingStore(fiveK);
+        ReplayMetrics fiveKMeters = metrics();
+        WindowedListingStore fiveKCache = new WindowedListingStore(fiveKWork, fiveKMeters, 12_500, 8);
+        List<ListedObject> first = fiveKCache.rows(null, true, null, 5001, KEYS);
+        fiveKCache.rows(ByteKey.copyOf(first.get(4_999).key()), false, null, 5001, KEYS);
+        assertThat(fiveK.lastLimit()).isEqualTo(15_003);
+        assertThat(fiveKWork.calls.get()).isEqualTo(2);
+        assertThat(fiveKWork.rows.get()).isEqualTo(5_001 + 15_003);
+        assertThat(fiveKMeters.registry().find("swath.replay.prefetch.window.ramp_ceiling_rows")
+                .summary().max()).isEqualTo(15_003);
+    }
+
+    @Test
+    void narrowedUpperBoundUsesCoveredRowsButIncompleteTailRefills() {
+        FakeListingStore delegate = store(100);
+        WindowedListingStore cache = new WindowedListingStore(delegate, metrics(), 50, 8);
+        cache.rows(null, true, null, 5, KEYS);
+        cache.rows(key(4), false, null, 5, KEYS); // 5..24 cached under open upper bound
+        int fills = delegate.calls();
+
+        assertThat(keys(cache.rows(key(18), false, key(20), 10, KEYS))).containsExactly("key-019");
+        assertThat(delegate.calls()).isEqualTo(fills);
+        assertThat(keys(cache.rows(key(21), false, key(40), 10, KEYS)))
+                .containsExactly("key-022", "key-023", "key-024", "key-025", "key-026",
+                        "key-027", "key-028", "key-029", "key-030", "key-031");
+        assertThat(delegate.calls()).isEqualTo(fills + 1);
+    }
+
+    @Test
+    void twoWindowJoinBridgesLeadingSmallPageWalkWithoutBackingRead() {
+        ReplayMetrics meters = metrics();
+        FakeListingStore delegate = store(100);
+        WindowedListingStore cache = new WindowedListingStore(delegate, meters, 12, 8);
+        ByteKey cursor = null;
+        for (int i = 0; i < 6; i++) {
+            List<ListedObject> page = cache.rows(cursor, cursor == null, null, 2, KEYS);
+            cursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+        }
+        assertThat(delegate.calls()).isEqualTo(3); // W2 is present before crossing probe
+        int before = delegate.calls();
+        assertThat(keys(cache.rows(key(6), false, null, 5, KEYS)))
+                .containsExactly("key-007", "key-008", "key-009", "key-010", "key-011");
+        assertThat(delegate.calls()).isEqualTo(before);
+        assertThat(meters.registry().find("swath.replay.prefetch.window.join")
+                .tag("reason", "hit").counter().count()).isGreaterThan(0);
+    }
+
+    @Test
+    void globalRowBudgetEvictsEvenBeforeEntryLimit() {
+        ReplayMetrics meters = metrics();
+        WindowedListingStore cache = new WindowedListingStore(store(100), meters, 10, 2);
+        cache.rows(null, true, null, 6, KEYS);
+        cache.rows(key(5), false, null, 6, KEYS); // rounded 12-row first window
+        cache.rows(key(30), false, null, 6, KEYS);
+        cache.rows(key(36), false, null, 6, KEYS); // second 12-row window; 24 > 20 budget
+        assertThat(meters.registry().find("swath.replay.prefetch.rows.live").gauge().value())
+                .isLessThanOrEqualTo(20.0);
+        assertThat(meters.registry().find("swath.replay.prefetch.window.row_budget_eviction")
+                .counter().count()).isGreaterThan(0);
+    }
+
+    @Test
+    void uncacheableRoundedContinuationFallsBackToRequestedRows() {
+        FakeListingStore delegate = store(100);
+        ReplayMetrics meters = metrics();
+        WindowedListingStore cache = new WindowedListingStore(delegate, meters, 40, 1);
+        ByteKey cursor = null;
+        for (int i = 0; i < 8; i++) {
+            List<ListedObject> page = cache.rows(cursor, cursor == null, null, 9, KEYS);
+            cursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+            assertThat(delegate.lastLimit()).isEqualTo(9);
+        }
+        assertThat(meters.registry().find("swath.replay.prefetch.window.uncached")
+                .tag("reason", "rounded_exceeds_row_budget").counter().count()).isGreaterThan(0);
+    }
+
+    @Test
+    void inclusiveSeekAtAnchorDoesNotClaimContinuationRamp() {
+        FakeListingStore delegate = store(100);
+        WindowedListingStore cache = new WindowedListingStore(delegate, metrics(), 50, 8);
+        cache.rows(null, true, null, 10, KEYS);
+        cache.rows(key(9), true, null, 10, KEYS);
+        assertThat(delegate.lastLimit()).isEqualTo(10);
+        cache.rows(key(9), false, null, 10, KEYS);
+        assertThat(delegate.lastLimit()).isEqualTo(40);
+    }
+
+    @Test
+    void olderSingleWindowWinsOverTighterInsufficientWindow() {
+        ReplayMetrics meters = metrics();
+        FakeListingStore delegate = store(100);
+        WindowedListingStore cache = new WindowedListingStore(delegate, meters, 50, 8);
+        cache.rows(key(19), false, null, 1, KEYS); // cold row 20
+        cache.rows(key(20), false, null, 1, KEYS); // tight window 21..24
+        cache.rows(null, true, null, 10, KEYS);
+        cache.rows(key(9), false, null, 10, KEYS); // broad window 10..49
+        int before = delegate.calls();
+        assertThat(keys(cache.rows(key(22), false, null, 5, KEYS)))
+                .containsExactly("key-023", "key-024", "key-025", "key-026", "key-027");
+        assertThat(delegate.calls()).isEqualTo(before);
+        assertThat(meters.registry().find("swath.replay.prefetch.window.join")
+                .tag("reason", "hit").counter()).isNull();
+    }
+
+    @Test
+    void joinDeclinesGapAndProjectionMismatch() {
+        FakeListingStore gapDelegate = store(100);
+        ReplayMetrics gapMeters = metrics();
+        WindowedListingStore gap = new WindowedListingStore(gapDelegate, gapMeters, 12, 8);
+        leadSmallWalkThroughFirstWindow(gap);
+        gap.rows(key(11), false, null, 2, KEYS);
+        gap.rows(key(13), false, null, 2, KEYS); // W2 lower 13 > W1 last 9
+        int gapReads = gapDelegate.calls();
+        assertThat(keys(gap.rows(key(6), false, null, 5, KEYS)))
+                .containsExactly("key-007", "key-008", "key-009", "key-010", "key-011");
+        assertThat(gapDelegate.calls()).isEqualTo(gapReads + 1);
+        assertThat(gapMeters.registry().find("swath.replay.prefetch.window.join")
+                .tag("reason", "gap").counter().count()).isEqualTo(1);
+
+        FakeListingStore projectionDelegate = store(100);
+        ReplayMetrics projectionMeters = metrics();
+        WindowedListingStore projection = new WindowedListingStore(projectionDelegate, projectionMeters, 12, 8);
+        leadSmallWalkThroughFirstWindow(projection);
+        projection.rows(key(9), false, null, 2, Projection.WITH_OWNER);
+        int projectionReads = projectionDelegate.calls();
+        assertThat(keys(projection.rows(key(6), false, null, 5, KEYS)))
+                .containsExactly("key-007", "key-008", "key-009", "key-010", "key-011");
+        assertThat(projectionDelegate.calls()).isEqualTo(projectionReads + 1);
+        assertThat(projectionMeters.registry().find("swath.replay.prefetch.window.join")
+                .tag("reason", "projection").counter().count()).isEqualTo(1);
+    }
+
+    @Test
+    void joinSkipsOverlapAndRejectsNarrowerSecondUpperBound() {
+        ReplayMetrics meters = metrics();
+        FakeListingStore delegate = store(100);
+        WindowedListingStore cache = new WindowedListingStore(delegate, meters, 12, 8);
+        cache.rows(null, true, key(50), 2, KEYS);
+        cache.rows(key(1), false, key(50), 2, KEYS); // W1: rows 2..9
+        cache.rows(key(1), false, null, 5, KEYS); // cold because W1's upper is only 50
+        cache.rows(key(6), false, null, 5, KEYS); // W2 lower 6 overlaps W1 through 9
+        int before = delegate.calls();
+        assertThat(keys(cache.rows(key(4), false, key(50), 8, KEYS)))
+                .containsExactly("key-005", "key-006", "key-007", "key-008", "key-009",
+                        "key-010", "key-011", "key-012");
+        assertThat(delegate.calls()).isEqualTo(before);
+        assertThat(meters.registry().find("swath.replay.prefetch.window.join")
+                .tag("reason", "hit").counter().count()).isGreaterThan(0);
+
+        FakeListingStore narrowDelegate = store(100);
+        ReplayMetrics narrowMeters = metrics();
+        WindowedListingStore narrow = new WindowedListingStore(narrowDelegate, narrowMeters, 12, 8);
+        narrow.rows(null, true, key(50), 2, KEYS);
+        narrow.rows(key(1), false, key(50), 2, KEYS);
+        narrow.rows(key(4), false, key(20), 2, KEYS); // hit seeds an exclusive anchor at key 6
+        narrow.rows(key(6), false, key(20), 5, KEYS); // W2 now has surplus but ends at upper 20
+        assertThat(narrowDelegate.calls()).isEqualTo(3);
+        int narrowReads = narrowDelegate.calls();
+        assertThat(keys(narrow.rows(key(4), false, key(50), 8, KEYS)))
+                .containsExactly("key-005", "key-006", "key-007", "key-008", "key-009",
+                        "key-010", "key-011", "key-012");
+        assertThat(narrowDelegate.calls()).isEqualTo(narrowReads + 1);
+        assertThat(narrowMeters.registry().find("swath.replay.prefetch.window.join")
+                .tag("reason", "upper_bound").counter().count()).isEqualTo(1);
+    }
+
+    @Test
+    void joinDeclinesInsufficientNonFinalSecondWindow() {
+        ReplayMetrics meters = metrics();
+        FakeListingStore delegate = store(100);
+        WindowedListingStore cache = new WindowedListingStore(delegate, meters, 12, 8);
+        cache.rows(null, true, key(50), 2, KEYS);
+        cache.rows(key(1), false, key(50), 2, KEYS); // W1 rows 2..9
+        cache.rows(key(7), false, null, 1, KEYS); // cold key 8 under wider upper
+        cache.rows(key(8), false, null, 1, KEYS); // W2 rows 9..12, non-final
+        int before = delegate.calls();
+        assertThat(keys(cache.rows(key(6), false, key(50), 10, KEYS))).hasSize(10);
+        assertThat(delegate.calls()).isEqualTo(before + 1);
+        assertThat(meters.registry().find("swath.replay.prefetch.window.join")
+                .tag("reason", "insufficient_second").counter().count()).isEqualTo(1);
+    }
+
+    @Test
+    void joinedSecondWindowCanProveUpperBoundOrFinalShortTail() {
+        FakeListingStore upperDelegate = store(100);
+        WindowedListingStore upper = new WindowedListingStore(upperDelegate, metrics(), 12, 8);
+        leadSmallWalkThroughSecondWindow(upper);
+        int upperReads = upperDelegate.calls();
+        assertThat(keys(upper.rows(key(6), false, key(12), 8, KEYS)))
+                .containsExactly("key-007", "key-008", "key-009", "key-010", "key-011");
+        assertThat(upperDelegate.calls()).isEqualTo(upperReads);
+
+        FakeListingStore finalDelegate = store(13);
+        WindowedListingStore finalCache = new WindowedListingStore(finalDelegate, metrics(), 12, 8);
+        leadSmallWalkThroughSecondWindow(finalCache);
+        int finalReads = finalDelegate.calls();
+        assertThat(keys(finalCache.rows(key(6), false, null, 8, KEYS)))
+                .containsExactly("key-007", "key-008", "key-009", "key-010", "key-011", "key-012");
+        assertThat(finalDelegate.calls()).isEqualTo(finalReads);
+    }
+
+    @Test
+    void joinedSecondWindowMayIncludeItsEqualLowerBoundary() {
+        FakeListingStore delegate = store(19);
+        WindowedListingStore cache = new WindowedListingStore(delegate, metrics(), 12, 8);
+        cache.rows(null, true, key(50), 2, KEYS);
+        cache.rows(key(1), false, key(50), 2, KEYS); // W1 rows 2..9
+        cache.rows(key(9), true, null, 11, KEYS); // final W2 includes boundary 9
+        int before = delegate.calls();
+        assertThat(keys(cache.rows(key(6), false, key(50), 8, KEYS)))
+                .containsExactly("key-007", "key-008", "key-009", "key-010", "key-011",
+                        "key-012", "key-013", "key-014");
+        assertThat(delegate.calls()).isEqualTo(before);
+    }
+
+    private static void leadSmallWalkThroughFirstWindow(WindowedListingStore cache) {
+        ByteKey cursor = null;
+        for (int i = 0; i < 5; i++) {
+            List<ListedObject> page = cache.rows(cursor, cursor == null, null, 2, KEYS);
+            cursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+        }
+    }
+
+    private static void leadSmallWalkThroughSecondWindow(WindowedListingStore cache) {
+        ByteKey cursor = null;
+        for (int i = 0; i < 6; i++) {
+            List<ListedObject> page = cache.rows(cursor, cursor == null, null, 2, KEYS);
+            cursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+        }
+    }
+
+    @Test
+    void staggeredWalkersReuseBackingWorkAgainstUniqueInventory() {
+        CountingStore aloneStore = new CountingStore(store(2400));
+        WindowedListingStore alone = new WindowedListingStore(aloneStore, metrics(), 120, 32);
+        List<String> unique = fullWalk(alone, 10);
+        assertThat(unique).hasSize(2400).doesNotHaveDuplicates();
+
+        for (int stagger = 1; stagger <= 3; stagger++) {
+            CountingStore sharedStore = new CountingStore(store(2400));
+            WindowedListingStore shared = new WindowedListingStore(sharedStore, metrics(), 120, 32);
+            List<String> leader = new ArrayList<>();
+            List<String> follower = new ArrayList<>();
+            ByteKey leadCursor = null;
+            ByteKey followCursor = null;
+            // Establish a real lead, rather than starting both at the identical cold position.
+            for (int i = 0; i < stagger; i++) {
+                List<ListedObject> page = shared.rows(leadCursor, leadCursor == null, null, 10, KEYS);
+                leader.addAll(keys(page));
+                leadCursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+            }
+            boolean leadDone = false;
+            boolean followDone = false;
+            while (!leadDone || !followDone) {
+                if (!leadDone) {
+                    List<ListedObject> page = shared.rows(leadCursor, false, null, 10, KEYS);
+                    leadDone = page.isEmpty();
+                    if (!leadDone) {
+                        leader.addAll(keys(page));
+                        leadCursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+                    }
+                }
+                if (!followDone) {
+                    List<ListedObject> page = shared.rows(followCursor, followCursor == null, null, 10, KEYS);
+                    followDone = page.isEmpty();
+                    if (!followDone) {
+                        follower.addAll(keys(page));
+                        followCursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+                    }
+                }
+            }
+            assertThat(leader).isEqualTo(unique);
+            assertThat(follower).isEqualTo(unique);
+            // Denominator is the one walker's unique inventory, never duplicated client output.
+            assertThat(sharedStore.calls.get()).isLessThanOrEqualTo((long) Math.ceil(aloneStore.calls.get() * 1.1));
+            assertThat(sharedStore.rows.get()).isLessThanOrEqualTo((long) Math.ceil(aloneStore.rows.get() * 1.1));
+        }
+    }
+
+    @Test
+    void leadingSmallPagesAndTrailingLargePagesShareUniqueInventoryWork() {
+        CountingStore referenceStore = new CountingStore(store(2400));
+        WindowedListingStore reference = new WindowedListingStore(referenceStore, metrics(), 125, 32);
+        PagerWalker baseline = new PagerWalker(11);
+        while (!baseline.done) baseline.step(reference);
+        assertThat(baseline.keys).hasSize(2400).doesNotHaveDuplicates();
+
+        ReplayMetrics meters = metrics();
+        CountingStore sharedStore = new CountingStore(store(2400));
+        WindowedListingStore shared = new WindowedListingStore(sharedStore, meters, 125, 32);
+        PagerWalker leading = new PagerWalker(11);
+        PagerWalker trailing = new PagerWalker(51);
+        for (int i = 0; i < 25; i++) leading.step(shared);
+        while (!leading.done || !trailing.done) {
+            for (int i = 0; i < 5 && !leading.done; i++) leading.step(shared);
+            if (!trailing.done) trailing.step(shared);
+        }
+        assertThat(leading.keys).isEqualTo(baseline.keys);
+        assertThat(trailing.keys).isEqualTo(baseline.keys);
+        assertThat(meters.registry().find("swath.replay.prefetch.window.join")
+                .tag("reason", "hit").counter().count()).isGreaterThan(0);
+        // Two clients each emit the inventory; denominator remains the ONE unique inventory walk.
+        assertThat(sharedStore.calls.get()).isLessThanOrEqualTo((long) Math.ceil(referenceStore.calls.get() * 1.1));
+        assertThat(sharedStore.rows.get()).isLessThanOrEqualTo((long) Math.ceil(referenceStore.rows.get() * 1.1));
+    }
+
+    private static final class PagerWalker {
+        private final int lookaheadLimit;
+        private final List<String> keys = new ArrayList<>();
+        private ByteKey cursor;
+        private boolean done;
+
+        PagerWalker(int lookaheadLimit) { this.lookaheadLimit = lookaheadLimit; }
+
+        void step(WindowedListingStore store) {
+            if (done) return;
+            List<ListedObject> rows = store.rows(cursor, cursor == null, null, lookaheadLimit, KEYS);
+            int emitted = Math.min(rows.size(), lookaheadLimit - 1);
+            keys.addAll(keys(rows.subList(0, emitted)));
+            done = rows.size() < lookaheadLimit;
+            if (!done) cursor = ByteKey.copyOf(rows.get(emitted - 1).key());
+        }
+    }
+
+    private static List<String> fullWalk(WindowedListingStore store, int limit) {
+        List<String> out = new ArrayList<>();
+        ByteKey cursor = null;
+        while (true) {
+            List<ListedObject> page = store.rows(cursor, cursor == null, null, limit, KEYS);
+            if (page.isEmpty()) return out;
+            out.addAll(keys(page));
+            cursor = ByteKey.copyOf(page.get(page.size() - 1).key());
+        }
+    }
+
+    private static final class CountingStore implements ListingStore {
+        private final FakeListingStore delegate;
+        private final AtomicLong calls = new AtomicLong();
+        private final AtomicLong rows = new AtomicLong();
+
+        CountingStore(FakeListingStore delegate) { this.delegate = delegate; }
+
+        @Override
+        public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
+                                       Projection projection) {
+            List<ListedObject> result = delegate.rows(from, fromInclusive, toExclusive, limit, projection);
+            calls.incrementAndGet();
+            rows.addAndGet(result.size());
+            return result;
+        }
+
+        @Override public void close() { delegate.close(); }
     }
 
     /**

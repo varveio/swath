@@ -11,7 +11,7 @@ import io.varve.swath.replay.fixture.FixtureMetrics;
 import io.varve.swath.replay.fixture.SortedEligibility;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
-import io.varve.swath.replay.server.ReplayMetrics;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.store.DuckDbListingStore;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.SortedParquetStore;

@@ -7,7 +7,7 @@ package io.varve.swath.replay.protocol;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.varve.swath.replay.server.ReplayMetrics;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.testkit.FakeListingStore;
 import java.nio.charset.StandardCharsets;
 import java.util.List;

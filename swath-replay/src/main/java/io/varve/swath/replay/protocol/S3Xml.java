@@ -5,12 +5,13 @@
  */
 package io.varve.swath.replay.protocol;
 
+import io.varve.swath.replay.server.BudgetedOutput;
+import io.varve.swath.replay.server.OwnedBody;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
 
 /** Renders {@link S3ListResult} and {@link S3Error} as byte-faithful S3 ListObjectsV2 XML. */
 public final class S3Xml {
@@ -29,9 +30,22 @@ public final class S3Xml {
      * response-sized UTF-16 {@link String} and immediately encode the whole response back to UTF-8.
      */
     public static ByteBuffer listBucketBuffer(S3ListResult result) {
+        try (BudgetedOutput xml = BudgetedOutput.standalone(Math.max(4096,
+                RESPONSE_BASE_CAPACITY + result.entries().size() * ESTIMATED_BYTES_PER_ENTRY))) {
+            writeBucket(result, xml);
+            // The compatibility form is not used by the serving path; flattening is confined here.
+            return xml.buffer();
+        }
+    }
+
+    /** Render into request-owned chunks while retaining the S3 byte grammar. */
+    public static OwnedBody listBucketBody(S3ListResult result, BudgetedOutput xml) {
+        writeBucket(result, xml);
+        return xml.body();
+    }
+
+    private static void writeBucket(S3ListResult result, BudgetedOutput xml) {
         S3ListRequest request = result.request();
-        Utf8XmlBuilder xml = new Utf8XmlBuilder(Math.max(4096,
-                RESPONSE_BASE_CAPACITY + result.entries().size() * ESTIMATED_BYTES_PER_ENTRY));
         xml.appendAscii("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
         xml.appendAscii("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
         element(xml, "Name", request.bucket());
@@ -67,7 +81,6 @@ public final class S3Xml {
             }
         }
         xml.appendAscii("</ListBucketResult>");
-        return xml.toByteBuffer();
     }
 
     /** Exact-sized compatibility form for callers that specifically need an owning byte array. */
@@ -97,7 +110,7 @@ public final class S3Xml {
         return xml.toString();
     }
 
-    private static void contents(Utf8XmlBuilder xml, ListedObject object, boolean encoded,
+    private static void contents(BudgetedOutput xml, ListedObject object, boolean encoded,
                                  boolean fetchOwner, TimestampPrefixCache timestamps) {
         xml.appendAscii("<Contents>");
         byteElement(xml, "Key", object.key(), encoded);
@@ -132,7 +145,7 @@ public final class S3Xml {
         xml.appendAscii("</Contents>");
     }
 
-    private static void commonPrefix(Utf8XmlBuilder xml, byte[] prefix, boolean encoded) {
+    private static void commonPrefix(BudgetedOutput xml, byte[] prefix, boolean encoded) {
         xml.appendAscii("<CommonPrefixes>");
         byteElement(xml, "Prefix", prefix, encoded);
         xml.appendAscii("</CommonPrefixes>");
@@ -147,7 +160,7 @@ public final class S3Xml {
         private long second = Long.MIN_VALUE;
         private String prefix;
 
-        private void append(Utf8XmlBuilder xml, long epochMicros) {
+        private void append(BudgetedOutput xml, long epochMicros) {
             long currentSecond = Math.floorDiv(epochMicros, 1_000_000L);
             if (prefix == null || currentSecond != second) {
                 second = currentSecond;
@@ -160,7 +173,7 @@ public final class S3Xml {
         }
     }
 
-    private static void element(Utf8XmlBuilder xml, String name, String value) {
+    private static void element(BudgetedOutput xml, String name, String value) {
         xml.appendByte('<');
         xml.appendAscii(name);
         xml.appendByte('>');
@@ -170,7 +183,7 @@ public final class S3Xml {
         xml.appendByte('>');
     }
 
-    private static void fixedElement(Utf8XmlBuilder xml, String name, String asciiValue) {
+    private static void fixedElement(BudgetedOutput xml, String name, String asciiValue) {
         xml.appendByte('<');
         xml.appendAscii(name);
         xml.appendByte('>');
@@ -180,7 +193,7 @@ public final class S3Xml {
         xml.appendByte('>');
     }
 
-    private static void numericElement(Utf8XmlBuilder xml, String name, long value) {
+    private static void numericElement(BudgetedOutput xml, String name, long value) {
         xml.appendByte('<');
         xml.appendAscii(name);
         xml.appendByte('>');
@@ -190,7 +203,7 @@ public final class S3Xml {
         xml.appendByte('>');
     }
 
-    private static void byteElement(Utf8XmlBuilder xml, String name, byte[] value, boolean encoded) {
+    private static void byteElement(BudgetedOutput xml, String name, byte[] value, boolean encoded) {
         xml.appendByte('<');
         xml.appendAscii(name);
         xml.appendByte('>');
@@ -226,179 +239,4 @@ public final class S3Xml {
         }
     }
 
-    /** Minimal growable UTF-8 sink specialized for the replay response grammar. */
-    private static final class Utf8XmlBuilder {
-        private static final byte[] HEX = "0123456789ABCDEF".getBytes(StandardCharsets.US_ASCII);
-        private static final boolean[] URL_SAFE = urlSafeTable();
-
-        private byte[] bytes;
-        private int length;
-
-        private Utf8XmlBuilder(int capacity) {
-            bytes = new byte[capacity];
-        }
-
-        private void appendByte(int value) {
-            ensure(1);
-            bytes[length++] = (byte) value;
-        }
-
-        @SuppressWarnings("deprecation")
-        private void appendAscii(String value) {
-            ensure(value.length());
-            // This overload copies the low byte of each UTF-16 code unit straight into the target
-            // array. Every caller is intentionally ASCII (tags, fixed values, or the proven-safe
-            // fast path in appendEscaped), so truncation is exactly the desired encoding and avoids
-            // both a temporary byte[] and a Java-level character-copy loop.
-            value.getBytes(0, value.length(), bytes, length);
-            length += value.length();
-        }
-
-        private void appendPercentEncoded(byte[] value) {
-            ensure(value.length * 3);
-            for (byte b : value) {
-                int v = b & 0xff;
-                if (URL_SAFE[v]) {
-                    bytes[length++] = b;
-                } else {
-                    bytes[length++] = '%';
-                    bytes[length++] = HEX[v >>> 4];
-                    bytes[length++] = HEX[v & 0x0f];
-                }
-            }
-        }
-
-        private void appendEscaped(String value) {
-            int safeLength = 0;
-            while (safeLength < value.length()) {
-                char c = value.charAt(safeLength);
-                if (c > 0x7f || c == '&' || c == '<' || c == '>' || c == '"' || c == '\'') {
-                    break;
-                }
-                safeLength++;
-            }
-            if (safeLength == value.length()) {
-                appendAscii(value);
-                return;
-            }
-            // One byte per code unit is enough for the overwhelmingly common ASCII case. Safe ASCII
-            // is copied directly below; only metacharacters and non-ASCII take the general encoder.
-            ensure(value.length());
-            for (int offset = 0; offset < value.length();) {
-                char c = value.charAt(offset);
-                switch (c) {
-                    case '&' -> appendAscii("&amp;");
-                    case '<' -> appendAscii("&lt;");
-                    case '>' -> appendAscii("&gt;");
-                    case '"' -> appendAscii("&quot;");
-                    case '\'' -> appendAscii("&apos;");
-                    default -> {
-                        if (c <= 0x7f) {
-                            bytes[length++] = (byte) c;
-                            offset++;
-                            continue;
-                        }
-                        int codePoint;
-                        if (Character.isHighSurrogate(c) && offset + 1 < value.length()
-                                && Character.isLowSurrogate(value.charAt(offset + 1))) {
-                            codePoint = Character.toCodePoint(c, value.charAt(offset + 1));
-                            offset++;
-                        } else if (Character.isSurrogate(c)) {
-                            // String.getBytes(UTF_8), used by the old renderer, replaces malformed
-                            // UTF-16 with the encoder's one-byte default replacement, '?'.
-                            codePoint = '?';
-                        } else {
-                            codePoint = c;
-                        }
-                        appendCodePoint(codePoint);
-                    }
-                }
-                offset++;
-            }
-        }
-
-        private void appendLong(long value) {
-            if (value == Long.MIN_VALUE) {
-                appendAscii("-9223372036854775808");
-                return;
-            }
-            boolean negative = value < 0;
-            long magnitude = negative ? -value : value;
-            int digits = 1;
-            for (long remaining = magnitude; remaining >= 10; remaining /= 10) {
-                digits++;
-            }
-            int width = digits + (negative ? 1 : 0);
-            ensure(width);
-            int end = length + width;
-            int cursor = end;
-            do {
-                bytes[--cursor] = (byte) ('0' + magnitude % 10);
-                magnitude /= 10;
-            } while (magnitude != 0);
-            if (negative) {
-                bytes[length] = '-';
-            }
-            length = end;
-        }
-
-        private void appendThreeDigits(int value) {
-            ensure(3);
-            bytes[length++] = (byte) ('0' + value / 100);
-            bytes[length++] = (byte) ('0' + value / 10 % 10);
-            bytes[length++] = (byte) ('0' + value % 10);
-        }
-
-        private void appendCodePoint(int codePoint) {
-            if (codePoint <= 0x7f) {
-                appendByte(codePoint);
-            } else if (codePoint <= 0x7ff) {
-                ensure(2);
-                bytes[length++] = (byte) (0xc0 | codePoint >>> 6);
-                bytes[length++] = (byte) (0x80 | codePoint & 0x3f);
-            } else if (codePoint <= 0xffff) {
-                ensure(3);
-                bytes[length++] = (byte) (0xe0 | codePoint >>> 12);
-                bytes[length++] = (byte) (0x80 | codePoint >>> 6 & 0x3f);
-                bytes[length++] = (byte) (0x80 | codePoint & 0x3f);
-            } else {
-                ensure(4);
-                bytes[length++] = (byte) (0xf0 | codePoint >>> 18);
-                bytes[length++] = (byte) (0x80 | codePoint >>> 12 & 0x3f);
-                bytes[length++] = (byte) (0x80 | codePoint >>> 6 & 0x3f);
-                bytes[length++] = (byte) (0x80 | codePoint & 0x3f);
-            }
-        }
-
-        private void ensure(int additional) {
-            int needed = length + additional;
-            if (needed > bytes.length) {
-                bytes = Arrays.copyOf(bytes, Math.max(needed, bytes.length + (bytes.length >>> 1)));
-            }
-        }
-
-        private ByteBuffer toByteBuffer() {
-            // Jetty accepts a bounded ByteBuffer, so the hot server path can write the populated
-            // prefix directly instead of copying every ~300-KiB page into an exact-sized byte[].
-            return ByteBuffer.wrap(bytes, 0, length);
-        }
-
-        private static boolean[] urlSafeTable() {
-            boolean[] safe = new boolean[256];
-            for (int value = 'A'; value <= 'Z'; value++) {
-                safe[value] = true;
-            }
-            for (int value = 'a'; value <= 'z'; value++) {
-                safe[value] = true;
-            }
-            for (int value = '0'; value <= '9'; value++) {
-                safe[value] = true;
-            }
-            safe['-'] = true;
-            safe['_'] = true;
-            safe['.'] = true;
-            safe['/'] = true;
-            return safe;
-        }
-    }
 }

@@ -7,6 +7,8 @@ package io.varve.swath.replay.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
@@ -18,10 +20,67 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class MetricsEndpointTest {
+
+    @Test
+    void heldScrapeCannotExtendCloseDeadlineAndRegistryCleanupWaitsForStop() throws Exception {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        CountDownLatch scraping = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger heldValue = new AtomicInteger(1);
+        Gauge.builder("held.scrape", heldValue, value -> {
+            scraping.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException ignored) {
+                // Model a scrape that ignores cancellation until released.
+            }
+            return value.get();
+        }).register(registry);
+        try (MetricsEndpoint endpoint = MetricsEndpoint.start("127.0.0.1", 0,
+                registry, "sorted", System.nanoTime());
+             HttpClient client = HttpClient.newHttpClient();
+             var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var scrape = client.sendAsync(HttpRequest.newBuilder(URI.create(
+                    "http://127.0.0.1:" + endpoint.port() + "/metrics")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(scraping.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(heldValue.get()).isEqualTo(1);
+            try {
+                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(200);
+                executor.submit(() -> {
+                    try {
+                        endpoint.closeAt(deadline);
+                    } catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                }).get(700, TimeUnit.MILLISECONDS);
+                assertThat(endpoint.stoppedFuture()).isNotDone();
+            } finally {
+                release.countDown();
+            }
+            try {
+                endpoint.stoppedFuture().get(5, TimeUnit.SECONDS);
+            } catch (java.util.concurrent.ExecutionException stoppedWithTimeout) {
+                assertThat(stoppedWithTimeout.getCause()).isInstanceOf(java.util.concurrent.TimeoutException.class);
+            }
+            try {
+                scrape.get(5, TimeUnit.SECONDS);
+            } catch (java.util.concurrent.ExecutionException ignored) {
+                // A held scrape may end by connection failure on stop.
+            }
+        } finally {
+            release.countDown();
+            registry.close();
+        }
+    }
 
     @TempDir
     Path temp;
@@ -36,7 +95,9 @@ class MetricsEndpointTest {
                 HttpProbe.response(server, "/bucket?list-type=2");
                 String body = scrape(endpoint, "/metrics");
 
-                assertThat(body).contains("\"schema_version\":1");
+                assertThat(body).contains("\"schema_version\":2")
+                        .contains("\"serving\":{")
+                        .contains("\"response_buffer_budget\":268435456");
                 assertThat(body).contains("\"serving_mode\":\"sorted\"");
                 assertThat(body).contains("\"swath.replay.http.requests\"");
                 assertThat(body).contains("\"swath.replay.fixture.list.latency\"");

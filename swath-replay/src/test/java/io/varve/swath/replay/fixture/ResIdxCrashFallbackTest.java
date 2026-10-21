@@ -93,7 +93,7 @@ class ResIdxCrashFallbackTest {
             // Role-1 still serves the raw capture's objects.
             assertThat(listKeys(declined)).containsExactly("alpha", "bravo", "charlie", "delta");
         } finally {
-            declined.fixture().close();
+            declined.close();
         }
 
         // A real sort-fixture build into a clean output directory now serves sorted.
@@ -105,7 +105,7 @@ class ResIdxCrashFallbackTest {
             assertThat(sorted.resolvedMode()).isEqualTo(ServingMode.SORTED);
             assertThat(listKeys(sorted)).containsExactly("alpha", "bravo", "charlie", "delta");
         } finally {
-            sorted.fixture().close();
+            sorted.close();
         }
     }
 

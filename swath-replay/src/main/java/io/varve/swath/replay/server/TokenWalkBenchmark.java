@@ -9,6 +9,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.distribution.HistogramSnapshot;
 import io.micrometer.core.instrument.distribution.ValueAtPercentile;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;

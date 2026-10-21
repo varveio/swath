@@ -7,11 +7,11 @@ package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ListObjectsV2Pager;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
-import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.sim.fixture.ListingFixtureStore;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;

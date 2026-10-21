@@ -13,6 +13,12 @@ import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics;
 import io.micrometer.core.instrument.binder.system.ProcessorMetrics;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import org.eclipse.jetty.http.HttpHeader;
 import org.eclipse.jetty.http.HttpStatus;
 import org.eclipse.jetty.server.Handler;
@@ -51,11 +57,16 @@ final class MetricsEndpoint implements AutoCloseable {
     private final Server server;
     private final JvmGcMetrics gc;
     private final JvmHeapPressureMetrics heapPressure;
+    private final AtomicBoolean accepting;
+    private final AtomicBoolean stopping = new AtomicBoolean();
+    private final CompletableFuture<Void> stopped = new CompletableFuture<>();
 
-    private MetricsEndpoint(Server server, JvmGcMetrics gc, JvmHeapPressureMetrics heapPressure) {
+    private MetricsEndpoint(Server server, JvmGcMetrics gc, JvmHeapPressureMetrics heapPressure,
+                            AtomicBoolean accepting) {
         this.server = server;
         this.gc = gc;
         this.heapPressure = heapPressure;
+        this.accepting = accepting;
     }
 
     /**
@@ -96,11 +107,24 @@ final class MetricsEndpoint implements AutoCloseable {
      */
     static MetricsEndpoint start(String host, int port, MeterRegistry registry, String servingMode,
                                  long startedNanos) throws Exception {
-        return start(host, port, registry, servingMode, startedNanos, RuntimeAttestation.system());
+        return start(host, port, registry, servingMode, startedNanos, RuntimeAttestation.system(),
+                () -> ServingMetadata.legacy(servingMode));
+    }
+
+    static MetricsEndpoint start(String host, int port, MeterRegistry registry, String servingMode,
+                                 long startedNanos, Supplier<ServingMetadata> serving) throws Exception {
+        return start(host, port, registry, servingMode, startedNanos, RuntimeAttestation.system(), serving);
     }
 
     static MetricsEndpoint start(String host, int port, MeterRegistry registry, String servingMode,
                                  long startedNanos, RuntimeAttestation attestation) throws Exception {
+        return start(host, port, registry, servingMode, startedNanos, attestation,
+                () -> ServingMetadata.legacy(servingMode));
+    }
+
+    static MetricsEndpoint start(String host, int port, MeterRegistry registry, String servingMode,
+                                 long startedNanos, RuntimeAttestation attestation,
+                                 Supplier<ServingMetadata> serving) throws Exception {
         QueuedThreadPool pool = new QueuedThreadPool(MAX_THREADS, MIN_THREADS);
         pool.setName("replay-metrics");
         Server server = new Server(pool);
@@ -108,25 +132,82 @@ final class MetricsEndpoint implements AutoCloseable {
         connector.setHost(host);
         connector.setPort(port);
         server.addConnector(connector);
-        server.setHandler(new MetricsHandler(registry, servingMode, startedNanos, attestation));
+        AtomicBoolean accepting = new AtomicBoolean(true);
+        server.setHandler(new MetricsHandler(registry, servingMode, startedNanos, attestation, serving,
+                accepting));
         Binders binders = bindProcessMeters(registry);
-        server.start();
-        return new MetricsEndpoint(server, binders.gc(), binders.heapPressure());
+        try {
+            server.start();
+            return new MetricsEndpoint(server, binders.gc(), binders.heapPressure(), accepting);
+        } catch (Exception | Error startFailure) {
+            try {
+                server.stop();
+            } catch (Exception cleanup) {
+                startFailure.addSuppressed(cleanup);
+            }
+            try {
+                binders.heapPressure().close();
+                binders.gc().close();
+            } catch (Exception cleanup) {
+                startFailure.addSuppressed(cleanup);
+            }
+            throw startFailure;
+        }
     }
 
     int port() {
         return ((ServerConnector) server.getConnectors()[0]).getLocalPort();
     }
 
+    CompletableFuture<Void> stoppedFuture() { return stopped; }
+
     @Override
     public void close() throws Exception {
+        if (stopping.get()) {
+            return;
+        }
+        closeAt(System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos());
+    }
+
+    void closeAt(long deadlineNanos) throws Exception {
         // Both binders register GC notification listeners; closing them is what unregisters those.
-        // Stop the server first so nothing is mid-scrape when the meters go away.
+        // Jetty may give its pool a one-second minimum on stop, so the stop runs on a daemon.
+        if (stopping.compareAndSet(false, true)) {
+            accepting.set(false);
+            long remainingMs = Math.max(1, (deadlineNanos - System.nanoTime()) / 1_000_000L);
+            server.setStopTimeout(remainingMs);
+            ((QueuedThreadPool) server.getThreadPool()).setStopTimeout(remainingMs);
+            Thread stopper = new Thread(() -> {
+                Exception failure = null;
+                try {
+                    server.stop();
+                } catch (Exception e) {
+                    failure = e;
+                }
+                try {
+                    heapPressure.close();
+                    gc.close();
+                } catch (Exception e) {
+                    if (failure == null) failure = e;
+                    else failure.addSuppressed(e);
+                }
+                if (failure == null) {
+                    stopped.complete(null);
+                } else {
+                    System.err.println("failed to stop replay metrics endpoint: " + failure);
+                    stopped.completeExceptionally(failure);
+                }
+            }, "replay-metrics-stop");
+            stopper.setDaemon(true);
+            stopper.start();
+        }
         try {
-            server.stop();
-        } finally {
-            heapPressure.close();
-            gc.close();
+            stopped.get(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException incomplete) {
+            System.err.println("shutdown_incomplete replay metrics endpoint stop exceeded its deadline");
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof Exception exception) throw exception;
+            throw failed;
         }
     }
 
@@ -136,17 +217,26 @@ final class MetricsEndpoint implements AutoCloseable {
         private final String servingMode;
         private final long startedNanos;
         private final RuntimeAttestation attestation;
+        private final Supplier<ServingMetadata> serving;
+        private final AtomicBoolean accepting;
 
         private MetricsHandler(MeterRegistry registry, String servingMode, long startedNanos,
-                               RuntimeAttestation attestation) {
+                               RuntimeAttestation attestation, Supplier<ServingMetadata> serving,
+                               AtomicBoolean accepting) {
             this.registry = registry;
             this.servingMode = servingMode;
             this.startedNanos = startedNanos;
             this.attestation = attestation;
+            this.serving = serving;
+            this.accepting = accepting;
         }
 
         @Override
         public boolean handle(Request request, Response response, Callback callback) {
+            if (!accepting.get()) {
+                write(response, HttpStatus.SERVICE_UNAVAILABLE_503, "text/plain", "stopping\n", callback);
+                return true;
+            }
             String path = request.getHttpURI().getPath();
             if ("/healthz".equals(path)) {
                 write(response, HttpStatus.OK_200, "text/plain", "ok\n", callback);
@@ -164,7 +254,7 @@ final class MetricsEndpoint implements AutoCloseable {
             }
             long uptimeMillis = (System.nanoTime() - startedNanos) / 1_000_000L;
             String body = MetricsSnapshotJson.render(registry, servingMode, uptimeMillis,
-                    System.currentTimeMillis());
+                    System.currentTimeMillis(), serving.get());
             write(response, HttpStatus.OK_200, "application/json", body + "\n", callback);
             return true;
         }
