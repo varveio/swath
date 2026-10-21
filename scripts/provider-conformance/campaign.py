@@ -24,7 +24,6 @@ import argparse
 import base64
 import dataclasses
 import fcntl
-import gzip
 import hashlib
 import html
 import http.client
@@ -51,7 +50,7 @@ from matrix import (Case, CorpusObject, PriceTable, RUN_PREFIX, RUN_PREFIX_ROOT,
                     mutate_token)
 
 MIB = 1024 * 1024
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = evidence.REPO_ROOT
 
 # Phases. Setup, probes and SDK walks share the active window and may not touch the
 # cleanup reserve; cleanup has its own window and may use the whole attempt cap.
@@ -1351,10 +1350,6 @@ PORTABLE_SDK_OPTIONS = frozenset({"provider", "walk", "prefix", "delimiter", "st
                                   "requestTimeoutSeconds"})
 
 
-def deterministic_gzip(payload: bytes) -> bytes:
-    return gzip.compress(payload, compresslevel=9, mtime=0)
-
-
 def creation_reason(body: str) -> str | None:
     """A provider's typed error code for a refused create, without its free-text message."""
     try:
@@ -1424,7 +1419,7 @@ def sanitize_run(provider: Provider, run_dir: Path, out_dir: Path, compress_over
                 index["sanitize_errors"][key] = f"{type(error).__name__}: {error}"
                 continue
             payload = evidence.canonical(safe)
-            stored = payload if len(payload) <= compress_over else deterministic_gzip(payload)
+            stored = payload if len(payload) <= compress_over else evidence.deterministic_gzip(payload)
             file_name = f"captures/{key}.json" + ("" if stored is payload else ".gz")
             (out_dir / file_name).parent.mkdir(parents=True, exist_ok=True)
             (out_dir / file_name).write_bytes(stored)

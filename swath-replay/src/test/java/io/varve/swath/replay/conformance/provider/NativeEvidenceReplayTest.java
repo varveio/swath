@@ -21,6 +21,7 @@ import io.varve.swath.replay.server.ServingMode;
 import io.varve.swath.replay.testkit.NativeSdkFixtures;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.RawHttp;
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -41,19 +42,22 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.zip.GZIPInputStream;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Replays every committed native GCS, Azure and S3 capture against replay serving the same corpus,
- * walking replay with its own tokens. Each capture's outcome must equal its committed
+ * Replays every native capture in the committed evidence archive against replay serving the same
+ * corpus, walking replay with its own tokens. Each capture's outcome must equal its committed
  * expectation: {@code match}, or a pinned discrepancy. With {@code swath.provider.receipts}
  * and {@code swath.provider.distribution} set on a clean tree, matches also write receipts.
  */
 class NativeEvidenceReplayTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Path REPO = Path.of("..").toAbsolutePath().normalize();
-    private static final Path EVIDENCE = REPO.resolve("docs/replay-provider-evidence");
+    private static final Path ARCHIVE = REPO.resolve("docs/replay-provider-evidence.tar.gz");
     private static final Path SOURCE = REPO.resolve(
             "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java");
     private static final String REPLAY_BUCKET = "replay-bucket";
@@ -96,16 +100,33 @@ class NativeEvidenceReplayTest {
         }
     }
 
-    private static ReplayContext open(String provider, Path dir) throws Exception {
+    /** Extracts the evidence archive's regular files under {@code dir}. */
+    private static Path extractEvidence(Path dir) throws IOException {
+        Path root = dir.resolve("evidence").toAbsolutePath().normalize();
+        try (var archive = new TarArchiveInputStream(new GZIPInputStream(
+                new BufferedInputStream(Files.newInputStream(ARCHIVE))))) {
+            for (TarArchiveEntry entry = archive.getNextEntry(); entry != null; entry = archive.getNextEntry()) {
+                Path target = root.resolve(entry.getName()).normalize();
+                if (!entry.isFile() || !target.startsWith(root)) {
+                    throw new IOException("unexpected evidence archive entry " + entry.getName());
+                }
+                Files.createDirectories(target.getParent());
+                Files.copy(archive, target);
+            }
+        }
+        return root;
+    }
+
+    private static ReplayContext open(String provider, Path root, Path dir) throws Exception {
         Files.createDirectories(dir);
-        Path root = EVIDENCE.resolve(provider);
         assumeTrue(Files.isRegularFile(root.resolve("index.json")), "no committed " + provider + " evidence");
         JsonNode index = JSON.readTree(root.resolve("index.json").toFile());
         Map<String, JsonNode> cases = new HashMap<>();
         index.path("cases").forEach(node -> cases.put(node.path("id").asText(), node));
-        String firstManifest = index.path("manifests").fieldNames().next();
-        JsonNode manifest = JSON.readTree(root.resolve(index.path("manifests").path(firstManifest)
-                .path("file").asText()).toFile());
+        // Every version's manifest lists the same corpus; a version without a file is derived.
+        JsonNode manifestEntry = index.path("manifests").valueStream().filter(entry -> entry.has("file"))
+                .findFirst().orElseThrow(() -> new IllegalStateException("evidence index has no manifest file"));
+        JsonNode manifest = JSON.readTree(root.resolve(manifestEntry.path("file").asText()).toFile());
         ObjectEntry[] objects = entries(provider, manifest);
         // The sorted fixture format caps keys at the S3 limit of 1,024 bytes, while Azure accepts
         // 1,024 UTF-16 units (up to about 3 KiB of UTF-8). Such a corpus is served by the DuckDB
@@ -131,13 +152,13 @@ class NativeEvidenceReplayTest {
     }
 
     private void replayProvider(String provider, String testName, Path dir) throws Exception {
-        Path root = EVIDENCE.resolve(provider);
+        Path root = extractEvidence(dir).resolve(provider);
         assumeTrue(Files.isRegularFile(root.resolve("index.json")), "no committed " + provider + " evidence");
         JsonNode expectations = JSON.readTree(root.resolve("replay-expectations.json").toFile());
         String receipts = System.getProperty("swath.provider.receipts");
         String distribution = System.getProperty("swath.provider.distribution");
         Map<String, String> outcomes = new TreeMap<>();
-        try (ReplayContext context = open(provider, dir)) {
+        try (ReplayContext context = open(provider, root, dir.resolve("replay"))) {
             ReplayServer server = context.server();
             JsonNode index = context.index();
             Map<String, JsonNode> cases = context.cases();
@@ -575,11 +596,12 @@ class NativeEvidenceReplayTest {
                         new String[] {"azure-08f~2026-06-06", "wrong-status"},
                         new String[] {"azure-08f~2026-06-06", "wrong-error"}));
         int checked = 0;
+        Path evidence = extractEvidence(dir);
         for (var entry : plan.entrySet()) {
             String provider = entry.getKey();
-            if (!Files.isRegularFile(EVIDENCE.resolve(provider).resolve("index.json"))) continue;
+            if (!Files.isRegularFile(evidence.resolve(provider).resolve("index.json"))) continue;
             boolean azure = provider.equals("azure");
-            try (ReplayContext context = open(provider, dir.resolve(provider))) {
+            try (ReplayContext context = open(provider, evidence.resolve(provider), dir.resolve(provider))) {
                 for (String[] corruption : entry.getValue()) {
                     String key = corruption[0];
                     JsonNode capture = context.index().path("captures").path(key);

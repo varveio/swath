@@ -566,7 +566,7 @@ class EvidenceStorageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             payload = b'{"a":1}\n'
             path = Path(tmp) / "capture.json.gz"
-            path.write_bytes(campaign.deterministic_gzip(payload))
+            path.write_bytes(evidence.deterministic_gzip(payload))
             self.assertEqual(evidence.read_evidence(path), payload)
 
     def test_duplicate_query_probe_rows_match_the_java_receipt(self):

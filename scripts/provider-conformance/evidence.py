@@ -9,17 +9,25 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import gzip
 import hashlib
 import html
+import io
 import json
 import re
 import subprocess
+import tarfile
+import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+# Committed GCS and Azure evidence: one reproducible tar.gz of per-provider evidence directories.
+EVIDENCE_ARCHIVE = REPO_ROOT / "docs" / "replay-provider-evidence.tar.gz"
 REQUEST_HEADERS = {"accept", "x-ms-version", "x-ms-client-request-id", "content-type",
                    "user-agent", "x-goog-api-client", "x-amz-optional-object-attributes"}
 RESPONSE_HEADERS = {"content-type", "date", "x-goog-request-id", "x-ms-request-id",
@@ -85,6 +93,44 @@ def read_evidence(path: Path) -> bytes:
     """Evidence bytes; a `.gz` file stores deterministic gzip of the checksummed bytes."""
     payload = path.read_bytes()
     return gzip.decompress(payload) if path.suffix == ".gz" else payload
+
+
+def deterministic_gzip(payload: bytes) -> bytes:
+    """Level-9 gzip with no file name, a zero timestamp and a fixed header."""
+    buffer = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", compresslevel=9, fileobj=buffer, mtime=0) as stream:
+        stream.write(payload)
+    return buffer.getvalue()
+
+
+@contextlib.contextmanager
+def evidence_root(path: Path) -> Iterator[Path]:
+    """An evidence directory, or a temporary extraction of an evidence archive."""
+    if path.is_dir():
+        yield path
+        return
+    with tempfile.TemporaryDirectory(prefix="provider-evidence-") as temp, tarfile.open(path, "r:gz") as archive:
+        if not all(member.isfile() for member in archive.getmembers()):
+            raise ValueError("evidence archive holds only regular files")
+        archive.extractall(temp, filter="data")
+        yield Path(temp)
+
+
+def load_manifests(root: Path) -> dict[tuple[str, str], dict]:
+    """Every provider/version manifest an evidence root's indexes name, checked against its digest."""
+    manifests = {}
+    for index_path in sorted(root.glob("*/index.json")):
+        index = strict_json(index_path.read_text(encoding="utf-8"))
+        for version, entry in sorted(index["manifests"].items()):
+            payload = checked_child(index_path.parent, entry["file"]).read_bytes()
+            manifest = strict_json(payload.decode("utf-8"))
+            if hashlib.sha256(canonical(manifest)).hexdigest() != entry["sha256"]:
+                raise ValueError("manifest differs from its index checksum")
+            validate_manifest(manifest)
+            if (manifest["provider"], manifest["api_version"]) != (index["provider"], version):
+                raise ValueError("manifest provider/version differs from its index")
+            manifests[(index["provider"], version)] = manifest
+    return manifests
 
 
 def headers(items: list[dict[str, str]], allowed: set[str], reject_unknown: bool = False) -> list[dict[str, str]]:
@@ -777,7 +823,8 @@ def main() -> None:
     check.add_argument("--manifest", type=Path, action="append", default=[])
     check.add_argument("--ledger", type=Path, required=True)
     check.add_argument("--matrix", type=Path, required=True)
-    check.add_argument("--captures", type=Path)
+    check.add_argument("--captures", type=Path, help="evidence directory or archive; its manifests are "
+                       "loaded when no --manifest is given")
     check.add_argument("--repo-root", type=Path)
     check.add_argument("--distribution", type=Path)
     args = parser.parse_args()
@@ -795,8 +842,11 @@ def main() -> None:
         if args.repo_root is not None:
             commit = subprocess.run(["git", "-C", str(args.repo_root), "rev-parse", "HEAD"],
                                     check=True, capture_output=True, text=True).stdout.strip()
-        validate_ledger(ledger, manifests, args.captures, args.repo_root,
-                        commit, args.distribution)
+        with contextlib.ExitStack() as stack:
+            captures = None if args.captures is None else stack.enter_context(evidence_root(args.captures))
+            if captures is not None and not manifests:
+                manifests = load_manifests(captures)
+            validate_ledger(ledger, manifests, captures, args.repo_root, commit, args.distribution)
         validate_matrix(args.matrix.read_text(encoding="utf-8"), ledger)
         print("provider evidence manifest and ledger valid")
         return

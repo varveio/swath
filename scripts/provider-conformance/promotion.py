@@ -5,8 +5,9 @@
 
 The case matrix in each provider adapter owns row IDs and behavior text. `rows` rewrites
 the ledger rows and the matrix table from it, keeping any existing evidence. `promote`
-attaches sanitized captures (OBSERVED) and replay receipts (REPLAY_MATCH) from an
-evidence directory, then runs the fail-closed validator; nothing is promoted on failure.
+attaches sanitized captures (OBSERVED) and replay receipts (REPLAY_MATCH) from the
+evidence archive or an evidence directory, then runs the fail-closed validator; nothing is
+promoted on failure.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import hashlib
 import html
 import json
 import re
+import subprocess
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -283,25 +285,22 @@ def main() -> None:
     parser.add_argument("command", choices=["rows", "promote"])
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--matrix", type=Path, required=True)
-    parser.add_argument("--evidence", type=Path, help="evidence root with gcs/ and azure/ indexes")
+    parser.add_argument("--evidence", type=Path, default=evidence.EVIDENCE_ARCHIVE,
+                        help="evidence archive or directory with per-provider indexes")
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--distribution", type=Path)
     args = parser.parse_args()
     ledger = evidence.strict_json(args.ledger.read_text(encoding="utf-8"))
     ledger["rows"] = generated_rows(ledger)
-    manifests = {}
-    if args.command == "promote":
-        ledger = promote(ledger, args.evidence, load_receipts(args.evidence))
-        for path in sorted(args.evidence.glob("*/manifest.*.json")):
-            manifest = evidence.strict_json(path.read_text(encoding="utf-8"))
-            evidence.validate_manifest(manifest)
-            manifests[(manifest["provider"], manifest["api_version"])] = manifest
     commit = None
     if args.repo_root is not None:
-        import subprocess
         commit = subprocess.run(["git", "-C", str(args.repo_root), "rev-parse", "HEAD"], check=True,
                                 capture_output=True, text=True).stdout.strip()
-    evidence.validate_ledger(ledger, manifests, args.evidence, args.repo_root, commit, args.distribution)
+    with evidence.evidence_root(args.evidence) as root:
+        if args.command == "promote":
+            ledger = promote(ledger, root, load_receipts(root))
+        evidence.validate_ledger(ledger, evidence.load_manifests(root), root, args.repo_root, commit,
+                                 args.distribution)
     matrix = rewrite_matrix(args.matrix.read_text(encoding="utf-8"), ledger["rows"])
     evidence.validate_matrix(matrix, ledger)
     write_ledger(args.ledger, ledger)

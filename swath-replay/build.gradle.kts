@@ -153,6 +153,8 @@ dependencies {
     testImplementation(libs.azure.core.http.jdk)
     testImplementation(libs.parquet.hadoop)
     testImplementation(libs.zstd.jni)
+    // NativeEvidenceReplayTest reads the committed provider evidence archive.
+    testImplementation(libs.commons.compress)
     testImplementation(libs.hadoop.common) {
         exclude(group = "org.slf4j", module = "slf4j-reload4j")
         exclude(group = "org.slf4j", module = "slf4j-log4j12")
@@ -298,4 +300,10 @@ tasks.withType<Test>().configureEach {
             "providerReport" to "swath.provider.report").forEach { (property, key) ->
         providers.gradleProperty(property).orNull?.let { systemProperty(key, it) }
     }
+}
+
+// NativeEvidenceReplayTest replays the committed GCS and Azure provider evidence archive.
+tasks.named<Test>("test") {
+    inputs.file(rootProject.file("docs/replay-provider-evidence.tar.gz"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
