@@ -5,9 +5,9 @@
  */
 package io.varve.swath.replay.store;
 
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListedObject;
-import io.varve.swath.replay.server.ReplayMetrics;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

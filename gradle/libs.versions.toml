@@ -34,6 +34,9 @@ duckdbjdbc = "1.5.4.0"
 jmh = "1.37"
 jmhplugin = "0.7.3"
 jackson = "2.22.2"
+google-cloud-storage = "2.73.0"
+azure-storage-blob = "12.35.1"
+azure-core-http-jdk = "1.1.5"
 # Terminal geometry for the live progress display's in-place redraw, and nothing else — see
 # TerminalGeometry. The 3.x line is not the superseded one: 3.30.16 postdates 4.3.1, and it is what
 # the ecosystem's shaded consumers ship against.
@@ -70,6 +73,10 @@ jetty-bom = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty" }
 jetty-server = { module = "org.eclipse.jetty:jetty-server" }
 duckdb-jdbc = { module = "org.duckdb:duckdb_jdbc", version.ref = "duckdbjdbc" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson" }
+google-cloud-storage = { module = "com.google.cloud:google-cloud-storage", version.ref = "google-cloud-storage" }
+azure-storage-blob = { module = "com.azure:azure-storage-blob", version.ref = "azure-storage-blob" }
+azure-core-http-jdk = { module = "com.azure:azure-core-http-jdk-httpclient", version.ref = "azure-core-http-jdk" }
 # jline-terminal carries the Terminal API and the `exec` fallback provider; jline-terminal-ffm is
 # the JDK-22+ provider that answers a size query with an ioctl instead of forking `stty`. The JNI
 # provider (jline-native, ~185 KB of bundled .so/.dll) is excluded at the usage site: on a JDK-25

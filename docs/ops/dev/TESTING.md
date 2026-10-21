@@ -15,7 +15,7 @@ LocalStack/MinIO/AWS one object at a time. Instead:
 | --- | --- | --- |
 | Correctness + **edge cases** (no-gap/no-overlap, resume, ordering, `0xFF`/supplementary-plane/1000-1001 boundaries, skew) | **`MockPageFetcher`** — in-memory, no SDK, no store; adversarial `Keyspaces.*` generators | instant |
 | **Memory/throughput at scale** (I11, PERF-1/2) | `MockPageFetcher` streams 100k–millions through the **real pipeline** | instant (no puts) |
-| **"Millions of objects" realism** | **swath-replay** (`:swath-replay`) — serves synthetic `ListObjectsV2` XML from a fixture (the LIST-only high-fidelity oracle; swath is LIST-only, no inventory path) | fixture-backed, cheap |
+| **"Millions of objects" realism** | **swath-replay** (`:swath-replay`) — serves one captured fixture through S3 ListObjectsV2 and optional native GCS JSON/Azure Blob XML listing subsets. Native profiles remain provisional pending live-provider evidence; see [replay toolkit](../../swath-replay.md). | fixture-backed, cheap |
 | **Simulator policy/model checks** | `:swath-sim` deterministic defaults (`SimKernelTest`, `PolicyInvariantsTest`), store/pager differential checks (`SimStoreDifferentialTest`, `SimListingViewProtocolTest`), and opt-in `@Tag("perf")` corpus/real-listing runs (`CorpusSweepRunTest`, `RealListingRunTest`) | in-memory or local fixture; no object-store population |
 | **Real-SDK integration** (pagination, continuation tokens, real byte order) | LocalStack/MinIO with **modest** counts (~1–2k zero-byte objects = a few pages) | seconds |
 | **Real-world ground truth** | the public-bucket `aws s3api --no-sign-request` differential at the **gates** | none (read-only) |
@@ -81,6 +81,13 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
   wall-clock; that is the point.
 - **`-PnoIntegration`** `./gradlew test -PnoIntegration` — Docker-free quick inner
   loop (skips the Testcontainers ITs).
+  The replay module's ordinary `check` also compiles and runs the standalone
+  `replayBenchmarkSelfTest` HTTP driver and the offline Python
+  `providerEvidenceSelfTest` capture/ledger checks. Native GCS/Azure SDK pagination
+  tests and parser/pager differential tests run in `:swath-replay:test`; the
+  `swath-replay-conformance` launcher handles captured-provider comparisons and
+  full token walks separately from the default test tier. These checks do not
+  substitute for live-provider conformance or the opt-in capacity gates.
 - **`-PonlyIntegration`** `./gradlew test -PonlyIntegration` — runs **only** the
   `@Tag("integration")` ITs (used by the CI `integration-tests` job so it does not re-run
   the fast tier that `fast-tests` already ran). Mutually exclusive with `-PnoIntegration`.

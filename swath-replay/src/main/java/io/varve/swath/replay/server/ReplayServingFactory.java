@@ -11,6 +11,7 @@ import io.varve.swath.replay.fixture.FixtureMetrics;
 import io.varve.swath.replay.fixture.SortedEligibility;
 import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ListObjectsV2Pager;
 import io.varve.swath.replay.protocol.ListingFixture;
 import io.varve.swath.replay.store.DuckDbListingStore;
@@ -21,6 +22,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,9 +47,86 @@ public final class ReplayServingFactory {
     private ReplayServingFactory() {
     }
 
-    /** The resolved fixture plus the concrete path chosen and the metrics that back it. */
-    public record Result(ListingFixture fixture, ServingMode resolvedMode, ReplayMetrics metrics,
-                         int parquetConnections, int requestAdmissionLimit) {
+    /** One owner for the opened store and registry; protocol pagers borrow the store. */
+    public static final class Result implements AutoCloseable {
+        private final ListingStore store;
+        private final ListingFixture fixture;
+        private final ServingMode resolvedMode;
+        private final ReplayMetrics metrics;
+        private final int parquetConnections;
+        private final int requestAdmissionLimit;
+        private final AutoCloseable ownedResource;
+        private final AtomicBoolean storeClosed = new AtomicBoolean();
+        private final AtomicBoolean registryClosed = new AtomicBoolean();
+
+        private Result(ListingStore store, ServingMode resolvedMode, ReplayMetrics metrics,
+                       int parquetConnections, int requestAdmissionLimit) {
+            this.store = store;
+            this.fixture = new ListObjectsV2Pager(store, metrics);
+            this.resolvedMode = resolvedMode;
+            this.metrics = metrics;
+            this.parquetConnections = parquetConnections;
+            this.requestAdmissionLimit = requestAdmissionLimit;
+            this.ownedResource = store;
+        }
+
+        // Existing test seam; a production Result always has a non-null shared store.
+        Result(ListingFixture fixture, ServingMode resolvedMode, ReplayMetrics metrics,
+               int parquetConnections, int requestAdmissionLimit) {
+            this.store = null;
+            this.fixture = fixture;
+            this.resolvedMode = resolvedMode;
+            this.metrics = metrics;
+            this.parquetConnections = parquetConnections;
+            this.requestAdmissionLimit = requestAdmissionLimit;
+            this.ownedResource = fixture;
+        }
+
+        public ListingStore store() { return store; }
+        public ListingFixture fixture() { return fixture; }
+        public ServingMode resolvedMode() { return resolvedMode; }
+        public ReplayMetrics metrics() { return metrics; }
+        public int parquetConnections() { return parquetConnections; }
+        public int requestAdmissionLimit() { return requestAdmissionLimit; }
+
+        void closeStore() {
+            if (!storeClosed.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                ownedResource.close();
+            } catch (Exception e) {
+                throw new IllegalStateException("failed to close replay listing store", e);
+            }
+        }
+
+        void closeRegistry() {
+            if (registryClosed.compareAndSet(false, true)) {
+                metrics.registry().close();
+            }
+        }
+
+        @Override
+        public void close() {
+            RuntimeException failure = null;
+            try {
+                closeStore();
+            } catch (RuntimeException e) {
+                failure = e;
+            }
+            try {
+                closeRegistry();
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
     }
 
     /**
@@ -60,10 +139,10 @@ public final class ReplayServingFactory {
      */
     public static Result open(Path fixturePath, ServingMode mode, int parquetConnections) {
         MeterRegistry registry = new SimpleMeterRegistry();
-        FixtureMetrics fixtureMetrics = new FixtureMetrics(registry);
-        List<Path> files = resolveFiles(fixturePath);
-
-        return switch (mode) {
+        try {
+            FixtureMetrics fixtureMetrics = new FixtureMetrics(registry);
+            List<Path> files = resolveFiles(fixturePath);
+            return switch (mode) {
             case DUCKDB -> duckDb(fixturePath, parquetConnections, registry);
             case SORTED -> {
                 // recordFallbackOnFailure=false: sorted mode never falls back, it hard-fails — a
@@ -77,15 +156,22 @@ public final class ReplayServingFactory {
                         "--serving-mode sorted requires a stamped, objects-mode, strictly-sorted, "
                                 + "pure-OBJECT fixture (" + reason + "): " + fixturePath);
             }
-        };
+            };
+        } catch (RuntimeException | Error failure) {
+            try {
+                registry.close();
+            } catch (RuntimeException cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
     }
 
     private static Result duckDb(Path fixturePath, int parquetConnections, MeterRegistry registry) {
         int connections = parquetConnections > 0 ? parquetConnections : DuckDbListingStore.defaultConnectionCount();
         ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
         DuckDbListingStore store = new DuckDbListingStore(fixturePath, metrics, connections);
-        ListObjectsV2Pager pager = new ListObjectsV2Pager(store, metrics);
-        return new Result(pager, ServingMode.DUCKDB, metrics, connections, connections);
+        return new Result(store, ServingMode.DUCKDB, metrics, connections, connections);
     }
 
     private static Result sorted(List<Path> files, List<IndexEntry> index, int parquetConnections,
@@ -96,20 +182,28 @@ public final class ReplayServingFactory {
         ListingStore store;
         if (prefetch.enabled()) {
             SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections);
-            store = new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
+            try {
+                store = new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
+            } catch (RuntimeException | Error failure) {
+                try {
+                    backing.close();
+                } catch (RuntimeException cleanup) {
+                    failure.addSuppressed(cleanup);
+                }
+                throw failure;
+            }
             log.info("replay_serving sorted prefetch ENABLED (window_rows={} max_windows={}) for {}",
                     prefetch.windowRows(), prefetch.maxWindows(), files);
         } else {
             store = new SortedParquetStore(files, index, metrics, connections);
             log.info("replay_serving sorted prefetch DISABLED (bare store) for {}", files);
         }
-        ListObjectsV2Pager pager = new ListObjectsV2Pager(store, metrics);
         // SortedParquetStore already bounds cold fills with its connection pool. When prefetch is
         // enabled, an outer fair semaphore would queue requests before WindowedListingStore can
         // recognize continuations or serve hits, allowing breadth-first cold traffic to churn the
         // bounded cache. Let every request reach the cache; only backing reads consume connections.
         int requestAdmissionLimit = prefetch.enabled() ? 0 : connections;
-        return new Result(pager, ServingMode.SORTED, metrics, connections, requestAdmissionLimit);
+        return new Result(store, ServingMode.SORTED, metrics, connections, requestAdmissionLimit);
     }
 
     private static List<Path> resolveFiles(Path fixturePath) {

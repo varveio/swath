@@ -68,7 +68,7 @@ class ReplayServingFactoryEligibilityScanTest {
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
             assertThat(served).containsExactlyInAnyOrder("a", "z", "unstamped-x", "unstamped-y");
         } finally {
-            result.fixture().close();
+            result.close();
         }
     }
 
@@ -132,7 +132,7 @@ class ReplayServingFactoryEligibilityScanTest {
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
             assertThat(served).containsExactlyInAnyOrder("a", "p", "z");   // "m" genuinely gone from disk
         } finally {
-            result.fixture().close();
+            result.close();
         }
     }
 

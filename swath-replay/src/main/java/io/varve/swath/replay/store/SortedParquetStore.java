@@ -9,11 +9,11 @@ import io.varve.swath.output.parquet.sorted.RowGroupOrderException;
 import io.varve.swath.output.parquet.sorted.SortedParquetRangeReader;
 import io.varve.swath.output.parquet.sorted.SortedParquetRowGroupReader;
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
+import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.Successor;
-import io.varve.swath.replay.server.ReplayMetrics;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -269,6 +269,13 @@ public final class SortedParquetStore implements ListingStore {
     @Override
     public List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
                                                 byte[] prefix, byte[] delimiter, int limit, Projection projection) {
+        return delimitedRollup(from, fromInclusive, toExclusive, prefix, delimiter, limit, projection, true);
+    }
+
+    @Override
+    public List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
+                                                byte[] prefix, byte[] delimiter, int limit, Projection projection,
+                                                boolean suppressPrefixAtOrBeforeFloor) {
         if (delimiter == null || delimiter.length != 1 || delimiter[0] != (byte) '/') {
             return null;
         }
@@ -278,7 +285,8 @@ public final class SortedParquetStore implements ListingStore {
         boolean success = false;
         try {
             List<DelimitedEntry> out = skipScan(
-                    from, fromInclusive, toExclusive, prefix, limit, projection, stats);
+                    from, fromInclusive, toExclusive, prefix, limit, projection,
+                    suppressPrefixAtOrBeforeFloor, stats);
             entries = out.size();
             success = true;
             return out;
@@ -444,6 +452,7 @@ public final class SortedParquetStore implements ListingStore {
      */
     private List<DelimitedEntry> skipScan(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
                                           byte[] prefix, int limit, Projection projection,
+                                          boolean suppressPrefixAtOrBeforeFloor,
                                           SkipScanStats stats) throws IOException {
         if (index.isEmpty() || limit <= 0) {
             return List.of();
@@ -485,10 +494,18 @@ public final class SortedParquetStore implements ListingStore {
                 // apply (the group straddles a prefix boundary, or is the fixture's last group).
                 if (rg + 1 < index.size()) {
                     byte[] wholeGroupPrefix = commonPrefixAfter(groupFirstKey, prefix);
+                    byte[] nextGroupFirst = index.get(rg + 1).firstKey().toByteArray();
                     if (wholeGroupPrefix != null && Arrays.equals(wholeGroupPrefix,
-                            commonPrefixAfter(index.get(rg + 1).firstKey().toByteArray(), prefix))) {
+                            commonPrefixAfter(nextGroupFirst, prefix))
+                            // GCS may emit a prefix whose spelling sorts before an inclusive
+                            // startOffset inside it. If the next group's first key is at/past
+                            // endOffset, the current group still needs a real row check: there may
+                            // be no object at all in this narrow interval.
+                            && (suppressPrefixAtOrBeforeFloor || upper == null
+                                    || ByteKeys.compareUnsigned(nextGroupFirst, upper) < 0)) {
                         metrics.recordDelimiterSkipScanWholeGroupShortcut();
-                        if (fromBytes == null || ByteKeys.compareUnsigned(wholeGroupPrefix, fromBytes) > 0) {
+                        if (!suppressPrefixAtOrBeforeFloor || fromBytes == null
+                                || ByteKeys.compareUnsigned(wholeGroupPrefix, fromBytes) > 0) {
                             out.add(new DelimitedEntry(wholeGroupPrefix, null));
                         }
                         switch (ByteKeys.successor(wholeGroupPrefix)) {
@@ -562,7 +579,8 @@ public final class SortedParquetStore implements ListingStore {
                 }
                 byte[] commonPrefix = commonPrefixAfter(key, prefix);
                 if (commonPrefix != null) {
-                    if (fromBytes == null || ByteKeys.compareUnsigned(commonPrefix, fromBytes) > 0) {
+                    if (!suppressPrefixAtOrBeforeFloor || fromBytes == null
+                            || ByteKeys.compareUnsigned(commonPrefix, fromBytes) > 0) {
                         out.add(new DelimitedEntry(commonPrefix, null));
                     }
                     switch (ByteKeys.successor(commonPrefix)) {

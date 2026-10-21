@@ -8,12 +8,12 @@ package io.varve.swath.replay.server;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.replay.metrics.RequestShape;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
 import io.varve.swath.replay.server.ShapeLatency.Delay;
-import io.varve.swath.replay.server.ShapeLatency.Shape;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -49,19 +49,19 @@ class ShapeLatencyTest {
         // A delimiter present is a structure probe, checked before the max-keys probe test so a
         // delimiter'd max-keys=1 still classes structural.
         assertThat(ShapeLatency.classify(req(new byte[]{'p', '/'}, new byte[]{'/'}, 1000)))
-                .isEqualTo(Shape.STRUCTURE_PROBE);
+                .isEqualTo(RequestShape.STRUCTURE_PROBE);
         assertThat(ShapeLatency.classify(req(new byte[]{'p', '/'}, new byte[]{'/'}, 1)))
-                .isEqualTo(Shape.STRUCTURE_PROBE);
-        assertThat(ShapeLatency.classify(req(null, null, 1))).isEqualTo(Shape.PIVOT_PROBE);
-        assertThat(ShapeLatency.classify(req(null, null, 1000))).isEqualTo(Shape.WORKER_PAGE);
+                .isEqualTo(RequestShape.STRUCTURE_PROBE);
+        assertThat(ShapeLatency.classify(req(null, null, 1))).isEqualTo(RequestShape.PIVOT_PROBE);
+        assertThat(ShapeLatency.classify(req(null, null, 1000))).isEqualTo(RequestShape.WORKER_PAGE);
     }
 
     @Test
     void appliesTheDelayForEachShape() {
         ShapeLatency latency = new ShapeLatency(Map.of(
-                Shape.WORKER_PAGE, Delay.flat(Duration.ofMillis(200)),
-                Shape.PIVOT_PROBE, Delay.flat(Duration.ofMillis(120)),
-                Shape.STRUCTURE_PROBE, Delay.flat(Duration.ofSeconds(6))), 0.0);
+                RequestShape.WORKER_PAGE, Delay.flat(Duration.ofMillis(200)),
+                RequestShape.PIVOT_PROBE, Delay.flat(Duration.ofMillis(120)),
+                RequestShape.STRUCTURE_PROBE, Delay.flat(Duration.ofSeconds(6))), 0.0);
         S3ListRequest page = req(null, null, 1000);
         S3ListRequest pivot = req(null, null, 1);
         S3ListRequest probe = req(new byte[]{'p', '/'}, new byte[]{'/'}, 1000);
@@ -80,7 +80,7 @@ class ShapeLatencyTest {
     @Test
     void structureProbeDelayIsProportionalToTheCommonPrefixesReturned() {
         ShapeLatency latency = new ShapeLatency(Map.of(
-                Shape.STRUCTURE_PROBE, new Delay(Duration.ofMillis(223), Duration.ofMillis(55))), 0.0);
+                RequestShape.STRUCTURE_PROBE, new Delay(Duration.ofMillis(223), Duration.ofMillis(55))), 0.0);
         S3ListRequest wide = req(new byte[]{'p', '/'}, new byte[]{'/'}, 1000);
         S3ListRequest capped = req(new byte[]{'p', '/'}, new byte[]{'/'}, 32);
 
@@ -95,7 +95,7 @@ class ShapeLatencyTest {
     @Test
     void unlistedShapeGetsNoDelay() {
         ShapeLatency latency = new ShapeLatency(
-                Map.of(Shape.STRUCTURE_PROBE, Delay.flat(Duration.ofSeconds(6))), 0.0);
+                Map.of(RequestShape.STRUCTURE_PROBE, Delay.flat(Duration.ofSeconds(6))), 0.0);
         S3ListRequest page = req(null, null, 1000);
         assertThat(latency.apply(page, result(page, 0))).isEqualTo(Duration.ZERO);
     }
@@ -204,7 +204,7 @@ class ShapeLatencyTest {
     @Test
     void jitterIsDeterministicPerRequestAndWithinBounds() {
         ShapeLatency latency = new ShapeLatency(
-                Map.of(Shape.WORKER_PAGE, Delay.flat(Duration.ofMillis(1000))), 0.2);
+                Map.of(RequestShape.WORKER_PAGE, Delay.flat(Duration.ofMillis(1000))), 0.2);
         S3ListRequest r = req(new byte[]{'k'}, null, 1000);
         S3ListResult res = result(r, 0);
         Duration first = latency.apply(r, res);
@@ -220,7 +220,7 @@ class ShapeLatencyTest {
     @Test
     void continuationPagesDrawDistinctJitter() {
         ShapeLatency latency = new ShapeLatency(
-                Map.of(Shape.WORKER_PAGE, Delay.flat(Duration.ofMillis(1000))), 0.2);
+                Map.of(RequestShape.WORKER_PAGE, Delay.flat(Duration.ofMillis(1000))), 0.2);
         Duration a = latency.apply(pageWithToken("token-a"), result(pageWithToken("token-a"), 0));
         Duration b = latency.apply(pageWithToken("token-b"), result(pageWithToken("token-b"), 0));
         assertThat(a).isNotEqualTo(b);
