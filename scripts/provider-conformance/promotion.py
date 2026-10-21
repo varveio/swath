@@ -38,7 +38,7 @@ FAMILY_PROMISES = {
     "azure-01": "Explicit version only", "azure-02": "Version individually gated",
     "azure-03": "Provisional flat list", "azure-04": "**Unsupported until native evidence**",
     "azure-05": "Matching `startFrom` retained on continuation; other combinations refused pending evidence",
-    "azure-06": "Provisional unsigned UTF-8 order",
+    "azure-06": "Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch",
     "azure-07": "Explicit encoding; raw-wire assertion required",
     "azure-08": "Zero refused pending evidence", "azure-09": "Complete native-marker walk required",
     "azure-10": "Must run unmodified with endpoint override", "azure-11": "Separate request counts",
