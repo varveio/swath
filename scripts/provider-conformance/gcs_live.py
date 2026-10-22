@@ -15,6 +15,7 @@ import re
 import os
 import threading
 import time
+from datetime import timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -80,9 +81,10 @@ class GcsAuthorizer:
 
     def headers(self, phase: str, request: "Request") -> list[tuple[str, str]]:
         with self.lock:
+            # google-auth keeps expiry as a naive UTC datetime; read it as UTC, not host-local time.
             expiry = self.credentials.expiry
             if not self.credentials.token or expiry is None or \
-                    expiry.replace(tzinfo=None).timestamp() - time.time() < REFRESH_MARGIN_SECONDS:
+                    expiry.replace(tzinfo=timezone.utc).timestamp() - time.time() < REFRESH_MARGIN_SECONDS:
                 self.transport.phase = phase
                 self.credentials.refresh(self.transport)
             return [("Authorization", "Bearer " + self.credentials.token)]

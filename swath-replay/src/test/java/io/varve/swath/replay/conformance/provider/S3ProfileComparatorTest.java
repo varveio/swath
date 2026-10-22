@@ -96,6 +96,22 @@ class S3ProfileComparatorTest {
     }
 
     @Test
+    void ownerChildrenAreComparedInOrderWithoutDuplicates() {
+        String owner = "<Owner><ID>{owner-id}</ID><DisplayName>{owner-name}</DisplayName></Owner>";
+        String nativeBody = page("{bucket}", "1", "false", null, contents("p/a", "e1", owner));
+        Map<String, String> cases = Map.of(
+                "duplicated ID", "<Owner><ID>s</ID><ID>s</ID><DisplayName>s</DisplayName></Owner>",
+                "reordered", "<Owner><DisplayName>s</DisplayName><ID>s</ID></Owner>",
+                "missing DisplayName", "<Owner><ID>s</ID></Owner>");
+        cases.forEach((label, replayOwner) -> assertThatThrownBy(() -> compare(nativeBody,
+                page("replay-bucket", "1", "false", null, contents("p/a", "e1", replayOwner))))
+                .as(label).hasMessageContaining("Owner replay children"));
+        assertThatThrownBy(() -> compare(page("{bucket}", "1", "false", null, contents("p/a", "e1",
+                "<Owner><ID>i</ID><ID>i</ID><DisplayName>n</DisplayName></Owner>")), nativeBody.replace("{bucket}",
+                "replay-bucket"))).hasMessageContaining("Owner children");
+    }
+
+    @Test
     void walkComparesInventoriesAndRefusesRepeatedCommonPrefixes() {
         String prefix = "<CommonPrefixes><Prefix>p/d/</Prefix></CommonPrefixes>";
         var nativePages = List.of(

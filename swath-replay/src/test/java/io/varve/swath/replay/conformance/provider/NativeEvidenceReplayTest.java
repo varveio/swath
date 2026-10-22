@@ -282,12 +282,17 @@ class NativeEvidenceReplayTest {
             String caseId = key.split("~", 2)[0];
             JsonNode record = cases.get(caseId);
             if (record == null) throw new IllegalStateException("capture has no case record");
+            String kind = capture.path("evidence_kind").asText();
             if (capture.path("schema_version").asText().equals("provider-capture-v1")) {
                 verifyExchange(file, capture, record);
-            } else if (capture.path("evidence_kind").asText().equals("sdk_run")) {
+            } else if (kind.equals("sdk_run")) {
                 verifySdk(file, capture, entry.path("sdk_options"));
-            } else {
+            } else if (kind.equals("walk")) {
                 verifyWalk(file, capture);
+            } else {
+                // A retry run must be replayed attempt by attempt, not as a fresh pagination walk;
+                // no such verifier exists yet, so retry evidence is refused rather than walked.
+                throw new IllegalStateException("no replay verifier for " + kind + " captures");
             }
         }
 
@@ -616,6 +621,18 @@ class NativeEvidenceReplayTest {
             }
         }
         assumeTrue(checked > 0, "no committed provider evidence");
+    }
+
+    @Test
+    void retryRunCapturesAreRefusedRatherThanWalked(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("gcs-10.json");
+        Files.writeString(file, JSON.writeValueAsString(Map.of("schema_version", "provider-capture-run-v1",
+                "evidence_kind", "retry_run", "provider", "gcs", "probe_id", "gcs-10", "steps", List.of())));
+        // Port 0 has no server: a walk would fail on connect, so the refusal must come first.
+        Endpoint endpoint = new Endpoint("gcs", 0, Map.of("gcs-10", JSON.createObjectNode()), false, Mutation.NONE);
+        assertThatThrownBy(() -> endpoint.verify("gcs-10", file, JSON.createObjectNode()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("no replay verifier for retry_run captures");
     }
 
     /** A deterministic corruption of replay exchanges, in page order. */

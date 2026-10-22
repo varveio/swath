@@ -307,6 +307,48 @@ class ProviderSdkCaptureTest {
     }
 
     @Test
+    void gcsAttemptCapCoversAPeerTricklingHeaders() throws Exception {
+        // One header byte every 200 ms never trips the 1 s socket read timeout, so only a cap on
+        // the whole attempt, started before the request is sent, ends it.
+        try (var socket = new java.net.ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress())) {
+            AtomicInteger hits = new AtomicInteger();
+            Thread server = Thread.ofVirtual().start(() -> {
+                while (!socket.isClosed()) {
+                    try {
+                        var client = socket.accept();
+                        hits.incrementAndGet();
+                        Thread.ofVirtual().start(() -> {
+                            try (client) {
+                                var output = client.getOutputStream();
+                                output.write("HTTP/1.1 200 OK\r\nX-Pad: ".getBytes(StandardCharsets.ISO_8859_1));
+                                for (int i = 0; i < 600; i++) {
+                                    output.write('a');
+                                    output.flush();
+                                    Thread.sleep(200);
+                                }
+                            } catch (java.io.IOException | InterruptedException e) {
+                                // the client closed the connection at its cap
+                            }
+                        });
+                    } catch (java.io.IOException e) {
+                        // closed
+                    }
+                }
+            });
+            long started = System.nanoTime();
+            var result = ProviderSdkCapture.run(gcs(socket.getLocalPort()).requestTimeoutSeconds(1).maxAttempts(1)
+                    .retryAttempts(1).build());
+            long elapsedMillis = (System.nanoTime() - started) / 1_000_000;
+            assertThat(result.status()).isEqualTo(ProviderSdkCapture.Status.INCOMPLETE);
+            assertThat(result.reason()).isEqualTo("bound:request_time");
+            assertThat(elapsedMillis).isLessThan(10_000);
+            assertThat(hits.get()).isGreaterThanOrEqualTo(1);
+            socket.close();
+            server.join(5_000);
+        }
+    }
+
+    @Test
     void azureResendsBelowTheSdkStayWithinTwiceTheReportedAttempts() throws Exception {
         try (DroppingServer server = new DroppingServer("application/xml", null)) {
             var result = ProviderSdkCapture.run(azure(server.port()).retryAttempts(3).build());

@@ -39,10 +39,12 @@ SAS_FIELDS = frozenset({"sv", "ss", "srt", "sp", "se", "st", "spr", "sig", "sr",
 
 class SasAuthorizer:
     def __init__(self, sas: str):
+        # A SAS copied with its leading `?` is accepted; the field check sees the query alone.
+        sas = sas.removeprefix("?")
         fields = {name for name, _ in parse_qsl(sas, keep_blank_values=True)}
         if not sas or "sig" not in fields or not fields <= SAS_FIELDS:
             raise ValueError("Azure SAS must be a container SAS query string")
-        self.sas = sas.lstrip("?")
+        self.sas = sas
 
     def headers(self, phase: str, request: "Request") -> list[tuple[str, str]]:
         return []
@@ -56,6 +58,9 @@ class AzureProvider:
     api_versions = VERSIONS
 
     def __init__(self, account: str, container: str, sas: str, region: str):
+        # The stripped SAS is what is sent, so it is also what is redacted. It is a substring of
+        # the spelling with `?`, so redacting it covers both.
+        sas = sas.removeprefix("?")
         if not account or not container or not sas:
             raise ValueError("Azure account, container and SAS must be configured explicitly")
         self.account = account

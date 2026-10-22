@@ -38,6 +38,9 @@ public final class S3ProfileComparator {
     private static final Set<String> CONTENTS_FIELDS = Set.of("Key", "LastModified", "ETag", "ChecksumAlgorithm",
             "ChecksumType", "Size", "StorageClass", "Owner", "RestoreStatus");
     private static final Set<String> OWNER_FIELDS = Set.of("ID", "DisplayName");
+    // Owner values may be synthetic on replay, so only the child sequence is compared. It is
+    // compared as a list so duplicated or reordered children do not pass.
+    private static final List<String> OWNER_SEQUENCE = List.of("ID", "DisplayName");
     private static final String PROFILE_OMITTED = "RestoreStatus";
 
     private S3ProfileComparator() {
@@ -172,8 +175,8 @@ public final class S3ProfileComparator {
                 switch (expected.name()) {
                     case "LastModified" -> equal(label, instant(expected.text()), instant(actual.text()));
                     case "Owner" -> {
-                        equal(label + " children", Set.copyOf(expected.children()), OWNER_FIELDS);
-                        equal(label + " replay children", Set.copyOf(actual.children()), OWNER_FIELDS);
+                        equal(label + " children", expected.children(), OWNER_SEQUENCE);
+                        equal(label + " replay children", actual.children(), OWNER_SEQUENCE);
                     }
                     default -> equal(label, expected.text(), actual.text());
                 }

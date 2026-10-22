@@ -19,9 +19,10 @@ import java.util.List;
 
 /**
  * The SDK's default {@link NetHttpTransport}, with every attempt counted before it is sent and
- * storage exchanges recorded. Credential refresh traffic uses an unrecorded instance. Each
- * attempt's timeouts are the request cap shortened by the deadline, response bytes are charged
- * as they are read, and TLS connections are counted so a transport resend is also gated.
+ * storage exchanges recorded. Credential refresh traffic uses an unrecorded instance. The whole
+ * attempt, from connect to the last body byte, is bounded by the request cap shortened by the
+ * deadline; response bytes are charged as they are read, and TLS connections are counted so a
+ * transport resend is also gated.
  */
 final class GcsGatedTransport extends HttpTransport {
     private static final java.util.concurrent.ScheduledExecutorService WATCHDOG =
@@ -31,6 +32,10 @@ final class GcsGatedTransport extends HttpTransport {
                 return thread;
             });
     private static final Method BUILD_REQUEST = buildRequestMethod();
+    private static final java.lang.reflect.Field CONNECTION = connectionField();
+    // After the cap the watchdog keeps closing the connection until the attempt returns, so a
+    // close that lands before the socket exists, or a transport resend, cannot escape it.
+    private static final long ABORT_REPEAT_MILLIS = 100;
 
     private final HttpTransport delegate;
     private final AttemptGate gate;
@@ -92,6 +97,27 @@ final class GcsGatedTransport extends HttpTransport {
         }
     }
 
+    // NetHttpRequest keeps its HttpURLConnection private; closing it is the only way to stop a
+    // connect or header read in progress, whose socket timeouts restart with every byte.
+    private static java.lang.reflect.Field connectionField() {
+        try {
+            Class<?> type = Class.forName("com.google.api.client.http.javanet.NetHttpRequest");
+            java.lang.reflect.Field field = type.getDeclaredField("connection");
+            field.setAccessible(true);
+            return field;
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static java.net.HttpURLConnection connection(LowLevelHttpRequest request) {
+        try {
+            return (java.net.HttpURLConnection) CONNECTION.get(request);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private final class GatedRequest extends LowLevelHttpRequest {
         private final String method;
         private final String url;
@@ -141,33 +167,21 @@ final class GcsGatedTransport extends HttpTransport {
             request.setContentEncoding(getContentEncoding());
             request.setContentType(getContentType());
             request.setStreamingContent(getStreamingContent());
-            long started = System.nanoTime();
-            LowLevelHttpResponse response;
-            try {
-                response = request.execute();
-            } catch (java.net.SocketTimeoutException e) {
-                throw new CaptureBoundException("request_time");
-            }
-            long remainingMillis = limit - (System.nanoTime() - started) / 1_000_000;
-            if (remainingMillis <= 0) {
-                response.disconnect();
-                throw new CaptureBoundException("request_time");
-            }
-            // A trickling body cannot outlive the attempt's total cap: the connection is closed then.
+            // A peer trickling headers or body cannot outlive the attempt's total cap: the
+            // connection is closed then, whatever phase the attempt is in.
+            java.net.HttpURLConnection connection = connection(request);
             java.util.concurrent.atomic.AtomicBoolean expired = new java.util.concurrent.atomic.AtomicBoolean();
-            java.util.concurrent.ScheduledFuture<?> watchdog = WATCHDOG.schedule(() -> {
+            java.util.concurrent.ScheduledFuture<?> watchdog = WATCHDOG.scheduleWithFixedDelay(() -> {
                 expired.set(true);
-                try {
-                    response.disconnect();
-                } catch (IOException ignored) {
-                    // the read below fails and reports the bound
-                }
-            }, remainingMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
+                connection.disconnect();
+            }, limit, ABORT_REPEAT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            LowLevelHttpResponse response = null;
             byte[] wire;
             try {
+                response = request.execute();
                 wire = recorder.readBounded(response.getContent(), gate);
             } catch (IOException | RuntimeException e) {
-                response.disconnect();
+                if (response != null) response.disconnect();
                 if (expired.get() || e instanceof java.net.SocketTimeoutException) {
                     throw new CaptureBoundException("request_time");
                 }
