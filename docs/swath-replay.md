@@ -8,9 +8,11 @@ normal listing.
 engine debugging, conformance checks, and benchmarks without repeatedly listing S3.
 
 It is built in this repository but distributed separately from the `swath` CLI. S3 wire
-behavior is conformance-tested. Native GCS and Azure routes have offline tests;
-live-provider conformance evidence is still being collected. Diagnostics and launcher
-settings remain a development surface.
+behavior is conformance-tested. Native GCS and Azure routes have offline tests, including
+replays of live GCS and Azure captures; the
+[provider conformance matrix](replay-provider-conformance.md) tracks which cases match,
+and those profiles stay provisional. Diagnostics and launcher settings remain a
+development surface.
 
 It is not a general object-store emulator: there is no object data, mutation,
 authentication, virtual-host routing, or version listing. Its listing routes serve the

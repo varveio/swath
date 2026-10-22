@@ -58,13 +58,31 @@ class ProviderMatchReceiptRunTest {
                 replay.getFirst().exchange(), Map.of(), "replay", false, dir,
                 dir.resolve("dist.jar"), source, "exactTest", dir.resolve("bad.json")))
                 .hasMessageContaining("one exchange");
+        // A replay walk that stops one page early is refused even though it is shorter.
         assertThatThrownBy(() -> ProviderMatchReceipt.gcsRun(capture, replay.subList(0, 1),
                 Map.of("local-token", NATIVE_TOKEN), "replay", false, dir,
                 dir.resolve("dist.jar"), source, "exactTest", dir.resolve("bad.json")))
-                .hasMessageContaining("exchange count");
-        assertThatThrownBy(() -> ProviderMatchReceipt.gcsRun(capture, replay, Map.of(),
-                "replay", false, dir, dir.resolve("dist.jar"), source, "exactTest",
-                dir.resolve("bad.json"))).hasMessageContaining("explicit mapping");
+                .hasMessageContaining("nonterminal");
+        // Walks follow each endpoint's own tokens, so no cross-endpoint token mapping is needed.
+        ProviderMatchReceipt.verifyGcsRun(capture, replay, Map.of(), "replay", false);
+        // Different page boundaries with the same complete ordered inventory match ...
+        var onePage = List.of(replay("walk", "/storage/v1/b/replay/o", "prefix=a", "gcloud-java/2.73.0",
+                null, gcsBodyOf("replay", null, "a", "b"), "application/json"));
+        ProviderMatchReceipt.verifyGcsRun(capture, onePage, Map.of(), "replay", false);
+        // ... but a duplicated, missing or reordered entry never does.
+        for (String[] names : List.of(new String[] {"a", "b", "b"}, new String[] {"a"},
+                new String[] {"b", "a"})) {
+            var corrupted = List.of(replay("walk", "/storage/v1/b/replay/o", "prefix=a", "gcloud-java/2.73.0",
+                    null, gcsBodyOf("replay", null, names), "application/json"));
+            assertThatThrownBy(() -> ProviderMatchReceipt.verifyGcsRun(capture, corrupted, Map.of(),
+                    "replay", false)).isInstanceOf(IllegalArgumentException.class);
+        }
+        // A replay walk whose later page changes the query scope is refused.
+        var scopeChange = List.of(replay.getFirst(), replay("walk", "/storage/v1/b/replay/o",
+                "prefix=b&pageToken=local-token", "gcloud-java/2.73.0", null, gcsBody("replay", "b", null),
+                "application/json"));
+        assertThatThrownBy(() -> ProviderMatchReceipt.verifyGcsRun(capture, scopeChange, Map.of(),
+                "replay", false)).hasMessageContaining("query differs");
         var wrongSdk = List.of(replay.getFirst(), replay("walk", "/storage/v1/b/replay/o",
                 "prefix=a&pageToken=local-token", "gcloud-java/2.73.1", null,
                 gcsBody("replay", "b", null), "application/json"));
@@ -197,6 +215,16 @@ class ProviderMatchReceiptRunTest {
                 new ProviderExchangeComparator.Exchange(200, responseHeaders, bytes(body)));
     }
 
+    private static String gcsBodyOf(String bucket, String next, String... names) {
+        List<String> items = new ArrayList<>();
+        for (String name : names) {
+            String body = gcsBody(bucket, name, null);
+            items.add(body.substring(body.indexOf('[') + 1, body.lastIndexOf(']')));
+        }
+        return "{\"kind\":\"storage#objects\",\"items\":[" + String.join(",", items) + "]"
+                + (next == null ? "}" : ",\"nextPageToken\":\"" + next + "\"}");
+    }
+
     private static String gcsBody(String bucket, String name, String next) {
         String item = "{\"kind\":\"storage#object\",\"bucket\":\"" + bucket
                 + "\",\"name\":\"" + name + "\",\"size\":\"1\","
@@ -241,4 +269,20 @@ class ProviderMatchReceiptRunTest {
     }
 
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
+
+    @Test
+    void sdkHeadersIgnoreOnlyTheJvmVersionToken() {
+        var captured = sdkRequest("gl-java/25.0.3 gdcl/2.7.2");
+        ProviderMatchReceipt.assertSdkHeaders(captured, sdkRequest("gl-java/25.0.4 gdcl/2.7.2"));
+        assertThatThrownBy(() -> ProviderMatchReceipt.assertSdkHeaders(captured,
+                sdkRequest("gl-java/25.0.4 gdcl/2.7.3")))
+                .hasMessageContaining("product/version token differs");
+        assertThatThrownBy(() -> ProviderMatchReceipt.assertSdkHeaders(captured, sdkRequest("gdcl/2.7.2")))
+                .hasMessageContaining("product/version token differs");
+    }
+
+    private static ProviderMatchReceipt.Request sdkRequest(String apiClient) {
+        return new ProviderMatchReceipt.Request("GET", "/storage/v1/b/{bucket}/o", "",
+                Map.of("x-goog-api-client", List.of(apiClient)));
+    }
 }

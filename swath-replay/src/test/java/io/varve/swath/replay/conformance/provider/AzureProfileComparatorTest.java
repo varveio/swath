@@ -5,6 +5,7 @@
  */
 package io.varve.swath.replay.conformance.provider;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -53,6 +54,21 @@ class AzureProfileComparatorTest {
     @Test
     void comparesExactMembershipTextOrderAndTypedSyntheticFields() {
         assertThatCode(() -> compare(NATIVE, REPLAY)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void nativeOnlyEmptyOrMetadataAfterPropertiesIsProfileOmitted() {
+        String withProperties = NATIVE.replace("</Properties></Blob>", "<Content-CRC64 /><Content-MD5>bWQ1"
+                + "</Content-MD5><ServerEncrypted>true</ServerEncrypted></Properties><OrMetadata /></Blob>");
+        assertThat(withProperties).contains("<OrMetadata />");
+        assertThatCode(() -> compare(withProperties, REPLAY)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> compare(withProperties.replace("<OrMetadata />", "<OrMetadata><Rule/></OrMetadata>"),
+                REPLAY)).hasMessageContaining("unexpected field after Properties");
+        assertThatThrownBy(() -> compare(withProperties.replace("<OrMetadata />", "<OrMetadata>x</OrMetadata>"),
+                REPLAY)).isInstanceOf(IllegalArgumentException.class);
+        String replayWithOr = REPLAY.replace("</Properties></Blob>", "</Properties><OrMetadata /></Blob>");
+        assertThatThrownBy(() -> compare(withProperties, replayWithOr))
+                .hasMessageContaining("unexpected field after Properties");
     }
 
     @Test

@@ -9,41 +9,168 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import gzip
 import hashlib
 import html
+import io
 import json
 import re
 import subprocess
+import tarfile
+import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+# Committed GCS and Azure evidence: one reproducible tar.gz of per-provider evidence directories.
+EVIDENCE_ARCHIVE = REPO_ROOT / "docs" / "replay-provider-evidence.tar.gz"
 REQUEST_HEADERS = {"accept", "x-ms-version", "x-ms-client-request-id", "content-type",
-                   "user-agent", "x-goog-api-client"}
+                   "user-agent", "x-goog-api-client", "x-amz-optional-object-attributes"}
 RESPONSE_HEADERS = {"content-type", "date", "x-goog-request-id", "x-ms-request-id",
                     "x-ms-version", "x-ms-error-code", "x-ms-client-request-id",
-                    "content-length", "server", "cache-control", "vary", "transfer-encoding"}
+                    "content-length", "server", "cache-control", "vary", "transfer-encoding",
+                    "x-amz-request-id", "x-amz-id-2", "x-amz-bucket-region",
+                    "x-guploader-uploadid", "x-goog-gcs-base-ts", "expires", "alt-svc", "pragma", "connection"}
 GCS_QUERY = {"prefix", "delimiter", "startOffset", "endOffset", "maxResults", "pageToken",
              "projection", "versions", "softDeleted", "includeFoldersAsPrefixes",
              "includeTrailingDelimiter", "matchGlob", "filter", "fields", "prettyPrint", "alt"}
+# Request-identifying response headers: kept as digests so their presence and spelling survive.
+VOLATILE_ID_HEADERS = {"x-goog-request-id", "x-ms-request-id", "x-amz-request-id", "x-amz-id-2",
+                       "x-guploader-uploadid"}
+S3_QUERY = {"list-type", "prefix", "delimiter", "max-keys", "continuation-token", "start-after",
+            "encoding-type", "fetch-owner", "marker", "optional-object-attributes"}
+S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+S3_HOST = re.compile(r"s3\.[a-z0-9-]+\.amazonaws\.com\Z")
+S3_ERROR_FIELDS = {"Code", "Message", "RequestId", "HostId", "BucketName", "ArgumentName",
+                   "ArgumentValue", "Region", "Key", "Condition", "MaxAllowedValue", "MinAllowedValue",
+                   "Size", "MaxSizeAllowed", "AWSAccessKeyId", "StringToSign", "SignatureProvided",
+                   "StringToSignBytes", "CanonicalRequest", "CanonicalRequestBytes", "Resource", "Method",
+                   "HeaderName", "HeaderValue"}
+# Signature-error details echo the access key, canonical request and string to sign.
+S3_REDACTED_ERROR_FIELDS = {"Message", "Condition", "AWSAccessKeyId", "StringToSign", "SignatureProvided",
+                            "StringToSignBytes", "CanonicalRequest", "CanonicalRequestBytes", "HeaderValue"}
 AZURE_QUERY = {"restype", "comp", "prefix", "delimiter", "marker", "maxresults", "startFrom",
                "timeout", "include", "showonly", "endBefore"}
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SDK_TOKEN = re.compile(
     r"(?<![A-Za-z0-9._-])(?:gcloud-java(?:-storage)?|google-cloud-storage|google-api-java-client|"
     r"google-http-java-client|google-http-client|azsdk-java-azure-storage-blob|"
-    r"azure-storage-blob|gdcl|gccl|gapic|gl-java)/[0-9][A-Za-z0-9._+\-]*",
+    r"azure-storage-blob|aws-sdk-java|gdcl|gccl|gapic|gl-java)/[0-9][A-Za-z0-9._+\-]*",
     re.IGNORECASE)
 EVIDENCE_KINDS = {"exchange", "walk", "sdk_run", "retry_run"}
+# Rows whose question can only be answered by a multi-page walk or an SDK/retry run. The
+# bundled rows are kept so a reintroduced legacy row is still held to its probe kind.
 REQUIRED_KINDS = {"gcs-07": "walk", "gcs-09": "sdk_run", "gcs-10": "retry_run",
-                  "azure-09": "walk", "azure-10": "sdk_run", "azure-11": "retry_run"}
+                  "azure-09": "walk", "azure-10": "sdk_run", "azure-11": "retry_run",
+                  **{row: "walk" for row in ("gcs-06c", "gcs-07a", "gcs-07c", "gcs-07d", "gcs-07e",
+                                             "gcs-07n", "gcs-07q", "azure-04m", "azure-05a",
+                                             "azure-08c", "azure-09a", "azure-09c", "azure-09e",
+                                             "azure-09n", "azure-09q")},
+                  **{row: "sdk_run" for row in ("gcs-09a", "gcs-09b", "gcs-09c",
+                                                "azure-10a", "azure-10b", "azure-10c")}}
 SPLIT_BEFORE_PROMOTION = {"gcs-01", "gcs-03", "gcs-06", "azure-04", "azure-08", "azure-12"}
-TOKEN_FIELDS = {"gcs": "pageToken", "azure": "marker"}
+# Probes whose subject is a duplicated query field; every other capture must not repeat one.
+# ProviderMatchReceipt.DUPLICATE_QUERY_PROBES must name the same rows.
+DUPLICATE_QUERY_PROBES = {"gcs-05", "azure-08", "gcs-05h", "gcs-05i", "gcs-06m",
+                          "azure-07h", "azure-07i", "azure-08m", "azure-08p",
+                          "s3-05h", "s3-05i", "s3-06m", "s3-12d"}
+# Rows about response spelling need a separately checksummed raw-wire artifact.
+RAW_WIRE_ROWS = {"gcs-08", "gcs-08a", "gcs-08b"}
+TOKEN_FIELDS = {"gcs": "pageToken", "azure": "marker", "s3": "continuation-token"}
+PROVIDER_QUERIES = {"gcs": GCS_QUERY, "azure": AZURE_QUERY, "s3": S3_QUERY}
+API_VERSIONS = {"gcs": {"json-v1"}, "azure": {"2026-06-06", "2026-10-06"}, "s3": {"2006-03-01"}}
+# A provider's record of which captures at other service versions equal its reference version's.
+VERSION_EQUIVALENCE_FILE = "version-equivalence.json"
+VERSION_EQUIVALENCE_SCHEMA = "provider-version-equivalence-v1"
+# Response or request header values that differ between two captures of one case without changing
+# the listing: the service version echo, HTTP dates, and request and client request IDs.
+VERSION_NORMALIZED_HEADERS = VOLATILE_ID_HEADERS | {"x-ms-version", "x-ms-client-request-id", "date", "expires"}
+# Capture provenance that names its own version, manifest and capture time.
+VERSION_PROVENANCE_FIELDS = ("api_version", "manifest_sha256", "captured_at")
 
 
 def canonical(value: object) -> bytes:
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def read_evidence(path: Path) -> bytes:
+    """Evidence bytes; a `.gz` file stores deterministic gzip of the checksummed bytes."""
+    payload = path.read_bytes()
+    return gzip.decompress(payload) if path.suffix == ".gz" else payload
+
+
+def deterministic_gzip(payload: bytes) -> bytes:
+    """Level-9 gzip with no file name, a zero timestamp and a fixed header."""
+    buffer = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", compresslevel=9, fileobj=buffer, mtime=0) as stream:
+        stream.write(payload)
+    return buffer.getvalue()
+
+
+@contextlib.contextmanager
+def evidence_root(path: Path) -> Iterator[Path]:
+    """An evidence directory, or a temporary extraction of an evidence archive."""
+    if path.is_dir():
+        yield path
+        return
+    with tempfile.TemporaryDirectory(prefix="provider-evidence-") as temp, tarfile.open(path, "r:gz") as archive:
+        if not all(member.isfile() for member in archive.getmembers()):
+            raise ValueError("evidence archive holds only regular files")
+        archive.extractall(temp, filter="data")
+        yield Path(temp)
+
+
+def load_manifests(root: Path) -> dict[tuple[str, str], dict]:
+    """Every provider/version manifest an evidence root's indexes name, checked against its digest.
+    A version stored without a file is its `derived_from` manifest with only the version changed."""
+    manifests = {}
+    for index_path in sorted(root.glob("*/index.json")):
+        index = strict_json(index_path.read_text(encoding="utf-8"))
+        for version, entry in sorted(index["manifests"].items(), key=lambda item: "derived_from" in item[1]):
+            if "derived_from" in entry:
+                manifest = dict(manifests[(index["provider"], entry["derived_from"])], api_version=version)
+            else:
+                payload = checked_child(index_path.parent, entry["file"]).read_bytes()
+                manifest = strict_json(payload.decode("utf-8"))
+            if hashlib.sha256(canonical(manifest)).hexdigest() != entry["sha256"]:
+                raise ValueError("manifest differs from its index checksum")
+            validate_manifest(manifest)
+            if (manifest["provider"], manifest["api_version"]) != (index["provider"], version):
+                raise ValueError("manifest provider/version differs from its index")
+            manifests[(index["provider"], version)] = manifest
+    return manifests
+
+
+def version_normalized(capture: dict) -> dict:
+    """A capture without its version provenance and with volatile header values replaced.
+
+    Two captures of one case at different service versions normalize equal exactly when their
+    requests and responses differ only in those values. An error's raw-body digest is dropped:
+    the raw error message carries the request ID and time, which sanitization redacts.
+    """
+    def exchange(value: dict) -> dict:
+        value = {key: item for key, item in value.items() if key not in VERSION_PROVENANCE_FIELDS}
+        if value["response"]["status"] >= 400:
+            value.pop("raw_body_sha256", None)
+        for side in ("request", "response"):
+            value[side] = dict(value[side], headers=[
+                {"name": header["name"], "value": "{normalized}"}
+                if header["name"] in VERSION_NORMALIZED_HEADERS else header
+                for header in value[side]["headers"]])
+        return value
+
+    if capture.get("schema_version") == "provider-capture-v1":
+        return exchange(capture)
+    return dict({key: item for key, item in capture.items() if key not in VERSION_PROVENANCE_FIELDS},
+                steps=[dict(step, exchange=exchange(step["exchange"])) for step in capture["steps"]])
+
+
+def normalized_sha256(capture: dict) -> str:
+    return hashlib.sha256(canonical(version_normalized(capture))).hexdigest()
 
 
 def headers(items: list[dict[str, str]], allowed: set[str], reject_unknown: bool = False) -> list[dict[str, str]]:
@@ -111,7 +238,7 @@ def sanitize_azure_body(raw: str, account: str, container: str) -> str:
     if parsed.tag == "Error":
         allowed = {"Code", "Message", "QueryParameterName", "QueryParameterValue",
                    "HeaderName", "HeaderValue", "Reason", "RequestId", "Time",
-                   "AuthenticationErrorDetail"}
+                   "AuthenticationErrorDetail", "MinimumAllowed", "MaximumAllowed"}
         redact = {"Message", "QueryParameterValue", "HeaderValue", "Reason",
                   "AuthenticationErrorDetail", "Time"}
         if parsed.attrib or not list(parsed) or (parsed.text or "").strip():
@@ -169,6 +296,50 @@ def sanitize_azure_body(raw: str, account: str, container: str) -> str:
     return head + tail
 
 
+def sanitize_s3_body(raw: str, bucket: str) -> str:
+    """Replace only namespace, owner and opaque-token text; keep the rest of the wire bytes,
+    including keys XML 1.0 cannot carry, which S3 can return without encoding-type=url."""
+    if not raw:
+        return raw
+    start = re.search(r"<(ListBucketResult|Error)[\s>]", raw)
+    if start is None or not re.fullmatch(r"\ufeff?(?:<\?xml[^<>]*\?>)?\s*", raw[:start.start()]):
+        raise ValueError("unexpected S3 XML root or preamble")
+    if start.group(1) == "Error":
+        parsed = ElementTree.fromstring(raw)
+        if parsed.tag != "Error" or parsed.attrib or (parsed.text or "").strip():
+            raise ValueError("S3 Error root has unclassified content")
+        seen = set()
+        for child in parsed:
+            if child.tag not in S3_ERROR_FIELDS or child.tag in seen or child.attrib or list(child) \
+                    or (child.tail or "").strip():
+                raise ValueError("unclassified S3 error detail")
+            seen.add(child.tag)
+            if child.tag == "Code" and not re.fullmatch(r"[A-Za-z]+", child.text or ""):
+                raise ValueError("S3 Error Code is not a classified service code")
+            if child.tag == "BucketName" and child.text != bucket:
+                raise ValueError("S3 error names an unexpected bucket")
+            if child.tag in S3_REDACTED_ERROR_FIELDS:
+                child.text = "{redacted-provider-detail}"
+            elif child.tag in {"RequestId", "HostId"}:
+                child.text = "request-id-sha256-" + hashlib.sha256((child.text or "").encode("utf-8")).hexdigest()
+            elif child.tag == "BucketName":
+                child.text = "{bucket}"
+        if "Code" not in seen:
+            raise ValueError("S3 Error lacks Code")
+        return raw[:start.start()] + ElementTree.tostring(parsed, encoding="unicode")
+    names = re.findall(r"<Name>([^<]*)</Name>", raw)
+    if names != [bucket]:
+        raise ValueError("S3 listing must name exactly the expected bucket once")
+    body = raw.replace(f"<Name>{bucket}</Name>", "<Name>{bucket}</Name>", 1)
+    for tag in ("ContinuationToken", "NextContinuationToken"):
+        body = re.sub(rf"(<{tag}>)([^<]+)(</{tag}>)",
+                      lambda match: match.group(1) + opaque_digest(html.unescape(match.group(2))) + match.group(3),
+                      body)
+    body = re.sub(r"(<(?:\w+:)?ID>)[^<]*(</(?:\w+:)?ID>)", r"\g<1>{owner-id}\g<2>", body)
+    body = re.sub(r"(<(?:\w+:)?DisplayName>)[^<]*(</(?:\w+:)?DisplayName>)", r"\g<1>{owner-name}\g<2>", body)
+    return body
+
+
 def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
                       manifest_sha256: str, probe_id: str, api_version: str | None = None) -> dict:
     request = exchange["request"]
@@ -176,15 +347,19 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
     url = urlsplit(request["url"])
     if url.scheme not in {"http", "https"} or not url.hostname:
         raise ValueError("capture request needs an absolute HTTP URL")
-    allowed = GCS_QUERY if provider == "gcs" else AZURE_QUERY
+    allowed = PROVIDER_QUERIES[provider]
     for part in url.query.split("&") if url.query else []:
         key = part.partition("=")[0]
         if key not in allowed:
             raise ValueError(f"unrecognized query field {key!r}; refusing to retain potential secret")
     if not SHA256.fullmatch(manifest_sha256) or not probe_id:
         raise ValueError("capture needs manifest digest and probe ID")
-    if provider == "gcs" and "bucket" not in names:
-        raise ValueError("GCS capture needs bucket replacement")
+    if provider in {"gcs", "s3"} and "bucket" not in names:
+        raise ValueError("GCS and S3 captures need bucket replacement")
+    if provider == "s3":
+        if url.scheme != "https" or not S3_HOST.fullmatch(url.hostname):
+            raise ValueError("S3 native capture needs the regional endpoint over HTTPS")
+        api_version = api_version or "2006-03-01"
     if provider == "gcs" and api_version is None:
         api_version = "json-v1"
     if provider == "azure" and ("account" not in names or "container" not in names):
@@ -196,8 +371,10 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
                            if item["name"].lower() == "x-ms-version"]
         echoed_versions = [item["value"] for item in response.get("headers", [])
                            if item["name"].lower() == "x-ms-version"]
-        if len(version_headers) != 1 or len(echoed_versions) != 1 \
-                or version_headers[0] != api_version or echoed_versions[0] != api_version:
+        # Some native error responses carry no x-ms-version echo; a success always must.
+        echo_optional = response["status"] >= 400 and not echoed_versions
+        if len(version_headers) != 1 or version_headers[0] != api_version or \
+                (not echo_optional and (len(echoed_versions) != 1 or echoed_versions[0] != api_version)):
             raise ValueError("Azure capture version differs from manifest/request/response")
 
     body = base64.b64decode(response["body_base64"], validate=True)
@@ -209,8 +386,14 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
     if azure_head_error and body:
         raise ValueError("Azure HEAD error capture must have an empty body")
     body_text = body.decode("utf-8", errors="strict")
-    safe_body_text = "" if azure_head_error else (sanitize_gcs_body(body_text, names["bucket"])
-        if provider == "gcs" else sanitize_azure_body(body_text, names["account"], names["container"]))
+    if azure_head_error:
+        safe_body_text = ""
+    elif provider == "gcs":
+        safe_body_text = sanitize_gcs_body(body_text, names["bucket"])
+    elif provider == "s3":
+        safe_body_text = sanitize_s3_body(body_text, names["bucket"])
+    else:
+        safe_body_text = sanitize_azure_body(body_text, names["account"], names["container"])
     safe_body = safe_body_text.encode("utf-8")
     segments = url.path.split("/")
     if provider == "gcs":
@@ -218,6 +401,10 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
                 or segments[4] != names["bucket"] or segments[5] != "o":
             raise ValueError("unexpected GCS listing path")
         segments[4] = "{bucket}"
+    elif provider == "s3":
+        if len(segments) != 2 or segments[1] != names["bucket"]:
+            raise ValueError("unexpected S3 path-style listing path")
+        segments[1] = "{bucket}"
     else:
         if len(segments) != 2 or segments[1] != names["container"]:
             raise ValueError("unexpected Azure listing path")
@@ -227,10 +414,10 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
     token_wire_sha256 = []
     for part in url.query.split("&") if url.query else []:
         key, sep, value = part.partition("=")
-        if key in {"pageToken", "marker"} and value:
+        opaque = key == TOKEN_FIELDS[provider] and value
+        if opaque:
             token_wire_sha256.append(hashlib.sha256(value.encode("utf-8")).hexdigest())
-        query_parts.append(key + sep + (opaque_digest(decoded_token(value))
-                                        if key in {"pageToken", "marker"} and value else value))
+        query_parts.append(key + sep + (opaque_digest(decoded_token(value)) if opaque else value))
     query = "&".join(query_parts)
     request_headers = headers(request.get("headers", []), REQUEST_HEADERS)
     request_client_ids = [header["value"] for header in request_headers
@@ -249,7 +436,7 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
             header["value"] = " ".join(tokens)
     response_headers = headers(response.get("headers", []), RESPONSE_HEADERS, reject_unknown=True)
     for header in response_headers:
-        if header["name"] in {"x-goog-request-id", "x-ms-request-id"}:
+        if header["name"] in VOLATILE_ID_HEADERS:
             header["value"] = "request-id-sha256-" + hashlib.sha256(header["value"].encode("utf-8")).hexdigest()
         elif header["name"] == "x-ms-client-request-id":
             header["value"] = opaque_digest(header["value"])
@@ -287,6 +474,8 @@ def sanitize_exchange(exchange: dict, provider: str, names: dict[str, str],
         for name in xml.findall(".//Name"):
             if name.attrib.get("Encoded", "").lower() == "true":
                 visible_parts.append(unquote(name.text or "", errors="strict"))
+    elif provider == "s3":
+        visible_parts.append(safe_body_text.replace("<Name>{bucket}</Name>", "", 1))
     elif provider == "gcs":
         body_for_review = strict_json(safe_body_text)
         for item in body_for_review.get("items", []):
@@ -340,9 +529,14 @@ def response_token(exchange: dict, provider: str) -> str | None:
     if provider == "gcs":
         parsed = strict_json(body)
         token = parsed.get("nextPageToken")
+    elif provider == "s3":
+        match = re.search(r"<NextContinuationToken>([^<]*)</NextContinuationToken>", body)
+        token = match.group(1) if match else None
     else:
         parsed = ElementTree.fromstring(body)
         token = parsed.findtext("NextMarker")
+    if token == "":
+        token = None  # Azure ends a walk with an empty <NextMarker />
     if token is not None and (not isinstance(token, str) or not token.startswith("token-sha256-")):
         raise ValueError("run response token is not sanitized")
     return token or None
@@ -403,8 +597,11 @@ def validate_manifest(manifest: dict) -> None:
                 "sdk_version", "capture_date", "objects"}
     if not required.issubset(manifest):
         raise ValueError(f"manifest missing {sorted(required - manifest.keys())}")
-    if manifest["provider"] not in {"gcs", "azure"}:
-        raise ValueError("manifest provider must be gcs or azure")
+    if manifest["provider"] not in API_VERSIONS:
+        raise ValueError("manifest provider must be gcs, azure or s3")
+    if manifest["provider"] == "s3" and (manifest["namespace_mode"] != "general-purpose-flat"
+                                         or manifest["api_version"] != "2006-03-01"):
+        raise ValueError("S3 corpus must record a general-purpose bucket and API 2006-03-01")
     if manifest["provider"] == "gcs" and manifest["namespace_mode"] != "flat-ubla":
         raise ValueError("GCS corpus must record flat namespace and UBLA")
     if manifest["provider"] == "azure" and manifest["namespace_mode"] != "flat-hns-off":
@@ -417,7 +614,7 @@ def validate_manifest(manifest: dict) -> None:
         if not isinstance(manifest[key], str) or not manifest[key].strip():
             raise ValueError(f"manifest {key} must be nonempty")
     products = {"gcs": {"gcloud-java"},
-                "azure": {"azsdk-java-azure-storage-blob"}}
+                "azure": {"azsdk-java-azure-storage-blob"}, "s3": {"aws-sdk-java"}}
     if manifest["sdk_product"] not in products[manifest["provider"]]:
         raise ValueError("manifest SDK product is not the pinned provider client")
     try:
@@ -445,7 +642,7 @@ def validate_ledger(ledger: dict, manifests: dict[tuple[str, str], dict] | None 
         if not row.get("id") or row["id"] in seen:
             raise ValueError("ledger needs unique row IDs")
         seen.add(row["id"])
-        if row.get("provider") not in {"gcs", "azure"}:
+        if row.get("provider") not in API_VERSIONS:
             raise ValueError("ledger row provider invalid")
         if row.get("evidence_kind") not in EVIDENCE_KINDS:
             raise ValueError("ledger row needs explicit evidence kind")
@@ -454,7 +651,7 @@ def validate_ledger(ledger: dict, manifests: dict[tuple[str, str], dict] | None 
         versions = row.get("api_versions")
         if not isinstance(versions, list) or not versions or len(versions) != len(set(versions)):
             raise ValueError("ledger row needs explicit distinct API versions")
-        supported = {"json-v1"} if row["provider"] == "gcs" else {"2026-06-06", "2026-10-06"}
+        supported = API_VERSIONS[row["provider"]]
         if not set(versions).issubset(supported):
             raise ValueError("ledger row has unsupported API version")
         status = row["status"]
@@ -471,11 +668,48 @@ def validate_ledger(ledger: dict, manifests: dict[tuple[str, str], dict] | None 
         if not isinstance(proofs, dict) or set(proofs) != set(versions):
             raise ValueError("promoted row needs separate evidence for every API version")
         for version in versions:
-            manifest = manifests.get((row["provider"], version))
-            if manifest is None:
+            if (row["provider"], version) not in manifests:
                 raise ValueError("promoted row requires its provider/version manifest")
-            validate_promotion(row, version, proofs[version], manifest, status, captures,
-                               repo_root, replay_commit, distribution)
+            evidenced = version
+            if "version_equivalence_file" in proofs[version]:
+                evidenced = validate_version_equivalence(row, version, proofs[version], manifests, captures)
+            validate_promotion(row, evidenced, proofs[version], manifests[(row["provider"], evidenced)], status,
+                               captures, repo_root, replay_commit, distribution)
+
+
+def validate_version_equivalence(row: dict, version: str, proof: dict,
+                                 manifests: dict[tuple[str, str], dict], captures: Path | None) -> str:
+    """The reference version whose capture evidences `version` through the provider's equivalence
+    record; the cited capture is then validated at that reference version."""
+    if captures is None:
+        raise ValueError("version equivalence needs the evidence directory")
+    if "replay_test" in proof:
+        # The record shows the two native versions agree; replay was only run at the reference.
+        raise ValueError("version equivalence cannot carry a replay match")
+    record = strict_json(checked_child(captures, proof["version_equivalence_file"]).read_text(encoding="utf-8"))
+    reference = record.get("reference_version")
+    if record.get("schema_version") != VERSION_EQUIVALENCE_SCHEMA or record.get("provider") != row["provider"] \
+            or reference == version or (row["provider"], reference) not in manifests:
+        raise ValueError("version equivalence record is not for this provider and version")
+    if dict(manifests[(row["provider"], reference)], api_version=version) != manifests[(row["provider"], version)]:
+        raise ValueError("equivalent versions need the same corpus manifest")
+    entry = record.get("cases", {}).get(f"{row['id']}~{version}")
+    if not isinstance(entry, dict) or entry.get("equivalent") is not True:
+        raise ValueError("version equivalence record does not cover this case")
+    cited = entry["reference"]
+    folded = entry.get("version")
+    # The folded capture is not archived; its own checksum lets a retained copy be checked.
+    if not isinstance(folded, dict) or not SHA256.fullmatch(str(folded.get("sha256"))) \
+            or not SHA256.fullmatch(str(folded.get("normalized_sha256"))) or folded["sha256"] == cited["sha256"]:
+        raise ValueError("version equivalence record lacks the folded capture's own digests")
+    if proof.get("capture_file") != f"{row['provider']}/{cited['file']}" \
+            or proof.get("capture_sha256") != cited["sha256"]:
+        raise ValueError("ledger cites another capture than its version equivalence record")
+    capture = strict_json(read_evidence(checked_child(captures, proof["capture_file"])).decode("utf-8"))
+    if normalized_sha256(capture) != cited["normalized_sha256"] \
+            or entry["version"]["normalized_sha256"] != cited["normalized_sha256"]:
+        raise ValueError("version equivalence digests differ")
+    return reference
 
 
 def validate_promotion(row: dict, version: str, proof: dict, manifest: dict,
@@ -486,7 +720,7 @@ def validate_promotion(row: dict, version: str, proof: dict, manifest: dict,
         raise ValueError("observed row lacks request, expected result, capture directory or checksum")
     manifest_digest = hashlib.sha256(canonical(manifest)).hexdigest()
     capture_path = checked_child(captures, proof.get("capture_file", ""))
-    payload = capture_path.read_bytes()
+    payload = read_evidence(capture_path)
     if hashlib.sha256(payload).hexdigest() != proof["capture_sha256"]:
         raise ValueError("capture SHA-256 differs from ledger")
     capture = strict_json(payload.decode("utf-8"))
@@ -517,7 +751,7 @@ def validate_promotion(row: dict, version: str, proof: dict, manifest: dict,
         token_hashes = exchange["request"].get("token_wire_sha256")
         parts = query_parts(exchange["request"]["query"])
         names = [key for key, _ in parts]
-        if len(names) != len(set(names)) and row["id"] not in {"gcs-05", "azure-08"}:
+        if len(names) != len(set(names)) and row["id"] not in DUPLICATE_QUERY_PROBES:
             raise ValueError("capture has duplicate query field outside duplicate-parameter probe")
         token_values = [value for key, value in parts
                         if key == TOKEN_FIELDS[row["provider"]] and value]
@@ -529,17 +763,23 @@ def validate_promotion(row: dict, version: str, proof: dict, manifest: dict,
         + ("?" + request["query"] if request["query"] else "")
     if proof["probe_request"] != exact_request:
         raise ValueError("ledger probe request differs from capture")
-    if row["id"] == "gcs-08":
+    if row["id"] in RAW_WIRE_ROWS:
         if not SHA256.fullmatch(proof.get("raw_wire_sha256", "")):
             raise ValueError("GCS raw spelling row needs independently sanitized raw-wire artifact")
-        raw_wire = checked_child(captures, proof.get("raw_wire_file", ""))
-        if hashlib.sha256(raw_wire.read_bytes()).hexdigest() != proof["raw_wire_sha256"]:
+        raw_wire = read_evidence(checked_child(captures, proof.get("raw_wire_file", "")))
+        if hashlib.sha256(raw_wire).hexdigest() != proof["raw_wire_sha256"]:
             raise ValueError("GCS raw-wire SHA-256 differs from ledger")
+        wire = strict_json(raw_wire.decode("utf-8"))
+        if wire.get("capture_sha256") not in (None, proof["capture_sha256"]) \
+                or wire.get("probe_id") not in (None, row["id"]):
+            raise ValueError("GCS raw-wire artifact is bound to another capture")
     if row["provider"] == "azure":
         for exchange in exchanges:
             for side in ("request", "response"):
                 version_headers = [header["value"] for header in exchange[side]["headers"]
                                    if header["name"] == "x-ms-version"]
+                if side == "response" and not version_headers and exchange["response"]["status"] >= 400:
+                    continue
                 if version_headers != [version]:
                     raise ValueError("Azure capture header version differs from ledger")
     if kind in {"sdk_run", "retry_run"}:
@@ -605,7 +845,7 @@ def validate_matrix(matrix: str, ledger: dict) -> None:
     rows = {row["id"]: row for row in ledger["rows"]}
     seen = set()
     for line in matrix.splitlines():
-        if not line.startswith("| gcs-") and not line.startswith("| azure-"):
+        if not line.startswith(("| gcs-", "| azure-", "| s3-")):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(cells) != 7:
@@ -615,7 +855,8 @@ def validate_matrix(matrix: str, ledger: dict) -> None:
             raise ValueError("matrix row missing from ledger or repeated")
         seen.add(row_id)
         row = rows[row_id]
-        provider = "gcs" if provider_display.startswith("GCS") else "azure"
+        provider = "gcs" if provider_display.startswith("GCS") else \
+            "s3" if provider_display.startswith("Amazon S3") else "azure"
         if provider == "azure" and "`2026-" in provider_display:
             displayed_version = provider_display.split("`", 2)[1]
             if row["api_versions"] != [displayed_version]:
@@ -648,7 +889,7 @@ def main() -> None:
     sanitize = sub.add_parser("sanitize")
     sanitize.add_argument("--input", type=Path, required=True)
     sanitize.add_argument("--output", type=Path, required=True)
-    sanitize.add_argument("--provider", choices=["gcs", "azure"], required=True)
+    sanitize.add_argument("--provider", choices=sorted(API_VERSIONS), required=True)
     sanitize.add_argument("--bucket")
     sanitize.add_argument("--account")
     sanitize.add_argument("--container")
@@ -659,7 +900,8 @@ def main() -> None:
     check.add_argument("--manifest", type=Path, action="append", default=[])
     check.add_argument("--ledger", type=Path, required=True)
     check.add_argument("--matrix", type=Path, required=True)
-    check.add_argument("--captures", type=Path)
+    check.add_argument("--captures", type=Path, help="evidence directory or archive; its manifests are "
+                       "loaded when no --manifest is given")
     check.add_argument("--repo-root", type=Path)
     check.add_argument("--distribution", type=Path)
     args = parser.parse_args()
@@ -677,8 +919,11 @@ def main() -> None:
         if args.repo_root is not None:
             commit = subprocess.run(["git", "-C", str(args.repo_root), "rev-parse", "HEAD"],
                                     check=True, capture_output=True, text=True).stdout.strip()
-        validate_ledger(ledger, manifests, args.captures, args.repo_root,
-                        commit, args.distribution)
+        with contextlib.ExitStack() as stack:
+            captures = None if args.captures is None else stack.enter_context(evidence_root(args.captures))
+            if captures is not None and not manifests:
+                manifests = load_manifests(captures)
+            validate_ledger(ledger, manifests, captures, args.repo_root, commit, args.distribution)
         validate_matrix(args.matrix.read_text(encoding="utf-8"), ledger)
         print("provider evidence manifest and ledger valid")
         return

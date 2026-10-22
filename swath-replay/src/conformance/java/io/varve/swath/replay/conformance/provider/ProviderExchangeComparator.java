@@ -32,13 +32,21 @@ public final class ProviderExchangeComparator {
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final Set<String> GCS_HEADERS = Set.of("content-type", "date", "x-goog-request-id",
-            "content-length", "server", "cache-control", "vary", "transfer-encoding", "x-swath-replay-error");
+            "content-length", "server", "cache-control", "vary", "transfer-encoding", "x-swath-replay-error",
+            "x-guploader-uploadid", "x-goog-gcs-base-ts", "expires", "alt-svc", "pragma");
+    /** Named volatile or classified transport headers: nonempty when present, never compared. */
+    private static final List<String> NONEMPTY_HEADERS = List.of("server", "cache-control", "transfer-encoding",
+            "x-swath-replay-error", "x-guploader-uploadid", "x-goog-gcs-base-ts", "alt-svc", "pragma");
+    private static final String HTTP_DATE = "[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT";
     private static final Set<String> AZURE_HEADERS = Set.of("content-type", "date", "x-ms-request-id",
             "x-ms-version", "x-ms-error-code", "x-ms-client-request-id", "content-length", "server",
             "cache-control", "vary", "transfer-encoding", "x-swath-replay-error");
+    private static final Set<String> S3_HEADERS = Set.of("content-type", "date", "x-amz-request-id",
+            "x-amz-id-2", "x-amz-bucket-region", "content-length", "server", "transfer-encoding",
+            "connection", "x-swath-replay-error");
     private static final Set<String> AZURE_NATIVE_ERROR_DETAILS = Set.of("QueryParameterName",
             "QueryParameterValue", "HeaderName", "HeaderValue", "Reason", "RequestId", "Time",
-            "AuthenticationErrorDetail");
+            "AuthenticationErrorDetail", "MinimumAllowed", "MaximumAllowed");
 
     private ProviderExchangeComparator() {
     }
@@ -97,6 +105,37 @@ public final class ProviderExchangeComparator {
                 nativeContainer, replayContainer, maxPages, maxEntries);
     }
 
+    /** Compare successful S3 ListObjectsV2 walks with independent endpoint tokens and page boundaries. */
+    public static void assertS3Walk(List<CapturedExchangePage> nativePages, List<CapturedExchangePage> replayPages,
+                                    String nativeBucket, String replayBucket, int maxPages, int maxEntries) {
+        List<S3ProfileComparator.CapturedPage> nativeBodies = new java.util.ArrayList<>();
+        List<S3ProfileComparator.CapturedPage> replayBodies = new java.util.ArrayList<>();
+        for (CapturedExchangePage page : nativePages) {
+            requireSuccessHeaders(page.exchange(), S3_HEADERS, "application/xml");
+            nativeBodies.add(new S3ProfileComparator.CapturedPage(page.requestToken(), page.exchange().body()));
+        }
+        for (CapturedExchangePage page : replayPages) {
+            requireSuccessHeaders(page.exchange(), S3_HEADERS, "application/xml");
+            replayBodies.add(new S3ProfileComparator.CapturedPage(page.requestToken(), page.exchange().body()));
+        }
+        S3ProfileComparator.assertWalk(nativeBodies, replayBodies, nativeBucket, replayBucket, maxPages, maxEntries);
+    }
+
+    /** Compare one S3 exchange: status, classified headers, then the page or the typed error code. */
+    public static void assertS3(Exchange nativeExchange, Exchange replayExchange, String nativeBucket,
+                                String replayBucket, String nativeRequestToken, String replayRequestToken) {
+        equal("S3 HTTP status", nativeExchange.status(), replayExchange.status());
+        checkHeaders(nativeExchange, S3_HEADERS, "application/xml");
+        checkHeaders(replayExchange, S3_HEADERS, "application/xml");
+        if (nativeExchange.status() == 200) {
+            S3ProfileComparator.assertPage(nativeExchange.body(), replayExchange.body(), nativeBucket,
+                    replayBucket, nativeRequestToken, replayRequestToken);
+        } else {
+            equal("S3 error code", S3ProfileComparator.errorCode(nativeExchange.body()),
+                    S3ProfileComparator.errorCode(replayExchange.body()));
+        }
+    }
+
     private static void requireSuccessHeaders(Exchange exchange, Set<String> allowed, String contentType) {
         if (exchange.status() != 200) fail("walk page has non-200 HTTP status");
         checkHeaders(exchange, allowed, contentType);
@@ -138,7 +177,10 @@ public final class ProviderExchangeComparator {
         boolean head = "HEAD".equals(requestMethod);
         checkHeaders(nativeExchange, AZURE_HEADERS, "application/xml", head);
         checkHeaders(replayExchange, AZURE_HEADERS, "application/xml", head);
-        equal("native x-ms-version", requestedVersion, single(nativeExchange, "x-ms-version"));
+        // Some native error responses omit the version echo; a success must carry it.
+        if (nativeExchange.status() < 400 || single(nativeExchange, "x-ms-version") != null) {
+            equal("native x-ms-version", requestedVersion, single(nativeExchange, "x-ms-version"));
+        }
         equal("replay x-ms-version", requestedVersion, single(replayExchange, "x-ms-version"));
         if (clientRequestId != null) {
             equal("native x-ms-client-request-id", clientRequestId,
@@ -210,22 +252,26 @@ public final class ProviderExchangeComparator {
                 fail("HTTP Content-Length is malformed");
             }
         }
-        String date = single(exchange, "date");
-        if (date != null) {
-            if (!date.matches("[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} "
-                    + "[0-9]{2}:[0-9]{2}:[0-9]{2} GMT")) fail("HTTP Date spelling is not padded GMT");
-            ZonedDateTime.parse(date, DateTimeFormatter.RFC_1123_DATE_TIME);
+        for (String name : List.of("date", "expires")) {
+            String date = single(exchange, name);
+            if (date != null) {
+                if (!date.matches(HTTP_DATE)) fail("HTTP " + name + " spelling is not padded GMT");
+                ZonedDateTime.parse(date, DateTimeFormatter.RFC_1123_DATE_TIME);
+            }
         }
-        for (String id : List.of("x-goog-request-id", "x-ms-request-id")) {
+        for (String id : List.of("x-goog-request-id", "x-ms-request-id", "x-amz-request-id", "x-amz-id-2")) {
             if (exchange.headers().containsKey(id) && single(exchange, id).isEmpty()) {
                 fail(id + " must be nonempty");
             }
         }
-        for (String classified : List.of("server", "cache-control", "vary", "transfer-encoding",
-                "x-swath-replay-error")) {
+        for (String classified : NONEMPTY_HEADERS) {
             if (exchange.headers().containsKey(classified) && single(exchange, classified).isEmpty()) {
                 fail(classified + " must be nonempty");
             }
+        }
+        // GCS sends Vary more than once (Origin, X-Origin); every value must be nonempty.
+        for (String value : exchange.headers().getOrDefault("vary", List.of())) {
+            if (value.isEmpty()) fail("vary must be nonempty");
         }
     }
 
