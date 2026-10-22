@@ -455,7 +455,9 @@ classified headers. Nonempty `HEAD` bodies and `HEAD` success
 captures are outside this provisional evidence profile. `GET` errors still require
 their typed XML envelope and native preamble.
 SDK run receipts also require every retained native product/version token to appear
-in the matching replay request header. Use the same pinned SDK and JDK for both
+in the matching replay request header. The `gl-java/` token is the one exception:
+it carries the running JVM's version rather than the SDK's, so replay must send it
+but its version may differ. Use the same pinned SDK and JDK for both
 runs; a changed runtime or transport may alter auxiliary SDK tokens even when
 the listing response is unchanged.
 `AzureNamespaceMapping` compares that sanitized native host-style path and
@@ -522,10 +524,10 @@ Azure), then verifies an empty namespace. `recover` repeats cleanup for an inter
 run. Credentials and account identifiers are redacted before anything is written;
 `sanitize` publishes evidence only after a scan of decoded bodies finds no identifier,
 credential, email or ACL entity.
-A probe answered 401, 408, 429 or 5xx, or a walk that ends on one, is an incomplete case
-rather than an observation; a 400 or 403 is still observed. If the sanitizer refuses any
-completed case's capture, the published receipt is INCOMPLETE and names each refused case,
-so `promote` attaches nothing from that run.
+A probe answered 401, 408, 429, 500, 502, 503 or 504, or a walk that ends on one, is an
+incomplete case rather than an observation; a 400, 403 or other status is still observed.
+If the sanitizer refuses any completed case's capture, the published receipt is INCOMPLETE
+and names each refused case, so `promote` attaches nothing from that run.
 
 `promotion.py rows` regenerates the ledger rows and the table above from the case
 matrices; `promotion.py promote` attaches captures and receipts from the evidence

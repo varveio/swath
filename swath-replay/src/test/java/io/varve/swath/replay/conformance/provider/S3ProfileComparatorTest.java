@@ -112,6 +112,22 @@ class S3ProfileComparatorTest {
     }
 
     @Test
+    void ownerWithoutDisplayNameMustMatchOnReplay() {
+        // AWS omits DisplayName outside a few regions; replay must then omit it too.
+        String nativeBody = page("{bucket}", "1", "false", null, contents("p/a", "e1",
+                "<Owner><ID>{owner-id}</ID></Owner>"));
+        assertThatCode(() -> compare(nativeBody, page("replay-bucket", "1", "false", null,
+                contents("p/a", "e1", "<Owner><ID>s</ID></Owner>")))).doesNotThrowAnyException();
+        assertThatThrownBy(() -> compare(nativeBody, page("replay-bucket", "1", "false", null,
+                contents("p/a", "e1", "<Owner><ID>s</ID><DisplayName>s</DisplayName></Owner>"))))
+                .hasMessageContaining("Owner replay children");
+        assertThatThrownBy(() -> compare(page("{bucket}", "1", "false", null, contents("p/a", "e1",
+                "<Owner><DisplayName>{owner-name}</DisplayName></Owner>")), page("replay-bucket", "1", "false",
+                null, contents("p/a", "e1", "<Owner><DisplayName>s</DisplayName></Owner>"))))
+                .hasMessageContaining("Owner children");
+    }
+
+    @Test
     void walkComparesInventoriesAndRefusesRepeatedCommonPrefixes() {
         String prefix = "<CommonPrefixes><Prefix>p/d/</Prefix></CommonPrefixes>";
         var nativePages = List.of(

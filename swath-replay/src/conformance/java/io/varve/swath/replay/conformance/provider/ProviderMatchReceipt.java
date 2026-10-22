@@ -30,6 +30,8 @@ public final class ProviderMatchReceipt {
             "gcs-05h", "gcs-05i", "gcs-06m", "azure-07h", "azure-07i", "azure-08m", "azure-08p",
             "s3-05h", "s3-05i", "s3-06m", "s3-12d");
 
+    private static final String JVM_TOKEN_PREFIX = "gl-java/";
+
     private ProviderMatchReceipt() { }
 
     public record Request(String method, String path, String query, Map<String, List<String>> headers) {
@@ -437,7 +439,7 @@ public final class ProviderMatchReceipt {
         return values == null ? null : values.getFirst();
     }
 
-    private static void assertSdkHeaders(Request nativeRequest, Request replayRequest) {
+    static void assertSdkHeaders(Request nativeRequest, Request replayRequest) {
         int classified = 0;
         for (String name : List.of("user-agent", "x-goog-api-client")) {
             String nativeValue = header(nativeRequest, name);
@@ -447,7 +449,11 @@ public final class ProviderMatchReceipt {
             require(replayValue != null, "replay SDK header " + name + " is missing");
             List<String> replayTokens = List.of(replayValue.split("\\s+"));
             for (String token : nativeValue.split("\\s+")) {
-                require(replayTokens.contains(token), "replay SDK product/version token differs");
+                // gl-java/ carries the running JVM's version, not the SDK's, so only its product must match.
+                boolean matched = token.startsWith(JVM_TOKEN_PREFIX)
+                        ? replayTokens.stream().anyMatch(replayToken -> replayToken.startsWith(JVM_TOKEN_PREFIX))
+                        : replayTokens.contains(token);
+                require(matched, "replay SDK product/version token differs");
             }
         }
         require(classified > 0, "native SDK run lacks classified product/version header");
