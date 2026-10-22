@@ -24,7 +24,7 @@ class AzureXmlGoldenTest {
                 new AzureListResult.Entry.BlobPrefix(raw("p/\t\n\r")),
                 new AzureListResult.Entry.Blob(object("é😀", 8)),
                 new AzureListResult.Entry.Blob(object("x\uFFFE/y", 9))), null);
-        String expected = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        String expected = "\uFEFF<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
                 + "<EnumerationResults ServiceEndpoint=\"http://127.0.0.1/replay/\" ContainerName=\"bucket\">"
                 + "<Prefix>a</Prefix><Marker>opaque</Marker><MaxResults>4</MaxResults><Delimiter>/</Delimiter>"
                 + "<Blobs>"
@@ -34,6 +34,15 @@ class AzureXmlGoldenTest {
                 + "<Blob><Name Encoded=\"true\">x%EF%BF%BE%2Fy</Name>" + properties(9) + "</Blob>"
                 + "</Blobs><NextMarker></NextMarker></EnumerationResults>";
         assertThat(render(result)).isEqualTo(expected);
+    }
+
+    @Test
+    void bodyStartsWithTheNativeUtf8ByteOrderMark() {
+        try (BudgetedOutput out = BudgetedOutput.standalone(128)) {
+            AzureXml.write(one("a"), "http://127.0.0.1/replay/", out);
+            byte[] body = OwnedBodyBytes.copy(out.body());
+            assertThat(java.util.Arrays.copyOf(body, 8)).containsExactly(0xEF, 0xBB, 0xBF, '<', '?', 'x', 'm', 'l');
+        }
     }
 
     @Test

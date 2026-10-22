@@ -17,9 +17,12 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -70,6 +73,37 @@ class AzureWireTest {
                     .contains("UnsupportedQueryParameter");
             assertThat(intersection.headers().firstValue("x-swath-replay-error"))
                     .contains("startfrom_delimiter_unmeasured");
+        }
+    }
+
+    /** Native Azure sends a UTF-8 BOM before the declaration on success and error bodies alike. */
+    @Test
+    void successAndErrorBodiesStartWithTheUtf8ByteOrderMark(@TempDir Path dir) throws Exception {
+        Path fixture = dir.resolve("part.parquet");
+        ParquetFixtures.write(fixture, ObjectEntries.key("a").size(1).isLatest(true).build());
+        ServeConfig config = new ServeConfig(fixture, "127.0.0.1", 0, "bucket", ServingMode.DUCKDB,
+                2, 8, Set.of(Protocol.AZURE), "replay", 1024 * 1024, 1024 * 1024,
+                Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(30), null, null);
+        try (ReplayServer server = ReplayServer.open(config)) {
+            server.start();
+            HttpClient client = HttpClient.newHttpClient();
+            String base = "http://127.0.0.1:" + server.port() + "/replay/bucket?restype=container&comp=list";
+            byte[] prolog = "\uFEFF<?xml version=\"1.0\" encoding=\"utf-8\"?>\n".getBytes(StandardCharsets.UTF_8);
+            for (String query : List.of("", "&maxresults=0")) {
+                HttpResponse<byte[]> response = client.send(HttpRequest.newBuilder(URI.create(base + query))
+                        .header("x-ms-version", "2026-06-06").GET().build(), HttpResponse.BodyHandlers.ofByteArray());
+                assertThat(response.statusCode()).isEqualTo(query.isEmpty() ? 200 : 400);
+                byte[] body = response.body();
+                assertThat(Arrays.copyOf(body, prolog.length)).containsExactly(prolog);
+                assertThat(body[prolog.length]).isEqualTo((byte) '<');
+                assertThat(response.headers().firstValue("content-type")).contains("application/xml");
+                assertThat(response.headers().firstValueAsLong("content-length")).hasValue(body.length);
+            }
+            HttpResponse<byte[]> head = client.send(HttpRequest.newBuilder(URI.create(base))
+                    .header("x-ms-version", "2026-06-06").method("HEAD", HttpRequest.BodyPublishers.noBody())
+                    .build(), HttpResponse.BodyHandlers.ofByteArray());
+            assertThat(head.statusCode()).isEqualTo(400);
+            assertThat(head.body()).isEmpty();
         }
     }
 

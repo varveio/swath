@@ -70,7 +70,8 @@ S3 uses `/{bucket}?list-type=2`; GCS JSON uses
 `/storage/v1/b/{bucket}/o`; Azure Blob XML uses
 `/{account}/{container}?restype=container&comp=list`, where `--bucket` supplies the
 container name. Azure accepts `x-ms-version: 2026-06-06` or `2026-10-06` for the
-flat listing subset. A wildcard bind with Azure also needs `--advertised-host` so
+flat listing subset. Every Azure XML body, success or error, starts with a UTF-8 byte
+order mark before the XML declaration, as live Azure sends it. A wildcard bind with Azure also needs `--advertised-host` so
 the XML service endpoint names a reachable host. S3-only keeps its existing first-path-
 segment routing, including paths after the bucket segment. Enabled native selectors
 claim their routes before method validation; conflicting selectors return a replay 400.

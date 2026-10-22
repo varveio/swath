@@ -13,10 +13,13 @@ a row.
 **Current release gate:** a bounded [live campaign](#live-campaign) captured every case
 below against a dedicated GCS bucket and Azure container. A row is `OBSERVED` when its
 sanitized capture is in the [evidence archive](#evidence-archive) and `REPLAY_MATCH` only
-when replay, serving the same corpus and walked with its own tokens, matched that capture.
-Every other observed row is a pinned replay discrepancy in the archive's
-`<provider>/replay-expectations.json`; the GCS and Azure profiles stay provisional until
-those rows match. S3 is out of scope for this evidence: the S3 campaign stopped before it
+when replay, serving the same corpus and walked with its own tokens, matched that capture
+and an archived receipt records the match. Every other observed row is a pinned replay
+discrepancy in the archive's `<provider>/replay-expectations.json`, except 51 Azure rows
+whose only pinned discrepancy was the UTF-8 BOM that live Azure sends before every XML
+body. Replay now sends it too, so those captures match, but their rows stay `OBSERVED`
+until their receipts are archived (see [Evidence archive](#evidence-archive)). The GCS and
+Azure profiles stay provisional until the remaining rows match. S3 is out of scope for this evidence: the S3 campaign stopped before it
 completed, so no S3 capture is published and every S3 row stays `UNMEASURED`. Promotion
 requires a COMPLETE campaign receipt. Each row is one case: one request shape that
 settles one question. Azure rows name their service versions, and each version is
@@ -401,7 +404,8 @@ checks to those body policies. It checks GCS JSON error reasons, Azure XML and
 content type, and body length. Date and provider request IDs are validated but
 their values are volatile; Content-Type media types are compared while charset
 parameters may differ. Azure BOM and XML prolog spelling are compared as raw
-preamble bytes. Sanitization keeps only classified response headers, hashes
+preamble bytes. Every live Azure capture, success and error alike, starts its body with the
+UTF-8 BOM (EF BB BF) before the declaration, and replay sends the same three bytes. Sanitization keeps only classified response headers, hashes
 provider request IDs, and adjusts retained Content-Length to sanitized body bytes;
 an unclassified response header halts the capture for review. Local tests exercise
 these rules; native status, header, and error behavior remains UNMEASURED.
@@ -563,6 +567,18 @@ The normal build reads the archive directly. `NativeEvidenceReplayTest` extracts
 a temporary directory and replays every capture against replay serving the same corpus;
 each outcome must equal its pinned expectation. The Python tests validate the ledger and
 this matrix against the archive and check that it rebuilds byte for byte.
+
+The Azure expectations in this archive were written while replay omitted the UTF-8 BOM.
+Each Azure pin that names the BOM also records what the comparison found with the BOM
+restored. Replay now sends the BOM, so the test applies such a pin as that remainder:
+`match` when nothing else differed, otherwise the remaining mismatch. Of the 73 such pins,
+51 now expect `match` and 22 keep another discrepancy. The archive is unchanged, so it holds
+no receipts for the 51 matches and their rows stay `OBSERVED`. Writing those receipts and
+rebuilding the archive, as in steps 2 and 3 below, promotes the four single-version rows
+`azure-01`, `azure-02`, `azure-10b` and `azure-10c` to `REPLAY_MATCH`. The other 47 also
+name `2026-10-06`, whose capture is folded, so they stay `OBSERVED` as described above.
+`-PproviderReport=DIR` writes each capture's outcome to `DIR/<provider>-outcomes.json`,
+from which a rebuild can write current expectations.
 
 `scripts/provider-conformance/evidence_archive.py` builds the archive from an evidence
 directory with sorted entries, zero timestamps and owners, mode 0644, and gzip level 9
