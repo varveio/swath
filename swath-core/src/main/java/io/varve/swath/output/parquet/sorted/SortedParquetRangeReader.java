@@ -33,7 +33,6 @@ import org.apache.parquet.internal.filter2.columnindex.ColumnIndexFilter;
 import org.apache.parquet.internal.filter2.columnindex.ColumnIndexStore;
 import org.apache.parquet.internal.filter2.columnindex.RowRanges;
 import org.apache.parquet.io.ColumnIOFactory;
-import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.io.api.Binary;
@@ -119,7 +118,7 @@ public final class SortedParquetRangeReader implements AutoCloseable {
         this.readers = new ArrayBlockingQueue<>(size);
         try {
             for (int i = 0; i < size; i++) {
-                ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file));
+                ParquetFileReader reader = ParquetFileReader.open(new BufferedLocalInputFile(file));
                 owned.add(reader);
                 readers.add(reader);
             }
