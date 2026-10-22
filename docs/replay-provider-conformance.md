@@ -15,13 +15,12 @@ below against a dedicated GCS bucket and Azure container. A row is `OBSERVED` wh
 sanitized capture is in the [evidence archive](#evidence-archive) and `REPLAY_MATCH` only
 when replay, serving the same corpus and walked with its own tokens, matched that capture
 and an archived receipt records the match. Every other observed row is a pinned replay
-discrepancy in the archive's `<provider>/replay-expectations.json`, except 51 Azure rows
-whose only pinned discrepancy was the UTF-8 BOM that live Azure sends before every XML
-body. Replay now sends it too, so those captures match, but their rows stay `OBSERVED`
-until their receipts are archived (see [Evidence archive](#evidence-archive)). The GCS and
-Azure profiles stay provisional until the remaining rows match. S3 is out of scope for this evidence: the S3 campaign stopped before it
-completed, so no S3 capture is published and every S3 row stays `UNMEASURED`. Promotion
-requires a COMPLETE campaign receipt. Each row is one case: one request shape that
+discrepancy, except 62 Azure rows that replay now matches. Those rows stay `OBSERVED` until
+their receipts are archived; [Evidence archive](#evidence-archive) explains how the test
+derives each expectation from the archive's `<provider>/replay-expectations.json`. The GCS
+and Azure profiles stay provisional until the remaining rows match. S3 is out of scope for
+this evidence: the S3 campaign stopped before it completed, so no S3 capture is published
+and every S3 row stays `UNMEASURED`. Promotion requires a COMPLETE campaign receipt. Each row is one case: one request shape that
 settles one question. Azure rows name their service versions, and each version is
 evidenced separately.
 
@@ -151,29 +150,29 @@ evidenced separately.
 | azure-03i | Azure Blob XML | `startFrom` with `endBefore` | Provisional flat list | 2026-06-06:1e479ee78b176fa57ac0c1310a5d187ef89ade297309560aeadfffc66f6b30d7; 2026-10-06:1e479ee78b176fa57ac0c1310a5d187ef89ade297309560aeadfffc66f6b30d7 | — | OBSERVED |
 | azure-03j | Azure Blob XML | Prefix that is a string prefix of longer names | Provisional flat list | 2026-06-06:eb2fd8d04111492d64077c8e93e9c85dbf645d8634b757fe8b585a24edcd8cd1; 2026-10-06:eb2fd8d04111492d64077c8e93e9c85dbf645d8634b757fe8b585a24edcd8cd1 | — | OBSERVED |
 | azure-03k | Azure Blob XML | `startFrom` inside a prefix that is a string prefix | Provisional flat list | 2026-06-06:f6085760d852d7484a460a009683f24bbe379ce31b6c667ccc05fbf192101ded; 2026-10-06:f6085760d852d7484a460a009683f24bbe379ce31b6c667ccc05fbf192101ded | — | OBSERVED |
-| azure-04a | Azure Blob XML | Delimiter `/` baseline over objects, subtrees, a folder marker and an empty segment | **Unsupported until native evidence** | 2026-06-06:76698d2d7e1a542fcf74a2024ab69ab075a2123b5130c436ff2fc840d8dacb13; 2026-10-06:76698d2d7e1a542fcf74a2024ab69ab075a2123b5130c436ff2fc840d8dacb13 | — | OBSERVED |
-| azure-04b | Azure Blob XML | Delimiter with `startFrom` equal to a subtree prefix | **Unsupported until native evidence** | 2026-06-06:4b9d417f5a6c961b7e66a4331899dc940852d46778c25d528be5934bf286d06b; 2026-10-06:4b9d417f5a6c961b7e66a4331899dc940852d46778c25d528be5934bf286d06b | — | OBSERVED |
-| azure-04c | Azure Blob XML | Delimiter with `startFrom` inside a subtree with remaining descendants | **Unsupported until native evidence** | 2026-06-06:cbb25c03e24d970ed73ca435b423167332163817ccf7fa732b8fef4e56586105; 2026-10-06:cbb25c03e24d970ed73ca435b423167332163817ccf7fa732b8fef4e56586105 | — | OBSERVED |
-| azure-04d | Azure Blob XML | Delimiter with `startFrom` inside a subtree after its last descendant | **Unsupported until native evidence** | 2026-06-06:f7027eb607dd6f2186012dd982e9a67cdf7e347a8164761b5de16e598a0cb41b; 2026-10-06:f7027eb607dd6f2186012dd982e9a67cdf7e347a8164761b5de16e598a0cb41b | — | OBSERVED |
-| azure-04e | Azure Blob XML | Delimiter with `startFrom` after a subtree, equal to an object | **Unsupported until native evidence** | 2026-06-06:cc5c54628fe7315a1ec5d845b658a791a392b60819ec8ac1cb69b5090d7d7c55; 2026-10-06:cc5c54628fe7315a1ec5d845b658a791a392b60819ec8ac1cb69b5090d7d7c55 | — | OBSERVED |
-| azure-04f | Azure Blob XML | Delimiter `/` with a prefix ending in the delimiter | **Unsupported until native evidence** | 2026-06-06:7c4333fbaac5384dcb6aa0a8ada842b62f2bda52ae35fd4696e87a7c6650a757; 2026-10-06:7c4333fbaac5384dcb6aa0a8ada842b62f2bda52ae35fd4696e87a7c6650a757 | — | OBSERVED |
-| azure-04g | Azure Blob XML | Delimiter `/` with a prefix that stops before the delimiter | **Unsupported until native evidence** | 2026-06-06:e52a7fda6725b45d0870af84829d3923b8e9fb0617e26b38ef50032627776ede; 2026-10-06:e52a7fda6725b45d0870af84829d3923b8e9fb0617e26b38ef50032627776ede | — | OBSERVED |
-| azure-04h | Azure Blob XML | Pipe delimiter that never occurs in names | **Unsupported until native evidence** | 2026-06-06:a38da1ca05b1b6550e36e81aea9a811a3baf4b00a1a6b7aa03578c07e70a1a19; 2026-10-06:a38da1ca05b1b6550e36e81aea9a811a3baf4b00a1a6b7aa03578c07e70a1a19 | — | OBSERVED |
-| azure-04i | Azure Blob XML | Two-character delimiter `/1` | **Unsupported until native evidence** | 2026-06-06:9d383ec7959bbfcfecfff9c06dd1d972f1d57203f1d89640cb37c46613dc0707; 2026-10-06:9d383ec7959bbfcfecfff9c06dd1d972f1d57203f1d89640cb37c46613dc0707 | — | OBSERVED |
-| azure-04j | Azure Blob XML | Two-character delimiter `-g` | **Unsupported until native evidence** | 2026-06-06:706e7e89698ec11ad948b8c0b58fc3e0231fd05712853ff7d703e5cd1d00bb29; 2026-10-06:706e7e89698ec11ad948b8c0b58fc3e0231fd05712853ff7d703e5cd1d00bb29 | — | OBSERVED |
-| azure-04k | Azure Blob XML | Empty `delimiter` value | **Unsupported until native evidence** | 2026-06-06:b8bcfd82fba22b74b641f3aebe38f1909e0499ad38f1ac517076ef9e935d4b67; 2026-10-06:b8bcfd82fba22b74b641f3aebe38f1909e0499ad38f1ac517076ef9e935d4b67 | — | OBSERVED |
-| azure-04l | Azure Blob XML | Delimiter without a prefix from a mid-corpus `startFrom` | **Unsupported until native evidence** | 2026-06-06:54456f9e3b00b063a0e669e3b3c75df69cc587b1a4a38ecf1b70a32a319bd31d; 2026-10-06:54456f9e3b00b063a0e669e3b3c75df69cc587b1a4a38ecf1b70a32a319bd31d | — | OBSERVED |
-| azure-04m | Azure Blob XML | Delimiter walk with `startFrom` inside a subtree | **Unsupported until native evidence** | 2026-06-06:435f785bcda78e01dea9c000fe407a682da5dfde7222014308889e6a7bd8a4d1; 2026-10-06:435f785bcda78e01dea9c000fe407a682da5dfde7222014308889e6a7bd8a4d1 | — | OBSERVED |
+| azure-04a | Azure Blob XML | Delimiter `/` baseline over objects, subtrees, a folder marker and an empty segment | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:76698d2d7e1a542fcf74a2024ab69ab075a2123b5130c436ff2fc840d8dacb13; 2026-10-06:76698d2d7e1a542fcf74a2024ab69ab075a2123b5130c436ff2fc840d8dacb13 | — | OBSERVED |
+| azure-04b | Azure Blob XML | Delimiter with `startFrom` equal to a subtree prefix | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:4b9d417f5a6c961b7e66a4331899dc940852d46778c25d528be5934bf286d06b; 2026-10-06:4b9d417f5a6c961b7e66a4331899dc940852d46778c25d528be5934bf286d06b | — | OBSERVED |
+| azure-04c | Azure Blob XML | Delimiter with `startFrom` inside a subtree with remaining descendants | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:cbb25c03e24d970ed73ca435b423167332163817ccf7fa732b8fef4e56586105; 2026-10-06:cbb25c03e24d970ed73ca435b423167332163817ccf7fa732b8fef4e56586105 | — | OBSERVED |
+| azure-04d | Azure Blob XML | Delimiter with `startFrom` inside a subtree after its last descendant | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:f7027eb607dd6f2186012dd982e9a67cdf7e347a8164761b5de16e598a0cb41b; 2026-10-06:f7027eb607dd6f2186012dd982e9a67cdf7e347a8164761b5de16e598a0cb41b | — | OBSERVED |
+| azure-04e | Azure Blob XML | Delimiter with `startFrom` after a subtree, equal to an object | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:cc5c54628fe7315a1ec5d845b658a791a392b60819ec8ac1cb69b5090d7d7c55; 2026-10-06:cc5c54628fe7315a1ec5d845b658a791a392b60819ec8ac1cb69b5090d7d7c55 | — | OBSERVED |
+| azure-04f | Azure Blob XML | Delimiter `/` with a prefix ending in the delimiter | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:7c4333fbaac5384dcb6aa0a8ada842b62f2bda52ae35fd4696e87a7c6650a757; 2026-10-06:7c4333fbaac5384dcb6aa0a8ada842b62f2bda52ae35fd4696e87a7c6650a757 | — | OBSERVED |
+| azure-04g | Azure Blob XML | Delimiter `/` with a prefix that stops before the delimiter | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:e52a7fda6725b45d0870af84829d3923b8e9fb0617e26b38ef50032627776ede; 2026-10-06:e52a7fda6725b45d0870af84829d3923b8e9fb0617e26b38ef50032627776ede | — | OBSERVED |
+| azure-04h | Azure Blob XML | Pipe delimiter that never occurs in names | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:a38da1ca05b1b6550e36e81aea9a811a3baf4b00a1a6b7aa03578c07e70a1a19; 2026-10-06:a38da1ca05b1b6550e36e81aea9a811a3baf4b00a1a6b7aa03578c07e70a1a19 | — | OBSERVED |
+| azure-04i | Azure Blob XML | Two-character delimiter `/1` | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:9d383ec7959bbfcfecfff9c06dd1d972f1d57203f1d89640cb37c46613dc0707; 2026-10-06:9d383ec7959bbfcfecfff9c06dd1d972f1d57203f1d89640cb37c46613dc0707 | — | OBSERVED |
+| azure-04j | Azure Blob XML | Two-character delimiter `-g` | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:706e7e89698ec11ad948b8c0b58fc3e0231fd05712853ff7d703e5cd1d00bb29; 2026-10-06:706e7e89698ec11ad948b8c0b58fc3e0231fd05712853ff7d703e5cd1d00bb29 | — | OBSERVED |
+| azure-04k | Azure Blob XML | Empty `delimiter` value | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:b8bcfd82fba22b74b641f3aebe38f1909e0499ad38f1ac517076ef9e935d4b67; 2026-10-06:b8bcfd82fba22b74b641f3aebe38f1909e0499ad38f1ac517076ef9e935d4b67 | — | OBSERVED |
+| azure-04l | Azure Blob XML | Delimiter without a prefix from a mid-corpus `startFrom` | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:54456f9e3b00b063a0e669e3b3c75df69cc587b1a4a38ecf1b70a32a319bd31d; 2026-10-06:54456f9e3b00b063a0e669e3b3c75df69cc587b1a4a38ecf1b70a32a319bd31d | — | OBSERVED |
+| azure-04m | Azure Blob XML | Delimiter walk with `startFrom` inside a subtree | Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name | 2026-06-06:435f785bcda78e01dea9c000fe407a682da5dfde7222014308889e6a7bd8a4d1; 2026-10-06:435f785bcda78e01dea9c000fe407a682da5dfde7222014308889e6a7bd8a4d1 | — | OBSERVED |
 | azure-05a | Azure Blob XML | Walk with `startFrom` and one entry per page | Matching `startFrom` retained on continuation; other combinations refused pending evidence | 2026-06-06:ebe5fcb2e9fa4428a1892ddef89e7c07d88d83434c53a0e585393140d65ee7ee; 2026-10-06:ebe5fcb2e9fa4428a1892ddef89e7c07d88d83434c53a0e585393140d65ee7ee | — | OBSERVED |
 | azure-05b | Azure Blob XML | `marker` with a later `startFrom` | Matching `startFrom` retained on continuation; other combinations refused pending evidence | 2026-06-06:73adbde4d2a4bf4fe5236678d3671b55ca782827d48d11aca156b810c6f35775; 2026-10-06:73adbde4d2a4bf4fe5236678d3671b55ca782827d48d11aca156b810c6f35775 | — | OBSERVED |
 | azure-05c | Azure Blob XML | `marker` with an earlier `startFrom` | Matching `startFrom` retained on continuation; other combinations refused pending evidence | 2026-06-06:8b6043e09bb55ed5140fa4bd7727e8b9f2a22c71b6b8b7af960164bf465d7b4f; 2026-10-06:8b6043e09bb55ed5140fa4bd7727e8b9f2a22c71b6b8b7af960164bf465d7b4f | — | OBSERVED |
 | azure-05d | Azure Blob XML | `marker` issued under `startFrom` used without it | Matching `startFrom` retained on continuation; other combinations refused pending evidence | 2026-06-06:bef99edd63e11fa304cd22a3fd3e61029083c8d0a58b0de78df5d8d2bedf89f6; 2026-10-06:bef99edd63e11fa304cd22a3fd3e61029083c8d0a58b0de78df5d8d2bedf89f6 | — | OBSERVED |
-| azure-06a | Azure Blob XML | BMP, surrogate-neighbor and supplementary names in list order | Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch | 2026-06-06:e8925d287db3728e4dca798a134b238895052af8c6717e55fe3403f8e4f1d80a; 2026-10-06:e8925d287db3728e4dca798a134b238895052af8c6717e55fe3403f8e4f1d80a | — | OBSERVED |
-| azure-06b | Azure Blob XML | `startFrom` at U+E000 | Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch | 2026-06-06:58c222baea1d6a0fd05b119ea4387dfa50943913dddaea2f46b1e8bba752c8a8; 2026-10-06:58c222baea1d6a0fd05b119ea4387dfa50943913dddaea2f46b1e8bba752c8a8 | — | OBSERVED |
-| azure-06c | Azure Blob XML | Prefix in NFC form with an NFD sibling | Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch | 2026-06-06:8f51c266b4bb4ad9bf140ff59261e51249ea4713cbe91aadc15eb03b73f401a0; 2026-10-06:8f51c266b4bb4ad9bf140ff59261e51249ea4713cbe91aadc15eb03b73f401a0 | — | OBSERVED |
-| azure-06d | Azure Blob XML | Prefix differing only in case | Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch | 2026-06-06:10934eaff3a208c194f781206d2439ed4f2a7c2be20812bc6ec9b4f92b602992; 2026-10-06:10934eaff3a208c194f781206d2439ed4f2a7c2be20812bc6ec9b4f92b602992 | — | OBSERVED |
-| azure-06e | Azure Blob XML | Supplementary-character `startFrom` in lowercase hex escapes | Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch | 2026-06-06:19fef0b90429161352a956eee0951680ee525185bf6d6a087a8761f07e369b02; 2026-10-06:19fef0b90429161352a956eee0951680ee525185bf6d6a087a8761f07e369b02 | — | OBSERVED |
-| azure-06f | Azure Blob XML | Delimiter `é` over Unicode names | Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch | 2026-06-06:ff6ca80f46fa26247e0d37e4f2b9eb7106a0c5d488630b9a25272fc44e04e195; 2026-10-06:ff6ca80f46fa26247e0d37e4f2b9eb7106a0c5d488630b9a25272fc44e04e195 | — | OBSERVED |
+| azure-06a | Azure Blob XML | BMP, surrogate-neighbor and supplementary names in list order | UTF-16 code-unit order over the byte-sorted fixture | 2026-06-06:e8925d287db3728e4dca798a134b238895052af8c6717e55fe3403f8e4f1d80a; 2026-10-06:e8925d287db3728e4dca798a134b238895052af8c6717e55fe3403f8e4f1d80a | — | OBSERVED |
+| azure-06b | Azure Blob XML | `startFrom` at U+E000 | UTF-16 code-unit order over the byte-sorted fixture | 2026-06-06:58c222baea1d6a0fd05b119ea4387dfa50943913dddaea2f46b1e8bba752c8a8; 2026-10-06:58c222baea1d6a0fd05b119ea4387dfa50943913dddaea2f46b1e8bba752c8a8 | — | OBSERVED |
+| azure-06c | Azure Blob XML | Prefix in NFC form with an NFD sibling | UTF-16 code-unit order over the byte-sorted fixture | 2026-06-06:8f51c266b4bb4ad9bf140ff59261e51249ea4713cbe91aadc15eb03b73f401a0; 2026-10-06:8f51c266b4bb4ad9bf140ff59261e51249ea4713cbe91aadc15eb03b73f401a0 | — | OBSERVED |
+| azure-06d | Azure Blob XML | Prefix differing only in case | UTF-16 code-unit order over the byte-sorted fixture | 2026-06-06:10934eaff3a208c194f781206d2439ed4f2a7c2be20812bc6ec9b4f92b602992; 2026-10-06:10934eaff3a208c194f781206d2439ed4f2a7c2be20812bc6ec9b4f92b602992 | — | OBSERVED |
+| azure-06e | Azure Blob XML | Supplementary-character `startFrom` in lowercase hex escapes | UTF-16 code-unit order over the byte-sorted fixture | 2026-06-06:19fef0b90429161352a956eee0951680ee525185bf6d6a087a8761f07e369b02; 2026-10-06:19fef0b90429161352a956eee0951680ee525185bf6d6a087a8761f07e369b02 | — | OBSERVED |
+| azure-06f | Azure Blob XML | Delimiter `é` over Unicode names | UTF-16 code-unit order over the byte-sorted fixture | 2026-06-06:ff6ca80f46fa26247e0d37e4f2b9eb7106a0c5d488630b9a25272fc44e04e195; 2026-10-06:ff6ca80f46fa26247e0d37e4f2b9eb7106a0c5d488630b9a25272fc44e04e195 | — | OBSERVED |
 | azure-07a | Azure Blob XML | Raw `+` in a `prefix` value | Explicit encoding; raw-wire assertion required | 2026-06-06:0fdcf81044424fa01c4b1f57461a151b992b13f673534c85ddc378c926eb009f; 2026-10-06:0fdcf81044424fa01c4b1f57461a151b992b13f673534c85ddc378c926eb009f | — | OBSERVED |
 | azure-07b | Azure Blob XML | `%2B` in a `prefix` value | Explicit encoding; raw-wire assertion required | 2026-06-06:e631e7612971e1c1db8adc00dfb89ae06aa7d95917ffa900b2a20bc29ad44254; 2026-10-06:e631e7612971e1c1db8adc00dfb89ae06aa7d95917ffa900b2a20bc29ad44254 | — | OBSERVED |
 | azure-07c | Azure Blob XML | `%20` in a `prefix` value | Explicit encoding; raw-wire assertion required | 2026-06-06:0cff59d8a2ae8c80a74f85cd1274026203175b1d07321155594c4d2af518fe75; 2026-10-06:0cff59d8a2ae8c80a74f85cd1274026203175b1d07321155594c4d2af518fe75 | — | OBSERVED |
@@ -363,8 +362,8 @@ auto-paginated local walks; retry-disabled 503 recipes each assert one attempt.
 | Feature/error | GCS JSON v1 provisional behavior | Azure Blob XML provisional behavior |
 | --- | --- | --- |
 | Page capacity | Default 1,000; larger valid requests cap at 1,000; zero refused | Default 5,000; signed-int32 values above 5,000 cap at 5,000; zero, negative and overflow refused |
-| Range | Inclusive `startOffset`, exclusive `endOffset`, intersected with prefix | Inclusive `startFrom`; `endBefore` refused for XML |
-| Delimiter | Objects and unique prefixes consume one capacity each; offset intersections remain evidence-gated | Interleaved Blob and BlobPrefix consume capacity; `startFrom` plus delimiter refused until observed |
+| Range | Inclusive `startOffset`, exclusive `endOffset`, intersected with prefix | Inclusive `startFrom` in UTF-16 code-unit order; `endBefore` refused for XML |
+| Delimiter | Objects and unique prefixes consume one capacity each; offset intersections remain evidence-gated | Interleaved Blob and BlobPrefix consume capacity; a prefix holding a name at or after `startFrom` is kept |
 | Marker | Replay-owned `gcs1.` token bound to fixture and listing scope | Replay-owned `az1.` marker bound to fixture, namespace, version and listing scope; matching startFrom retained |
 | Unsupported features | Versions, soft deletion, glob/filter evaluation, ACL expansion and partial fields | HNS/ADLS, versions, snapshots, deleted/include expansions, Arrow and `endBefore` |
 | Client error | JSON `invalid` 400; not-found 404; wrong-method 405 | XML `InvalidQueryParameterValue` / `OutOfRangeQueryParameterValue` / `InvalidHeaderValue` 400; `ContainerNotFound` 404 |
@@ -404,8 +403,9 @@ checks to those body policies. It checks GCS JSON error reasons, Azure XML and
 content type, and body length. Date and provider request IDs are validated but
 their values are volatile; Content-Type media types are compared while charset
 parameters may differ. Azure BOM and XML prolog spelling are compared as raw
-preamble bytes. Every live Azure capture, success and error alike, starts its body with the
-UTF-8 BOM (EF BB BF) before the declaration, and replay sends the same three bytes. Sanitization keeps only classified response headers, hashes
+preamble bytes. Every live Azure capture, success and error alike, starts its body with
+the UTF-8 BOM (EF BB BF) before the declaration, and replay sends the same three bytes.
+Sanitization keeps only classified response headers, hashes
 provider request IDs, and adjusts retained Content-Length to sanitized body bytes;
 an unclassified response header halts the capture for review. Local tests exercise
 these rules; native status, header, and error behavior remains UNMEASURED.
@@ -568,17 +568,30 @@ a temporary directory and replays every capture against replay serving the same 
 each outcome must equal its pinned expectation. The Python tests validate the ledger and
 this matrix against the archive and check that it rebuilds byte for byte.
 
-The Azure expectations in this archive were written while replay omitted the UTF-8 BOM.
-Each Azure pin that names the BOM also records what the comparison found with the BOM
-restored. Replay now sends the BOM, so the test applies such a pin as that remainder:
-`match` when nothing else differed, otherwise the remaining mismatch. Of the 73 such pins,
-51 now expect `match` and 22 keep another discrepancy. The archive is unchanged, so it holds
-no receipts for the 51 matches and their rows stay `OBSERVED`. Writing those receipts and
-rebuilding the archive, as in steps 2 and 3 below, promotes the four single-version rows
-`azure-01`, `azure-02`, `azure-10b` and `azure-10c` to `REPLAY_MATCH`. The other 47 also
-name `2026-10-06`, whose capture is folded, so they stay `OBSERVED` as described above.
-`-PproviderReport=DIR` writes each capture's outcome to `DIR/<provider>-outcomes.json`,
-from which a rebuild can write current expectations.
+The archive changes only with a re-capture, so the test derives the expectation for each
+capture from its archived pin by two rules, both in `NativeEvidenceReplayTest.expectations`.
+First, the Azure pins were written while replay omitted the UTF-8 BOM, and each pin that
+names the BOM also records what the comparison found with the BOM restored. Replay now
+sends the BOM, so such a pin expects that remainder: `match` when nothing else differed,
+otherwise the remaining mismatch. Second,
+[`replay-provider-expectations.json`](replay-provider-expectations.json) records, by
+provider and capture as in the archive, each outcome that a later replay change altered:
+`match`, or the remaining mismatch. An entry replaces whatever the first rule left for its
+capture, and the test fails on an entry for a capture the archive does not have or one that
+repeats that expectation. The file holds the 11 Azure captures that match since replay lists
+Azure in UTF-16 code-unit order and serves `startFrom` with a delimiter: `azure-04b` to
+`azure-04e`, `azure-04l`, `azure-04m`, `azure-06a`, `azure-06b`, `azure-06e`, `azure-06f`
+and `azure-10a`. Of the 103 Azure captures, 62 now expect `match`: 51 by the first rule and
+11 by the second.
+
+The archive holds no receipts for those 62 matches, so their rows stay `OBSERVED`. Writing
+the receipts and rebuilding the archive, as in steps 2 and 3 below, promotes the five
+single-version rows `azure-01`, `azure-02`, `azure-10a`, `azure-10b` and `azure-10c` to
+`REPLAY_MATCH`. The other 57 also name `2026-10-06`, whose capture is folded, so they stay
+`OBSERVED` as described above. `-PproviderReport=DIR` writes each capture's outcome to
+`DIR/<provider>-outcomes.json`, from which a rebuild can write current expectations. A
+rebuilt archive pins replay as it then is, so neither rule applies to it: remove the BOM rule
+and `replay-provider-expectations.json` in the same change.
 
 `scripts/provider-conformance/evidence_archive.py` builds the archive from an evidence
 directory with sorted entries, zero timestamps and owners, mode 0644, and gzip level 9

@@ -1,0 +1,16 @@
+{
+  "description": "Replay outcomes that changed after the evidence archive was built. Each entry replaces the expectation NativeEvidenceReplayTest derives from the archive's pin for that capture; see docs/replay-provider-conformance.md.",
+  "azure": {
+    "azure-04b~2026-06-06": "match",
+    "azure-04c~2026-06-06": "match",
+    "azure-04d~2026-06-06": "match",
+    "azure-04e~2026-06-06": "match",
+    "azure-04l~2026-06-06": "match",
+    "azure-04m~2026-06-06": "match",
+    "azure-06a~2026-06-06": "match",
+    "azure-06b~2026-06-06": "match",
+    "azure-06e~2026-06-06": "match",
+    "azure-06f~2026-06-06": "match",
+    "azure-10a~2026-06-06": "match"
+  }
+}

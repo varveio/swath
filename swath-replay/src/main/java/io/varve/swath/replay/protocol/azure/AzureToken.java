@@ -46,7 +46,8 @@ final class AzureToken {
     static byte[] binding(AzureListRequest request, String fixtureIdentity, String injectionProfile) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            for (String part : new String[] {"azure-flat-v1", "synthetic-v1", fixtureIdentity,
+            // v2: boundaries compare in UTF-16 code-unit order, so a v1 boundary would resume elsewhere.
+            for (String part : new String[] {"azure-flat-v2", "synthetic-v1", fixtureIdentity,
                     request.account(), request.container(), request.version(), request.prefix(),
                     request.delimiter(), request.startFrom(), injectionProfile}) {
                 byte[] value = part == null ? new byte[0] : part.getBytes(StandardCharsets.UTF_8);

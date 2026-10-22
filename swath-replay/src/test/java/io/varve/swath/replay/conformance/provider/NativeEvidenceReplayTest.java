@@ -51,13 +51,15 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * Replays every native capture in the committed evidence archive against replay serving the same
  * corpus, walking replay with its own tokens. Each capture's outcome must equal its committed
- * expectation: {@code match}, or a pinned discrepancy. With {@code swath.provider.receipts}
+ * expectation: {@code match}, or a pinned discrepancy, as {@link #expectations} derives it from
+ * the archive's pins and {@code docs/replay-provider-expectations.json}. With {@code swath.provider.receipts}
  * and {@code swath.provider.distribution} set on a clean tree, matches also write receipts.
  */
 class NativeEvidenceReplayTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Path REPO = Path.of("..").toAbsolutePath().normalize();
     private static final Path ARCHIVE = REPO.resolve("docs/replay-provider-evidence.tar.gz");
+    private static final Path EXPECTATION_UPDATES = REPO.resolve("docs/replay-provider-expectations.json");
     private static final Path SOURCE = REPO.resolve(
             "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java");
     private static final String REPLAY_BUCKET = "replay-bucket";
@@ -160,7 +162,8 @@ class NativeEvidenceReplayTest {
     private void replayProvider(String provider, String testName, Path dir) throws Exception {
         Path root = extractEvidence(dir).resolve(provider);
         assumeTrue(Files.isRegularFile(root.resolve("index.json")), "no committed " + provider + " evidence");
-        JsonNode expectations = withReplayBom(JSON.readTree(root.resolve("replay-expectations.json").toFile()));
+        JsonNode expectations = expectations(JSON.readTree(root.resolve("replay-expectations.json").toFile()),
+                JSON.readTree(EXPECTATION_UPDATES.toFile()).path(provider));
         String receipts = System.getProperty("swath.provider.receipts");
         String distribution = System.getProperty("swath.provider.distribution");
         Map<String, String> outcomes = new TreeMap<>();
@@ -208,13 +211,15 @@ class NativeEvidenceReplayTest {
     }
 
     /**
-     * The committed expectations as they apply to replay now. Replay sends the native UTF-8 BOM, so
-     * an archived Azure pin that opens with {@link #ARCHIVED_BOM_PIN} now expects what that pin
-     * found with the BOM restored: {@code match} for "nothing else", otherwise the remaining
-     * mismatch. Every other expectation applies unchanged. The archive changes only with a
-     * re-capture, whose expectations are written against replay as it then is.
+     * The expectations replay must meet now: the archive's pins, adjusted in two ways that only
+     * exist because the archive changes only with a re-capture. First, the archive was pinned
+     * while replay omitted the native UTF-8 BOM, so a pin that opens with {@link #ARCHIVED_BOM_PIN}
+     * expects what it found with the BOM restored: {@code match} for "nothing else", otherwise the
+     * remaining mismatch. Second, each entry in {@code updates}, from {@link #EXPECTATION_UPDATES},
+     * replaces the expectation for its capture; it must name an archived capture and differ from
+     * the expectation it replaces. A rebuilt archive pins replay as it then is, so neither applies.
      */
-    static JsonNode withReplayBom(JsonNode archived) {
+    static JsonNode expectations(JsonNode archived, JsonNode updates) {
         ObjectNode current = archived.deepCopy();
         for (var expectation : archived.properties()) {
             String pin = expectation.getValue().path("mismatch").asText("");
@@ -223,6 +228,18 @@ class NativeEvidenceReplayTest {
             if (rest.isEmpty()) throw new IllegalStateException("archived BOM pin names no remainder");
             if (rest.equals("nothing else")) current.put(expectation.getKey(), "match");
             else current.set(expectation.getKey(), JSON.createObjectNode().put("mismatch", rest));
+        }
+        for (var update : updates.properties()) {
+            JsonNode replaced = current.get(update.getKey());
+            if (replaced == null) {
+                throw new IllegalStateException(
+                        "expectation update for " + update.getKey() + ", which the archive does not pin");
+            }
+            if (replaced.equals(update.getValue())) {
+                throw new IllegalStateException(
+                        "expectation update for " + update.getKey() + " repeats the expectation it replaces");
+            }
+            current.set(update.getKey(), update.getValue());
         }
         return current;
     }
@@ -635,13 +652,40 @@ class NativeEvidenceReplayTest {
         archived.set("status", JSON.createObjectNode()
                 .put("mismatch", "Azure HTTP status differs: expected=200 actual=400"));
         archived.put("matched", "match");
-        JsonNode current = withReplayBom(archived);
+        JsonNode current = expectations(archived, JSON.createObjectNode());
         assertThat(current.path("only-bom").asText()).isEqualTo("match");
         assertThat(current.path("bom-and-echo").path("mismatch").asText())
                 .isEqualTo("Delimiter echo differs: expected=null actual=");
         assertThat(current.path("status")).isEqualTo(archived.path("status"));
         assertThat(current.path("matched").asText()).isEqualTo("match");
         assertThat(archived.path("only-bom").path("mismatch").asText()).startsWith(ARCHIVED_BOM_PIN);
+        ObjectNode emptyRest = JSON.createObjectNode();
+        emptyRest.set("bom", JSON.createObjectNode().put("mismatch", ARCHIVED_BOM_PIN));
+        assertThatThrownBy(() -> expectations(emptyRest, JSON.createObjectNode()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("archived BOM pin names no remainder");
+    }
+
+    @Test
+    void expectationUpdatesReplaceWhatTheBomRuleLeaves() {
+        ObjectNode archived = JSON.createObjectNode();
+        archived.set("order", JSON.createObjectNode()
+                .put("mismatch", ARCHIVED_BOM_PIN + "entry count differs: expected=4 actual=7"));
+        archived.set("status", JSON.createObjectNode()
+                .put("mismatch", "Azure HTTP status differs: expected=200 actual=400"));
+        archived.set("only-bom", JSON.createObjectNode().put("mismatch", ARCHIVED_BOM_PIN + "nothing else"));
+        ObjectNode updates = JSON.createObjectNode().put("order", "match").put("status", "match");
+        JsonNode current = expectations(archived, updates);
+        assertThat(current.path("order").asText()).isEqualTo("match");
+        assertThat(current.path("status").asText()).isEqualTo("match");
+        assertThat(current.path("only-bom").asText()).isEqualTo("match");
+
+        assertThatThrownBy(() -> expectations(archived, JSON.createObjectNode().put("only-bom", "match")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("expectation update for only-bom repeats the expectation it replaces");
+        assertThatThrownBy(() -> expectations(archived, JSON.createObjectNode().put("unknown", "match")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("expectation update for unknown, which the archive does not pin");
     }
 
     /** A deterministic corruption of replay exchanges, in page order. */
