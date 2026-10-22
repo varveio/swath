@@ -103,6 +103,25 @@ sizes; they do not make the encoded-byte budget a bound on Jetty direct memory o
 decoded Parquet rows. Benchmark receipts should state the JVM direct-memory cap and
 observed direct-buffer use alongside heap and response-budget settings.
 
+#### Azure listing order
+
+Live Azure Blob orders names by UTF-16 code units, and compares `startFrom` and markers the
+same way. For valid UTF-8 that is unsigned byte order except at the first differing byte,
+where lead bytes F0 to F4 (U+10000 and above, a surrogate pair in UTF-16) sort before EE
+and EF (U+E000 to U+FFFF). The fixture stays byte-sorted, and every serving mode answers
+the Azure route with the same byte-range reads. The route reads a range in byte order.
+When it meets a name with an EE or EF byte whose F0 to F4 siblings are still in the
+range, it reads that sibling branch first, then the EE and EF branch, then the rest of
+the range. Rows already read go to the part they belong to. A page whose names have no
+such lead bytes costs the same store reads as before. Resuming after a name reads one
+byte range, plus up to two more for each EE to F4 lead byte in that name. A fixture name
+that is not valid UTF-8 is placed by the same byte rule, but the Azure route refuses to
+render it.
+
+With a delimiter, a `startFrom` inside a rolled prefix keeps that prefix only when one of
+its names is at or after `startFrom`, as Azure does. The listing then continues after
+that prefix.
+
 ## Build
 
 ```bash
@@ -332,7 +351,9 @@ The metrics payload has `schema_version: 2` and fields
 The `serving` object records enabled protocols, fixture identity, ordering and metadata
 profiles, response/chunk bounds and live/peak charged bytes, active responses, and timeouts.
 `ordering_profile=unsigned-utf8-byte-order` describes the unsigned key-byte comparison
-used for fixture order and page boundaries; `serving_mode` separately names the backing store.
+used for fixture order and page boundaries. With Azure enabled it ends in
+`;azure=utf16-code-unit-order`, the order of that route. `serving_mode` separately names the
+backing store.
 Each meter carries its `name`, `type` (`timer`, `counter`,
 `distribution`, `gauge`), and `tags`; a timer adds `count`, `sum_ms`, `mean_ms`,
 `max_ms`, `p50_ms`, `p99_ms` — the same values `bench` reports, read the same
@@ -520,10 +541,8 @@ JVM, connection pool, and filesystem cache before recording a benchmark.
 
 - Only object rows and the documented S3, GCS, and Azure listing subsets are served;
   version listing is unsupported.
-- Every route lists in unsigned UTF-8 byte order. Live Azure Blob lists, and applies
-  `startFrom`, in UTF-16 code-unit order, so names with characters at U+10000 and above
-  sort before names with U+E000–U+FFFF there. Azure results that mix those ranges differ
-  from Azure until #239.
+- The S3 and GCS routes list in unsigned UTF-8 byte order. The Azure route lists in
+  UTF-16 code-unit order, as live Azure Blob does; see [Azure listing order](#azure-listing-order).
 - The server is usually faster than S3 unless a target profile is injected.
 - One local process does not reproduce distributed service capacity or real network faults.
 - In-server injection adds latency, not API errors, resets, malformed bodies, or partial

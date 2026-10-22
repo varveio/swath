@@ -1,0 +1,16 @@
+{
+  "description": "Replay outcomes that changed after the evidence archive was built. Each entry replaces the archive's pinned expectation for that capture in NativeEvidenceReplayTest; see docs/replay-provider-conformance.md.",
+  "azure": {
+    "azure-04b~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-04c~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-04d~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-04e~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-04l~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-04m~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-06a~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-06b~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-06e~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-06f~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"},
+    "azure-10a~2026-06-06": {"mismatch": "Azure BOM/prolog differs: expected=\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: nothing else"}
+  }
+}

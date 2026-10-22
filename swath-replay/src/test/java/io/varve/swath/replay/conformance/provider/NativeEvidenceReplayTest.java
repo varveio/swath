@@ -51,13 +51,15 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * Replays every native capture in the committed evidence archive against replay serving the same
  * corpus, walking replay with its own tokens. Each capture's outcome must equal its committed
- * expectation: {@code match}, or a pinned discrepancy. With {@code swath.provider.receipts}
+ * expectation: {@code match}, or a pinned discrepancy, as the archive pins it or as
+ * {@code docs/replay-provider-expectations.json} updates it. With {@code swath.provider.receipts}
  * and {@code swath.provider.distribution} set on a clean tree, matches also write receipts.
  */
 class NativeEvidenceReplayTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Path REPO = Path.of("..").toAbsolutePath().normalize();
     private static final Path ARCHIVE = REPO.resolve("docs/replay-provider-evidence.tar.gz");
+    private static final Path EXPECTATION_UPDATES = REPO.resolve("docs/replay-provider-expectations.json");
     private static final Path SOURCE = REPO.resolve(
             "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java");
     private static final String REPLAY_BUCKET = "replay-bucket";
@@ -154,7 +156,7 @@ class NativeEvidenceReplayTest {
     private void replayProvider(String provider, String testName, Path dir) throws Exception {
         Path root = extractEvidence(dir).resolve(provider);
         assumeTrue(Files.isRegularFile(root.resolve("index.json")), "no committed " + provider + " evidence");
-        JsonNode expectations = JSON.readTree(root.resolve("replay-expectations.json").toFile());
+        JsonNode expectations = expectations(provider, root);
         String receipts = System.getProperty("swath.provider.receipts");
         String distribution = System.getProperty("swath.provider.distribution");
         Map<String, String> outcomes = new TreeMap<>();
@@ -209,6 +211,26 @@ class NativeEvidenceReplayTest {
             if (!outcomes.containsKey(key)) unexpected.put(key, "expectation without a capture");
         });
         assertThat(unexpected).as("replay outcomes differing from committed expectations").isEmpty();
+    }
+
+    /**
+     * The archive's pinned expectations with the committed updates for {@code provider} applied. The
+     * archive changes only with a re-capture, so a replay change that alters an outcome records the
+     * new expectation in {@link #EXPECTATION_UPDATES}. Each update must name an archived capture and
+     * differ from its archived pin.
+     */
+    private static JsonNode expectations(String provider, Path root) throws IOException {
+        ObjectNode expectations = (ObjectNode) JSON.readTree(root.resolve("replay-expectations.json").toFile());
+        if (!Files.isRegularFile(EXPECTATION_UPDATES)) return expectations;
+        for (var update : JSON.readTree(EXPECTATION_UPDATES.toFile()).path(provider).properties()) {
+            JsonNode archived = expectations.get(update.getKey());
+            assertThat(archived).as("expectation update for %s, which the archive does not pin", update.getKey())
+                    .isNotNull();
+            assertThat(update.getValue()).as("expectation update for %s repeats its archived pin", update.getKey())
+                    .isNotEqualTo(archived);
+            expectations.set(update.getKey(), update.getValue());
+        }
+        return expectations;
     }
 
     private static ObjectEntry[] entries(String provider, JsonNode manifest) {

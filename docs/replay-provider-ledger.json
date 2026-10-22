@@ -2755,7 +2755,7 @@
       "id": "azure-04a",
       "provider": "azure",
       "feature": "Delimiter `/` baseline over objects, subtrees, a folder marker and an empty segment",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2782,7 +2782,7 @@
       "id": "azure-04b",
       "provider": "azure",
       "feature": "Delimiter with `startFrom` equal to a subtree prefix",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2809,7 +2809,7 @@
       "id": "azure-04c",
       "provider": "azure",
       "feature": "Delimiter with `startFrom` inside a subtree with remaining descendants",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2836,7 +2836,7 @@
       "id": "azure-04d",
       "provider": "azure",
       "feature": "Delimiter with `startFrom` inside a subtree after its last descendant",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2863,7 +2863,7 @@
       "id": "azure-04e",
       "provider": "azure",
       "feature": "Delimiter with `startFrom` after a subtree, equal to an object",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2890,7 +2890,7 @@
       "id": "azure-04f",
       "provider": "azure",
       "feature": "Delimiter `/` with a prefix ending in the delimiter",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2917,7 +2917,7 @@
       "id": "azure-04g",
       "provider": "azure",
       "feature": "Delimiter `/` with a prefix that stops before the delimiter",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2944,7 +2944,7 @@
       "id": "azure-04h",
       "provider": "azure",
       "feature": "Pipe delimiter that never occurs in names",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2971,7 +2971,7 @@
       "id": "azure-04i",
       "provider": "azure",
       "feature": "Two-character delimiter `/1`",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -2998,7 +2998,7 @@
       "id": "azure-04j",
       "provider": "azure",
       "feature": "Two-character delimiter `-g`",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3025,7 +3025,7 @@
       "id": "azure-04k",
       "provider": "azure",
       "feature": "Empty `delimiter` value",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3052,7 +3052,7 @@
       "id": "azure-04l",
       "provider": "azure",
       "feature": "Delimiter without a prefix from a mid-corpus `startFrom`",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3079,7 +3079,7 @@
       "id": "azure-04m",
       "provider": "azure",
       "feature": "Delimiter walk with `startFrom` inside a subtree",
-      "profile_promise": "**Unsupported until native evidence**",
+      "profile_promise": "Interleaved Blob and BlobPrefix; `startFrom` keeps a prefix holding a later name",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3214,7 +3214,7 @@
       "id": "azure-06a",
       "provider": "azure",
       "feature": "BMP, surrogate-neighbor and supplementary names in list order",
-      "profile_promise": "Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch",
+      "profile_promise": "UTF-16 code-unit order over the byte-sorted fixture",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3241,7 +3241,7 @@
       "id": "azure-06b",
       "provider": "azure",
       "feature": "`startFrom` at U+E000",
-      "profile_promise": "Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch",
+      "profile_promise": "UTF-16 code-unit order over the byte-sorted fixture",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3268,7 +3268,7 @@
       "id": "azure-06c",
       "provider": "azure",
       "feature": "Prefix in NFC form with an NFD sibling",
-      "profile_promise": "Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch",
+      "profile_promise": "UTF-16 code-unit order over the byte-sorted fixture",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3295,7 +3295,7 @@
       "id": "azure-06d",
       "provider": "azure",
       "feature": "Prefix differing only in case",
-      "profile_promise": "Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch",
+      "profile_promise": "UTF-16 code-unit order over the byte-sorted fixture",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3322,7 +3322,7 @@
       "id": "azure-06e",
       "provider": "azure",
       "feature": "Supplementary-character `startFrom` in lowercase hex escapes",
-      "profile_promise": "Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch",
+      "profile_promise": "UTF-16 code-unit order over the byte-sorted fixture",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
@@ -3349,7 +3349,7 @@
       "id": "azure-06f",
       "provider": "azure",
       "feature": "Delimiter `é` over Unicode names",
-      "profile_promise": "Native order is UTF-16 code units; replay's unsigned UTF-8 order is a pinned mismatch",
+      "profile_promise": "UTF-16 code-unit order over the byte-sorted fixture",
       "status": "OBSERVED",
       "api_versions": [
         "2026-06-06",
