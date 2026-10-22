@@ -148,10 +148,10 @@ public final class AzureHandler implements ListingProtocolHandler {
             case OVERLOAD -> "ServerBusy";
             case FIXTURE_INCOMPATIBLE, FIXTURE_DISORDERED, RESPONSE_TOO_LARGE, INTERNAL -> "InternalError";
         };
-        String body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Error><Code>" + code
-                + "</Code><Message>" + code + "</Message></Error>";
-        ByteBuffer bytes = request.head() ? ByteBuffer.allocate(0)
-                : ByteBuffer.wrap(body.getBytes(StandardCharsets.UTF_8));
+        byte[] body = ("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Error><Code>" + code
+                + "</Code><Message>" + code + "</Message></Error>").getBytes(StandardCharsets.UTF_8);
+        ByteBuffer bytes = ByteBuffer.allocate(request.head() ? 0 : AzureXml.UTF8_BOM.length + body.length);
+        if (!request.head()) bytes.put(AzureXml.UTF8_BOM).put(body).flip();
         Map<String, String> headers = new HashMap<>(headers(
                 request.hasDuplicateHeader("x-ms-version") ? null : request.header("x-ms-version"),
                 request.hasDuplicateHeader("x-ms-client-request-id") ? null

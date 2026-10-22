@@ -51,13 +51,15 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * Replays every native capture in the committed evidence archive against replay serving the same
  * corpus, walking replay with its own tokens. Each capture's outcome must equal its committed
- * expectation: {@code match}, or a pinned discrepancy. With {@code swath.provider.receipts}
+ * expectation: {@code match}, or a pinned discrepancy, as {@link #expectations} derives it from
+ * the archive's pins and {@code docs/replay-provider-expectations.json}. With {@code swath.provider.receipts}
  * and {@code swath.provider.distribution} set on a clean tree, matches also write receipts.
  */
 class NativeEvidenceReplayTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Path REPO = Path.of("..").toAbsolutePath().normalize();
     private static final Path ARCHIVE = REPO.resolve("docs/replay-provider-evidence.tar.gz");
+    private static final Path EXPECTATION_UPDATES = REPO.resolve("docs/replay-provider-expectations.json");
     private static final Path SOURCE = REPO.resolve(
             "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java");
     private static final String REPLAY_BUCKET = "replay-bucket";
@@ -67,6 +69,12 @@ class NativeEvidenceReplayTest {
     private static final String AZURE_NATIVE_ENDPOINT = "https://{account}.blob.core.windows.net/";
     private static final int MAX_WALK_PAGES = 64;
     private static final int SORTED_KEY_LIMIT = 1024;
+    /**
+     * The opening of every Azure pin the committed archive recorded while replay omitted the native
+     * UTF-8 BOM. Each such pin goes on to name what the comparison found with the BOM restored.
+     */
+    static final String ARCHIVED_BOM_PIN = "Azure BOM/prolog differs: expected=\uFEFF<?xml version=\"1.0\""
+            + " encoding=\"utf-8\"?> actual=<?xml version=\"1.0\" encoding=\"utf-8\"?> | with the BOM restored: ";
 
     @Test
     void gcsNativeCapturesMatchReplay(@TempDir Path dir) throws Exception {
@@ -86,8 +94,8 @@ class NativeEvidenceReplayTest {
     /** Committed evidence for one provider and a replay server serving its corpus. */
     private record ReplayContext(Path root, JsonNode index, Map<String, JsonNode> cases, ReplayServer server)
             implements AutoCloseable {
-        Endpoint endpoint(boolean restoreBom, Mutation mutation) {
-            return new Endpoint(index.path("provider").asText(), server.port(), cases, restoreBom, mutation);
+        Endpoint endpoint(Mutation mutation) {
+            return new Endpoint(index.path("provider").asText(), server.port(), cases, mutation);
         }
 
         Path capture(String key) {
@@ -154,7 +162,8 @@ class NativeEvidenceReplayTest {
     private void replayProvider(String provider, String testName, Path dir) throws Exception {
         Path root = extractEvidence(dir).resolve(provider);
         assumeTrue(Files.isRegularFile(root.resolve("index.json")), "no committed " + provider + " evidence");
-        JsonNode expectations = JSON.readTree(root.resolve("replay-expectations.json").toFile());
+        JsonNode expectations = expectations(JSON.readTree(root.resolve("replay-expectations.json").toFile()),
+                JSON.readTree(EXPECTATION_UPDATES.toFile()).path(provider));
         String receipts = System.getProperty("swath.provider.receipts");
         String distribution = System.getProperty("swath.provider.distribution");
         Map<String, String> outcomes = new TreeMap<>();
@@ -162,7 +171,7 @@ class NativeEvidenceReplayTest {
             ReplayServer server = context.server();
             JsonNode index = context.index();
             Map<String, JsonNode> cases = context.cases();
-            Endpoint endpoint = context.endpoint(false, Mutation.NONE);
+            Endpoint endpoint = context.endpoint(Mutation.NONE);
             for (var capture : index.path("captures").properties()) {
                 String key = capture.getKey();
                 Path file = root.resolve(capture.getValue().path("file").asText());
@@ -172,16 +181,6 @@ class NativeEvidenceReplayTest {
                     outcome = "match";
                 } catch (IllegalArgumentException | IllegalStateException | IOException error) {
                     outcome = "mismatch: " + error.getMessage();
-                    if (error.getMessage() != null && error.getMessage().startsWith("Azure BOM/prolog")) {
-                        String rest;
-                        try {
-                            context.endpoint(true, Mutation.NONE).verify(key, file, capture.getValue());
-                            rest = "nothing else";
-                        } catch (IllegalArgumentException | IllegalStateException | IOException other) {
-                            rest = other.getMessage();
-                        }
-                        outcome += " | with the BOM restored: " + rest;
-                    }
                 }
                 outcomes.put(key, outcome);
                 if (outcome.equals("match") && receipts != null) {
@@ -211,6 +210,40 @@ class NativeEvidenceReplayTest {
         assertThat(unexpected).as("replay outcomes differing from committed expectations").isEmpty();
     }
 
+    /**
+     * The expectations replay must meet now: the archive's pins, adjusted in two ways that only
+     * exist because the archive changes only with a re-capture. First, the archive was pinned
+     * while replay omitted the native UTF-8 BOM, so a pin that opens with {@link #ARCHIVED_BOM_PIN}
+     * expects what it found with the BOM restored: {@code match} for "nothing else", otherwise the
+     * remaining mismatch. Second, each entry in {@code updates}, from {@link #EXPECTATION_UPDATES},
+     * replaces the expectation for its capture; it must name an archived capture and differ from
+     * the expectation it replaces. A rebuilt archive pins replay as it then is, so neither applies.
+     */
+    static JsonNode expectations(JsonNode archived, JsonNode updates) {
+        ObjectNode current = archived.deepCopy();
+        for (var expectation : archived.properties()) {
+            String pin = expectation.getValue().path("mismatch").asText("");
+            if (!pin.startsWith(ARCHIVED_BOM_PIN)) continue;
+            String rest = pin.substring(ARCHIVED_BOM_PIN.length());
+            if (rest.isEmpty()) throw new IllegalStateException("archived BOM pin names no remainder");
+            if (rest.equals("nothing else")) current.put(expectation.getKey(), "match");
+            else current.set(expectation.getKey(), JSON.createObjectNode().put("mismatch", rest));
+        }
+        for (var update : updates.properties()) {
+            JsonNode replaced = current.get(update.getKey());
+            if (replaced == null) {
+                throw new IllegalStateException(
+                        "expectation update for " + update.getKey() + ", which the archive does not pin");
+            }
+            if (replaced.equals(update.getValue())) {
+                throw new IllegalStateException(
+                        "expectation update for " + update.getKey() + " repeats the expectation it replaces");
+            }
+            current.set(update.getKey(), update.getValue());
+        }
+        return current;
+    }
+
     private static ObjectEntry[] entries(String provider, JsonNode manifest) {
         List<ObjectEntry> entries = new ArrayList<>();
         for (JsonNode object : manifest.path("objects")) {
@@ -235,30 +268,7 @@ class NativeEvidenceReplayTest {
     }
 
     /** Issues the replay side of one capture with replay's own tokens and compares it. */
-    /**
-     * {@code restoreBom} is a diagnostic only: after the pinned "replay omits the UTF-8 BOM" Azure
-     * mismatch, it re-compares with the BOM restored to report whatever else differs. It never
-     * produces a match verdict or a receipt.
-     */
-    private record Endpoint(String provider, int port, Map<String, JsonNode> cases, boolean restoreBom,
-                            Mutation mutation) {
-
-        ProviderExchangeComparator.Exchange replayExchange(int status, Map<String, List<String>> headers,
-                                                           byte[] body) {
-            if (!restoreBom || body.length == 0 || (body.length >= 3 && (body[0] & 0xff) == 0xef)) {
-                return new ProviderExchangeComparator.Exchange(status, headers, body);
-            }
-            byte[] withBom = new byte[body.length + 3];
-            withBom[0] = (byte) 0xef;
-            withBom[1] = (byte) 0xbb;
-            withBom[2] = (byte) 0xbf;
-            System.arraycopy(body, 0, withBom, 3, body.length);
-            Map<String, List<String>> adjusted = new LinkedHashMap<>(headers);
-            if (adjusted.containsKey("content-length")) {
-                adjusted.put("content-length", List.of(Integer.toString(withBom.length)));
-            }
-            return new ProviderExchangeComparator.Exchange(status, adjusted, withBom);
-        }
+    private record Endpoint(String provider, int port, Map<String, JsonNode> cases, Mutation mutation) {
 
         boolean gcs() { return provider.equals("gcs"); }
 
@@ -317,8 +327,8 @@ class NativeEvidenceReplayTest {
             RawHttp.Response response = send(request.path("method").asText(), query, headers);
             var replayRequest = new ProviderMatchReceipt.Request(request.path("method").asText(), replayPath(),
                     query, headerMap(headers));
-            var exchange = mutation.apply(provider, List.of(
-                    replayExchange(response.status(), response.headers(), response.body()))).getFirst();
+            var exchange = mutation.apply(provider, List.of(new ProviderExchangeComparator.Exchange(
+                    response.status(), response.headers(), response.body()))).getFirst();
             if (s3()) {
                 ProviderMatchReceipt.verifyS3(file, replayRequest, exchange, tokens, REPLAY_BUCKET);
             } else if (gcs()) {
@@ -348,7 +358,8 @@ class NativeEvidenceReplayTest {
                 RawHttp.Response response = send("GET", query, headers);
                 replay.add(new ProviderMatchReceipt.ReplayStep("walk",
                         new ProviderMatchReceipt.Request("GET", replayPath(), query, headerMap(headers)),
-                        replayExchange(response.status(), response.headers(), response.body())));
+                        new ProviderExchangeComparator.Exchange(response.status(), response.headers(),
+                                response.body())));
                 token = response.status() == 200 ? nextToken(response.body()) : null;
                 if (token == null) break;
             }
@@ -418,7 +429,7 @@ class NativeEvidenceReplayTest {
                 replay.add(new ProviderMatchReceipt.ReplayStep("walk",
                         new ProviderMatchReceipt.Request(exchange.path("request").path("method").asText(),
                                 path, query, requestHeaders),
-                        replayExchange(exchange.path("response").path("status").asInt(),
+                        new ProviderExchangeComparator.Exchange(exchange.path("response").path("status").asInt(),
                                 responseHeaders, Base64.getDecoder().decode(
                                         exchange.path("response").path("body_base64").asText()))));
             }
@@ -590,8 +601,6 @@ class NativeEvidenceReplayTest {
                         new String[] {"s3-04a", "swap-order-pair"}, new String[] {"s3-05o", "double-decode"},
                         new String[] {"s3-07q", "terminate-early"}, new String[] {"s3-07c", "repeat-prefix"},
                         new String[] {"s3-06f", "wrong-status"}, new String[] {"s3-06f", "wrong-error"}),
-                // Azure baselines restore the BOM replay omits (a pinned finding), so the
-                // corruption under test is the only remaining difference.
                 "azure", List.of(new String[] {"azure-03a~2026-06-06", "drop-first"},
                         new String[] {"azure-03a~2026-06-06", "duplicate-last"},
                         new String[] {"azure-03a~2026-06-06", "swap-order-pair"},
@@ -605,14 +614,13 @@ class NativeEvidenceReplayTest {
         for (var entry : plan.entrySet()) {
             String provider = entry.getKey();
             if (!Files.isRegularFile(evidence.resolve(provider).resolve("index.json"))) continue;
-            boolean azure = provider.equals("azure");
             try (ReplayContext context = open(provider, evidence.resolve(provider), dir.resolve(provider))) {
                 for (String[] corruption : entry.getValue()) {
                     String key = corruption[0];
                     JsonNode capture = context.index().path("captures").path(key);
                     Path file = context.capture(key);
-                    context.endpoint(azure, Mutation.NONE).verify(key, file, capture);
-                    Endpoint corrupted = context.endpoint(azure, Mutation.named(corruption[1]));
+                    context.endpoint(Mutation.NONE).verify(key, file, capture);
+                    Endpoint corrupted = context.endpoint(Mutation.named(corruption[1]));
                     assertThatThrownBy(() -> corrupted.verify(key, file, capture))
                             .as(key + " with " + corruption[1])
                             .isInstanceOfAny(IllegalArgumentException.class, IllegalStateException.class);
@@ -629,10 +637,55 @@ class NativeEvidenceReplayTest {
         Files.writeString(file, JSON.writeValueAsString(Map.of("schema_version", "provider-capture-run-v1",
                 "evidence_kind", "retry_run", "provider", "gcs", "probe_id", "gcs-10", "steps", List.of())));
         // Port 0 has no server: a walk would fail on connect, so the refusal must come first.
-        Endpoint endpoint = new Endpoint("gcs", 0, Map.of("gcs-10", JSON.createObjectNode()), false, Mutation.NONE);
+        Endpoint endpoint = new Endpoint("gcs", 0, Map.of("gcs-10", JSON.createObjectNode()), Mutation.NONE);
         assertThatThrownBy(() -> endpoint.verify("gcs-10", file, JSON.createObjectNode()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("no replay verifier for retry_run captures");
+    }
+
+    @Test
+    void archivedBomPinsExpectWhatRemainedWithTheBomRestored() {
+        ObjectNode archived = JSON.createObjectNode();
+        archived.set("only-bom", JSON.createObjectNode().put("mismatch", ARCHIVED_BOM_PIN + "nothing else"));
+        archived.set("bom-and-echo", JSON.createObjectNode()
+                .put("mismatch", ARCHIVED_BOM_PIN + "Delimiter echo differs: expected=null actual="));
+        archived.set("status", JSON.createObjectNode()
+                .put("mismatch", "Azure HTTP status differs: expected=200 actual=400"));
+        archived.put("matched", "match");
+        JsonNode current = expectations(archived, JSON.createObjectNode());
+        assertThat(current.path("only-bom").asText()).isEqualTo("match");
+        assertThat(current.path("bom-and-echo").path("mismatch").asText())
+                .isEqualTo("Delimiter echo differs: expected=null actual=");
+        assertThat(current.path("status")).isEqualTo(archived.path("status"));
+        assertThat(current.path("matched").asText()).isEqualTo("match");
+        assertThat(archived.path("only-bom").path("mismatch").asText()).startsWith(ARCHIVED_BOM_PIN);
+        ObjectNode emptyRest = JSON.createObjectNode();
+        emptyRest.set("bom", JSON.createObjectNode().put("mismatch", ARCHIVED_BOM_PIN));
+        assertThatThrownBy(() -> expectations(emptyRest, JSON.createObjectNode()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("archived BOM pin names no remainder");
+    }
+
+    @Test
+    void expectationUpdatesReplaceWhatTheBomRuleLeaves() {
+        ObjectNode archived = JSON.createObjectNode();
+        archived.set("order", JSON.createObjectNode()
+                .put("mismatch", ARCHIVED_BOM_PIN + "entry count differs: expected=4 actual=7"));
+        archived.set("status", JSON.createObjectNode()
+                .put("mismatch", "Azure HTTP status differs: expected=200 actual=400"));
+        archived.set("only-bom", JSON.createObjectNode().put("mismatch", ARCHIVED_BOM_PIN + "nothing else"));
+        ObjectNode updates = JSON.createObjectNode().put("order", "match").put("status", "match");
+        JsonNode current = expectations(archived, updates);
+        assertThat(current.path("order").asText()).isEqualTo("match");
+        assertThat(current.path("status").asText()).isEqualTo("match");
+        assertThat(current.path("only-bom").asText()).isEqualTo("match");
+
+        assertThatThrownBy(() -> expectations(archived, JSON.createObjectNode().put("only-bom", "match")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("expectation update for only-bom repeats the expectation it replaces");
+        assertThatThrownBy(() -> expectations(archived, JSON.createObjectNode().put("unknown", "match")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("expectation update for unknown, which the archive does not pin");
     }
 
     /** A deterministic corruption of replay exchanges, in page order. */

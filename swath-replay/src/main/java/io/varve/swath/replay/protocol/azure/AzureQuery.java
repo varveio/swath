@@ -76,9 +76,6 @@ public final class AzureQuery {
         if (invalidXmlEcho(prefix) || invalidXmlEcho(delimiter)) {
             throw failure(ReplayFailure.Kind.UNSUPPORTED, "xml_query_echo_unmeasured");
         }
-        if (startFrom != null && delimiter != null) {
-            throw failure(ReplayFailure.Kind.UNSUPPORTED, "startfrom_delimiter_unmeasured");
-        }
         int pageSize = 5000;
         String rawSize = params.get("maxresults");
         if (rawSize != null) {

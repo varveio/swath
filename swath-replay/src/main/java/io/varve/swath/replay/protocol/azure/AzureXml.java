@@ -27,6 +27,11 @@ public final class AzureXml {
     private static final long LAST_RENDERABLE_SECOND = LocalDateTime.of(9999, 12, 31, 23, 59, 59)
             .toEpochSecond(ZoneOffset.UTC);
     private static final byte[] HEX = "0123456789ABCDEF".getBytes(StandardCharsets.US_ASCII);
+    /**
+     * Native Azure starts every List Blobs XML body, success or error, with a UTF-8 byte order mark
+     * before the declaration (observed for both service versions in the live campaign).
+     */
+    static final byte[] UTF8_BOM = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
     private static final String PROLOG_AND_ROOT = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
             + "<EnumerationResults ServiceEndpoint=\"";
     private static final String BLOB_PROPERTIES_BEFORE_SIZE = "<Properties><Last-Modified>";
@@ -47,6 +52,7 @@ public final class AzureXml {
     public static void write(AzureListResult result, String endpoint, BudgetedOutput out,
                              ReplayMetrics metrics) {
         AzureListRequest request = result.request();
+        out.write(UTF8_BOM, 0, UTF8_BOM.length);
         out.appendAscii(PROLOG_AND_ROOT);
         out.appendEscaped(endpoint);
         out.appendAscii("\" ContainerName=\"");
