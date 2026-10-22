@@ -518,10 +518,10 @@ Azure), then verifies an empty namespace. `recover` repeats cleanup for an inter
 run. Credentials and account identifiers are redacted before anything is written;
 `sanitize` publishes evidence only after a scan of decoded bodies finds no identifier,
 credential, email or ACL entity.
-A probe answered 401, 408, 429 or 5xx, or a walk that ends on one, is an incomplete case
-rather than an observation; a 400 or 403 is still observed. If the sanitizer refuses any
-completed case's capture, the published receipt is INCOMPLETE and names each refused case,
-so `promote` attaches nothing from that run.
+A probe answered 401, 408, 429, 500, 502, 503 or 504, or a walk that ends on one, is an
+incomplete case rather than an observation; a 400, 403 or other status is still observed.
+If the sanitizer refuses any completed case's capture, the published receipt is INCOMPLETE
+and names each refused case, so `promote` attaches nothing from that run.
 
 `promotion.py rows` regenerates the ledger rows and the table above from the case
 matrices; `promotion.py promote` attaches captures and receipts from the evidence

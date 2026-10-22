@@ -39,8 +39,9 @@ public final class S3ProfileComparator {
             "ChecksumType", "Size", "StorageClass", "Owner", "RestoreStatus");
     private static final Set<String> OWNER_FIELDS = Set.of("ID", "DisplayName");
     // Owner values may be synthetic on replay, so only the child sequence is compared. It is
-    // compared as a list so duplicated or reordered children do not pass.
-    private static final List<String> OWNER_SEQUENCE = List.of("ID", "DisplayName");
+    // compared as a list so duplicated or reordered children do not pass. AWS sends DisplayName
+    // only in some regions, so a native Owner may hold the ID alone; replay must then match it.
+    private static final List<List<String>> OWNER_SEQUENCES = List.of(List.of("ID"), List.of("ID", "DisplayName"));
     private static final String PROFILE_OMITTED = "RestoreStatus";
 
     private S3ProfileComparator() {
@@ -175,8 +176,10 @@ public final class S3ProfileComparator {
                 switch (expected.name()) {
                     case "LastModified" -> equal(label, instant(expected.text()), instant(actual.text()));
                     case "Owner" -> {
-                        equal(label + " children", expected.children(), OWNER_SEQUENCE);
-                        equal(label + " replay children", actual.children(), OWNER_SEQUENCE);
+                        if (!OWNER_SEQUENCES.contains(expected.children())) {
+                            fail(label + " children are not an S3 Owner: " + expected.children());
+                        }
+                        equal(label + " replay children", expected.children(), actual.children());
                     }
                     default -> equal(label, expected.text(), actual.text());
                 }
