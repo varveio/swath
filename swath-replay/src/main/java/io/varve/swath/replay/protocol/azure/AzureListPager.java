@@ -86,7 +86,7 @@ public final class AzureListPager {
     private AzureListResult flat(AzureListRequest request, byte[] prefix, Boundary lower, byte[] binding,
                                  int pageSize, int progress) {
         record("flat", request.startFrom() == null ? "prefix_window" : "start_from");
-        AzureOrderedCursor cursor = new AzureOrderedCursor(this::rowItems,
+        AzureOrderedCursor cursor = new AzureOrderedCursor(this::rowItems, this::firstKey,
                 AzureOrder.rangesFrom(lower.key(), lower.inclusive(), prefix));
         return page(request, List.of(), cursor, binding, pageSize, progress);
     }
@@ -102,7 +102,7 @@ public final class AzureListPager {
         byte[] from = lower.key();
         boolean inclusive = lower.inclusive();
         for (byte[] holder; from != null && (holder = rollup(from, prefix, delimiter)) != null;) {
-            AzureOrderedCursor names = new AzureOrderedCursor(this::rowItems,
+            AzureOrderedCursor names = new AzureOrderedCursor(this::rowItems, this::firstKey,
                     AzureOrder.rangesFrom(from, inclusive, holder));
             boolean listed = names.next(1) != null;
             record("delimiter_lower_in_prefix", listed ? "prefix_listed" : "prefix_skipped");
@@ -112,7 +112,7 @@ public final class AzureListPager {
             if (from != null && !ByteKeys.startsWith(from, prefix)) from = null;
         }
         AzureOrderedCursor cursor = from == null ? null : new AzureOrderedCursor(rollups(prefix, delimiter),
-                AzureOrder.rangesFrom(from, inclusive, prefix));
+                this::firstKey, AzureOrder.rangesFrom(from, inclusive, prefix));
         return page(request, leading, cursor, binding, pageSize, progress);
     }
 
@@ -217,6 +217,11 @@ public final class AzureListPager {
         List<AzureOrderedCursor.Item> items = new ArrayList<>(rows.size());
         for (ListedObject row : rows) items.add(AzureOrderedCursor.Item.blob(row));
         return items;
+    }
+
+    private byte[] firstKey(byte[] from, boolean inclusive) {
+        List<ListedObject> first = rows(from, inclusive, null, 1);
+        return first.isEmpty() ? null : first.get(0).key();
     }
 
     private List<ListedObject> rows(byte[] from, boolean inclusive, byte[] upper, int limit) {

@@ -115,10 +115,14 @@ the Azure route with the same byte-range reads. The route reads a range in byte 
 When it meets a name with an EE or EF byte whose F0 to F4 siblings are still in the
 range, it reads that sibling branch first, then the EE and EF branch, then the rest of
 the range. Rows already read go to the part they belong to. A page whose names have no
-such lead bytes costs the same store reads as before. Resuming after a name reads one
-byte range, plus up to two more for each EE to F4 lead byte in that name. A fixture name
-that is not valid UTF-8 is placed by the same byte rule, but the Azure route refuses to
-render it.
+such lead bytes costs the same store reads as before. Resuming after a name, or after a
+`startFrom`, covers one byte range, plus up to two more for each EE to F4 lead byte in it,
+and a name with many EE or EF bytes splits once per byte. Those parts are mostly empty, so
+when a read comes back empty the route reads the first key at or after the lowest part
+still to be read, and every part below that key is settled without its own read. A
+4,096-byte `startFrom` of U+10000 covers 2,049 ranges but costs under ten store reads on a
+typical fixture. A fixture name that is not valid UTF-8 is placed by the same byte rule,
+but the Azure route refuses to render it.
 
 With a delimiter, a `startFrom` inside a rolled prefix keeps that prefix only when one of
 its names is at or after `startFrom`, as Azure does. The listing then continues after

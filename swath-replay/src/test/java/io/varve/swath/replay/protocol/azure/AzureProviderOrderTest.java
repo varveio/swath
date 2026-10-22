@@ -188,6 +188,53 @@ class AzureProviderOrderTest {
     }
 
     @Test
+    void deepLeadByteBoundsRetireEmptyPartsWithAFewProbes(@TempDir Path dir) throws Exception {
+        // A 4,096-byte startFrom of U+10000 yields 2,049 byte ranges and one of U+E000 yields 1,366;
+        // a 1,021-byte fixture name of U+10000 yields 511 ranges to resume after, and the name of 340
+        // U+E000 splits 340 times. Nearly every part is empty; each once cost its own store read.
+        String supplementary = "\ud800\udc00".repeat(1024);
+        String privateUse = "\ue000".repeat(1365);
+        String deep = "\ud800\udc00".repeat(255) + "a";
+        assertThat(AzureOrder.rangesFrom(bytes(supplementary), true, new byte[0])).hasSize(2049);
+        assertThat(AzureOrder.rangesFrom(bytes(privateUse), true, new byte[0])).hasSize(1366);
+        List<String> keys = List.of("a", "a/1", "\u00e9", "\ud800\udc00/x", "\ud83d\ude00", "\ue000x", "\uff21",
+                "\uff21/y", deep, "\ue000".repeat(340) + "z", "\uffff");
+        for (String delimiter : Arrays.asList(null, "/")) {
+            for (String start : List.of(supplementary, privateUse, deep)) {
+                for (int size : List.of(1, 5000)) {
+                    try (FakeListingStore store = FakeListingStore.ofKeys(keys.toArray(String[]::new))) {
+                        AzureListPager pager = new AzureListPager(store, "fixture");
+                        AzureListResult first = pager.list(request(null, delimiter, start, null, size));
+                        int firstCalls = store.calls();
+                        assertThat(firstCalls).as("first page %s %s %d", ascii(delimiter), start.length(), size)
+                                .isLessThanOrEqualTo(12);
+                        if (first.nextMarker() != null) {
+                            pager.list(request(null, delimiter, start, first.nextMarker(), size));
+                            assertThat(store.calls() - firstCalls)
+                                    .as("continuation %s %s %d", ascii(delimiter), start.length(), size)
+                                    .isLessThanOrEqualTo(12);
+                        }
+                    }
+                }
+            }
+        }
+        for (Store store : stores(dir, keys)) {
+            try (store) {
+                AzureListPager pager = new AzureListPager(store.store(), "fixture");
+                for (String delimiter : Arrays.asList(null, "/")) {
+                    for (String start : List.of(supplementary, privateUse, deep)) {
+                        for (int size : List.of(1, 5000)) {
+                            assertThat(walk(pager, null, delimiter, start, size))
+                                    .as("%s %s %d %d", store.mode(), ascii(delimiter), start.length(), size)
+                                    .containsExactlyElementsOf(expected(keys, null, delimiter, start));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void swappedBranchesReuseRowsAlreadyRead() {
         // One read returns the EE branch, the F0 branch and the tail; the swap re-reads nothing.
         try (FakeListingStore store = FakeListingStore.ofKeys("a", "\ue000", "\uffff", "\ud800\udc00", "z\u00ff")) {

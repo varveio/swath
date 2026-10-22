@@ -21,11 +21,24 @@ import java.util.List;
  * entry up to {@code Q+F0}, then {@code [Q+F5, upper)}. Entries already read are handed to the part
  * they belong to, so a split costs a store read only when a part has not been read yet. A range with
  * no such pair of branches is read exactly as in byte order.
+ *
+ * <p>A bound or a name with many lead bytes yields hundreds of nested parts, and most are usually
+ * empty. Parts are queued in provider order, which is not byte order: the {@code EE/EF} parts of a
+ * lower bound, and the parts split off a name, descend in byte order as the queue advances. So when
+ * a read comes back empty, one {@link Probe} for the first key at or after the lowest pending store
+ * position settles every part below that key, wherever it is queued, and parts split off later
+ * inherit what it found. A read that finds rows costs what it did before; each empty one adds at
+ * most one probe.
  */
 final class AzureOrderedCursor {
     /** Reads up to {@code limit} entries of {@code [from, upper)} in byte order. */
     interface Source {
         List<Item> read(byte[] from, boolean inclusive, byte[] upper, int limit);
+    }
+
+    /** The first fixture key at or after {@code from} in byte order, or {@code null} when none is. */
+    interface Probe {
+        byte[] first(byte[] from, boolean inclusive);
     }
 
     /** A Blob ({@code object != null}) or a rolled BlobPrefix spelled {@code name}. */
@@ -45,11 +58,13 @@ final class AzureOrderedCursor {
 
     private static final int MAX_BATCH = 4096;
     private final Source source;
+    private final Probe probe;
     private final Deque<Part> parts = new ArrayDeque<>();
     private int splits;
 
-    AzureOrderedCursor(Source source, List<AzureOrder.Range> ranges) {
+    AzureOrderedCursor(Source source, Probe probe, List<AzureOrder.Range> ranges) {
         this.source = source;
+        this.probe = probe;
         for (int i = ranges.size() - 1; i >= 0; i--) {
             AzureOrder.Range range = ranges.get(i);
             parts.push(new Part(range.from(), range.fromInclusive(), range.upper()));
@@ -73,6 +88,7 @@ final class AzureOrderedCursor {
                     parts.pop();
                 } else {
                     part.fill(source, Math.clamp(wanted, 2, MAX_BATCH));
+                    if (part.buffered.isEmpty()) probeLowest();
                 }
                 continue;
             }
@@ -108,9 +124,30 @@ final class AzureOrderedCursor {
                 child.fromInclusive = part.fromInclusive;
             }
         }
+        if (part.probed) {
+            for (Part child : rest == null ? List.of(branch, supplementary) : List.of(branch, supplementary, rest)) {
+                child.learn(part.from, part.fromInclusive, part.next);
+            }
+        }
         if (rest != null) parts.push(rest);
         parts.push(branch);
         parts.push(supplementary);
+    }
+
+    /**
+     * Probes once from the lowest store position still to be read and not yet probed, then applies
+     * the key found to every part: below it a part is exhausted, holding it a part needs no probe.
+     */
+    private void probeLowest() {
+        Part lowest = null;
+        for (Part part : parts) {
+            if (!part.exhausted && !part.probed && (lowest == null || part.startsBelow(lowest))) lowest = part;
+        }
+        if (lowest == null) return;
+        byte[] from = lowest.from;
+        boolean inclusive = lowest.fromInclusive;
+        byte[] key = probe.first(from, inclusive);
+        for (Part part : parts) part.learn(from, inclusive, key);
     }
 
     /**
@@ -123,6 +160,9 @@ final class AzureOrderedCursor {
         private byte[] from;
         private boolean fromInclusive;
         private boolean exhausted;
+        /** {@code next} is the first fixture key at or after {@code from}, or {@code null} for none. */
+        private boolean probed;
+        private byte[] next;
 
         Part(byte[] from, boolean fromInclusive, byte[] upper) {
             this.from = from;
@@ -130,7 +170,33 @@ final class AzureOrderedCursor {
             this.upper = upper;
         }
 
+        /** Whether this part's store position is below {@code other}'s, an inclusive one first on a tie. */
+        boolean startsBelow(Part other) {
+            int cmp = ByteKeys.compareUnsigned(from, other.from);
+            return cmp < 0 || cmp == 0 && fromInclusive && !other.fromInclusive;
+        }
+
+        /**
+         * Applies a probe from {@code at}: {@code key} is the first fixture key at or after it (after
+         * it when {@code inclusive} is false), {@code null} for none. A part whose store position is
+         * not below {@code at} is then exhausted when its range ends at or before {@code key}.
+         */
+        void learn(byte[] at, boolean inclusive, byte[] key) {
+            int cmp = ByteKeys.compareUnsigned(from, at);
+            if (exhausted || cmp < 0 || cmp == 0 && fromInclusive && !inclusive) return;
+            if (key == null || upper != null && ByteKeys.compareUnsigned(upper, key) <= 0) {
+                exhausted = true;
+                return;
+            }
+            int position = ByteKeys.compareUnsigned(key, from);
+            if (position > 0 || position == 0 && fromInclusive) {
+                probed = true;
+                next = key;
+            }
+        }
+
         void fill(Source source, int limit) {
+            probed = false;
             List<Item> read = source.read(from, fromInclusive, upper, limit);
             buffered.addAll(read);
             if (read.size() < limit) {
