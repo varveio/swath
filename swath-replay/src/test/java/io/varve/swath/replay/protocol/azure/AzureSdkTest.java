@@ -104,7 +104,8 @@ class AzureSdkTest {
                 List<String> names = new ArrayList<>();
                 client.listBlobs(new ListBlobsOptions().setMaxResultsPerPage(1), Duration.ofSeconds(10))
                         .forEach(item -> names.add(item.getName()));
-                assertThat(names).containsExactly("a/1", "a/2", "a/sub/1", "x\uFFFE/y", "é", "\uE000", "😀");
+                // UTF-16 order: the surrogate pair of U+1F600 sorts before U+E000.
+                assertThat(names).containsExactly("a/1", "a/2", "a/sub/1", "x\uFFFE/y", "é", "😀", "\uE000");
                 assertThat(proxy.exchanges()).anySatisfy(exchange ->
                         assertThat(new String(exchange.responseBody(), java.nio.charset.StandardCharsets.UTF_8))
                                 .contains("<Name Encoded=\"true\">"));

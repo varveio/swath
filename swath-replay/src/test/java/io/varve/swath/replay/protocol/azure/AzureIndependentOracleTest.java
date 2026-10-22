@@ -10,7 +10,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.varve.swath.replay.testkit.FakeListingStore;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
@@ -55,12 +54,13 @@ class AzureIndependentOracleTest {
 
     private static List<String> expected(List<String> inventory, String prefix, String delimiter, String start) {
         List<String> ordered = new ArrayList<>(inventory);
-        ordered.sort((a, b) -> Arrays.compareUnsigned(bytes(a), bytes(b)));
+        // Azure orders names by UTF-16 code units, which is String.compareTo.
+        ordered.sort(String::compareTo);
         Set<String> emitted = new HashSet<>();
         List<String> result = new ArrayList<>();
         for (String key : ordered) {
             if (prefix != null && !key.startsWith(prefix)
-                    || start != null && Arrays.compareUnsigned(bytes(key), bytes(start)) < 0) continue;
+                    || start != null && key.compareTo(start) < 0) continue;
             int at = delimiter == null ? -1 : key.indexOf(delimiter, prefix == null ? 0 : prefix.length());
             if (at >= 0) {
                 String rolled = key.substring(0, at + delimiter.length());
@@ -79,9 +79,5 @@ class AzureIndependentOracleTest {
 
     private static String pick(Random random, String... values) {
         return values[random.nextInt(values.length)];
-    }
-
-    private static byte[] bytes(String value) {
-        return value.getBytes(StandardCharsets.UTF_8);
     }
 }
