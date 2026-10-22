@@ -269,4 +269,20 @@ class ProviderMatchReceiptRunTest {
     }
 
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
+
+    @Test
+    void sdkHeadersIgnoreOnlyTheJvmVersionToken() {
+        var captured = sdkRequest("gl-java/25.0.3 gdcl/2.7.2");
+        ProviderMatchReceipt.assertSdkHeaders(captured, sdkRequest("gl-java/25.0.4 gdcl/2.7.2"));
+        assertThatThrownBy(() -> ProviderMatchReceipt.assertSdkHeaders(captured,
+                sdkRequest("gl-java/25.0.4 gdcl/2.7.3")))
+                .hasMessageContaining("product/version token differs");
+        assertThatThrownBy(() -> ProviderMatchReceipt.assertSdkHeaders(captured, sdkRequest("gdcl/2.7.2")))
+                .hasMessageContaining("product/version token differs");
+    }
+
+    private static ProviderMatchReceipt.Request sdkRequest(String apiClient) {
+        return new ProviderMatchReceipt.Request("GET", "/storage/v1/b/{bucket}/o", "",
+                Map.of("x-goog-api-client", List.of(apiClient)));
+    }
 }

@@ -451,7 +451,9 @@ classified headers. Nonempty `HEAD` bodies and `HEAD` success
 captures are outside this provisional evidence profile. `GET` errors still require
 their typed XML envelope and native preamble.
 SDK run receipts also require every retained native product/version token to appear
-in the matching replay request header. Use the same pinned SDK and JDK for both
+in the matching replay request header. The `gl-java/` token is the one exception:
+it carries the running JVM's version rather than the SDK's, so replay must send it
+but its version may differ. Use the same pinned SDK and JDK for both
 runs; a changed runtime or transport may alter auxiliary SDK tokens even when
 the listing response is unchanged.
 `AzureNamespaceMapping` compares that sanitized native host-style path and
