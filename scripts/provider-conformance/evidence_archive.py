@@ -7,6 +7,7 @@ The archive is a plain tar of per-provider evidence directories (`gcs/`, `azure/
 at level 9. Entries are sorted, carry a zero timestamp, owner and group, and mode 0644, and
 the gzip header has no name or timestamp, so rebuilding from the same files gives the same
 bytes. Files are stored unchanged: a capture keeps the bytes its ledger checksum names.
+Build with classic zlib: zlib-ng compresses the same tar to different, equally valid bytes.
 
 `--fold PROVIDER=VERSION` keeps one service version's captures: a capture at another
 version that equals the reference capture once `evidence.version_normalized` is replaced by
@@ -16,12 +17,14 @@ an entry in `version-equivalence.json` with both digests; a capture that differs
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import io
 import json
 import shutil
 import tarfile
 import tempfile
+import zlib
 from pathlib import Path
 
 import evidence
@@ -45,6 +48,18 @@ def pack(root: Path) -> bytes:
             info.uname = info.gname = ""
             archive.addfile(info, io.BytesIO(payload))
     return evidence.deterministic_gzip(buffer.getvalue())
+
+
+def classic_zlib() -> bool:
+    """Whether this zlib gives the deflate bytes the committed archive was built with."""
+    return "zlib-ng" not in zlib.ZLIB_RUNTIME_VERSION
+
+
+def refuse_links(tree: Path) -> None:
+    """Refuse a link anywhere in an evidence tree: copying it would archive the bytes it points to."""
+    for path in (tree, *tree.rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"evidence holds only regular files: {path}")
 
 
 def write_json(path: Path, value: object, sort_keys: bool = False) -> None:
@@ -104,12 +119,15 @@ def fold_versions(provider_dir: Path, reference: str) -> dict:
 
 def build(evidence_dir: Path, providers: list[str], out: Path, folds: dict[str, str]) -> bytes:
     """Archive the named providers' evidence directories, folding service versions as asked."""
+    if not classic_zlib():
+        raise ValueError(f"build the archive with classic zlib, not {zlib.ZLIB_RUNTIME_VERSION}")
     with tempfile.TemporaryDirectory(prefix="provider-evidence-") as temp:
         stage = Path(temp)
         for provider in providers:
             if not (evidence_dir / provider / "index.json").is_file():
                 raise ValueError(f"{provider} has no evidence index under {evidence_dir}")
-            shutil.copytree(evidence_dir / provider, stage / provider)
+            refuse_links(evidence_dir / provider)
+            shutil.copytree(evidence_dir / provider, stage / provider, symlinks=True)
             if provider in folds:
                 record = fold_versions(stage / provider, folds[provider])
                 kept = sorted(key for key, case in record["cases"].items() if not case["equivalent"])
@@ -121,9 +139,14 @@ def build(evidence_dir: Path, providers: list[str], out: Path, folds: dict[str, 
 
 
 def rebuilds_identically(archive: Path) -> bool:
-    """Whether packing the archive's own files reproduces its bytes."""
+    """Whether packing the archive's own files reproduces its bytes. Under zlib-ng only the tar
+    and the gzip header can be compared."""
+    committed = archive.read_bytes()
     with evidence.evidence_root(archive) as root:
-        return pack(root) == archive.read_bytes()
+        rebuilt = pack(root)
+    if classic_zlib():
+        return rebuilt == committed
+    return rebuilt[:10] == committed[:10] and gzip.decompress(rebuilt) == gzip.decompress(committed)
 
 
 def main() -> None:
@@ -146,7 +169,8 @@ def main() -> None:
         return
     if not rebuilds_identically(args.archive):
         raise SystemExit(f"{args.archive} does not rebuild byte for byte")
-    print(f"{args.archive} rebuilds byte for byte")
+    print(f"{args.archive} rebuilds byte for byte" if classic_zlib()
+          else f"{args.archive} rebuilds the same tar; zlib-ng deflate bytes are not compared")
 
 
 if __name__ == "__main__":

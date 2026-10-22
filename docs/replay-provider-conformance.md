@@ -518,6 +518,10 @@ Azure), then verifies an empty namespace. `recover` repeats cleanup for an inter
 run. Credentials and account identifiers are redacted before anything is written;
 `sanitize` publishes evidence only after a scan of decoded bodies finds no identifier,
 credential, email or ACL entity.
+A probe answered 401, 408, 429 or 5xx, or a walk that ends on one, is an incomplete case
+rather than an observation; a 400 or 403 is still observed. If the sanitizer refuses any
+completed case's capture, the published receipt is INCOMPLETE and names each refused case,
+so `promote` attaches nothing from that run.
 
 `promotion.py rows` regenerates the ledger rows and the table above from the case
 matrices; `promotion.py promote` attaches captures and receipts from the evidence
@@ -542,10 +546,18 @@ It leaves out two things:
   request ID and time). `azure/version-equivalence.json` records the digests of both
   sides for every compared case. A `2026-10-06` ledger entry cites the `2026-06-06`
   capture and that record, and the validator recomputes the cited capture's normalized
-  digest. A case that differs keeps its `2026-10-06` capture; in this campaign all 98
-  compared cases matched. `azure-02` exists only at `2026-10-06` and keeps its capture.
+  digest. It cannot recompute the `2026-10-06` side, because that capture is not archived:
+  those digests are what the build computed before it deleted the capture, so the record
+  is as trustworthy as the sanitized captures it was built from. The validator requires
+  the record to carry that capture's own SHA-256 and normalized digest, so a retained copy
+  can still be checked against it. A case that differs keeps its `2026-10-06` capture; in
+  this campaign all 98 compared cases matched. `azure-02` exists only at `2026-10-06` and
+  keeps its capture.
   The `2026-10-06` manifest is the `2026-06-06` manifest with its version changed, so the
-  index keeps only its digest.
+  index keeps only its digest. Replay requests carry the captured service version, so a
+  receipt for a `2026-06-06` capture says nothing about replay at `2026-10-06`. A folded
+  entry carries no receipt, and a row that names both versions stays `OBSERVED` until
+  replay is also run and matched at `2026-10-06`.
 
 The normal build reads the archive directly. `NativeEvidenceReplayTest` extracts it into
 a temporary directory and replays every capture against replay serving the same corpus;
@@ -554,8 +566,10 @@ this matrix against the archive and check that it rebuilds byte for byte.
 
 `scripts/provider-conformance/evidence_archive.py` builds the archive from an evidence
 directory with sorted entries, zero timestamps and owners, mode 0644, and gzip level 9
-without a name or time, so the same files always give the same bytes. To publish a new
-campaign:
+without a name or time, so the same files always give the same bytes. It archives only
+regular files and stops at a link anywhere in an evidence directory. Build it with classic
+zlib: zlib-ng compresses the same tar to different bytes, so `build` refuses it there and
+`check` compares only the tar and the gzip header. To publish a new campaign:
 
 1. Build the archive from the sanitized evidence and commit it:
 
@@ -567,6 +581,8 @@ campaign:
 
 2. On that clean commit, write receipts for the captures replay matches into the evidence
    directory. Keep the jar: it records the commit, and the receipts name its checksum.
+   Each receipt requires a clean working tree, so `EVIDENCE_DIR` must be outside the
+   repository or under a gitignored path.
 
    ```bash
    ./gradlew :swath-replay:jar

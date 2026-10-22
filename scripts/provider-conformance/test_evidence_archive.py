@@ -10,11 +10,13 @@ import hashlib
 import io
 import json
 import os
+import struct
 import tarfile
 import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest import mock
 
 import evidence
 import evidence_archive
@@ -60,6 +62,48 @@ class EvidenceArchiveTest(unittest.TestCase):
             (root / "gcs/link.json").symlink_to(root / "gcs/index.json")
             with self.assertRaisesRegex(ValueError, "only regular files"):
                 evidence_archive.pack(root)
+
+    def test_build_refuses_links_without_writing_an_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "secret.json").write_bytes(b"credential\n")
+            (root / "outside").mkdir()
+            out = root / "evidence.tar.gz"
+            for link, target in (("gcs/captures/gcs-01a.json", root / "secret.json"),
+                                 ("gcs/receipts", root / "outside"), ("gcs/index.json", root / "secret.json")):
+                with self.subTest(link=link):
+                    evidence_dir = root / link.replace("/", "-") / "evidence"
+                    (evidence_dir / "gcs/captures").mkdir(parents=True)
+                    if link != "gcs/index.json":
+                        (evidence_dir / "gcs/index.json").write_bytes(b"{}\n")
+                    (evidence_dir / link).symlink_to(target)
+                    with self.assertRaisesRegex(ValueError, "only regular files"):
+                        evidence_archive.build(evidence_dir, ["gcs"], out, {})
+                    self.assertFalse(out.exists())
+
+    def test_check_compares_the_tar_when_zlib_ng_deflates_differently(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "gcs").mkdir()
+            (root / "gcs/index.json").write_bytes(b"{}\n" * 1000)
+            packed = evidence_archive.pack(root)
+            tar = gzip.decompress(packed)
+            # The same tar and gzip header with another valid deflate stream, as zlib-ng writes.
+            deflate = zlib.compressobj(9, zlib.DEFLATED, -15, 9, zlib.Z_HUFFMAN_ONLY)
+            other = packed[:10] + deflate.compress(tar) + deflate.flush() + struct.pack(
+                "<II", zlib.crc32(tar), len(tar))
+            self.assertNotEqual(other, packed)
+            archive = root / "evidence.tar.gz"
+            archive.write_bytes(other)
+            with mock.patch.object(zlib, "ZLIB_RUNTIME_VERSION", "1.3.1"):
+                self.assertFalse(evidence_archive.rebuilds_identically(archive))
+            with mock.patch.object(zlib, "ZLIB_RUNTIME_VERSION", "1.3.1.zlib-ng"):
+                self.assertTrue(evidence_archive.rebuilds_identically(archive))
+                archive.write_bytes(evidence.deterministic_gzip(tar[:-1] + b"x"))
+                self.assertFalse(evidence_archive.rebuilds_identically(archive))
+                with self.assertRaisesRegex(ValueError, "classic zlib"):
+                    evidence_archive.build(root, ["gcs"], root / "built.tar.gz", {})
+                self.assertFalse((root / "built.tar.gz").exists())
 
     def test_reader_refuses_entries_other_than_regular_files(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -182,6 +226,9 @@ class VersionFoldTest(unittest.TestCase):
                     (lambda r: r["cases"][f"azure-03a~{self.OTHER}"]["reference"].update(
                         file=f"captures/azure-03b~{self.REFERENCE}.json"), "another capture"),
                     (lambda r: r.update(reference_version=self.OTHER), "not for this provider"),
+                    (lambda r: r["cases"][f"azure-03a~{self.OTHER}"]["version"].pop("sha256"), "own digests"),
+                    (lambda r: r["cases"][f"azure-03a~{self.OTHER}"]["version"].update(
+                        sha256=r["cases"][f"azure-03a~{self.OTHER}"]["reference"]["sha256"]), "own digests"),
                     (lambda r: r["cases"].pop(f"azure-03a~{self.OTHER}"), "does not cover")):
                 tampered = copy.deepcopy(record)
                 edit(tampered)

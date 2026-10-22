@@ -697,6 +697,11 @@ def validate_version_equivalence(row: dict, version: str, proof: dict,
     if not isinstance(entry, dict) or entry.get("equivalent") is not True:
         raise ValueError("version equivalence record does not cover this case")
     cited = entry["reference"]
+    folded = entry.get("version")
+    # The folded capture is not archived; its own checksum lets a retained copy be checked.
+    if not isinstance(folded, dict) or not SHA256.fullmatch(str(folded.get("sha256"))) \
+            or not SHA256.fullmatch(str(folded.get("normalized_sha256"))) or folded["sha256"] == cited["sha256"]:
+        raise ValueError("version equivalence record lacks the folded capture's own digests")
     if proof.get("capture_file") != f"{row['provider']}/{cited['file']}" \
             or proof.get("capture_sha256") != cited["sha256"]:
         raise ValueError("ledger cites another capture than its version equivalence record")
