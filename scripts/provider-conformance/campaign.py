@@ -59,6 +59,10 @@ ACTIVE_PHASES = frozenset({SETUP, PROBE, SDK})
 WINDOW_ACTIVE, WINDOW_CLEANUP = "active", "cleanup"
 COMPLETE, INCOMPLETE = "COMPLETE", "INCOMPLETE"
 RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+# A probe answered with one of these statuses failed before listing semantics ran, so the
+# response answers no case. A 400, or the 403 a signed-query spelling probe can earn, is an
+# observation.
+NOT_AN_ANSWER = RETRYABLE_STATUS | {401}
 # The JDK can resend a request below the SDK capture gate (stale keep-alive connections);
 # every attempt the SDK driver reports is charged this many times.
 SDK_RESEND_FACTOR = 2
@@ -1166,14 +1170,19 @@ class Campaign:
                     query = self.provider.with_token(query, self._token(case, version, walks))
                 request = self.provider.list_request(query, version, case.headers)
                 response = self.client.send(request, phase)
-                return raw_exchange(request, response, self.redactor, self.provider.scrub), \
-                    {"status": response.status, "complete": True, "response": response}
+                result = {"status": response.status, "complete": response.status not in NOT_AN_ANSWER,
+                          "response": response}
+                if not result["complete"]:
+                    result["reason"] = f"HTTP {response.status} is a service or credential failure"
+                return raw_exchange(request, response, self.redactor, self.provider.scrub), result
             if case.kind == "walk":
                 walk = self.walk(case.query, version, phase, case.headers)
                 walks[(case.id, version)] = walk
                 raw = {"steps": [{"phase": "walk", "exchange": page["exchange"]} for page in walk["pages"]]}
-                # A walk that ends on an HTTP error is still a complete observation of that error.
-                complete = walk["complete"] or walk["reason"].startswith("HTTP ")
+                # A walk that ends on an HTTP error is still a complete observation of that
+                # error, unless the service or the credential failed.
+                complete = walk["complete"] or (walk["reason"].startswith("HTTP ")
+                                                and walk["pages"][-1]["status"] not in NOT_AN_ANSWER)
                 return raw, {"pages": len(walk["pages"]), "complete": complete,
                              "terminal": walk["complete"], "reason": walk["reason"]}
             return self._sdk(case, version, run_dir)
@@ -1262,13 +1271,18 @@ class Campaign:
             self.ledger.refund_bytes(byte_allowance - used_bytes)
 
     @staticmethod
-    def _release(reader: threading.Thread, fifo: Path) -> None:
+    def _release(reader: threading.Thread, fifo: Path, timeout: float = 10.0) -> None:
         """Unblock a pipe reader whose writer never opened the pipe, then wait for it."""
-        if reader.is_alive():
-            fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK) if fifo.exists() else None
-            if fd is not None:
-                os.close(fd)
-            reader.join(10)
+        deadline = time.monotonic() + timeout
+        while reader.is_alive() and time.monotonic() < deadline:
+            try:
+                # Opening and closing a writer ends a read that has no other writer.
+                os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+            except OSError:
+                # No reader holds the pipe: the thread has not opened it yet, or it has
+                # already read to the end and is still finishing. Try again until it exits.
+                pass
+            reader.join(0.05)
 
     def _scrubbed(self, exchange: dict) -> dict:
         body = self.provider.scrub(base64.b64decode(exchange["response"]["body_base64"]))
@@ -1437,6 +1451,12 @@ def sanitize_run(provider: Provider, run_dir: Path, out_dir: Path, compress_over
                 # Namespace, credentials and budget fields are per-endpoint and stay private.
                 entry["sdk_options"] = {k: v for k, v in options.items() if k in PORTABLE_SDK_OPTIONS}
             index["captures"][key] = entry
+    if index["sanitize_errors"]:
+        # A completed case the sanitizer refused is coverage this index cannot publish, so the
+        # published receipt is INCOMPLETE and promotion attaches nothing from this run.
+        index["receipt"]["status"] = INCOMPLETE
+        index["receipt"]["incomplete_reasons"] = list(index["receipt"]["incomplete_reasons"] or []) + \
+            [f"case {key}: sanitizer refused the capture" for key in sorted(index["sanitize_errors"])]
     scan_private(index, identifiers)
     payload = (json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     (out_dir / "index.json").write_bytes(payload)
@@ -1527,8 +1547,8 @@ def main() -> None:
     campaign_dir = args.campaign_dir / args.provider
     if args.command == "sanitize":
         index = sanitize_run(provider, campaign_dir / "runs" / args.run, args.out)
-        print(json.dumps({"captures": len(index["captures"]), "sanitize_errors": index["sanitize_errors"]},
-                         ensure_ascii=False, indent=2))
+        print(json.dumps({"status": index["receipt"]["status"], "captures": len(index["captures"]),
+                          "sanitize_errors": index["sanitize_errors"]}, ensure_ascii=False, indent=2))
         return
     if not args.confirm_live:
         raise SystemExit("this command sends live provider requests; pass --confirm-live")

@@ -5,9 +5,11 @@
 
 import base64
 import json
+import os
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, unquote
@@ -17,6 +19,7 @@ import campaign
 import evidence
 import gcs_live
 import matrix
+import promotion
 import s3_live
 from campaign import (CLEANUP, PROBE, SETUP, WINDOW_ACTIVE, WINDOW_CLEANUP, BoundExceeded, Bounds,
                       Campaign, CampaignLedger, Listed, NoAuthorizer, OwnershipJournal, Redactor, Request)
@@ -481,6 +484,33 @@ class CampaignRunTest(unittest.TestCase):
             self.assertEqual(receipt["cases"]["fake-02~v1"]["status"], 200)
             self.assertEqual(receipt["status"], campaign.INCOMPLETE)
 
+    def test_service_and_credential_failures_are_not_observations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cases = [Case("fake-01", "refused", "q", "exchange", "prefix=x&status=400"),
+                     Case("fake-05", "throttled", "q", "exchange", "prefix=x&status=503"),
+                     Case("fake-06", "expired", "q", "walk", "prefix=" + quote(RUN) + "&walk=1&status=401")]
+            store = FakeStore()
+            original = store.exchange
+
+            def answer(request, *args):
+                query = dict(parse_qsl(request.query))
+                # Exchanges fail at once; the walk's first page lists and its continuation fails.
+                if "status" in query and ("token" in query or "walk" not in query):
+                    return int(query["status"]), [], b'{"error": {"errors": [{"reason": "r"}]}}'
+                return original(request, *args)
+
+            store.exchange = answer
+            run, _ = campaign_for(tmp, provider=FakeProvider(cases=cases), store=store)
+            receipt = run.run("full", RUN)
+            self.assertTrue(receipt["cases"]["fake-01"]["complete"])
+            self.assertEqual(receipt["cases"]["fake-01"]["status"], 400)
+            self.assertFalse(receipt["cases"]["fake-05"]["complete"])
+            self.assertEqual(receipt["cases"]["fake-06"]["pages"], 2)
+            self.assertFalse(receipt["cases"]["fake-06"]["complete"])
+            self.assertEqual(receipt["status"], campaign.INCOMPLETE)
+            failed = [reason.split(":", 1)[0] for reason in receipt["incomplete_reasons"]]
+            self.assertEqual(failed, ["case fake-05", "case fake-06"])
+
     def _sdk_run(self, tmp, result, returncode=0):
         (Path(tmp) / "cp.txt").write_text("classpath")
         cases = [Case("fake-09", "sdk", "q", "sdk_run", sdk={"walk": "flat", "max_attempts": 8})]
@@ -534,6 +564,46 @@ class CampaignRunTest(unittest.TestCase):
             self.assertEqual(store.sent, [])
 
 
+class SdkPipeTest(unittest.TestCase):
+    """A pipe reader thread that is alive but does not hold the pipe open, so opening a
+    writer fails with ENXIO. The SDK case must still finish."""
+
+    def _release_while(self, target, written=b""):
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "out.fifo"
+            os.mkfifo(fifo, 0o600)
+            finish = threading.Event()
+            received = []
+            reader = threading.Thread(target=target, args=(fifo, finish, received), daemon=True)
+            reader.start()
+            if written:
+                with open(fifo, "wb") as pipe:
+                    pipe.write(written)
+                # The read has returned, so the reader no longer holds the pipe.
+                while not received:
+                    time.sleep(0.01)
+            threading.Timer(0.2, finish.set).start()
+            Campaign._release(reader, fifo)
+            self.assertFalse(reader.is_alive())
+            return received
+
+    @staticmethod
+    def _drained(fifo, finish, received):
+        received.append(fifo.read_bytes())
+        finish.wait()
+
+    @staticmethod
+    def _late(fifo, finish, received):
+        finish.wait()
+        received.append(fifo.read_bytes())
+
+    def test_release_waits_for_a_reader_that_already_read_to_the_end(self):
+        self.assertEqual(self._release_while(self._drained, b"result"), [b"result"])
+
+    def test_release_unblocks_a_reader_that_opens_the_pipe_late(self):
+        self.assertEqual(self._release_while(self._late), [b""])
+
+
 class PublicationTest(unittest.TestCase):
     def test_redactor_covers_mixed_escapes(self):
         redactor = Redactor({"private-bucket": "{bucket}"})
@@ -559,6 +629,45 @@ class PublicationTest(unittest.TestCase):
         for provider in ProviderMatrixTest.PROVIDERS:
             bound = campaign.cost_bound(provider.prices(), campaign.HARD_BOUNDS)
             self.assertLessEqual(bound["total_usd"], campaign.HARD_BOUNDS.max_cost_usd)
+
+
+class SanitizeRunTest(unittest.TestCase):
+    def test_a_refused_capture_makes_the_published_receipt_incomplete(self):
+        provider = ProviderMatrixTest.PROVIDERS[0]
+        cases = provider.cases(RUN, "full")[:2]
+        redactor = Redactor(provider.redactions())
+        with tempfile.TemporaryDirectory() as tmp:
+            run, out = Path(tmp) / "run", Path(tmp) / "evidence" / "gcs"
+            item = {"name": RUN + "r/k02", "size": 2, "updated": "2026-10-21T12:00:00Z",
+                    "sha256": "0" * 64, "group": "r"}
+            campaign.write_json(run / "manifest.json", {"provider": "gcs", **provider.manifest_fields(),
+                                                        "capture_date": "2026-10-21", "run_prefix": RUN,
+                                                        "objects": [item]})
+            campaign.write_json(run / "plan.json", {"cases": [matrix.case_record(c) for c in cases],
+                                                    "untested": []})
+            campaign.write_json(run / "receipt.json", {
+                "status": campaign.COMPLETE, "incomplete_reasons": [], "creation": [],
+                "cases": {case.id: {"status": 200, "complete": True} for case in cases},
+                "cleanup": {"claimed": True, "deleted": 1, "absent": 0, "rounds": 1, "verified_empty": True,
+                            "reason": None, "leftovers": []}})
+            # The second answer names a bucket the sanitizer cannot place, so it refuses the capture.
+            for case, extra in zip(cases, ({}, {"bucket": "another-bucket"})):
+                body = json.dumps({"kind": "storage#objects", "items": [{"name": item["name"], **extra}]})
+                request = provider.list_request(case.query, None)
+                response = campaign.Response(200, (("Content-Type", "application/json"),), body.encode(),
+                                             "2026-10-21T12:00:00Z")
+                campaign.write_json(run / "raw" / f"{case.id}.json", campaign.raw_exchange(request, response, redactor))
+            index = campaign.sanitize_run(provider, run, out)
+            self.assertEqual(list(index["captures"]), [cases[0].id])
+            self.assertEqual(list(index["sanitize_errors"]), [cases[1].id])
+            self.assertEqual(index["receipt"]["status"], campaign.INCOMPLETE)
+            self.assertEqual(index["receipt"]["incomplete_reasons"],
+                             [f"case {cases[1].id}: sanitizer refused the capture"])
+            self.assertEqual(json.loads((out / "index.json").read_text())["receipt"]["status"], campaign.INCOMPLETE)
+            row = {"id": cases[0].id, "provider": "gcs", "api_versions": ["json-v1"], "status": "UNMEASURED",
+                   "evidence_kind": "exchange"}
+            promoted = promotion.promote({"rows": [row]}, out.parent, {})
+            self.assertEqual(promoted["rows"][0]["status"], "UNMEASURED")
 
 
 class EvidenceStorageTest(unittest.TestCase):
