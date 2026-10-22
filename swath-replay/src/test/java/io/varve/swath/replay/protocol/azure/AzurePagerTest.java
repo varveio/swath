@@ -21,11 +21,13 @@ import org.junit.jupiter.api.Test;
 
 class AzurePagerTest {
     @Test
-    void parserPinsVersionAndRefusesUnmeasuredIntersection() {
+    void parserPinsVersionAndAcceptsStartFromWithDelimiter() {
         assertThatThrownBy(() -> parse("2026-04-06", "restype=container&comp=list"))
                 .isInstanceOf(ReplayRequestException.class);
-        assertThatThrownBy(() -> parse("2026-06-06", "restype=container&comp=list&startFrom=a%2F1&delimiter=%2F"))
-                .isInstanceOf(ReplayRequestException.class);
+        AzureListRequest intersection = parse("2026-06-06",
+                "restype=container&comp=list&startFrom=a%2F1&delimiter=%2F");
+        assertThat(intersection.startFrom()).isEqualTo("a/1");
+        assertThat(intersection.delimiter()).isEqualTo("/");
         assertThatThrownBy(() -> parse("2026-06-06", "restype=container&comp=list&maxresults=0"))
                 .isInstanceOf(ReplayRequestException.class);
         assertThat(parse("2026-10-06", "restype=container&comp=list&maxresults=5001").pageSize())

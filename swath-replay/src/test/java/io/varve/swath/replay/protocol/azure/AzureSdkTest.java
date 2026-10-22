@@ -109,18 +109,12 @@ class AzureSdkTest {
                 assertThat(proxy.exchanges()).anySatisfy(exchange ->
                         assertThat(new String(exchange.responseBody(), java.nio.charset.StandardCharsets.UTF_8))
                                 .contains("<Name Encoded=\"true\">"));
-                int beforeNegative = proxy.exchanges().size();
-                Throwable rejected = org.assertj.core.api.Assertions.catchThrowable(() ->
-                        client.listBlobsByHierarchy("/", new ListBlobsOptions().setStartFrom("a/2"),
-                                Duration.ofSeconds(10)).iterator().hasNext());
-                assertThat(rejected).isNotNull();
-                assertThat(rejected).isInstanceOf(BlobStorageException.class);
-                BlobStorageException serviceError = (BlobStorageException) rejected;
-                assertThat(serviceError.getStatusCode()).isEqualTo(400);
-                assertThat(serviceError.getErrorCode()).isEqualTo(BlobErrorCode.UNSUPPORTED_QUERY_PARAMETER);
-                assertThat(proxy.exchanges()).hasSize(beforeNegative + 1);
-                assertThat(proxy.exchanges().getLast().responseHeader("x-ms-error-code"))
-                        .isEqualTo("UnsupportedQueryParameter");
+                // startFrom with a delimiter: a prefix holding later names stays, in UTF-16 order.
+                List<String> hierarchy = new ArrayList<>();
+                client.listBlobsByHierarchy("/", new ListBlobsOptions().setStartFrom("a/2").setMaxResultsPerPage(2),
+                        Duration.ofSeconds(10)).forEach(item -> hierarchy.add(
+                                (Boolean.TRUE.equals(item.isPrefix()) ? "P:" : "O:") + item.getName()));
+                assertThat(hierarchy).containsExactly("P:a/", "P:x\uFFFE/", "O:é", "O:😀", "O:\uE000");
             }
         }
     }

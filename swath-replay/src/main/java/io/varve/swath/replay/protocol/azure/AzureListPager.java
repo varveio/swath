@@ -41,9 +41,6 @@ public final class AzureListPager {
     }
 
     public AzureListResult list(AzureListRequest request) {
-        if (request.startFrom() != null && request.delimiter() != null) {
-            throw new IllegalArgumentException("startFrom with delimiter is unmeasured");
-        }
         byte[] prefix = request.prefix() == null ? new byte[0] : bytes(request.prefix());
         byte[] delimiter = request.delimiter() == null ? new byte[0] : bytes(request.delimiter());
         byte[] binding = AzureToken.binding(request, fixtureIdentity, profile.bindingName());
@@ -94,11 +91,29 @@ public final class AzureListPager {
         return page(request, List.of(), cursor, binding, pageSize, progress);
     }
 
+    /**
+     * A lower bound inside a rolled prefix (a {@code startFrom} below a subtree) lists that prefix
+     * only when one of its names is at or after the bound, then continues after the subtree. Every
+     * byte range read later then holds whole rolled subtrees, so no prefix is listed twice.
+     */
     private AzureListResult delimited(AzureListRequest request, byte[] prefix, byte[] delimiter,
                                       Boundary lower, byte[] binding, int pageSize, int progress) {
-        AzureOrderedCursor cursor = new AzureOrderedCursor(rollups(prefix, delimiter),
-                AzureOrder.rangesFrom(lower.key(), lower.inclusive(), prefix));
-        return page(request, List.of(), cursor, binding, pageSize, progress);
+        List<AzureOrderedCursor.Item> leading = new ArrayList<>(1);
+        byte[] from = lower.key();
+        boolean inclusive = lower.inclusive();
+        for (byte[] holder; from != null && (holder = rollup(from, prefix, delimiter)) != null;) {
+            AzureOrderedCursor names = new AzureOrderedCursor(this::rowItems,
+                    AzureOrder.rangesFrom(from, inclusive, holder));
+            boolean listed = names.next(1) != null;
+            record("delimiter_lower_in_prefix", listed ? "prefix_listed" : "prefix_skipped");
+            if (listed) leading.add(AzureOrderedCursor.Item.prefix(holder));
+            from = AzureOrder.upperOf(holder);
+            inclusive = true;
+            if (from != null && !ByteKeys.startsWith(from, prefix)) from = null;
+        }
+        AzureOrderedCursor cursor = from == null ? null : new AzureOrderedCursor(rollups(prefix, delimiter),
+                AzureOrder.rangesFrom(from, inclusive, prefix));
+        return page(request, leading, cursor, binding, pageSize, progress);
     }
 
     /**

@@ -30,7 +30,7 @@ class AzureIndependentOracleTest {
             for (int caseNumber = 0; caseNumber < 250; caseNumber++) {
                 String prefix = pick(random, null, "a/", "root/", "root/b/");
                 String delimiter = pick(random, null, "/", "0");
-                String start = delimiter == null ? pick(random, null, "A", "a/1", "root/b/032", "\uFF21") : null;
+                String start = pick(random, null, "A", "a/1", "root/b/032", "root/c", "\uFF21");
                 List<String> expected = expected(keys, prefix, delimiter, start);
                 List<String> actual = new ArrayList<>();
                 Set<String> seenTokens = new HashSet<>();

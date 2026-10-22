@@ -81,6 +81,48 @@ class AzureProviderOrderTest {
     }
 
     @Test
+    void capturedStartFromWithDelimiterCasesMatchNativeAzure(@TempDir Path dir) throws Exception {
+        String run = "probe/r/";
+        List<String> keys = new ArrayList<>();
+        for (String name : List.of("d//x", "d/a/", "d/a/1", "d/a/m/1", "d/a/z", "d/a0", "d/b/1", "d/b/2",
+                "d/c", "d/e/1", "d/f-g-h", "d/f-g/1", "u/E", "u/\ue000", "u/\ud83d\ude00")) {
+            keys.add(run + name);
+        }
+        keys.addAll(List.of("a", "probe0", "q/1"));
+        String d = run + "d/";
+        List<String> tail = List.of("P:" + d + "b/", "O:" + d + "c", "P:" + d + "e/", "O:" + d + "f-g-h",
+                "P:" + d + "f-g/");
+        List<String> fromA = new ArrayList<>(List.of("P:" + d + "a/", "O:" + d + "a0"));
+        fromA.addAll(tail);
+        for (Store store : stores(dir, keys)) {
+            try (store) {
+                AzureListPager pager = new AzureListPager(store.store(), "fixture");
+                List<String> all = new ArrayList<>(List.of("P:" + d + "/"));
+                all.addAll(fromA);
+                // azure-04a, the baseline without startFrom.
+                assertThat(walk(pager, d, "/", null, 5000)).as(store.mode()).containsExactlyElementsOf(all);
+                // azure-04b and 04c: a startFrom equal to or inside d/a/ keeps d/a/, which has later names.
+                assertThat(walk(pager, d, "/", d + "a/", 5000)).as(store.mode()).containsExactlyElementsOf(fromA);
+                assertThat(walk(pager, d, "/", d + "a/m", 5000)).as(store.mode()).containsExactlyElementsOf(fromA);
+                // azure-04d: a startFrom after the last name under d/b/ omits d/b/.
+                assertThat(walk(pager, d, "/", d + "b/3", 5000)).as(store.mode())
+                        .containsExactlyElementsOf(tail.subList(1, 5));
+                // azure-04e: a startFrom equal to a blob after a subtree.
+                List<String> fromBlob = new ArrayList<>(List.of("O:" + d + "a0"));
+                fromBlob.addAll(tail);
+                assertThat(walk(pager, d, "/", d + "a0", 5000)).as(store.mode())
+                        .containsExactlyElementsOf(fromBlob);
+                // azure-04l: no prefix, startFrom inside probe/ keeps probe/ and the names after it.
+                assertThat(walk(pager, null, "/", d, 5000)).as(store.mode())
+                        .containsExactly("P:probe/", "O:probe0", "P:q/");
+                // azure-04m: the 04c walk one entry per page.
+                assertThat(pages(pager, d, "/", d + "a/m", 1)).as(store.mode())
+                        .containsExactlyElementsOf(fromA.stream().map(List::of).toList());
+            }
+        }
+    }
+
+    @Test
     void randomizedWalksMatchUtf16Model(@TempDir Path dir) throws Exception {
         Random random = new Random(0x239);
         Set<String> unique = new LinkedHashSet<>();
@@ -97,8 +139,8 @@ class AzureProviderOrderTest {
                             firstCharacter(keys.get(cases.nextInt(keys.size()))));
                     String delimiter = pick(cases, null, null, "/", "\u00e9", "\ue000", "\ud83d\ude00",
                             "/\ue000");
-                    String start = delimiter != null ? null : pick(cases, null, keys.get(cases.nextInt(keys.size())),
-                            randomName(cases, 2), "\ue000", "\ud800\udc00");
+                    String start = pick(cases, null, keys.get(cases.nextInt(keys.size())),
+                            randomName(cases, 2), "\ue000", "\ud800\udc00", "a/", "a/\ue000");
                     int pageSize = pick(cases, 1, 2, 3, 7, 5000);
                     List<String> expected = expected(keys, prefix, delimiter, start);
                     List<List<String>> pages = pages(pager, prefix, delimiter, start, pageSize);

@@ -64,12 +64,10 @@ class AzureWireTest {
                     .contains("InvalidHeaderValue");
             assertThat(duplicateVersion.headers().firstValue("x-ms-version")).isEmpty();
 
+            // startFrom with a delimiter is served as measured (azure-04b to 04e, 04l, 04m).
             HttpResponse<String> intersection = get(client, base + "&startFrom=a&delimiter=%2F", "2026-06-06");
-            assertThat(intersection.statusCode()).isEqualTo(400);
-            assertThat(intersection.headers().firstValue("x-ms-error-code"))
-                    .contains("UnsupportedQueryParameter");
-            assertThat(intersection.headers().firstValue("x-swath-replay-error"))
-                    .contains("startfrom_delimiter_unmeasured");
+            assertThat(intersection.statusCode()).isEqualTo(200);
+            assertThat(intersection.body()).contains("<Delimiter>/</Delimiter><Blobs><Blob><Name>a</Name>");
         }
     }
 
