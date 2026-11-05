@@ -86,6 +86,10 @@ func prepareOut(out, absOut, schemaID string, replace bool) error {
 	if err := os.MkdirAll(filepath.Join(absOut, DataDir), 0o755); err != nil {
 		return fmt.Errorf("create output: %w", err)
 	}
+	// data/ itself must survive a power loss once a part is recorded in it.
+	if err := errors.Join(syncDir(absOut), syncDir(filepath.Dir(absOut))); err != nil {
+		return fmt.Errorf("sync output: %w", err)
+	}
 	return nil
 }
 

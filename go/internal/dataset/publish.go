@@ -173,6 +173,10 @@ func writeAtomic(dir, name string, data []byte) error {
 	return nil
 }
 
+// SyncDir fsyncs a directory, making the entries created or renamed in it
+// durable (a no-op where directories cannot be synced).
+func SyncDir(dir string) error { return syncDir(dir) }
+
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {

@@ -112,7 +112,12 @@ func Create(out string, id Identity) (*Journal, error) {
 		j.Close()
 		return nil, err
 	}
+	// The journal's entry in .swath, and .swath's entry in the output.
 	if err := syncDir(filepath.Join(out, Dir)); err != nil {
+		j.Close()
+		return nil, err
+	}
+	if err := syncDir(out); err != nil {
 		j.Close()
 		return nil, err
 	}

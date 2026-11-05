@@ -106,5 +106,16 @@ nothing depends on it, and a reopen truncates it. A bad checksum with data after
 became durable means nothing was durable, and the run starts over. `swath inspect DIR` prints the header, every record and any torn
 tail as JSON lines.
 
-Durability is process-crash and power-loss safe as far as `fsync` is: parts, records and renames are each
-synced before the next step depends on them.
+**The contract, precisely.**
+- **Process crash (SIGKILL, panic, OOM kill) on a running kernel.** Every acknowledged step survives, because
+  the page cache does. This is what the crash matrix and the SIGKILL tests demonstrate.
+- **Power loss or a kernel crash.** Recovery holds when the filesystem honours `fsync` on files and
+  directories (ext4, XFS and APFS do). Before a journal record names a part:
+  - the part file is synced, and so is its directory entry in `data/`;
+  - `data/` and `.swath/` were created with their entries in the output directory synced;
+  - the journal frame is synced before `Append` returns;
+  - a rename is followed by a sync of `data/`.
+
+  Nothing tests this: SIGKILL cannot show power-loss behaviour.
+- **Unsupported on Windows:** directories cannot be synced and the lock is not enforced, so neither
+  guarantee holds there.

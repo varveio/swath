@@ -11,6 +11,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -232,6 +233,11 @@ func (w *writer) close(final bool) (dataset.Part, error) {
 		err = w.file.Sync()
 	}
 	err = errors.Join(err, w.file.Close())
+	if err == nil {
+		// The temporary part's directory entry must be durable before a
+		// journal record names it (power loss, not only process crash).
+		err = dataset.SyncDir(filepath.Dir(w.file.Name()))
+	}
 	if err != nil {
 		return dataset.Part{}, fmt.Errorf("close %s: %w", w.file.Name(), err)
 	}
