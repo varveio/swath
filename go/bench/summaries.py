@@ -36,19 +36,22 @@ def flat(prefix, x, out):
 def go_row(path, d):
     """A Go run report (run.json, or what -json printed)."""
     inv, out, t = d["invocation"], d["output"], d["timings"]
-    src = (d.get("source") or {}).get("stats", {})
+    stats = (d.get("source") or {}).get("stats", {})
+    src = dict((stats.get("counters") or {}).get("values", {}))
+    src["mean_active"] = stats.get("mean_active")
+    feats = (stats.get("counters") or {}).get("features", {})
     r = {
         "file": path, "producer": d["build"]["tool"], "bucket": inv["source"], "version": d["build"].get("revision", ""),
-        "concurrency": inv["workers"], "seed_mode": "shallow" if "seed" in src else "none",
-        "toggles_off": ",".join(src.get("disabled", [])), "completed": d["outcome"]["complete"], "objects": out["rows_listed"],
+        "concurrency": inv["workers"], "seed_mode": "shallow" if feats.get("seed") else "none",
+        "toggles_off": ",".join(sorted(k for k, v in feats.items() if not v)), "completed": d["outcome"]["complete"], "objects": out["rows_listed"],
         "duration_ms": t["wall_ms"], "listing_duration_ms": t["listing_ms"], "api_calls": src.get("requests"),
-        "pages": src.get("pages"), "splits": sum(v for k, v in src.get("split", {}).items() if k.startswith("accepted")),
+        "pages": src.get("pages"), "splits": sum(v for k, v in src.items() if k.startswith("split.accepted")),
         "steals": 0, "peak_in_flight": src.get("max_active"), "avg_in_flight": src.get("mean_active"),
         "files_out": out["parts_written"] + out["parts_retained"], "bytes_out": out["bytes"],
         "retries": src.get("retries", ""), "throttle_events": src.get("throttles", ""),
     }
     g = {}
-    flat("go", {k: v for k, v in src.items() if k in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "timeouts", "attempts", "probe")}, g)
+    flat("go", {k: v for k, v in src.items() if k.split(".")[0] in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "timeouts", "attempts", "probe")}, g)
     r.update(g)
     return r
 

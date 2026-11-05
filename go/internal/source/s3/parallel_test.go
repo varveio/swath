@@ -204,7 +204,7 @@ func TestT1RandomSplitsCoverEveryKeyOnce(t *testing.T) {
 				coin := func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(3) == 0 }
 				got, st, leaves := run(t, newSorted(keys, true, int64(s)), Options{splitCoin: coin, Seed: s%2 == 1}, w)
 				if !slices.Equal(got, want) {
-					t.Fatalf("%s seed=%d w=%d: %d keys, want %d (splits %d)", name, s, w, len(got), len(want), st.Split.AcceptedBounded+st.Split.AcceptedFrontier)
+					t.Fatalf("%s seed=%d w=%d: %d keys, want %d (splits %d)", name, s, w, len(got), len(want), st.Get(cSplitAcceptedBounded)+st.Get(cSplitAcceptedFrontier))
 				}
 				checkTiling(t, fmt.Sprintf("%s seed=%d w=%d", name, s, w), leaves)
 			}
@@ -321,8 +321,8 @@ func TestT3Guard(t *testing.T) {
 	keys := keyspaces()["singlePrefixFlat"]
 	// No demand with one worker: never split.
 	_, st, _ := run(t, newSorted(keys, false, 1), Options{}, 1)
-	if st.Split.AcceptedBounded+st.Split.AcceptedFrontier != 0 || st.Split.Skipped.NoDemand == 0 {
-		t.Fatalf("w1 split: %+v", st.Split)
+	if st.Get(cSplitAcceptedBounded)+st.Get(cSplitAcceptedFrontier) != 0 || st.Get(cSplitSkippedNoDemand) == 0 {
+		t.Fatalf("w1 split: %+v", st.Counters)
 	}
 	// Unsafe cursor: keys ending in a control character never become a lower bound.
 	odd := make([]string, 3000)
@@ -330,15 +330,15 @@ func TestT3Guard(t *testing.T) {
 		odd[i] = fmt.Sprintf("k%05d\x01", i)
 	}
 	got, st, _ := run(t, newSorted(odd, false, 1), Options{}, 8)
-	if len(got) != 3000 || st.Split.Rejected.UnsafeCursor == 0 {
-		t.Fatalf("unsafe cursor: %d keys, %+v", len(got), st.Split.Rejected)
+	if len(got) != 3000 || st.Get(cSplitRejectedUnsafeCursor) == 0 {
+		t.Fatalf("unsafe cursor: %d keys, %+v", len(got), st.Counters)
 	}
 	// A page that ends a range is never followed by a split (done is checked
 	// before the decision), and splits need a full page (progress gate):
 	// one page of keys never splits.
 	_, st, _ = run(t, newSorted(keys[:900], false, 1), Options{}, 8)
-	if st.Split.Considered != 0 {
-		t.Fatalf("split considered on a single final page: %+v", st.Split)
+	if st.Get(cSplitConsidered) != 0 {
+		t.Fatalf("split considered on a single final page: %+v", st.Counters)
 	}
 }
 
@@ -389,13 +389,13 @@ func TestT4Paging(t *testing.T) {
 		many = append(many, fmt.Sprintf("d%04d/x", i))
 	}
 	_, st, leaves := run(t, newSorted(many, false, 1), Options{Seed: true}, 2)
-	if !st.Seed.Truncated || !st.Seed.Subsampled || st.Seed.Cuts != 8 || st.Seed.Sentinel {
-		t.Fatalf("seed (truncated, cap 4W=8): %+v", st.Seed)
+	if st.Get(cSeedTruncated) == 0 || st.Get(cSeedSubsampled) == 0 || st.Get(cSeedCuts) != 8 || st.Get(cSeedSentinel) != 0 {
+		t.Fatalf("seed (truncated, cap 4W=8): %+v", st.Counters)
 	}
 	checkTiling(t, "seed truncated", leaves)
 	_, st, leaves = run(t, newSorted([]string{"a/1", "b/1", "c/1"}, false, 1), Options{Seed: true}, 4)
-	if !st.Seed.Sentinel || st.Seed.Cuts != 3 {
-		t.Fatalf("seed sentinel: %+v", st.Seed)
+	if st.Get(cSeedSentinel) == 0 || st.Get(cSeedCuts) != 3 {
+		t.Fatalf("seed sentinel: %+v", st.Counters)
 	}
 	checkTiling(t, "seed sentinel", leaves)
 }
@@ -431,18 +431,18 @@ func TestT6BalanceSmoke(t *testing.T) {
 			t.Fatalf("%d keys", len(got))
 		}
 		checkTiling(t, "T6", leaves)
-		accepted := st.Split.AcceptedBounded + st.Split.AcceptedFrontier
+		accepted := st.Get(cSplitAcceptedBounded) + st.Get(cSplitAcceptedFrontier)
 		t.Logf("noProbe=%v max_active=%d accepted=%d (bounded %d, frontier %d) child_empty=%+v requests=%d probe=%v",
-			noProbe, st.MaxActive, accepted, st.Split.AcceptedBounded, st.Split.AcceptedFrontier, st.ChildEmpty, st.Requests, st.tally["probe"])
-		min := 12
+			noProbe, st.Get(cMaxActive), accepted, st.Get(cSplitAcceptedBounded), st.Get(cSplitAcceptedFrontier), st.Counters, st.Get(cRequests), st.Counters.On("probe"))
+		min := int64(12)
 		if !noProbe {
 			min = 8
-			if st.ChildEmpty.Upper != 0 {
-				t.Fatalf("probe let %d empty upper children through", st.ChildEmpty.Upper)
+			if st.Get(cChildEmptyUpper) != 0 {
+				t.Fatalf("probe let %d empty upper children through", st.Get(cChildEmptyUpper))
 			}
 		}
-		if st.MaxActive < min || accepted == 0 {
-			t.Fatalf("noProbe=%v: parallelism did not engage: max_active=%d accepted=%d", noProbe, st.MaxActive, accepted)
+		if st.Get(cMaxActive) < min || accepted == 0 {
+			t.Fatalf("noProbe=%v: parallelism did not engage: max_active=%d accepted=%d", noProbe, st.Get(cMaxActive), accepted)
 		}
 	}
 }

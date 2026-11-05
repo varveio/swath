@@ -84,70 +84,20 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 	return bucket, prefix, nil
 }
 
-// Stats count what a listing did. Split and seed counters say which
-// algorithm paths engaged and what constrained them.
+// Stats is what a listing did: the counter snapshot (Counters, the one
+// representation of every count, with the run's feature states) and the
+// few values that are not counts.
 type Stats struct {
-	Objects       int64      `json:"objects"`
-	Bytes         int64      `json:"bytes"`
-	Pages         int64      `json:"pages"`
-	Requests      int64      `json:"requests"`
-	Retries       int64      `json:"retries"`
-	Throttles     int64      `json:"throttles"`
-	Timeouts      int64      `json:"timeouts"`
-	Attempts      int64      `json:"attempts"`       // HTTP requests, retries included
-	ParseFailures int64      `json:"parse_failures"` // 200 bodies that did not parse, retried
-	OverfetchKeys int64      `json:"overfetch_keys"` // listed past a range's hi and trimmed
-	Anonymous     bool       `json:"anonymous"`
-	Credentials   string     `json:"credentials,omitempty"` // where they came from
-	Region        string     `json:"region,omitempty"`
-	Truncated     bool       `json:"truncated_at_max_keys"`
-	Seed          SeedStats  `json:"seed"`
-	Split         SplitStats `json:"split"`
-	ChildEmpty    struct {
-		Lower int64 `json:"lower"`
-		Upper int64 `json:"upper"`
-	} `json:"child_empty"` // split children that listed no key (the cost of not probing)
-	ResumedRanges int64   `json:"resumed_ranges,omitempty"` // tiles of (after, ⊤] on resume
-	MaxActive     int     `json:"max_active"`
-	MaxQueued     int     `json:"max_queued"`
-	MeanActive    float64 `json:"mean_active"` // time-weighted
-	BusyNs        int64   `json:"busy_ns"`     // sum of Expand wall time
-	SinkWaitNs    int64   `json:"sink_wait_ns"`
-
-	tally map[string]any // the counter table, rendered for MarshalJSON
+	Anonymous   bool   `json:"anonymous"`
+	Credentials string `json:"credentials,omitempty"` // where they came from
+	Region      string `json:"region,omitempty"`
+	// MeanActive is the time-weighted mean of ranges in Expand.
+	MeanActive float64           `json:"mean_active"`
+	Counters   counters.Snapshot `json:"counters"`
 }
 
-// SeedStats describe the one-page seed.
-type SeedStats struct {
-	Prefixes   int64            `json:"prefixes"` // common prefixes returned
-	Cuts       int64            `json:"cuts"`     // cut points used
-	Unsafe     int64            `json:"unsafe"`   // prefixes dropped as unusable start-after values
-	Subsampled bool             `json:"subsampled"`
-	Truncated  bool             `json:"truncated"`
-	Sentinel   bool             `json:"sentinel"`
-	Declined   map[string]int64 `json:"sentinel_declined,omitempty"`
-}
-
-// SplitStats count split decisions; every accepted split is a steal for an
-// idle worker.
-type SplitStats struct {
-	Considered       int64 `json:"considered"`
-	Extrapolated     int64 `json:"pivot_extrapolated"` // pivots from page density (else midpoint/reflection)
-	AcceptedBounded  int64 `json:"accepted_bounded"`
-	AcceptedFrontier int64 `json:"accepted_frontier"`
-	Rejected         struct {
-		Cursor       int64 `json:"cursor"`
-		Bound        int64 `json:"bound"`
-		Done         int64 `json:"done"`
-		NoPivot      int64 `json:"no_pivot"`
-		UnsafeCursor int64 `json:"unsafe_cursor"`
-	} `json:"rejected"`
-	Skipped struct {
-		NoDemand      int64 `json:"no_demand"`
-		Outranked     int64 `json:"outranked"`
-		NotContinuing int64 `json:"not_continuing"`
-	} `json:"skipped"`
-}
+// Get is counter id's value.
+func (s *Stats) Get(id counters.ID) int64 { return s.Counters.Get(id) }
 
 // Provider lists one bucket (or prefix). It implements source.Provider[Range, Object].
 type Provider struct {
@@ -228,32 +178,10 @@ func (p *Provider) Stats() Stats {
 		p.c.Set(cAttempts, n.Attempts)
 		p.c.Set(cParseFailures, n.ParseFailures)
 	}
-	c := p.c.Load
-	var s Stats
-	s.Objects, s.Bytes, s.Pages, s.Requests = c(cObjects), c(cBytes), c(cPages), c(cRequests)
-	s.Attempts, s.Retries, s.Throttles, s.Timeouts, s.ParseFailures = c(cAttempts), c(cRetries), c(cThrottles), c(cTimeouts), c(cParseFailures)
-	s.OverfetchKeys, s.Truncated = c(cOverfetchKeys), c(cTruncated) != 0
-	s.Seed = SeedStats{Prefixes: c(cSeedPrefixes), Cuts: c(cSeedCuts), Unsafe: c(cSeedUnsafe), Subsampled: c(cSeedSubsampled) != 0,
-		Truncated: c(cSeedTruncated) != 0, Sentinel: c(cSeedSentinel) != 0,
-		Declined: map[string]int64{}}
-	for id, k := range map[int]string{cSentinelDeclinedTruncated: "truncated", cSentinelDeclinedObjectLast: "object_last",
-		cSentinelDeclinedNoCeiling: "no_ceiling", cSentinelDeclinedUnsafe: "unsafe"} {
-		if v := c(id); v > 0 {
-			s.Seed.Declined[k] = v
-		}
-	}
-	sp := &s.Split
-	sp.Considered, sp.Extrapolated, sp.AcceptedBounded, sp.AcceptedFrontier = c(cSplitConsidered), c(cSplitExtrapolated), c(cSplitAcceptedBounded), c(cSplitAcceptedFrontier)
-	sp.Rejected.Cursor, sp.Rejected.Bound, sp.Rejected.Done = c(cSplitRejectedCursor), c(cSplitRejectedBound), c(cSplitRejectedDone)
-	sp.Rejected.NoPivot, sp.Rejected.UnsafeCursor = c(cSplitRejectedNoPivot), c(cSplitRejectedUnsafeCursor)
-	sp.Skipped.NoDemand, sp.Skipped.Outranked, sp.Skipped.NotContinuing = c(cSplitSkippedNoDemand), c(cSplitSkippedOutranked), c(cSplitSkippedNotContinuing)
-	s.ChildEmpty.Lower, s.ChildEmpty.Upper, s.ResumedRanges = c(cChildEmptyLower), c(cChildEmptyUpper), c(cResumedRanges)
-	s.MaxActive, s.MaxQueued, s.BusyNs, s.SinkWaitNs = int(c(cMaxActive)), int(c(cMaxQueued)), c(cBusyNs), c(cSinkWaitNs)
+	s := Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, Counters: p.c.Snapshot(p.disabled()...)}
 	if el := time.Since(p.start).Seconds(); el > 0 {
 		s.MeanActive = p.area / el
 	}
-	s.Anonymous, s.Credentials, s.Region = p.anonymous, p.creds, p.region
-	s.tally = p.c.Map(p.disabled()...)
 	return s
 }
 

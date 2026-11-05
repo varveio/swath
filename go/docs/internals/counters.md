@@ -1,23 +1,26 @@
 # Counters
 
 Every algorithm path counts its engagements. A provider declares its counters once, as a table of
-`counters.Def{Key, Kind, Unit, Help}` backed by one `atomic.Int64` each (package `internal/counters`). The run
-report renders the table by iterating it (`run.json` → `source.stats`), and the table below is
+`counters.Def{Key, Kind, Unit, Help, Feature}` indexed by a typed `counters.ID` and backed by one
+`atomic.Int64` each (package `internal/counters`). That table is the one representation: the provider reads
+it out as one immutable `counters.Snapshot` (code reads `Get(id)`; there is no parallel struct of fields),
+and the run report renders the snapshot by iterating the table (`run.json` →
+`source.stats.counters`: `features` and `values`, flat stable names), and the table below is
 generated from the same definitions (`UPDATE=1 go test ./internal/source/s3 -run TestCountersDoc`). A new
 path costs one row and its increment. Kinds: `count` is a monotonic sum, `max` a high-water mark, `flag`
 a boolean.
 
-**Off, absent and zero are different.** A counter that measures a policy names it (`Feature`). When the run
-turns that policy off, its counters are left out and the policy is listed under `disabled` in the same
-object (`TestSummaryDistinguishesOffFromZero`):
-- absent, and not listed: this build or provider has no such counter;
-- absent, and listed under `disabled`: the policy was off for this run (for S3: `seed` without `-seed` or on
-  resume, `split` and `probe` with `-sequential`, `probe` without `-probe`, `resume` on a fresh run,
-  `max_keys` without `-max-keys`);
+**Feature state is separate from engagement; off, absent and zero are different.** A counter that measures
+a policy names it (`Feature`). `features` maps every such policy to whether this run had it on; the values of
+an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
+- absent, no feature: this build or provider has no such counter;
+- absent, feature `false`: the policy was off for this run (for S3: `seed` without `-seed` or on resume,
+  `split` and `probe` with `-sequential`, `probe` without `-probe`, `resume` on a fresh run, `max_keys`
+  without `-max-keys`);
 - present and zero: the policy was on and never fired.
 
-The summary's top level follows the same rule: `spill` is an object that is absent with `-no-spill`
-(listed under the top-level `disabled`), and `encoder_wait_ns` is absent without output.
+The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
+`-no-spill`, and `encoder_wait_ns` is absent without output.
 
 Request accounting uses `attempts` (HTTP requests, retries included) as the denominator; `requests` counts
 logical calls.

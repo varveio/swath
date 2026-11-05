@@ -164,13 +164,14 @@ func (o *opened) Restart(after string, checkpoints [][]byte) error {
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	opt := o.p.opt
+	truncated := st.Get(cTruncated) != 0
 	r := source.Report{Name: "s3", Stats: &st,
 		Brief: fmt.Sprintf("objects=%d bytes=%d pages=%d requests=%d retries=%d splits=%d child_empty=%d max_active=%d truncated=%v",
-			st.Objects, st.Bytes, st.Pages, st.Requests, st.Retries, st.Split.AcceptedBounded+st.Split.AcceptedFrontier,
-			st.ChildEmpty.Lower+st.ChildEmpty.Upper, st.MaxActive, st.Truncated),
-		Coverage: source.Coverage{Target: o.target(), Prefix: opt.Prefix, Complete: !st.Truncated, StopReason: "completed"},
+			st.Get(cObjects), st.Get(cBytes), st.Get(cPages), st.Get(cRequests), st.Get(cRetries), st.Get(cSplitAcceptedBounded)+st.Get(cSplitAcceptedFrontier),
+			st.Get(cChildEmptyLower)+st.Get(cChildEmptyUpper), st.Get(cMaxActive), truncated),
+		Coverage: source.Coverage{Target: o.target(), Prefix: opt.Prefix, Complete: !truncated, StopReason: "completed"},
 	}
-	if st.Truncated {
+	if truncated {
 		r.Coverage.StopReason = "max_keys"
 	}
 	return r

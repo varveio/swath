@@ -125,10 +125,10 @@ parts are byte-identical within a build only.
 `output.rows_listed`, `duration_ms`/`listing_duration_ms` → `timings.wall_ms`/`listing_ms`, `config.target` →
 `invocation.source`, `config.max_parallel_listings` → `invocation.workers`, `output.files` →
 `output.parts_written` + `parts_retained`, `output.compressed_size_bytes` → `output.bytes`,
-`shape.fingerprint.git_sha` → `build.revision`. Java meters map to the provider's statistics
-(`source.stats`, here for S3) as follows:
+`shape.fingerprint.git_sha` → `build.revision`. Java meters map to the provider's counters
+(`source.stats.counters.values`, here for S3) as follows:
 
-| Java meter or field | Go (`source.stats` unless noted) |
+| Java meter or field | Go (`source.stats.counters.values` unless noted) |
 |---|---|
 | `cost.api_calls`, `swath.api.calls` | `requests` (logical calls); `attempts` counts HTTP requests with retries |
 | `swath.retries`, `recovered_errors.retries` | `retries` |
@@ -150,7 +150,7 @@ parts are byte-identical within a build only.
 | `swath.sort.backpressure.wait` | `sink_wait_ns`; `resources`: `budget_wait_ns`, `frontier_wait_ns`, `encoder_wait_ns` |
 | `swath.sort.segment.bytes` (staging) | `resources.spill.bytes` (spill replaces staging) |
 
-A policy that was off is listed under `disabled` and its counters are absent; a present zero means the
+A policy that was off reads `false` under `features` and its counters are absent; a present zero means the
 policy was on and never fired ([internals/counters.md](internals/counters.md)).
 
 ## Gates

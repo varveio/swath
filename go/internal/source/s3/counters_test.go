@@ -39,7 +39,7 @@ func TestCountersDoc(t *testing.T) {
 
 // TestCountersMatchIDs: one definition per ID, keys unique.
 func TestCountersMatchIDs(t *testing.T) {
-	if len(Counters) != numCounters {
+	if counters.ID(len(Counters)) != numCounters {
 		t.Fatalf("%d definitions for %d IDs", len(Counters), numCounters)
 	}
 	seen := map[string]bool{}

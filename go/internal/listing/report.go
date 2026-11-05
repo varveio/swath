@@ -98,10 +98,11 @@ type Resources struct {
 	// EncoderWaitNs is the time the order stage waited for an encoder (nil
 	// without output).
 	EncoderWaitNs *int64 `json:"encoder_wait_ns,omitempty"`
-	Spill         *Spill `json:"spill,omitempty"` // nil: spill was off ("spill" is listed under Disabled)
-	// Disabled lists the run's policies that were turned off, so a zero
-	// counter always means "on, never fired" (docs/internals/counters.md).
-	Disabled []string `json:"disabled,omitempty"`
+	Spill         *Spill `json:"spill,omitempty"` // nil: spill was off
+	// Features are the pipeline's policies and whether this run had them
+	// on; an off policy reports no counters, so a zero always means "on,
+	// never fired" (docs/internals/counters.md).
+	Features map[string]bool `json:"features"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

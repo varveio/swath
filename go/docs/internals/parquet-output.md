@@ -33,7 +33,7 @@ same type, also for a dry run or a failure. Sections: `build` (tool, module vers
 `listed` or `failed`, the error, completeness, stop reason, per-entry errors), `timings` (timestamps and
 integer `*_ms` durations, wall, listing, user and system CPU), `output` (rows this invocation listed, rows
 retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (peak RSS,
-row budget, peak buffered, waits in `*_ns`, spill, `disabled`) and `source` (the provider's statistics under
+row budget, peak buffered, waits in `*_ns`, spill, `features`) and `source` (the provider's statistics under
 its name: `s3`, `local`; requests and attempts are this invocation's). It is operational: written after the
 commit (a failure to write it is a warning, the dataset stands) and never part of acceptance, which reads the
 manifest's coverage ([../upgrade.md](../upgrade.md)). There is no cost estimate and no Java-only field.

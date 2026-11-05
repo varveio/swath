@@ -4,14 +4,12 @@
 package s3
 
 import (
-	"encoding/json"
-
 	"github.com/varveio/swath/go/internal/counters"
 )
 
 // Counter IDs, the indices of Counters.
 const (
-	cObjects = iota
+	cObjects counters.ID = iota
 	cBytes
 	cPages
 	cRequests
@@ -59,7 +57,7 @@ const (
 )
 
 // Counters is the S3 provider's tally: every engagement counter, in
-// summary order. The summary JSON ("go.s3") and the table in
+// report order. The run report (source.stats.counters) and the table in
 // docs/internals/counters.md are generated from it.
 var Counters = []counters.Def{
 	d("objects", counters.Count, "objects", "objects listed (emitted rows)"),
@@ -134,22 +132,4 @@ func (p *Provider) disabled() []string {
 		off = append(off, "max_keys")
 	}
 	return off
-}
-
-// MarshalJSON renders the counters by iterating the table, plus the
-// non-counter fields.
-func (s Stats) MarshalJSON() ([]byte, error) {
-	m := s.tally
-	if m == nil {
-		m = map[string]any{}
-	}
-	m["anonymous"] = s.Anonymous
-	m["mean_active"] = s.MeanActive
-	if s.Credentials != "" {
-		m["credentials"] = s.Credentials
-	}
-	if s.Region != "" {
-		m["region"] = s.Region
-	}
-	return json.Marshal(m)
 }

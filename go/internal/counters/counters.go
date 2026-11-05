@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package counters is the run's tally: a table of counter definitions
-// (summary key, kind, unit, meaning) backed by one atomic per entry. The
-// run summary is emitted by iterating the table, and the documentation
-// table is generated from it, so a new engagement counter is one table row
-// plus its increment.
+// (stable name, kind, unit, meaning) backed by one atomic per entry, read
+// out as one immutable Snapshot. The run report is emitted by iterating
+// the table, and the documentation table is generated from it, so a new
+// engagement counter is one table row plus its increment.
 package counters
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -26,12 +27,16 @@ const (
 
 func (k Kind) String() string { return [...]string{"count", "max", "flag"}[k] }
 
-// Def defines one counter. Key is its dotted path in the summary JSON.
-// Feature, if set, names the policy the counter measures: when the run
-// turns that policy off, the counter is left out of the summary and the
-// feature is listed under "disabled". So a summary distinguishes a counter
-// this build does not have (absent), a policy that was off (listed under
-// "disabled"), and a policy that was on but never fired (present, zero).
+// ID is a counter's index in its table.
+type ID int
+
+// Def defines one counter. Key is its stable name (dotted, flat in the
+// report). Feature, if set, names the policy the counter measures: when the
+// run turns that policy off, the counter is left out of the snapshot's
+// report and the feature reads off. So a report distinguishes a counter this
+// build does not have (absent, no feature), a policy that was off (the
+// feature is false), and a policy that was on but never fired (present,
+// zero).
 type Def struct {
 	Key     string
 	Kind    Kind
@@ -50,16 +55,16 @@ type Set struct {
 func New(defs []Def) *Set { return &Set{defs: defs, v: make([]atomic.Int64, len(defs))} }
 
 // Add adds n to counter id.
-func (s *Set) Add(id int, n int64) { s.v[id].Add(n) }
+func (s *Set) Add(id ID, n int64) { s.v[id].Add(n) }
 
 // Inc adds one to counter id.
-func (s *Set) Inc(id int) { s.v[id].Add(1) }
+func (s *Set) Inc(id ID) { s.v[id].Add(1) }
 
 // Set stores n (flags, or values copied from elsewhere).
-func (s *Set) Set(id int, n int64) { s.v[id].Store(n) }
+func (s *Set) Set(id ID, n int64) { s.v[id].Store(n) }
 
 // Max raises counter id to n.
-func (s *Set) Max(id int, n int64) {
+func (s *Set) Max(id ID, n int64) {
 	for {
 		cur := s.v[id].Load()
 		if n <= cur || s.v[id].CompareAndSwap(cur, n) {
@@ -69,42 +74,79 @@ func (s *Set) Max(id int, n int64) {
 }
 
 // Load reads counter id.
-func (s *Set) Load(id int) int64 { return s.v[id].Load() }
+func (s *Set) Load(id ID) int64 { return s.v[id].Load() }
 
-// Map renders the set as nested maps by the dotted keys, flags as booleans.
-// Counters of a disabled feature are left out, and the disabled features
-// that have counters are listed, sorted, under "disabled".
-func (s *Set) Map(disabled ...string) map[string]any {
-	root := map[string]any{}
-	var off []string
+// Snapshot is the set's values at one moment, with the run's feature
+// states; it does not change afterwards.
+type Snapshot struct {
+	defs     []Def
+	vals     []int64
+	features map[string]bool
+}
+
+// Snapshot reads every counter. off names the features this run turned
+// off; every other feature named in the table is on.
+func (s *Set) Snapshot(off ...string) Snapshot {
+	sn := Snapshot{defs: s.defs, vals: make([]int64, len(s.v)), features: map[string]bool{}}
+	for i := range s.v {
+		sn.vals[i] = s.v[i].Load()
+		if f := s.defs[i].Feature; f != "" {
+			sn.features[f] = !slices.Contains(off, f)
+		}
+	}
+	return sn
+}
+
+// Get is counter id's value.
+func (s Snapshot) Get(id ID) int64 {
+	if int(id) >= len(s.vals) {
+		return 0
+	}
+	return s.vals[id]
+}
+
+// Value is the value of the counter named key (0 if there is none).
+func (s Snapshot) Value(key string) int64 {
 	for i, d := range s.defs {
-		if d.Feature != "" && slices.Contains(disabled, d.Feature) {
-			if !slices.Contains(off, d.Feature) {
-				off = append(off, d.Feature)
-			}
+		if d.Key == key {
+			return s.vals[i]
+		}
+	}
+	return 0
+}
+
+// On reports whether feature was on.
+func (s Snapshot) On(feature string) bool { return s.features[feature] }
+
+// MarshalJSON writes {"features": {name: on}, "values": {key: value}}:
+// flat stable names, flags as booleans, and no counter of a feature that
+// was off.
+func (s Snapshot) MarshalJSON() ([]byte, error) {
+	var b []byte
+	b = append(b, `{"features":`...)
+	f, err := json.Marshal(s.features)
+	if err != nil {
+		return nil, err
+	}
+	b = append(append(b, f...), `,"values":{`...)
+	first := true
+	for i, d := range s.defs {
+		if d.Feature != "" && !s.features[d.Feature] {
 			continue
 		}
-		parts := strings.Split(d.Key, ".")
-		m := root
-		for _, p := range parts[:len(parts)-1] {
-			next, ok := m[p].(map[string]any)
-			if !ok {
-				next = map[string]any{}
-				m[p] = next
-			}
-			m = next
-		}
-		var v any = s.v[i].Load()
+		var v any = s.vals[i]
 		if d.Kind == Flag {
-			v = s.v[i].Load() != 0
+			v = s.vals[i] != 0
 		}
-		m[parts[len(parts)-1]] = v
+		key, _ := json.Marshal(d.Key)
+		val, _ := json.Marshal(v)
+		if !first {
+			b = append(b, ',')
+		}
+		first = false
+		b = append(append(append(b, key...), ':'), val...)
 	}
-	if len(off) > 0 {
-		slices.Sort(off)
-		root["disabled"] = off
-	}
-	return root
+	return append(b, "}}"...), nil
 }
 
 // Markdown renders defs as a documentation table.

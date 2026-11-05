@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +59,7 @@ func TestS3Dataset(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s3Stats(sum) == nil || sum.Output.RowsListed != s3Stats(sum).Objects || sum.Output.RowsListed == 0 {
+		if s3Stats(sum) == nil || sum.Output.RowsListed != s3Stats(sum).Counters.Value("objects") || sum.Output.RowsListed == 0 {
 			t.Fatalf("%+v", sum)
 		}
 		var m dataset.Manifest
@@ -141,7 +140,7 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("%+v splits=%d child_empty=%+v max_active=%d", s3cfg, s3Stats(sum).Split.AcceptedBounded+s3Stats(sum).Split.AcceptedFrontier, s3Stats(sum).ChildEmpty, s3Stats(sum).MaxActive)
+		t.Logf("%+v counters=%s", s3cfg, mustJSON(s3Stats(sum).Counters))
 		return out
 	}
 	ref := build(S3Config{Sequential: true}, 1)
@@ -210,36 +209,33 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 		}
 		return true
 	}
-	off := func(m map[string]any, path ...string) []string {
+	feat := func(m map[string]any, path ...string) map[string]any {
 		var v any = m
 		for _, p := range path {
 			v = v.(map[string]any)[p]
 		}
-		var out []string
-		for _, x := range v.([]any) {
-			out = append(out, x.(string))
-		}
-		return out
+		return v.(map[string]any)
 	}
+	vals := []string{"source", "stats", "counters", "values"}
 	on := run(Config{Out: filepath.Join(t.TempDir(), "ds"), Workers: 4, Source: &S3Config{Seed: true, Probe: true}})
-	if !has(on, "source", "stats", "probe", "requests") || !has(on, "source", "stats", "seed", "cuts") || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
+	if !has(on, append(vals, "probe.requests")...) || !has(on, append(vals, "seed.cuts")...) || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
 		t.Fatalf("enabled policies must report their counters: %v", on)
 	}
-	if got := off(on, "source", "stats", "disabled"); strings.Join(got, ",") != "max_keys,resume" {
-		t.Fatalf("disabled = %v", got)
+	if f := feat(on, "source", "stats", "counters", "features"); f["probe"] != true || f["seed"] != true || f["split"] != true || f["resume"] != false || f["max_keys"] != false {
+		t.Fatalf("features = %v", f)
 	}
-	if has(on, "resources", "disabled") {
-		t.Fatalf("nothing in the run is off: %v", on["resources"])
+	if f := feat(on, "resources", "features"); f["spill"] != true {
+		t.Fatalf("pipeline features = %v", f)
 	}
 	cfg := Config{Workers: 4, NoSpill: true, Source: &S3Config{}}
 	m := run(cfg)
-	if has(m, "source", "stats", "probe") || has(m, "source", "stats", "seed") || has(m, "resources", "spill") || has(m, "resources", "encoder_wait_ns") {
+	if has(m, append(vals, "probe.requests")...) || has(m, append(vals, "seed.cuts")...) || has(m, "resources", "spill") || has(m, "resources", "encoder_wait_ns") {
 		t.Fatalf("disabled policies must not report counters: %v", m)
 	}
-	if got := off(m, "source", "stats", "disabled"); strings.Join(got, ",") != "max_keys,probe,resume,seed" {
-		t.Fatalf("disabled = %v", got)
+	if f := feat(m, "source", "stats", "counters", "features"); f["probe"] != false || f["seed"] != false || f["split"] != true {
+		t.Fatalf("features = %v", f)
 	}
-	if got := off(m, "resources", "disabled"); strings.Join(got, ",") != "spill" {
-		t.Fatalf("disabled = %v", got)
+	if f := feat(m, "resources", "features"); f["spill"] != false {
+		t.Fatalf("pipeline features = %v", f)
 	}
 }

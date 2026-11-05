@@ -403,8 +403,8 @@ func TestResumeAfterFinalPartDoesNotList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s3Stats(sum) != nil && s3Stats(sum).Requests != 0 {
-		t.Fatalf("resume after the final part listed again (%d requests)", s3Stats(sum).Requests)
+	if s3Stats(sum) != nil && s3Stats(sum).Counters.Value("requests") != 0 {
+		t.Fatalf("resume after the final part listed again (%d requests)", s3Stats(sum).Counters.Value("requests"))
 	}
 	sameDataset(t, "final", ref, out)
 }

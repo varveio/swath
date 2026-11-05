@@ -1502,6 +1502,14 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
    gone). `dataset.Publish` no longer writes reports: the manifest is installed, then `dataset.WriteReport`
    writes `run.json`, whose failure is a warning. `bench/summaries.py` maps both tools' reports onto one row.
 
+9. **One counter representation.** The S3 provider's counter table is the only representation: typed
+   `counters.ID`s, one immutable `counters.Snapshot` (code reads `Get(id)`), rendered as `features` (each
+   policy on or off) and `values` (flat stable names, units in the table). The parallel `Stats` struct of
+   fields, the `tally` map its `MarshalJSON` rewrote, and the `disabled` lists are gone; `Stats` keeps only the
+   non-counts (anonymous, credentials, region, mean active). The pipeline's `resources.features` says whether
+   spill was on. The filesystem provider's `Stats` stays a plain struct (its only representation; it has no
+   policies to toggle). `bench/summaries.py` reads the new paths.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

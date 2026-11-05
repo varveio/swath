@@ -229,10 +229,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		_ = os.Remove(filepath.Dir(oopt.SpillDir))
 	}
 	sum.Resources.MaxBufferedBytes, sum.Output.RowsListed = ost.MaxBuffered, ost.Rows
+	sum.Resources.Features = map[string]bool{"spill": oopt.SpillDir != ""}
 	if oopt.SpillDir != "" {
 		sum.Resources.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused}
-	} else {
-		sum.Resources.Disabled = append(sum.Resources.Disabled, "spill")
 	}
 	sum.Resources.FrontierWaitNs, sum.Resources.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
 	if router != nil {
