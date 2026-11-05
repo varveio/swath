@@ -47,6 +47,13 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestVersion(t *testing.T) {
+	var b bytes.Buffer
+	if err := dispatch(context.Background(), []string{"--version"}, &b); err != nil || !strings.HasPrefix(b.String(), "swath-go ") {
+		t.Fatalf("%v %q", err, b.String())
+	}
+}
+
 func TestSize(t *testing.T) {
 	for in, want := range map[string]int64{"4MiB": 4 << 20, "4MB": 4_000_000, "123": 123, "2GiB": 2 << 30} {
 		var s size

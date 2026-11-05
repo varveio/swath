@@ -95,6 +95,14 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		return resume(ctx, args[1:], stdout)
 	case "show":
 		return show(args[1:], stdout)
+	case "version", "-version", "--version":
+		b := listing.BuildInfo()
+		fmt.Fprintf(stdout, "%s %s", b.Tool, b.Version)
+		if b.Revision != "" {
+			fmt.Fprintf(stdout, " (%s)", b.Revision)
+		}
+		fmt.Fprintln(stdout)
+		return nil
 	case "help", "-h", "-help", "--help":
 		commands(stdout)
 		return nil
@@ -110,6 +118,7 @@ func commands(w io.Writer) {
   swath resume DIR [runtime flags]         continue the interrupted run in DIR
   swath show [--journal] DIR               show a dataset or an interrupted run
   swath diag list SOURCE [flags]           list with diagnostic flags (comparisons, policy toggles)
+  swath --version                          print the build (tool, module version, VCS revision)
 SOURCE is a local directory or s3://bucket[/prefix]. swath list -h lists the flags.
 `)
 }

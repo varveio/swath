@@ -5,6 +5,7 @@ swath list SOURCE --output DIR [flags]   list SOURCE into a sorted dataset in DI
 swath resume DIR [runtime flags]         continue the interrupted run in DIR
 swath show [--journal] DIR               show a dataset or an interrupted run
 swath diag list SOURCE [flags]           list with diagnostic flags (comparisons, policy toggles)
+swath --version                          print the build (tool, module version, VCS revision)
 ```
 
 SOURCE is a local directory or `s3://bucket[/prefix]`. `swath list` writes a dataset to `--output` (`-o`)

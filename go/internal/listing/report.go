@@ -143,6 +143,9 @@ func (r *Report) finish() {
 	r.Resources.PeakRSSBytes = peakRSS()
 }
 
+// BuildInfo is this binary's name, module version and VCS revision.
+func BuildInfo() Build { return build() }
+
 // build is this binary's name, module version and VCS revision.
 func build() Build {
 	b := Build{Tool: "swath-go", Version: "devel"}
