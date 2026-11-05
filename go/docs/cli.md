@@ -164,6 +164,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
   -stall-timeout duration
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
+  -structure
+    	S3: structure probes: pivot on folder boundaries listed alongside a range's pages
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 

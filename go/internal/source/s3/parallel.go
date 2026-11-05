@@ -47,7 +47,8 @@ type Range struct {
 	kind   kind
 	lo, hi string
 	open   bool
-	after  string // on resume: keys <= after are already published; lo is a safe start-after at or below it
+	sb     structure // folder boundaries known inside (lo, hi), from the parent's structure probe
+	after  string    // on resume: keys <= after are already published; lo is a safe start-after at or below it
 	id     uint64
 	born   origin
 }
@@ -61,7 +62,10 @@ type running struct {
 	id           uint64
 	cooldown     int // pages to skip after a probe found no key past the pivot
 	probeFails   int
-	dens         density // page density, for the floors
+	dens         density        // page density, for the floors
+	sb           structure      // known folder boundaries (structure probes)
+	pending      chan structure // a structure probe in flight
+	zeroes       int            // consecutive structure probes that found no folder
 }
 
 // Root is the scope: the sequential chain, a resumed tiling, the seed, or
@@ -123,7 +127,7 @@ func (p *Provider) enter(r Range) *running {
 	if r.born != fromRoot {
 		p.queued--
 	}
-	st := &running{id: r.id, open: r.open}
+	st := &running{id: r.id, open: r.open, sb: r.sb}
 	p.running[r.id] = st
 	p.c.Max(cMaxActive, int64(len(p.running)))
 	return st
@@ -154,6 +158,7 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 	in := p.input()
 	in.StartAfter = r.lo
 	c := r.lo
+	p.maybeProbe(ctx, st, r, c)
 	for {
 		out, err := p.list(ctx, in)
 		if err != nil {
@@ -220,6 +225,7 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 			lower, upper := p.commit(st, r, c, m, ext, ok)
 			if !ok {
 				in.StartAfter, in.ContinuationToken = "", out.NextContinuationToken
+				p.maybeProbe(ctx, st, r, c)
 				continue
 			}
 			if err := faults.At("split"); err != nil {
@@ -232,6 +238,7 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 			return e.Child(upper)
 		}
 		in.StartAfter, in.ContinuationToken = "", out.NextContinuationToken
+		p.maybeProbe(ctx, st, r, c)
 	}
 }
 
@@ -297,13 +304,20 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 	if r.open {
 		ceil, bounded = prefixCeil(p.opt.Prefix)
 	}
-	var found bool
-	if r.open {
+	var found, structural bool
+	if p.opt.Structure && !r.open {
+		p.absorb(st)
+		m, structural = boundary(st.sb, c, r.hi)
+		found = structural
+	}
+	switch {
+	case structural:
+	case r.open:
 		m, found = forwardReflect(r.lo, c)
-	} else {
+	default:
 		m, found = between(c, r.hi)
 	}
-	if found && m > c {
+	if found && m > c && !structural {
 		// Refinement from the page's density (span·max(4, hunger) past the
 		// cursor, at most halfway to hi): taken when it is nearer the cursor
 		// than the spec pivot, or when the spec pivot is within one page span
@@ -343,6 +357,9 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 		}
 	}
 	p.queued += 2 // reserved while the pivot is probed
+	if structural {
+		p.c.Inc(cSplitPivotStructure)
+	}
 	return m, extrapolated, true
 }
 
@@ -401,8 +418,10 @@ func (p *Provider) commit(st *running, r Range, c, m string, extrapolated, ok bo
 		p.c.Inc(cSplitAcceptedBounded)
 	}
 	p.c.Max(cMaxQueued, int64(p.queued))
-	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower}
-	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper}
+	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower,
+		sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}}
+	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper,
+		sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped}}
 	if os.Getenv("SWATH_SPLIT_TRACE") != "" {
 		fmt.Fprintf(os.Stderr, "split id=%d lo=%q c=%q m=%q hi=%q open=%v keys=%d\n", r.id, r.lo, c, m, r.hi, r.open, st.keys)
 	}

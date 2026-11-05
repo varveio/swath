@@ -184,6 +184,18 @@ fractions of the window `(lo, hi]` past the bytes `lo` and `hi` share (12 bytes)
 The open frontier's remainder is unbounded, so neither gate applies to it. On keys that use only part of
 each byte (decimal digits, printable names), the estimate over-states the remainder, as Java's does.
 
+**Structure probes** (after Swath's thief structure probes; behind `swath diag list --structure`, off by
+default). A bounded range whose cursor has a folder below the scope prefix sends, alongside its next
+page and only while a worker is idle, one delimiter request (`max-keys` 32, start-after the cursor) per
+folder level: the folder where the cursor and `hi` diverge, then the next folder below it on the cursor's
+path. The coarsest level with a folder inside `(c, hi)` gives the range its boundaries. At a later split
+decision, if the result has arrived, the pivot is the median boundary inside `(c, hi)`, or the furthest when
+that level's page was full; the byte pivot is used otherwise. A split never waits for a probe
+(`structure.late` counts decisions taken while one was in flight). Children inherit the boundaries inside
+their bounds, so one probe serves several generations of splits. Eight probes in a row that find no folder
+at any level stop probing in that range (`structure.suppressed`). Swath sends these probes serially, coarse
+to fine, after a 1-key probe found the upper child empty; here the levels go at once and nothing waits.
+
 **Guards**, checked before any child and counted per clause: `done` (never after the page that ended the
 range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), `bound` (`m < hi`, or below
 `prefixCeil(scope)` on the frontier), `no_pivot` (the owner keeps listing).
@@ -216,7 +228,7 @@ and the run used about 1 of 64 workers (REPORT.md "Step 5a").
 (prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted
 bounded and frontier, rejected per guard clause, skipped for no demand, outranked or not continuing);
 `child_empty.{lower,upper}`; the floors' skips; the seed descent's probes, classifications and
-sentinel; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
+sentinel; structure probes and their pivots; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
 sink-wait time.
 
 **Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is

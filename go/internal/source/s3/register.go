@@ -38,6 +38,7 @@ func flags(f *flag.FlagSet, diag bool) any {
 	f.BoolVar(&o.Seed, "seed", false, "S3: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
 	o.SeedDescent = true
 	if diag {
+		f.BoolVar(&o.Structure, "structure", false, "S3: structure probes: pivot on folder boundaries listed alongside a range's pages")
 		f.BoolVar(&o.SeedDescent, "seed-descent", true, "S3: with -seed, walk the folder hierarchy (false: one delimiter page)")
 		f.BoolVar(&o.Floors, "floors", false, "S3: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		f.BoolVar(&o.Sequential, "sequential", false, "S3: list with one continuation-token chain (no ranges; the reference)")

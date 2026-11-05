@@ -15,7 +15,7 @@ a policy names it (`Feature`). `features` maps every such policy to whether this
 an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
 - absent, feature `false`: the policy was off for this run (for S3: `seed` without `-seed` or on resume,
-  `split` and `probe` with `--sequential`, `probe` without `--probe`, `floors` without `--floors` (all `swath diag list` flags), `resume` on a fresh run, `max_keys`
+  `split` and `probe` with `--sequential`, `probe` without `--probe`, `floors` without `--floors`, `structure` without `--structure` (all `swath diag list` flags), `resume` on a fresh run, `max_keys`
   without `-max-keys`);
 - present and zero: the policy was on and never fired.
 
@@ -110,6 +110,13 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `seed.levels.tiny_leaf_explosion` | count | levels | seed | truncated folders of one-object subfolders: left whole |
 | `seed.levels.dense_root_radix_banded` | count | levels | seed | the dense flat folder cut into radix bands |
 | `seed.levels.delimiter_seeded` | count | levels | seed | a complete top level whose folders seeded the tiles (nothing else engaged) |
+| `structure.requests` | count | requests | structure | delimiter probes (max-keys 32) after a cursor, one per folder level; also counted in requests |
+| `structure.zero_fanout` | count | probes | structure | probes that found no folder at any level |
+| `structure.no_boundary` | count | probes | structure | probes whose folders all lay outside the range |
+| `structure.capped` | count | probes | structure | probes whose chosen level filled its page (the furthest folder is the pivot) |
+| `structure.suppressed` | count | decisions | structure | probes not sent: 8 in a row found no folder in this range |
+| `structure.late` | count | decisions | structure | split decisions taken while the range's probe was still in flight |
+| `split.pivot_structure` | count | pivots | structure | pivots on a folder boundary from a structure probe (else midpoint, density or reflection) |
 <!-- s3:end -->
 
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active

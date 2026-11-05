@@ -77,6 +77,13 @@ const (
 	cSeedLevelTinyLeaf
 	cSeedLevelRadix
 	cSeedLevelDelimiter
+	cStructureRequests
+	cStructureZero
+	cStructureNoBoundary
+	cStructureCapped
+	cStructureSuppressed
+	cStructureLate
+	cSplitPivotStructure
 	numCounters
 )
 
@@ -152,6 +159,13 @@ var Counters = []counters.Def{
 	d("seed.levels.tiny_leaf_explosion", counters.Count, "levels", "truncated folders of one-object subfolders: left whole", "seed"),
 	d("seed.levels.dense_root_radix_banded", counters.Count, "levels", "the dense flat folder cut into radix bands", "seed"),
 	d("seed.levels.delimiter_seeded", counters.Count, "levels", "a complete top level whose folders seeded the tiles (nothing else engaged)", "seed"),
+	d("structure.requests", counters.Count, "requests", "delimiter probes (max-keys 32) after a cursor, one per folder level; also counted in requests", "structure"),
+	d("structure.zero_fanout", counters.Count, "probes", "probes that found no folder at any level", "structure"),
+	d("structure.no_boundary", counters.Count, "probes", "probes whose folders all lay outside the range", "structure"),
+	d("structure.capped", counters.Count, "probes", "probes whose chosen level filled its page (the furthest folder is the pivot)", "structure"),
+	d("structure.suppressed", counters.Count, "decisions", "probes not sent: 8 in a row found no folder in this range", "structure"),
+	d("structure.late", counters.Count, "decisions", "split decisions taken while the range's probe was still in flight", "structure"),
+	d("split.pivot_structure", counters.Count, "pivots", "pivots on a folder boundary from a structure probe (else midpoint, density or reflection)", "structure"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {
@@ -169,6 +183,9 @@ func (p *Provider) disabled() []string {
 		off = append(off, "split", "probe")
 	} else if !p.opt.Probe {
 		off = append(off, "probe")
+	}
+	if p.opt.Sequential || !p.opt.Structure {
+		off = append(off, "structure")
 	}
 	if p.opt.Sequential || !p.opt.Floors {
 		off = append(off, "floors")
