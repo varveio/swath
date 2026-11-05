@@ -62,14 +62,19 @@ func TestS3Dataset(t *testing.T) {
 		if s3Stats(sum) == nil || sum.Rows != s3Stats(sum).Objects || sum.Rows == 0 {
 			t.Fatalf("%+v", sum)
 		}
-		var m struct {
-			SourceBucket string `json:"sourceBucket"`
-			FileSchema   string `json:"fileSchema"`
-			SchemaID     string `json:"schemaId"`
-			TotalRows    int64  `json:"totalRows"`
-		}
+		var m dataset.Manifest
 		readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
-		if m.SourceBucket != "bkt" || m.FileSchema != schema.S3.Message() || m.TotalRows != sum.Rows {
+		var rows int64
+		for _, p := range m.Parts {
+			rows += p.Rows
+		}
+		scope := dataset.Scope{Kind: "whole"}
+		if tc.root != "s3://bkt" {
+			scope = dataset.Scope{Kind: "prefix", Prefix: "logs/03/"}
+		}
+		if m.Source != (dataset.Source{Kind: "s3", URI: tc.root, Container: "bkt"}) || m.Scope != scope || m.SchemaID != schema.S3.ID ||
+			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Rows ||
+			m.Coverage.ListingStartedAt.IsZero() || m.Coverage.ListingFinishedAt.Before(m.Coverage.ListingStartedAt) {
 			t.Fatalf("manifest %+v", m)
 		}
 		var run RunSummary
@@ -83,8 +88,10 @@ func TestS3Dataset(t *testing.T) {
 			t.Fatalf("S3 dataset has %s: %v", dataset.SummaryName, err)
 		}
 	}
-	if !strings.Contains(schema.S3.Message(), "required boolean is_delete_marker;") {
-		t.Fatal(schema.S3.Message())
+	for _, reserved := range []string{"version_id", "is_latest", "is_delete_marker", "row_type"} {
+		if strings.Contains(schema.S3.Message(), " "+reserved+";") {
+			t.Fatalf("the current-object schema has %s", reserved)
+		}
 	}
 }
 
@@ -159,7 +166,9 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 		strip := func(dir string) map[string]any {
 			var m map[string]any
 			readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
-			delete(m, "creationTimestamp")
+			delete(m, "published_at")
+			delete(m["coverage"].(map[string]any), "listing_started_at")
+			delete(m["coverage"].(map[string]any), "listing_finished_at")
 			return m
 		}
 		if fmt.Sprint(strip(ref)) != fmt.Sprint(strip(got)) {

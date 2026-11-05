@@ -4,15 +4,23 @@
 usage: diffds.py A B [--ts-ms]
 
 Checks: identical row sets on the 13 canonical columns (EXCEPT ALL both ways), both strictly ascending by
-key bytes within and across parts (so identical sets imply identical order), manifest min/max key of the
-whole dataset, row counts. Prints part counts and dataset sizes side by side. --ts-ms truncates
-last_modified to milliseconds on both sides (S3 routes that render milliseconds).
+key bytes within and across parts (so identical sets imply identical order), min/max key of the whole
+dataset, row counts. Prints part counts and dataset sizes side by side. --ts-ms truncates last_modified
+to milliseconds on both sides (S3 routes that render milliseconds).
+
+Comparison projection: a dataset with the current-object S3 schema (format 2, swath/s3-objects/v1) has no
+version_id, is_latest, is_delete_marker or row_type. For it the view restores the values every current
+object has in the canonical schema (NULL, NULL, false, 'OBJECT'), so it compares with a Java dataset
+value for value; every other value and null is compared as is.
 """
 import json, os, sys
 import duckdb
 
 COLS = ["key", "size", "last_modified", "etag", "storage_class", "version_id", "is_latest",
         "is_delete_marker", "owner_id", "owner_display_name", "checksum_algorithm", "checksum_type", "row_type"]
+# The canonical values of the reserved columns for a current object.
+CURRENT_OBJECT = {"version_id": "NULL::VARCHAR", "is_latest": "NULL::BOOLEAN", "is_delete_marker": "false",
+                  "row_type": "'OBJECT'"}
 
 
 def parts(d):
@@ -33,15 +41,18 @@ def size(d):
 
 
 def view(con, name, paths, ts_ms):
+    lst = "[" + ",".join("'%s'" % p for p in paths) + "]"
+    have = {r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet({lst}, union_by_name=true)").fetchall()}
     sel = []
     for c in COLS:
-        if c == "last_modified":
+        if c not in have and c in CURRENT_OBJECT:
+            sel.append(f"{CURRENT_OBJECT[c]} AS {c}")
+        elif c == "last_modified":
             sel.append("date_trunc('millisecond', last_modified::TIMESTAMP) AS last_modified" if ts_ms else "last_modified::TIMESTAMP AS last_modified")
         elif c == "size":
             sel.append("size::BIGINT AS size")
         else:
             sel.append(c)
-    lst = "[" + ",".join("'%s'" % p for p in paths) + "]"
     con.execute(f"CREATE VIEW {name} AS SELECT {', '.join(sel)}, filename, file_row_number FROM read_parquet({lst}, filename=true, file_row_number=true, union_by_name=true)")
 
 

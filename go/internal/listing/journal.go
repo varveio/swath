@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/durable"
@@ -99,7 +100,7 @@ func openLocked(cfg Config, path string, id durable.Identity, lock *durable.Lock
 		}
 		return &journal{out: cfg.Out, lock: lock, j: j}, nil
 	}
-	if _, err := os.Stat(filepath.Join(cfg.Out, dataset.SuccessName)); err == nil {
+	if dataset.Committed(cfg.Out) {
 		return nil, ErrComplete
 	}
 	st, err := durable.Read(cfg.Out)
@@ -179,7 +180,15 @@ func recoverParts(out string, st *durable.State) error {
 			}
 		}
 	}
-	return nil
+	// Unrecorded parts: the resume writes them again.
+	parts := filepath.Join(out, dataset.Workspace, dataset.PartsDir)
+	if err := os.RemoveAll(parts); err != nil {
+		return fmt.Errorf("resume: %w", err)
+	}
+	if err := os.MkdirAll(parts, 0o755); err != nil {
+		return fmt.Errorf("resume: %w", err)
+	}
+	return dataset.SyncDir(filepath.Join(out, dataset.Workspace))
 }
 
 // ErrPartAltered reports a retained part that does not match its record.
@@ -214,6 +223,15 @@ func (jr *journal) last() *durable.Record {
 func (jr *journal) complete() bool {
 	last := jr.last()
 	return last != nil && last.Final
+}
+
+// listingStarted is when the listing began: the journal's creation for a
+// resumed run, else now.
+func (jr *journal) listingStarted(now time.Time) time.Time {
+	if jr != nil && jr.state != nil {
+		return jr.state.Header.Created
+	}
+	return now
 }
 
 func (jr *journal) resumedParts() int {

@@ -1311,6 +1311,31 @@ Now:
   timing-dependent splits (31 against 30 pages).
 - Only the journal differs, by design.
 
+## Format revision, group 1 (items 1–5): dataset format 2
+
+One coordinated change, documented for readers in [docs/upgrade.md](docs/upgrade.md):
+1. **Coverage in the manifest.** `source`, `scope` (whole or prefix) and `coverage` (complete, stop reason,
+   skipped entries, exclusions, filters, `snapshot: false`, listing start and finish) come from the source's
+   report. Acceptance reads the manifest; the run reports are operational only.
+2. **One typed snake_case manifest** (`dataset.Manifest`): `format`, `format_version`, `schema_id`,
+   `published_at`, `source`, `scope`, `coverage`, ordered `parts` (`path`, `rows`, `bytes`, exact
+   `min_key`/`max_key`, `md5`). `fileFormat`, `sorted`, `sortKey`, `fileSchema` and `totalRows` are gone.
+3. **Manifest-last commit.** Parts are written in `.swath/parts/`, renamed into `data/`, then `manifest.json` is
+   installed by an atomic rename with a directory sync: that is the commit. `_SUCCESS` and `symlink.txt` are
+   gone. `.swath/` is the locked workspace (lock, journal, parts, spill); replacing a previous run empties it
+   but keeps the lock. Reports follow the commit; one that cannot be written is a warning. Crash points
+   `published` (before the manifest) and `manifest` (after) replace `manifest` and `success`.
+4. **Current-object S3 schema** `swath/s3-objects/v1`: nine columns, without `version_id`, `is_latest`,
+   `is_delete_marker` and `row_type`. `bench/diffds.py` restores their constants for comparison.
+5. **Footer:** `swath.profile`, `swath.profile_version`, `swath.schema_id`, `swath.index_bound_bytes` and the
+   standard `sorting_columns`; no order, mode, `file_index` or `file_final` stamps. Footer finality is gone; the
+   journal still records the final part.
+
+Gates: `verify.py` (rewritten for format 2) passes on local and S3 datasets; `diffds.py` finds format 2 and
+format 1 of the same listing identical through the projection; the Varve probe passes (next section but one).
+Java reading Go output is no longer a gate. Byte baselines change once here: the S3 parts lose four columns
+and every part's footer changes.
+
 ## Measurement drift
 
 The host slowed during the session (Firecracker guest; nothing else was running in the guest, and `vmstat`
@@ -1543,27 +1568,27 @@ same part MD5.
 
 ## Varve reader compatibility
 
-From the same review. Varve at `2353ada4`, probed with its `swath.Open`/`List`/`Stream` API on
-`out-realistic`. The dataset is **not yet readable by Varve**, for three reasons:
+**Format 2 (current).** The changes in [docs/upgrade.md](docs/upgrade.md) were applied to a scratch copy of
+Varve at `2353ada4` (the checkout itself is untouched). The diff is 4 files, +117/−5 lines:
+- a format-2 manifest decoder that requires whole-bucket coverage and fails closed (`manifest_v2.go`, 80 lines);
+- dispatch on the manifest's `format` before the `_SUCCESS` check (`manifest.go`);
+- the current-object schema treated as all current objects (`reader.go`);
+- the `swath.profile` stamp accepted, and no `row_type` statistics check for that schema (`eligibility.go`).
 
-- **(a) Bucket and provider.** `Open` requires provider `s3` or `gcs` and a non-empty bucket equal to the
-  manifest's `sourceBucket`. The spike writes `""`. This needs a Varve-side change: a local-dataset `Open` keyed
-  on `schemaId`/`sourceKind` that does not take a provider or bucket. Writing a fake bucket name would only hide
-  the mismatch.
-- **(b) Run summary name.** Varve parses `_swath_summary.json` when it is present and rejected the spike's own
-  schema. **Fixed here:** the report is now `_swath_local_summary.json`. Varve treats the Swath summary as
-  optional, so it passes. `verify.py` checks the new name.
-- **(c) S3 columns.** `columnsFor` requires `version_id`, `is_latest`, `is_delete_marker` and `row_type`.
-  `decodeObject` and `Eligibility` then require `row_type == "OBJECT"`, null versions and no delete markers.
-  There are two options. Varve can treat a schema without those columns as all current objects, gated on
-  `schemaId == "swath-local/v0"` (recommended). Or swath-local can pad four constant S3 columns. **We did not
-  pad**, because that would reintroduce the S3 semantics the local schema dropped.
-- **Also:** `--fields names` writes a null `size`, and Varve rejects rows with a missing size. A names-tier
-  dataset would still fail after (a) to (c), unless Varve accepts a null size for local datasets or swath-local
-  refuses `names` when writing a dataset.
+The probe read a 20,000-key fake bucket (synthetic, `keys.tsv` from a fixed generator) through `Open`,
+`Stream`, `Eligibility` and a delimiter `List`:
 
-What did pass: the manifest shape and checks, part sizes and MD5s against the manifest, row counts, footer sort
-stamps, `key`/`size`/`last_modified` types, and the key ColumnIndex/OffsetIndex policy.
+| Dataset | Result |
+|---|---|
+| format 2, `-sequential` | opened; 20,000 objects in strict order; eligible; `d05/` lists 5 prefixes |
+| format 2, parallel `-seed` | the same |
+| format 1 (the pre-change binary, ec23ff8) | the same: the legacy path still works |
+| format 2, prefix `s3://eq/d03/` | refused: "dataset does not cover the whole bucket" |
+
+Varve's own `internal/swath` tests pass in the patched copy. `bench/diffds.py` finds the format-2 and format-1
+datasets of the same listing identical through its projection (20,000 rows both ways); format 2 is 2.2%
+smaller. The earlier format-1 findings for local datasets (no bucket, no S3 columns, null `size` with
+`--fields names`) still stand: format 2 does not make a local dataset a bucket dataset.
 
 ## Skipped or not measured
 

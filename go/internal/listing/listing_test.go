@@ -30,11 +30,11 @@ func mk(t *testing.T, root string, files ...string) {
 
 func noScratch(t *testing.T, out string) {
 	t.Helper()
-	if tmps, _ := filepath.Glob(filepath.Join(out, dataset.DataDir, "*.tmp")); len(tmps) > 0 {
+	if tmps, _ := filepath.Glob(filepath.Join(out, dataset.Workspace, dataset.PartsDir, "*")); len(tmps) > 0 {
 		t.Fatalf("unpublished parts left: %v", tmps)
 	}
-	if _, err := os.Stat(filepath.Join(out, dataset.SuccessName)); !os.IsNotExist(err) {
-		t.Fatal("_SUCCESS present")
+	if dataset.Committed(out) {
+		t.Fatal("manifest present")
 	}
 }
 
@@ -49,10 +49,21 @@ func TestEndToEnd(t *testing.T) {
 	if sum.Rows != 7 || sum.Parts != 1 {
 		t.Fatalf("rows %d parts %d", sum.Rows, sum.Parts)
 	}
-	for _, f := range []string{dataset.ManifestName, dataset.SuccessName, dataset.SummaryName, dataset.SymlinkName, "data/part-00000.parquet"} {
+	for _, f := range []string{dataset.ManifestName, dataset.SummaryName, "data/part-00000.parquet"} {
 		if _, err := os.Stat(filepath.Join(out, f)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	for _, f := range []string{"_SUCCESS", "symlink.txt"} {
+		if _, err := os.Stat(filepath.Join(out, f)); !os.IsNotExist(err) {
+			t.Fatalf("%s written: %v", f, err)
+		}
+	}
+	var m dataset.Manifest
+	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
+	if m.Format != dataset.Format || m.FormatVersion != dataset.FormatVersion || m.Source.Kind != "local-fs" || m.Scope.Kind != "whole" ||
+		!m.Coverage.Complete || m.Coverage.SkippedEntries != 0 || len(m.Parts) != 1 || m.Parts[0].Rows != 7 || m.Parts[0].Path != "data/part-00000.parquet" {
+		t.Fatalf("manifest %+v", m)
 	}
 }
 
@@ -119,8 +130,8 @@ func TestEncoderFailureLeavesNothing(t *testing.T) {
 	if err == nil {
 		t.Fatal("run succeeded")
 	}
-	if _, err := os.Stat(filepath.Join(out, dataset.SuccessName)); !os.IsNotExist(err) {
-		t.Fatal("_SUCCESS present")
+	if dataset.Committed(out) {
+		t.Fatal("manifest present")
 	}
 }
 

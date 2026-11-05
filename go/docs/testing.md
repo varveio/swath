@@ -21,7 +21,7 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 | order and memory bound | `order` `TestOrderedOutput`, `TestSinkFailureStopsPromptly`, `TestCancellation` |
 | deterministic output | `parquet` `TestRouterIsDeterministicAcrossEncoders`, `TestColumnParallelEncodingIsByteIdentical` |
 | publication order and gate | `dataset` `TestCheck`, `TestPublishFailureLeavesNoSuccess`; `listing` cancellation and encoder-failure tests |
-| crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`: an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, manifest, `_SUCCESS`), at its 1st, 4th and 12th occurrence, then `-resume`: the dataset is byte-identical to an uninterrupted run. `cmd/swath` `TestSIGKILLAtEveryPoint` (the real process SIGKILLs itself at 13 points, including between a rename and its directory sync, and after `_SUCCESS`), `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed. `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run |
+| crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`: an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, every part published, manifest installed), at its 1st, 4th and 12th occurrence, then `-resume`: the dataset is byte-identical to an uninterrupted run. `cmd/swath` `TestSIGKILLAtEveryPoint` (the real process SIGKILLs itself at 13 points, including between a rename and its directory sync, before the manifest and after it), `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed. `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run |
 | split states (I4) | `source/s3` `TestSplitStateModel`: random runs, a crash at a random published key with a random durable prefix of the boundary history; the resume lists exactly the keys after K and its ranges tile (K, ⊤] |
 | spill (step 3) | `order` `TestSpillKeepsWorkersBusy` (slow dense frontier, 56 fast siblings, 220-byte keys, 8 workers, 500-row budget: identical output, wall near the frontier's own time, buffered rows within budget + one batch per worker + the frontier path, no files left; plain and zstd), `TestSpillCleanedOnFailure`; `TestSpillDiskBudget` (a cap at a quarter of the uncapped peak holds with identical output; a reserve larger than the disk spills nothing); frontier and budget waits are nonzero without spill |
 | summary semantics | `listing` `TestSummaryDistinguishesOffFromZero`: a disabled policy's counters are absent and the policy is listed under `disabled`; an enabled one reports zeros |
@@ -120,9 +120,10 @@ they measure client CPU and coordination, not S3 latency.
 
 ## verify.py
 
-`python3 verify.py OUT` checks a dataset with DuckDB, independently of the Go code: `_SUCCESS`, `data/` holds
-exactly the manifest's parts, row counts, strictly ascending raw key bytes within and across parts, manifest
-`minKey`/`maxKey`, footer stamps, and for S3 datasets every canonical column against contracts §4.
+`python3 verify.py OUT` checks a format-2 dataset with DuckDB, independently of the Go code: the manifest's
+fields and coverage, no `_SUCCESS` or `symlink.txt`, `data/` holds exactly the manifest's parts, row counts,
+strictly ascending raw key bytes within and across parts, exact manifest `min_key`/`max_key`, the four footer
+stamps and no others, and for S3 datasets every column of the current-object schema.
 
 ## Fuzzing
 

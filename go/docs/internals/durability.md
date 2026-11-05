@@ -13,9 +13,9 @@ A key passes through five states. Only the last two survive a crash, and they ar
 |---|---|---|
 | fetched | a response body in the client | fetched again |
 | emitted | rows in the order stage (memory, or a disposable spill file) | listed again from the durable frontier |
-| encoded | an open or closed `.tmp` part | discarded unless its journal record is durable |
+| encoded | an open or closed part in `.swath/parts/` | discarded unless its journal record is durable |
 | durable | a synced journal record for a synced part | kept; the part is renamed if the rename was lost |
-| committed | renamed into `data/`, later the manifest and `_SUCCESS` | kept |
+| committed | renamed into `data/`, and finally named by `manifest.json` (the dataset commit) | kept |
 
 The durable frontier K is the max key of the last record, and records exist only for a contiguous ordinal
 prefix (part i is published only after part i−1). No worker's cursor is ever persisted: a worker that has
@@ -26,13 +26,13 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | response fetched, nothing emitted (`response-read`) | fetched again; the frontier does not move |
 | split decided, children partly queued (`split`) | the tiling is rebuilt from K and the recorded boundaries; the split is lost harmlessly |
 | rows buffered or queued to an encoder (`range-done`, `encoding`) | relisted from K |
-| part closed and synced, no record (`part-closed`, `journal-append`) | the orphan `.tmp` is removed and the part is reproduced byte for byte |
+| part closed and synced, no record (`part-closed`, `journal-append`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
 | record written, not synced (`journal-sync`) | a torn tail is ignored; a whole unsynced frame that survived is a valid record of a synced part |
-| record durable, rename absent (`recorded`, `rename`) | the `.tmp` is checked against the record (size, MD5), then renamed |
-| rename done, directory sync absent | the same check: the part is either at its final name or still at `.tmp` |
+| record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, MD5), then renamed into `data/` |
+| rename done, directory sync absent (`renamed-unsynced`) | the same check: the part is either at its final name or still in `.swath/parts/` |
 | several parts closed out of order | only the contiguous ordinal prefix was published; later parts are reproduced |
-| manifest written, `_SUCCESS` absent (`manifest`) | the resume lists nothing after K and republishes manifest, reports and `_SUCCESS` |
-| `_SUCCESS` durable (`success`) | committed; `-resume` reports `ErrComplete` |
+| every part published, no manifest (`published`) | the final part is durable: the resume does not list, and installs the manifest |
+| manifest installed (`manifest`) | committed; `-resume` reports `ErrComplete`. The run reports are written after the commit and cannot revoke it |
 
 Every boundary in the left column is a named crash point (`internal/faults`). `TestCrashMatrix` stops the run
 there without cleanup, and `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself there. Both then
@@ -50,7 +50,7 @@ resume and compare with an uninterrupted run.
 
 Parts are published as soon as they close, in ordinal order, by the router's `Publish` hook:
 
-1. The part's encoder closes the file and fsyncs it (`data/part-NNNNN.parquet.tmp`).
+1. The part's encoder closes the file and fsyncs it, then the directory (`.swath/parts/part-NNNNN.parquet`).
 2. One journal record is appended and fsynced: the part (ordinal, rows, bytes, MD5, min and max key), the
    router's frozen part limit, the total rows so far, and the source's checkpoint: an opaque descriptor,
    versioned by the provider, of what it learned since the previous record (for S3, the range boundaries it
@@ -59,15 +59,16 @@ Parts are published as soon as they close, in ordinal order, by the router's `Pu
 
 This is commit-before-emit (I1) at part granularity: no row is published before the record that covers it.
 Rows may sit in memory, or in an unpublished `.tmp` part, beyond the last record; a crash loses them and the
-resume lists them again. `manifest.json`, the run reports and `_SUCCESS` are written at the end as before.
+resume lists them again. At the end, `manifest.json` is installed by an atomic rename and a directory sync:
+that is the commit. The run reports follow it.
 
 ## Resume
 
 `swath list s3://… -out DIR -resume`:
 
-1. Takes the output lock (`-out/.swath.lock`, `flock`) before reading, recovering, removing or writing
-   anything. It is held through the run's cleanup and publication. Fresh runs and overwrites take it too,
-   and it lives outside `.swath/`, so replacing a previous run never removes a live owner's lock.
+1. Takes the output lock (`-out/.swath/lock`, `flock`) before reading, recovering, removing or writing
+   anything. It is held through the run's cleanup and publication. Fresh runs and overwrites take it too.
+   Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
 2. Checks the identity in the journal header against the request (`durable.Check`, a pure function). The
    pipeline freezes the schema, key cap, writer (`parquet.WriterID`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that
@@ -86,7 +87,7 @@ resume lists them again. `manifest.json`, the run reports and `_SUCCESS` are wri
 5. Continues the router at the next ordinal with the recorded limit, so part boundaries fall exactly where
    the uninterrupted run would have put them.
 
-A record also carries whether its part is the final one (`file_final`). Once the final part is durable, a
+A record also carries whether its part is the final one. Once the final part is durable, a
 resume does not list again: it only publishes. On a changed bucket, listing again could add a second final
 part. S3's checkpoint carries at most 4,096 boundaries (the most recent), so the journal grows with parts, not
 splits. A record over the frame limit is refused on append as well as on read.

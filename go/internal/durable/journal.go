@@ -151,9 +151,10 @@ func Reopen(out string, st *State) (*Journal, error) {
 	return start(f), nil
 }
 
-// LockName is the output directory's lock file. It lives outside .swath, so
-// replacing a previous run's entries never removes a live owner's lock.
-const LockName = ".swath.lock"
+// LockName is the output directory's lock file, inside the workspace.
+// Replacing a previous run empties the workspace but never removes the
+// lock (dataset.Prepare), so a live owner's lock is never unlinked.
+var LockName = filepath.Join(dataset.Workspace, dataset.LockName)
 
 // Lock is exclusive ownership of an output directory: taken before the
 // directory is prepared, recovered or written, held until the run ends.
@@ -161,7 +162,7 @@ type Lock struct{ f *os.File }
 
 // TakeLock creates out if needed and takes its lock (non-blocking).
 func TakeLock(out string) (*Lock, error) {
-	if err := os.MkdirAll(out, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(out, dataset.Workspace), 0o755); err != nil {
 		return nil, fmt.Errorf("output: %w", err)
 	}
 	f, err := os.OpenFile(filepath.Join(out, LockName), os.O_CREATE|os.O_RDWR, 0o644)

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -32,7 +31,7 @@ type Part struct {
 func Check(parts []Part, rows int64) error {
 	var n int64
 	for i, p := range parts {
-		if b := filepath.Base(p.Path); b != PartName(i)+".tmp" && b != PartName(i) {
+		if filepath.Base(p.Path) != PartName(i) {
 			return fmt.Errorf("part ordinals not dense: index %d holds %s", i, p.Path)
 		}
 		if p.Rows == 0 || p.MinKey > p.MaxKey {
@@ -49,18 +48,67 @@ func Check(parts []Part, rows int64) error {
 	return nil
 }
 
-// Meta describes the dataset in the manifest.
-type Meta struct {
-	SchemaID     string
-	FileSchema   string // parquet-mr message string
-	SortKey      string
-	SourceKind   string // "local-fs" or "s3"
-	SourceBucket string // object-store bucket; empty for a filesystem
-	SourceRoot   string // absolute path or s3://bucket/prefix
+// Manifest is manifest.json, the dataset's commit record and the only file
+// a reader needs to accept it: what was listed (source, scope), how much of
+// it (coverage), and the ordered parts with their exact bounds.
+type Manifest struct {
+	Format        string         `json:"format"`         // Format
+	FormatVersion int            `json:"format_version"` // FormatVersion
+	SchemaID      string         `json:"schema_id"`
+	PublishedAt   time.Time      `json:"published_at"`
+	Source        Source         `json:"source"`
+	Scope         Scope          `json:"scope"`
+	Coverage      Coverage       `json:"coverage"`
+	Parts         []ManifestPart `json:"parts"` // in key order; part i is data/part-%05d.parquet
 }
 
-// SwathSummaryName is Swath's run-summary file.
-const SwathSummaryName = "_swath_summary.json"
+// Source is what was listed.
+type Source struct {
+	Kind      string `json:"kind"`                // "s3", "local-fs"
+	URI       string `json:"uri"`                 // s3://bucket/prefix, or the absolute root path
+	Container string `json:"container,omitempty"` // the bucket
+}
+
+// Scope is the part of the source the listing was asked for.
+type Scope struct {
+	Kind   string `json:"kind"`             // "whole" (the bucket, the tree) or "prefix"
+	Prefix string `json:"prefix,omitempty"` // with "prefix"
+}
+
+// Coverage is how much of the scope the dataset holds. A dataset covers its
+// scope fully when complete is true, nothing was skipped and there are no
+// filters; exclusions name what the listing left out by design (an output
+// directory inside a listed tree). A listing is not a point-in-time
+// snapshot: entries that changed while it ran may or may not be in it.
+type Coverage struct {
+	Complete          bool      `json:"complete"`    // the listing reached the end of the scope
+	StopReason        string    `json:"stop_reason"` // "completed", or why it stopped early
+	SkippedEntries    int64     `json:"skipped_entries"`
+	Exclusions        []string  `json:"exclusions"`
+	Filters           []string  `json:"filters"`
+	Snapshot          bool      `json:"snapshot"` // always false
+	ListingStartedAt  time.Time `json:"listing_started_at"`
+	ListingFinishedAt time.Time `json:"listing_finished_at"`
+}
+
+// ManifestPart is one part in the manifest. Keys are exact (never
+// truncated); path is relative to the dataset root.
+type ManifestPart struct {
+	Path   string `json:"path"`
+	Rows   int64  `json:"rows"`
+	Bytes  int64  `json:"bytes"`
+	MinKey string `json:"min_key"`
+	MaxKey string `json:"max_key"`
+	MD5    string `json:"md5"`
+}
+
+// Meta is what Publish needs beyond the parts.
+type Meta struct {
+	SchemaID string
+	Source   Source
+	Scope    Scope
+	Coverage Coverage
+}
 
 // File is a JSON document published beside the manifest.
 type File struct {
@@ -68,75 +116,62 @@ type File struct {
 	Value any
 }
 
-type manifestFile struct {
-	Key         string `json:"key"`
-	Size        int64  `json:"size"`
-	MD5checksum string `json:"MD5checksum"`
-	RowCount    int64  `json:"rowCount"`
-	MinKey      string `json:"minKey"`
-	MaxKey      string `json:"maxKey"`
-}
+// ReportError is a run report that could not be written after the dataset
+// was committed: the dataset stands.
+type ReportError struct{ Err error }
 
-// manifest mirrors io.varve.swath.output.parquet.Manifest (field order kept),
-// with additive local fields after files.
-type manifest struct {
-	SourceBucket      string         `json:"sourceBucket"`
-	Version           string         `json:"version"`
-	CreationTimestamp int64          `json:"creationTimestamp"`
-	FileFormat        string         `json:"fileFormat"`
-	FileSchema        string         `json:"fileSchema"`
-	Sorted            bool           `json:"sorted"`
-	SortKey           string         `json:"sortKey"`
-	Files             []manifestFile `json:"files"`
-	SchemaID          string         `json:"schemaId"`
-	SourceKind        string         `json:"sourceKind"`
-	SourceRoot        string         `json:"sourceRoot"`
-	TotalRows         int64          `json:"totalRows"`
-}
+func (e *ReportError) Error() string { return "dataset committed; run report: " + e.Err.Error() }
+func (e *ReportError) Unwrap() error { return e.Err }
 
-// Publish commits parts (already gated) in order: rename each part, fsync
-// the data directory, then manifest.json, symlink.txt and the run reports,
-// each atomically, and _SUCCESS last.
+// Publish commits parts (already gated): each part not yet published is
+// renamed into data/, data/ is synced, and manifest.json is installed by an
+// atomic rename and a directory sync. That rename is the commit. The run
+// reports follow; failing to write one returns a *ReportError and leaves
+// the dataset committed.
 func Publish(out string, meta Meta, parts []Part, reports []File) error {
 	data := filepath.Join(out, DataDir)
-	m := manifest{
-		Version: "1", CreationTimestamp: time.Now().UnixMilli(), FileFormat: "Parquet",
-		FileSchema: meta.FileSchema, Sorted: true, SortKey: meta.SortKey, Files: []manifestFile{},
-		SourceBucket: meta.SourceBucket, SchemaID: meta.SchemaID, SourceKind: meta.SourceKind, SourceRoot: meta.SourceRoot,
+	m := Manifest{Format: Format, FormatVersion: FormatVersion, SchemaID: meta.SchemaID,
+		Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
+	if m.Coverage.Exclusions == nil {
+		m.Coverage.Exclusions = []string{}
 	}
-	var links strings.Builder
+	if m.Coverage.Filters == nil {
+		m.Coverage.Filters = []string{}
+	}
 	for i, p := range parts {
 		if final := filepath.Join(data, PartName(i)); p.Path != final {
 			if err := os.Rename(p.Path, final); err != nil {
 				return fmt.Errorf("publish part %d: %w", i, err)
 			}
 		}
-		key := DataDir + "/" + PartName(i)
-		m.Files = append(m.Files, manifestFile{Key: key, Size: p.Bytes, MD5checksum: p.MD5, RowCount: p.Rows, MinKey: p.MinKey, MaxKey: p.MaxKey})
-		m.TotalRows += p.Rows
-		links.WriteString(key + "\n")
+		m.Parts = append(m.Parts, ManifestPart{Path: DataDir + "/" + PartName(i), Rows: p.Rows, Bytes: p.Bytes,
+			MinKey: p.MinKey, MaxKey: p.MaxKey, MD5: p.MD5})
 	}
 	if err := syncDir(data); err != nil {
 		return fmt.Errorf("sync data directory: %w", err)
 	}
+	if err := faults.At("published"); err != nil {
+		return err
+	}
+	m.PublishedAt = time.Now().UTC()
 	if err := writeJSON(out, ManifestName, m); err != nil {
 		return err
 	}
 	if err := faults.At("manifest"); err != nil {
 		return err
 	}
-	if err := writeAtomic(out, SymlinkName, []byte(links.String())); err != nil {
-		return err
-	}
 	for _, r := range reports {
 		if err := writeJSON(out, r.Name, r.Value); err != nil {
-			return err
+			return &ReportError{err}
 		}
 	}
-	if err := writeAtomic(out, SuccessName, nil); err != nil {
-		return err
-	}
-	return faults.At("success")
+	return nil
+}
+
+// Committed reports whether out holds a committed dataset (its manifest).
+func Committed(out string) bool {
+	fi, err := os.Stat(filepath.Join(out, ManifestName))
+	return err == nil && fi.Mode().IsRegular()
 }
 
 func writeJSON(dir, name string, v any) error {

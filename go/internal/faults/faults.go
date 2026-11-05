@@ -16,7 +16,7 @@ var ErrCrash = errors.New("injected crash")
 
 // Points are the crash points the matrix covers, in run order.
 var Points = []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append",
-	"journal-sync", "recorded", "rename", "renamed-unsynced", "renamed", "manifest", "success"}
+	"journal-sync", "recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"}
 
 var hook atomic.Pointer[func(point string) error]
 

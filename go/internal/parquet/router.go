@@ -5,6 +5,8 @@ package parquet
 
 import (
 	"github.com/varveio/swath/go/internal/faults"
+	"os"
+	"path/filepath"
 
 	"context"
 	"errors"
@@ -103,6 +105,9 @@ type part struct {
 func NewRouter(opt Options) (*Router, error) {
 	if opt.PartSize <= 0 || opt.Encoders < 1 || opt.Schema == nil {
 		return nil, errors.New("parquet router: part size, encoders and schema are required")
+	}
+	if err := os.MkdirAll(filepath.Join(opt.Out, dataset.Workspace, dataset.PartsDir), 0o755); err != nil {
+		return nil, fmt.Errorf("parquet router: %w", err)
 	}
 	r := &Router{opt: opt, slots: make(chan struct{}, opt.Encoders)}
 	if res := opt.Resume; res != nil {
@@ -275,7 +280,7 @@ func (r *Router) encode(p *part) {
 		w.abort()
 		return
 	}
-	p.info, p.err = w.close(p.final)
+	p.info, p.err = w.close()
 	if p.err != nil {
 		r.fail(p.err)
 		return

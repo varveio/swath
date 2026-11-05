@@ -123,16 +123,21 @@ type Report struct {
 	Brief  string // one line of text for the plain-text summary
 	Errors int64  // per-entry problems counted (not fatal)
 	Fields string // the metadata tier collected, if the provider has tiers
-	// Coverage, if set, makes the dataset carry swath's run summary, which
-	// readers (Varve) use to tell a whole-source dataset from a partial one.
-	Coverage *Coverage
-	Activity Activity
+	// Coverage is what the dataset covers; it goes into the manifest,
+	// where readers accept or refuse the dataset.
+	Coverage Coverage
+	// Activity, if set, makes the dataset carry swath's run summary (a
+	// remote listing's engine activity).
+	Activity *Activity
 }
 
 // Coverage is what a dataset claims to cover.
 type Coverage struct {
-	Target     string   // the canonical listed target (s3://bucket[/prefix])
+	Target     string   // the canonical listed target (s3://bucket[/prefix], or the root path)
+	Prefix     string   // the scope: "" for the whole source, else the listed prefix
 	Filters    []string // none today
+	Exclusions []string // left out by design (an output directory inside a listed tree)
+	Skipped    int64    // entries not listed (unreadable, invalid names)
 	Complete   bool     // false if the listing stopped early (a key limit)
 	StopReason string   // "completed", or why it stopped
 }

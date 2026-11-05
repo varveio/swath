@@ -39,9 +39,8 @@ type Column struct {
 
 // Schema is a named, ordered column list.
 type Schema struct {
-	Name      string // Parquet message name
-	ID        string // stamped into manifest.json as schemaId
-	SortOrder string // swath.sort.order footer value
+	Name string // Parquet message name
+	ID   string // stamped into manifest.json as schemaId
 	// MaxKeyBytes caps key length (0: no cap). S3 keys are at most 1,024
 	// bytes (contracts §6); filesystem paths are not capped, and their
 	// column-index bounds are truncated (conservative) instead.

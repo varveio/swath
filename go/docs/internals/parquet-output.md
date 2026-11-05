@@ -29,18 +29,17 @@ dataset layout"); this page says how the Go writer meets it.
 
 S3 datasets carry swath's run summary as `_swath_summary.json` (`listing.RunSummary`): Java swath's
 schema_version 2 field set where this tool has a counterpart (target, completion, objects, durations, cost,
-efficiency, engine, seed, sort), plus this tool's own report under `go`. Varve reads `schema_version`,
-`completed`, `config.target` and `config.filters` to accept a dataset as whole-bucket coverage. Filesystem
-datasets carry this tool's report as `_swath_local_summary.json`; Java has no filesystem mode to mirror.
+efficiency, engine, seed, sort), plus this tool's own report under `go`. Filesystem datasets carry this
+tool's report as `_swath_local_summary.json`. Both are operational: written after the commit, and not part
+of acceptance, which reads the manifest's coverage ([../upgrade.md](../upgrade.md)).
 
 ## Footer stamps
 
-Every part carries swath's `SortedParquetWriter` stamps: `swath.sort.order`
-(`key_bytes_unsigned,version_id_null_first,row_type_rank`), `swath.sort.mode=objects`,
-`swath.sort.format_version=1`, `swath.sort.file_index` (1-based), `swath.sort.file_final=true` on the last
-part only, and `swath.sort.index_bound_bytes=1024`: the column-index truncation, so readers know bounds of
-longer values are conservative. `sorting_columns` repeats the key order in standard Parquet metadata. Readers use them to trust the global order without re-sorting; `file_final` lets a reader tell a
-complete dataset from a truncated copy.
+Every part carries four stamps: `swath.profile=swath-dataset`, `swath.profile_version=2`, `swath.schema_id`
+and `swath.index_bound_bytes=1024` (the column-index truncation, so readers know bounds of longer values are
+conservative). Within-file order is the standard `sorting_columns` (key, ascending) on every row group. Order
+across parts, exact bounds and completeness are the manifest's; nothing in a footer says where a part sits
+in the dataset.
 
 ## Part router and deterministic boundaries
 
@@ -49,7 +48,8 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
 - A row's logical size is its uncompressed field bytes.
 - Part 0 is cut at `PartSize / 0.1` logical bytes (0.1 is an assumed compression ratio).
 - When part 0 closes, its measured ratio is frozen; every later part is cut at `PartSize / ratio`.
-- Ordinals are dense and zero-based; the router knows the last part and sets `file_final`.
+- Ordinals are dense and zero-based; the router knows the last part (the journal records it, so a resume
+  after the final part only publishes).
 
 The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`. Each part is
 written by its own goroutine and zstd encoder from a bounded channel; at most `Encoders` parts are open.
@@ -57,19 +57,22 @@ written by its own goroutine and zstd encoder from a bounded channel; at most `E
 ## Publication gate and order
 
 Before anything is renamed, `dataset` checks dense ordinals, strictly ascending and disjoint part key ranges,
-and rows written equal to rows routed. Then: parts (written as `.tmp`, fsynced on close) are renamed in
-ordinal order, the `data/` directory is fsynced, each JSON file is written `.tmp`, fsynced and renamed, and
-`_SUCCESS` is written last. A failure or cancellation removes the `.tmp` parts and writes no `_SUCCESS`.
+and rows written equal to rows routed. Then: parts (written in `.swath/parts/`, fsynced on close) are renamed
+into `data/` in ordinal order, `data/` is fsynced, and `manifest.json` is written to a temporary name, fsynced,
+renamed and its directory fsynced. That rename is the commit: without a manifest there is no dataset. The
+run reports follow; a report that cannot be written is a warning, and the dataset stands. A failure or
+cancellation removes the unpublished parts and writes no manifest.
 
 ```text
 out/
   data/part-00000.parquet ...   dense, zero-based %05d; name order == key order; parts strictly disjoint
-  manifest.json                 swath's consumer manifest fields + schemaId, sourceKind, sourceRoot|sourceBucket, totalRows
-  symlink.txt                   data/<part> paths
+  manifest.json                 format 2: source, scope, coverage, ordered parts with exact bounds (the commit)
   _swath_summary.json           S3: swath's run summary (schema_version 2) with this tool's report under "go"
   _swath_local_summary.json     filesystem: this tool's run report
-  _SUCCESS                      empty, written last
+  .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/
 ```
+
+The manifest's fields and the reader's acceptance rule are in [../upgrade.md](../upgrade.md).
 
 `-out` safety: the source root is validated first; `-out` may not be the root or an ancestor of it (by path
 and by dev/inode); a non-empty `-out` is refused unless `-overwrite`, which replaces only a previous dataset of
@@ -77,12 +80,10 @@ this tool, outside the root, removing only its own entries. An `-out` inside the
 
 ## What readers rely on
 
-- **Varve's Go reader** opens S3 datasets when: `manifest.json` `sourceBucket` names the bucket;
-  `_swath_summary.json`, if present, covers the whole bucket (a prefix dataset is refused); the required
-  columns `is_delete_marker` and `row_type` are present, with `version_id` and `is_latest` as optional
-  columns; statistics show pure-object rows.
-- **swath's Java reader** needs the canonical physical schema (bare INT64 `size`), the sort stamps, and a key
-  column index it accepts (ascending one-page indexes for older releases).
+- **Varve's Go reader** opens format-2 S3 datasets with the changes in [../upgrade.md](../upgrade.md): it
+  dispatches on the manifest's format, accepts whole-bucket coverage from the manifest, reads the
+  current-object schema and the `swath.profile` stamp (REPORT.md, "Varve reader compatibility").
+- **swath's Java reader** does not open format 2, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
 
 ## Schemas
@@ -91,10 +92,11 @@ Schemas are data (`schema.Schema`: name, id, sort order, columns with type, requ
 `Row`). `Message()` renders the parquet-mr message string stored in the manifest; the Parquet node is built
 from the same list.
 
-**`schema.S3`** (`swath/canonical`) is swath's canonical 13 columns: `key`, `size`, `last_modified`, `etag`,
-`storage_class`, `version_id` (null), `is_latest` (null), `is_delete_marker` (required, false), `owner_id`,
-`owner_display_name` (only with `-fetch-owner`), `checksum_algorithm` (the first listed), `checksum_type`,
-`row_type` (required, `OBJECT`). ETags lose one pair of surrounding quotes, as swath does.
+**`schema.S3`** (`swath/s3-objects/v1`) is the current-object schema, nine columns: `key`, `size`,
+`last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name` (null unless `-fetch-owner`),
+`checksum_algorithm` (the first listed), `checksum_type` (null when S3 omits them). Every row is a current
+object, so Java's `version_id`, `is_latest`, `is_delete_marker` and `row_type` are not stored; `bench/diffds.py`
+restores their constant values for comparison. ETags lose one pair of surrounding quotes, as swath does.
 
 **`schema.Local`** (`swath-local/v0`) has one row per entry below the root. `key`, `size` and
 `last_modified` match the canonical schema; the rest replace the S3 columns:

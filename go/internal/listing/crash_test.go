@@ -23,6 +23,7 @@ import (
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/durable"
 	"github.com/varveio/swath/go/internal/faults"
 )
@@ -98,9 +99,9 @@ func TestCrashMatrix(t *testing.T) {
 						t.Fatalf("crash not injected: %v", err)
 					}
 					sum, err := Run(context.Background(), crashConfig(url, out, true))
-					if point == "success" {
+					if point == "manifest" {
 						if !errors.Is(err, ErrComplete) {
-							t.Fatalf("resume after _SUCCESS: %v", err)
+							t.Fatalf("resume after the manifest: %v", err)
 						}
 					} else if err != nil {
 						t.Fatalf("resume: %v", err)
@@ -282,13 +283,17 @@ func TestCompetingRunsAreRefused(t *testing.T) {
 	}
 	// The owner's other encoders keep working while one is paused, so new
 	// temporary parts may appear and earlier ones be published; nothing
-	// the owner had may be gone (a published part counts as its .tmp).
+	// the owner had may be gone (a published part counts as its temporary).
+	norm := func(p string) string {
+		return strings.Replace(p, string(filepath.Separator)+filepath.Join(dataset.Workspace, dataset.PartsDir)+string(filepath.Separator),
+			string(filepath.Separator)+dataset.DataDir+string(filepath.Separator), 1)
+	}
 	after := snapshot()
 	for i := range after {
-		after[i] = strings.TrimSuffix(after[i], ".tmp")
+		after[i] = norm(after[i])
 	}
 	for _, name := range before {
-		if !slices.Contains(after, strings.TrimSuffix(name, ".tmp")) {
+		if !slices.Contains(after, norm(name)) {
 			t.Fatalf("a refused run removed the owner's %s:\n%v\n%v", name, before, after)
 		}
 	}
@@ -384,7 +389,7 @@ func TestResumeAfterFinalPartDoesNotList(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "ds")
 	restore := faults.Set(func(p string) error {
-		if p == "manifest" {
+		if p == "published" { // every part durable and published, no manifest yet
 			return faults.ErrCrash
 		}
 		return nil

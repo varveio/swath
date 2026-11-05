@@ -11,7 +11,7 @@ import (
 )
 
 func part(i int, lo, hi string, n int64) Part {
-	return Part{Path: "/x/data/" + PartName(i) + ".tmp", MinKey: lo, MaxKey: hi, Rows: n}
+	return Part{Path: TempPath("/x", i), MinKey: lo, MaxKey: hi, Rows: n}
 }
 
 func TestCheck(t *testing.T) {
@@ -86,22 +86,25 @@ func TestPrepareNeverDeletesTheTree(t *testing.T) {
 
 func TestReplaceRemovesOnlyOwnEntries(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "ds")
-	for _, f := range []string{"data/part-00000.parquet", ManifestName, SuccessName, SymlinkName, "notes.txt"} {
+	for _, f := range []string{"data/part-00000.parquet", ManifestName, legacySuccess, legacySymlink, ".swath/journal", ".swath/lock", "notes.txt"} {
 		touch(t, filepath.Join(out, f))
 	}
 	if err := Prepare(out, t.TempDir(), id, true); err != nil {
 		t.Fatal(err)
 	}
-	exists(t, filepath.Join(out, "notes.txt"), filepath.Join(out, DataDir))
-	for _, gone := range []string{"data/part-00000.parquet", ManifestName, SuccessName} {
+	exists(t, filepath.Join(out, "notes.txt"), filepath.Join(out, DataDir), filepath.Join(out, ".swath/lock"))
+	for _, gone := range []string{"data/part-00000.parquet", ManifestName, legacySuccess, legacySymlink, ".swath/journal"} {
 		if _, err := os.Stat(filepath.Join(out, gone)); !os.IsNotExist(err) {
 			t.Errorf("%s survived", gone)
 		}
 	}
 }
 
-func TestPublishFailureLeavesNoSuccess(t *testing.T) {
+// TestPublishFailureLeavesNoManifest: the manifest is the commit; a failed
+// publication has none.
+func TestPublishFailureLeavesNoManifest(t *testing.T) {
 	out := t.TempDir()
+	touch(t, filepath.Join(out, DataDir, "x"))
 	touch(t, TempPath(out, 0))
 	// A non-empty directory where manifest.json goes makes the commit fail.
 	touch(t, filepath.Join(out, ManifestName, "blocker"))
@@ -109,7 +112,7 @@ func TestPublishFailureLeavesNoSuccess(t *testing.T) {
 	if err == nil {
 		t.Fatal("publish succeeded")
 	}
-	if _, err := os.Stat(filepath.Join(out, SuccessName)); !os.IsNotExist(err) {
-		t.Fatal("_SUCCESS written after a failed publish")
+	if Committed(out) {
+		t.Fatal("a failed publish committed")
 	}
 }

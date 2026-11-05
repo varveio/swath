@@ -66,7 +66,7 @@ func Prepare(out, root, schemaID string, replace bool) error {
 func prepareOut(out, absOut, schemaID string, replace bool) error {
 	ents, err := os.ReadDir(absOut)
 	switch {
-	case err == nil && nonLock(ents) > 0:
+	case err == nil && nonLock(absOut, ents) > 0:
 		if !replace {
 			return fmt.Errorf("%s: %w", out, ErrNotEmpty)
 		}
@@ -80,14 +80,26 @@ func prepareOut(out, absOut, schemaID string, replace bool) error {
 				}
 			}
 		}
+		// Empty the workspace but keep the lock: its holder is this run.
+		ws, _ := os.ReadDir(filepath.Join(absOut, Workspace))
+		for _, e := range ws {
+			if e.Name() != LockName {
+				if err := os.RemoveAll(filepath.Join(absOut, Workspace, e.Name())); err != nil {
+					return fmt.Errorf("remove previous run: %w", err)
+				}
+			}
+		}
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return fmt.Errorf("read output: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(absOut, DataDir), 0o755); err != nil {
-		return fmt.Errorf("create output: %w", err)
+	for _, d := range []string{DataDir, filepath.Join(Workspace, PartsDir)} {
+		if err := os.MkdirAll(filepath.Join(absOut, d), 0o755); err != nil {
+			return fmt.Errorf("create output: %w", err)
+		}
 	}
-	// data/ itself must survive a power loss once a part is recorded in it.
-	if err := errors.Join(syncDir(absOut), syncDir(filepath.Dir(absOut))); err != nil {
+	// data/ and the parts directory must survive a power loss once a part
+	// is recorded in them.
+	if err := errors.Join(syncDir(filepath.Join(absOut, Workspace)), syncDir(absOut), syncDir(filepath.Dir(absOut))); err != nil {
 		return fmt.Errorf("sync output: %w", err)
 	}
 	return nil
@@ -127,13 +139,10 @@ func LocateInside(root, out string) (rel string, inside bool, err error) {
 	}
 }
 
-// Cleanup removes a failed run's unpublished parts. Without _SUCCESS nothing
-// was published.
+// Cleanup removes a failed run's unpublished parts. Without a manifest
+// nothing was published.
 func Cleanup(out string) {
-	tmps, _ := filepath.Glob(filepath.Join(out, DataDir, "*.tmp"))
-	for _, t := range tmps {
-		_ = os.Remove(t)
-	}
+	_ = os.RemoveAll(filepath.Join(out, Workspace, PartsDir))
 }
 
 // isUnder reports whether path is strictly below dir (cleaned absolute paths).
@@ -194,13 +203,14 @@ func insideRoot(root, out string) (bool, error) {
 func isDataset(out, schemaID string) bool {
 	if b, err := os.ReadFile(filepath.Join(out, ManifestName)); err == nil {
 		var m struct {
-			SchemaID string `json:"schemaId"`
+			SchemaID string `json:"schema_id"`
+			Legacy   string `json:"schemaId"`
 		}
-		if json.Unmarshal(b, &m) == nil && m.SchemaID == schemaID {
-			return true
+		if json.Unmarshal(b, &m) == nil && (m.SchemaID == schemaID || m.Legacy != "") {
+			return true // this tool's dataset, of this or an earlier format
 		}
 	}
-	_, e1 := os.Stat(filepath.Join(out, SuccessName))
+	_, e1 := os.Stat(filepath.Join(out, legacySuccess))
 	fi, e2 := os.Stat(filepath.Join(out, DataDir))
 	if e1 == nil && e2 == nil && fi.IsDir() {
 		return true
@@ -212,18 +222,22 @@ func isDataset(out, schemaID string) bool {
 
 // Resumable reports whether out holds an interrupted journaled run.
 func Resumable(out string) bool {
-	_, e1 := os.Stat(filepath.Join(out, SuccessName))
 	_, e2 := os.Stat(filepath.Join(out, JournalDir, "journal"))
-	return e1 != nil && e2 == nil
+	return !Committed(out) && e2 == nil
 }
 
-// nonLock counts entries other than the output lock file.
-func nonLock(ents []os.DirEntry) int {
+// nonLock counts the entries of out other than a workspace that holds
+// only the lock (a fresh run takes the lock before preparing).
+func nonLock(out string, ents []os.DirEntry) int {
 	n := 0
 	for _, e := range ents {
-		if e.Name() != ".swath.lock" {
-			n++
+		if e.Name() == Workspace {
+			ws, err := os.ReadDir(filepath.Join(out, Workspace))
+			if err == nil && len(ws) == 1 && ws[0].Name() == LockName {
+				continue
+			}
 		}
+		n++
 	}
 	return n
 }

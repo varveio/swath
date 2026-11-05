@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 # Copyright 2026 Varve Systems Ltd
 # SPDX-License-Identifier: Apache-2.0
-"""Verify a swath-local dataset with DuckDB (independent of the Go writer).
+"""Verify a swath dataset (format 2) with DuckDB, independently of the Go writer.
 
-Checks: _SUCCESS present; for a local dataset the run report
-_swath_local_summary.json and no _swath_summary.json (Swath's reserved run-summary
-name, parsed by Varve), for an S3 dataset a compatible one (schema_version 2, completed, no
-filters, target s3://<sourceBucket>[/prefix]) and every column checked against
-Swath's canonical schema (contracts section 4); manifest totalRows == sum(rowCount) == DuckDB count;
-per-file DuckDB row count == manifest rowCount and min/max key == manifest
-minKey/maxKey; keys strictly ascending (unsigned bytes) within and across parts
-in file order; Parquet footer stamps (file_index 1..N, file_final only on N).
-Prints the schema as DuckDB sees it and min/max key per part.
+Checks: manifest.json is format 2 (format, format_version, schema_id, source, scope, coverage, parts) and
+is the commit (no _SUCCESS, no symlink.txt); data/ holds exactly the manifest's parts; the run report
+exists (_swath_summary.json for S3, _swath_local_summary.json otherwise); for S3, every column against the
+current-object schema and every row a current object; per part: DuckDB row count == manifest rows,
+first/last key == manifest min_key/max_key (exact), keys strictly ascending (unsigned bytes) within and
+across parts; footer stamps (profile, profile version, schema id, index bound) and nothing else under
+swath.*. Prints the schema as DuckDB sees it and min/max key per part.
 """
 import json
 import os
@@ -28,45 +26,41 @@ def main(out):
         print(("PASS " if cond else "FAIL ") + msg)
         ok = ok and cond
 
-    check(os.path.exists(os.path.join(out, "_SUCCESS")), "_SUCCESS present")
-    manifest = json.load(open(os.path.join(out, "manifest.json")))
-    s3 = manifest.get("sourceKind") == "s3"
-    check(os.path.exists(os.path.join(out, "_swath_local_summary.json")) != s3,
-          "_swath_local_summary.json " + ("absent (S3 reports in _swath_summary.json)" if s3 else "present"))
-    swath_summary = os.path.join(out, "_swath_summary.json")
-    if s3:
-        run = json.load(open(swath_summary))
-        target = run.get("config", {}).get("target", "")
-        check(run.get("schema_version") == 2 and run.get("completed") is True and run.get("config", {}).get("filters") == []
-              and target.startswith("s3://" + manifest["sourceBucket"]), f"_swath_summary.json compatible (target {target})")
-    else:
-        check(not os.path.exists(swath_summary), "no _swath_summary.json (Swath's reserved run-summary name, parsed by Varve)")
     m = json.load(open(os.path.join(out, "manifest.json")))
-    files = [f["key"] for f in m["files"]]
+    check(m.get("format") == "swath-dataset" and m.get("format_version") == 2, "manifest is format 2")
+    for k in ("schema_id", "published_at", "source", "scope", "coverage", "parts"):
+        check(k in m, f"manifest has {k}")
+    cov = m.get("coverage", {})
+    check(cov.get("snapshot") is False and isinstance(cov.get("exclusions"), list) and isinstance(cov.get("filters"), list),
+          f"coverage complete={cov.get('complete')} skipped={cov.get('skipped_entries')} scope={m.get('scope')}")
+    for gone in ("_SUCCESS", "symlink.txt"):
+        check(not os.path.exists(os.path.join(out, gone)), f"no {gone} (the manifest is the commit)")
+    s3 = m["source"]["kind"] == "s3"
+    report = "_swath_summary.json" if s3 else "_swath_local_summary.json"
+    check(os.path.exists(os.path.join(out, report)), f"{report} present (operational report)")
+    files = [f["path"] for f in m["parts"]]
     paths = [os.path.join(out, k) for k in files]
     on_disk = sorted("data/" + p for p in os.listdir(os.path.join(out, "data")))
     check(on_disk == files, f"data/ holds exactly the {len(files)} manifest parts, in name order")
-    check(m["totalRows"] == sum(f["rowCount"] for f in m["files"]), "manifest totalRows == sum(rowCount)")
+    rows = sum(f["rows"] for f in m["parts"])
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = true")
     glob = os.path.join(out, "data", "*.parquet")
     total = con.execute(f"SELECT count(*) FROM read_parquet('{glob}')").fetchone()[0]
-    check(total == m["totalRows"], f"DuckDB count {total} == manifest totalRows {m['totalRows']}")
+    check(total == rows, f"DuckDB count {total} == sum of manifest rows {rows}")
 
     if s3:
-        # Swath canonical schema, docs/internals/contracts.md section 4:
+        # The current-object schema (swath/s3-objects/v1):
         # name, physical type, repetition, logical type (None = unannotated).
         contract = [
             ("key", "BYTE_ARRAY", "REQUIRED", "String"), ("size", "INT64", "OPTIONAL", None),
             ("last_modified", "INT64", "OPTIONAL", "Timestamp"), ("etag", "BYTE_ARRAY", "OPTIONAL", "String"),
-            ("storage_class", "BYTE_ARRAY", "OPTIONAL", "String"), ("version_id", "BYTE_ARRAY", "OPTIONAL", "String"),
-            ("is_latest", "BOOLEAN", "OPTIONAL", None), ("is_delete_marker", "BOOLEAN", "REQUIRED", None),
+            ("storage_class", "BYTE_ARRAY", "OPTIONAL", "String"),
             ("owner_id", "BYTE_ARRAY", "OPTIONAL", "String"), ("owner_display_name", "BYTE_ARRAY", "OPTIONAL", "String"),
             ("checksum_algorithm", "BYTE_ARRAY", "OPTIONAL", "String"), ("checksum_type", "BYTE_ARRAY", "OPTIONAL", "String"),
-            ("row_type", "BYTE_ARRAY", "REQUIRED", "String"),
         ]
         got = con.execute(f"SELECT name, type, repetition_type, logical_type FROM parquet_schema('{paths[0]}') WHERE name <> 'swath_listing'").fetchall()
-        print("\nColumn-by-column against contracts section 4:")
+        print("\nColumn-by-column against the current-object schema:")
         for i, want in enumerate(contract):
             g = got[i] if i < len(got) else (None, None, None, None)
             logical = None if g[3] is None else str(g[3])
@@ -76,10 +70,9 @@ def main(out):
                 ok = ok and "isAdjustedToUTC=1" in (logical or "") and "MICROS=MicroSeconds" in (logical or "")
             check(ok, f"  {want[0]}: {g[1]} {g[2]} {logical}")
         check(len(got) == len(contract), f"  {len(got)} columns, contract has {len(contract)}")
-        bad = con.execute(f"""SELECT count(*) FROM read_parquet('{glob}') WHERE row_type <> 'OBJECT' OR is_delete_marker
-                              OR version_id IS NOT NULL OR is_latest IS NOT NULL OR size IS NULL OR last_modified IS NULL
+        bad = con.execute(f"""SELECT count(*) FROM read_parquet('{glob}') WHERE size IS NULL OR last_modified IS NULL
                               OR etag LIKE '"%'""").fetchone()[0]
-        check(bad == 0, "every row is a current object: row_type OBJECT, not a delete marker, no version, size and mtime set, etag unquoted")
+        check(bad == 0, "every row is a current object: size and mtime set, etag unquoted")
 
     print("\nSchema as DuckDB sees it (DESCRIBE):")
     for name, typ, null, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}')").fetchall():
@@ -93,7 +86,7 @@ def main(out):
 
     print("\nPer part:")
     prev_max = None
-    for i, (f, p) in enumerate(zip(m["files"], paths)):
+    for i, (f, p) in enumerate(zip(m["parts"], paths)):
         # Strict ascending within the file, comparing raw key bytes (BLOB compare is unsigned bytewise).
         r = con.execute(f"""
             WITH t AS (SELECT key, encode(key)::BLOB AS b, file_row_number AS n
@@ -103,23 +96,22 @@ def main(out):
             FROM (SELECT key, b, n, lag(b) OVER (ORDER BY n) AS prev FROM t)
         """).fetchone()
         cnt, bmin, bmax, first, last, bad = r
-        print(f"  {f['key']}: rows={cnt} bytes={f['size']} min_key={first!r} max_key={last!r}")
-        check(cnt == f["rowCount"], f"  rowCount {f['rowCount']}")
+        print(f"  {f['path']}: rows={cnt} bytes={f['bytes']} min_key={first!r} max_key={last!r}")
+        check(cnt == f["rows"], f"  rows {f['rows']}")
         check(bad == 0, "  keys strictly ascending within part (file row order)")
-        check(first == f["minKey"] and last == f["maxKey"], "  first/last key == manifest minKey/maxKey")
+        check(first == f["min_key"] and last == f["max_key"], "  first/last key == manifest min_key/max_key")
         check(bytes(bmin) == first.encode() and bytes(bmax) == last.encode(), "  first/last are byte min/max")
         if prev_max is not None:
-            check(prev_max < first.encode(), "  previous part maxKey < this minKey (unsigned bytes)")
+            check(prev_max < first.encode(), "  previous part max_key < this min_key (unsigned bytes)")
         prev_max = last.encode()
         kv = dict(
             (k.decode() if isinstance(k, (bytes, bytearray)) else k, v.decode() if isinstance(v, (bytes, bytearray)) else v)
             for k, v in con.execute(f"SELECT key, value FROM parquet_kv_metadata('{p}')").fetchall()
         )
-        final = kv.get("swath.sort.file_final")
-        check(kv.get("swath.sort.file_index") == str(i + 1), f"  swath.sort.file_index == {i+1}")
-        check((final == "true") == (i == len(paths) - 1) and final in (None, "true"), "  file_final only on last part")
-        check(kv.get("swath.sort.order") == m["sortKey"] and kv.get("swath.sort.mode") == "objects"
-              and kv.get("swath.sort.format_version") == "1", "  sort order/mode/format stamps")
+        want = {"swath.profile": "swath-dataset", "swath.profile_version": "2", "swath.schema_id": m["schema_id"],
+                "swath.index_bound_bytes": "1024"}
+        check(all(kv.get(k) == v for k, v in want.items()), "  footer stamps: profile, version, schema id, index bound")
+        check(not [k for k in kv if k.startswith("swath.") and k not in want], "  no other swath.* stamps")
     print("\nRESULT:", "OK" if ok else "FAILED")
     return 0 if ok else 1
 

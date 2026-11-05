@@ -60,7 +60,7 @@ func writeFile(t *testing.T, path string, rows []schema.Row, columns int) datase
 			t.Fatal(err)
 		}
 	}
-	p, err := w.close(true)
+	p, err := w.close()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,12 +116,20 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 			if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
 				t.Fatalf("enc=%d part %d differs", enc, i)
 			}
+			// The footer carries the profile, the schema and the index
+			// bound; nothing about the part's place in the dataset.
 			kv := footer(t, parts[i].Path)
-			if kv[dataset.StampFileIndex] != strconv.Itoa(i+1) {
-				t.Errorf("part %d file_index %q", i, kv[dataset.StampFileIndex])
+			want := map[string]string{dataset.StampProfile: dataset.Format, dataset.StampProfileVersion: strconv.Itoa(dataset.FormatVersion),
+				dataset.StampSchema: schema.Local.ID, dataset.StampIndexBound: "1024"}
+			for k, v := range want {
+				if kv[k] != v {
+					t.Errorf("part %d: %s = %q, want %q", i, k, kv[k], v)
+				}
 			}
-			if _, final := kv[dataset.StampFileFinal]; final != (i == len(parts)-1) {
-				t.Errorf("part %d file_final=%v", i, final)
+			for k := range kv {
+				if _, ok := want[k]; !ok && strings.HasPrefix(k, "swath.") {
+					t.Errorf("part %d: unexpected stamp %s", i, k)
+				}
 			}
 		}
 		if got := readKeys(t, parts); !slices.Equal(got, keysOf(rows)) {

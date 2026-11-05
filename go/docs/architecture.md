@@ -64,7 +64,7 @@ filesystem fields inline, object-store fields behind one pointer (`Row.Object`, 
   disk, the journal) cancels the pipeline's context with that error as its cause, so listing stops at once
   and `Run` returns that error. The first error stops the walk (an atomic flag,
   checked without taking `ctx`'s mutex), wakes every waiter, closes the encoders, removes temporary parts and
-  is returned wrapped with its path or phase. `_SUCCESS` is written only after a complete publish.
+  is returned wrapped with its path or phase. `manifest.json`, the commit, is installed only after a complete publish.
 
 ## How a provider plugs in
 

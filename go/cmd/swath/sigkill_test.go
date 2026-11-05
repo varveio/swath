@@ -130,7 +130,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		t.Fatalf("reference: %v\n%s", err, out)
 	}
 	for _, point := range []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append", "journal-sync",
-		"recorded", "rename", "renamed-unsynced", "renamed", "manifest", "success"} {
+		"recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"} {
 		for _, nth := range []string{"1", "5"} {
 			out := filepath.Join(t.TempDir(), "ds")
 			cmd := exec.Command(bin, args(out)...)
@@ -146,7 +146,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 			if o, err := exec.Command(bin, args(out, "-resume")...).CombinedOutput(); err != nil {
 				// Killed after _SUCCESS: the dataset is complete, which is
 				// what -resume reports.
-				if point != "success" || !bytes.Contains(o, []byte("already complete")) {
+				if point != "manifest" || !bytes.Contains(o, []byte("already complete")) {
 					t.Fatalf("%s:%s resume: %v\n%s", point, nth, err, o)
 				}
 			}

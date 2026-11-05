@@ -209,15 +209,13 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		}
 	}
 	sum.ResumedParts, sum.ResumedRows = jr.resumedParts(), jr.resumedRows()
-	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceKind: loc.Kind,
-		SourceBucket: loc.Container, SourceRoot: loc.Root}
 	var p source.Provider[any] = src
 	if jr.complete() {
 		// The final part is durable: listing again could only add a
 		// second final part on a changed source. Publish what is recorded.
 		p = source.Empty{}
 	}
-	return pipeline(ctx, cfg, sum, src, p, s, meta, jr)
+	return pipeline(ctx, cfg, sum, src, p, s, jr)
 }
 
 // identity is the run's resume identity: what the pipeline freezes, and
@@ -235,10 +233,29 @@ func identity(src source.Source, s *schema.Schema, cfg Config) durable.Identity 
 	return id
 }
 
+// manifestMeta is the manifest's account of the source, the scope and the
+// coverage, from the source's locator and report.
+func manifestMeta(s *schema.Schema, loc source.Locator, rep *source.Report, started, listed time.Time) dataset.Meta {
+	m := dataset.Meta{SchemaID: s.ID, Source: dataset.Source{Kind: loc.Kind, URI: loc.Root, Container: loc.Container},
+		Scope: dataset.Scope{Kind: "whole"}}
+	m.Coverage = dataset.Coverage{ListingStartedAt: started.UTC(), ListingFinishedAt: listed.UTC()}
+	if rep == nil {
+		m.Coverage.StopReason = "unreported" // a source without a report claims nothing
+		return m
+	}
+	c := rep.Coverage
+	if c.Prefix != "" {
+		m.Scope = dataset.Scope{Kind: "prefix", Prefix: c.Prefix}
+	}
+	m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.SkippedEntries = c.Complete, c.StopReason, c.Skipped
+	m.Coverage.Exclusions, m.Coverage.Filters = c.Exclusions, c.Filters
+	return m
+}
+
 // reports names the JSON run reports published beside the manifest: swath's
 // run summary for a source that states its coverage, else this summary.
 func reports(cfg Config, sum *Summary) []dataset.File {
-	if r := sum.report; r != nil && r.Coverage != nil {
+	if r := sum.report; r != nil && r.Activity != nil {
 		return []dataset.File{{Name: dataset.SwathSummaryName, Value: swathSummary(cfg, sum, r)}}
 	}
 	return []dataset.File{{Name: dataset.SummaryName, Value: sum}}
@@ -246,7 +263,7 @@ func reports(cfg Config, sum *Summary) []dataset.File {
 
 // pipeline runs provider → order → router → publish. p is src, or Empty
 // when a resume has nothing left to list.
-func pipeline(ctx context.Context, cfg Config, sum Summary, src source.Source, p source.Provider[any], s *schema.Schema, meta dataset.Meta,
+func pipeline(ctx context.Context, cfg Config, sum Summary, src source.Source, p source.Provider[any], s *schema.Schema,
 	jr *journal) (Summary, error) {
 	defer jr.close()
 	// One shared cause: the first asynchronous failure (an encoder, the
@@ -312,7 +329,8 @@ func pipeline(ctx context.Context, cfg Config, sum Summary, src source.Source, p
 		w := int64(router.EncoderWait())
 		sum.EncoderWaitNs = &w
 	}
-	sum.ListingSeconds = time.Since(sum.Started).Seconds()
+	listed := time.Now()
+	sum.ListingSeconds = listed.Sub(sum.Started).Seconds()
 	if r, ok := src.(source.Reporter); ok {
 		sum.setReport(r.Report())
 	}
@@ -336,7 +354,15 @@ func pipeline(ctx context.Context, cfg Config, sum Summary, src source.Source, p
 		sum.OutBytes += part.Bytes
 	}
 	finish(&sum)
-	if err := dataset.Publish(cfg.Out, meta, parts, reports(cfg, &sum)); err != nil {
+	err = dataset.Publish(cfg.Out, manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Started), listed), parts, reports(cfg, &sum))
+	var rerr *dataset.ReportError
+	if errors.As(err, &rerr) { // committed: the dataset stands
+		if cfg.Warn != nil {
+			cfg.Warn(rerr.Error())
+		}
+		err = nil
+	}
+	if err != nil {
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
 			dataset.Cleanup(cfg.Out)
 		}

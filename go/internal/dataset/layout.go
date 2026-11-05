@@ -1,9 +1,10 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package dataset owns the on-disk layout of a sorted listing dataset (the
-// layout of Swath's sorted managed Parquet output): output-directory safety,
-// the publication gate, the manifest and the commit order.
+// Package dataset owns the on-disk layout of a sorted listing dataset:
+// output-directory safety, the private workspace, the manifest and the
+// commit order. The manifest is the commit record: a dataset exists once
+// manifest.json is installed, and not before.
 package dataset
 
 import (
@@ -11,29 +12,42 @@ import (
 	"path/filepath"
 )
 
+// Format identifies the dataset format in the manifest and the footers.
+const (
+	Format        = "swath-dataset"
+	FormatVersion = 2
+)
+
 // File and directory names inside a dataset.
 const (
 	DataDir      = "data"
 	ManifestName = "manifest.json"
-	SuccessName  = "_SUCCESS"
-	SymlinkName  = "symlink.txt"
-	// SummaryName is the run report of filesystem datasets. It avoids Swath's reserved
-	// _swath_summary.json, whose schema readers such as Varve validate.
-	SummaryName = "_swath_local_summary.json"
-	// JournalDir holds an S3 run's durable journal (package durable).
-	JournalDir = ".swath"
+	// SummaryName is the run report of filesystem datasets; SwathSummaryName
+	// that of S3 datasets. Both are operational, written after the commit.
+	SummaryName      = "_swath_local_summary.json"
+	SwathSummaryName = "_swath_summary.json"
+	// Workspace is the run's private directory: the lock, the journal,
+	// unpublished parts and spill. Readers ignore it.
+	Workspace = ".swath"
+	// JournalDir is the workspace (the journal lives there).
+	JournalDir = Workspace
+	// LockName is the output lock, inside the workspace. Replacing a
+	// previous run never removes it (see Prepare).
+	LockName = "lock"
+	// PartsDir holds parts until they are published into data/.
+	PartsDir = "parts"
 )
 
-// Footer key/value stamps on every sorted part (Swath's SortedParquetWriter).
+// Footer key/value stamps on every part. Order within a part is the
+// standard sorting_columns; order across parts, bounds and completeness
+// are the manifest's.
 const (
-	StampOrder     = "swath.sort.order"
-	StampMode      = "swath.sort.mode"
-	StampFormat    = "swath.sort.format_version"
-	StampFileIndex = "swath.sort.file_index" // 1-based
-	StampFileFinal = "swath.sort.file_final" // "true", last part only
+	StampProfile        = "swath.profile"         // Format
+	StampProfileVersion = "swath.profile_version" // FormatVersion
+	StampSchema         = "swath.schema_id"
 	// StampIndexBound is the ColumnIndex min/max truncation in bytes: bounds
 	// of longer values are truncated, so readers treat them as conservative.
-	StampIndexBound = "swath.sort.index_bound_bytes"
+	StampIndexBound = "swath.index_bound_bytes"
 )
 
 // PartName is the published name of part ordinal i: dense, zero-based, %05d,
@@ -42,10 +56,18 @@ func PartName(i int) string { return fmt.Sprintf("part-%05d.parquet", i) }
 
 // TempPath is where part i is written before publication.
 func TempPath(out string, i int) string {
-	return filepath.Join(out, DataDir, PartName(i)+".tmp")
+	return filepath.Join(out, Workspace, PartsDir, PartName(i))
 }
 
 // ownEntries are the root entries a dataset owns; overwrite removes these and
-// their .tmp siblings, nothing else. .swath-state.json is Swath's resume
-// identity file, which this tool does not write but older outputs may hold.
-var ownEntries = []string{DataDir, ManifestName, SuccessName, SummaryName, SymlinkName, SwathSummaryName, ".swath-state.json", JournalDir}
+// their .tmp siblings, nothing else. The workspace is emptied except for the
+// lock. Earlier layouts' entries (_SUCCESS, symlink.txt, .swath.lock and
+// Swath's .swath-state.json) are removed too, so an old dataset can be
+// replaced.
+var ownEntries = []string{DataDir, ManifestName, SummaryName, SwathSummaryName, legacySuccess, legacySymlink, legacyLock, ".swath-state.json"}
+
+const (
+	legacySuccess = "_SUCCESS"
+	legacySymlink = "symlink.txt"
+	legacyLock    = ".swath.lock"
+)

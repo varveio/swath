@@ -109,7 +109,11 @@ func sameDataset(t *testing.T, name, ref, got string) {
 	strip := func(dir string) string {
 		var m map[string]any
 		readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
-		delete(m, "creationTimestamp")
+		delete(m, "published_at")
+		if c, ok := m["coverage"].(map[string]any); ok { // observation times differ between runs
+			delete(c, "listing_started_at")
+			delete(c, "listing_finished_at")
+		}
 		return fmt.Sprint(m)
 	}
 	if strip(ref) != strip(got) {

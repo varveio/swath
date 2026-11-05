@@ -61,7 +61,7 @@ type writer struct {
 	closed    bool
 }
 
-// create opens path for part ordinal (0-based); file_final is decided at close.
+// create opens path for part ordinal (0-based).
 func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func() int) (*writer, error) {
 	c, err := newCodec(max(1, maxColumns))
 	if err != nil {
@@ -87,10 +87,9 @@ func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func
 		pq.DefaultEncodingFor(pq.Int32, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Boolean, &pq.Plain),
 		pq.CreatedBy(createdBy, createdVersion, ""),
-		pq.KeyValueMetadata(dataset.StampOrder, s.SortOrder),
-		pq.KeyValueMetadata(dataset.StampMode, "objects"),
-		pq.KeyValueMetadata(dataset.StampFormat, "1"),
-		pq.KeyValueMetadata(dataset.StampFileIndex, strconv.Itoa(ordinal+1)),
+		pq.KeyValueMetadata(dataset.StampProfile, dataset.Format),
+		pq.KeyValueMetadata(dataset.StampProfileVersion, strconv.Itoa(dataset.FormatVersion)),
+		pq.KeyValueMetadata(dataset.StampSchema, s.ID),
 		pq.KeyValueMetadata(dataset.StampIndexBound, strconv.Itoa(indexBoundBytes)),
 		// Standard Parquet sorting_columns on every row group (metadata only:
 		// rows arrive sorted; GenericWriter does not reorder them).
@@ -211,9 +210,9 @@ func (w *writer) flushGroup() error {
 	return nil
 }
 
-// close flushes, stamps file_final when final, writes the footer, fsyncs and
-// closes the file. Metadata is returned only if all of that succeeded.
-func (w *writer) close(final bool) (dataset.Part, error) {
+// close flushes, writes the footer, fsyncs and closes the file. Metadata is
+// returned only if all of that succeeded.
+func (w *writer) close() (dataset.Part, error) {
 	if w.closed {
 		return dataset.Part{}, errors.New("writer already closed")
 	}
@@ -221,9 +220,6 @@ func (w *writer) close(final bool) (dataset.Part, error) {
 	err := w.flushPage()
 	if err == nil {
 		err = w.flushGroup()
-	}
-	if err == nil && final {
-		w.w.SetKeyValueMetadata(dataset.StampFileFinal, "true")
 	}
 	if err == nil {
 		err = w.w.Close()
