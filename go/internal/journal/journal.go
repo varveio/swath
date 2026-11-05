@@ -56,6 +56,8 @@ type Header struct {
 	Version  int       `json:"version"`
 	Identity Identity  `json:"identity"`
 	Created  time.Time `json:"created"`
+	// Argv is the command that started the run; swath resume replays it.
+	Argv []string `json:"argv,omitempty"`
 }
 
 // Record is one durable step: a part published.
@@ -94,7 +96,7 @@ type Journal struct {
 
 // Create starts a new journal at Path(out), replacing any old one, with
 // the header written and synced.
-func Create(out string, id Identity) (*Journal, error) {
+func Create(out string, id Identity, argv []string) (*Journal, error) {
 	if err := os.MkdirAll(filepath.Join(out, Dir), 0o755); err != nil {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
@@ -103,7 +105,7 @@ func Create(out string, id Identity) (*Journal, error) {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
 	j := start(f)
-	if err := j.append(Header{Type: "header", Version: Version, Identity: id, Created: time.Now().UTC()}); err != nil {
+	if err := j.append(Header{Type: "header", Version: Version, Identity: id, Created: time.Now().UTC(), Argv: argv}); err != nil {
 		j.Close()
 		return nil, err
 	}

@@ -15,12 +15,12 @@ a policy names it (`Feature`). `features` maps every such policy to whether this
 an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
 - absent, feature `false`: the policy was off for this run (for S3: `seed` without `-seed` or on resume,
-  `split` and `probe` with `-sequential`, `probe` without `-probe`, `resume` on a fresh run, `max_keys`
+  `split` and `probe` with `--sequential`, `probe` without `--probe` (both `swath diag list` flags), `resume` on a fresh run, `max_keys`
   without `-max-keys`);
 - present and zero: the policy was on and never fired.
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
-`-no-spill`, and `encoder_wait_ns` is absent without output.
+`swath diag list --no-spill`, and `encoder_wait_ns` is absent without output.
 
 Request accounting uses `attempts` (HTTP requests, retries included) as the denominator; `requests` counts
 logical calls.

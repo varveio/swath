@@ -381,7 +381,7 @@ func (p *Provider) commit(st *running, r Range, c, m string, extrapolated, ok bo
 	p.c.Max(cMaxQueued, int64(p.queued))
 	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower}
 	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper}
-	if os.Getenv("SWATH_LOCAL_SPLIT_TRACE") != "" {
+	if os.Getenv("SWATH_SPLIT_TRACE") != "" {
 		fmt.Fprintf(os.Stderr, "split id=%d lo=%q c=%q m=%q hi=%q open=%v keys=%d\n", r.id, r.lo, c, m, r.hi, r.open, st.keys)
 	}
 	return lower, upper

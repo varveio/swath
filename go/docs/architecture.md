@@ -58,7 +58,7 @@ router for `P` (Go has no generic methods, so the binding happens where `P` is k
 - **One drainer** (the goroutine that called `order.Run`) walks the node tree depth-first and calls the sink
   (the router) with contiguous ascending segments. It expands a queued range itself when it needs it and no
   worker has claimed it, so a full buffer cannot deadlock the walk.
-- **Publication**: with a journal (S3 with `-out`), each encoder goroutine publishes its part when it closes,
+- **Publication**: with a journal (S3 with an output directory), each encoder goroutine publishes its part when it closes,
   after the previous part's publication (a channel per part keeps ordinal order): journal record, then
   rename. That chain is the one ordered committer; the journal's append is a synchronous call. See [internals/durability.md](internals/durability.md).
 - **Encoders**: the router starts one goroutine per open part, at most `Encoders` at a time (a semaphore

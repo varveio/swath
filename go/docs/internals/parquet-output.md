@@ -27,7 +27,7 @@ dataset layout"); this page says how the Go writer meets it.
 
 ## Run reports
 
-Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 1); `-json` prints the
+Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 1); `--report-format json` prints the
 same type, also for a dry run or a failure. Sections: `build` (tool, module version, VCS revision),
 `invocation` (argv, source, output, schema, workers, encoders, memory and part size), `outcome` (`committed`,
 `listed` or `failed`, the error, completeness, stop reason, per-entry errors), `timings` (timestamps and
@@ -79,9 +79,9 @@ out/
 
 The manifest's fields and the reader's acceptance rule are in [../upgrade.md](../upgrade.md).
 
-`-out` safety: the source root is validated first; `-out` may not be the root or an ancestor of it (by path
-and by dev/inode); a non-empty `-out` is refused unless `-overwrite`, which replaces only a previous dataset of
-this tool, outside the root, removing only its own entries. An `-out` inside the root is skipped by the walk.
+Output safety: the source root is validated first; the output may not be the root or an ancestor of it (by path
+and by dev/inode); a non-empty output is refused unless `--overwrite`, which replaces only a previous dataset of
+this tool, outside the root, removing only its own entries. An output inside the root is skipped by the walk.
 
 ## What readers rely on
 
@@ -127,7 +127,7 @@ named `kind`. `size` and `last_modified` match the S3 schema; `key` is binary. I
 | `dev` | INT64 `INT(64,false)` | optional | `st_dev` (statx: `makedev(major, minor)`) |
 | `allocated_bytes` | INT64 `INT(64,true)` | optional | `st_blocks * 512` (sparse files show `allocated_bytes < size`) |
 | `metadata_changed_at`, `atime` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_ctime`, `st_atime` |
-| `birth_time` | INT64 TIMESTAMP(MICROS, UTC) | optional | statx `stx_btime` (only `--fields statx`, mask `all`, when the filesystem reports it); Windows `CreationTime` |
+| `birth_time` | INT64 TIMESTAMP(MICROS, UTC) | optional | statx `stx_btime` (only `--metadata statx`, mask `all`, when the filesystem reports it); Windows `CreationTime` |
 | `link_target` | BYTE_ARRAY (unannotated) | optional | `readlink` result, symlinks only (stat/statx tiers unless `--no-link-target`) |
 
 Directories produce `kind=DIR` rows keyed `a/b/` (`-no-dirs` omits them). In the S3 schema a key ending in

@@ -29,15 +29,15 @@ func (f *Fields) Set(s string) error {
 	return err
 }
 
-func flags(f *flag.FlagSet) any {
+func flags(f *flag.FlagSet, _ bool) any {
 	o := &Options{LinkTarget: true}
-	f.Var(&o.Fields, "fields", "metadata `tier` per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)")
-	f.BoolVar(&o.NoDirs, "no-dirs", false, "omit kind=DIR rows")
-	f.BoolFunc("no-link-target", "do not read symlink targets", func(string) error { o.LinkTarget = false; return nil })
+	f.Var(&o.Fields, "metadata", "local: metadata `tier` per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)")
+	f.BoolVar(&o.NoDirs, "no-dirs", false, "local: omit kind=DIR rows")
+	f.BoolFunc("no-link-target", "local: do not read symlink targets", func(string) error { o.LinkTarget = false; return nil })
 	return o
 }
 
-// open validates the root. SWATH_LOCAL_ENGINE=portable selects the
+// open validates the root. SWATH_LOCALFS_ENGINE=portable selects the
 // portable engine (comparisons).
 func open(_ context.Context, req registry.Request) (registry.Source, error) {
 	o, ok := req.Options.(*Options)
@@ -45,7 +45,7 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 		return nil, fmt.Errorf("localfs: options are %T, not *localfs.Options", req.Options)
 	}
 	opt := *o
-	if os.Getenv("SWATH_LOCAL_ENGINE") == "portable" {
+	if os.Getenv("SWATH_LOCALFS_ENGINE") == "portable" {
 		opt.Portable = true
 	}
 	root, err := filepath.Abs(req.Root)

@@ -20,24 +20,24 @@ func TestRun(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "ds")
 	var buf bytes.Buffer
 	// root after flags and before them both work
-	if err := run(context.Background(), []string{"-out", out, src, "-part-size", "4MiB"}, &buf); err != nil {
+	if err := run(context.Background(), []string{"-o", out, src, "--part-size", "4MiB"}, &buf, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "rows=1 parts=1") {
 		t.Fatalf("summary: %s", buf.String())
 	}
-	err := run(context.Background(), []string{src, "-out", out}, &buf)
-	if err == nil || !strings.Contains(err.Error(), "-overwrite") {
+	err := run(context.Background(), []string{src, "--output", out}, &buf, false)
+	if err == nil || !strings.Contains(err.Error(), "--overwrite") {
 		t.Fatalf("non-empty output: %v", err)
 	}
-	if err := run(context.Background(), []string{src, "-out", out, "-overwrite"}, &buf); err != nil {
+	if err := run(context.Background(), []string{src, "--output", out, "--overwrite"}, &buf, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(context.Background(), []string{src, "-out", src, "-overwrite"}, &buf); err == nil || !strings.HasPrefix(err.Error(), "-out:") {
+	if err := run(context.Background(), []string{src, "--output", src, "--overwrite"}, &buf, false); err == nil || !strings.HasPrefix(err.Error(), "--output:") {
 		t.Fatalf("out == root: %v", err)
 	}
-	if err := run(context.Background(), []string{src, "-count-only", "-fields", "bogus"}, &buf); err == nil {
-		t.Fatal("bad -fields accepted")
+	if err := run(context.Background(), []string{src, "--count-only", "--metadata", "bogus"}, &buf, false); err == nil {
+		t.Fatal("bad --metadata accepted")
 	}
 }
 
@@ -58,7 +58,9 @@ func TestSize(t *testing.T) {
 // run with UPDATE=1 to rewrite it.
 func TestCLIDocFlags(t *testing.T) {
 	var b bytes.Buffer
-	usage(&b, newFlags(&options{}))
+	usage(&b, newFlags(&options{}, false), false)
+	b.WriteString("\n")
+	usage(&b, newFlags(&options{}, true), true)
 	const begin, end = "<!-- flags:begin -->\n", "<!-- flags:end -->"
 	readme, err := os.ReadFile("../../docs/cli.md")
 	if err != nil {

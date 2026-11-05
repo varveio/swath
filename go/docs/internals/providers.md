@@ -31,9 +31,9 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
-  `SWATH_LOCAL_ENGINE=portable`): `os.File.ReadDir` + `Lstat`, re-checking that an opened child directory is
+  `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir` + `Lstat`, re-checking that an opened child directory is
   the one that was listed.
-- **Tiers** (`-fields`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
+- **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks, the portable engine checks every 1,024 entries, and stat checks as before.
@@ -149,7 +149,7 @@ bounded and frontier, rejected per guard clause, skipped for no demand, outranke
 `child_empty.{lower,upper}`; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
 sink-wait time.
 
-**Sequential oracle.** `-sequential` lists the scope as one continuation-token chain; its dataset is
+**Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
@@ -182,7 +182,7 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 | `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `listing` |
 
 A source that is not resumable (or declines `Resume`) runs without the output lock or journal, as the local
-listing always has; `-resume` on it is an error.
+listing always has; `swath resume` on it is an error.
 
 ## The contract for the next providers (planned with GCS)
 

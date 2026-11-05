@@ -21,7 +21,7 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 | order and memory bound | `order` `TestOrderedOutput`, `TestSinkFailureStopsPromptly`, `TestCancellation` |
 | deterministic output | `parquetout` `TestRouterIsDeterministicAcrossEncoders`, `TestColumnParallelEncodingIsByteIdentical` |
 | publication order and gate | `dataset` `TestCheck`, `TestPublishFailureLeavesNoSuccess`; `listing` cancellation and encoder-failure tests |
-| crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`: an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, every part published, manifest installed), at its 1st, 4th and 12th occurrence, then `-resume`: the dataset is byte-identical to an uninterrupted run. `cmd/swath` `TestSIGKILLAtEveryPoint` (the real process SIGKILLs itself at 13 points, including between a rename and its directory sync, before the manifest and after it), `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed. `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run |
+| crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`: an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, every part published, manifest installed), at its 1st, 4th and 12th occurrence, then resume: the dataset is byte-identical to an uninterrupted run. `cmd/swath` `TestSIGKILLAtEveryPoint` (the real process SIGKILLs itself at 13 points, including between a rename and its directory sync, before the manifest and after it), `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed with `swath resume` (a frozen flag on resume is a usage error, exit 2). `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run |
 | resume after K (I4) | `source/s3` `TestResumeAfterKey`: random keyspaces, split coins and K; the resume lists exactly the keys after K and its ranges tile (K, ⊤] |
 | spill (step 3) | `order` `TestSpillKeepsWorkersBusy` (slow dense frontier, 56 fast siblings, 220-byte keys, 8 workers, 500-row budget: identical output, wall near the frontier's own time, buffered rows within budget + one batch per worker + the frontier path, no files left; plain and zstd), `TestSpillCleanedOnFailure`; `TestSpillDiskBudget` (a cap at a quarter of the uncapped peak holds with identical output; a reserve larger than the disk spills nothing); frontier and budget waits are nonzero without spill |
 | summary semantics | `listing` `TestSummaryDistinguishesOffFromZero`: a disabled policy's counters are absent and its feature reads false; an enabled one reports zeros |
@@ -79,7 +79,7 @@ until curl -sf http://127.0.0.1:19192/healthz >/dev/null; do sleep 1; done
 
 # 5. List it with the Go tool and compare.
 cd go && go build -o /tmp/swath ./cmd/swath
-/tmp/swath list s3://noaa-normals-pds -endpoint http://127.0.0.1:19090 -path-style -anonymous -out /tmp/go-ds
+/tmp/swath list s3://noaa-normals-pds -endpoint http://127.0.0.1:19090 -path-style -anonymous -o /tmp/go-ds
 python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical: true
 ```
 
@@ -113,7 +113,7 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
 
 ```bash
 go run ./bench/s3fake -keys keys.tsv -bucket bench -addr 127.0.0.1:9000 &   # TSV: key, mtime (µs)
-./swath list s3://bench -endpoint http://127.0.0.1:9000 -path-style -out /tmp/ds
+./swath list s3://bench -endpoint http://127.0.0.1:9000 -path-style -o /tmp/ds
 ```
 
 `bench/s3_parallel.sh` runs the sequential and parallel wall table on it. Fake-bucket numbers are synthetic:

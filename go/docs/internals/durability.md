@@ -1,6 +1,6 @@
 # Durability and resume
 
-An S3 run with `-out` keeps a journal so that `-resume` continues an interrupted run. A resume never
+An S3 run with an output directory keeps a journal so that `swath resume DIR` continues an interrupted run. A resume never
 re-lists a published key and never skips one, and the final dataset is byte-identical to an uninterrupted
 run's. Package `internal/journal` holds the journal; `internal/listing/journal.go` connects it to the router
 and the provider. Filesystem runs opt out: they are fast enough to restart.
@@ -32,7 +32,7 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | rename done, directory sync absent (`renamed-unsynced`) | the same check: the part is either at its final name or still in `.swath/parts/` |
 | several parts closed out of order | only the contiguous ordinal prefix was published; later parts are reproduced |
 | every part published, no manifest (`published`) | the final part is durable: the resume does not list, and installs the manifest |
-| manifest installed (`manifest`) | committed; `-resume` reports `ErrComplete`. The run reports are written after the commit and cannot revoke it |
+| manifest installed (`manifest`) | committed; `swath resume` reports `ErrComplete`. The run reports are written after the commit and cannot revoke it |
 
 Every boundary in the left column is a named crash point (`internal/faults`). `TestCrashMatrix` stops the run
 there without cleanup, and `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself there. Both then
@@ -66,9 +66,9 @@ that is the commit. The run reports follow it.
 
 ## Resume
 
-`swath list s3://… -out DIR -resume`:
+`swath resume DIR` (it replays the command recorded in the journal header; only the runtime flags `--workers`, `--encoders`, `--memory`, `--spill-*` and `--report-format` may change):
 
-1. Takes the output lock (`-out/.swath/lock`, `flock`) before reading, recovering, removing or writing
+1. Takes the output lock (`DIR/.swath/lock`, `flock`) before reading, recovering, removing or writing
    anything. It is held through the run's cleanup and publication. Fresh runs and overwrites take it too.
    Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
@@ -98,8 +98,8 @@ resume ramps up from one range, as a fresh run does from the root (splits engage
 each range). The ramp-up cost has not been measured; hints come back only if a measurement shows it.
 
 A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
-may already be recorded (its rename failed), and only `-resume`'s reconciliation decides which are.
-`-resume` on a complete dataset returns `ErrComplete`; on a directory without a journal,
+may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.
+`swath resume` on a complete dataset returns `ErrComplete`; on a directory without a journal,
 `ErrNothingToResume`. A new run over an interrupted one needs `-overwrite`.
 
 ## Why splits need no transaction
@@ -124,7 +124,7 @@ proves a record was lost (a damaged length, or bit rot in the last frame). The r
 (`ErrCorrupt`) before deleting anything. It was never acknowledged, so
 nothing depends on it, and a reopen truncates it. A bad checksum with data after it is interior corruption
 (`ErrCorrupt`), and the resume refuses. So does an unknown header version. A journal whose header never
-became durable means nothing was durable, and the run starts over. `swath inspect DIR` prints the header, every record and any torn
+became durable means nothing was durable, and the run starts over. `swath show --journal DIR` prints the header, every record and any torn
 tail as JSON lines.
 
 **The contract, precisely.**

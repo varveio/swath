@@ -45,7 +45,7 @@ type runJournal struct {
 func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJournal, error) {
 	if cfg.Out == "" {
 		if cfg.Resume {
-			return nil, errors.New("-resume needs -out")
+			return nil, errors.New("resume needs an output directory")
 		}
 		return nil, nil
 	}
@@ -55,7 +55,7 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 	}
 	if !resumable {
 		if cfg.Resume {
-			return nil, fmt.Errorf("-resume: a %s source cannot resume", src.Locator().Kind)
+			return nil, fmt.Errorf("resume: a %s source cannot resume", src.Locator().Kind)
 		}
 		if err := dataset.Prepare(cfg.Out, src.Locator().Path, id.SchemaID, cfg.Replace); err != nil {
 			return nil, fmt.Errorf("prepare output: %w", err)
@@ -85,14 +85,14 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 	if !cfg.Resume {
 		if err := dataset.Prepare(cfg.Out, path, id.SchemaID, cfg.Replace); err != nil {
 			if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(cfg.Out) {
-				err = fmt.Errorf("%w (it holds an interrupted run: pass -resume to continue it)", err)
+				err = fmt.Errorf("%w (it holds an interrupted run: swath resume continues it)", err)
 			}
 			return nil, fmt.Errorf("prepare output: %w", err)
 		}
 		if cfg.NoJournal {
 			return &runJournal{out: cfg.Out, lock: lock}, nil
 		}
-		j, err := journal.Create(cfg.Out, id)
+		j, err := journal.Create(cfg.Out, id, cfg.Argv)
 		if err != nil {
 			return nil, err
 		}

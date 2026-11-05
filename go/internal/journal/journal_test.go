@@ -59,7 +59,7 @@ func TestCheck(t *testing.T) {
 func TestJournalRoundTripAndTornTail(t *testing.T) {
 	out := t.TempDir()
 	id := Identity{Tool: "swath-go", Format: 1, Provider: "s3", Source: []Field{{Name: "source", Value: "s3://b/"}}}
-	j, err := Create(out, id)
+	j, err := Create(out, id, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 // cannot take the lock.
 func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	out := t.TempDir()
-	j, err := Create(out, Identity{Tool: "swath-go"})
+	j, err := Create(out, Identity{Tool: "swath-go"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	if _, err := Read(out); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("interior corruption: %v", err)
 	}
-	j, _ = Create(out, Identity{})
+	j, _ = Create(out, Identity{}, nil)
 	j.Close()
 	b, _ = os.ReadFile(Path(out))
 	b2 := []byte(strings.Replace(string(b[8:]), fmt.Sprintf(`"version":%d`, Version), `"version":9`, 1))

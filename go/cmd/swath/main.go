@@ -24,7 +24,6 @@ import (
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/registry"
 
@@ -40,18 +39,7 @@ const shutdownGrace = 15 * time.Second
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if len(os.Args) == 3 && os.Args[1] == "inspect" {
-		if err := journal.Dump(os.Stdout, os.Args[2]); err != nil {
-			fmt.Fprintln(os.Stderr, "swath:", err)
-			os.Exit(1)
-		}
-		return
-	}
 	killAt(os.Getenv("SWATH_TEST_KILL_AT"))
-	if len(os.Args) < 2 || os.Args[1] != "list" {
-		usage(os.Stderr, newFlags(&options{}))
-		os.Exit(2)
-	}
 	finished := make(chan struct{})
 	defer close(finished)
 	go func() { // bounded shutdown: an interrupted run gets 15 s to clean up
@@ -63,16 +51,62 @@ func main() {
 		select {
 		case <-finished:
 		case <-time.After(shutdownGrace):
-			fmt.Fprintf(os.Stderr, "swath: still stopping after %s; exiting (an interrupted S3 run can be resumed)\n", shutdownGrace)
+			fmt.Fprintf(os.Stderr, "swath: still stopping after %s; exiting (an interrupted journaled run can be resumed)\n", shutdownGrace)
 			os.Exit(130)
 		}
 	}()
-	if err := run(ctx, os.Args[2:], os.Stdout); err != nil {
-		if !errors.Is(err, flag.ErrHelp) {
+	if err := dispatch(ctx, os.Args[1:], os.Stdout); err != nil {
+		var u usageError
+		switch {
+		case errors.Is(err, flag.ErrHelp):
+			os.Exit(0)
+		case errors.As(err, &u):
 			fmt.Fprintln(os.Stderr, "swath:", err)
+			os.Exit(2)
 		}
+		fmt.Fprintln(os.Stderr, "swath:", err)
 		os.Exit(1)
 	}
+}
+
+// usageError is a malformed command line.
+type usageError struct{ error }
+
+// dispatch runs one command: list, resume, show or diag list.
+func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		commands(os.Stderr)
+		return usageError{errors.New("no command")}
+	}
+	switch args[0] {
+	case "list":
+		return run(ctx, args[1:], stdout, false)
+	case "diag":
+		if len(args) < 2 || args[1] != "list" {
+			return usageError{errors.New("usage: swath diag list SOURCE [flags]")}
+		}
+		return run(ctx, args[2:], stdout, true)
+	case "resume":
+		return resume(ctx, args[1:], stdout)
+	case "show":
+		return show(args[1:], stdout)
+	case "help", "-h", "-help", "--help":
+		commands(stdout)
+		return nil
+	}
+	commands(os.Stderr)
+	return usageError{fmt.Errorf("unknown command %q", args[0])}
+}
+
+// commands prints the command summary.
+func commands(w io.Writer) {
+	fmt.Fprint(w, `usage:
+  swath list SOURCE --output DIR [flags]   list SOURCE into a sorted dataset in DIR
+  swath resume DIR [runtime flags]         continue the interrupted run in DIR
+  swath show [--journal] DIR               show a dataset or an interrupted run
+  swath diag list SOURCE [flags]           list with diagnostic flags (comparisons, policy toggles)
+SOURCE is a local directory or s3://bucket[/prefix]. swath list -h lists the flags.
+`)
 }
 
 // killAt is a test hook: "point:n" makes the process SIGKILL itself the
@@ -98,7 +132,8 @@ func killAt(spec string) {
 type options struct {
 	out                    string
 	overwrite              bool
-	countOnly, json        bool
+	countOnly              bool
+	reportFormat           string
 	workers, encoders      int
 	partSize, memory       size
 	spillMax, spillReserve zsize
@@ -107,10 +142,14 @@ type options struct {
 	sources                map[string]any // each provider's options value, by scheme
 }
 
-func newFlags(o *options) *flag.FlagSet {
+// runtimeFlags may change on swath resume: they do not change the output.
+var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "report-format"}
+
+func newFlags(o *options, diag bool) *flag.FlagSet {
 	f := flag.NewFlagSet("list", flag.ContinueOnError)
-	f.StringVar(&o.out, "out", "", "output dataset `directory` (required unless -count-only)")
-	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous swath-local dataset in -out")
+	f.StringVar(&o.out, "output", "", "output dataset `directory` (required unless --count-only)")
+	f.StringVar(&o.out, "o", "", "short for --output")
+	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in --output")
 	o.partSize = listing.DefaultPartSize
 	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB)")
 	o.memory = listing.DefaultMemory
@@ -118,59 +157,82 @@ func newFlags(o *options) *flag.FlagSet {
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))")
 	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS)")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
-	f.BoolVar(&o.noSpill, "no-spill", false, "wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
 	f.BoolVar(&o.spillCompress, "spill-compress", false, "compress spill files (zstd level 1)")
 	f.Var(&o.spillMax, "spill-max", "cap on spill `bytes` on disk (0: no cap); past it, listing waits instead of spilling")
 	o.spillReserve = 1 << 30
 	f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem, for the parts still to be written")
-	f.BoolVar(&o.resume, "resume", false, "S3: continue the interrupted run in -out (same source and output settings)")
-	f.BoolVar(&o.noJournal, "no-journal", false, "S3: publish parts only at the end, without the journal that -resume needs")
-	f.BoolVar(&o.json, "json", false, "print the run report (the content of run.json) as JSON")
+	f.StringVar(&o.reportFormat, "report-format", "text", "`text` (one line) or json (the run report, as in run.json)")
+	if diag {
+		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
+		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
+	}
 	// Each provider owns its flag group.
 	o.sources = map[string]any{}
 	for _, p := range registry.Factories() {
-		o.sources[p.Scheme] = p.Flags(f)
+		o.sources[p.Scheme] = p.Flags(f, diag)
 	}
 	f.SetOutput(io.Discard)
 	return f
 }
 
 // usage prints the flags generated from the flag set itself.
-func usage(w io.Writer, f *flag.FlagSet) {
-	fmt.Fprintln(w, "usage: swath list <root> [flags]")
-	fmt.Fprintln(w, "  <root> is a local directory or s3://bucket[/prefix]")
+func usage(w io.Writer, f *flag.FlagSet, diag bool) {
+	if diag {
+		fmt.Fprintln(w, "usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)")
+	} else {
+		fmt.Fprintln(w, "usage: swath list SOURCE --output DIR [flags]")
+	}
+	fmt.Fprintln(w, "  SOURCE is a local directory or s3://bucket[/prefix]")
 	fmt.Fprintln(w)
 	f.SetOutput(w)
 	f.PrintDefaults()
 	f.SetOutput(io.Discard)
-	fmt.Fprintln(w, "\nswath inspect <out> prints an S3 run's journal (.swath/journal) as JSON lines.")
-	fmt.Fprintln(w, "\nProfiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.")
+	fmt.Fprintln(w, "\nswath resume DIR [--workers N ...] continues an interrupted run with its recorded command;")
+	fmt.Fprintln(w, "only "+strings.Join(runtimeFlags, ", ")+" may change.")
+	fmt.Fprintln(w, "swath show [--journal] DIR shows a dataset or an interrupted run.")
+	fmt.Fprintln(w, "\nProfiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.")
 }
 
-func run(ctx context.Context, args []string, stdout io.Writer) error {
+func run(ctx context.Context, args []string, stdout io.Writer, diag bool) error {
+	return runWith(ctx, args, stdout, diag, nil, false)
+}
+
+// runWith lists; argv0 is the recorded command, resumed tells a resume.
+func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, recorded []string, resumed bool) error {
 	var o options
-	f := newFlags(&o)
+	f := newFlags(&o, diag)
 	var root string
 	for rest := args; ; {
 		if err := f.Parse(rest); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
-				usage(stdout, f)
+				usage(stdout, f, diag)
+				return err
 			}
-			return err
+			return usageError{err}
 		}
 		if f.NArg() == 0 {
 			break
 		}
 		if root != "" {
-			return fmt.Errorf("unexpected argument %q", f.Arg(0))
+			return usageError{fmt.Errorf("unexpected argument %q", f.Arg(0))}
 		}
 		root, rest = f.Arg(0), f.Args()[1:]
 	}
 	if root == "" {
-		return errors.New("missing <root>")
+		return usageError{errors.New("missing SOURCE")}
 	}
 	if !o.countOnly && o.out == "" {
-		return errors.New("-out is required unless -count-only")
+		return usageError{errors.New("--output is required unless --count-only")}
+	}
+	if o.reportFormat != "text" && o.reportFormat != "json" {
+		return usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
+	}
+	argv := recorded
+	if argv == nil {
+		argv = append([]string{"list"}, args...)
+		if diag {
+			argv = append([]string{"diag", "list"}, args...)
+		}
 	}
 	pf, err := registry.Lookup(root)
 	if err != nil {
@@ -179,7 +241,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	cfg := listing.Config{
 		Root: root, Replace: o.overwrite, Source: o.sources[pf.Scheme],
 		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
-		Argv: append([]string{"list"}, args...), Resume: o.resume, NoJournal: o.noJournal,
+		Argv: argv, Resume: resumed, NoJournal: o.noJournal,
 		NoSpill: o.noSpill, SpillCompress: o.spillCompress, SpillMax: int64(o.spillMax), SpillReserve: int64(o.spillReserve),
 		Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) },
 	}
@@ -195,7 +257,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return explain(err)
 	}
-	if o.json {
+	if o.reportFormat == "json" {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(sum)
@@ -213,9 +275,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 func explain(err error) error {
 	switch {
 	case errors.Is(err, dataset.ErrNotEmpty):
-		return fmt.Errorf("%w (use -overwrite to replace a previous swath-local dataset)", err)
+		return fmt.Errorf("%w (use --overwrite to replace a previous dataset, or swath resume to continue an interrupted run)", err)
 	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrInsideRoot), errors.Is(err, dataset.ErrNotDataset):
-		return fmt.Errorf("-out: %w", err)
+		return fmt.Errorf("--output: %w", err)
 	}
 	return err
 }
@@ -224,7 +286,7 @@ func explain(err error) error {
 // by the environment, for development.
 func profile() (stop func(), err error) {
 	stops := []func(){}
-	if path := os.Getenv("SWATH_LOCAL_CPUPROFILE"); path != "" {
+	if path := os.Getenv("SWATH_CPUPROFILE"); path != "" {
 		f, err := os.Create(path)
 		if err != nil {
 			return nil, err
@@ -234,7 +296,7 @@ func profile() (stop func(), err error) {
 		}
 		stops = append(stops, func() { pprof.StopCPUProfile(); f.Close() })
 	}
-	if path := os.Getenv("SWATH_LOCAL_MEMPROFILE"); path != "" {
+	if path := os.Getenv("SWATH_MEMPROFILE"); path != "" {
 		runtime.MemProfileRate = 64 << 10
 		stops = append(stops, func() {
 			if f, err := os.Create(path); err == nil {

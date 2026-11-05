@@ -10,9 +10,11 @@ the two are separate tools until the Java code is retired (see the port plan). D
 
 ```bash
 CGO_ENABLED=0 go build -ldflags='-s -w' -o swath ./cmd/swath
-./swath list /some/root -out /tmp/ds        # list, order, encode, publish
-./swath list /some/root -count-only         # list only
-./swath list s3://bucket -out /tmp/ds       # an S3 bucket or prefix
+./swath list /some/root -o /tmp/ds          # list, order, encode, publish
+./swath list /some/root --count-only        # list only
+./swath list s3://bucket -o /tmp/ds         # an S3 bucket or prefix
+./swath resume /tmp/ds                      # continue an interrupted S3 run
+./swath show /tmp/ds                        # what a dataset or an interrupted run holds
 python3 verify.py /tmp/ds                   # independent DuckDB check
 go vet ./... && go test -race ./...
 ```

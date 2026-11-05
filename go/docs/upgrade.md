@@ -26,7 +26,7 @@ A format-2 manifest never falls into a reader's thin-manifest (legacy) fallback.
 | `manifest.json` | `manifest.json`, new shape (below) |
 | `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 1); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
-| `.swath/journal`, `-out/.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
+| `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
 ## Manifest
 
@@ -152,6 +152,14 @@ parts are byte-identical within a build only.
 
 A policy that was off reads `false` under `features` and its counters are absent; a present zero means the
 policy was on and never fired ([internals/counters.md](internals/counters.md)).
+
+## Command line
+
+Launch scripts change as follows: `swath list SOURCE -out DIR` → `swath list SOURCE --output DIR` (`-o`);
+rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath show --journal DIR`; `-json` →
+`--report-format json`; `-fields` → `--metadata`; `-sequential`, `-probe`, `-max-keys`, `-no-journal`,
+`-no-spill` → `swath diag list …`; `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
+`SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`.
 
 ## Gates
 

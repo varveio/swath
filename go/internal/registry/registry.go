@@ -30,8 +30,10 @@ type Factory struct {
 	Scheme string
 	// Flags registers the provider's flags on fs and returns its options
 	// value, which the flags fill when fs is parsed. The value is opaque to
-	// everything but the provider: it travels in Request.Options.
-	Flags func(fs *flag.FlagSet) any
+	// everything but the provider: it travels in Request.Options. diag adds
+	// the provider's diagnostic flags (comparison modes and policy toggles,
+	// for swath diag list only).
+	Flags func(fs *flag.FlagSet, diag bool) any
 	// Defaults returns the options value used when none was given.
 	Defaults func() any
 	// Open validates the root and returns a source ready to list. It must

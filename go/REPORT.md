@@ -1526,6 +1526,15 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
     `runJournal`). `source`, `order`, `dataset`, `listing` keep their names. `schema` was made provider-neutral
     in item 7 (rows and bindings beside their producers); the library stays internal.
 
+14. **CLI by task.** `swath list SOURCE --output DIR`, `swath resume DIR` (replays the command the journal
+    header now records; only runtime flags may change, a frozen one is exit 2), `swath show [--journal] DIR`
+    (a dataset or an interrupted run; the coordinator's `show` in place of `inspect`), and `swath diag list`
+    for the diagnostic switches (`--sequential`, `--probe`, `--max-keys`, `--no-journal`, `--no-spill`).
+    `--report-format json` replaces `-json`, `--metadata` replaces `-fields`, `SWATH_*` replaces
+    `SWATH_LOCAL_*`. A malformed command line exits 2. A run killed before its journal header is durable
+    cannot be resumed (its command was never recorded; nothing was published): `swath resume` says so and
+    the SIGKILL test reruns it with `--overwrite`.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

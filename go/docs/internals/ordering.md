@@ -53,7 +53,7 @@ place, so the range keeps listing while a slow frontier holds the output back:
   markers are published, so the drainer never reads ahead of the writer.
 - **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
   range larger than the remaining budget therefore never blocks; this is what the slow-frontier shape needs.
-- **Files.** One file per range under `-out/.swath/spill/spill-*/` (or the temp directory without `-out`).
+- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (or the temp directory without an output).
   Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`-spill-compress`, level 1),
   or a trailer with the row count. A rows frame holds each row's key and the producer's payload encoded by
   its `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values, `s3.Object` its
@@ -69,12 +69,12 @@ place, so the range keeps listing while a slow frontier holds the output back:
   the budget is full, since their rows will spill, unless the disk budget has refused a frame.
 - **Disk budget.** A frame is written only if the live spill bytes stay within `-spill-max` (default: no cap)
   and the spill filesystem keeps `-spill-reserve` bytes free afterwards (default 1 GiB, room for the parts
-  still to be published; the spill directory is under `-out`, so they share the filesystem). A refused
-  frame is not an error: the emitter waits on the reorder budget, as with `-no-spill`, and retries after the
+  still to be published; the spill directory is under the output directory, so they share the filesystem). A refused
+  frame is not an error: the emitter waits on the reorder budget, as with `swath diag list --no-spill`, and retries after the
   drainer moves. An ENOSPC on a spill write is handled the same way after truncating the torn frame. A
   range's bytes return to the budget when its file is deleted after replay. Trailers (a few bytes) are
   always admitted, and concurrent emitters can each pass the free-space check before either writes, so the
   reserve can be undershot by at most one frame per worker. The summary reports `spill_peak_bytes` and
   `spill_refused` (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical
   output; a reserve larger than the disk spills nothing).
-- `-no-spill` restores waiting on the budget.
+- `swath diag list --no-spill` restores waiting on the budget.

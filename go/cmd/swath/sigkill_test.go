@@ -22,7 +22,7 @@ import (
 )
 
 // TestSIGKILLResume kills a real swath process with SIGKILL once parts are
-// published, resumes it with -resume, and requires the dataset to be
+// published, resumes it with swath resume, and requires the dataset to be
 // byte-identical to an uninterrupted run's.
 func TestSIGKILLResume(t *testing.T) {
 	if testing.Short() {
@@ -50,7 +50,7 @@ func TestSIGKILLResume(t *testing.T) {
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
 		return append([]string{"list", "s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous", "-workers", "8",
-			"-part-size", "4KiB", "-memory", "1MiB", "-out", out}, extra...)
+			"-part-size", "4KiB", "-memory", "1MiB", "-o", out}, extra...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
@@ -79,7 +79,13 @@ func TestSIGKILLResume(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "_SUCCESS")); err == nil {
 		t.Skip("the run finished before the kill")
 	}
-	if o, err := exec.Command(bin, args(out, "-resume")...).CombinedOutput(); err != nil {
+	// Only runtime flags may change on resume: a frozen one is a usage error.
+	if o, err := exec.Command(bin, "resume", out, "--part-size", "8KiB").CombinedOutput(); err == nil || !bytes.Contains(o, []byte("only workers")) {
+		t.Fatalf("resume with a frozen flag: %v\n%s", err, o)
+	} else if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 2 {
+		t.Fatalf("resume with a frozen flag: exit %v, want 2", err)
+	}
+	if o, err := exec.Command(bin, "resume", "--workers", "3", out).CombinedOutput(); err != nil {
 		t.Fatalf("resume: %v\n%s", err, o)
 	}
 	parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
@@ -94,9 +100,9 @@ func TestSIGKILLResume(t *testing.T) {
 			t.Fatalf("%s differs after resume (%v)", filepath.Base(p), err)
 		}
 	}
-	insp, err := exec.Command(bin, "inspect", out).Output()
+	insp, err := exec.Command(bin, "show", "--journal", out).Output()
 	if err != nil || !bytes.Contains(insp, []byte(`"type":"header"`)) {
-		t.Fatalf("inspect: %v %s", err, insp)
+		t.Fatalf("show --journal: %v %s", err, insp)
 	}
 }
 
@@ -123,7 +129,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
 		return append([]string{"list", "s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous", "-workers", "8",
-			"-part-size", "4KiB", "-memory", "1MiB", "-out", out}, extra...)
+			"-part-size", "4KiB", "-memory", "1MiB", "-o", out}, extra...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
@@ -143,10 +149,18 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 			if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
 				t.Fatalf("%s:%s: not killed: %v", point, nth, err)
 			}
-			if o, err := exec.Command(bin, args(out, "-resume")...).CombinedOutput(); err != nil {
-				// Killed after _SUCCESS: the dataset is complete, which is
-				// what -resume reports.
-				if point != "manifest" || !bytes.Contains(o, []byte("already complete")) {
+			if o, err := exec.Command(bin, "resume", out).CombinedOutput(); err != nil {
+				switch {
+				case point == "manifest" && bytes.Contains(o, []byte("already complete")):
+					// Killed after the commit: the dataset is complete,
+					// which is what swath resume reports.
+				case bytes.Contains(o, []byte("before recording its command")):
+					// Killed before the journal header was durable:
+					// nothing was published; the run starts over.
+					if o, err := exec.Command(bin, args(out, "--overwrite")...).CombinedOutput(); err != nil {
+						t.Fatalf("%s:%s rerun: %v\n%s", point, nth, err, o)
+					}
+				default:
 					t.Fatalf("%s:%s resume: %v\n%s", point, nth, err, o)
 				}
 			}
