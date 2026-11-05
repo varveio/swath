@@ -75,7 +75,7 @@ func TestTypedErrorsAreNotRetried(t *testing.T) {
 	if !errors.As(err, &se) || se.Code != "PermanentRedirect" || se.RequestID != "RID" || se.Region != "eu-west-2" || n.Load() != 1 {
 		t.Fatalf("%v (%d attempts)", err, n.Load())
 	}
-	if !strings.Contains(err.Error(), "-region eu-west-2") {
+	if !strings.Contains(err.Error(), "the bucket is in eu-west-2") || strings.Contains(err.Error(), "-region") {
 		t.Fatal(err)
 	}
 }
