@@ -16,8 +16,8 @@ streams the frontier: rows of the node it is draining are consumed as they arriv
 
 ## The budget
 
-`Options.Budget` is a byte budget: half of `-memory`, for rows in flight. A row counts its struct, its object
-metadata and its strings (`schema.RowBytes`). The strings are views of the page arena they came from, so
+`Options.Budget` is a byte budget: half of `-memory`, for rows in flight. A row counts its value (`schema.Row[P]`, the
+key and the payload), its key bytes and the payload's strings (`Schema.RowBytes`, with the producer's `Heap`). The strings are views of the page arena they came from, so
 counting them approximates the arena they keep alive. The encoders' queues add the bytes of every queued
 batch to the same budget (`order.Shared`, fed by the router's `Account` hook) and release them once
 written. A slow encoder therefore slows producers instead of growing a second, unaccounted buffer. The other
@@ -55,7 +55,9 @@ place, so the range keeps listing while a slow frontier holds the output back:
   range larger than the remaining budget therefore never blocks; this is what the slow-frontier shape needs.
 - **Files.** One file per range under `-out/.swath/spill/spill-*/` (or the temp directory without `-out`).
   Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`-spill-compress`, level 1),
-  or a trailer with the row count. The trailer is written when the range ends and checked after replay.
+  or a trailer with the row count. A rows frame holds each row's key and the producer's payload encoded by
+  its `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values, `s3.Object` its
+  size, time and six strings); the encoding is private to one run. The trailer is written when the range ends and checked after replay.
   Children have their own files, so a parent's trailer says nothing about them.
 - **Defensive reads.** A frame length is checked against a bound (256 MiB) before anything is allocated, and
   the reader is closed on every error path.

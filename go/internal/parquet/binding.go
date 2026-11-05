@@ -16,12 +16,15 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 )
 
-// nodeOf builds the Parquet schema for s. Column order is the declaration
-// order; the key column is delta-encoded with an ascending single-page index,
-// and integer columns carry the standard INT annotation (signed or not).
-func nodeOf(s *schema.Schema) *pq.Schema {
-	fields := make([]reflect.StructField, len(s.Columns))
-	for i, c := range s.Columns {
+// nodeOf builds the Parquet schema for s: the key column, then s.Columns in
+// declaration order. The key column is delta-encoded with an ascending
+// single-page index, and integer columns carry the standard INT annotation
+// (signed or not).
+func nodeOf[P any](s *schema.Schema[P]) *pq.Schema {
+	specs := s.Specs()
+	delta := make([]bool, len(specs))
+	fields := make([]reflect.StructField, len(specs))
+	for i, c := range specs {
 		var t reflect.Type
 		tag := c.Name
 		switch c.Type {
@@ -44,6 +47,8 @@ func nodeOf(s *schema.Schema) *pq.Schema {
 		}
 		if i == 0 {
 			tag += ",delta"
+		} else {
+			delta[i] = s.Columns[i-1].Delta
 		}
 		if !c.Required {
 			t = reflect.PointerTo(t)
@@ -52,7 +57,7 @@ func nodeOf(s *schema.Schema) *pq.Schema {
 		fields[i] = reflect.StructField{Name: fmt.Sprintf("C%d", i), Type: t, Tag: reflect.StructTag(fmt.Sprintf("parquet:%q", tag))}
 	}
 	node := pq.SchemaOf(reflect.New(reflect.StructOf(fields)).Interface())
-	return pq.NewSchema(s.Name, root{node, s})
+	return pq.NewSchema(s.Name, root{node, delta})
 }
 
 // insertOptional adds "optional" right after the column name in a tag.
@@ -67,7 +72,7 @@ func insertOptional(tag string) string {
 
 type root struct {
 	pq.Node
-	s *schema.Schema
+	delta []bool // per field: DELTA_BYTE_ARRAY (schema.Column.Delta)
 }
 
 func (r root) Fields() []pq.Field {
@@ -76,17 +81,12 @@ func (r root) Fields() []pq.Field {
 		if i == 0 {
 			fields[i] = ascendingKey{f}
 		}
-		if deltaBytes[r.s.Columns[i].Name] {
+		if r.delta[i] {
 			fields[i] = encoded{fields[i], &pq.DeltaByteArray}
 		}
 	}
 	return fields
 }
-
-// deltaBytes are byte-array columns written DELTA_BYTE_ARRAY instead of
-// dictionary-then-PLAIN: ETags are unique hex, so the dictionary never pays
-// and parquet-mr (Java swath) falls back to DELTA_BYTE_ARRAY for them.
-var deltaBytes = map[string]bool{"etag": true}
 
 // encoded overrides a field's encoding.
 type encoded struct {
@@ -118,9 +118,17 @@ func (ix ascendingIndexer) ColumnIndex() format.ColumnIndex {
 	return index
 }
 
-// fill writes column c of rows into dst as parquet values: the single
-// row-to-column mapping, driven by the schema's accessors.
-func fill(c *schema.Column, col int, dst []pq.Value, rows []schema.Row) {
+// fillKey writes the key column (column 0) of rows into dst.
+func fillKey[P any](dst []pq.Value, rows []schema.Row[P]) {
+	for i := range rows {
+		dst[i] = pq.ByteArrayValue(unsafeBytes(rows[i].Key)).Level(0, 0, 0)
+	}
+}
+
+// fill writes column c (c >= 1; schema column c-1) of rows into dst as
+// parquet values: the single row-to-column mapping, driven by the schema's
+// accessors.
+func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row[P]) {
 	def := 1
 	if c.Required {
 		def = 0
@@ -128,7 +136,7 @@ func fill(c *schema.Column, col int, dst []pq.Value, rows []schema.Row) {
 	switch {
 	case c.Str != nil:
 		for i := range rows {
-			if v, ok := c.Str(&rows[i]); ok {
+			if v, ok := c.Str(&rows[i].Data); ok {
 				dst[i] = pq.ByteArrayValue(unsafeBytes(v)).Level(0, def, col)
 			} else {
 				dst[i] = pq.NullValue().Level(0, 0, col)
@@ -136,7 +144,7 @@ func fill(c *schema.Column, col int, dst []pq.Value, rows []schema.Row) {
 		}
 	case c.Type == schema.Int32 || c.Type == schema.Uint32:
 		for i := range rows {
-			if v, ok := c.Int(&rows[i]); ok {
+			if v, ok := c.Int(&rows[i].Data); ok {
 				dst[i] = pq.Int32Value(int32(v)).Level(0, def, col)
 			} else {
 				dst[i] = pq.NullValue().Level(0, 0, col)
@@ -144,7 +152,7 @@ func fill(c *schema.Column, col int, dst []pq.Value, rows []schema.Row) {
 		}
 	case c.Bool != nil:
 		for i := range rows {
-			if v, ok := c.Bool(&rows[i]); ok {
+			if v, ok := c.Bool(&rows[i].Data); ok {
 				dst[i] = pq.BooleanValue(v).Level(0, def, col)
 			} else {
 				dst[i] = pq.NullValue().Level(0, 0, col)
@@ -152,7 +160,7 @@ func fill(c *schema.Column, col int, dst []pq.Value, rows []schema.Row) {
 		}
 	default:
 		for i := range rows {
-			if v, ok := c.Int(&rows[i]); ok {
+			if v, ok := c.Int(&rows[i].Data); ok {
 				dst[i] = pq.Int64Value(v).Level(0, def, col)
 			} else {
 				dst[i] = pq.NullValue().Level(0, 0, col)

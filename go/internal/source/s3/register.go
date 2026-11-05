@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 )
 
 func init() {
-	source.Register(source.Factory{Scheme: "s3", Flags: flags, Defaults: func() any { return &Options{} }, Open: open})
+	registry.Register(registry.Factory{Scheme: "s3", Flags: flags, Defaults: func() any { return &Options{} }, Open: open})
 }
 
 // flags registers the S3 flag group; the returned *Options is filled when
@@ -41,7 +41,7 @@ func flags(f *flag.FlagSet) any {
 	return o
 }
 
-func open(ctx context.Context, req source.Request) (source.Source, error) {
+func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	bucket, prefix, err := ParseURL(req.Root)
 	if err != nil {
 		return nil, err
@@ -56,17 +56,15 @@ func open(ctx context.Context, req source.Request) (source.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &opened{Provider: source.Erase[Range](p), p: p, root: req.Root}, nil
+	return &opened{Bound: registry.Bind[Range, Object](p, &Schema), p: p, root: req.Root}, nil
 }
 
 // opened is the S3 provider as the pipeline sees it.
 type opened struct {
-	source.Provider[any]
+	registry.Bound[Object]
 	p    *Provider
 	root string
 }
-
-func (o *opened) Schema() *schema.Schema { return &schema.S3 }
 
 func (o *opened) Locator() source.Locator {
 	return source.Locator{Kind: "s3", Root: o.root, Container: o.p.opt.Bucket}

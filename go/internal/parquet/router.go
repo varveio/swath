@@ -30,10 +30,9 @@ const partQueue = 16
 
 // Options configure a Router.
 type Options struct {
-	Out      string         // dataset directory; parts go to out/data/*.tmp
-	Schema   *schema.Schema //
-	PartSize int64          // target encoded bytes per part
-	Encoders int            // parts encoded concurrently (>= 1)
+	Out      string // dataset directory; parts go to .swath/parts/
+	PartSize int64  // target encoded bytes per part
+	Encoders int    // parts encoded concurrently (>= 1)
 
 	// Publish, if set, publishes each part as soon as it is closed, in
 	// ordinal order (part i only after part i-1): the journaled run makes
@@ -70,12 +69,13 @@ type Resume struct {
 // Encoders parts are in flight. When fewer parts than encoders are active, a
 // part encodes its page columns in parallel (byte-identical), so a single
 // part still uses every core.
-type Router struct {
+type Router[P any] struct {
+	schema  *schema.Schema[P]
 	opt     Options
 	slots   chan struct{}
 	active  atomic.Int32
-	cur     *part
-	parts   []*part
+	cur     *part[P]
+	parts   []*part[P]
 	limit   int64 // logical bytes per part; 0 until part 0 is measured
 	rows    int64
 	full    bool
@@ -87,10 +87,10 @@ type Router struct {
 	done    []dataset.Part // resumed parts, already published
 }
 
-type part struct {
+type part[P any] struct {
 	ordinal   int
-	prev      *part // the previous part of this run, nil for the first
-	segs      chan batch
+	prev      *part[P] // the previous part of this run, nil for the first
+	segs      chan batch[P]
 	done      chan struct{}
 	published chan struct{} // closed once published (or failed), with Publish set
 	logical   int64
@@ -102,14 +102,14 @@ type part struct {
 }
 
 // NewRouter returns a router writing into opt.Out.
-func NewRouter(opt Options) (*Router, error) {
-	if opt.PartSize <= 0 || opt.Encoders < 1 || opt.Schema == nil {
+func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
+	if opt.PartSize <= 0 || opt.Encoders < 1 || s == nil {
 		return nil, errors.New("parquet router: part size, encoders and schema are required")
 	}
 	if err := os.MkdirAll(filepath.Join(opt.Out, dataset.Workspace, dataset.PartsDir), 0o755); err != nil {
 		return nil, fmt.Errorf("parquet router: %w", err)
 	}
-	r := &Router{opt: opt, slots: make(chan struct{}, opt.Encoders)}
+	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.Encoders)}
 	if res := opt.Resume; res != nil {
 		r.done, r.limit, r.rows = res.Parts, res.Limit, res.Rows
 	}
@@ -118,16 +118,12 @@ func NewRouter(opt Options) (*Router, error) {
 
 // EncoderWait is the time Write waited for an encoder: a full part queue,
 // or every encoder busy when a part was opened.
-func (r *Router) EncoderWait() time.Duration { return time.Duration(r.waitNs.Load()) }
-
-// Account sets the byte accounting hook (see Options.Account); call before
-// the first Write.
-func (r *Router) Account(f func(int64)) { r.opt.Account = f }
+func (r *Router[P]) EncoderWait() time.Duration { return time.Duration(r.waitNs.Load()) }
 
 // Write routes ascending segments into parts. Each part receives the
 // segments of one Write call as a single batch.
-func (r *Router) Write(ctx context.Context, segs [][]schema.Row) error {
-	var batch [][]schema.Row
+func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	var batch [][]schema.Row[P]
 	for _, seg := range segs {
 		start := 0
 		for i := range seg {
@@ -149,7 +145,7 @@ func (r *Router) Write(ctx context.Context, segs [][]schema.Row) error {
 				}
 			}
 			r.rows++
-			r.cur.logical += logicalBytes(&seg[i])
+			r.cur.logical += r.schema.LogicalBytes(&seg[i])
 			target := r.limit
 			if target == 0 {
 				target = int64(float64(r.opt.PartSize) / initialRatio)
@@ -166,19 +162,19 @@ func (r *Router) Write(ctx context.Context, segs [][]schema.Row) error {
 }
 
 // batch is one order-stage batch queued to a part's encoder.
-type batch struct {
-	segs  [][]schema.Row
+type batch[P any] struct {
+	segs  [][]schema.Row[P]
 	bytes int64
 }
 
-func (r *Router) send(ctx context.Context, segs [][]schema.Row) error {
+func (r *Router[P]) send(ctx context.Context, segs [][]schema.Row[P]) error {
 	if len(segs) == 0 {
 		return nil
 	}
-	b := batch{segs: segs}
+	b := batch[P]{segs: segs}
 	if r.opt.Account != nil {
 		for _, s := range segs {
-			b.bytes += schema.RowsBytes(s)
+			b.bytes += r.schema.RowsBytes(s)
 		}
 		r.opt.Account(b.bytes)
 	}
@@ -202,14 +198,14 @@ func (r *Router) send(ctx context.Context, segs [][]schema.Row) error {
 }
 
 // done1 releases a batch's bytes once it is written or dropped.
-func (r *Router) done1(b batch) {
+func (r *Router[P]) done1(b batch[P]) {
 	if r.opt.Account != nil && b.bytes != 0 {
 		r.opt.Account(-b.bytes)
 	}
 }
 
 // open starts the next part's encoder, waiting for a free slot.
-func (r *Router) open(ctx context.Context) error {
+func (r *Router[P]) open(ctx context.Context) error {
 	if err := r.firstErr(); err != nil {
 		return err
 	}
@@ -224,7 +220,7 @@ func (r *Router) open(ctx context.Context) error {
 		}
 		r.waitNs.Add(int64(time.Since(t)))
 	}
-	p := &part{ordinal: len(r.done) + len(r.parts), segs: make(chan batch, partQueue), done: make(chan struct{}),
+	p := &part[P]{ordinal: len(r.done) + len(r.parts), segs: make(chan batch[P], partQueue), done: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}
 	if n := len(r.parts); n > 0 {
 		p.prev = r.parts[n-1]
@@ -236,7 +232,7 @@ func (r *Router) open(ctx context.Context) error {
 	return nil
 }
 
-func (r *Router) encode(p *part) {
+func (r *Router[P]) encode(p *part[P]) {
 	defer func() {
 		r.active.Add(-1)
 		<-r.slots
@@ -244,7 +240,7 @@ func (r *Router) encode(p *part) {
 	}()
 	defer close(p.published)
 	columns := func() int { return max(1, r.opt.Encoders/max(1, int(r.active.Load()))) }
-	w, err := create(dataset.TempPath(r.opt.Out, p.ordinal), r.opt.Schema, p.ordinal, r.opt.Encoders, columns)
+	w, err := create(dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.Encoders, columns)
 	if err != nil {
 		p.err = err
 		r.fail(p.err)
@@ -310,7 +306,7 @@ func (r *Router) encode(p *part) {
 }
 
 // cut closes the current part. Part 0 is waited for, to freeze the ratio.
-func (r *Router) cut(ctx context.Context, final bool) error {
+func (r *Router[P]) cut(ctx context.Context, final bool) error {
 	p := r.cur
 	p.final = final
 	close(p.segs)
@@ -329,7 +325,7 @@ func (r *Router) cut(ctx context.Context, final bool) error {
 	return nil
 }
 
-func (r *Router) fail(err error) {
+func (r *Router[P]) fail(err error) {
 	r.errMu.Lock()
 	first := r.err == nil
 	if first {
@@ -341,7 +337,7 @@ func (r *Router) fail(err error) {
 	}
 }
 
-func (r *Router) firstErr() error {
+func (r *Router[P]) firstErr() error {
 	r.errMu.Lock()
 	defer r.errMu.Unlock()
 	return r.err
@@ -349,7 +345,7 @@ func (r *Router) firstErr() error {
 
 // Close marks the last part final, waits for every encoder and returns the
 // parts in ordinal order after the publication gate.
-func (r *Router) Close() ([]dataset.Part, error) {
+func (r *Router[P]) Close() ([]dataset.Part, error) {
 	if r.closed {
 		return nil, errors.New("router already closed")
 	}
@@ -383,7 +379,7 @@ func (r *Router) Close() ([]dataset.Part, error) {
 
 // Abort stops every encoder; it is safe after Close. Unpublished files are
 // removed by dataset.Cleanup.
-func (r *Router) Abort() {
+func (r *Router[P]) Abort() {
 	if r.closed {
 		return
 	}
@@ -398,21 +394,10 @@ func (r *Router) Abort() {
 	}
 }
 
-// logicalBytes is the deterministic uncompressed size of a row.
-func logicalBytes(r *schema.Row) int64 {
-	n := int64(len(r.Key)+len(r.LinkTarget)+len(r.Kind.String())) + 1
-	for _, p := range [...]schema.Presence{schema.HasSize, schema.HasMtime, schema.HasInode, schema.HasDev, schema.HasBlocks, schema.HasCtime, schema.HasAtime, schema.HasBtime} {
-		if r.Has(p) {
-			n += 8
-		}
-	}
-	for _, p := range [...]schema.Presence{schema.HasMode, schema.HasUID, schema.HasGID, schema.HasNlink} {
-		if r.Has(p) {
-			n += 4
-		}
-	}
-	if o := r.Object; o != nil {
-		n += int64(len(o.ETag) + len(o.StorageClass) + len(o.OwnerID) + len(o.OwnerDisplayName) + len(o.ChecksumAlgorithm) + len(o.ChecksumType))
-	}
-	return n
+// Encoder is a router seen without its row type: what the pipeline does
+// with it after listing.
+type Encoder interface {
+	Close() ([]dataset.Part, error)
+	Abort()
+	EncoderWait() time.Duration
 }

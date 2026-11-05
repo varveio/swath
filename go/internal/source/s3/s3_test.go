@@ -19,7 +19,6 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
@@ -68,10 +67,10 @@ func testKeys() []string {
 
 type collect struct {
 	mu   sync.Mutex
-	rows []schema.Row
+	rows []Row
 }
 
-func (c *collect) Write(_ context.Context, segs [][]schema.Row) error {
+func (c *collect) Write(_ context.Context, segs [][]Row) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, s := range segs {
@@ -80,7 +79,7 @@ func (c *collect) Write(_ context.Context, segs [][]schema.Row) error {
 	return nil
 }
 
-func list(t *testing.T, opt Options, workers int) ([]schema.Row, Stats) {
+func list(t *testing.T, opt Options, workers int) ([]Row, Stats) {
 	t.Helper()
 	t.Setenv("AWS_PROFILE", "")
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
@@ -94,13 +93,13 @@ func list(t *testing.T, opt Options, workers int) ([]schema.Row, Stats) {
 		t.Fatal(err)
 	}
 	c := &collect{}
-	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: 100 * 256}); err != nil {
+	if _, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: 100 * 256}); err != nil {
 		t.Fatal(err)
 	}
 	return c.rows, p.Stats()
 }
 
-func keysOf(rows []schema.Row) []string {
+func keysOf(rows []Row) []string {
 	out := make([]string, len(rows))
 	for i := range rows {
 		out[i] = rows[i].Key
@@ -119,8 +118,8 @@ func TestListFakeBucket(t *testing.T) {
 		t.Fatalf("stats %+v", st)
 	}
 	r := rows[0]
-	if r.Size != int64(len(r.Key)) || r.Mtime == 0 || r.Object == nil || len(r.Object.ETag) != 32 || r.Object.ETag[0] == '"' {
-		t.Fatalf("row %+v %+v", r, r.Object)
+	if r.Data.Size != int64(len(r.Key)) || r.Data.Mtime == 0 || len(r.Data.ETag) != 32 || r.Data.ETag[0] == '"' {
+		t.Fatalf("row %+v", r)
 	}
 }
 
@@ -138,7 +137,7 @@ func TestPrefixAndLimit(t *testing.T) {
 				t.Fatalf("parallel w%d seed=%v: %d keys", w, seed, len(par))
 			}
 			for i := range par {
-				if par[i].Size != seq[i].Size || par[i].Mtime != seq[i].Mtime || *par[i].Object != *seq[i].Object {
+				if par[i] != seq[i] {
 					t.Fatalf("w%d seed=%v: row %d differs", w, seed, i)
 				}
 			}
@@ -194,15 +193,15 @@ func TestObjectFields(t *testing.T) {
 	for _, owner := range []bool{false, true} {
 		rows, _ := list(t, Options{Bucket: "x", Client: &stub{pages: []*client.Page{page}}, FetchOwner: owner, Sequential: true}, 1)
 		a, b := rows[0], rows[1]
-		want := schema.ObjectMeta{ETag: "0123456789abcdef0123456789abcdef-3", StorageClass: "GLACIER", ChecksumAlgorithm: "CRC32", ChecksumType: "FULL_OBJECT"}
+		want := Object{Size: 7, Mtime: when.UnixMicro(), ETag: "0123456789abcdef0123456789abcdef-3", StorageClass: "GLACIER", ChecksumAlgorithm: "CRC32", ChecksumType: "FULL_OBJECT"}
 		if owner {
 			want.OwnerID, want.OwnerDisplayName = "o1", "me"
 		}
-		if *a.Object != want || a.Size != 7 || a.Mtime != when.UnixMicro() {
-			t.Fatalf("owner=%v: %+v %+v", owner, a, a.Object)
+		if a.Data != want {
+			t.Fatalf("owner=%v: %+v", owner, a)
 		}
-		if b.Object.ETag != "unquoted" || b.Size != 0 || b.Mtime != 0 || !b.Has(schema.HasSize|schema.HasMtime) {
-			t.Fatalf("row b %+v %+v", b, b.Object)
+		if b.Data != (Object{ETag: "unquoted"}) {
+			t.Fatalf("row b %+v", b)
 		}
 	}
 }
@@ -213,7 +212,7 @@ func TestOutOfOrderListingFails(t *testing.T) {
 		{Contents: []client.Object{{Key: "a"}}},
 	}
 	p, _ := New(context.Background(), Options{Bucket: "x", Client: &stub{pages: pages}, Sequential: true})
-	if _, err := order.Run[Range](context.Background(), p, &collect{}, order.Options{Workers: 1, Budget: 10 * 256}); err == nil {
+	if _, err := order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 10 * 256}); err == nil {
 		t.Fatal("out-of-order pages accepted")
 	}
 }

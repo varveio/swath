@@ -85,15 +85,15 @@ func build() (app, version, rev string) {
 }
 
 // writer writes one sorted part in strictly ascending key order.
-type writer struct {
-	schema    *schema.Schema
+type writer[P any] struct {
+	schema    *schema.Schema[P]
 	columns   func() int // goroutines encoding one page's columns (>= 1), read per page
 	file      *os.File
 	out       *tracking
 	w         *pq.GenericWriter[any]
 	codec     *codec
 	values    [][]pq.Value
-	page      []schema.Row
+	page      []schema.Row[P]
 	rows      int64
 	groupRows int64
 	baseline  int64
@@ -103,7 +103,7 @@ type writer struct {
 }
 
 // create opens path for part ordinal (0-based).
-func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func() int) (*writer, error) {
+func create[P any](path string, s *schema.Schema[P], ordinal, maxColumns int, columns func() int) (*writer[P], error) {
 	c, err := newCodec(max(1, maxColumns))
 	if err != nil {
 		return nil, err
@@ -134,15 +134,15 @@ func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func
 		pq.KeyValueMetadata(dataset.StampIndexBound, strconv.Itoa(indexBoundBytes)),
 		// Standard Parquet sorting_columns on every row group (metadata only:
 		// rows arrive sorted; GenericWriter does not reorder them).
-		pq.SortingWriterConfig(pq.SortingColumns(pq.Ascending(s.Columns[0].Name))),
+		pq.SortingWriterConfig(pq.SortingColumns(pq.Ascending("key"))),
 	}
 	out := &tracking{w: f, digest: md5.New()}
-	w := &writer{
+	w := &writer[P]{
 		schema: s, columns: columns, file: f, out: out, codec: c,
 		w:    pq.NewGenericWriter[any](out, opts...),
-		page: make([]schema.Row, 0, pageRows),
+		page: make([]schema.Row[P], 0, pageRows),
 	}
-	w.values = make([][]pq.Value, len(s.Columns))
+	w.values = make([][]pq.Value, len(s.Columns)+1)
 	for i := range w.values {
 		w.values[i] = make([]pq.Value, pageRows)
 	}
@@ -151,7 +151,7 @@ func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func
 }
 
 // write appends one row; keys must be strictly ascending.
-func (w *writer) write(r *schema.Row) error {
+func (w *writer[P]) write(r *schema.Row[P]) error {
 	if n := w.schema.MaxKeyBytes; n > 0 && len(r.Key) > n {
 		return fmt.Errorf("%w: %d bytes (limit %d): %.64q…", schema.ErrKeyTooLong, len(r.Key), n, r.Key)
 	}
@@ -170,7 +170,7 @@ func (w *writer) write(r *schema.Row) error {
 	return nil
 }
 
-func (w *writer) flushPage() error {
+func (w *writer[P]) flushPage() error {
 	if len(w.page) == 0 {
 		return nil
 	}
@@ -189,14 +189,18 @@ func (w *writer) flushPage() error {
 // parquet-go column writers are independent (own buffers and page state;
 // the shared pools and the codec are concurrency-safe), so several
 // goroutines may take columns; the bytes equal the serial result.
-func (w *writer) encodePage() error {
+func (w *writer[P]) encodePage() error {
 	cols := w.w.ColumnWriters()
-	if len(cols) != len(w.schema.Columns) {
-		return fmt.Errorf("column count %d, schema has %d", len(cols), len(w.schema.Columns))
+	if len(cols) != len(w.schema.Columns)+1 {
+		return fmt.Errorf("column count %d, schema has %d", len(cols), len(w.schema.Columns)+1)
 	}
 	one := func(c int) error {
 		vals := w.values[c][:len(w.page)]
-		fill(&w.schema.Columns[c], c, vals, w.page)
+		if c == 0 {
+			fillKey(vals, w.page)
+		} else {
+			fill(&w.schema.Columns[c-1], c, vals, w.page)
+		}
 		return writeColumn(cols[c], vals)
 	}
 	g := min(w.columns(), len(cols))
@@ -239,7 +243,7 @@ func writeColumn(cw *pq.ColumnWriter, values []pq.Value) error {
 	return cw.Flush()
 }
 
-func (w *writer) flushGroup() error {
+func (w *writer[P]) flushGroup() error {
 	if w.groupRows == 0 {
 		return nil
 	}
@@ -253,7 +257,7 @@ func (w *writer) flushGroup() error {
 
 // close flushes, writes the footer, fsyncs and closes the file. Metadata is
 // returned only if all of that succeeded.
-func (w *writer) close() (dataset.Part, error) {
+func (w *writer[P]) close() (dataset.Part, error) {
 	if w.closed {
 		return dataset.Part{}, errors.New("writer already closed")
 	}
@@ -285,7 +289,7 @@ func (w *writer) close() (dataset.Part, error) {
 }
 
 // abort releases the writer without producing a part.
-func (w *writer) abort() {
+func (w *writer[P]) abort() {
 	if !w.closed {
 		w.closed = true
 		_ = w.codec.Close()

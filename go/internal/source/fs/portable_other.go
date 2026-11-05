@@ -18,7 +18,7 @@ const nativeEngine = false
 
 type chunk struct{}
 
-func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range], st *Stats) error {
+func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
 	return p.expandPortable(ctx, r, e, st)
 }
 

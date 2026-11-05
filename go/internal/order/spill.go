@@ -44,7 +44,8 @@ import (
 
 var spillCRC = crc32.MakeTable(crc32.Castagnoli)
 
-type spiller struct {
+type spiller[P any] struct {
+	codec    schema.Codec[P]
 	dir      string
 	compress bool
 	max      int64 // live spill bytes (0: no cap)
@@ -60,7 +61,7 @@ type spiller struct {
 	rows, frames, bytes, files atomic.Int64
 }
 
-func newSpiller(parent string, compress bool, max, reserve int64) (*spiller, error) {
+func newSpiller[P any](codec schema.Codec[P], parent string, compress bool, max, reserve int64) (*spiller[P], error) {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return nil, fmt.Errorf("spill: %w", err)
 	}
@@ -68,7 +69,7 @@ func newSpiller(parent string, compress bool, max, reserve int64) (*spiller, err
 	if err != nil {
 		return nil, fmt.Errorf("spill: %w", err)
 	}
-	s := &spiller{dir: dir, compress: compress, max: max, reserve: reserve}
+	s := &spiller[P]{codec: codec, dir: dir, compress: compress, max: max, reserve: reserve}
 	if compress {
 		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1)); err != nil {
 			return nil, err
@@ -77,7 +78,7 @@ func newSpiller(parent string, compress bool, max, reserve int64) (*spiller, err
 	return s, nil
 }
 
-func (s *spiller) close() {
+func (s *spiller[P]) close() {
 	if s.dec != nil {
 		s.dec.Close()
 	}
@@ -95,12 +96,12 @@ type spillFile struct {
 	read    int64 // rows replayed (drainer only)
 }
 
-func (s *spiller) file() *spillFile {
+func (s *spiller[P]) file() *spillFile {
 	s.files.Add(1)
 	return &spillFile{path: filepath.Join(s.dir, fmt.Sprintf("%08d.spill", s.seq.Add(1)))}
 }
 
-func (s *spiller) frame(typ byte, body []byte) []byte {
+func (s *spiller[P]) frame(typ byte, body []byte) []byte {
 	payload := make([]byte, 0, len(body)+1)
 	payload = append(append(payload, typ), body...)
 	var hdr [8]byte
@@ -110,10 +111,10 @@ func (s *spiller) frame(typ byte, body []byte) []byte {
 }
 
 // write appends one frame of rows (and, when final, the trailer).
-func (s *spiller) write(f *spillFile, rows []schema.Row, final bool) error {
+func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error {
 	var buf []byte
 	if len(rows) > 0 {
-		body := schema.AppendRows(nil, rows)
+		body := appendRows(nil, rows, s.codec)
 		typ := byte('R')
 		if s.compress {
 			enc, _ := s.enc.Get().(*zstd.Encoder)
@@ -175,7 +176,7 @@ var errSpillFull = errors.New("spill: disk budget used")
 // admitted: it is a few bytes, and without it the range's file cannot be
 // replayed. Concurrent emitters may each pass the free-space check before
 // either has written; the overshoot is at most one frame per worker.
-func (s *spiller) admit(n int64, final bool) bool {
+func (s *spiller[P]) admit(n int64, final bool) bool {
 	live := s.live.Add(n)
 	if !final {
 		if (s.max > 0 && live > s.max) || (s.reserve > 0 && freeBytes(s.dir) < n+s.reserve) {
@@ -191,7 +192,7 @@ func (s *spiller) admit(n int64, final bool) bool {
 }
 
 // release returns a deleted file's bytes to the budget.
-func (s *spiller) release(f *spillFile) {
+func (s *spiller[P]) release(f *spillFile) {
 	s.live.Add(-f.size)
 	s.full.Store(false)
 }
@@ -210,7 +211,7 @@ func (f *spillFile) close() {
 
 // next reads the next rows frame; at the trailer it checks the count,
 // closes and deletes the file and returns nil rows.
-func (s *spiller) next(f *spillFile) ([]schema.Row, error) {
+func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 	if f.r == nil {
 		fh, err := os.Open(f.path)
 		if err != nil {
@@ -255,11 +256,44 @@ func (s *spiller) next(f *spillFile) ([]schema.Row, error) {
 		f.close()
 		return nil, errSpillFrame
 	}
-	rows, err := schema.DecodeRows(body)
+	rows, err := decodeRows(body, s.codec)
 	if err != nil {
 		f.close()
 		return nil, err
 	}
 	f.read += int64(len(rows))
+	return rows, nil
+}
+
+// appendRows encodes rows for a frame: the count, then per row its key
+// and the producer's payload codec. The format is private to one run.
+func appendRows[P any](dst []byte, rows []schema.Row[P], c schema.Codec[P]) []byte {
+	dst = binary.AppendUvarint(dst, uint64(len(rows)))
+	for i := range rows {
+		dst = schema.AppendString(dst, rows[i].Key)
+		dst = c.Append(dst, &rows[i].Data)
+	}
+	return dst
+}
+
+// decodeRows decodes a frame written by appendRows. The rows' strings view
+// src, which the caller hands over (it must not be modified afterwards).
+func decodeRows[P any](src []byte, c schema.Codec[P]) ([]schema.Row[P], error) {
+	d := schema.NewDecoder(src)
+	n := d.Uvarint()
+	if d.Err() != nil || n > uint64(len(src)) {
+		return nil, schema.ErrCodec
+	}
+	rows := make([]schema.Row[P], n)
+	for i := range rows {
+		rows[i].Key = d.Str()
+		c.Decode(d, &rows[i].Data)
+		if err := d.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if d.Len() != 0 {
+		return nil, schema.ErrCodec
+	}
 	return rows, nil
 }

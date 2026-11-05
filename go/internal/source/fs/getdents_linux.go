@@ -17,7 +17,6 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -78,7 +77,7 @@ func disposeChunk(r Range) {
 // Per directory it allocates one key arena, one row slab sized from the
 // entry count and one range per subdirectory; entries are sorted by key
 // before stat, so each stat lands in its final slot.
-func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range], st *Stats) error {
+func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
 	if c := r.chunk; c != nil {
 		defer c.dir.release()
 		rows, err := p.statInto(ctx, c.dir.fd, r.path, c.names, c.ents, st)
@@ -196,7 +195,7 @@ func buildKeys(prefix string, sc *scratch) {
 }
 
 // emitChunks shares fd among chunk ranges of the sorted entries.
-func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Range], st *Stats) error {
+func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Range, Entry], st *Stats) error {
 	names := slices.Clone(sc.names)
 	ents := slices.Clone(sc.ents)
 	n := (len(ents) + chunkEntries - 1) / chunkEntries
@@ -219,8 +218,8 @@ func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Ran
 
 // statInto stats ents (sorted) relative to fd into one row slab, dropping
 // entries that vanished, failed or changed type since they were listed.
-func (p *Provider) statInto(ctx context.Context, fd int, path string, names []byte, ents []entry, st *Stats) ([]schema.Row, error) {
-	rows := make([]schema.Row, len(ents))
+func (p *Provider) statInto(ctx context.Context, fd int, path string, names []byte, ents []entry, st *Stats) ([]Row, error) {
+	rows := make([]Row, len(ents))
 	n := 0
 	for i := range ents {
 		if i%cancelEvery == cancelEvery-1 {
@@ -232,29 +231,29 @@ func (p *Provider) statInto(ctx context.Context, fd int, path string, names []by
 		r := &rows[n]
 		r.Key = e.key
 		if p.opt.Fields == Names {
-			r.Kind = kindOfDT(e.typ)
+			r.Data.Kind = kindOfDT(e.typ)
 			n++
 			continue
 		}
 		name := nameOf(names, e)
-		if err := statAt(fd, name, p.opt.Fields, r); err != nil {
+		if err := statAt(fd, name, p.opt.Fields, &r.Data); err != nil {
 			full := path + string(os.PathSeparator) + name
 			if errors.Is(err, unix.ENOENT) {
 				st.note(&st.Vanished, full, err)
 			} else {
 				st.note(&st.StatErrors, full, err)
 			}
-			*r = schema.Row{}
+			*r = Row{}
 			continue
 		}
-		if (r.Kind == schema.KindDir) != (e.typ == unix.DT_DIR) {
+		if (r.Data.Kind == KindDir) != (e.typ == unix.DT_DIR) {
 			st.note(&st.Changed, path+string(os.PathSeparator)+name, errors.New("type changed during listing"))
-			*r = schema.Row{}
+			*r = Row{}
 			continue
 		}
-		if r.Kind == schema.KindSymlink && p.opt.LinkTarget {
+		if r.Data.Kind == KindSymlink && p.opt.LinkTarget {
 			if t, err := readlinkAt(fd, name); err == nil {
-				r.LinkTarget, r.Present = t, r.Present|schema.HasLink
+				r.Data.LinkTarget, r.Data.Present = t, r.Data.Present|HasLink
 			} else {
 				st.note(&st.ReadlinkErrors, path+string(os.PathSeparator)+name, err)
 			}

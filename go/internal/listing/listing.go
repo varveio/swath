@@ -22,6 +22,7 @@ import (
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquet"
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 )
@@ -31,7 +32,7 @@ type Config struct {
 	Root    string // a local directory, or scheme://...; the registered provider for the scheme lists it
 	Out     string // dataset directory; empty for a dry run
 	Replace bool   // replace a previous dataset in Out
-	// Source is the provider's options value (source.Factory.Flags or
+	// Source is the provider's options value (registry.Factory.Flags or
 	// Defaults); opaque here. nil takes the provider's defaults.
 	Source        any
 	Warn          func(string) // one-time warnings for the user (nil: dropped)
@@ -174,7 +175,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		Tool: "swath-go", Out: cfg.Out, Workers: cfg.Workers, Encoders: cfg.Encoders,
 		RowBudget: cfg.Memory / 2, Started: start,
 	}
-	f, err := source.Lookup(cfg.Root)
+	f, err := registry.Lookup(cfg.Root)
 	if err != nil {
 		return sum, err
 	}
@@ -186,7 +187,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if warn == nil {
 		warn = func(string) {}
 	}
-	src, err := f.Open(ctx, source.Request{Root: cfg.Root, Options: opts, Workers: cfg.Workers, Warn: warn})
+	src, err := f.Open(ctx, registry.Request{Root: cfg.Root, Options: opts, Workers: cfg.Workers, Warn: warn})
 	if err != nil {
 		return sum, err
 	}
@@ -209,18 +210,12 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		}
 	}
 	sum.ResumedParts, sum.ResumedRows = jr.resumedParts(), jr.resumedRows()
-	var p source.Provider[any] = src
-	if jr.complete() {
-		// The final part is durable: listing again could only add a
-		// second final part on a changed source. Publish what is recorded.
-		p = source.Empty{}
-	}
-	return pipeline(ctx, cfg, sum, src, p, s, jr)
+	return pipeline(ctx, cfg, sum, src, s, jr)
 }
 
 // identity is the run's resume identity: what the pipeline freezes, and
 // what the source names (source.Identified).
-func identity(src source.Source, s *schema.Schema, cfg Config) durable.Identity {
+func identity(src registry.Source, s schema.Info, cfg Config) durable.Identity {
 	id := durable.Identity{Tool: "swath-go", Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquet.WriterID,
 		PartSize: cfg.PartSize, Provider: src.Locator().Kind}
 	if idf, ok := src.(source.Identified); ok {
@@ -235,7 +230,7 @@ func identity(src source.Source, s *schema.Schema, cfg Config) durable.Identity 
 
 // manifestMeta is the manifest's account of the source, the scope and the
 // coverage, from the source's locator and report.
-func manifestMeta(s *schema.Schema, loc source.Locator, rep *source.Report, started, listed time.Time) dataset.Meta {
+func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started, listed time.Time) dataset.Meta {
 	m := dataset.Meta{SchemaID: s.ID, Source: dataset.Source{Kind: loc.Kind, URI: loc.Root, Container: loc.Container},
 		Scope: dataset.Scope{Kind: "whole"}}
 	m.Coverage = dataset.Coverage{ListingStartedAt: started.UTC(), ListingFinishedAt: listed.UTC()}
@@ -263,26 +258,26 @@ func reports(cfg Config, sum *Summary) []dataset.File {
 
 // pipeline runs provider → order → router → publish. p is src, or Empty
 // when a resume has nothing left to list.
-func pipeline(ctx context.Context, cfg Config, sum Summary, src source.Source, p source.Provider[any], s *schema.Schema,
-	jr *journal) (Summary, error) {
+func pipeline(ctx context.Context, cfg Config, sum Summary, src registry.Source, s schema.Info, jr *journal) (Summary, error) {
 	defer jr.close()
 	// One shared cause: the first asynchronous failure (an encoder, the
 	// disk, the journal) cancels listing at once, and is what Run returns.
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	var sink order.Sink = discard{}
-	var router *parquet.Router
+	// One byte budget for rows in flight, shared by the order stage and the
+	// encoders' queues (half of -memory; the rest is headroom for pages
+	// being parsed, codecs and the garbage collector).
+	shared := &order.Shared{}
+	// The final part is durable: listing again could only add a second
+	// final part on a changed source. Publish what is recorded.
+	env := registry.Env{After: jr.after(), Empty: jr.complete()}
 	if cfg.Out != "" {
-		var err error
-		ropt := parquet.Options{Out: cfg.Out, Schema: s, PartSize: cfg.PartSize, Encoders: cfg.Encoders}
+		ropt := parquet.Options{Out: cfg.Out, PartSize: cfg.PartSize, Encoders: cfg.Encoders, Account: shared.Add}
 		jr.routerOptions(&ropt)
 		ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
-		router, err = parquet.NewRouter(ropt)
-		if err != nil {
-			return sum, err
-		}
-		sink = jr.guard(router)
+		env.Router = &ropt
 	}
+	var router parquet.Encoder
 	fail := func(err error) (Summary, error) {
 		if router != nil {
 			router.Abort()
@@ -296,13 +291,6 @@ func pipeline(ctx context.Context, cfg Config, sum Summary, src source.Source, p
 		finish(&sum)
 		return sum, err
 	}
-	// One byte budget for rows in flight, shared by the order stage and the
-	// encoders' queues (half of -memory; the rest is headroom for pages
-	// being parsed, codecs and the garbage collector).
-	shared := &order.Shared{}
-	if router != nil {
-		router.Account(shared.Add)
-	}
 	oopt := order.Options{Workers: cfg.Workers, Budget: sum.RowBudget, Shared: shared, SpillCompress: cfg.SpillCompress, SpillMax: cfg.SpillMax, SpillReserve: cfg.SpillReserve}
 	if !cfg.NoSpill {
 		// Spill files are disposable: a crash relists their rows.
@@ -313,7 +301,11 @@ func pipeline(ctx context.Context, cfg Config, sum Summary, src source.Source, p
 			_ = os.RemoveAll(oopt.SpillDir)
 		}
 	}
-	ost, err := order.Run(ctx, p, sink, oopt)
+	env.Order = oopt
+	ost, router, err := src.Run(ctx, env)
+	if router == nil && cfg.Out != "" && err != nil {
+		return sum, err // the router could not start: nothing was written
+	}
 	if cfg.Out != "" && oopt.SpillDir != "" {
 		_ = os.Remove(oopt.SpillDir) // only if empty; order.Run removed its own files
 		_ = os.Remove(filepath.Dir(oopt.SpillDir))
@@ -378,7 +370,3 @@ func finish(s *Summary) {
 	s.UserSeconds, s.SysSeconds = u.Seconds(), sys.Seconds()
 	s.PeakRSS = peakRSS()
 }
-
-type discard struct{}
-
-func (discard) Write(context.Context, [][]schema.Row) error { return nil }

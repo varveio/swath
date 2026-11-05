@@ -21,7 +21,7 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/source/s3"
 )
 
 func fakeS3(t *testing.T, n int) string {
@@ -73,7 +73,7 @@ func TestS3Dataset(t *testing.T) {
 		if tc.root != "s3://bkt" {
 			scope = dataset.Scope{Kind: "prefix", Prefix: "logs/03/"}
 		}
-		if m.Source != (dataset.Source{Kind: "s3", URI: tc.root, Container: "bkt"}) || m.Scope != scope || m.SchemaID != schema.S3.ID ||
+		if m.Source != (dataset.Source{Kind: "s3", URI: tc.root, Container: "bkt"}) || m.Scope != scope || m.SchemaID != s3.Schema.ID ||
 			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Rows ||
 			m.Coverage.ListingStartedAt.IsZero() || m.Coverage.ListingFinishedAt.Before(m.Coverage.ListingStartedAt) {
 			t.Fatalf("manifest %+v", m)
@@ -89,7 +89,7 @@ func TestS3Dataset(t *testing.T) {
 			t.Fatalf("S3 dataset has %s: %v", dataset.SummaryName, err)
 		}
 	}
-	for _, c := range schema.S3.Columns {
+	for _, c := range s3.Schema.Columns {
 		if slices.Contains([]string{"version_id", "is_latest", "is_delete_marker", "row_type"}, c.Name) {
 			t.Fatalf("the current-object schema has %s", c.Name)
 		}

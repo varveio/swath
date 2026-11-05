@@ -30,7 +30,7 @@ func (f *frontier) key(i, page, j int) string {
 	return fmt.Sprintf("r%04d/%0200d-%04d-%04d", i, 0, page, j) // about 220-byte keys
 }
 
-func (f *frontier) Expand(ctx context.Context, r fr, e source.Emitter[fr]) error {
+func (f *frontier) Expand(ctx context.Context, r fr, e source.Emitter[fr, tp]) error {
 	if r.i < 0 {
 		for i := 0; i <= f.siblings; i++ {
 			if err := e.Child(fr{i}); err != nil {
@@ -45,9 +45,9 @@ func (f *frontier) Expand(ctx context.Context, r fr, e source.Emitter[fr]) error
 	}
 	for p := range pages {
 		time.Sleep(delay)
-		rows := make([]schema.Row, f.rows)
+		rows := make([]schema.Row[tp], f.rows)
 		for j := range rows {
-			rows[j] = schema.Row{Key: f.key(r.i, p, j), Size: int64(j), Present: schema.HasSize, Object: &schema.ObjectMeta{ETag: "e"}}
+			rows[j] = schema.Row[tp]{Key: f.key(r.i, p, j), Data: tp{Size: int64(j), ETag: "e"}}
 		}
 		if err := e.Rows(rows); err != nil {
 			return err
@@ -85,12 +85,17 @@ func TestSpillKeepsWorkersBusy(t *testing.T) {
 		t.Helper()
 		c := &collect{}
 		start := time.Now()
-		st, err := Run[fr](context.Background(), f, c, opt)
+		st, err := Run[fr, tp](context.Background(), f, c, &testSchema, opt)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !slices.Equal(c.keys, want) {
 			t.Fatalf("%+v: %d keys, want %d", opt, len(c.keys), len(want))
+		}
+		for i, d := range c.data { // payloads survive the spill codec
+			if d != (tp{Size: int64(i % f.rows), ETag: "e"}) {
+				t.Fatalf("%+v: row %d payload %+v", opt, i, d)
+			}
 		}
 		return time.Since(start), st
 	}
@@ -131,7 +136,7 @@ func TestSpillCleanedOnFailure(t *testing.T) {
 	f := &frontier{slowPages: 20, siblings: 20, sibPages: 5, rows: 100, slowDelay: 5 * time.Millisecond}
 	dir := t.TempDir()
 	c := &collect{fail: 2500}
-	if _, err := Run[fr](context.Background(), f, c, Options{Workers: 8, Budget: 300, SpillDir: dir}); err == nil {
+	if _, err := Run[fr, tp](context.Background(), f, c, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: dir}); err == nil {
 		t.Fatal("sink failure not reported")
 	}
 	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
@@ -151,7 +156,7 @@ func TestSpillDiskBudget(t *testing.T) {
 	run := func(opt Options) Stats {
 		t.Helper()
 		c := &collect{}
-		st, err := Run[fr](context.Background(), f, c, opt)
+		st, err := Run[fr, tp](context.Background(), f, c, &testSchema, opt)
 		if err != nil {
 			t.Fatal(err)
 		}

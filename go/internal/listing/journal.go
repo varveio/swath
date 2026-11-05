@@ -4,7 +4,6 @@
 package listing
 
 import (
-	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -17,9 +16,8 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/durable"
 	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquet"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -44,7 +42,7 @@ type journal struct {
 // new journal), a resume (identity check, recovery of the published
 // parts), or no journal at all. A source that cannot resume gets a plain
 // Prepare, without the lock.
-func openJournal(cfg Config, src source.Source, id durable.Identity) (*journal, error) {
+func openJournal(cfg Config, src registry.Source, id durable.Identity) (*journal, error) {
 	if cfg.Out == "" {
 		if cfg.Resume {
 			return nil, errors.New("-resume needs -out")
@@ -298,28 +296,15 @@ func (jr *journal) close() {
 	jr.lock.Release()
 }
 
-// guard wraps the sink on resume: every row must sort after the last
-// published key (the provider starts there; this checks it).
-func (jr *journal) guard(sink order.Sink) order.Sink {
+// after is the resume's last published key: every row must sort after it
+// (the provider starts there; the pipeline checks it). nil for a fresh run.
+func (jr *journal) after() *string {
 	last := jr.last()
 	if last == nil {
-		return sink
+		return nil
 	}
-	return afterSink{sink, string(last.Part.MaxKey)}
-}
-
-type afterSink struct {
-	order.Sink
-	after string
-}
-
-func (a afterSink) Write(ctx context.Context, segs [][]schema.Row) error {
-	for _, seg := range segs {
-		if len(seg) > 0 && seg[0].Key <= a.after {
-			return fmt.Errorf("resume: key %q is not after the last published key %q", seg[0].Key, a.after)
-		}
-	}
-	return a.Sink.Write(ctx, segs)
+	k := string(last.Part.MaxKey)
+	return &k
 }
 
 // journaled reports whether the run keeps a journal (and so leaves its

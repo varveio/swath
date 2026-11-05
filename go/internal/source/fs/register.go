@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 )
 
 // The local filesystem takes roots without a scheme.
 func init() {
-	source.Register(source.Factory{Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open})
+	registry.Register(registry.Factory{Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open})
 }
 
 // Set and String make Fields a flag value.
@@ -39,7 +39,7 @@ func flags(f *flag.FlagSet) any {
 
 // open validates the root. SWATH_LOCAL_ENGINE=portable selects the
 // portable engine (comparisons).
-func open(_ context.Context, req source.Request) (source.Source, error) {
+func open(_ context.Context, req registry.Request) (registry.Source, error) {
 	o, ok := req.Options.(*Options)
 	if !ok {
 		return nil, fmt.Errorf("fs: options are %T, not *fs.Options", req.Options)
@@ -56,15 +56,13 @@ func open(_ context.Context, req source.Request) (source.Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("root: %w", err)
 	}
-	return &opened{Provider: source.Erase[Range](p), p: p}, nil
+	return &opened{Bound: registry.Bind[Range, Entry](p, &Schema), p: p}, nil
 }
 
 type opened struct {
-	source.Provider[any]
+	registry.Bound[Entry]
 	p *Provider
 }
-
-func (o *opened) Schema() *schema.Schema { return &schema.Local }
 
 func (o *opened) Locator() source.Locator {
 	return source.Locator{Kind: "local-fs", Root: o.p.root, Path: o.p.root}

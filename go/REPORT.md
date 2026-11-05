@@ -1444,6 +1444,21 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
    base64 fields into `[]byte` (two lines changed; the diff stays 4 files, +117/−5). Same-build byte identity holds;
    the local parts' bytes change (key and link target lose STRING), the S3 column content does not.
 
+7. **Typed rows.** `schema.Row[P]` is a key and the producer's payload: `fs.Entry` (the filesystem fields)
+   and `s3.Object` (size, time and six strings), so neither carries the other's slots and the object pointer
+   is gone. Each producer's `schema.Schema[P]` lives beside it: columns as accessors of `P` (with the
+   `Delta` encoding preference replacing the writer's `etag` name map), the logical size the router cuts by,
+   the heap bytes the budget counts, and the spill codec, which writes only the producer's fields (the
+   filesystem codec only the present values). `order`, `parquet` and spill are generic over `P`; the pipeline
+   is not. Go has no generic methods, so `registry.Bind[R, P]` (new package `internal/registry`, which also
+   holds the factory registry) binds an opened provider to the typed stages; providers import it, the
+   pipeline never imports a provider (boundary test extended). Gates green; same-build byte identity holds;
+   part boundaries move (logical sizes no longer count the S3 `FILE` kind). Timing: synthetic `realistic`
+   tree (1.07 M entries, stat tier, `-workers 12`, written dataset), interleaved, after a warm-up pair: the
+   item-6 build 1.85 and 1.93 s, this build 1.77 and 1.78 s; peak RSS 291–354 vs 294–297 MB. A first cut that
+   counted the payload's logical bytes against the memory budget (integers twice) spilled 6× more rows and
+   ran 1.7× slower; the budget now counts the payload's `Heap` (its strings).
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

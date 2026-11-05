@@ -80,7 +80,7 @@ func (p *Provider) Root() Range {
 }
 
 // Expand lists one range.
-func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range]) error {
+func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Object]) error {
 	switch r.kind {
 	case whole:
 		return p.expandSequential(ctx, e)
@@ -94,7 +94,7 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range])
 
 // expandResume tiles (after, ⊤] at the recorded boundaries above after:
 // (after, b1], …, (bn, ⊤]. It lists nothing itself.
-func (p *Provider) expandResume(e source.Emitter[Range]) error {
+func (p *Provider) expandResume(e source.Emitter[Range, Object]) error {
 	after := p.opt.Resume.After
 	cuts := make([]string, 0, len(p.opt.Resume.Boundaries))
 	for _, b := range p.opt.Resume.Boundaries {
@@ -166,7 +166,7 @@ func (p *Provider) leave(r Range, st *running, start time.Time) {
 
 // expandRange lists (lo, hi]: the first page starts after lo, later pages
 // follow continuation tokens; keys past hi are trimmed and end the range.
-func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Range]) error {
+func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Range, Object]) error {
 	start := time.Now()
 	st := p.enter(r)
 	defer p.leave(r, st, start)
@@ -460,7 +460,7 @@ func guard(c, m string, found bool, ceil string, bounded, done bool) clause {
 // expandSeed sends one delimiter page and tiles the scope at its common
 // prefixes; it emits no rows (the tiles list every key, including the
 // page's own objects).
-func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range]) error {
+func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range, Object]) error {
 	in := p.input()
 	in.FetchOwner, in.Delimiter = false, "/"
 	out, err := p.list(ctx, in)

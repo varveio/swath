@@ -65,8 +65,8 @@ func TestRowsMatchSDK(t *testing.T) {
 			t.Fatalf("rows %d, sdk %d, keys %d", len(got), len(want), len(keys))
 		}
 		for i := range got {
-			if got[i].Key != want[i].Key || got[i].Size != want[i].Size || got[i].Mtime != want[i].Mtime || *got[i].Object != *want[i].Object {
-				t.Fatalf("sequential=%v row %d: %+v %+v vs %+v %+v", seq, i, got[i], got[i].Object, want[i], want[i].Object)
+			if got[i] != want[i] {
+				t.Fatalf("sequential=%v row %d: %+v vs %+v", seq, i, got[i], want[i])
 			}
 		}
 	}

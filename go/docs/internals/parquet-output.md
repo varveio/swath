@@ -45,7 +45,8 @@ in the dataset.
 
 The router is the order stage's sink. It owns part boundaries, so they never depend on encoder timing:
 
-- A row's logical size is its uncompressed field bytes.
+- A row's logical size is its key plus the payload's uncompressed column bytes (`Schema.Bytes`, defined by
+  the producer: string lengths, 8 or 4 bytes per present integer).
 - Part 0 is cut at `PartSize / 0.1` logical bytes (0.1 is an assumed compression ratio).
 - When part 0 closes, its measured ratio is frozen; every later part is cut at `PartSize / ratio`.
 - Ordinals are dense and zero-based; the router knows the last part (the journal records it, so a resume
@@ -88,11 +89,12 @@ this tool, outside the root, removing only its own entries. An `-out` inside the
 
 ## Schemas
 
-Schemas are data (`schema.Schema`: name, id, columns with type, required flag and an accessor on `Row`); the
-Parquet node is built from that list, and `TestFooterMatchesSchema` checks the footer against it. There is no
-message string any more.
+Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with type, required flag, an
+accessor of the payload `P` and an encoding preference: `Delta` writes DELTA_BYTE_ARRAY, used for `etag`). Each
+producer defines its schema beside its code. The Parquet node is built from that list; `TestFooterMatchesSchema`
+checks the footer against a test schema with one column of every type. There is no message string any more.
 
-**`schema.S3`** (`swath/s3-objects/v1`) is the current-object schema, nine columns: `key`, `size`,
+**`s3.Schema`** (`swath/s3-objects/v1`) is the current-object schema, nine columns: `key`, `size`,
 `last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name` (null unless `-fetch-owner`),
 `checksum_algorithm` (the first listed), `checksum_type` (null when S3 omits them). Every row is a current
 object, so Java's `version_id`, `is_latest`, `is_delete_marker` and `row_type` are not stored; `bench/diffds.py`
@@ -104,7 +106,7 @@ targets are unannotated BYTE_ARRAY, written exactly as the kernel returned them,
 normalised. Manifest bounds are written in base64 (`min_key_base64`, `max_key_base64`) so every key survives
 JSON; readers compare the decoded bytes (`dataset.Key`).
 
-**`schema.Local`** (`swath-local/v1`) has one row per entry below the root, directories included, each with a
+**`fs.Schema`** (`swath-local/v1`) has one row per entry below the root, directories included, each with a
 named `kind`. `size` and `last_modified` match the S3 schema; `key` is binary. Identifiers are unsigned. v1 renamed
 `blocks` to `allocated_bytes` and `ctime` to `metadata_changed_at`, and made the identifiers unsigned:
 

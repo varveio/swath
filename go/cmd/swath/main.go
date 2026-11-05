@@ -26,7 +26,7 @@ import (
 	"github.com/varveio/swath/go/internal/durable"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/registry"
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
@@ -128,7 +128,7 @@ func newFlags(o *options) *flag.FlagSet {
 	f.BoolVar(&o.json, "json", false, "print the summary as JSON")
 	// Each provider owns its flag group.
 	o.sources = map[string]any{}
-	for _, p := range source.Factories() {
+	for _, p := range registry.Factories() {
 		o.sources[p.Scheme] = p.Flags(f)
 	}
 	f.SetOutput(io.Discard)
@@ -172,7 +172,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if !o.countOnly && o.out == "" {
 		return errors.New("-out is required unless -count-only")
 	}
-	pf, err := source.Lookup(root)
+	pf, err := registry.Lookup(root)
 	if err != nil {
 		return err
 	}

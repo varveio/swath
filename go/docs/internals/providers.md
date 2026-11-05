@@ -3,15 +3,18 @@
 ## The contract (`internal/source`)
 
 ```go
-type Emitter[R any] interface {
-    Rows(rows []schema.Row) error // next rows of this range, ascending; the slice now belongs to the caller
-    Child(r R) error              // a child range whose whole subtree sorts here
+type Emitter[R, P any] interface {
+    Rows(rows []schema.Row[P]) error // next rows of this range, ascending; the slice now belongs to the caller
+    Child(r R) error                 // a child range whose whole subtree sorts here
 }
-type Provider[R any] interface {
+type Provider[R, P any] interface {
     Root() R
-    Expand(ctx context.Context, r R, e Emitter[R]) error
+    Expand(ctx context.Context, r R, e Emitter[R, P]) error
 }
 ```
+
+`P` is the provider's row payload (`fs.Entry`, `s3.Object`), bound to columns by its `schema.Schema[P]`, which
+lives beside the provider.
 
 A range is a provider-defined value. `Expand` emits its content in ascending key order: every key of a child's
 subtree sorts after everything emitted before the child and before everything emitted after it. `Expand` may
@@ -160,14 +163,15 @@ backoff; AIMD concurrency; mass-aware and multi-level seeding; the rate-anchored
 
 ## Registry and optional interfaces
 
-A provider registers a `source.Factory` from `init`: its URL scheme (`s3`; the empty scheme takes local
+A provider registers a `registry.Factory` from `init`: its URL scheme (`s3`; the empty scheme takes local
 paths), its flag group (`Flags(*flag.FlagSet) any` returns the provider's options value, filled by the
 parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. The command imports providers only for that
 registration and passes the options value for the root's scheme as `listing.Config.Source`, opaque to the
 pipeline. `Open` validates the root without touching the output.
 
-A `Source` is the provider with its range type erased (`source.Erase`: ranges are boxed once each, rows pass
-through), its `Schema`, its `Locator` (kind, root, container, local path) and `Listed` (rows emitted, checked
+A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: the range type erased by
+`source.Erase`, ranges boxed once each, rows untouched; `Run` instantiates the order stage and the part router
+for `P`), its schema `Info`, its `Locator` (kind, root, container, local path) and `Listed` (rows emitted, checked
 against the rows ordered). Optional interfaces, each found by a type assertion:
 
 | Interface | Meaning | S3 | fs |

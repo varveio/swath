@@ -3,54 +3,6 @@
 
 package source
 
-import (
-	"context"
-	"flag"
-	"fmt"
-	"slices"
-	"strings"
-	"sync"
-
-	"github.com/varveio/swath/go/internal/schema"
-)
-
-// A Factory opens one kind of source. Providers register a factory from
-// an init function; the command imports them only for that. Nothing in the
-// pipeline (listing, order, parquet, dataset, schema, durable) imports a
-// provider: it sees only what this package declares.
-type Factory struct {
-	// Scheme is the root's URL scheme ("s3" for s3://bucket/prefix). The
-	// factory with the empty scheme takes roots without one (local paths).
-	Scheme string
-	// Flags registers the provider's flags on fs and returns its options
-	// value, which the flags fill when fs is parsed. The value is opaque to
-	// everything but the provider: it travels in Request.Options.
-	Flags func(fs *flag.FlagSet) any
-	// Defaults returns the options value used when none was given.
-	Defaults func() any
-	// Open validates the root and returns a source ready to list. It must
-	// not touch the output directory.
-	Open func(ctx context.Context, req Request) (Source, error)
-}
-
-// Request is what the pipeline tells a factory.
-type Request struct {
-	Root    string       // as given, scheme included
-	Options any          // the provider's options value (Flags or Defaults)
-	Workers int          // the order stage's worker count
-	Warn    func(string) // one-time warnings for the user; never nil
-}
-
-// Source is an opened provider with its range type erased (see Erase).
-type Source interface {
-	Provider[any]
-	Schema() *schema.Schema
-	Locator() Locator
-	// Listed is the number of rows emitted so far; after a listing it
-	// must equal the rows the order stage handed on.
-	Listed() int64
-}
-
 // Locator says what a source lists, for the dataset's metadata.
 type Locator struct {
 	Kind      string // the dataset's source kind ("s3", "local-fs")
@@ -156,49 +108,4 @@ type Activity struct {
 	SeedMode        string           // "shallow" or "none"
 	SeedCuts        int64
 	SeedRanges      int64
-}
-
-var (
-	regMu     sync.Mutex
-	factories = map[string]Factory{}
-)
-
-// Register adds a factory; registering a scheme twice panics.
-func Register(f Factory) {
-	regMu.Lock()
-	defer regMu.Unlock()
-	if _, ok := factories[f.Scheme]; ok {
-		panic("source: scheme registered twice: " + f.Scheme)
-	}
-	factories[f.Scheme] = f
-}
-
-// Factories returns the registered factories, by scheme.
-func Factories() []Factory {
-	regMu.Lock()
-	defer regMu.Unlock()
-	out := make([]Factory, 0, len(factories))
-	for _, f := range factories {
-		out = append(out, f)
-	}
-	slices.SortFunc(out, func(a, b Factory) int { return strings.Compare(a.Scheme, b.Scheme) })
-	return out
-}
-
-// Lookup returns the factory for root's scheme.
-func Lookup(root string) (Factory, error) {
-	scheme := ""
-	if i := strings.Index(root, "://"); i > 0 {
-		scheme = root[:i]
-	}
-	regMu.Lock()
-	defer regMu.Unlock()
-	f, ok := factories[scheme]
-	if !ok {
-		if scheme == "" {
-			return f, fmt.Errorf("no provider for local paths is registered (root %q)", root)
-		}
-		return f, fmt.Errorf("unsupported root %q: no provider for %s://", root, scheme)
-	}
-	return f, nil
 }

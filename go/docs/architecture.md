@@ -24,14 +24,15 @@ There is no external sort, no staging and no merge.
 |---|---|---|
 | `cmd/swath` | flags into `listing.Config`, with each provider's own flag group; `signal.NotifyContext`; usage generated from the flag set | listing, source; providers only to register them (`_` imports) |
 | `internal/listing` | `Run(ctx, Config) (Summary, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run summary | source and all below, no provider |
-| `internal/source` | the provider contract: `Provider[R]`, `Emitter[R]`, `Disposer[R]`; the registry (`Factory` by URL scheme, `Source`, `Erase`) and the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
-| `internal/source/fs` | filesystem provider: Linux `getdents64` engine, portable engine; registers the scheme-less roots | source, schema, dataset |
-| `internal/source/s3` | S3 provider: `(lo, hi]` ranges, seed, owner-side splits, pivots; registers `s3://` | source, schema, s3/client |
+| `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
+| `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`) | source, schema, order, parquet |
+| `internal/source/fs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath-local/v1`; registers the scheme-less roots | source, schema, registry, dataset |
+| `internal/source/s3` | S3 provider: `(lo, hi]` ranges, seed, owner-side splits, pivots; its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://` | source, schema, registry, s3/client |
 | `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, retries, the page parser | – |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |
-| `internal/schema` | `Row`, schemas as data (`Local`, `S3`), the sort rule | – |
-| `internal/parquet` | file writer, schema binding, codec, part router, encoders | schema, dataset |
+| `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]`), `Info` | – |
+| `internal/parquet` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order | faults |
 | `internal/durable` | the journal (CRC-framed records, one writer goroutine), resume identity | dataset |
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
@@ -39,8 +40,16 @@ There is no external sort, no staging and no merge.
 
 `order` and `parquet` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquet, dataset, schema, durable) import nothing under `internal/source/`, and
-`internal/source` imports no provider: `internal/source` `TestImportBoundary` checks it, transitively. `schema.Row` is shared:
-filesystem fields inline, object-store fields behind one pointer (`Row.Object`, nil for filesystem rows).
+`internal/source` and `internal/registry` import no provider: `internal/source` `TestImportBoundary` checks it,
+transitively.
+
+**Typed rows.** A row is `schema.Row[P]`: its key and the producer's payload `P` (`fs.Entry`, `s3.Object`), so
+an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`
+beside its code: columns as accessors of `P`, the logical size the router cuts parts by, the heap bytes the
+budget counts, and the spill codec. The order stage and the router are generic over `P`; the pipeline
+(`listing`) never names it. The one place that does is `registry.Bind[R, P]`, which a provider calls when it
+opens: it erases the range type and returns a `Source` whose `Run` instantiates the order stage and the
+router for `P` (Go has no generic methods, so the binding happens where `P` is known).
 
 ## Goroutines and ownership
 
@@ -68,10 +77,11 @@ filesystem fields inline, object-store fields behind one pointer (`Row.Object`, 
 
 ## How a provider plugs in
 
-Implement `source.Provider[R]` for a range type `R` (see [internals/providers.md](internals/providers.md)),
-choose a `schema.Schema`, and add a branch in `listing.Run` that builds the provider and fills
-`dataset.Meta` (source kind, root or bucket, schema id). The generic `pipeline[R]` in `internal/listing` does
-the rest. A provider whose listing API is not sorted (Google Drive) sorts within each range; one whose order
+Implement `source.Provider[R, P]` for a range type `R` and a row payload `P`, define `P`'s
+`schema.Schema[P]`, and register a `registry.Factory` from `init` whose `Open` returns
+`registry.Bind(provider, &schema)` embedded in a value with the `Locator`, `Listed` and the optional interfaces
+(see [internals/providers.md](internals/providers.md)). The command imports the package for that registration
+only; `listing` does the rest. A provider whose listing API is not sorted (Google Drive) sorts within each range; one whose order
 is not unsigned byte order (Azure's UTF-16 order) must keep its range boundaries where the two orders agree.
 
 ## Memory

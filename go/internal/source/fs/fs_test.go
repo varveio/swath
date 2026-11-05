@@ -17,15 +17,14 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
 )
 
 type collect struct {
 	mu   sync.Mutex
-	rows []schema.Row
+	rows []Row
 }
 
-func (c *collect) Write(_ context.Context, segs [][]schema.Row) error {
+func (c *collect) Write(_ context.Context, segs [][]Row) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, s := range segs {
@@ -113,14 +112,14 @@ func oracle(t *testing.T, root string, dirs bool) []string {
 	return keys
 }
 
-func list(t *testing.T, root string, opt Options, workers, budget int) ([]schema.Row, Stats) {
+func list(t *testing.T, root string, opt Options, workers, budget int) ([]Row, Stats) {
 	t.Helper()
 	p, err := New(root, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := &collect{}
-	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: int64(budget) * 256}); err != nil {
+	if _, err := order.Run[Range, Entry](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: int64(budget) * 256}); err != nil {
 		t.Fatal(err)
 	}
 	return c.rows, p.Stats()
@@ -164,15 +163,15 @@ func TestListingEqualsSortedOracle(t *testing.T) {
 	}
 }
 
-func checkRows(t *testing.T, rows []schema.Row, fields Fields, portable bool) {
+func checkRows(t *testing.T, rows []Row, fields Fields, portable bool) {
 	t.Helper()
-	by := map[string]schema.Row{}
+	by := map[string]Entry{}
 	for _, r := range rows {
-		by[r.Key] = r
+		by[r.Key] = r.Data
 	}
-	want := map[string]schema.Kind{"z": schema.KindFile, "link-file": schema.KindSymlink, "link-dir": schema.KindSymlink, "dangling": schema.KindSymlink}
+	want := map[string]Kind{"z": KindFile, "link-file": KindSymlink, "link-dir": KindSymlink, "dangling": KindSymlink}
 	if runtime.GOOS != "windows" {
-		want["mixed/fifo"] = schema.KindFIFO
+		want["mixed/fifo"] = KindFIFO
 	}
 	for k, kind := range want {
 		if by[k].Kind != kind {
@@ -186,16 +185,16 @@ func checkRows(t *testing.T, rows []schema.Row, fields Fields, portable bool) {
 		}
 		return
 	}
-	if z.Size != 5 || !z.Has(schema.HasSize|schema.HasMtime|schema.HasMode) {
+	if z.Size != 5 || !z.Has(HasSize|HasMtime|HasMode) {
 		t.Errorf("z: size %d presence %b", z.Size, z.Present)
 	}
-	if runtime.GOOS == "linux" && (!z.Has(schema.HasStat) || z.Inode == 0 || z.Nlink != 1) {
+	if runtime.GOOS == "linux" && (!z.Has(HasStat) || z.Inode == 0 || z.Nlink != 1) {
 		t.Errorf("z: stat fields missing: %+v", z)
 	}
-	if l := by["link-file"]; l.LinkTarget != "z" || !l.Has(schema.HasLink) {
+	if l := by["link-file"]; l.LinkTarget != "z" || !l.Has(HasLink) {
 		t.Errorf("link target %q", l.LinkTarget)
 	}
-	if fields == Statx && !z.Has(schema.HasBtime) {
+	if fields == Statx && !z.Has(HasBtime) {
 		t.Log("filesystem reports no birth time") // tmpfs, older kernels
 	}
 }
@@ -254,7 +253,7 @@ func TestCancelledExpand(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := order.Run[Range](ctx, p, &collect{}, order.Options{Workers: 2, Budget: 10 * 256}); err == nil {
+	if _, err := order.Run[Range, Entry](ctx, p, &collect{}, &Schema, order.Options{Workers: 2, Budget: 10 * 256}); err == nil {
 		t.Fatal("expected cancellation")
 	}
 }
@@ -285,7 +284,7 @@ func TestCancelReleasesChunkFDs(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := &failAfter{n: 3000}
-		if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: 4, Budget: 2000 * 256}); err == nil {
+		if _, err := order.Run[Range, Entry](context.Background(), p, c, &Schema, order.Options{Workers: 4, Budget: 2000 * 256}); err == nil {
 			t.Fatal("sink failure not reported")
 		}
 	}
@@ -302,7 +301,7 @@ func TestCancelReleasesChunkFDs(t *testing.T) {
 
 type failAfter struct{ n, seen int }
 
-func (f *failAfter) Write(_ context.Context, segs [][]schema.Row) error {
+func (f *failAfter) Write(_ context.Context, segs [][]Row) error {
 	for _, s := range segs {
 		f.seen += len(s)
 	}

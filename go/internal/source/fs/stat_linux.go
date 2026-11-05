@@ -16,7 +16,7 @@ import (
 
 // statAt fills r from one stat of name relative to dirfd, never following a
 // symlink or triggering an automount.
-func statAt(dirfd int, name string, f Fields, r *schema.Row) error {
+func statAt(dirfd int, name string, f Fields, r *Entry) error {
 	if f == Statx {
 		var s unix.Statx_t
 		if err := unix.Statx(dirfd, name, unix.AT_SYMLINK_NOFOLLOW|unix.AT_NO_AUTOMOUNT, unix.STATX_ALL, &s); err != nil {
@@ -47,45 +47,45 @@ func readlinkAt(dirfd int, name string) (string, error) {
 	}
 }
 
-func kindOfMode(m uint32) schema.Kind {
+func kindOfMode(m uint32) Kind {
 	switch m & unix.S_IFMT {
 	case unix.S_IFREG:
-		return schema.KindFile
+		return KindFile
 	case unix.S_IFDIR:
-		return schema.KindDir
+		return KindDir
 	case unix.S_IFLNK:
-		return schema.KindSymlink
+		return KindSymlink
 	case unix.S_IFIFO:
-		return schema.KindFIFO
+		return KindFIFO
 	case unix.S_IFSOCK:
-		return schema.KindSocket
+		return KindSocket
 	case unix.S_IFCHR:
-		return schema.KindCharDevice
+		return KindCharDevice
 	case unix.S_IFBLK:
-		return schema.KindBlockDevice
+		return KindBlockDevice
 	}
-	return schema.KindUnknown
+	return KindUnknown
 }
 
 // dtKinds maps d_type values (0..15) to kinds; unlisted values are unknown.
-var dtKinds = [16]schema.Kind{
-	unix.DT_REG: schema.KindFile, unix.DT_DIR: schema.KindDir, unix.DT_LNK: schema.KindSymlink,
-	unix.DT_FIFO: schema.KindFIFO, unix.DT_SOCK: schema.KindSocket, unix.DT_CHR: schema.KindCharDevice,
-	unix.DT_BLK: schema.KindBlockDevice,
+var dtKinds = [16]Kind{
+	unix.DT_REG: KindFile, unix.DT_DIR: KindDir, unix.DT_LNK: KindSymlink,
+	unix.DT_FIFO: KindFIFO, unix.DT_SOCK: KindSocket, unix.DT_CHR: KindCharDevice,
+	unix.DT_BLK: KindBlockDevice,
 }
 
-func kindOfDT(t uint8) schema.Kind { return dtKinds[t&15] }
+func kindOfDT(t uint8) Kind { return dtKinds[t&15] }
 
-func dtypeOf(k schema.Kind) uint8 {
+func dtypeOf(k Kind) uint8 {
 	for t, kk := range dtKinds {
-		if kk == k && k != schema.KindUnknown {
+		if kk == k && k != KindUnknown {
 			return uint8(t)
 		}
 	}
 	return unix.DT_UNKNOWN
 }
 
-func fillStat(r *schema.Row, s *unix.Stat_t) {
+func fillStat(r *Entry, s *unix.Stat_t) {
 	r.Kind = kindOfMode(s.Mode)
 	r.Size = s.Size
 	r.Mode = s.Mode & 0o7777
@@ -94,10 +94,10 @@ func fillStat(r *schema.Row, s *unix.Stat_t) {
 	r.Mtime = schema.Micros(s.Mtim.Unix())
 	r.Ctime = schema.Micros(s.Ctim.Unix())
 	r.Atime = schema.Micros(s.Atim.Unix())
-	r.Present |= schema.HasStat
+	r.Present |= HasStat
 }
 
-func fillStatx(r *schema.Row, s *unix.Statx_t) {
+func fillStatx(r *Entry, s *unix.Statx_t) {
 	r.Kind = kindOfMode(uint32(s.Mode))
 	r.Size = int64(s.Size)
 	r.Mode = uint32(s.Mode) & 0o7777
@@ -106,15 +106,15 @@ func fillStatx(r *schema.Row, s *unix.Statx_t) {
 	r.Mtime = schema.Micros(s.Mtime.Sec, int64(s.Mtime.Nsec))
 	r.Ctime = schema.Micros(s.Ctime.Sec, int64(s.Ctime.Nsec))
 	r.Atime = schema.Micros(s.Atime.Sec, int64(s.Atime.Nsec))
-	r.Present |= schema.HasStat
+	r.Present |= HasStat
 	if s.Mask&unix.STATX_BTIME != 0 {
 		r.Btime = schema.Micros(s.Btime.Sec, int64(s.Btime.Nsec))
-		r.Present |= schema.HasBtime
+		r.Present |= HasBtime
 	}
 }
 
 // fillSys adds what os.FileInfo hides behind Sys() (portable engine).
-func fillSys(r *schema.Row, fi fs.FileInfo) {
+func fillSys(r *Entry, fi fs.FileInfo) {
 	s, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return
@@ -125,5 +125,5 @@ func fillSys(r *schema.Row, fi fs.FileInfo) {
 	r.Ctime = schema.Micros(s.Ctim.Unix())
 	r.Atime = schema.Micros(s.Atim.Unix())
 	r.Mode = s.Mode & 0o7777
-	r.Present |= schema.HasStat
+	r.Present |= HasStat
 }

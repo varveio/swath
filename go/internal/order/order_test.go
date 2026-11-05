@@ -5,6 +5,7 @@ package order
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -34,7 +35,7 @@ type rng struct {
 
 func (t *tree) Root() rng { return rng{} }
 
-func (t *tree) Expand(ctx context.Context, r rng, e source.Emitter[rng]) error {
+func (t *tree) Expand(ctx context.Context, r rng, e source.Emitter[rng, tp]) error {
 	t.expanded.Add(1)
 	if r.prefix == t.failAt && t.failAt != "" {
 		return errors.New("provider failed")
@@ -44,9 +45,9 @@ func (t *tree) Expand(ctx context.Context, r rng, e source.Emitter[rng]) error {
 	}
 	for i := range t.fanout {
 		// rows "p/iNN" then, for i, a child "p/iNN/" subtree
-		rows := make([]schema.Row, 0, t.rowsPer)
+		rows := make([]schema.Row[tp], 0, t.rowsPer)
 		for j := range t.rowsPer {
-			rows = append(rows, schema.Row{Key: fmt.Sprintf("%s%02d-%03d", r.prefix, i, j)})
+			rows = append(rows, schema.Row[tp]{Key: fmt.Sprintf("%s%02d-%03d", r.prefix, i, j)})
 		}
 		if err := e.Rows(rows); err != nil {
 			return err
@@ -78,20 +79,44 @@ func (t *tree) keys() []string {
 }
 
 // The tests state budgets in rows: count each row as one unit.
-func init() { rowBytes = func(rows []schema.Row) int64 { return int64(len(rows)) } }
+func init() { countRows = true }
+
+// tp is the tests' row payload: one integer and one string, so spill
+// frames carry a payload through the codec.
+type tp struct {
+	Size int64
+	ETag string
+}
+
+type tpCodec struct{}
+
+func (tpCodec) Append(dst []byte, p *tp) []byte {
+	return schema.AppendString(binary.AppendVarint(dst, p.Size), p.ETag)
+}
+
+func (tpCodec) Decode(d *schema.Decoder, p *tp) { p.Size, p.ETag = d.Varint(), d.Str() }
+
+var testSchema = schema.Schema[tp]{
+	Info:  schema.Info{Name: "t", ID: "test", Key: schema.String},
+	Bytes: func(p *tp) int64 { return 8 + int64(len(p.ETag)) },
+	Heap:  func(p *tp) int64 { return int64(len(p.ETag)) },
+	Codec: tpCodec{},
+}
 
 type collect struct {
 	mu   sync.Mutex
 	keys []string
+	data []tp
 	fail int // fail after this many rows (0 = never)
 }
 
-func (c *collect) Write(_ context.Context, segs [][]schema.Row) error {
+func (c *collect) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, s := range segs {
 		for _, r := range s {
 			c.keys = append(c.keys, r.Key)
+			c.data = append(c.data, r.Data)
 		}
 	}
 	if c.fail > 0 && len(c.keys) >= c.fail {
@@ -109,7 +134,7 @@ func TestOrderedOutput(t *testing.T) {
 	for _, tc := range []struct{ workers, budget int }{{1, 1}, {4, 3}, {8, 50}, {3, 1 << 20}} {
 		t.Run(fmt.Sprintf("w%d_b%d", tc.workers, tc.budget), func(t *testing.T) {
 			c := &collect{}
-			st, err := Run[rng](context.Background(), tr, c, Options{Workers: tc.workers, Budget: int64(tc.budget)})
+			st, err := Run[rng, tp](context.Background(), tr, c, &testSchema, Options{Workers: tc.workers, Budget: int64(tc.budget)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -133,7 +158,7 @@ func TestOrderedOutput(t *testing.T) {
 func TestSinkFailureStopsPromptly(t *testing.T) {
 	tr := &tree{depth: 5, fanout: 6, rowsPer: 20} // 9331 ranges
 	c := &collect{fail: 100}
-	_, err := Run[rng](context.Background(), tr, c, Options{Workers: 4, Budget: 500})
+	_, err := Run[rng, tp](context.Background(), tr, c, &testSchema, Options{Workers: 4, Budget: 500})
 	if err == nil || err.Error() != "sink failed" {
 		t.Fatalf("err = %v", err)
 	}
@@ -144,7 +169,7 @@ func TestSinkFailureStopsPromptly(t *testing.T) {
 
 func TestProviderFailure(t *testing.T) {
 	tr := &tree{depth: 3, fanout: 4, rowsPer: 3, failAt: "02/01/"}
-	_, err := Run[rng](context.Background(), tr, &collect{}, Options{Workers: 3, Budget: 10})
+	_, err := Run[rng, tp](context.Background(), tr, &collect{}, &testSchema, Options{Workers: 3, Budget: 10})
 	if err == nil || err.Error() != "provider failed" {
 		t.Fatalf("err = %v", err)
 	}
@@ -155,7 +180,7 @@ func TestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(20*time.Millisecond, cancel)
 	start := time.Now()
-	_, err := Run[rng](ctx, tr, &collect{}, Options{Workers: 4, Budget: 1000})
+	_, err := Run[rng, tp](ctx, tr, &collect{}, &testSchema, Options{Workers: 4, Budget: 1000})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
 	}
@@ -170,7 +195,7 @@ func TestCancellation(t *testing.T) {
 type failingRoot struct{}
 
 func (failingRoot) Root() rng { return rng{} }
-func (failingRoot) Expand(context.Context, rng, source.Emitter[rng]) error {
+func (failingRoot) Expand(context.Context, rng, source.Emitter[rng, tp]) error {
 	return errors.New("first LIST failed")
 }
 
@@ -183,7 +208,7 @@ func TestWorkerFailureNeverSucceeds(t *testing.T) {
 	hookAfterExpand = func() { time.Sleep(2 * time.Millisecond) }
 	defer func() { hookBeforeDrain, hookAfterExpand = nil, nil }()
 	for i := range 200 {
-		if _, err := Run[rng](context.Background(), failingRoot{}, &collect{}, Options{Workers: 4, Budget: 10}); err == nil {
+		if _, err := Run[rng, tp](context.Background(), failingRoot{}, &collect{}, &testSchema, Options{Workers: 4, Budget: 10}); err == nil {
 			t.Fatalf("iteration %d: a failed listing reported success", i)
 		}
 	}

@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
@@ -150,7 +149,7 @@ type SplitStats struct {
 	} `json:"skipped"`
 }
 
-// Provider lists one bucket (or prefix). It implements source.Provider[Range].
+// Provider lists one bucket (or prefix). It implements source.Provider[Range, Object].
 type Provider struct {
 	opt       Options
 	client    API
@@ -170,7 +169,7 @@ type Provider struct {
 	areaAt  time.Time
 }
 
-var _ source.Provider[Range] = (*Provider)(nil)
+var _ source.Provider[Range, Object] = (*Provider)(nil)
 
 // New builds the client (see package client for credentials and retries)
 // unless Options.Client supplies one.
@@ -273,7 +272,7 @@ func (p *Provider) list(ctx context.Context, in *client.ListInput) (*client.Page
 }
 
 // expandSequential lists the whole scope with one continuation-token chain.
-func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range]) error {
+func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range, Object]) error {
 	in := p.input()
 	last := ""
 	skip := ""
@@ -322,10 +321,10 @@ func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range]
 }
 
 // emit counts and hands one page of rows to e.
-func (p *Provider) emit(rows []schema.Row, e source.Emitter[Range]) error {
+func (p *Provider) emit(rows []Row, e source.Emitter[Range, Object]) error {
 	var bytes int64
 	for i := range rows {
-		bytes += rows[i].Size
+		bytes += rows[i].Data.Size
 	}
 	t := time.Now()
 	err := e.Rows(rows)
@@ -345,21 +344,19 @@ func (p *Provider) input() *client.ListInput {
 
 // rows converts the first n objects of a page to rows (Swath's mapping).
 // Rows share the page's strings.
-func (p *Provider) rows(out *client.Page, n int) []schema.Row {
-	rows := make([]schema.Row, n)
-	meta := make([]schema.ObjectMeta, n)
+func (p *Provider) rows(out *client.Page, n int) []Row {
+	rows := make([]Row, n)
 	for i := range out.Contents[:n] {
-		o, m := &out.Contents[i], &meta[i]
+		o, r := &out.Contents[i], &rows[i]
+		m := &r.Data
+		r.Key = o.Key
 		m.ETag = stripQuotes(o.ETag)
 		m.StorageClass = o.StorageClass
 		if p.opt.FetchOwner {
 			m.OwnerID, m.OwnerDisplayName = o.OwnerID, o.OwnerDisplayName
 		}
 		m.ChecksumAlgorithm, m.ChecksumType = o.ChecksumAlgorithm, o.ChecksumType
-		r := &rows[i]
-		r.Key, r.Kind, r.Object = o.Key, schema.KindFile, m
-		r.Size, r.Mtime = o.Size, o.Mtime
-		r.Present = schema.HasSize | schema.HasMtime
+		m.Size, m.Mtime = o.Size, o.Mtime
 	}
 	return rows
 }

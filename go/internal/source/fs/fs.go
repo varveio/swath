@@ -21,7 +21,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -118,7 +117,7 @@ type Range struct {
 	chunk  *chunk
 }
 
-// Provider lists one root. It implements source.Provider[Range].
+// Provider lists one root. It implements source.Provider[Range, Entry].
 type Provider struct {
 	root   string
 	opt    Options
@@ -127,7 +126,7 @@ type Provider struct {
 	stats  Stats
 }
 
-var _ source.Provider[Range] = (*Provider)(nil)
+var _ source.Provider[Range, Entry] = (*Provider)(nil)
 
 // ErrNotDir is returned by New when the root is not a directory.
 var ErrNotDir = errors.New("not a directory")
@@ -164,7 +163,7 @@ func (p *Provider) Stats() Stats {
 // its directory descriptor). It implements source.Disposer.
 func (p *Provider) Dispose(r Range) { disposeChunk(r) }
 
-func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range]) error {
+func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Entry]) error {
 	if done(ctx) {
 		return ctx.Err()
 	}
@@ -183,13 +182,13 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range])
 
 // emit hands a directory's sorted rows to e, splicing each subdirectory in
 // as a child range right after its DIR row. Skipped directories are dropped.
-func (p *Provider) emit(r Range, rows []schema.Row, e source.Emitter[Range], st *Stats) error {
+func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
 	start := 0
 	for i := range rows {
 		row := &rows[i]
-		if row.Kind != schema.KindDir {
+		if row.Data.Kind != KindDir {
 			st.Files++
-			st.Bytes += row.Size
+			st.Bytes += row.Data.Size
 			continue
 		}
 		if len(p.opt.Skip) > 0 && p.opt.Skip[row.Key] {
@@ -228,12 +227,12 @@ func done(ctx context.Context) bool {
 	}
 }
 
-func sortRows(rows []schema.Row) {
-	slices.SortFunc(rows, func(a, b schema.Row) int { return strings.Compare(a.Key, b.Key) })
+func sortRows(rows []Row) {
+	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
 }
 
 // expandPortable lists a directory with os.File.ReadDir and Lstat.
-func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range], st *Stats) error {
+func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
 	f, ok := openChecked(r, st)
 	if !ok {
 		return nil
@@ -244,16 +243,16 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 	if err != nil {
 		st.note(&st.ReadErrors, r.path, err)
 	}
-	rows := make([]schema.Row, 0, len(ents))
+	rows := make([]Row, 0, len(ents))
 	for i, d := range ents {
 		if i%1024 == 1023 && done(ctx) { // stat-heavy loop: stay cancellable
 			return ctx.Err()
 		}
 		name := d.Name()
-		row := schema.Row{Key: r.prefix + name}
+		row := Row{Key: r.prefix + name}
 		path := r.path + string(os.PathSeparator) + name
 		if p.opt.Fields == Names {
-			row.Kind = kindOf(d.Type())
+			row.Data.Kind = kindOf(d.Type())
 		} else {
 			fi, err := d.Info()
 			if err != nil {
@@ -264,16 +263,16 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 				}
 				continue
 			}
-			fromFileInfo(&row, fi)
-			if row.Kind == schema.KindSymlink && p.opt.LinkTarget {
+			fromFileInfo(&row.Data, fi)
+			if row.Data.Kind == KindSymlink && p.opt.LinkTarget {
 				if t, err := os.Readlink(path); err == nil {
-					row.LinkTarget, row.Present = filepath.ToSlash(t), row.Present|schema.HasLink
+					row.Data.LinkTarget, row.Data.Present = filepath.ToSlash(t), row.Data.Present|HasLink
 				} else {
 					st.note(&st.ReadlinkErrors, path, err)
 				}
 			}
 		}
-		if row.Kind == schema.KindDir {
+		if row.Data.Kind == KindDir {
 			row.Key += "/"
 		}
 		rows = append(rows, row)
@@ -306,28 +305,28 @@ func openChecked(r Range, st *Stats) (*os.File, bool) {
 }
 
 // kindOf maps Go file mode type bits to a kind.
-func kindOf(m fs.FileMode) schema.Kind {
+func kindOf(m fs.FileMode) Kind {
 	switch {
 	case m.IsRegular():
-		return schema.KindFile
+		return KindFile
 	case m&fs.ModeDir != 0:
-		return schema.KindDir
+		return KindDir
 	case m&fs.ModeSymlink != 0:
-		return schema.KindSymlink
+		return KindSymlink
 	case m&fs.ModeNamedPipe != 0:
-		return schema.KindFIFO
+		return KindFIFO
 	case m&fs.ModeSocket != 0:
-		return schema.KindSocket
+		return KindSocket
 	case m&fs.ModeDevice != 0 && m&fs.ModeCharDevice != 0:
-		return schema.KindCharDevice
+		return KindCharDevice
 	case m&fs.ModeDevice != 0:
-		return schema.KindBlockDevice
+		return KindBlockDevice
 	}
-	return schema.KindUnknown
+	return KindUnknown
 }
 
 // fromFileInfo fills a row from os.FileInfo plus the platform Sys() data.
-func fromFileInfo(r *schema.Row, fi fs.FileInfo) {
+func fromFileInfo(r *Entry, fi fs.FileInfo) {
 	m := fi.Mode()
 	r.Kind = kindOf(m)
 	r.Size = fi.Size()
@@ -342,6 +341,6 @@ func fromFileInfo(r *schema.Row, fi fs.FileInfo) {
 	if m&fs.ModeSticky != 0 {
 		r.Mode |= 0o1000
 	}
-	r.Present |= schema.HasSize | schema.HasMtime | schema.HasMode
+	r.Present |= HasSize | HasMtime | HasMode
 	fillSys(r, fi)
 }

@@ -35,8 +35,8 @@ import (
 
 // Sink receives ascending row segments from a single goroutine. The segments
 // are owned by the sink once Write is called.
-type Sink interface {
-	Write(ctx context.Context, segs [][]schema.Row) error
+type Sink[P any] interface {
+	Write(ctx context.Context, segs [][]schema.Row[P]) error
 }
 
 // Options configure Run.
@@ -87,32 +87,32 @@ const (
 	done
 )
 
-type item[R any] struct {
-	rows  []schema.Row
+type item[R, P any] struct {
+	rows  []schema.Row[P]
 	units int64 // budget bytes of rows
-	child *node[R]
+	child *node[R, P]
 	spill *spillFile // rows of this item are the next frame of the node's spill file
 }
 
-type node[R any] struct {
+type node[R, P any] struct {
 	r       R
 	state   state
-	items   []item[R]
-	pending []*node[R]  // children not yet pushed to the stack
-	spill   *spillFile  // the node's spill file, once it has spilled
-	onPath  atomic.Bool // the drainer's current node: its emitter publishes at once (written under mu)
-	awaited atomic.Bool // the drainer waits for, or itself expands, this node: its emitter never blocks
+	items   []item[R, P]
+	pending []*node[R, P] // children not yet pushed to the stack
+	spill   *spillFile    // the node's spill file, once it has spilled
+	onPath  atomic.Bool   // the drainer's current node: its emitter publishes at once (written under mu)
+	awaited atomic.Bool   // the drainer waits for, or itself expands, this node: its emitter never blocks
 }
 
-type run[R any] struct {
+type run[R, P any] struct {
 	ctx      context.Context
 	cancel   context.CancelCauseFunc
-	p        source.Provider[R]
+	p        source.Provider[R, P]
 	opt      Options
 	mu       sync.Mutex
 	work     *sync.Cond // workers: stack empty or budget used
 	drain    *sync.Cond // drainer and blocked emitters
-	stack    []*node[R]
+	stack    []*node[R, P]
 	buffered int64
 	max      int64
 	frontier time.Duration // Stats.FrontierWait (under mu)
@@ -121,16 +121,17 @@ type run[R any] struct {
 	stopped  atomic.Bool // ctx is done; checked instead of ctx.Err(), which takes a mutex
 
 	// Drainer-owned output batch (only the drainer goroutine touches it).
-	sp      *spiller // nil: no spill
-	sink    Sink
-	segs    [][]schema.Row
+	sp      *spiller[P]                 // nil: no spill
+	measure func([]schema.Row[P]) int64 // budget bytes of rows
+	sink    Sink[P]
+	segs    [][]schema.Row[P]
 	segRows int
 	rows    int64
 }
 
 // dispose releases the ranges that were queued but never expanded (a
 // cancelled or failed run); called after the workers have stopped.
-func (o *run[R]) dispose() {
+func (o *run[R, P]) dispose() {
 	d, ok := o.p.(source.Disposer[R])
 	if !ok {
 		return
@@ -147,12 +148,12 @@ func (o *run[R]) dispose() {
 // Test hooks that widen race windows; nil in production.
 var hookBeforeDrain, hookAfterExpand func()
 
-// rowBytes measures rows for the budget (tests count rows instead).
-var rowBytes = schema.RowsBytes
+// countRows makes the budget count rows instead of bytes (tests).
+var countRows bool
 
 // full reports whether the budget is used up (mu held): bytes buffered here
 // plus bytes held downstream.
-func (o *run[R]) full() bool {
+func (o *run[R, P]) full() bool {
 	n := o.buffered
 	if o.opt.Shared != nil {
 		n += o.opt.Shared.n.Load()
@@ -191,7 +192,7 @@ func (s *Shared) setWake(f func()) {
 }
 
 // send appends rows to the drainer's output batch, writing full batches.
-func (o *run[R]) send(rows []schema.Row) error {
+func (o *run[R, P]) send(rows []schema.Row[P]) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -203,7 +204,7 @@ func (o *run[R]) send(rows []schema.Row) error {
 	return nil
 }
 
-func (o *run[R]) flush() error {
+func (o *run[R, P]) flush() error {
 	if len(o.segs) == 0 {
 		return nil
 	}
@@ -215,13 +216,16 @@ func (o *run[R]) flush() error {
 
 // Run drains p in ascending key order into sink. It returns the first error
 // from the provider or the sink, or the context's error on cancellation.
-func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Options) (Stats, error) {
+func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s *schema.Schema[P], opt Options) (Stats, error) {
 	if opt.Workers < 1 || opt.Budget < 1 {
 		return Stats{}, errors.New("order: workers and budget must be positive")
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	o := &run[R]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink}
+	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes}
+	if countRows {
+		o.measure = func(rows []schema.Row[P]) int64 { return int64(len(rows)) }
+	}
 	if opt.Shared != nil {
 		opt.Shared.setWake(func() {
 			o.mu.Lock()
@@ -232,7 +236,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		defer opt.Shared.setWake(nil)
 	}
 	if opt.SpillDir != "" {
-		sp, err := newSpiller(opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
+		sp, err := newSpiller(s.Codec, opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
 		if err != nil {
 			return Stats{}, err
 		}
@@ -249,8 +253,8 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		o.mu.Unlock()
 	})
 	defer stop()
-	root := &node[R]{r: p.Root()}
-	o.stack = []*node[R]{root}
+	root := &node[R, P]{r: p.Root()}
+	o.stack = []*node[R, P]{root}
 
 	var wg sync.WaitGroup
 	for range opt.Workers {
@@ -292,7 +296,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 	return st, err
 }
 
-func (o *run[R]) worker() {
+func (o *run[R, P]) worker() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for {
@@ -331,8 +335,8 @@ func (o *run[R]) worker() {
 // mu. direct is set when the drainer expands the node it is draining: rows
 // up to the first child are then next in global order and go straight to the
 // sink, so a long streaming range is not buffered while the drainer is busy.
-func (o *run[R]) expand(n *node[R], direct bool) error {
-	e := &emitter[R]{o: o, n: n, direct: direct}
+func (o *run[R, P]) expand(n *node[R, P], direct bool) error {
+	e := &emitter[R, P]{o: o, n: n, direct: direct}
 	err := o.p.Expand(o.ctx, n.r, e)
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -376,11 +380,11 @@ func (o *run[R]) expand(n *node[R], direct bool) error {
 // when publishRows rows have accumulated or the range ends. One directory
 // therefore costs one lock round trip, while a long streaming range still
 // becomes visible to the drainer as it grows.
-type emitter[R any] struct {
-	o      *run[R]
-	n      *node[R]
-	items  []item[R]
-	kids   []*node[R]
+type emitter[R, P any] struct {
+	o      *run[R, P]
+	n      *node[R, P]
+	items  []item[R, P]
+	kids   []*node[R, P]
 	rows   int
 	units  int64
 	direct bool // drainer-expanded, no child yet: rows go straight to the sink
@@ -388,7 +392,7 @@ type emitter[R any] struct {
 
 const publishRows = 1024
 
-func (e *emitter[R]) Rows(rows []schema.Row) error {
+func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -398,22 +402,22 @@ func (e *emitter[R]) Rows(rows []schema.Row) error {
 		}
 		return e.o.send(rows)
 	}
-	u := rowBytes(rows)
-	e.items = append(e.items, item[R]{rows: rows, units: u})
+	u := e.o.measure(rows)
+	e.items = append(e.items, item[R, P]{rows: rows, units: u})
 	e.rows += len(rows)
 	e.units += u
 	return e.maybePublish()
 }
 
-func (e *emitter[R]) Child(r R) error {
+func (e *emitter[R, P]) Child(r R) error {
 	e.direct = false
-	c := &node[R]{r: r}
-	e.items = append(e.items, item[R]{child: c})
+	c := &node[R, P]{r: r}
+	e.items = append(e.items, item[R, P]{child: c})
 	e.kids = append(e.kids, c)
 	return e.maybePublish()
 }
 
-func (e *emitter[R]) maybePublish() error {
+func (e *emitter[R, P]) maybePublish() error {
 	if e.rows < publishRows && !e.n.onPath.Load() {
 		return nil
 	}
@@ -424,7 +428,7 @@ func (e *emitter[R]) maybePublish() error {
 
 // publish appends the collected items to the node; mu held. Unless the node
 // is on the drain path, it first waits while the budget is used up.
-func (e *emitter[R]) publish() error {
+func (e *emitter[R, P]) publish() error {
 	o := e.o
 	refused := false // the disk budget refused the last spill: wait before retrying
 	for !e.n.awaited.Load() && o.full() && !o.stopped.Load() {
@@ -474,7 +478,7 @@ func (e *emitter[R]) publish() error {
 // spill writes the collected row items to the node's spill file and
 // replaces them with markers; called without mu (the node's own emitter is
 // the only writer of its file).
-func (e *emitter[R]) spill() error {
+func (e *emitter[R, P]) spill() error {
 	if e.n.spill == nil {
 		e.n.spill = e.o.sp.file()
 	}
@@ -487,13 +491,13 @@ func (e *emitter[R]) spill() error {
 		}
 		e.rows -= len(e.items[i].rows)
 		e.units -= e.items[i].units
-		e.items[i] = item[R]{spill: e.n.spill}
+		e.items[i] = item[R, P]{spill: e.n.spill}
 	}
 	return nil
 }
 
 // replay reads one spilled frame and sends it; called without mu.
-func (o *run[R]) replay(f *spillFile) error {
+func (o *run[R, P]) replay(f *spillFile) error {
 	rows, err := o.sp.next(f)
 	if err != nil {
 		return err
@@ -505,7 +509,7 @@ func (o *run[R]) replay(f *spillFile) error {
 }
 
 // drainTree walks the tree depth-first from root, streaming rows to sink.
-func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
+func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	var st Stats
 	var released int64
 	release := func() { // mu held
@@ -523,7 +527,7 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 	releaseEvery := max(1, o.opt.Budget/16)
 
 	type frame struct {
-		n *node[R]
+		n *node[R, P]
 		i int
 	}
 	frames := []frame{{n: root}}
@@ -540,11 +544,11 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 			// A finished node's items are immutable: drain them without the lock.
 			items := n.items
 			o.mu.Unlock()
-			var child *node[R]
+			var child *node[R, P]
 			var err error
 			for f.i < len(items) && err == nil {
 				it := items[f.i]
-				items[f.i] = item[R]{}
+				items[f.i] = item[R, P]{}
 				f.i++
 				if it.child != nil {
 					child = it.child
@@ -576,7 +580,7 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 		}
 		if f.i < len(n.items) {
 			it := n.items[f.i]
-			n.items[f.i] = item[R]{}
+			n.items[f.i] = item[R, P]{}
 			f.i++
 			if it.child != nil {
 				n.onPath.Store(false)

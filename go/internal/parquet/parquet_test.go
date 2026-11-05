@@ -20,11 +20,11 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 )
 
-func testRows(n int, seed int64) []schema.Row {
+func testRows(n int, seed int64) []row {
 	rng := rand.New(rand.NewSource(seed))
 	alpha := []string{"a", "b", "z", "~", "/", ".", "-", "é", "ÿ", "日", "A", "0"}
 	seen := map[string]bool{}
-	rows := make([]schema.Row, 0, n)
+	rows := make([]row, 0, n)
 	for len(rows) < n {
 		k := ""
 		for range 1 + rng.Intn(14) {
@@ -34,24 +34,23 @@ func testRows(n int, seed int64) []schema.Row {
 			continue
 		}
 		seen[k] = true
-		r := schema.Row{Key: k, Kind: schema.KindFile, Size: int64(len(rows)), Mtime: 1_700_000_000_000_000 + int64(len(rows)), Present: schema.HasSize | schema.HasMtime}
+		r := row{Key: k, Data: tr{Kind: "FILE", Size: int64(len(rows)), Mtime: 1_700_000_000_000_000 + int64(len(rows)), ETag: strconv.Itoa(len(rows) * 7919)}}
 		if len(rows)%7 == 0 {
-			r.Kind, r.LinkTarget, r.Present = schema.KindSymlink, "t-"+k, r.Present|schema.HasLink
+			r.Data.Kind, r.Data.Link, r.Data.Has = "SYMLINK", "t-"+k, 2
 		}
 		if len(rows)%11 == 0 {
-			r.Present |= schema.HasStat | schema.HasBtime
-			r.UID, r.GID, r.Mode, r.Nlink, r.Inode, r.Dev, r.Blocks = 1<<31+5, 7, 0o4755, 3, -1, 42, 4096
-			r.Ctime, r.Atime, r.Btime = -5, 6, 7
+			r.Data.Has |= 1
+			r.Data.Mode, r.Data.Inode, r.Data.Small, r.Data.Flag = 1<<31+5, -1, -7, true
 		}
 		rows = append(rows, r)
 	}
-	slices.SortFunc(rows, func(a, b schema.Row) int { return strings.Compare(a.Key, b.Key) })
+	slices.SortFunc(rows, func(a, b row) int { return strings.Compare(a.Key, b.Key) })
 	return rows
 }
 
-func writeFile(t *testing.T, path string, rows []schema.Row, columns int) dataset.Part {
+func writeFile(t *testing.T, path string, rows []row, columns int) dataset.Part {
 	t.Helper()
-	w, err := create(path, &schema.Local, 0, columns, func() int { return columns })
+	w, err := create(path, &testSchema, 0, columns, func() int { return columns })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,18 +77,18 @@ func TestColumnParallelEncodingIsByteIdentical(t *testing.T) {
 	}
 }
 
-func route(t *testing.T, rows []schema.Row, encoders int, partSize int64) (string, []dataset.Part) {
+func route(t *testing.T, rows []row, encoders int, partSize int64) (string, []dataset.Part) {
 	t.Helper()
 	out := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r, err := NewRouter(Options{Out: out, Schema: &schema.Local, PartSize: partSize, Encoders: encoders})
+	r, err := NewRouter(Options{Out: out, PartSize: partSize, Encoders: encoders}, &testSchema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < len(rows); i += 1500 {
-		segs := [][]schema.Row{rows[i:min(i+700, len(rows))], rows[min(i+700, len(rows)):min(i+1500, len(rows))]}
+		segs := [][]row{rows[i:min(i+700, len(rows))], rows[min(i+700, len(rows)):min(i+1500, len(rows))]}
 		if err := r.Write(context.Background(), segs); err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +119,7 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 			// bound; nothing about the part's place in the dataset.
 			kv := footer(t, parts[i].Path)
 			want := map[string]string{dataset.StampProfile: dataset.Format, dataset.StampProfileVersion: strconv.Itoa(dataset.FormatVersion),
-				dataset.StampSchema: schema.Local.ID, dataset.StampIndexBound: "1024"}
+				dataset.StampSchema: testSchema.ID, dataset.StampIndexBound: "1024"}
 			for k, v := range want {
 				if kv[k] != v {
 					t.Errorf("part %d: %s = %q, want %q", i, k, kv[k], v)
@@ -141,8 +140,8 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 func TestRouterRejectsDescendingKeys(t *testing.T) {
 	out := t.TempDir()
 	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
-	r, _ := NewRouter(Options{Out: out, Schema: &schema.Local, PartSize: 1 << 20, Encoders: 2})
-	_ = r.Write(context.Background(), [][]schema.Row{{{Key: "b"}, {Key: "a"}}})
+	r, _ := NewRouter(Options{Out: out, PartSize: 1 << 20, Encoders: 2}, &testSchema)
+	_ = r.Write(context.Background(), [][]row{{{Key: "b"}, {Key: "a"}}})
 	if _, err := r.Close(); err == nil {
 		t.Fatal("expected an ordering error")
 	}
@@ -191,11 +190,12 @@ func TestFooterMatchesSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	elems := pf.Metadata().Schema[1:]
-	if len(elems) != len(schema.Local.Columns) {
-		t.Fatalf("%d footer columns, schema has %d", len(elems), len(schema.Local.Columns))
+	specs := testSchema.Specs()
+	if len(elems) != len(specs) {
+		t.Fatalf("%d footer columns, schema has %d", len(elems), len(specs))
 	}
 	for i, e := range elems {
-		c := schema.Local.Columns[i]
+		c := specs[i]
 		typ, _ := e.Type.Get()
 		rep, _ := e.RepetitionType.Get()
 		want := map[schema.Type]string{schema.String: "BYTE_ARRAY STRING", schema.Int32: "INT32 INT(32,true)",
@@ -259,7 +259,7 @@ func readKeys(t *testing.T, parts []dataset.Part) []string {
 	return keys
 }
 
-func keysOf(rows []schema.Row) []string {
+func keysOf(rows []row) []string {
 	out := make([]string, len(rows))
 	for i := range rows {
 		out[i] = rows[i].Key
@@ -267,23 +267,23 @@ func keysOf(rows []schema.Row) []string {
 	return out
 }
 
-// TestKeyLimits: the S3 schema refuses a key over 1,024 bytes with a typed
-// error; the filesystem schema writes longer keys, and the footer records
+// TestKeyLimits: a schema with a 1,024-byte key cap (S3) refuses a key over 1,024 bytes with a typed
+// error; an uncapped schema (filesystem) writes longer keys, and the footer records
 // the bound truncation, sorting_columns and readable truncated bounds.
 func TestKeyLimits(t *testing.T) {
 	out := t.TempDir()
 	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
 	long := strings.Repeat("k", 1500)
-	r, _ := NewRouter(Options{Out: out, Schema: &schema.S3, PartSize: 1 << 20, Encoders: 1})
-	_ = r.Write(context.Background(), [][]schema.Row{{{Key: long, Object: &schema.ObjectMeta{}}}})
+	r, _ := NewRouter(Options{Out: out, PartSize: 1 << 20, Encoders: 1}, &cappedSchema)
+	_ = r.Write(context.Background(), [][]row{{{Key: long}}})
 	if _, err := r.Close(); !errors.Is(err, schema.ErrKeyTooLong) {
 		t.Fatalf("S3 schema: %v", err)
 	}
 	out = t.TempDir()
 	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
-	r, _ = NewRouter(Options{Out: out, Schema: &schema.Local, PartSize: 1 << 20, Encoders: 1})
-	rows := []schema.Row{{Key: "a" + long, Kind: schema.KindFile}, {Key: "b" + long, Kind: schema.KindFile}}
-	if err := r.Write(context.Background(), [][]schema.Row{rows}); err != nil {
+	r, _ = NewRouter(Options{Out: out, PartSize: 1 << 20, Encoders: 1}, &testSchema)
+	rows := []row{{Key: "a" + long}, {Key: "b" + long}}
+	if err := r.Write(context.Background(), [][]row{rows}); err != nil {
 		t.Fatal(err)
 	}
 	parts, err := r.Close()

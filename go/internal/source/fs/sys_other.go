@@ -7,10 +7,8 @@ package fs
 
 import (
 	"io/fs"
-
-	"github.com/varveio/swath/go/internal/schema"
 )
 
 // fillSys: other platforms fill only what os.FileInfo exposes portably
 // (kind, size, mtime, permission bits).
-func fillSys(*schema.Row, fs.FileInfo) {}
+func fillSys(*Entry, fs.FileInfo) {}

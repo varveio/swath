@@ -19,7 +19,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
@@ -182,7 +181,7 @@ func runBudget(t *testing.T, api *sorted, opt Options, workers, budget int) ([]s
 		t.Fatal(err)
 	}
 	c := &collect{}
-	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: int64(budget) * 256}); err != nil {
+	if _, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: int64(budget) * 256}); err != nil {
 		t.Fatal(err)
 	}
 	return keysOf(c.rows), p.Stats(), leaves
@@ -377,7 +376,7 @@ func TestT4Paging(t *testing.T) {
 	before := runtime.NumGoroutine()
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
-	if _, err := order.Run[Range](ctx, p, &collect{}, order.Options{Workers: 4, Budget: 100 * 256}); !errors.Is(err, context.Canceled) {
+	if _, err := order.Run[Range, Object](ctx, p, &collect{}, &Schema, order.Options{Workers: 4, Budget: 100 * 256}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -404,8 +403,8 @@ func TestT4Paging(t *testing.T) {
 // direct is an emitter that collects rows and ignores children.
 type direct struct{ c *collect }
 
-func (d *direct) Rows(rows []schema.Row) error {
-	return d.c.Write(context.Background(), [][]schema.Row{rows})
+func (d *direct) Rows(rows []Row) error {
+	return d.c.Write(context.Background(), [][]Row{rows})
 }
 func (d *direct) Child(Range) error { return nil }
 
