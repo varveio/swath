@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/varveio/swath/go/internal/counters"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -176,15 +177,37 @@ func (p *Provider) list(ctx context.Context, in *client.ListInput) (*client.Page
 	p.mu.Lock()
 	p.c.Inc(cRequests)
 	p.mu.Unlock()
-	out, err := p.client.ListObjectsV2(ctx, in)
-	if err != nil {
+	for wait := requeueBase; ; wait = min(2*wait, requeueMax) {
+		out, err := p.client.ListObjectsV2(ctx, in)
+		if err == nil {
+			return out, nil
+		}
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, ctx.Err()
 		}
+		var ex *client.ExhaustedError
+		if errors.As(err, &ex) && client.Classify(err).Transient() && ctx.Err() == nil {
+			// Never fail the run on retry exhaustion: the page is asked
+			// again after a backoff, for as long as the run lives. Whether
+			// the run still makes progress is the command's watchdog's
+			// decision, not this one's.
+			p.c.Inc(cRequeues)
+			t := time.NewTimer(wait/2 + rand.N(wait/2+1))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return nil, context.Cause(ctx)
+			case <-t.C:
+			}
+			continue
+		}
 		return nil, fmt.Errorf("list s3://%s/%s: %w", p.opt.Bucket, p.opt.Prefix, err)
 	}
-	return out, nil
 }
+
+// requeueBase and requeueMax bound the backoff before a page whose
+// client retries were exhausted is asked again.
+var requeueBase, requeueMax = 2 * time.Second, 60 * time.Second
 
 // expandSequential lists the whole scope with one continuation-token chain.
 func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range, Object]) error {
@@ -213,7 +236,7 @@ func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range,
 		rows := p.rows(out, n)
 		for i := range rows {
 			if last != "" && rows[i].Key <= last {
-				return fmt.Errorf("listing out of order: %q after %q", rows[i].Key, last)
+				return fmt.Errorf("%w: listing out of order: %q after %q", client.ErrInvalidPage, rows[i].Key, last)
 			}
 			last = rows[i].Key
 		}
@@ -229,7 +252,7 @@ func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range,
 			return nil
 		}
 		if out.NextContinuationToken == "" {
-			return errors.New("truncated page without a continuation token")
+			return fmt.Errorf("%w: truncated page without a continuation token", client.ErrInvalidPage)
 		}
 		in.ContinuationToken = out.NextContinuationToken
 	}

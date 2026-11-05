@@ -5,7 +5,6 @@ package s3
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/varveio/swath/go/internal/faults"
 	"math"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 // Parallel S3 core: Swath's range tiling, seed, demand-driven owner split
@@ -176,7 +176,7 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		for i := range out.Contents {
 			k := out.Contents[i].Key
 			if (c != "" || i > 0) && k <= c {
-				return fmt.Errorf("listing out of order in (%q, %q]: %q after %q", r.lo, r.hi, k, c)
+				return fmt.Errorf("%w: listing out of order in (%q, %q]: %q after %q", client.ErrInvalidPage, r.lo, r.hi, k, c)
 			}
 			if !r.open && k > r.hi {
 				kept, reached = i, true
@@ -186,10 +186,10 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		}
 		truncated := out.IsTruncated
 		if truncated && out.NextContinuationToken == "" {
-			return errors.New("truncated page without a continuation token")
+			return fmt.Errorf("%w: truncated page without a continuation token", client.ErrInvalidPage)
 		}
 		if truncated && kept == 0 && !reached && skipped == 0 {
-			return fmt.Errorf("truncated page with no key in (%q, %q]", r.lo, r.hi)
+			return fmt.Errorf("%w: truncated page with no key in (%q, %q]", client.ErrInvalidPage, r.lo, r.hi)
 		}
 		if err := p.emit(p.rows(out, kept), e); err != nil {
 			return err

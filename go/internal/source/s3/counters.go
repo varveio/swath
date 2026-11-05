@@ -53,6 +53,7 @@ const (
 	cProbeUpperEmpty
 	cProbeMoved
 	cSplitRejectedProbe
+	cRequeues
 	numCounters
 )
 
@@ -104,6 +105,7 @@ var Counters = []counters.Def{
 	d("probe.upper_empty", counters.Count, "probes", "probes that found no key past the pivot: an empty upper child avoided", "probe"),
 	d("probe.moved", counters.Count, "pivots", "pivots moved to the midpoint of (cursor, pivot] after an empty probe", "probe"),
 	d("split.rejected.probe_empty", counters.Count, "decisions", "splits skipped: probes found no key past any pivot tried", "probe"),
+	d("requeues", counters.Count, "requests", "pages asked again after the client's retries were exhausted (the run never fails on that)"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {

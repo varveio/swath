@@ -89,6 +89,16 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   Other 4xx answers are typed `*client.Error`
   values (status, code, message, request id) and are not retried. Attempts, retries, throttles and timeouts are
   counted in the summary.
+- *Retry exhaustion never fails a run.* After its attempts, the client returns a `*client.ExhaustedError`; the
+  provider asks the same page again after a jittered backoff (2 s doubling, capped at 60 s), for as long as
+  the run lives, and counts `requeues`. Only the command's watchdog decides that a run cannot go on (no
+  progress for `--stall-timeout`: exit 75, resumable). Every request, including probes and the seed page,
+  goes through the same path.
+- *Error classes* (`client.Classify`, one table test covers each): `auth`, `access_denied`, `no_such_bucket`,
+  `redirect`, `throttle`, `timeout`, `server`, `transport`, `parse` (a body that does not parse),
+  `invalid_page` (a page that breaks the listing contract: out of order, truncated without a token or a key
+  in range), `canceled`, `other`. `throttle`, `timeout`, `server`, `transport` and `parse` are transient
+  (retried, then requeued); the rest stop the run, and the class is the run outcome's `cause`.
 - *Parsing:* a hand-rolled scanner over the whole body (read into a pooled buffer) with encoding/xml's
   semantics for what S3 sends: entities and character references, CDATA, comments, namespaces, `\r\n`
   normalisation, last occurrence wins, unknown elements (`RestoreStatus`, newer fields) skipped. It allocates

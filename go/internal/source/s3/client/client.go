@@ -137,7 +137,7 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 		retry, throttle := retryable(err, &timeout)
 		if !retry || attempt >= c.cfg.MaxAttempts {
 			if retry {
-				err = fmt.Errorf("after %d attempts: %w", attempt, err)
+				err = &ExhaustedError{Attempts: attempt, Err: err}
 			}
 			return nil, err
 		}

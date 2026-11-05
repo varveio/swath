@@ -86,6 +86,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `probe.upper_empty` | count | probes | probe | probes that found no key past the pivot: an empty upper child avoided |
 | `probe.moved` | count | pivots | probe | pivots moved to the midpoint of (cursor, pivot] after an empty probe |
 | `split.rejected.probe_empty` | count | decisions | probe | splits skipped: probes found no key past any pivot tried |
+| `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
 <!-- s3:end -->
 
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active
