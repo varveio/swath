@@ -64,7 +64,9 @@ resume lists them again. `manifest.json`, the run reports and `_SUCCESS` are wri
 
 `swath list s3://… -out DIR -resume`:
 
-1. Takes the directory lock (`.swath/lock`, `flock`): one process owns an output directory.
+1. Takes the output lock (`-out/.swath.lock`, `flock`) before reading, recovering, removing or writing
+   anything. It is held through the run's cleanup and publication. Fresh runs and overwrites take it too,
+   and it lives outside `.swath/`, so replacing a previous run never removes a live owner's lock.
 2. Checks the identity in the journal header against the request (`durable.Check`, a pure function). The
    provider, bucket, prefix, schema, writer (`parquet.WriterID`: encodings, geometry, part-size rule), part
    size and `-fetch-owner` must match; a mismatch is a typed `*durable.MismatchError`. Workers, encoders,

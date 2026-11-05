@@ -222,3 +222,56 @@ func TestEncoderFailureStopsListing(t *testing.T) {
 		t.Fatalf("the pipeline ran to the end (%d rows ordered) after the encoder failed", sum.Rows)
 	}
 }
+
+// TestCompetingRunsAreRefused: while a run owns the output (paused inside
+// an encoder), a resume and an overwrite by another run are refused before
+// they touch anything, and the owner then finishes byte-identically (Sol
+// P1-2).
+func TestCompetingRunsAreRefused(t *testing.T) {
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	paused, release := make(chan struct{}), make(chan struct{})
+	var n atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "encoding" && n.Add(1) == 3 {
+			close(paused)
+			<-release
+		}
+		return nil
+	})
+	defer restore()
+	done := make(chan error, 1)
+	go func() { _, err := Run(context.Background(), crashConfig(url, out, false)); done <- err }()
+	<-paused
+	snapshot := func() []string {
+		var names []string
+		filepath.Walk(out, func(p string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				names = append(names, p)
+			}
+			return nil
+		})
+		return names
+	}
+	before := snapshot()
+	if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, durable.ErrLocked) {
+		t.Fatalf("competing resume: %v", err)
+	}
+	over := crashConfig(url, out, false)
+	over.Replace = true
+	if _, err := Run(context.Background(), over); !errors.Is(err, durable.ErrLocked) {
+		t.Fatalf("competing overwrite: %v", err)
+	}
+	if after := snapshot(); fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("a refused run changed the owner's files:\n%v\n%v", before, after)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	sameDataset(t, "owner", ref, out)
+}

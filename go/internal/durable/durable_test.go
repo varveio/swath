@@ -98,9 +98,14 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(out, Identity{}); !errors.Is(err, ErrLocked) {
+	lock, err := TakeLock(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TakeLock(out); !errors.Is(err, ErrLocked) {
 		t.Fatalf("second owner: %v", err)
 	}
+	lock.Release()
 	for i := range 3 {
 		j.Append(Record{Ordinal: i, Part: dataset.Part{MaxKey: "k"}})
 	}

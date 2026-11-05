@@ -66,7 +66,7 @@ func Prepare(out, root, schemaID string, replace bool) error {
 func prepareOut(out, absOut, schemaID string, replace bool) error {
 	ents, err := os.ReadDir(absOut)
 	switch {
-	case err == nil && len(ents) > 0:
+	case err == nil && nonLock(ents) > 0:
 		if !replace {
 			return fmt.Errorf("%s: %w", out, ErrNotEmpty)
 		}
@@ -211,4 +211,15 @@ func Resumable(out string) bool {
 	_, e1 := os.Stat(filepath.Join(out, SuccessName))
 	_, e2 := os.Stat(filepath.Join(out, JournalDir, "journal"))
 	return e1 != nil && e2 == nil
+}
+
+// nonLock counts entries other than the output lock file.
+func nonLock(ents []os.DirEntry) int {
+	n := 0
+	for _, e := range ents {
+		if e.Name() != ".swath.lock" {
+			n++
+		}
+	}
+	return n
 }

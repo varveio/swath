@@ -85,9 +85,8 @@ func (s *State) Last() *Record {
 }
 
 // Journal appends records with one writer goroutine; Append returns once
-// the record is on disk. It holds the directory's lock while open.
+// the record is on disk. The caller holds the output's Lock.
 type Journal struct {
-	lock *os.File
 	f    *os.File
 	reqs chan req
 	done chan struct{}
@@ -104,16 +103,11 @@ func Create(out string, id Identity) (*Journal, error) {
 	if err := os.MkdirAll(filepath.Join(out, Dir), 0o755); err != nil {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
-	lock, err := acquire(out)
-	if err != nil {
-		return nil, err
-	}
 	f, err := os.OpenFile(Path(out), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
-		lock.Close()
 		return nil, fmt.Errorf("journal: %w", err)
 	}
-	j := start(f, lock)
+	j := start(f)
 	if err := j.append(Header{Type: "header", Version: Version, Identity: id, Created: time.Now().UTC()}); err != nil {
 		j.Close()
 		return nil, err
@@ -128,13 +122,8 @@ func Create(out string, id Identity) (*Journal, error) {
 // Reopen continues an existing journal: it truncates a torn tail and
 // appends after the last whole frame.
 func Reopen(out string, st *State) (*Journal, error) {
-	lock, err := acquire(out)
-	if err != nil {
-		return nil, err
-	}
 	f, err := os.OpenFile(Path(out), os.O_WRONLY, 0o644)
 	if err != nil {
-		lock.Close()
 		return nil, fmt.Errorf("journal: %w", err)
 	}
 	end, err := f.Seek(0, io.SeekEnd)
@@ -152,28 +141,43 @@ func Reopen(out string, st *State) (*Journal, error) {
 			return nil, fmt.Errorf("journal: %w", err)
 		}
 	}
-	return start(f, lock), nil
+	return start(f), nil
 }
 
-// acquire takes the directory's lock file (exclusive, non-blocking): one
-// process owns an output directory at a time.
-func acquire(out string) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Join(out, Dir), 0o755); err != nil {
-		return nil, fmt.Errorf("journal: %w", err)
+// LockName is the output directory's lock file. It lives outside .swath, so
+// replacing a previous run's entries never removes a live owner's lock.
+const LockName = ".swath.lock"
+
+// Lock is exclusive ownership of an output directory: taken before the
+// directory is prepared, recovered or written, held until the run ends.
+type Lock struct{ f *os.File }
+
+// TakeLock creates out if needed and takes its lock (non-blocking).
+func TakeLock(out string) (*Lock, error) {
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return nil, fmt.Errorf("output: %w", err)
 	}
-	f, err := os.OpenFile(filepath.Join(out, Dir, "lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(filepath.Join(out, LockName), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("journal: %w", err)
+		return nil, fmt.Errorf("output lock: %w", err)
 	}
 	if err := lockFile(f); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("%w (%s): %v", ErrLocked, out, err)
 	}
-	return f, nil
+	return &Lock{f}, nil
 }
 
-func start(f, lock *os.File) *Journal {
-	j := &Journal{f: f, lock: lock, reqs: make(chan req), done: make(chan struct{})}
+// Release releases the lock.
+func (l *Lock) Release() {
+	if l != nil && l.f != nil {
+		l.f.Close()
+		l.f = nil
+	}
+}
+
+func start(f *os.File) *Journal {
+	j := &Journal{f: f, reqs: make(chan req), done: make(chan struct{})}
 	go j.writer()
 	return j
 }
@@ -222,11 +226,7 @@ func (j *Journal) append(v any) error {
 func (j *Journal) Close() error {
 	close(j.reqs)
 	<-j.done
-	err := j.f.Close()
-	if j.lock != nil {
-		j.lock.Close()
-	}
-	return err
+	return j.f.Close()
 }
 
 // Version is the journal format this tool writes and reads.
