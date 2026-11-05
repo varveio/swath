@@ -199,7 +199,8 @@ func TestFooterMatchesSchema(t *testing.T) {
 		typ, _ := e.Type.Get()
 		rep, _ := e.RepetitionType.Get()
 		want := map[schema.Type]string{schema.String: "BYTE_ARRAY STRING", schema.Int32: "INT32 INT(32,true)",
-			schema.Int64: "INT64 INT(64,true)", schema.TimestampMicros: "INT64 TIMESTAMP(isAdjustedToUTC=true,unit=MICROS)", schema.Bool: "BOOLEAN <nil>"}[c.Type]
+			schema.Int64: "INT64 INT(64,true)", schema.TimestampMicros: "INT64 TIMESTAMP(isAdjustedToUTC=true,unit=MICROS)", schema.Bool: "BOOLEAN <nil>",
+			schema.Uint32: "INT32 INT(32,false)", schema.Uint64: "INT64 INT(64,false)"}[c.Type]
 		logical := "<nil>"
 		if e.LogicalType.Value != nil {
 			logical = e.LogicalType.String()

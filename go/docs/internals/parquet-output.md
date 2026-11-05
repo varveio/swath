@@ -98,8 +98,9 @@ message string any more.
 object, so Java's `version_id`, `is_latest`, `is_delete_marker` and `row_type` are not stored; `bench/diffds.py`
 restores their constant values for comparison. ETags lose one pair of surrounding quotes, as swath does.
 
-**`schema.Local`** (`swath-local/v0`) has one row per entry below the root. `key`, `size` and
-`last_modified` match the canonical schema; the rest replace the S3 columns:
+**`schema.Local`** (`swath-local/v1`) has one row per entry below the root, directories included, each with a
+named `kind`. `key`, `size` and `last_modified` match the S3 schema. Identifiers are unsigned. v1 renamed
+`blocks` to `allocated_bytes` and `ctime` to `metadata_changed_at`, and made the identifiers unsigned:
 
 | Column | Parquet physical / logical | Null? | Source |
 |---|---|---|---|
@@ -107,15 +108,16 @@ restores their constant values for comparison. ETags lose one pair of surroundin
 | `size` | INT64 `INT(64,true)` | optional | `st_size` (apparent bytes) |
 | `last_modified` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_mtime` |
 | `kind` | BINARY (STRING) | required | `FILE`, `DIR`, `SYMLINK`, `FIFO`, `SOCKET`, `CHAR_DEVICE`, `BLOCK_DEVICE`, `UNKNOWN` |
-| `mode` | INT32 `INT(32,true)` | optional | `st_mode & 0o7777` (permission + setuid/setgid/sticky) |
-| `uid`, `gid` | INT32 `INT(32,true)` | optional | `st_uid`, `st_gid` (bit pattern: ids >= 2^31 read back negative) |
-| `nlink` | INT32 `INT(32,true)` | optional | `st_nlink` |
-| `inode` | INT64 `INT(64,true)` | optional | `st_ino` (bit pattern) |
-| `dev` | INT64 `INT(64,true)` | optional | `st_dev` (statx: `makedev(major, minor)`) |
-| `blocks` | INT64 `INT(64,true)` | optional | `st_blocks * 512` = allocated bytes (sparse files show `blocks < size`) |
-| `ctime`, `atime` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_ctime`, `st_atime` |
+| `mode` | INT32 `INT(32,false)` | optional | `st_mode & 0o7777` (permission + setuid/setgid/sticky) |
+| `uid`, `gid` | INT32 `INT(32,false)` | optional | `st_uid`, `st_gid` |
+| `nlink` | INT32 `INT(32,false)` | optional | `st_nlink` |
+| `inode` | INT64 `INT(64,false)` | optional | `st_ino` |
+| `dev` | INT64 `INT(64,false)` | optional | `st_dev` (statx: `makedev(major, minor)`) |
+| `allocated_bytes` | INT64 `INT(64,true)` | optional | `st_blocks * 512` (sparse files show `allocated_bytes < size`) |
+| `metadata_changed_at`, `atime` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_ctime`, `st_atime` |
 | `birth_time` | INT64 TIMESTAMP(MICROS, UTC) | optional | statx `stx_btime` (only `--fields statx`, mask `all`, when the filesystem reports it); Windows `CreationTime` |
 | `link_target` | BINARY (STRING) | optional | `readlink` result, symlinks only (stat/statx tiers unless `--no-link-target`) |
 
-Directories produce `kind=DIR` rows keyed `a/b/` (`-no-dirs` omits them). The Parquet message name is
-`swath_listing` for both schemas.
+Directories produce `kind=DIR` rows keyed `a/b/` (`-no-dirs` omits them). In the S3 schema a key ending in
+`/` is an object like any other: delimiter prefixes are derived by readers, never stored. The Parquet schema
+name is `swath_listing` for both schemas.

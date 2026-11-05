@@ -17,6 +17,8 @@ const (
 	Int64                       // INT64, unannotated
 	TimestampMicros             // INT64 TIMESTAMP(MICROS, UTC)
 	Bool                        // BOOLEAN
+	Uint32                      // INT32 INT(32, unsigned)
+	Uint64                      // INT64 INT(64, unsigned)
 )
 
 // Spec is a column's name, type and nullability.

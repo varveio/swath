@@ -3,24 +3,26 @@
 
 package schema
 
-// Local is schema swath-local/v0. key, size and last_modified are identical
-// to Swath's canonical schema, so a reader that needs only them works on both.
+// Local is schema swath-local/v1: one row per entry below the root,
+// directories included, each with a named kind. key, size and last_modified
+// match the S3 schema. Identifiers (mode, uid, gid, nlink, inode, dev) are
+// unsigned; allocated_bytes is st_blocks × 512; metadata_changed_at is ctime.
 var Local = Schema{
 	Name: "swath_listing",
-	ID:   "swath-local/v0",
+	ID:   "swath-local/v1",
 	Columns: []Column{
 		{Spec: Spec{"key", String, true}, Str: func(r *Row) (string, bool) { return r.Key, true }},
 		int64Col("size", HasSize, func(r *Row) int64 { return r.Size }),
 		timeCol("last_modified", HasMtime, func(r *Row) int64 { return r.Mtime }),
 		{Spec: Spec{"kind", String, true}, Str: func(r *Row) (string, bool) { return r.Kind.String(), true }},
-		int32Col("mode", HasMode, func(r *Row) uint32 { return r.Mode }),
-		int32Col("uid", HasUID, func(r *Row) uint32 { return r.UID }),
-		int32Col("gid", HasGID, func(r *Row) uint32 { return r.GID }),
-		int32Col("nlink", HasNlink, func(r *Row) uint32 { return r.Nlink }),
-		int64Col("inode", HasInode, func(r *Row) int64 { return r.Inode }),
-		int64Col("dev", HasDev, func(r *Row) int64 { return r.Dev }),
-		int64Col("blocks", HasBlocks, func(r *Row) int64 { return r.Blocks }),
-		timeCol("ctime", HasCtime, func(r *Row) int64 { return r.Ctime }),
+		uint32Col("mode", HasMode, func(r *Row) uint32 { return r.Mode }),
+		uint32Col("uid", HasUID, func(r *Row) uint32 { return r.UID }),
+		uint32Col("gid", HasGID, func(r *Row) uint32 { return r.GID }),
+		uint32Col("nlink", HasNlink, func(r *Row) uint32 { return r.Nlink }),
+		uint64Col("inode", HasInode, func(r *Row) int64 { return r.Inode }),
+		uint64Col("dev", HasDev, func(r *Row) int64 { return r.Dev }),
+		int64Col("allocated_bytes", HasBlocks, func(r *Row) int64 { return r.Blocks }),
+		timeCol("metadata_changed_at", HasCtime, func(r *Row) int64 { return r.Ctime }),
 		timeCol("atime", HasAtime, func(r *Row) int64 { return r.Atime }),
 		timeCol("birth_time", HasBtime, func(r *Row) int64 { return r.Btime }),
 		{Spec: Spec{"link_target", String, false}, Str: func(r *Row) (string, bool) { return r.LinkTarget, r.Has(HasLink) }},
@@ -35,8 +37,13 @@ func timeCol(name string, p Presence, get func(*Row) int64) Column {
 	return Column{Spec: Spec{name, TimestampMicros, false}, Int: func(r *Row) (int64, bool) { return get(r), r.Has(p) }}
 }
 
-func int32Col(name string, p Presence, get func(*Row) uint32) Column {
-	return Column{Spec: Spec{name, Int32, false}, Int: func(r *Row) (int64, bool) { return int64(int32(get(r))), r.Has(p) }}
+// uint32Col and uint64Col carry the unsigned value's bits in Int.
+func uint32Col(name string, p Presence, get func(*Row) uint32) Column {
+	return Column{Spec: Spec{name, Uint32, false}, Int: func(r *Row) (int64, bool) { return int64(int32(get(r))), r.Has(p) }}
+}
+
+func uint64Col(name string, p Presence, get func(*Row) int64) Column {
+	return Column{Spec: Spec{name, Uint64, false}, Int: func(r *Row) (int64, bool) { return get(r), r.Has(p) }}
 }
 
 // S3 is the current-object schema: every row is a current object, so the

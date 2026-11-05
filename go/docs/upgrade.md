@@ -83,9 +83,12 @@ or may not be in it.
 | `is_delete_marker` | always false | removed |
 | `row_type` | always `OBJECT` | removed |
 
+The local schema becomes `swath-local/v1`: `blocks` is renamed `allocated_bytes`, `ctime` is renamed
+`metadata_changed_at`, and `mode`, `uid`, `gid`, `nlink` (`INT(32,false)`), `inode` and `dev`
+(`INT(64,false)`) are unsigned.
+
 A reader that needs the format-1 columns restores them as constants: `NULL`, `NULL`, `false`, `'OBJECT'`.
-`bench/diffds.py` does exactly that, so a Go dataset compares with a Java dataset value for value. The local
-schema (`swath-local/v0`) is unchanged.
+`bench/diffds.py` does exactly that, so a Go dataset compares with a Java dataset value for value.
 
 ## Footer
 

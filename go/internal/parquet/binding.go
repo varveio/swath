@@ -18,7 +18,7 @@ import (
 
 // nodeOf builds the Parquet schema for s. Column order is the declaration
 // order; the key column is delta-encoded with an ascending single-page index,
-// and integer columns are bare (no INT annotation), like Swath's size column.
+// and integer columns carry the standard INT annotation (signed or not).
 func nodeOf(s *schema.Schema) *pq.Schema {
 	fields := make([]reflect.StructField, len(s.Columns))
 	for i, c := range s.Columns {
@@ -31,6 +31,10 @@ func nodeOf(s *schema.Schema) *pq.Schema {
 			t = reflect.TypeFor[int32]()
 		case schema.Int64:
 			t = reflect.TypeFor[int64]()
+		case schema.Uint32:
+			t = reflect.TypeFor[uint32]()
+		case schema.Uint64:
+			t = reflect.TypeFor[uint64]()
 		case schema.TimestampMicros:
 			t, tag = reflect.TypeFor[int64](), tag+",timestamp(microsecond:utc)"
 		case schema.Bool:
@@ -128,7 +132,7 @@ func fill(c *schema.Column, col int, dst []pq.Value, rows []schema.Row) {
 				dst[i] = pq.NullValue().Level(0, 0, col)
 			}
 		}
-	case c.Type == schema.Int32:
+	case c.Type == schema.Int32 || c.Type == schema.Uint32:
 		for i := range rows {
 			if v, ok := c.Int(&rows[i]); ok {
 				dst[i] = pq.Int32Value(int32(v)).Level(0, def, col)
