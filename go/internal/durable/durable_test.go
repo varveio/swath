@@ -28,6 +28,10 @@ func TestCheck(t *testing.T) {
 		{"bucket", func(i *Identity) { i.Bucket = "c" }, "source"},
 		{"prefix", func(i *Identity) { i.Prefix = "p/" }, "source"},
 		{"writer", func(i *Identity) { i.Writer = "w2" }, "writer"},
+		{"endpoint", func(i *Identity) { i.Endpoint = "http://other:9000" }, "endpoint"},
+		{"endpoint spelling", func(i *Identity) { i.Endpoint = "" }, ""},
+		{"region", func(i *Identity) { i.Region = "eu-west-1" }, "region"},
+		{"key cap", func(i *Identity) { i.KeyCap = 4096 }, "key cap"},
 		{"part size", func(i *Identity) { i.PartSize = 1 }, "part size"},
 		{"fetch owner", func(i *Identity) { i.FetchOwner = true }, "fetch owner"},
 	} {

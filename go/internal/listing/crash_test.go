@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -128,12 +129,18 @@ func TestResumeChecksIdentity(t *testing.T) {
 	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "part size" {
 		t.Fatalf("changed part size accepted: %v", err)
 	}
+	cfg = crashConfig(url, out, true)
+	cfg.S3.Endpoint = strings.Replace(url, "127.0.0.1", "localhost", 1) // another route, maybe another bucket
+	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "endpoint" {
+		t.Fatalf("changed endpoint accepted: %v", err)
+	}
 	cfg = crashConfig(url, out, false)
 	if _, err := Run(context.Background(), cfg); err == nil {
 		t.Fatal("a fresh run over an interrupted one was accepted without -overwrite")
 	}
 	cfg = crashConfig(url, out, true)
 	cfg.Workers = 3
+	cfg.S3.Endpoint = strings.ToUpper(url[:4]) + url[4:] + "/" // an equivalent spelling of the same endpoint
 	if _, err := Run(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}

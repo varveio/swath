@@ -202,7 +202,8 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 		target += "/" + prefix
 	}
 	jr, err := openJournal(cfg, durable.Identity{Tool: "swath-go", Format: 1, SchemaID: s.ID, Provider: "s3",
-		Bucket: bucket, Prefix: prefix, Writer: parquet.WriterID, PartSize: cfg.PartSize, FetchOwner: cfg.S3.FetchOwner})
+		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, KeyCap: s.MaxKeyBytes,
+		Writer: parquet.WriterID, PartSize: cfg.PartSize, FetchOwner: cfg.S3.FetchOwner})
 	if err != nil {
 		return sum, err
 	}

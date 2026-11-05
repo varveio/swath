@@ -3,7 +3,10 @@
 
 package durable
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Identity is what must not change between a run and its resume: anything
 // that changes which rows are listed or how they are written.
@@ -14,6 +17,9 @@ type Identity struct {
 	Provider   string `json:"provider"`    // "s3"
 	Bucket     string `json:"bucket"`      // the source, not its URL: the endpoint may change
 	Prefix     string `json:"prefix"`      //
+	Endpoint   string `json:"endpoint"`    // "" for AWS; compared after NormalizeEndpoint
+	Region     string `json:"region"`      // as requested ("" for the resolved default)
+	KeyCap     int    `json:"key_cap"`     // the schema's key length limit (rows it refuses)
 	Writer     string `json:"writer"`      // encoding, geometry and part-size rule (parquet.WriterID)
 	PartSize   int64  `json:"part_size"`   // part boundaries
 	FetchOwner bool   `json:"fetch_owner"` // owner columns
@@ -30,9 +36,10 @@ func (e *MismatchError) Error() string {
 }
 
 // Check compares a stored identity with a requested one. It is a pure
-// function; workers, encoders, memory, seeding and the endpoint (an
-// equivalent route to the same bucket) may change across a resume because
-// they do not change the dataset.
+// function. Workers, encoders, memory, seeding, probing and credentials may
+// change across a resume. The endpoint may change only to a spelling
+// NormalizeEndpoint treats as the same: a different endpoint can serve a
+// different bucket of the same name.
 func Check(stored, requested Identity) error {
 	switch {
 	case stored.Tool != requested.Tool:
@@ -43,6 +50,12 @@ func Check(stored, requested Identity) error {
 		return &MismatchError{"schema", stored.SchemaID, requested.SchemaID}
 	case stored.Provider != requested.Provider || stored.Bucket != requested.Bucket || stored.Prefix != requested.Prefix:
 		return &MismatchError{"source", stored.Provider + "://" + stored.Bucket + "/" + stored.Prefix, requested.Provider + "://" + requested.Bucket + "/" + requested.Prefix}
+	case NormalizeEndpoint(stored.Endpoint) != NormalizeEndpoint(requested.Endpoint):
+		return &MismatchError{"endpoint", stored.Endpoint, requested.Endpoint}
+	case stored.Region != requested.Region:
+		return &MismatchError{"region", stored.Region, requested.Region}
+	case stored.KeyCap != requested.KeyCap:
+		return &MismatchError{"key cap", stored.KeyCap, requested.KeyCap}
 	case stored.Writer != requested.Writer:
 		return &MismatchError{"writer", stored.Writer, requested.Writer}
 	case stored.PartSize != requested.PartSize:
@@ -51,4 +64,20 @@ func Check(stored, requested Identity) error {
 		return &MismatchError{"fetch owner", stored.FetchOwner, requested.FetchOwner}
 	}
 	return nil
+}
+
+// NormalizeEndpoint is the allowlist of equivalent endpoint spellings: the
+// scheme and host are case-insensitive and a trailing slash is ignored.
+// Nothing else is assumed equivalent.
+func NormalizeEndpoint(e string) string {
+	e = strings.TrimSuffix(e, "/")
+	if i := strings.Index(e, "://"); i >= 0 {
+		rest := e[i+3:]
+		host, path, _ := strings.Cut(rest, "/")
+		e = strings.ToLower(e[:i]) + "://" + strings.ToLower(host)
+		if path != "" {
+			e += "/" + path
+		}
+	}
+	return e
 }

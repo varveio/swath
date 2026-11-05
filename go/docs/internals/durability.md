@@ -68,9 +68,11 @@ resume lists them again. `manifest.json`, the run reports and `_SUCCESS` are wri
    anything. It is held through the run's cleanup and publication. Fresh runs and overwrites take it too,
    and it lives outside `.swath/`, so replacing a previous run never removes a live owner's lock.
 2. Checks the identity in the journal header against the request (`durable.Check`, a pure function). The
-   provider, bucket, prefix, schema, writer (`parquet.WriterID`: encodings, geometry, part-size rule), part
-   size and `-fetch-owner` must match; a mismatch is a typed `*durable.MismatchError`. Workers, encoders,
-   memory, `-seed` and the endpoint (an equivalent route to the same bucket) may change.
+   provider, bucket, prefix, endpoint, region, schema, key cap, writer (`parquet.WriterID`: encodings,
+   geometry, part-size rule), part size and `-fetch-owner` must match; a mismatch is a typed
+   `*durable.MismatchError`. Endpoints are compared after `NormalizeEndpoint` (scheme and host case, a
+   trailing slash), the only equivalences allowed: another endpoint may serve another bucket of the same
+   name. Workers, encoders, memory, `-seed`, `-no-probe` and credentials may change.
 3. Recovers `data/`. Every retained part must match its record's size and MD5 (`ErrPartAltered` otherwise).
    A part whose record is durable but whose rename did not happen is renamed now. Every unrecorded file in
    `data/` is removed.
