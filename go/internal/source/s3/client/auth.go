@@ -48,9 +48,11 @@ func loadAuth(cfg Config) (*auth, error) {
 	if cfg.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(cfg.Profile))
 	}
-	if cfg.Region != "" {
-		opts = append(opts, config.WithRegion(cfg.Region))
-	}
+	// The bucket's region (--region) is the signing region only. The
+	// credential chain (STS for web identity and assumed roles) keeps the
+	// environment's or the profile's region, else us-east-1, so a bucket in
+	// another region never moves the STS endpoint.
+	opts = append(opts, config.WithDefaultRegion("us-east-1"))
 	if cfg.Anonymous {
 		opts = append(opts, config.WithCredentialsProvider(aws.AnonymousCredentials{}))
 	}
@@ -58,9 +60,9 @@ func loadAuth(cfg Config) (*auth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("AWS configuration: %w", err)
 	}
-	a := &auth{region: ac.Region, signer: v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true })}
+	a := &auth{region: cfg.Region, signer: v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true })}
 	if a.region == "" {
-		a.region = "us-east-1"
+		a.region = ac.Region // the environment's or the profile's, else us-east-1
 	}
 	if cfg.Anonymous || ac.Credentials == nil {
 		a.anonymous, a.source = true, "anonymous"

@@ -67,7 +67,7 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   - the China partition (`*.amazonaws.com.cn` for `cn-` regions);
   - custom endpoints (`-endpoint`, S3-compatible stores).
 
-  **Not supported yet:** access points and Multi-Region Access Points (ARNs), S3 Express One Zone directory
+  **Not supported:** access points and Multi-Region Access Points (ARNs), S3 Express One Zone directory
   buckets, Outposts, the GovCloud-specific and ISO partitions beyond the plain regional host,
   `use_fips_endpoint` and `use_dualstack_endpoint` read from the shared config (use the flags), and
   automatic region redirects.
@@ -86,7 +86,14 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   - container credentials (ECS, EKS Pod Identity);
   - EC2 instance roles (IMDSv2).
 
-  Credentials are cached and refreshed by the SDK. The first lookup is bounded at 3 s. If the chain finds
+  Verified by tests against a fake STS and the fake bucket (`TestCredentialSources`, `TestCredentialRefresh`,
+  `TestCredentialChain`): environment keys, shared-file profiles, web identity, a role chained from web
+  identity with `external_id` (passed to AssumeRole), and credentials that expire mid-listing (fetched again;
+  requests are signed with the new keys, none fails). SSO, container credentials and instance roles are the
+  SDK's own providers, not exercised here. **STS region:** the bucket's `--region` is the signing region for
+  S3 only; the credential chain's STS calls use the environment's or the profile's region, else `us-east-1`
+  (`TestCredentialSources` lists buckets in eu-west-2 and ap-southeast-2 and sees STS signed for us-east-1).
+  Credentials are cached by the SDK and refreshed before they expire. The first lookup is bounded at 3 s. If the chain finds
   nothing and no profile was named, requests go unsigned; a named profile that fails is an error.
 - *Region:* `-region`, else the SDK's resolution (`AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's
   `region`), else `us-east-1`. A 301 or `AuthorizationHeaderMalformed` answer names the bucket's region in

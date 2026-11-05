@@ -1583,6 +1583,11 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
   row-identical to the sequential oracle; `TestMetamorphicLaws` checks invariance to page size, range
   decomposition, memory budget and the probe toggle over 19 keyspaces × 12 variants (fake bucket, synthetic).
 
+- **Credentials verified.** A fake STS (`AWS_ENDPOINT_URL_STS`) answers web identity and a chained
+  AssumeRole with `external_id`; `--region` no longer becomes the credential chain's region (STS keeps the
+  environment's or profile's region, else us-east-1); a 2-second `credential_process` stands in for an
+  hour-long session and the client re-fetches and re-signs without a failed request.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and
