@@ -30,7 +30,8 @@ dataset layout"); this page says how the Go writer meets it.
 Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 1); `--report-format json` prints the
 same type, also for a dry run or a failure. Sections: `build` (tool, module version, VCS revision),
 `invocation` (argv, source, output, schema, workers, encoders, memory and part size), `outcome` (`committed`,
-`listed` or `failed`, the error, completeness, stop reason, per-entry errors), `timings` (timestamps and
+`listed` or `failed`, the error, completeness, stop reason, per-entry errors, and the command's `class`,
+`exit_code`, `resumable` and `cause`, as in [../cli.md](../cli.md)), `timings` (timestamps and
 integer `*_ms` durations, wall, listing, user and system CPU), `output` (rows this invocation listed, rows
 retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (peak RSS,
 row budget, peak buffered, waits in `*_ns`, spill, `features`) and `source` (the provider's statistics under
@@ -74,7 +75,8 @@ out/
   data/part-00000.parquet ...   dense, zero-based %05d; name order == key order; parts strictly disjoint
   manifest.json                 format 2: source, scope, coverage, ordered parts with exact bounds (the commit)
   run.json                      the run report (operational, written after the commit)
-  .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/
+  error.json                    the outcome of a run that did not complete (removed when one completes)
+  .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/, progress.json
 ```
 
 The manifest's fields and the reader's acceptance rule are in [../upgrade.md](../upgrade.md).

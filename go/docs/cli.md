@@ -43,6 +43,8 @@ usage: swath list SOURCE --output DIR [flags]
     	S3: fill owner_id and owner_display_name
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  -max-duration duration
+    	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -memory bytes
     	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -metadata tier
@@ -77,11 +79,13 @@ usage: swath list SOURCE --output DIR [flags]
     	cap on spill bytes on disk (0: no cap); past it, listing waits instead of spilling
   -spill-reserve bytes
     	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
+  -stall-timeout duration
+    	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format may change.
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, max-duration, stall-timeout may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -103,6 +107,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: fill owner_id and owner_display_name
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  -max-duration duration
+    	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -max-keys int
     	S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)
   -memory bytes
@@ -147,11 +153,13 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	cap on spill bytes on disk (0: no cap); past it, listing waits instead of spilling
   -spill-reserve bytes
     	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
+  -stall-timeout duration
+    	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format may change.
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, max-duration, stall-timeout may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -182,7 +190,30 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Resume:** an S3 run keeps a journal in `DIR/.swath/` with the command that started it; after a crash or
   interruption, `swath resume DIR` continues it ([internals/durability.md](internals/durability.md)).
   `swath diag list --no-journal` turns it off (parts are then published only at the end).
-- **Exit status** is 2 for a malformed command line, 1 for any other error; a failed or interrupted run (SIGINT, SIGTERM) leaves no `manifest.json`.
-  An interrupted run gets 15 s to stop cleanly, and is then exited with status 130; an S3 run can be resumed.
+- **Exit status and outcome.** A supervisor reads the exit code and, for a run that did not complete,
+  `DIR/error.json` (`class`, `exit_code`, `message`, `resumable`, and `cause`: the provider's failure class such
+  as `throttle` or `access_denied`); it never needs stderr. `error.json` is written only into an output this
+  tool owns (one with `.swath/`) and is removed when a later run or resume completes.
+
+  | Code | Class | Meaning | Resumable |
+  |---|---|---|---|
+  | 0 | `completed` | the dataset is committed (or a dry run finished) | – |
+  | 1 | `fatal` | a cause a resume will not fix (access denied, no such bucket, an invariant) | no |
+  | 2 | `usage` | a malformed command line | no |
+  | 75 | `stuck` | no progress for `--stall-timeout` (default 10 min; a warning at half) | yes, journal intact |
+  | 124 | `deadline` | `--max-duration` reached with the output unfinished | yes |
+  | 130 | `interrupted` | SIGINT (also after the 15 s shutdown grace) | yes |
+  | 143 | `terminated` | SIGTERM, a graceful stop | yes |
+
+  "Resumable" holds when the output has an intact journal (S3); a filesystem run starts over. A source that
+  stops early (a key limit) never exits 0 with a partial manifest unless its coverage says so.
+- **Liveness.** The command alone decides that a run cannot go on: its watchdog watches the run's progress
+  (rows listed, ordered, encoded, parts published; any rise counts) and stops it as stuck after
+  `--stall-timeout`. Nothing in the pipeline gives up on a slow source (S3 requeues a page after its retries).
+- **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename:
+  `objects` (rows listed so far), `ordered`, `encoded`, `parts`, `advance` (their sum, which rises in every
+  phase), `started_at`, `as_of`, `duration_ms`. A supervisor watches that file; `DIR/run.json` follows the
+  commit. `--max-duration` and `--stall-timeout` are runtime flags: `swath resume` replays the recorded
+  values unless given again.
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;
   `SWATH_LOCALFS_ENGINE=portable` selects the portable filesystem engine; `SWATH_SPLIT_TRACE` traces S3 splits.

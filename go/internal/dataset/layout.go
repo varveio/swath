@@ -24,6 +24,9 @@ const (
 	ManifestName = "manifest.json"
 	// ReportName is the run report, operational, written after the commit.
 	ReportName = "run.json"
+	// ErrorName is the outcome of a run that did not complete (class, exit
+	// code, cause, resumable), written by the command.
+	ErrorName = "error.json"
 	// Workspace is the run's private directory: the lock, the journal,
 	// unpublished parts and spill. Readers ignore it.
 	Workspace = ".swath"
@@ -63,7 +66,7 @@ func TempPath(out string, i int) string {
 // _swath_*summary.json reports and
 // Swath's .swath-state.json) are removed too, so an old dataset can be
 // replaced.
-var ownEntries = []string{DataDir, ManifestName, ReportName, legacyLocalSummary, legacySummary, legacySuccess, legacySymlink, legacyLock, ".swath-state.json"}
+var ownEntries = []string{DataDir, ManifestName, ReportName, ErrorName, legacyLocalSummary, legacySummary, legacySuccess, legacySymlink, legacyLock, ".swath-state.json"}
 
 const (
 	legacyLocalSummary = "_swath_local_summary.json"

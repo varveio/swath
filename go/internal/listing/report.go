@@ -64,6 +64,13 @@ type Outcome struct {
 	StopReason string `json:"stop_reason,omitempty"` // "completed", or why it stopped early
 	// EntryErrors counts per-entry problems the provider counted (not fatal).
 	EntryErrors int64 `json:"entry_errors"`
+	// Class, ExitCode and Resumable are the command's account of how the
+	// run ended (completed, fatal, stuck, deadline, interrupted,
+	// terminated); Cause is the provider's class of a failure.
+	Class     string `json:"class,omitempty"`
+	ExitCode  int    `json:"exit_code"`
+	Resumable bool   `json:"resumable"`
+	Cause     string `json:"cause,omitempty"`
 }
 
 // Timings of the run, wall and CPU.

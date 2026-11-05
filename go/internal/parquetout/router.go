@@ -45,6 +45,8 @@ type Options struct {
 	// Fail, if set, is called once with the first asynchronous failure (an
 	// encoder, the disk, the journal), so the whole pipeline stops at once.
 	Fail func(error)
+	// Encoded, if set, counts rows the encoders have written (progress).
+	Encoded *atomic.Int64
 	// Account, if set, is told the bytes (schema.RowsBytes) queued to the
 	// encoders (+) and written (-): they share the order stage's budget.
 	Account func(int64)
@@ -268,6 +270,9 @@ func (r *Router[P]) encode(p *part[P]) {
 					r.fail(p.err)
 					break write
 				}
+			}
+			if r.opt.Encoded != nil {
+				r.opt.Encoded.Add(int64(len(seg)))
 			}
 		}
 		r.done1(b)

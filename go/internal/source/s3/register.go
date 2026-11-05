@@ -13,10 +13,11 @@ import (
 
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 func init() {
-	registry.Register(registry.Factory{Scheme: "s3", Flags: flags, Defaults: func() any { return &Options{} }, Open: open})
+	registry.Register(registry.Factory{Classify: classify, Scheme: "s3", Flags: flags, Defaults: func() any { return &Options{} }, Open: open})
 }
 
 // flags registers the S3 flag group; the returned *Options is filled when
@@ -141,3 +142,14 @@ var (
 	_ source.Capable    = (*opened)(nil)
 	_ source.Reporter   = (*opened)(nil)
 )
+
+// classify names the class of an S3 failure (client.Classify) for the
+// run's outcome.
+func classify(err error) string {
+	switch c := client.Classify(err); c {
+	case client.ClassOther, client.ClassCanceled:
+		return ""
+	default:
+		return string(c)
+	}
+}

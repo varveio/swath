@@ -1564,6 +1564,21 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
     with its mechanism and test. S3's `(lo, hi]` boundary, safe pivots and key limit moved to providers.md;
     I1–I12 are a migration-history paragraph. `docs/upgrade.md` remains the one reader upgrade guide.
 
+## Liveness, outcomes and the supervisor contract
+
+- **Retry exhaustion never fails a run** (`fcba6c1`). The S3 client's exhausted transient failures come back
+  as `*client.ExhaustedError`; the provider asks the page again after a jittered backoff (2–60 s), counting
+  `requeues`. `client.Classify` names every failure class (table test); the class is the outcome's `cause`.
+- **One liveness owner.** The command's watchdog reads the run's progress (rows listed, ordered, encoded,
+  parts published) and stops the run as stuck after `--stall-timeout` (default 10 min, a warning at half).
+  Escalation is warn, then stop; reducing concurrency first is not built.
+- **Exit codes and `error.json`.** 0 completed, 1 fatal, 2 usage, 75 stuck, 124 `--max-duration` reached, 130
+  SIGINT, 143 SIGTERM; a run that did not complete leaves `DIR/error.json` (class, exit code, message,
+  resumable, cause), only in an output the tool owns; a completed run removes it. `TestExitCodes` drives the
+  real binary through every code, including a resume after the deadline.
+- **Progress file.** `DIR/.swath/progress.json`, rewritten every 2 s by atomic rename: objects, ordered,
+  encoded, parts, advance, started_at, as_of, duration_ms.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

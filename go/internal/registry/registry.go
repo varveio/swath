@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquetout"
@@ -39,6 +40,10 @@ type Factory struct {
 	// Open validates the root and returns a source ready to list. It must
 	// not touch the output directory.
 	Open func(ctx context.Context, req Request) (Source, error)
+	// Classify, if set, names the class of a failure the provider caused
+	// ("throttle", "access_denied", ...), for the run's outcome; "" if it
+	// does not know the error.
+	Classify func(error) string
 }
 
 // Request is what the pipeline tells a factory.
@@ -73,6 +78,8 @@ type Env struct {
 	After *string
 	// Empty lists nothing: a resume whose final part is durable.
 	Empty bool
+	// Ordered, if set, counts rows the order stage has handed on.
+	Ordered *atomic.Int64
 }
 
 // Bound is a provider bound to its schema; embed it in an opened source.
@@ -103,12 +110,27 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if env.After != nil {
 		sink = afterSink[P]{sink, *env.After}
 	}
+	if env.Ordered != nil {
+		sink = countSink[P]{sink, env.Ordered}
+	}
 	p := b.p
 	if env.Empty {
 		p = source.Empty[P]{}
 	}
 	st, err := order.Run(ctx, p, sink, b.s, env.Order)
 	return st, enc, err
+}
+
+type countSink[P any] struct {
+	order.Sink[P]
+	n *atomic.Int64
+}
+
+func (c countSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	for _, s := range segs {
+		c.n.Add(int64(len(s)))
+	}
+	return c.Sink.Write(ctx, segs)
 }
 
 type discard[P any] struct{}

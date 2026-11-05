@@ -38,36 +38,40 @@ import (
 const shutdownGrace = 15 * time.Second
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	killAt(os.Getenv("SWATH_TEST_KILL_AT"))
+	ctx, cancel := context.WithCancelCause(context.Background())
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	finished := make(chan struct{})
 	defer close(finished)
-	go func() { // bounded shutdown: an interrupted run gets 15 s to clean up
+	go func() {
 		select {
 		case <-finished:
 			return
-		case <-ctx.Done():
+		case sig := <-sigs:
+			cancel(&signalError{sig}) // graceful: the run stops and cleans up
 		}
-		select {
+		select { // bounded shutdown: an interrupted run gets 15 s
 		case <-finished:
 		case <-time.After(shutdownGrace):
 			fmt.Fprintf(os.Stderr, "swath: still stopping after %s; exiting (an interrupted journaled run can be resumed)\n", shutdownGrace)
-			os.Exit(130)
+			os.Exit(exitInterrupted)
 		}
 	}()
-	if err := dispatch(ctx, os.Args[1:], os.Stdout); err != nil {
-		var u usageError
-		switch {
-		case errors.Is(err, flag.ErrHelp):
-			os.Exit(0)
-		case errors.As(err, &u):
-			fmt.Fprintln(os.Stderr, "swath:", err)
-			os.Exit(2)
-		}
-		fmt.Fprintln(os.Stderr, "swath:", err)
-		os.Exit(1)
+	killAt(os.Getenv("SWATH_TEST_KILL_AT"))
+	err := dispatch(ctx, os.Args[1:], os.Stdout)
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return
 	}
+	fmt.Fprintln(os.Stderr, "swath:", err)
+	var u usageError
+	var ee *exitError
+	switch {
+	case errors.As(err, &ee):
+		os.Exit(ee.code)
+	case errors.As(err, &u):
+		os.Exit(exitUsage)
+	}
+	os.Exit(exitFatal)
 }
 
 // usageError is a malformed command line.
@@ -135,6 +139,7 @@ type options struct {
 	overwrite              bool
 	countOnly              bool
 	reportFormat           string
+	maxDuration, stall     time.Duration
 	workers, encoders      int
 	partSize, memory       size
 	spillMax, spillReserve zsize
@@ -144,7 +149,7 @@ type options struct {
 }
 
 // runtimeFlags may change on swath resume: they do not change the output.
-var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "report-format"}
+var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "report-format", "max-duration", "stall-timeout"}
 
 func newFlags(o *options, diag bool) *flag.FlagSet {
 	f := flag.NewFlagSet("list", flag.ContinueOnError)
@@ -163,6 +168,8 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	o.spillReserve = 1 << 30
 	f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem, for the parts still to be written")
 	f.StringVar(&o.reportFormat, "report-format", "text", "`text` (one line) or json (the run report, as in run.json)")
+	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
+	f.DurationVar(&o.stall, "stall-timeout", 10*time.Minute, "stop the run as stuck after this long without progress (exit 75; resumable); 0: never")
 	if diag {
 		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
 		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
@@ -254,8 +261,26 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	if o.maxDuration > 0 {
+		var stopTimer context.CancelFunc
+		ctx, stopTimer = context.WithTimeoutCause(ctx, o.maxDuration, errDeadline)
+		defer stopTimer()
+	}
+	cfg.Progress = &listing.Progress{}
+	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn)
 	sum, err := listing.Run(ctx, cfg)
+	stopWatch()
 	stopProfile()
+	if err != nil && pf.Classify != nil {
+		if c := pf.Classify(err); c != "" {
+			err = &classified{err, c}
+		}
+	}
+	out := classify(err, context.Cause(ctx), cfg.Output.Dir)
+	writeOutcome(cfg.Output.Dir, out)
+	sum.Outcome.Class, sum.Outcome.ExitCode, sum.Outcome.Resumable, sum.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
 	if o.reportFormat == "json" {
 		// The report goes out on failure too: its outcome names the error.
 		enc := json.NewEncoder(stdout)
@@ -265,7 +290,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		}
 	}
 	if err != nil {
-		return explain(err)
+		return &exitError{explain(err), out.ExitCode}
 	}
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")

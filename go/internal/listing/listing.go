@@ -34,6 +34,9 @@ type Config struct {
 	Limits Limits
 	Argv   []string     // the command line, recorded in the run report and the journal
 	Warn   func(string) // one-time warnings for the user (nil: dropped)
+	// Progress, if set, is updated while the run goes (watchdog, progress
+	// file).
+	Progress *Progress
 }
 
 // SourceConfig is what to list.
@@ -232,9 +235,27 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// The final part is durable: listing again could only add a second
 	// final part on a changed source. Publish what is recorded.
 	env := registry.Env{After: jr.after(), Empty: jr.complete()}
+	if pr := cfg.Progress; pr != nil {
+		pr.started.Store(sum.Timings.StartedAt.UnixNano())
+		listed := src.Listed
+		pr.listed.Store(&listed)
+		env.Ordered = &pr.ordered
+	}
 	if cfg.Output.Dir != "" {
 		ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add}
 		jr.routerOptions(&ropt)
+		if pr := cfg.Progress; pr != nil {
+			ropt.Encoded = &pr.encoded
+			if pub := ropt.Publish; pub != nil {
+				ropt.Publish = func(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
+					p, err := pub(ordinal, p, limit, rows, final)
+					if err == nil {
+						pr.parts.Add(1)
+					}
+					return p, err
+				}
+			}
+		}
 		ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
 		env.Router = &ropt
 	}
@@ -311,8 +332,11 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		}
 		return sum.failed(fmt.Errorf("publish: %w", err))
 	}
+	if pr := cfg.Progress; pr != nil && !jr.journaled() {
+		pr.parts.Add(int64(sum.Output.PartsWritten))
+	}
 	// Committed: the report follows and can no longer revoke the dataset.
-	sum.Outcome.Status = "committed"
+	sum.Outcome.Status, sum.Outcome.Class = "committed", "completed"
 	sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
 	sum.finish()
 	if err := dataset.WriteReport(cfg.Output.Dir, sum); err != nil && cfg.Warn != nil {
