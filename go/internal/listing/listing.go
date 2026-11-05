@@ -43,6 +43,8 @@ type Config struct {
 	Resume        bool     // continue the interrupted journaled run in Out
 	NoSpill       bool     // wait on the reorder budget instead of spilling ahead-of-frontier rows
 	SpillCompress bool     // zstd level 1 on spill frames
+	SpillMax      int64    // cap on live spill bytes (0: none)
+	SpillReserve  int64    // free bytes spill leaves on its filesystem (0: none; the CLI default is 1 GiB)
 	S3            S3Config
 }
 
@@ -108,6 +110,8 @@ type Summary struct {
 	SpillRows    int64     `json:"spill_rows"`   // rows written to spill files and replayed
 	SpillBytes   int64     `json:"spill_bytes"`  //
 	SpillFiles   int64     `json:"spill_ranges"` // ranges that spilled
+	SpillPeak    int64     `json:"spill_peak_bytes"`
+	SpillRefused int64     `json:"spill_refused"` // frames the disk budget refused (the emitter waited instead)
 	Listing      *fs.Stats `json:"listing,omitempty"`
 	S3           *s3.Stats `json:"s3,omitempty"`
 	Rows         int64     `json:"rows"`
@@ -290,7 +294,7 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 	if router != nil {
 		router.Account(shared.Add)
 	}
-	oopt := order.Options{Workers: cfg.Workers, Budget: sum.RowBudget, Shared: shared, SpillCompress: cfg.SpillCompress}
+	oopt := order.Options{Workers: cfg.Workers, Budget: sum.RowBudget, Shared: shared, SpillCompress: cfg.SpillCompress, SpillMax: cfg.SpillMax, SpillReserve: cfg.SpillReserve}
 	if !cfg.NoSpill {
 		// Spill files are disposable: a crash relists their rows.
 		oopt.SpillDir = os.TempDir()
@@ -307,6 +311,7 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 	}
 	sum.MaxBuffered, sum.Rows = ost.MaxBuffered, ost.Rows
 	sum.SpillRows, sum.SpillBytes, sum.SpillFiles = ost.SpillRows, ost.SpillBytes, ost.SpillFiles
+	sum.SpillPeak, sum.SpillRefused = ost.SpillPeak, ost.SpillRefused
 	sum.ListingSeconds = time.Since(sum.Started).Seconds()
 	want := listed(&sum)
 	if err != nil {

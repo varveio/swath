@@ -73,6 +73,10 @@ usage: swath list <root> [flags]
     	S3: list with one continuation-token chain (no ranges; the reference)
   -spill-compress
     	compress spill files (zstd level 1)
+  -spill-max bytes
+    	cap on spill bytes on disk (0: no cap); past it, listing waits instead of spilling
+  -spill-reserve bytes
+    	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
@@ -100,7 +104,9 @@ Profiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.
   [internals/providers.md](internals/providers.md).
 - **Spill:** when the reorder budget is full, rows of ranges ahead of the frontier go to disposable files
   under `-out/.swath/spill/` instead of stalling the workers; `-no-spill` turns it off, `-spill-compress`
-  compresses them ([internals/ordering.md](internals/ordering.md)).
+  compresses them. Spill stops (and listing waits instead) at `-spill-max` bytes on disk or when the
+  filesystem would drop below `-spill-reserve` free bytes (default 1 GiB)
+  ([internals/ordering.md](internals/ordering.md)).
 - **Resume:** an S3 run with `-out` keeps a journal in `-out/.swath/`; after a crash or interruption,
   rerun the same command with `-resume` ([internals/durability.md](internals/durability.md)).
   `-no-journal` turns it off (parts are then published only at the end). `swath inspect DIR` prints the

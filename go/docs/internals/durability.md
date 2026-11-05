@@ -128,4 +128,4 @@ tail as JSON lines.
 
   Nothing tests this: SIGKILL cannot show power-loss behaviour.
 - **Unsupported on Windows:** directories cannot be synced and the lock is not enforced, so neither
-  guarantee holds there.
+  guarantee holds there; a journaled run prints a warning (`durable.Enforced` is false).

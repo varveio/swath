@@ -96,6 +96,7 @@ type options struct {
 	countOnly, json          bool
 	workers, encoders        int
 	partSize, memory         size
+	spillMax, spillReserve   zsize
 	endpoint, region         string
 	profile                  string
 	anonymous                bool
@@ -137,6 +138,9 @@ func newFlags(o *options) *flag.FlagSet {
 	f.BoolVar(&o.noProbe, "no-probe", false, "S3: split without the 1-key probe that checks the upper child is not empty")
 	f.BoolVar(&o.noSpill, "no-spill", false, "wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
 	f.BoolVar(&o.spillCompress, "spill-compress", false, "compress spill files (zstd level 1)")
+	f.Var(&o.spillMax, "spill-max", "cap on spill `bytes` on disk (0: no cap); past it, listing waits instead of spilling")
+	o.spillReserve = 1 << 30
+	f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem, for the parts still to be written")
 	f.BoolVar(&o.resume, "resume", false, "S3: continue the interrupted run in -out (same source and output settings)")
 	f.BoolVar(&o.noJournal, "no-journal", false, "S3: publish parts only at the end, without the journal that -resume needs")
 	f.Int64Var(&o.maxKeys, "max-keys", 0, "S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)")
@@ -189,7 +193,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	cfg := listing.Config{
 		Root: root, Replace: o.overwrite, Fields: fields, NoDirs: o.noDirs, NoLinks: o.noLnk,
 		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
-		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable", Argv: append([]string{"list"}, args...), Resume: o.resume, NoSpill: o.noSpill, SpillCompress: o.spillCompress,
+		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable", Argv: append([]string{"list"}, args...), Resume: o.resume, NoSpill: o.noSpill, SpillCompress: o.spillCompress, SpillMax: int64(o.spillMax), SpillReserve: int64(o.spillReserve),
 		S3: listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle, FIPS: o.fips, DualStack: o.dualStack,
 			Profile: o.profile, Anonymous: o.anonymous, Timeout: o.timeout, Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) }, FetchOwner: o.fetchOwner, Seed: o.seed, Sequential: o.sequential, MaxKeys: o.maxKeys, NoJournal: o.noJournal, NoProbe: o.noProbe},
 	}
@@ -267,6 +271,19 @@ func profile() (stop func(), err error) {
 
 // size is a byte count flag accepting binary and decimal suffixes.
 type size int64
+
+// zsize is a size that may also be 0 (off).
+type zsize size
+
+func (s *zsize) String() string { return (*size)(s).String() }
+
+func (s *zsize) Set(v string) error {
+	if strings.TrimSpace(v) == "0" {
+		*s = 0
+		return nil
+	}
+	return (*size)(s).Set(v)
+}
 
 func (s *size) String() string { return strconv.FormatInt(int64(*s), 10) }
 

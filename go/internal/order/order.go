@@ -50,6 +50,10 @@ type Options struct {
 	// of waiting (see spill.go). SpillCompress compresses frames (zstd 1).
 	SpillDir      string
 	SpillCompress bool
+	// SpillMax caps the live spill bytes (0: no cap); SpillReserve is the
+	// free space spill leaves on its filesystem (0: none). Past either, an
+	// emitter waits on the budget instead of spilling.
+	SpillMax, SpillReserve int64
 }
 
 // Stats describe a run.
@@ -60,6 +64,10 @@ type Stats struct {
 	SpillFrames int64
 	SpillBytes  int64
 	SpillFiles  int64 // ranges that spilled
+	SpillPeak   int64 // peak live spill bytes
+	// SpillRefused counts frames the disk budget refused; each made its
+	// emitter wait on the reorder budget instead.
+	SpillRefused int64
 }
 
 // batchRows is the minimum number of rows per sink call (except the last).
@@ -216,7 +224,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		defer opt.Shared.setWake(nil)
 	}
 	if opt.SpillDir != "" {
-		sp, err := newSpiller(opt.SpillDir, opt.SpillCompress)
+		sp, err := newSpiller(opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
 		if err != nil {
 			return Stats{}, err
 		}
@@ -271,6 +279,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 	st.Rows, st.MaxBuffered = o.rows, o.max
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
+		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
 	}
 	return st, err
 }
@@ -279,7 +288,7 @@ func (o *run[R]) worker() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for {
-		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || (o.sp == nil && o.full())) {
+		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || ((o.sp == nil || o.sp.full.Load()) && o.full())) {
 			o.work.Wait()
 		}
 		if o.finished || o.stopped.Load() {
@@ -403,23 +412,31 @@ func (e *emitter[R]) maybePublish() error {
 // is on the drain path, it first waits while the budget is used up.
 func (e *emitter[R]) publish() error {
 	o := e.o
+	refused := false // the disk budget refused the last spill: wait before retrying
 	for !e.n.awaited.Load() && o.full() && !o.stopped.Load() {
-		if o.sp != nil && e.rows > 0 {
+		if o.sp != nil && e.rows > 0 && !refused {
 			// Spill instead of waiting: write the rows (without the lock),
 			// then publish markers. Frames precede their markers, so the
 			// drainer never reads ahead of the writer.
 			o.mu.Unlock()
 			err := e.spill()
 			o.mu.Lock()
-			if err != nil {
+			if err == nil {
+				break
+			}
+			if err != errSpillFull {
 				return err
 			}
-			break
-		}
-		if o.sp != nil && len(e.items) > 0 { // only children: never block
+			// The disk budget is used: wait, as without spill. The lock
+			// was released, so recheck the condition first (the drainer
+			// may have marked this node awaited meanwhile).
+			refused = true
+			continue
+		} else if o.sp != nil && e.rows == 0 && len(e.items) > 0 { // only children: never block
 			break
 		}
 		o.drain.Wait()
+		refused = false
 	}
 	if o.stopped.Load() {
 		return context.Cause(o.ctx)
@@ -450,11 +467,12 @@ func (e *emitter[R]) spill() error {
 			continue
 		}
 		if err := e.o.sp.write(e.n.spill, e.items[i].rows, false); err != nil {
-			return err
+			return err // refused: the items not yet written keep their rows
 		}
+		e.rows -= len(e.items[i].rows)
+		e.units -= e.items[i].units
 		e.items[i] = item[R]{spill: e.n.spill}
 	}
-	e.rows, e.units = 0, 0
 	return nil
 }
 

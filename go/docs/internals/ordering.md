@@ -64,8 +64,15 @@ place, so the range keeps listing while a slow frontier holds the output back:
   lock, and the resume relists from the durable frontier.
 - **Memory.** In-memory buffered rows stay within the budget plus one publish batch per worker plus the
   frontier path, with or without spill (`TestSpillKeepsWorkersBusy`). Workers also claim new ranges while
-  the budget is full, since their rows will spill.
+  the budget is full, since their rows will spill, unless the disk budget has refused a frame.
+- **Disk budget.** A frame is written only if the live spill bytes stay within `-spill-max` (default: no cap)
+  and the spill filesystem keeps `-spill-reserve` bytes free afterwards (default 1 GiB, room for the parts
+  still to be published; the spill directory is under `-out`, so they share the filesystem). A refused
+  frame is not an error: the emitter waits on the reorder budget, as with `-no-spill`, and retries after the
+  drainer moves. An ENOSPC on a spill write is handled the same way after truncating the torn frame. A
+  range's bytes return to the budget when its file is deleted after replay. Trailers (a few bytes) are
+  always admitted, and concurrent emitters can each pass the free-space check before either writes, so the
+  reserve can be undershot by at most one frame per worker. The summary reports `spill_peak_bytes` and
+  `spill_refused` (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical
+  output; a reserve larger than the disk spills nothing).
 - `-no-spill` restores waiting on the budget.
-
-**Not built yet** (from the architecture review): a disk budget with reserved publication space and a pressure
-policy; spill is bounded today only by the listing itself.

@@ -48,6 +48,9 @@ func openJournal(cfg Config, id durable.Identity) (*journal, error) {
 		}
 		return nil, nil
 	}
+	if !durable.Enforced && cfg.S3.Warn != nil {
+		cfg.S3.Warn("the output lock and directory syncs are not enforced on this platform: a concurrent run or a power loss can damage the journal")
+	}
 	// Ownership first: nothing in the output is read, removed or renamed
 	// before this process holds its lock.
 	lock, err := durable.TakeLock(cfg.Out)

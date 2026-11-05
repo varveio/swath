@@ -132,3 +132,48 @@ func TestSpillCleanedOnFailure(t *testing.T) {
 		t.Fatalf("spill directory left after failure: %d entries", len(ents))
 	}
 }
+
+// TestSpillDiskBudget: spill stays within its disk budget and backs off to
+// waiting when the budget is used, with identical output and memory still
+// bounded. A cap well below the spill a free run produces must be hit; a
+// free-space reserve larger than any disk refuses every frame, so the run
+// behaves as without spill.
+func TestSpillDiskBudget(t *testing.T) {
+	f := &frontier{slowPages: 40, siblings: 56, sibPages: 10, rows: 100, slowDelay: 5 * time.Millisecond}
+	want := f.keys()
+	const workers, budget = 8, 500
+	run := func(opt Options) Stats {
+		t.Helper()
+		c := &collect{}
+		st, err := Run[fr](context.Background(), f, c, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(c.keys, want) {
+			t.Fatalf("%d keys, want %d", len(c.keys), len(want))
+		}
+		if limit := int64(budget + workers*publishRows + f.rows); st.MaxBuffered > limit {
+			t.Fatalf("max buffered %d > %d", st.MaxBuffered, limit)
+		}
+		return st
+	}
+	dir := t.TempDir()
+	free := run(Options{Workers: workers, Budget: budget, SpillDir: dir})
+	if free.SpillRefused != 0 || free.SpillPeak == 0 {
+		t.Fatalf("no budget: peak %d, refused %d", free.SpillPeak, free.SpillRefused)
+	}
+	limit := free.SpillPeak / 4
+	capped := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillMax: limit})
+	t.Logf("peak without a cap %d bytes; with cap %d: peak %d, refused %d, %d rows spilled", free.SpillPeak, limit, capped.SpillPeak, capped.SpillRefused, capped.SpillRows)
+	// Trailers are always admitted (a few bytes per file).
+	if capped.SpillRefused == 0 || capped.SpillPeak > limit+16*capped.SpillFiles {
+		t.Fatalf("cap %d: peak %d, refused %d", limit, capped.SpillPeak, capped.SpillRefused)
+	}
+	none := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillReserve: 1 << 62})
+	if none.SpillRows != 0 || none.SpillRefused == 0 {
+		t.Fatalf("reserve: %d rows spilled, %d refused", none.SpillRows, none.SpillRefused)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Fatalf("spill files left: %d", len(ents))
+	}
+}
