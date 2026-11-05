@@ -112,7 +112,15 @@ func NormalizeEndpoint(e string) string {
 	return e
 }
 
-func (o *opened) Capabilities() source.Capabilities { return source.Capabilities{Resume: true} }
+// Capabilities: S3 has no rank oracle and start-after is a fabricable
+// seek, so the range engine applies; -sequential lists one token chain.
+func (o *opened) Capabilities() source.Capabilities {
+	c := source.Capabilities{Resume: true, Seek: source.SeekFabricable}
+	if o.p.opt.Sequential {
+		c.Seek = source.SeekTokenOnly
+	}
+	return c
+}
 
 // Restart continues after the last published key, from the normal
 // start-up: one range (after, ⊤], split as on a fresh run.

@@ -50,8 +50,35 @@ type Capable interface {
 
 // Capabilities of an opened source.
 type Capabilities struct {
-	Resume bool // journal the run so that -resume can continue it (needs Resumable)
+	Resume bool // journal the run so that swath resume can continue it (needs Resumable)
+	// Seek is how a listing can start at a key: the parallel range engine
+	// applies only to a source that has no rank oracle and a fabricable
+	// seek (see docs/internals/providers.md, "Does the range engine apply").
+	Seek Seek
+	// RankOracle: the source can say how many keys precede a key (an
+	// index); it can be partitioned exactly, so dynamic splitting is not
+	// the right tool.
+	RankOracle bool
 }
+
+// Seek is how a listing can start at a key.
+type Seek string
+
+const (
+	// SeekFabricable: a listing can start after any key the caller makes
+	// up (S3 start-after), so a range can be split at a synthesized pivot.
+	SeekFabricable Seek = "fabricable"
+	// SeekTokenOnly: only an opaque continuation token resumes a listing;
+	// the source is listed as one sequential chain per root.
+	SeekTokenOnly Seek = "token_only"
+	// SeekNone: no seek at all; a range (a directory) is read whole and
+	// sorted inside the provider.
+	SeekNone Seek = "none"
+)
+
+// RangeEngine reports whether dynamic range splitting applies: no rank
+// oracle and a fabricable seek, both.
+func (c Capabilities) RangeEngine() bool { return !c.RankOracle && c.Seek == SeekFabricable }
 
 // Excluder sources can contain the output directory (a local tree); after
 // the output is prepared, the pipeline asks them to leave it out.

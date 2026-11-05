@@ -1,5 +1,14 @@
 # Providers
 
+**Does the range engine apply?** Dynamic range splitting (ranges, owner-side splits at synthesized pivots,
+seeding) applies to a source only when both hold: it has **no rank oracle** (nothing can say how many keys
+precede a key, which would allow an exact partition instead) and it has a **fabricable seek** (a listing can
+start after any key the caller makes up, as S3's `start-after`). A source with a token-only seek is listed as
+one sequential chain per root; one with no seek reads each range whole and sorts it inside the provider. Each
+provider declares this in `source.Capabilities` (`Seek`: `fabricable`, `token_only`, `none`; `RankOracle`;
+`RangeEngine()` is the test): S3 is fabricable without a rank oracle (`token_only` with `--sequential`); the
+filesystem has no seek (a directory is a range, read whole and sorted).
+
 ## The contract (`internal/source`)
 
 ```go
@@ -196,8 +205,9 @@ listing always has; `swath resume` on it is an error.
 
 ## Provider capabilities
 
-What a provider must state about itself (built: `source.Capable` with `Resume`, `source.Resumable`,
-`source.Disposer`):
+What a provider must state about itself (built: `source.Capable` with `Resume`, `Seek` and `RankOracle`,
+`source.Resumable`, `source.Disposer`):
+- **Applicability:** its seek kind and whether it has a rank oracle (above).
 - **Order:** output is unsigned byte order; a provider whose native order differs sorts or partitions inside
   itself; there are no per-range comparators.
 - **Bounds:** explicit bound inclusivity, as S3's `(lo, hi]`.

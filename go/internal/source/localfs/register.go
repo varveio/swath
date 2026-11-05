@@ -103,7 +103,14 @@ func (o *opened) Report() source.Report {
 		Brief: fmt.Sprintf("files=%d dirs=%d bytes=%d errors=%d", st.Files, st.Dirs, st.Bytes, st.Errors())}
 }
 
+// Capabilities: a directory is read whole and sorted; there is no seek and
+// no resume.
+func (o *opened) Capabilities() source.Capabilities {
+	return source.Capabilities{Seek: source.SeekNone}
+}
+
 var (
+	_ source.Capable  = (*opened)(nil)
 	_ source.Excluder = (*opened)(nil)
 	_ source.Reporter = (*opened)(nil)
 )

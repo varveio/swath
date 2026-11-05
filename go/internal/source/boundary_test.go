@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/source"
 )
 
 const mod = "github.com/varveio/swath/go"
@@ -82,6 +84,25 @@ func TestImportBoundary(t *testing.T) {
 			if strings.HasPrefix(path, providers) && (imp.Name == nil || imp.Name.Name != "_") {
 				t.Errorf("%s imports provider %s for more than registration", filepath.Base(f), path)
 			}
+		}
+	}
+}
+
+// TestRangeEngineApplicability: the range engine applies only with no rank
+// oracle and a fabricable seek.
+func TestRangeEngineApplicability(t *testing.T) {
+	for _, c := range []struct {
+		caps source.Capabilities
+		want bool
+	}{
+		{source.Capabilities{Seek: source.SeekFabricable}, true},
+		{source.Capabilities{Seek: source.SeekFabricable, RankOracle: true}, false},
+		{source.Capabilities{Seek: source.SeekTokenOnly}, false},
+		{source.Capabilities{Seek: source.SeekNone}, false},
+		{source.Capabilities{}, false},
+	} {
+		if got := c.caps.RangeEngine(); got != c.want {
+			t.Errorf("%+v: %v, want %v", c.caps, got, c.want)
 		}
 	}
 }
