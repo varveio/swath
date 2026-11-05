@@ -74,11 +74,15 @@ that is the commit. The run reports follow it.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
    pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that
-   is the provider, the source (bucket and prefix), the endpoint, the region and `-fetch-owner`. A field
+   is the provider, the source (bucket and prefix), the effective route and `-fetch-owner`. The route is
+   what the client resolved, not what was asked: the endpoint requests go to (`--endpoint`, or the regional
+   AWS host with its partition, FIPS and dual-stack variant) and the signing region, so a resume in an
+   environment or profile that resolves another region is refused even when neither flag was given. A field
    added, dropped or changed is a typed `*journal.MismatchError`. The S3 endpoint's canonical form is
    `s3.NormalizeEndpoint` (scheme and host case, a trailing slash), the only equivalences allowed: another
    endpoint may serve another bucket of the same name. Workers, encoders, memory, `-seed`, `-probe` and
-   credentials may change.
+   credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
+   one process listed.
 3. Recovers `data/`. Every retained part must match its record's size and MD5 (`ErrPartAltered` otherwise).
    A part whose record is durable but whose rename did not happen is renamed now. Every unrecorded file in
    `data/` is removed.

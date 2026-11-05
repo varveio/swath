@@ -107,7 +107,8 @@ type Provider struct {
 	client    API
 	anonymous bool
 	creds     string
-	region    string
+	region    string // the resolved signing region ("" with a supplied Client)
+	endpoint  string // the resolved base URL ("" with a supplied Client)
 }
 
 // Range is the engine's unit of listing work.
@@ -133,7 +134,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		if n := c.Note(); n != "" && opt.Warn != nil {
 			opt.Warn(n)
 		}
-		p.client, p.region = c, c.Region()
+		p.client, p.region, p.endpoint = c, c.Region(), c.Endpoint()
 		p.creds, p.anonymous = c.Credentials()
 	}
 	var resume *keyrange.Resume

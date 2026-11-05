@@ -87,15 +87,23 @@ func (o *opened) target() string {
 	return t
 }
 
-// Identity: the bucket and prefix, the endpoint (a different endpoint can
-// serve a different bucket of the same name; equivalent spellings are
-// allowed), the requested region and the owner columns.
+// Identity: the bucket and prefix, the effective route and the owner
+// columns. The route is what the client resolved, not what was asked: the
+// endpoint requests go to (a different endpoint, or another AWS partition,
+// can serve a different bucket of the same name; equivalent spellings are
+// allowed) and the signing region. With neither --endpoint nor --region
+// given, both come from the environment or the profile, so a resume in an
+// environment that resolves them differently is refused.
 func (o *opened) Identity() source.Identity {
 	opt := o.p.opt
+	endpoint, region := o.p.endpoint, o.p.region
+	if endpoint == "" { // a supplied client (tests): what was asked
+		endpoint, region = opt.Endpoint, opt.Region
+	}
 	return source.Identity{Provider: "s3", Fields: []source.IdentityField{
 		{Name: "source", Value: "s3://" + opt.Bucket + "/" + opt.Prefix},
-		{Name: "endpoint", Value: opt.Endpoint, Canonical: NormalizeEndpoint(opt.Endpoint)},
-		{Name: "region", Value: opt.Region},
+		{Name: "endpoint", Value: endpoint, Canonical: NormalizeEndpoint(endpoint)},
+		{Name: "region", Value: region},
 		{Name: "fetch owner", Value: strconv.FormatBool(opt.FetchOwner)},
 	}}
 }
@@ -117,9 +125,13 @@ func NormalizeEndpoint(e string) string {
 }
 
 // Capabilities: S3 has no rank oracle and start-after is a fabricable
-// seek, so the range engine applies; -sequential lists one token chain.
+// seek, so the range engine applies; -sequential lists one token chain. A
+// run with an object-count cap (-max-keys) cannot resume: the cap counts
+// the objects one process listed, and a resume could neither honour it
+// nor tell a capped final part from a complete one. Such a run keeps no
+// journal, and a resume of one is refused.
 func (o *opened) Capabilities() source.Capabilities {
-	c := source.Capabilities{Resume: true, Seek: source.SeekFabricable}
+	c := source.Capabilities{Resume: o.p.opt.MaxKeys == 0, Seek: source.SeekFabricable}
 	if o.p.opt.Sequential {
 		c.Seek = source.SeekTokenOnly
 	}

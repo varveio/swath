@@ -117,6 +117,11 @@ func (c *Client) Note() string { return c.note }
 // Region is the signing region.
 func (c *Client) Region() string { return c.region }
 
+// Endpoint is the base URL requests go to: the configured endpoint, or
+// the regional AWS endpoint the resolved region selects (its partition's
+// domain, FIPS and dual-stack variants).
+func (c *Client) Endpoint() string { return c.base.String() }
+
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
 	return Counters{c.attempts.Load(), c.retries.Load(), c.throttles.Load(), c.timeouts.Load(), c.parseFailures.Load()}

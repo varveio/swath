@@ -32,7 +32,7 @@ import (
 // parts and parallel splits.
 func crashBucket(t *testing.T) string {
 	t.Helper()
-	for _, k := range []string{"AWS_PROFILE", "AWS_SESSION_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"} {
+	for _, k := range []string{"AWS_PROFILE", "AWS_SESSION_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_DEFAULT_REGION"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
@@ -140,6 +140,21 @@ func TestResumeChecksIdentity(t *testing.T) {
 	cfg.Source.Options.(*S3Config).Endpoint = strings.Replace(url, "127.0.0.1", "localhost", 1) // another route, maybe another bucket
 	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "endpoint" {
 		t.Fatalf("changed endpoint accepted: %v", err)
+	}
+	cfg = crashConfig(url, out, true)
+	cfg.Source.Options.(*S3Config).Region = "eu-west-1" // the same endpoint, another signing region
+	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "region" {
+		t.Fatalf("changed region accepted: %v", err)
+	}
+	t.Setenv("AWS_REGION", "us-west-2") // nothing asked, the environment resolves another region
+	if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.As(err, &mm) || mm.Field != "region" {
+		t.Fatalf("a resume in an environment with another region was accepted: %v", err)
+	}
+	t.Setenv("AWS_REGION", "")
+	cfg = crashConfig(url, out, true)
+	cfg.Source.Options.(*S3Config).Sequential, cfg.Source.Options.(*S3Config).MaxKeys = true, 100
+	if _, err := Run(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "cannot resume") {
+		t.Fatalf("a capped resume was accepted: %v", err)
 	}
 	cfg = crashConfig(url, out, false)
 	if _, err := Run(context.Background(), cfg); err == nil {

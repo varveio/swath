@@ -187,7 +187,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   tool and never anything inside the listed root.
 - **S3 modes.** The default is the parallel core; `--seed` tiles the scope from one delimiter page first;
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
-  dataset is then marked incomplete). `--endpoint` and `--path-style` select S3-compatible stores.
+  dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` and `--path-style` select S3-compatible stores.
 - **Requester pays:** `--request-payer` sends `x-amz-request-payer: requester` (signed) on every request, so
   a requester-pays bucket can be listed at the caller's charge.
 - **S3 credentials:** `--anonymous` sends unsigned requests whatever the environment holds. Otherwise the AWS
