@@ -75,7 +75,7 @@ that is the commit. The run reports follow it.
    is the provider, the source (bucket and prefix), the endpoint, the region and `-fetch-owner`. A field
    added, dropped or changed is a typed `*durable.MismatchError`. The S3 endpoint's canonical form is
    `s3.NormalizeEndpoint` (scheme and host case, a trailing slash), the only equivalences allowed: another
-   endpoint may serve another bucket of the same name. Workers, encoders, memory, `-seed`, `-no-probe` and
+   endpoint may serve another bucket of the same name. Workers, encoders, memory, `-seed`, `-probe` and
    credentials may change.
 3. Recovers `data/`. Every retained part must match its record's size and MD5 (`ErrPartAltered` otherwise).
    A part whose record is durable but whose rename did not happen is renamed now. Every unrecorded file in

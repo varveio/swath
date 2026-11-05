@@ -427,7 +427,7 @@ func TestT6BalanceSmoke(t *testing.T) {
 	// probes catch pivots past the end of the keyspace; it must still engage
 	// most workers, and its empty upper children must be avoided.
 	for _, noProbe := range []bool{true, false} {
-		got, st, leaves := runBudget(t, f, Options{NoProbe: noProbe}, 16, 131_072)
+		got, st, leaves := runBudget(t, f, Options{Probe: !noProbe}, 16, 131_072)
 		if len(got) != len(keys) {
 			t.Fatalf("%d keys", len(got))
 		}

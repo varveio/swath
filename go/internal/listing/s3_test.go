@@ -224,7 +224,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 		}
 		return out
 	}
-	on := run(Config{Out: filepath.Join(t.TempDir(), "ds"), Workers: 4, Source: &S3Config{Seed: true}})
+	on := run(Config{Out: filepath.Join(t.TempDir(), "ds"), Workers: 4, Source: &S3Config{Seed: true, Probe: true}})
 	if !has(on, "s3", "probe", "requests") || !has(on, "s3", "seed", "cuts") || !has(on, "spill", "rows") || !has(on, "encoder_wait_ns") {
 		t.Fatalf("enabled policies must report their counters: %v", on)
 	}
@@ -234,7 +234,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 	if has(on, "disabled") {
 		t.Fatalf("nothing in the run is off: %v", on["disabled"])
 	}
-	cfg := Config{Workers: 4, NoSpill: true, Source: &S3Config{NoProbe: true}}
+	cfg := Config{Workers: 4, NoSpill: true, Source: &S3Config{}}
 	m := run(cfg)
 	if has(m, "s3", "probe") || has(m, "s3", "seed") || has(m, "spill") || has(m, "encoder_wait_ns") {
 		t.Fatalf("disabled policies must not report counters: %v", m)

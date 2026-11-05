@@ -1335,7 +1335,8 @@ the old pivot), Go 5a (new pivot + probe) and Go 5a `-no-probe` (added afterward
   recordings. The probe removes most empty children (161→13, 154→10, 2,237→89), but each probe is a serial
   round trip in the owner's `Expand` before its split. Requests rise 17–47% and mean active falls (29.6→23.3,
   24.3→15.0, 25.6→16.6). Recommendation for the owner: default `-no-probe` (or remove the probe) until a
-  cheaper check exists; the decision is the owner's.
+  cheaper check exists; the decision is the owner's. Taken: the probe is off by default and `-probe` turns
+  it on (see "Probe default off" below).
 - **Go's kernel beats Java on flat-ish shapes and loses badly on deep hierarchies.** Go is 9–13× faster than
   Java on noaa-eri-pds and pansurg, and close to Java defaults on real-changesets. It is far behind on
   fourcastnetgfs (4.6×) and nara (15.6×). On those, Go runs about one range at a time (mean active 1.2–1.8),
@@ -1425,6 +1426,13 @@ Gates: `verify.py` (rewritten for format 2) passes on local and S3 datasets; `di
 format 1 of the same listing identical through the projection; the Varve probe passes (next section but one).
 Java reading Go output is no longer a gate. Byte baselines change once here: the S3 parts lose four columns
 and every part's footer changes.
+
+## Probe default off
+
+The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and
+its test stay (`TestT6BalanceSmoke` runs both arms). Reason: Step 5a, where the probe made every finished
+recording 1.4–2.2× slower than without it. It is revisited only as an asynchronous or speculative check.
+With the probe off its counters are absent and `probe` is listed under the S3 section's `disabled`.
 
 ## Measurement drift
 

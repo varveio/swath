@@ -12,7 +12,7 @@ turns that policy off, its counters are left out and the policy is listed under 
 object (`TestSummaryDistinguishesOffFromZero`):
 - absent, and not listed: this build or provider has no such counter;
 - absent, and listed under `disabled`: the policy was off for this run (for S3: `seed` without `-seed` or on
-  resume, `split` and `probe` with `-sequential`, `probe` with `-no-probe`, `resume` on a fresh run,
+  resume, `split` and `probe` with `-sequential`, `probe` without `-probe`, `resume` on a fresh run,
   `max_keys` without `-max-keys`);
 - present and zero: the policy was on and never fired.
 

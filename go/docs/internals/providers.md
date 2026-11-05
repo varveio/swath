@@ -123,17 +123,18 @@ range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), 
    that differs from `c`. It is taken only when it lies between the cursor and the spec pivot (nearer the
    cursor), or when the spec pivot is within one page span of the cursor. In that second case the spec
    pivot would leave the lower child empty: reflection from ⊥ moves only the last character.
-3. **The 1-key probe (Java's pivot probe, the first ported policy feature).** Before the split is published,
+3. **The 1-key probe (Java's pivot probe; off by default, `-probe` turns it on).** Before the split is published,
    one ListObjectsV2 with `max-keys=1` after the pivot checks that the upper child `(m, hi]` holds a key. If
    it does not, the pivot moves to the safe midpoint of `(c, m]` and is probed again, up to 3 probes. Then
    the split is skipped, and the range does not try again for 2, 4, … 64 pages.
 
 The split's demand slot is reserved while it is probed, so concurrent owners do not split for the same idle
-worker. Every pivot is safe (I12). `-no-probe` lists with the kernel alone.
+worker. Every pivot is safe (I12). Without `-probe` the provider lists with the kernel alone.
 
 Measured on five replayed recordings (REPORT.md, "Step 5a"), the probe costs more than the empty children
 it saves: it is a serial round trip before each split, so it lowers concurrency, and runs were 1.4–2.2× slower
-than without it. Without it the refined pivot matches the old one. The default is the owner's decision.
+than without it. Without it the refined pivot matches the old one. So the probe is off by default; the code
+stays, to be revisited only as an asynchronous or speculative check, never a serial pre-split round trip.
 
 **Why.** Before the probe, the density estimate was the first choice and could reach far past the data on
 skewed shapes. On a replay of noaa-nws-fourcastnetgfs-pds, 1,362 of 2,927 splits left an empty upper child,
@@ -142,7 +143,7 @@ and the run used about 1 of 64 workers (REPORT.md "Step 5a").
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted
 bounded and frontier, rejected per guard clause, skipped for no demand, outranked or not continuing);
-`child_empty.{lower,upper}`; `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
+`child_empty.{lower,upper}`; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
 sink-wait time.
 
 **Sequential oracle.** `-sequential` lists the scope as one continuation-token chain; its dataset is

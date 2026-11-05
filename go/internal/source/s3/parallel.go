@@ -352,7 +352,7 @@ const maxProbes = 3
 // the pivot moves to the safe midpoint of (c, m] and is probed again, up to
 // maxProbes times; then the split is skipped. Called without mu.
 func (p *Provider) probe(ctx context.Context, r Range, c, m string) (string, bool, error) {
-	if p.opt.NoProbe {
+	if !p.opt.Probe {
 		return m, true, nil
 	}
 	for range maxProbes {

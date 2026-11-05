@@ -47,8 +47,6 @@ usage: swath list <root> [flags]
     	S3: publish parts only at the end, without the journal that -resume needs
   -no-link-target
     	do not read symlink targets
-  -no-probe
-    	S3: split without the 1-key probe that checks the upper child is not empty
   -no-spill
     	wait on the reorder budget instead of spilling rows ahead of the frontier to disk
   -out directory
@@ -59,6 +57,8 @@ usage: swath list <root> [flags]
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
     	S3: path-style addressing
+  -probe
+    	S3: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)
   -profile profile
     	S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
   -region string

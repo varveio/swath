@@ -121,7 +121,7 @@ func (p *Provider) disabled() []string {
 	var off []string
 	if p.opt.Sequential {
 		off = append(off, "split", "probe")
-	} else if p.opt.NoProbe {
+	} else if !p.opt.Probe {
 		off = append(off, "probe")
 	}
 	if p.opt.Sequential || p.opt.Resume != nil || !p.opt.Seed {
