@@ -203,7 +203,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		}
 	}
 	if last := jr.last(); last != nil {
-		if err := jr.src.Restart(last.Part.MaxKey, jr.state.Checkpoints); err != nil {
+		if err := jr.src.Restart(string(last.Part.MaxKey), jr.state.Checkpoints); err != nil {
 			jr.close()
 			return sum, err
 		}

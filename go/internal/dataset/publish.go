@@ -7,6 +7,7 @@ import (
 	"github.com/varveio/swath/go/internal/faults"
 
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,14 +16,38 @@ import (
 	"time"
 )
 
+// Key is a key's exact bytes, held in a Go string and compared as unsigned
+// bytes. JSON spells it in standard base64, so a key that is not UTF-8 (a
+// filesystem name) survives a round trip; readers compare decoded bytes.
+type Key string
+
+// MarshalJSON writes k as a base64 JSON string.
+func (k Key) MarshalJSON() ([]byte, error) {
+	return json.Marshal(base64.StdEncoding.EncodeToString([]byte(k)))
+}
+
+// UnmarshalJSON reads a base64 JSON string.
+func (k *Key) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	v, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("key: %w", err)
+	}
+	*k = Key(v)
+	return nil
+}
+
 // Part is the close-gated metadata of one written part.
 type Part struct {
 	Path   string `json:"path"` // temporary path while unpublished, the final path once published
 	Rows   int64  `json:"rows"`
 	Bytes  int64  `json:"bytes"`
 	MD5    string `json:"md5"`
-	MinKey string `json:"min_key"`
-	MaxKey string `json:"max_key"`
+	MinKey Key    `json:"min_key_base64"`
+	MaxKey Key    `json:"max_key_base64"`
 }
 
 // Check is the publication gate: dense ordinals (part i at TempPath i, or
@@ -92,13 +117,13 @@ type Coverage struct {
 }
 
 // ManifestPart is one part in the manifest. Keys are exact (never
-// truncated); path is relative to the dataset root.
+// truncated) and base64; path is relative to the dataset root.
 type ManifestPart struct {
 	Path   string `json:"path"`
 	Rows   int64  `json:"rows"`
 	Bytes  int64  `json:"bytes"`
-	MinKey string `json:"min_key"`
-	MaxKey string `json:"max_key"`
+	MinKey Key    `json:"min_key_base64"`
+	MaxKey Key    `json:"max_key_base64"`
 	MD5    string `json:"md5"`
 }
 

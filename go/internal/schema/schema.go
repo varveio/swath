@@ -12,13 +12,14 @@ import (
 type Type uint8
 
 const (
-	String          Type = iota // BYTE_ARRAY (STRING)
+	String          Type = iota // BYTE_ARRAY (STRING): UTF-8 the schema guarantees
 	Int32                       // INT32, unannotated
 	Int64                       // INT64, unannotated
 	TimestampMicros             // INT64 TIMESTAMP(MICROS, UTC)
 	Bool                        // BOOLEAN
 	Uint32                      // INT32 INT(32, unsigned)
 	Uint64                      // INT64 INT(64, unsigned)
+	Binary                      // BYTE_ARRAY, unannotated: arbitrary bytes
 )
 
 // Spec is a column's name, type and nullability.

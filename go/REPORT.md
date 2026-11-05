@@ -1427,6 +1427,23 @@ format 1 of the same listing identical through the projection; the Varve probe p
 Java reading Go output is no longer a gate. Byte baselines change once here: the S3 parts lose four columns
 and every part's footer changes.
 
+## Format revision, group 2 (items 6–10)
+
+Gates for every item below, run by one script on a 20,000-key fake bucket (synthetic, `keys.tsv`) and a
+305-entry local tree with a name that is not UTF-8 and a symlink: `verify.py` on sequential, parallel,
+prefix and local datasets; `diffds.py` format 1 (Java-compatible, `ec23ff8`) vs format 2 and sequential vs
+parallel; same-build byte identity (part MD5s equal across `-sequential`, `-workers 16 -seed` and
+`-workers 4 -seed`, and across local runs with 1 and 4 workers); the Varve probe on a scratch copy of Varve
+with the upgrade guide applied, and Varve's own `internal/swath` tests.
+
+6. **Keys are bytes.** Filesystem `key` and `link_target` are unannotated BYTE_ARRAY; names that are not
+   UTF-8 are listed with their exact bytes (format 1 skipped them and their subtrees; `invalid_utf8_names`
+   is gone). S3 keys stay STRING. Manifest and journal part bounds are `min_key_base64`/`max_key_base64`
+   (`dataset.Key`, compared as bytes); journal version 4. Tests: `TestKeysAreBytes` (end to end, manifest
+   bytes), the filesystem oracle now includes the non-UTF-8 names. Varve probe: the decoder reads the two
+   base64 fields into `[]byte` (two lines changed; the diff stays 4 files, +117/−5). Same-build byte identity holds;
+   the local parts' bytes change (key and link target lose STRING), the S3 column content does not.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

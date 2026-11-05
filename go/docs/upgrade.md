@@ -45,7 +45,7 @@ A format-2 manifest never falls into a reader's thin-manifest (legacy) fallback.
   },
   "parts": [
     {"path": "data/part-00000.parquet", "rows": 1000, "bytes": 81234,
-     "min_key": "logs/a", "max_key": "logs/k", "md5": "…"}
+     "min_key_base64": "bG9ncy9h", "max_key_base64": "bG9ncy9r", "md5": "…"}
   ]
 }
 ```
@@ -59,8 +59,12 @@ A format-2 manifest never falls into a reader's thin-manifest (legacy) fallback.
 | – (inferred from the run summary's `config.target`) | `scope.kind` (`whole` or `prefix`), `scope.prefix` |
 | – (run summary `completed`, `config.filters`) | `coverage` |
 | `files[].key` | `parts[].path` (relative to the dataset root) |
-| `files[].size`, `rowCount`, `MD5checksum`, `minKey`, `maxKey` | `parts[].bytes`, `rows`, `md5`, `min_key`, `max_key` (exact, never truncated) |
+| `files[].size`, `rowCount`, `MD5checksum`, `minKey`, `maxKey` | `parts[].bytes`, `rows`, `md5`, `min_key_base64`, `max_key_base64` (exact, never truncated; standard base64 of the key bytes) |
 | `fileFormat`, `sorted`, `sortKey`, `fileSchema`, `totalRows` | removed (the format implies the first four; sum `rows` for the total) |
+
+**Keys are bytes.** Part bounds are the key bytes in standard base64, so a key that is not UTF-8 survives
+JSON. A reader decodes them and compares bytes (unsigned), never the base64 text. For the S3 schema the
+decoded bounds are UTF-8, as the keys are.
 
 **Acceptance.** A reader that needs the whole source accepts a dataset only if `coverage.complete` is true,
 `coverage.skipped_entries` is 0, `coverage.filters` is empty and `scope.kind` is `whole`. A missing or
@@ -83,7 +87,8 @@ or may not be in it.
 | `is_delete_marker` | always false | removed |
 | `row_type` | always `OBJECT` | removed |
 
-The local schema becomes `swath-local/v1`: `blocks` is renamed `allocated_bytes`, `ctime` is renamed
+The local schema becomes `swath-local/v1`: `key` and `link_target` are unannotated BYTE_ARRAY (names are
+bytes; a name that is not UTF-8 is listed exactly, where format 1 skipped it), `blocks` is renamed `allocated_bytes`, `ctime` is renamed
 `metadata_changed_at`, and `mode`, `uid`, `gid`, `nlink` (`INT(32,false)`), `inode` and `dev`
 (`INT(64,false)`) are unsigned.
 
@@ -108,7 +113,7 @@ readers treat page bounds as conservative. Manifest bounds are exact.
 ## Versions
 
 Four versions move independently: the dataset format (`format_version` and `swath.profile_version`, 2), the
-logical schema (`schema_id`), the private journal (version 3, never read by readers) and the writer recipe
+logical schema (`schema_id`), the private journal (version 4, never read by readers) and the writer recipe
 (`parquet.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
 parts are byte-identical within a build only.
 

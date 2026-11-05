@@ -7,10 +7,11 @@ Checks: manifest.json is format 2 (format, format_version, schema_id, source, sc
 is the commit (no _SUCCESS, no symlink.txt); data/ holds exactly the manifest's parts; the run report
 exists (_swath_summary.json for S3, _swath_local_summary.json otherwise); for S3, every column against the
 current-object schema and every row a current object; per part: DuckDB row count == manifest rows,
-first/last key == manifest min_key/max_key (exact), keys strictly ascending (unsigned bytes) within and
+first/last key == manifest min_key_base64/max_key_base64 (exact bytes), keys strictly ascending (unsigned bytes) within and
 across parts; footer stamps (profile, profile version, schema id, index bound) and nothing else under
 swath.*. Prints the schema as DuckDB sees it and min/max key per part.
 """
+import base64
 import json
 import os
 import sys
@@ -84,26 +85,31 @@ def main(out):
         ).fetchall():
             print("  " + " | ".join(str(x) for x in row))
 
+    # S3 keys are STRING (VARCHAR); filesystem keys are unannotated BYTE_ARRAY (BLOB).
+    key_type = dict((r[0], r[1]) for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}')").fetchall())["key"]
+    kb = "key" if key_type == "BLOB" else "encode(key)"
     print("\nPer part:")
     prev_max = None
     for i, (f, p) in enumerate(zip(m["parts"], paths)):
         # Strict ascending within the file, comparing raw key bytes (BLOB compare is unsigned bytewise).
         r = con.execute(f"""
-            WITH t AS (SELECT key, encode(key)::BLOB AS b, file_row_number AS n
+            WITH t AS (SELECT {kb}::BLOB AS b, file_row_number AS n
                        FROM read_parquet('{p}', file_row_number = true))
-            SELECT count(*), min(b), max(b), first(key ORDER BY n), last(key ORDER BY n),
+            SELECT count(*), min(b), max(b), first(b ORDER BY n), last(b ORDER BY n),
                    count(*) FILTER (WHERE prev IS NOT NULL AND prev >= b)
-            FROM (SELECT key, b, n, lag(b) OVER (ORDER BY n) AS prev FROM t)
+            FROM (SELECT b, n, lag(b) OVER (ORDER BY n) AS prev FROM t)
         """).fetchone()
         cnt, bmin, bmax, first, last, bad = r
+        bmin, bmax, first, last = bytes(bmin), bytes(bmax), bytes(first), bytes(last)
+        lo, hi = base64.b64decode(f["min_key_base64"]), base64.b64decode(f["max_key_base64"])
         print(f"  {f['path']}: rows={cnt} bytes={f['bytes']} min_key={first!r} max_key={last!r}")
         check(cnt == f["rows"], f"  rows {f['rows']}")
         check(bad == 0, "  keys strictly ascending within part (file row order)")
-        check(first == f["min_key"] and last == f["max_key"], "  first/last key == manifest min_key/max_key")
-        check(bytes(bmin) == first.encode() and bytes(bmax) == last.encode(), "  first/last are byte min/max")
+        check(first == lo and last == hi, "  first/last key == manifest min_key_base64/max_key_base64 (decoded bytes)")
+        check(bmin == first and bmax == last, "  first/last are byte min/max")
         if prev_max is not None:
-            check(prev_max < first.encode(), "  previous part max_key < this min_key (unsigned bytes)")
-        prev_max = last.encode()
+            check(prev_max < first, "  previous part max key < this min key (unsigned bytes)")
+        prev_max = last
         kv = dict(
             (k.decode() if isinstance(k, (bytes, bytearray)) else k, v.decode() if isinstance(v, (bytes, bytearray)) else v)
             for k, v in con.execute(f"SELECT key, value FROM parquet_kv_metadata('{p}')").fetchall()

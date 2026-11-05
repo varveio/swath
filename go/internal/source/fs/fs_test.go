@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"sync"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/schema"
@@ -101,12 +100,6 @@ func oracle(t *testing.T, root string, dirs bool) []string {
 		}
 		rel, _ := filepath.Rel(root, p)
 		rel = filepath.ToSlash(rel)
-		if !utf8.ValidString(rel) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
 		if d.IsDir() {
 			if dirs {
 				keys = append(keys, rel+"/")
@@ -153,8 +146,9 @@ func TestListingEqualsSortedOracle(t *testing.T) {
 						if !slices.Equal(keys, want) {
 							t.Fatalf("sequence differs: got %d keys, want %d", len(keys), len(want))
 						}
-						if runtime.GOOS != "windows" && st.InvalidUTF8 != 2 {
-							t.Errorf("invalid UTF-8 count %d, want 2", st.InvalidUTF8)
+						// Names that are not UTF-8 are listed with their exact bytes.
+						if runtime.GOOS != "windows" && (!slices.Contains(keys, "bad\xffname") || !slices.Contains(keys, "bad\xffdir/hidden")) {
+							t.Error("names that are not UTF-8 were not listed byte for byte")
 						}
 						if os.Geteuid() != 0 && st.OpenErrors == 0 {
 							t.Error("unreadable directory not counted")

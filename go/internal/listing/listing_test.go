@@ -8,7 +8,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +67,29 @@ func TestEndToEnd(t *testing.T) {
 	if m.Format != dataset.Format || m.FormatVersion != dataset.FormatVersion || m.Source.Kind != "local-fs" || m.Scope.Kind != "whole" ||
 		!m.Coverage.Complete || m.Coverage.SkippedEntries != 0 || len(m.Parts) != 1 || m.Parts[0].Rows != 7 || m.Parts[0].Path != "data/part-00000.parquet" {
 		t.Fatalf("manifest %+v", m)
+	}
+}
+
+// Keys are bytes: a name that is not UTF-8 is listed, and the manifest
+// carries its exact bytes (base64), not a replacement character.
+func TestKeysAreBytes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("NTFS names are UTF-16")
+	}
+	src := t.TempDir()
+	mk(t, src, "a", "z\xff")
+	out := filepath.Join(t.TempDir(), "ds")
+	if _, err := Run(context.Background(), Config{Root: src, Out: out}); err != nil {
+		t.Fatal(err)
+	}
+	var m dataset.Manifest
+	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
+	if len(m.Parts) != 1 || m.Parts[0].MinKey != "a" || m.Parts[0].MaxKey != "z\xff" {
+		t.Fatalf("parts %+v", m.Parts)
+	}
+	raw, _ := os.ReadFile(filepath.Join(out, dataset.ManifestName))
+	if !strings.Contains(string(raw), `"max_key_base64": "ev8="`) {
+		t.Fatalf("manifest bound not base64: %s", raw)
 	}
 }
 

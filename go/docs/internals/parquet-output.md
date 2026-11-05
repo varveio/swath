@@ -98,13 +98,19 @@ message string any more.
 object, so Java's `version_id`, `is_latest`, `is_delete_marker` and `row_type` are not stored; `bench/diffds.py`
 restores their constant values for comparison. ETags lose one pair of surrounding quotes, as swath does.
 
+**Keys are bytes.** Every schema's `key` is a required BYTE_ARRAY ordered as unsigned bytes. It carries the
+STRING annotation only where the producer guarantees UTF-8 (S3 keys are UTF-8); filesystem keys and link
+targets are unannotated BYTE_ARRAY, written exactly as the kernel returned them, never skipped, replaced or
+normalised. Manifest bounds are written in base64 (`min_key_base64`, `max_key_base64`) so every key survives
+JSON; readers compare the decoded bytes (`dataset.Key`).
+
 **`schema.Local`** (`swath-local/v1`) has one row per entry below the root, directories included, each with a
-named `kind`. `key`, `size` and `last_modified` match the S3 schema. Identifiers are unsigned. v1 renamed
+named `kind`. `size` and `last_modified` match the S3 schema; `key` is binary. Identifiers are unsigned. v1 renamed
 `blocks` to `allocated_bytes` and `ctime` to `metadata_changed_at`, and made the identifiers unsigned:
 
 | Column | Parquet physical / logical | Null? | Source |
 |---|---|---|---|
-| `key` | BINARY (STRING) | required | path relative to the root, `/`-separated, no leading `/`; directories end in `/` |
+| `key` | BYTE_ARRAY (unannotated) | required | path relative to the root, `/`-separated, no leading `/`; directories end in `/`; the name's exact bytes |
 | `size` | INT64 `INT(64,true)` | optional | `st_size` (apparent bytes) |
 | `last_modified` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_mtime` |
 | `kind` | BINARY (STRING) | required | `FILE`, `DIR`, `SYMLINK`, `FIFO`, `SOCKET`, `CHAR_DEVICE`, `BLOCK_DEVICE`, `UNKNOWN` |
@@ -116,7 +122,7 @@ named `kind`. `key`, `size` and `last_modified` match the S3 schema. Identifiers
 | `allocated_bytes` | INT64 `INT(64,true)` | optional | `st_blocks * 512` (sparse files show `allocated_bytes < size`) |
 | `metadata_changed_at`, `atime` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_ctime`, `st_atime` |
 | `birth_time` | INT64 TIMESTAMP(MICROS, UTC) | optional | statx `stx_btime` (only `--fields statx`, mask `all`, when the filesystem reports it); Windows `CreationTime` |
-| `link_target` | BINARY (STRING) | optional | `readlink` result, symlinks only (stat/statx tiers unless `--no-link-target`) |
+| `link_target` | BYTE_ARRAY (unannotated) | optional | `readlink` result, symlinks only (stat/statx tiers unless `--no-link-target`) |
 
 Directories produce `kind=DIR` rows keyed `a/b/` (`-no-dirs` omits them). In the S3 schema a key ending in
 `/` is an object like any other: delimiter prefixes are derived by readers, never stored. The Parquet schema

@@ -20,7 +20,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
@@ -71,7 +70,6 @@ type Stats struct {
 	Vanished       int64    `json:"vanished"` // gone between listing and stat
 	Changed        int64    `json:"changed"`  // type changed between listing and stat; dropped
 	ReadlinkErrors int64    `json:"readlink_errors"`
-	InvalidUTF8    int64    `json:"invalid_utf8_names"` // skipped; a directory's subtree too
 	Skipped        int64    `json:"skipped_dirs"`
 	Unsafe         int64    `json:"unsafe_dirs"` // a directory replaced by a symlink before open
 	Chunks         int64    `json:"chunks"`      // large-directory chunks statted in parallel
@@ -80,7 +78,7 @@ type Stats struct {
 
 // Errors is the sum of the error counters.
 func (s *Stats) Errors() int64 {
-	return s.OpenErrors + s.ReadErrors + s.StatErrors + s.Vanished + s.Changed + s.ReadlinkErrors + s.InvalidUTF8 + s.Unsafe
+	return s.OpenErrors + s.ReadErrors + s.StatErrors + s.Vanished + s.Changed + s.ReadlinkErrors + s.Unsafe
 }
 
 const maxSamples = 8
@@ -103,7 +101,6 @@ func (s *Stats) add(o *Stats) {
 	s.Vanished += o.Vanished
 	s.Changed += o.Changed
 	s.ReadlinkErrors += o.ReadlinkErrors
-	s.InvalidUTF8 += o.InvalidUTF8
 	s.Skipped += o.Skipped
 	s.Unsafe += o.Unsafe
 	s.Chunks += o.Chunks
@@ -253,10 +250,6 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 			return ctx.Err()
 		}
 		name := d.Name()
-		if !utf8.ValidString(name) {
-			st.InvalidUTF8++
-			continue
-		}
 		row := schema.Row{Key: r.prefix + name}
 		path := r.path + string(os.PathSeparator) + name
 		if p.opt.Fields == Names {

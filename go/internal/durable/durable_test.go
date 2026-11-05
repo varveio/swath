@@ -6,6 +6,7 @@ package durable
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -63,7 +64,7 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 3 {
-		if err := j.Append(Record{Ordinal: i, Part: dataset.Part{Rows: 10, MaxKey: string(rune('a' + i))}, RowsTotal: int64(10 * (i + 1)), Checkpoint: []byte{byte('k' + i)}}); err != nil {
+		if err := j.Append(Record{Ordinal: i, Part: dataset.Part{Rows: 10, MaxKey: dataset.Key(string(rune('a' + i)))}, RowsTotal: int64(10 * (i + 1)), Checkpoint: []byte{byte('k' + i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -129,7 +130,7 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	j, _ = Create(out, Identity{})
 	j.Close()
 	b, _ = os.ReadFile(Path(out))
-	b2 := []byte(strings.Replace(string(b[8:]), `"version":3`, `"version":9`, 1))
+	b2 := []byte(strings.Replace(string(b[8:]), fmt.Sprintf(`"version":%d`, Version), `"version":9`, 1))
 	binary.LittleEndian.PutUint32(b[4:8], frameCRC(b[:4], b2))
 	os.WriteFile(Path(out), append(b[:8], b2...), 0o644)
 	if _, err := Read(out); err == nil || !strings.Contains(err.Error(), "version 9") {

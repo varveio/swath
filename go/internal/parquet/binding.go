@@ -39,6 +39,8 @@ func nodeOf(s *schema.Schema) *pq.Schema {
 			t, tag = reflect.TypeFor[int64](), tag+",timestamp(microsecond:utc)"
 		case schema.Bool:
 			t = reflect.TypeFor[bool]()
+		case schema.Binary:
+			t = reflect.TypeFor[[]byte]()
 		}
 		if i == 0 {
 			tag += ",delta"

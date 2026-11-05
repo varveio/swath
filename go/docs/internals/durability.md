@@ -108,7 +108,8 @@ parallelism on resume, never a key. The only work under the split mutex is the i
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 3 (version 3 made the identity and the checkpoint provider-neutral;
+the payload, and the payload (JSON); journal version 4 (version 3 made the identity and the checkpoint provider-neutral, version 4 writes part
+bounds as base64;
 an older journal is refused, so an interrupted run of an older build is finished with that build or started
 over with `-overwrite`). The first frame is the header (tool, format, identity, creation time).
 Every later frame is a part record, with the ordinals dense from 0. One writer goroutine owns the file;

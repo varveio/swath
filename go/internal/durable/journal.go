@@ -241,7 +241,7 @@ func (j *Journal) Close() error {
 }
 
 // Version is the journal format this tool writes and reads.
-const Version = 3
+const Version = 4
 
 // frameCRC covers the length field and the payload, so a damaged length
 // cannot pass for a different frame boundary.

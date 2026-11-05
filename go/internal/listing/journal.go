@@ -305,7 +305,7 @@ func (jr *journal) guard(sink order.Sink) order.Sink {
 	if last == nil {
 		return sink
 	}
-	return afterSink{sink, last.Part.MaxKey}
+	return afterSink{sink, string(last.Part.MaxKey)}
 }
 
 type afterSink struct {

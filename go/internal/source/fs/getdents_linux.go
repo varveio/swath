@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode/utf8"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -137,10 +136,6 @@ func openDir(path string, noFollow bool) (int, error) {
 func readNames(ctx context.Context, fd int, path string, sc *scratch, st *Stats) error {
 	sc.names, sc.ents = sc.names[:0], sc.ents[:0]
 	add := func(ino uint64, typ uint8, name []byte) {
-		if !utf8.Valid(name) {
-			st.InvalidUTF8++
-			return
-		}
 		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), ino: ino, typ: typ})
 		sc.names = append(sc.names, name...)
 	}

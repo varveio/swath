@@ -11,7 +11,7 @@ import (
 )
 
 func part(i int, lo, hi string, n int64) Part {
-	return Part{Path: TempPath("/x", i), MinKey: lo, MaxKey: hi, Rows: n}
+	return Part{Path: TempPath("/x", i), MinKey: Key(lo), MaxKey: Key(hi), Rows: n}
 }
 
 func TestCheck(t *testing.T) {

@@ -34,8 +34,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   symlinks), `statx` (full mask, adds `birth_time`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks, the portable engine checks every 1,024 entries, and stat checks as before.
-- Symlinks are never followed (`O_NOFOLLOW`). Names that are not valid UTF-8 are counted and skipped (a
-  directory's whole subtree). Mount points are crossed; there is no `-one-file-system` yet.
+- Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
+  its exact bytes, like any other. Mount points are crossed; there is no `-one-file-system` yet.
 
 ## S3 (`internal/source/s3`)
 

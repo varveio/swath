@@ -122,7 +122,7 @@ they measure client CPU and coordination, not S3 latency.
 
 `python3 verify.py OUT` checks a format-2 dataset with DuckDB, independently of the Go code: the manifest's
 fields and coverage, no `_SUCCESS` or `symlink.txt`, `data/` holds exactly the manifest's parts, row counts,
-strictly ascending raw key bytes within and across parts, exact manifest `min_key`/`max_key`, the four footer
+strictly ascending raw key bytes within and across parts, exact manifest bounds (`min_key_base64`/`max_key_base64`, decoded), the four footer
 stamps and no others, and for S3 datasets every column of the current-object schema.
 
 ## Fuzzing

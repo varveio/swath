@@ -7,11 +7,13 @@ package schema
 // directories included, each with a named kind. key, size and last_modified
 // match the S3 schema. Identifiers (mode, uid, gid, nlink, inode, dev) are
 // unsigned; allocated_bytes is st_blocks × 512; metadata_changed_at is ctime.
+// Names are bytes (a POSIX name need not be UTF-8): key and link_target are
+// unannotated BYTE_ARRAY, written exactly as the kernel returned them.
 var Local = Schema{
 	Name: "swath_listing",
 	ID:   "swath-local/v1",
 	Columns: []Column{
-		{Spec: Spec{"key", String, true}, Str: func(r *Row) (string, bool) { return r.Key, true }},
+		{Spec: Spec{"key", Binary, true}, Str: func(r *Row) (string, bool) { return r.Key, true }},
 		int64Col("size", HasSize, func(r *Row) int64 { return r.Size }),
 		timeCol("last_modified", HasMtime, func(r *Row) int64 { return r.Mtime }),
 		{Spec: Spec{"kind", String, true}, Str: func(r *Row) (string, bool) { return r.Kind.String(), true }},
@@ -25,7 +27,7 @@ var Local = Schema{
 		timeCol("metadata_changed_at", HasCtime, func(r *Row) int64 { return r.Ctime }),
 		timeCol("atime", HasAtime, func(r *Row) int64 { return r.Atime }),
 		timeCol("birth_time", HasBtime, func(r *Row) int64 { return r.Btime }),
-		{Spec: Spec{"link_target", String, false}, Str: func(r *Row) (string, bool) { return r.LinkTarget, r.Has(HasLink) }},
+		{Spec: Spec{"link_target", Binary, false}, Str: func(r *Row) (string, bool) { return r.LinkTarget, r.Has(HasLink) }},
 	},
 }
 
