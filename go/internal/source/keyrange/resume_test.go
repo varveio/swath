@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"fmt"
@@ -38,7 +38,7 @@ func TestResumeAfterKey(t *testing.T) {
 			var mu sync.Mutex
 			coin := func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(3) == 0 }
 			k := keys[rng.Intn(len(keys)-1)]
-			got, _, leaves := run(t, newSorted(keys, true, int64(s+1)), Options{Resume: &Resume{After: k}, splitCoin: coin}, 8)
+			got, _, leaves := run(t, newSorted(keys, true, int64(s+1)), Options{Resume: &Resume{After: k}, SplitCoin: coin}, 8)
 			want := keys[slices.Index(keys, k)+1:]
 			what := fmt.Sprintf("%s seed=%d K=%q", name, s, k)
 			if !slices.Equal(got, want) {

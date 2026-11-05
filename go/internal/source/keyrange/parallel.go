@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"context"
@@ -12,13 +12,12 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
-// Parallel S3 core: Swath's range tiling, seed, demand-driven owner split
-// and safe pivot, without probes, checkpointing or pacing (docs/internals/providers.md).
+// Parallel core: Swath's range tiling, seed, demand-driven owner split
+// and safe pivot (docs/internals/providers.md, "Range engine").
 //
-// A range is (lo, hi]: start-after is exclusive, so a boundary key belongs
+// A range is (lo, hi]: the lower bound is exclusive, so a boundary key belongs
 // to the left range. lo "" is ⊥; open marks the frontier (hi = ⊤). The
 // order stage makes a range's children claimable only when its Expand
 // returns, so splits are owner-side: at a page boundary, when workers are
@@ -70,7 +69,7 @@ type running struct {
 
 // Root is the scope: the sequential chain, a resumed tiling, the seed, or
 // (⊥, ⊤].
-func (p *Provider) Root() Range {
+func (p *Engine[P]) Root() Range {
 	switch {
 	case p.opt.Sequential:
 		return Range{kind: whole}
@@ -83,7 +82,7 @@ func (p *Provider) Root() Range {
 }
 
 // Expand lists one range.
-func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Object]) error {
+func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range, P]) error {
 	switch r.kind {
 	case whole:
 		return p.expandSequential(ctx, e)
@@ -98,11 +97,11 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 // expandResume hands on (after, ⊤], the rest of the scope after a
 // journaled run's last published key; splits ramp it up as on a fresh run.
 // It lists nothing itself.
-func (p *Provider) expandResume(e source.Emitter[Range, Object]) error {
+func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	after := p.opt.Resume.After
 	p.mu.Lock()
 	t := Range{lo: after, open: true, id: p.ids.Add(1), born: fromSeed}
-	// K is a real key and may hold scalars S3 refuses in start-after: start
+	// K is a real key and may hold scalars outside the pivot alphabet: start
 	// at its safe prefix and drop keys up to K there.
 	if s := safePrefix(after); s != after {
 		t.lo, t.after = s, after
@@ -115,12 +114,12 @@ func (p *Provider) expandResume(e source.Emitter[Range, Object]) error {
 }
 
 // account integrates the active count over time; mu held.
-func (p *Provider) account(now time.Time) {
+func (p *Engine[P]) account(now time.Time) {
 	p.area += float64(len(p.running)) * now.Sub(p.areaAt).Seconds()
 	p.areaAt = now
 }
 
-func (p *Provider) enter(r Range) *running {
+func (p *Engine[P]) enter(r Range) *running {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.account(time.Now())
@@ -133,7 +132,7 @@ func (p *Provider) enter(r Range) *running {
 	return st
 }
 
-func (p *Provider) leave(r Range, st *running, start time.Time) {
+func (p *Engine[P]) leave(r Range, st *running, start time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.account(time.Now())
@@ -151,12 +150,13 @@ func (p *Provider) leave(r Range, st *running, start time.Time) {
 
 // expandRange lists (lo, hi]: the first page starts after lo, later pages
 // follow continuation tokens; keys past hi are trimmed and end the range.
-func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Range, Object]) error {
+func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[Range, P]) error {
 	start := time.Now()
 	st := p.enter(r)
 	defer p.leave(r, st, start)
-	in := p.input()
-	in.StartAfter = r.lo
+	in := p.query()
+	in.After = r.lo
+	in.Through, in.Bounded = r.hi, !r.open
 	c := r.lo
 	p.maybeProbe(ctx, st, r, c)
 	for {
@@ -167,22 +167,22 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		skipped := 0
 		if r.after != "" { // resume: drop keys already published
 			n := 0
-			for n < len(out.Contents) && out.Contents[n].Key <= r.after {
+			for n < len(out.Rows) && out.Rows[n].Key <= r.after {
 				n++
 			}
 			if n > 0 {
-				c, skipped = out.Contents[n-1].Key, n
-				out.Contents = out.Contents[n:]
+				c, skipped = out.Rows[n-1].Key, n
+				out.Rows = out.Rows[n:]
 				p.mu.Lock()
 				p.c.Add(cOverfetchKeys, int64(n))
 				p.mu.Unlock()
 			}
 		}
-		kept, reached := len(out.Contents), false
-		for i := range out.Contents {
-			k := out.Contents[i].Key
+		kept, reached := len(out.Rows), false
+		for i := range out.Rows {
+			k := out.Rows[i].Key
 			if (c != "" || i > 0) && k <= c {
-				return fmt.Errorf("%w: listing out of order in (%q, %q]: %q after %q", client.ErrInvalidPage, r.lo, r.hi, k, c)
+				return fmt.Errorf("%w: listing out of order in (%q, %q]: %q after %q", p.d.invalid(), r.lo, r.hi, k, c)
 			}
 			if !r.open && k > r.hi {
 				kept, reached = i, true
@@ -190,21 +190,21 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 			}
 			c = k
 		}
-		truncated := out.IsTruncated
-		if truncated && out.NextContinuationToken == "" {
-			return fmt.Errorf("%w: truncated page without a continuation token", client.ErrInvalidPage)
+		truncated := out.Truncated
+		if truncated && out.Token == "" {
+			return fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
 		}
 		if truncated && kept == 0 && !reached && skipped == 0 {
-			return fmt.Errorf("%w: truncated page with no key in (%q, %q]", client.ErrInvalidPage, r.lo, r.hi)
+			return fmt.Errorf("%w: truncated page with no key in (%q, %q]", p.d.invalid(), r.lo, r.hi)
 		}
-		if err := p.emit(p.rows(out, kept), e); err != nil {
+		if err := p.emit(out.Rows[:kept], e); err != nil {
 			return err
 		}
 		p.mu.Lock()
-		p.c.Add(cOverfetchKeys, int64(len(out.Contents)-kept))
+		p.c.Add(cOverfetchKeys, int64(len(out.Rows)-kept))
 		st.keys += int64(kept)
 		if kept > 0 {
-			st.dens.observe(out.Contents[0].Key, out.Contents[kept-1].Key, r.lo, r.hi, kept)
+			st.dens.observe(out.Rows[0].Key, out.Rows[kept-1].Key, r.lo, r.hi, kept)
 		}
 		p.mu.Unlock()
 		done := reached || !truncated || (!r.open && kept > 0 && c == r.hi)
@@ -214,7 +214,7 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		}
 		page := make([]string, kept)
 		for i := range page {
-			page[i] = out.Contents[i].Key
+			page[i] = out.Rows[i].Key
 		}
 		if m, ext, ok := p.decide(st, r, page, c); ok {
 			m, ok, err := p.probe(ctx, r, c, m)
@@ -224,7 +224,7 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 			}
 			lower, upper := p.commit(st, r, c, m, ext, ok)
 			if !ok {
-				in.StartAfter, in.ContinuationToken = "", out.NextContinuationToken
+				in.After, in.Token = "", out.Token
 				p.maybeProbe(ctx, st, r, c)
 				continue
 			}
@@ -237,14 +237,14 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 			}
 			return e.Child(upper)
 		}
-		in.StartAfter, in.ContinuationToken = "", out.NextContinuationToken
+		in.After, in.Token = "", out.Token
 		p.maybeProbe(ctx, st, r, c)
 	}
 }
 
-func (p *Provider) covered(lo, hi string, open bool) {
-	if p.opt.trace != nil {
-		p.opt.trace(lo, hi, open)
+func (p *Engine[P]) covered(lo, hi string, open bool) {
+	if p.opt.Trace != nil {
+		p.opt.Trace(lo, hi, open)
 	}
 }
 
@@ -256,7 +256,7 @@ func (p *Provider) covered(lo, hi string, open bool) {
 // density (see below). On success the two children are
 // reserved in the demand count; the caller probes the pivot and then
 // commits or releases the split.
-func (p *Provider) decide(st *running, r Range, page []string, c string) (m string, extrapolated, ok bool) {
+func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m string, extrapolated, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st.continuing = true
@@ -267,7 +267,7 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 		st.cooldown--
 		return
 	}
-	if coin := p.opt.splitCoin; coin != nil {
+	if coin := p.opt.SplitCoin; coin != nil {
 		if !coin() {
 			return
 		}
@@ -283,7 +283,7 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 		}
 	}
 	hunger := p.opt.Workers - len(p.running) - p.queued
-	if p.opt.splitCoin == nil {
+	if p.opt.SplitCoin == nil {
 		if hunger <= 0 {
 			p.c.Inc(cSplitSkippedNoDemand)
 			return
@@ -329,7 +329,7 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 			m, extrapolated = e, true
 		}
 	}
-	switch guard(c, m, found, ceil, bounded, false) {
+	switch guard(c, m, found, ceil, bounded, false, p.safe) {
 	case clauseNoPivot:
 		p.c.Inc(cSplitRejectedNoPivot)
 		st.unsplittable = true
@@ -340,6 +340,9 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 		return
 	case clauseCursor:
 		p.c.Inc(cSplitRejectedCursor)
+		return
+	case clauseUnsafePivot:
+		p.c.Inc(cSplitRejectedUnsafePivot)
 		return
 	case clauseBound:
 		p.c.Inc(cSplitRejectedBound)
@@ -366,28 +369,28 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 // maxProbes bounds the 1-key probes spent on one split.
 const maxProbes = 3
 
-// probe is Java's 1-key probe: one ListObjectsV2 with max-keys=1 after the
+// probe is Swath's 1-key probe: one request for 1 key after the
 // pivot tells whether the upper child (m, hi] holds a key. If it is empty
 // the pivot moves to the safe midpoint of (c, m] and is probed again, up to
 // maxProbes times; then the split is skipped. Called without mu.
-func (p *Provider) probe(ctx context.Context, r Range, c, m string) (string, bool, error) {
+func (p *Engine[P]) probe(ctx context.Context, r Range, c, m string) (string, bool, error) {
 	if !p.opt.Probe {
 		return m, true, nil
 	}
 	for range maxProbes {
-		in := p.input()
-		in.StartAfter, in.MaxKeys, in.FetchOwner = m, 1, false
+		in := p.query()
+		in.After, in.Max, in.Probe = m, 1, true
 		p.c.Inc(cProbeRequests)
 		out, err := p.list(ctx, in)
 		if err != nil {
 			return "", false, err
 		}
-		if len(out.Contents) > 0 && (r.open || out.Contents[0].Key <= r.hi) {
+		if len(out.Rows) > 0 && (r.open || out.Rows[0].Key <= r.hi) {
 			return m, true, nil
 		}
 		p.c.Inc(cProbeUpperEmpty) // an empty child avoided
 		next, found := between(c, m)
-		if !found || !(c < next && next < m) || !safeString(next) {
+		if !found || !(c < next && next < m) || !p.safe(next) {
 			return "", false, nil
 		}
 		m = next
@@ -398,7 +401,7 @@ func (p *Provider) probe(ctx context.Context, r Range, c, m string) (string, boo
 
 // commit accepts a probed split (children, counters, boundaries for the
 // journal) or releases its reservation.
-func (p *Provider) commit(st *running, r Range, c, m string, extrapolated, ok bool) (lower, upper Range) {
+func (p *Engine[P]) commit(st *running, r Range, c, m string, extrapolated, ok bool) (lower, upper Range) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !ok {
@@ -451,6 +454,7 @@ const (
 	clauseNoPivot
 	clauseUnsafeCursor
 	clauseCursor
+	clauseUnsafePivot
 	clauseBound
 	clauseDone
 )
@@ -459,18 +463,22 @@ const (
 //   - done: never split a range whose last page completed it;
 //   - unsafe cursor: c becomes the lower child's start-after;
 //   - cursor: m must be > c, or the upper child would list (m, c] again;
+//   - unsafe pivot: m becomes a bound; the provider may veto it
+//     (Description.SafeBound);
 //   - bound: m must be < H (or below prefixCeil(scope) on the frontier), or
 //     the lower child would list keys of the next range.
-func guard(c, m string, found bool, ceil string, bounded, done bool) clause {
+func guard(c, m string, found bool, ceil string, bounded, done bool, safe func(string) bool) clause {
 	switch {
 	case done:
 		return clauseDone
 	case !found:
 		return clauseNoPivot
-	case !safeString(c):
+	case !safe(c):
 		return clauseUnsafeCursor
 	case m <= c:
 		return clauseCursor
+	case !safe(m):
+		return clauseUnsafePivot
 	case bounded && m >= ceil:
 		return clauseBound
 	}
@@ -480,22 +488,22 @@ func guard(c, m string, found bool, ceil string, bounded, done bool) clause {
 // expandSeedPage sends one delimiter page and tiles the scope at its common
 // prefixes; it emits no rows (the tiles list every key, including the
 // page's own objects). The seed with --seed-descent=false.
-func (p *Provider) expandSeedPage(ctx context.Context, e source.Emitter[Range, Object]) error {
-	in := p.input()
-	in.FetchOwner, in.Delimiter = false, "/"
+func (p *Engine[P]) expandSeedPage(ctx context.Context, e source.Emitter[Range, P]) error {
+	in := p.query()
+	in.Probe, in.Delimiter = true, "/"
 	out, err := p.list(ctx, in)
 	if err != nil {
 		return err
 	}
 	var cuts []string
 	p.mu.Lock()
-	p.c.Set(cSeedPrefixes, int64(len(out.CommonPrefixes)))
-	seedTruncated := out.IsTruncated
+	p.c.Set(cSeedPrefixes, int64(len(out.Prefixes)))
+	seedTruncated := out.Truncated
 	if seedTruncated {
 		p.c.Set(cSeedTruncated, 1)
 	}
-	for _, k := range out.CommonPrefixes {
-		if safeString(k) {
+	for _, k := range out.Prefixes {
+		if p.safe(k) {
 			cuts = append(cuts, k)
 		} else {
 			p.c.Inc(cSeedUnsafe)
@@ -517,10 +525,10 @@ func (p *Provider) expandSeedPage(ctx context.Context, e source.Emitter[Range, O
 	if k := len(cuts); k > 0 {
 		pk := cuts[k-1]
 		lastObject := ""
-		if n := len(out.Contents); n > 0 {
-			lastObject = out.Contents[n-1].Key
+		if n := len(out.Rows); n > 0 {
+			lastObject = out.Rows[n-1].Key
 		}
-		lastPrefix := out.CommonPrefixes[len(out.CommonPrefixes)-1]
+		lastPrefix := out.Prefixes[len(out.Prefixes)-1]
 		u, ok := prefixCeil(pk)
 		switch {
 		case seedTruncated:
@@ -529,7 +537,7 @@ func (p *Provider) expandSeedPage(ctx context.Context, e source.Emitter[Range, O
 			p.c.Inc(cSentinelDeclinedObjectLast)
 		case !ok || u <= pk:
 			p.c.Inc(cSentinelDeclinedNoCeiling)
-		case !safeString(u):
+		case !p.safe(u):
 			p.c.Inc(cSentinelDeclinedUnsafe)
 		default:
 			sentinel = u

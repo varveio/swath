@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
 )
 
 func TestStructurePrefixes(t *testing.T) {
@@ -53,7 +53,7 @@ type structureGate struct {
 	release chan struct{}
 }
 
-func (g *structureGate) ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error) {
+func (g *structureGate) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
 	if in.Delimiter != "" && in.MaxKeys == structureKeys {
 		select {
 		case <-g.release:
@@ -61,7 +61,7 @@ func (g *structureGate) ListObjectsV2(ctx context.Context, in *client.ListInput)
 			return nil, ctx.Err()
 		}
 	}
-	return g.sorted.ListObjectsV2(ctx, in)
+	return g.sorted.List(ctx, in)
 }
 
 // TestStructureNeverBlocksASplit: with every structure probe held, the
@@ -69,8 +69,8 @@ func (g *structureGate) ListObjectsV2(ctx context.Context, in *client.ListInput)
 func TestStructureNeverBlocksASplit(t *testing.T) {
 	keys := seedShapes()["deep census"]
 	g := &structureGate{sorted: newSorted(keys, false, 1), release: make(chan struct{})}
-	g.latency = time.Millisecond
-	p, err := New(context.Background(), Options{Bucket: "b", Client: g, Workers: 16, Structure: true})
+	g.Latency = time.Millisecond
+	p, err := newTest(g, Options{Workers: 16, Structure: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestStructurePivotsOnFolders(t *testing.T) {
 	var empty [2]int64
 	for i, on := range []bool{false, true} {
 		f := newSorted(keys, false, 1)
-		f.latency = 2 * time.Millisecond
+		f.Latency = 2 * time.Millisecond
 		got, st, leaves := runBudget(t, f, Options{Structure: on}, 16, 1<<20)
 		if !slices.Equal(got, want) {
 			t.Fatalf("structure=%v: %d keys, want %d", on, len(got), len(want))

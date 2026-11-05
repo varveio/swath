@@ -1,49 +1,15 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
-	"fmt"
 	"math/rand"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 )
 
-// hostile are adversarial keyspaces on the fake bucket.
-func hostile() map[string][]string {
-	ks := map[string][]string{}
-	// The cardinality bomb: one prefix with an enormous fan-out of keys that
-	// differ only in their last bytes, after a long shared run.
-	var bomb []string
-	for i := range 6000 {
-		bomb = append(bomb, "bomb/"+strings.Repeat("a", 200)+fmt.Sprintf("%04d", i))
-	}
-	bomb = append(bomb, "a", "bomb", "bomb0", "bomb/", "zz")
-	ks["cardinalityBomb"] = bomb
-	// The encoding minefield: every awkward byte sequence a key may hold.
-	mine := []string{"%", "%%", "%2F", "%2f", "a%2Fb", "%25", "+", "a+b", " ", "a b", "  ", "a ", " a", "?", "#", "&", "=",
-		"a?b=c&d", "\\", "\"", "'", "<", ">", "<a>&amp;", "/", "//", "a//b", "/a", "a/", "~", "\x7f", "\u00a0", "\u2028",
-		"\ufeff", "\ufffd", "\U0001F600", "\U0010FFFF", "e\u0301", "\u00e9", "\u03a9", "\u65e5\u672c\u8a9e/\u30ad\u30fc"}
-	for c := 1; c < 0x20; c++ {
-		mine = append(mine, "ctl"+string(rune(c))+"x", string(rune(c)))
-	}
-	for _, b := range []string{"a", "z", "~", "/", "%", " ", "\x7f", "\u00ff", "\U0010FFFF"} {
-		for _, n := range []int{1, 2, 63, 64, 255, 256, 511} {
-			mine = append(mine, strings.Repeat(b, n))
-		}
-	}
-	for i := range 2000 { // enough keys to split among the mines
-		mine = append(mine, fmt.Sprintf("m/%%%02X/%04d", i%256, i))
-	}
-	ks["encodingMinefield"] = mine
-	return ks
-}
-
-// TestHostileFixturesMatchSequential: both hostile keyspaces list
-// row-identical to the sequential oracle, parallel and seeded.
 func TestHostileFixturesMatchSequential(t *testing.T) {
 	for name, keys := range hostile() {
 		want := slices.Compact(slices.Sorted(slices.Values(keys)))
@@ -116,12 +82,12 @@ func TestMetamorphicLaws(t *testing.T) {
 				continue
 			}
 			api := newSorted(keys, v.short, int64(i+1))
-			api.pageCap = v.pageCap
+			api.PageCap = v.pageCap
 			opt := v.opt
 			if v.coin {
 				rng := rand.New(rand.NewSource(int64(i)))
 				var mu sync.Mutex
-				opt.splitCoin = func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(2) == 0 }
+				opt.SplitCoin = func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(2) == 0 }
 			}
 			got, _, _ := runBudget(t, api, opt, v.workers, v.budget)
 			if !slices.Equal(got, want) {

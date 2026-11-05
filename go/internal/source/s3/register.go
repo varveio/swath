@@ -77,7 +77,7 @@ func (o *opened) Locator() source.Locator {
 	return source.Locator{Kind: "s3", Root: o.root, Container: o.p.opt.Bucket}
 }
 
-func (o *opened) Listed() int64 { return o.p.c.Load(cObjects) }
+func (o *opened) Listed() int64 { return o.p.Listed() }
 
 func (o *opened) target() string {
 	t := "s3://" + o.p.opt.Bucket
@@ -129,18 +129,19 @@ func (o *opened) Capabilities() source.Capabilities {
 // Restart continues after the last published key, from the normal
 // start-up: one range (after, ⊤], split as on a fresh run.
 func (o *opened) Restart(after string) error {
-	o.p.opt.Resume = &Resume{After: after}
+	o.p.Restart(after)
 	return nil
 }
 
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	opt := o.p.opt
-	truncated := st.Get(cTruncated) != 0
+	v := st.Counters.Value
+	truncated := v("truncated_at_max_keys") != 0
 	r := source.Report{Name: "s3", Stats: &st,
 		Brief: fmt.Sprintf("objects=%d bytes=%d pages=%d requests=%d retries=%d splits=%d child_empty=%d max_active=%d truncated=%v",
-			st.Get(cObjects), st.Get(cBytes), st.Get(cPages), st.Get(cRequests), st.Get(cRetries), st.Get(cSplitAcceptedBounded)+st.Get(cSplitAcceptedFrontier),
-			st.Get(cChildEmptyLower)+st.Get(cChildEmptyUpper), st.Get(cMaxActive), truncated),
+			v("objects"), v("bytes"), v("pages"), v("requests"), v("retries"), v("split.accepted_bounded")+v("split.accepted_frontier"),
+			v("child_empty.lower")+v("child_empty.upper"), v("max_active"), truncated),
 		Coverage: source.Coverage{Target: o.target(), Prefix: opt.Prefix, Complete: !truncated, StopReason: "completed"},
 	}
 	if truncated {

@@ -123,14 +123,48 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   in place (form semantics, as the AWS SDKs decode). Rows keep pointing into the arena until encoded; the
   writer clones the only keys that outlive a part (its min and max).
 
-**S3 rules** (provider-local; the generic contracts are in [contracts.md](contracts.md)): a range `(a, b]`
+**On the range engine.** S3 lists through `internal/source/keyrange` (below): its page fetch is one
+ListObjectsV2 (`start-after` is exclusive, there is no end bound, so the engine trims at `hi`; probes do not
+fetch owners), its description adds the client's counters (`attempts`, `retries`, `throttles`, `timeouts`,
+`parse_failures`), requeues a transient failure whose retries were exhausted, and wraps contract breaks in
+`client.ErrInvalidPage`. `TestDecisionsGolden` (`internal/source/s3`) pins the engine's decisions through
+the S3 adapter: for every fixture and hostile keyspace and six deterministic configurations, a hash of the
+covered intervals, the requests sent, the output and the non-zero counters, against
+`testdata/decisions.golden`, which was generated before the engine left the S3 package.
+
+## Range engine (`internal/source/keyrange`)
+
+The range model, seed, owner split, safe pivots, guards, demand, the probes, retry-and-requeue and their
+counters, shared by the providers whose listing returns keys in unsigned byte order and can start after any
+key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Range, P]`; a provider supplies:
+- a page fetch, `Fetch[P]`: one request (`Query`: prefix, delimiter, `After`, `Through`/`Bounded`, token,
+  page size, `Probe` for requests whose objects are not emitted) to one `Page[P]` (rows in listing order,
+  common prefixes, truncated, token);
+- a `Description[P]`:
+  - *bound inclusivity:* the engine's ranges are `(lo, hi]`. `After` means keys strictly above it; a
+    provider whose start bound is inclusive sends it as is and sets `StartInclusive`, and the engine drops
+    a key equal to `After` from the first page of a request chain. `Through` is the inclusive end; a
+    provider may ignore it (the engine trims) or bound the request with `ExclusiveEnd(Through)`, the
+    immediate successor (`Through` + NUL);
+  - *pivot safety:* synthesized pivots use the pivot alphabet (`Safe`: valid UTF-8 without C0, DEL, C1,
+    `%`, surrogates or non-characters); `SafeBound` is a provider veto on top, applied to pivots (guard
+    clause `unsafe_pivot`), cursors (`unsafe_cursor`) and seed and structure boundaries;
+  - `Requeue` (which failures are asked again after a backoff instead of failing the run), `InvalidPage`
+    (the error contract breaks wrap), `Size` (a row's bytes) and the provider's own `Counters`, reported
+    after the engine's.
+
+The engine's options are the scope prefix, `Sequential`, `Seed`, `SeedDescent`, `Structure`, `Probe`,
+`Floors`, `Workers`, `MaxKeys` and `Resume`. Its tests (`internal/source/keyrange`) run on a fake listing
+API over a sorted key slice (`keyrange/keyrangetest`, with the fixture and hostile keyspaces).
+
+**Rules** (the generic contracts are in [contracts.md](contracts.md)): a range `(a, b]`
 lists `a < k ≤ b`, and its right neighbour starts after `b` (the boundary belongs to the left); a synthesized
 pivot is valid UTF-8, strictly between its bounds and adds no code point from the unsafe set (safe pivots);
 keys are at most 1,024 bytes (`schema.ErrKeyTooLong`).
 
-**Paging.** A range is `(lo, hi]`: `lo = ""` is ⊥, the open frontier has `hi = ⊤`. The first page sends
-`StartAfter = lo`, later pages the continuation token. Keys past `hi` are trimmed (`overfetch_keys`); a page
-whose last key equals `hi` ends the range without another request; `IsTruncated = false` ends it. A truncated
+**Paging.** A range is `(lo, hi]`: `lo = ""` is ⊥, the open frontier has `hi = ⊤`. The first page starts
+after `lo`, later pages follow the continuation token. Keys past `hi` are trimmed (`overfetch_keys`); a page
+whose last key equals `hi` ends the range without another request; a page that is not truncated ends it. A truncated
 page without a token, a truncated page with no key in range, or a key not after its predecessor is an error.
 
 **Root and seed.** The root is `(⊥, ⊤]`. With `-seed` the root is a seed that emits no rows and tiles the
@@ -235,8 +269,8 @@ sink-wait time.
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
-**Resume.** The provider is `source.Resumable`: `Restart(K)` makes the root one range `(K, ⊤]`, split as on
-a fresh run ([durability.md](durability.md)).
+**Resume.** `Restart(K)` makes the root one range `(K, ⊤]`, split as on a fresh run; S3 is
+`source.Resumable` through it ([durability.md](durability.md)).
 
 ## Registry and optional interfaces
 

@@ -37,10 +37,11 @@ func TestCountersDoc(t *testing.T) {
 	t.Fatal("docs/internals/counters.md is stale; run UPDATE=1 go test ./internal/source/s3 -run TestCountersDoc")
 }
 
-// TestCountersMatchIDs: one definition per ID, keys unique.
+// TestCountersMatchIDs: one client counter definition per ID; keys unique
+// across the engine's and the client's.
 func TestCountersMatchIDs(t *testing.T) {
-	if counters.ID(len(Counters)) != numCounters {
-		t.Fatalf("%d definitions for %d IDs", len(Counters), numCounters)
+	if len(clientCounters) != cParseFailures+1 {
+		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), cParseFailures+1)
 	}
 	seen := map[string]bool{}
 	for _, d := range Counters {

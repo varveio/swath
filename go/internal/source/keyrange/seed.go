@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 // fetched together, up to one per worker, so a level costs about one round
 // trip. Results the walk does not ask for are counted and dropped; the plan
 // is the one the walk would make probing serially.
-func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range, Object]) error {
+func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) error {
 	if !p.opt.SeedDescent {
 		return p.expandSeedPage(ctx, e)
 	}
@@ -33,20 +33,20 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range, Objec
 		fetches[q] = f
 		go func() {
 			defer close(f.done)
-			in := p.input()
-			in.Prefix, in.StartAfter, in.Delimiter, in.MaxKeys, in.FetchOwner = q.prefix, q.after, seedDelimiter, seedPage, false
+			in := p.query()
+			in.Prefix, in.After, in.Delimiter, in.Max, in.Probe = q.prefix, q.after, seedDelimiter, seedPage, true
 			out, err := p.list(ctx, in)
 			if err != nil {
 				f.err = err
 				return
 			}
-			f.out = seedOutcome{prefixes: out.CommonPrefixes, capped: out.IsTruncated, objects: len(out.Contents)}
-			for _, o := range out.Contents {
+			f.out = seedOutcome{prefixes: out.Prefixes, capped: out.Truncated, objects: len(out.Rows)}
+			for _, o := range out.Rows {
 				if !f.out.hasLast || o.Key > f.out.last {
 					f.out.last, f.out.hasLast = o.Key, true
 				}
 			}
-			for _, cp := range out.CommonPrefixes {
+			for _, cp := range out.Prefixes {
 				if !f.out.hasLast || cp > f.out.last {
 					f.out.last, f.out.hasLast = cp, true
 				}
@@ -106,7 +106,7 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range, Objec
 		}
 	}
 	for _, c := range res.cuts {
-		if safeString(c) {
+		if p.safe(c) {
 			cuts = append(cuts, c)
 		} else {
 			p.c.Inc(cSeedUnsafe)

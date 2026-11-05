@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"context"
@@ -13,17 +13,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
 )
 
 // serialSeed runs the descent one probe at a time against api: the
 // reference for the provider's concurrent walk.
-func serialSeed(t *testing.T, api API, prefix string, workers int) *seedResult {
+func serialSeed(t *testing.T, api lister, prefix string, workers int) *seedResult {
 	t.Helper()
 	d := newDescent(prefix, workers)
 	q, res := d.start()
 	for res == nil {
-		out, err := api.ListObjectsV2(context.Background(), &client.ListInput{Bucket: "b", Prefix: q.prefix, StartAfter: q.after, Delimiter: seedDelimiter, MaxKeys: seedPage})
+		out, err := api.List(context.Background(), &keyrangetest.ListInput{Prefix: q.prefix, StartAfter: q.after, Delimiter: seedDelimiter, MaxKeys: seedPage})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -38,7 +38,7 @@ func serialSeed(t *testing.T, api API, prefix string, workers int) *seedResult {
 	return res
 }
 
-func keysOfPage(p *client.Page) []string {
+func keysOfPage(p *keyrangetest.Page) []string {
 	var k []string
 	for _, o := range p.Contents {
 		k = append(k, o.Key)
@@ -132,7 +132,7 @@ type inflight struct {
 	now, peak atomic.Int64
 }
 
-func (f *inflight) ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error) {
+func (f *inflight) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
 	n := f.now.Add(1)
 	for {
 		p := f.peak.Load()
@@ -141,7 +141,7 @@ func (f *inflight) ListObjectsV2(ctx context.Context, in *client.ListInput) (*cl
 		}
 	}
 	defer f.now.Add(-1)
-	return f.sorted.ListObjectsV2(ctx, in)
+	return f.sorted.List(ctx, in)
 }
 
 // TestSeedDescentConcurrentEqualsSerial: the provider's walk, with probes
@@ -152,8 +152,8 @@ func TestSeedDescentConcurrentEqualsSerial(t *testing.T) {
 		for _, w := range []int{1, 4, 64} {
 			ref := serialSeed(t, newSorted(keys, false, 1), "", w)
 			f := &inflight{sorted: newSorted(keys, false, 1)}
-			f.latency = time.Millisecond
-			p, err := New(context.Background(), Options{Bucket: "b", Client: f, Workers: w, Seed: true, SeedDescent: true})
+			f.Latency = time.Millisecond
+			p, err := newTest(f, Options{Workers: w, Seed: true, SeedDescent: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,7 +167,7 @@ func TestSeedDescentConcurrentEqualsSerial(t *testing.T) {
 			}
 			var want []string
 			for _, c := range ref.cuts {
-				if safeString(c) {
+				if Safe(c) {
 					want = append(want, c)
 				}
 			}

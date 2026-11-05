@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
@@ -32,15 +33,14 @@ func (f *flaky) ListObjectsV2(ctx context.Context, in *client.ListInput) (*clien
 // exhausted on a transient failure is asked again after a backoff, until
 // it succeeds; a permanent failure stops the run at once.
 func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
-	defer func(b, m time.Duration) { requeueBase, requeueMax = b, m }(requeueBase, requeueMax)
-	requeueBase, requeueMax = time.Millisecond, 4*time.Millisecond
+	defer keyrange.SetRequeueBackoff(time.Millisecond, 4*time.Millisecond)()
 	page := &client.Page{Contents: []client.Object{{Key: "a"}, {Key: "b"}}}
 	exhausted := &client.ExhaustedError{Attempts: 9, Err: &client.Error{Status: 503, Code: "SlowDown"}}
 	f := &flaky{stub: stub{pages: []*client.Page{page}}, err: exhausted}
 	f.n.Store(5)
 	rows, st := list(t, Options{Bucket: "b", Client: f, Sequential: true}, 1)
-	if len(rows) != 2 || st.Get(cRequeues) != 5 {
-		t.Fatalf("%d rows, %d requeues", len(rows), st.Get(cRequeues))
+	if len(rows) != 2 || st.Counters.Value("requeues") != 5 {
+		t.Fatalf("%d rows, %d requeues", len(rows), st.Counters.Value("requeues"))
 	}
 	denied := &flaky{stub: stub{pages: []*client.Page{page}}, err: &client.Error{Status: 403, Code: "AccessDenied"}}
 	denied.n.Store(1)

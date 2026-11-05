@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"math/big"
@@ -10,7 +10,7 @@ import (
 
 // Pivot synthesis, ported from Swath's ByteMidpoint (swath-model): a split
 // point strictly between two keys, built only from "safe" scalars, because
-// it is later sent as start-after and real S3 rejects control characters
+// it is later sent as a start bound, and object stores reject control characters
 // and non-characters there (a verbatim-echo endpoint also mishandles '%').
 
 const (
@@ -32,8 +32,11 @@ func isSafe(cp int) bool {
 	return cp < 0xD800 || cp >= 0xE000
 }
 
-// safeString reports whether every scalar of s is safe (a usable start-after).
-func safeString(s string) bool {
+// Safe reports whether every scalar of s is in the pivot alphabet: valid
+// UTF-8 without C0, DEL, C1, '%', surrogates or non-characters. Synthesized
+// pivots are always Safe; real keys used as bounds (cursors, seed and
+// structure boundaries) must be too.
+func Safe(s string) bool {
 	if !utf8.ValidString(s) {
 		return false
 	}

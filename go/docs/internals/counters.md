@@ -44,13 +44,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 |---|---|---|---|---|
 | `objects` | count | objects |  | objects listed (emitted rows) |
 | `bytes` | count | bytes |  | sum of listed object sizes |
-| `pages` | count | pages |  | ListObjectsV2 pages processed (and the seed's probes) |
-| `requests` | count | requests |  | ListObjectsV2 calls, retries not counted |
-| `attempts` | count | requests |  | HTTP requests, retries included |
-| `retries` | count | requests |  | attempts repeated after a retryable failure |
-| `throttles` | count | requests |  | of the retries, 429/503/SlowDown answers |
-| `timeouts` | count | requests |  | of the retries, attempts past -request-timeout |
-| `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
+| `pages` | count | pages |  | listing pages processed (and the seed's probes) |
+| `requests` | count | requests |  | listing requests, retries not counted |
 | `overfetch_keys` | count | keys |  | keys listed past a range's hi (or at or below a resume key) and dropped |
 | `truncated_at_max_keys` | flag |  | max_keys | -max-keys stopped the listing; the dataset is incomplete |
 | `seed.prefixes` | count | prefixes | seed | common prefixes on the top seed page |
@@ -72,6 +67,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.rejected.done` | count | decisions | split | guard: the range had ended |
 | `split.rejected.no_pivot` | count | decisions | split | guard: no safe pivot exists |
 | `split.rejected.unsafe_cursor` | count | decisions | split | guard: the cursor is not a usable start-after |
+| `split.rejected.unsafe_pivot` | count | decisions | split | guard: the provider vetoes the pivot as a bound |
 | `split.skipped.no_demand` | count | decisions | split | no idle worker (hunger <= 0) |
 | `split.skipped.outranked` | count | decisions | split | larger ranges took the demand |
 | `split.skipped.not_continuing` | count | decisions | split | the range's last page did not continue |
@@ -117,6 +113,11 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `structure.suppressed` | count | decisions | structure | probes not sent: 8 in a row found no folder in this range |
 | `structure.late` | count | decisions | structure | split decisions taken while the range's probe was still in flight |
 | `split.pivot_structure` | count | pivots | structure | pivots on a folder boundary from a structure probe (else midpoint, density or reflection) |
+| `attempts` | count | requests |  | HTTP requests, retries included |
+| `retries` | count | requests |  | attempts repeated after a retryable failure |
+| `throttles` | count | requests |  | of the retries, 429/503/SlowDown answers |
+| `timeouts` | count | requests |  | of the retries, attempts past -request-timeout |
+| `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
 <!-- s3:end -->
 
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active

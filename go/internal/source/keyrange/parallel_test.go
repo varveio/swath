@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"context"
@@ -10,8 +10,6 @@ import (
 	"math/rand"
 	"runtime"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,146 +17,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
 )
-
-// sorted is a fake ListObjectsV2 over a sorted key slice: Prefix,
-// StartAfter (400 for scalars real S3 rejects), ContinuationToken,
-// Delimiter, MaxKeys; optional short truncated pages and latency.
-type sorted struct {
-	keys    []string
-	short   bool
-	pageCap int // if set, no page holds more than this many entries
-	latency time.Duration
-	mu      sync.Mutex
-	rng     *rand.Rand
-	calls   int
-}
-
-func newSorted(keys []string, short bool, seed int64) *sorted {
-	k := slices.Clone(keys)
-	slices.Sort(k)
-	return &sorted{keys: slices.Compact(k), short: short, rng: rand.New(rand.NewSource(seed))}
-}
-
-var errBadStartAfter = errors.New("400 InvalidArgument: start-after")
-
-func (f *sorted) ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error) {
-	if f.latency > 0 {
-		select {
-		case <-time.After(f.latency):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	f.mu.Lock()
-	f.calls++
-	size := in.MaxKeys
-	if f.short {
-		size = 1 + f.rng.Intn(size)
-	}
-	if f.pageCap > 0 {
-		size = min(size, f.pageCap)
-	}
-	f.mu.Unlock()
-	prefix, delim := in.Prefix, in.Delimiter
-	i := sort.SearchStrings(f.keys, prefix)
-	if tok := in.ContinuationToken; tok != "" {
-		i, _ = strconv.Atoi(tok)
-	} else if sa := in.StartAfter; sa != "" {
-		for _, r := range sa {
-			if !isSafe(int(r)) && r != '%' {
-				return nil, errBadStartAfter
-			}
-		}
-		i = max(i, sort.Search(len(f.keys), func(j int) bool { return f.keys[j] > sa }))
-	}
-	out := &client.Page{}
-	n := 0
-	for ; i < len(f.keys) && strings.HasPrefix(f.keys[i], prefix); i++ {
-		if n == size {
-			out.IsTruncated, out.NextContinuationToken, out.HasContinuation = true, strconv.Itoa(i), true
-			break
-		}
-		k := f.keys[i]
-		if delim != "" {
-			if j := strings.Index(k[len(prefix):], delim); j >= 0 {
-				cp := k[:len(prefix)+j+len(delim)]
-				if m := len(out.CommonPrefixes); m == 0 || out.CommonPrefixes[m-1] != cp {
-					out.CommonPrefixes = append(out.CommonPrefixes, cp)
-					n++
-				}
-				continue
-			}
-		}
-		out.Contents = append(out.Contents, client.Object{Key: k, Size: int64(len(k))})
-		n++
-	}
-	return out, nil
-}
-
-// Keyspaces after Swath's testkit Keyspaces, plus markers and keys with '%'
-// and control characters.
-func keyspaces() map[string][]string {
-	rng := rand.New(rand.NewSource(7))
-	gen := func(n int, f func(i int) string) []string {
-		out := make([]string, n)
-		for i := range out {
-			out[i] = f(i)
-		}
-		return out
-	}
-	alnum := "abcdefghijklmnopqrstuvwxyz0123456789"
-	randStr := func(n int, alphabet string) string {
-		b := make([]byte, n)
-		for i := range b {
-			b[i] = alphabet[rng.Intn(len(alphabet))]
-		}
-		return string(b)
-	}
-	ks := map[string][]string{
-		"empty":            nil,
-		"oneKey":           {"a"},
-		"exactly3000":      gen(3000, func(i int) string { return fmt.Sprintf("k%06d", i) }),
-		"flatRandom":       gen(4000, func(int) string { return randStr(1+rng.Intn(16), alnum) }),
-		"singlePrefixFlat": gen(4000, func(i int) string { return fmt.Sprintf("p/%07d", i) }),
-		"flatUpperHex":     gen(4000, func(int) string { return randStr(8, "0123456789ABCDEF") }),
-		"longKeys1024":     gen(1500, func(i int) string { return strings.Repeat("L", 1018) + fmt.Sprintf("%06d", i) }),
-		"lastByteDiffer":   gen(2000, func(i int) string { return "same/long/prefix/" + string(rune(0x21+i%90)) + string(rune(0x21+i/90)) }),
-		"maxScalarRun":     gen(300, func(i int) string { return strings.Repeat("\U0010FFFF", 1+i%40) + strconv.Itoa(i) }),
-		"supplementaryPlane": gen(3000, func(int) string {
-			return string(rune(0x10000+rng.Intn(0xFFFFF-0x10000))) + string(rune(0x1F600+rng.Intn(80))) + randStr(3, alnum)
-		}),
-		"markersAndOddChars": {"a/", "a/x", "a/y/", "a/y/z", "b", "c%20d", "c%", "d\x01e", "d\x7f", "e/\x01/f", "f/%", "zz/"},
-	}
-	var deep []string
-	for a := range 5 {
-		for b := range 5 {
-			for c := range 5 {
-				for d := range 5 {
-					for f := range 8 {
-						deep = append(deep, fmt.Sprintf("d%d/e%d/f%d/g%d/file%d", a, b, c, d, f))
-					}
-				}
-			}
-		}
-	}
-	ks["deepTree"] = deep
-	skew := gen(4000, func(i int) string { return fmt.Sprintf("big/%06d", i) })
-	skew = append(skew, gen(50, func(i int) string { return fmt.Sprintf("small%02d/x", i) })...)
-	ks["badlySkewed"] = skew
-	needle := gen(4000, func(i int) string { return fmt.Sprintf("h/needle/%05d", i) })
-	needle = append(needle, "a", "m/x", "z/y")
-	ks["hotNeedle"] = needle
-	for k, v := range ks {
-		for _, s := range v {
-			if !utf8.ValidString(s) {
-				panic(k)
-			}
-		}
-	}
-	return ks
-}
 
 type span struct {
 	lo, hi string
@@ -174,13 +34,13 @@ func runBudget(t *testing.T, api *sorted, opt Options, workers, budget int) ([]s
 	t.Helper()
 	var mu sync.Mutex
 	var leaves []span
-	opt.Bucket, opt.Client, opt.Workers = "b", api, workers
-	opt.trace = func(lo, hi string, open bool) {
+	opt.Workers = workers
+	opt.Trace = func(lo, hi string, open bool) {
 		mu.Lock()
 		leaves = append(leaves, span{lo, hi, open})
 		mu.Unlock()
 	}
-	p, err := New(context.Background(), opt)
+	p, err := newTest(api, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +66,7 @@ func TestT1RandomSplitsCoverEveryKeyOnce(t *testing.T) {
 				rng := rand.New(rand.NewSource(int64(s*1000 + w)))
 				var mu sync.Mutex
 				coin := func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(3) == 0 }
-				got, st, leaves := run(t, newSorted(keys, true, int64(s)), Options{splitCoin: coin, Seed: s%2 == 1}, w)
+				got, st, leaves := run(t, newSorted(keys, true, int64(s)), Options{SplitCoin: coin, Seed: s%2 == 1}, w)
 				if !slices.Equal(got, want) {
 					t.Fatalf("%s seed=%d w=%d: %d keys, want %d (splits %d)", name, s, w, len(got), len(want), st.Get(cSplitAcceptedBounded)+st.Get(cSplitAcceptedFrontier))
 				}
@@ -317,8 +177,11 @@ func TestT3Guard(t *testing.T) {
 		{"b", "c", true, "d", true, true, clauseDone},
 		{"b\x01", "c", true, "d", true, false, clauseUnsafeCursor},
 		{"b", "", false, "d", true, false, clauseNoPivot},
+		{"b", "c\x01", true, "d", true, false, clauseUnsafePivot},
+		{"b", "cv", true, "d", true, false, clauseUnsafePivot}, // vetoed by the provider below
 	} {
-		if got := guard(tc.c, tc.m, tc.found, tc.ceil, tc.bounded, tc.done); got != tc.want {
+		veto := func(s string) bool { return Safe(s) && s != "cv" }
+		if got := guard(tc.c, tc.m, tc.found, tc.ceil, tc.bounded, tc.done, veto); got != tc.want {
 			t.Errorf("guard(%+v) = %d, want %d", tc, got, tc.want)
 		}
 	}
@@ -350,33 +213,33 @@ func TestT3Guard(t *testing.T) {
 func TestT4Paging(t *testing.T) {
 	keys := keyspaces()["exactly3000"]
 	f := newSorted(keys, false, 1)
-	p, _ := New(context.Background(), Options{Bucket: "b", Client: f, Workers: 1})
+	p, _ := newTest(f, Options{Workers: 1})
 	c := &collect{}
 	r := Range{lo: "", hi: keys[999], id: 1, born: fromLower}
-	if err := p.expandRange(context.Background(), r, &direct{c}); err != nil || len(c.rows) != 1000 || f.calls != 1 {
-		t.Fatalf("page ending at hi: err=%v rows=%d calls=%d", err, len(c.rows), f.calls)
+	if err := p.expandRange(context.Background(), r, &direct{c}); err != nil || len(c.rows) != 1000 || f.Calls != 1 {
+		t.Fatalf("page ending at hi: err=%v rows=%d calls=%d", err, len(c.rows), f.Calls)
 	}
 	// Truncated empty page.
-	empty := &stub{pages: []*client.Page{{IsTruncated: true, NextContinuationToken: "1"}, {}}}
-	p, _ = New(context.Background(), Options{Bucket: "b", Client: empty, Workers: 1})
+	empty := &stub{pages: []*keyrangetest.Page{{IsTruncated: true, NextContinuationToken: "1"}, {}}}
+	p, _ = newTest(empty, Options{Workers: 1})
 	if err := p.expandRange(context.Background(), Range{open: true}, &direct{&collect{}}); err == nil {
 		t.Fatal("truncated empty page accepted")
 	}
 	// Non-ascending keys and keys not after lo.
-	bad := &stub{pages: []*client.Page{{Contents: []client.Object{{Key: "b"}, {Key: "a"}}}}}
-	p, _ = New(context.Background(), Options{Bucket: "b", Client: bad, Workers: 1})
+	bad := &stub{pages: []*keyrangetest.Page{{Contents: []keyrangetest.Object{{Key: "b"}, {Key: "a"}}}}}
+	p, _ = newTest(bad, Options{Workers: 1})
 	if err := p.expandRange(context.Background(), Range{open: true}, &direct{&collect{}}); err == nil {
 		t.Fatal("non-ascending page accepted")
 	}
-	behind := &stub{pages: []*client.Page{{Contents: []client.Object{{Key: "a"}}}}}
-	p, _ = New(context.Background(), Options{Bucket: "b", Client: behind, Workers: 1})
+	behind := &stub{pages: []*keyrangetest.Page{{Contents: []keyrangetest.Object{{Key: "a"}}}}}
+	p, _ = newTest(behind, Options{Workers: 1})
 	if err := p.expandRange(context.Background(), Range{lo: "b", open: true}, &direct{&collect{}}); err == nil {
 		t.Fatal("key not after lo accepted")
 	}
 	// Cancellation mid-request.
 	slow := newSorted(keys, false, 1)
-	slow.latency = time.Second
-	p, _ = New(context.Background(), Options{Bucket: "b", Client: slow, Workers: 4})
+	slow.Latency = time.Second
+	p, _ = newTest(slow, Options{Workers: 4})
 	before := runtime.NumGoroutine()
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
@@ -424,7 +287,7 @@ func TestT6BalanceSmoke(t *testing.T) {
 		keys[i] = fmt.Sprintf("p/%07d", i)
 	}
 	f := newSorted(keys, false, 1)
-	f.latency = 20 * time.Millisecond
+	f.Latency = 20 * time.Millisecond
 	// The kernel alone (no probe) must engage at least 12 of 16 workers. With
 	// the 1-key probe each split costs one more 20 ms request here, and
 	// probes catch pivots past the end of the keyspace; it must still engage

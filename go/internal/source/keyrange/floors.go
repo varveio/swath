@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import "math"
 
@@ -105,7 +105,7 @@ func (d *density) ratio(c, lo, hi string, keys int64) float64 {
 
 // belowRemainingFloor: the range is not worth splitting.
 func belowRemainingFloor(est float64) bool {
-	return est <= remainingFloorPages*pageKeys
+	return est <= remainingFloorPages*PageKeys
 }
 
 // tailBelowFloor: the child past a pivot at fraction f of the remaining
@@ -114,7 +114,7 @@ func belowRemainingFloor(est float64) bool {
 // StealMath.childTailBelowObservedMassFloor, reach_floored).
 func tailBelowFloor(est, f, ratio float64) bool {
 	reach := math.Min(1, ratio) - f
-	return est*math.Max(tailReachMin, reach) <= tailFloorPages*pageKeys
+	return est*math.Max(tailReachMin, reach) <= tailFloorPages*PageKeys
 }
 
 // pivotFraction is where m lies in the remaining span (c, hi], in est's

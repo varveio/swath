@@ -27,7 +27,9 @@ There is no external sort, no staging and no merge.
 | `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
 | `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`) | source, schema, order, parquetout |
 | `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath-local/v1`; registers the scheme-less roots | source, schema, registry, dataset |
-| `internal/source/s3` | S3 provider: `(lo, hi]` ranges, seed, owner-side splits, pivots; its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://` | source, schema, registry, s3/client |
+| `internal/source/keyrange` | the range engine: `(lo, hi]` ranges, seed, owner-side splits, safe pivots, guards, probes, requeue, counters; behind a page fetch and a provider description | source, schema, counters, faults |
+| `internal/source/keyrange/keyrangetest` | test fixtures: a fake listing API over sorted keys, the fixture and hostile keyspaces; imported by tests only | – |
+| `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://` | source, schema, registry, keyrange, s3/client |
 | `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, retries, the page parser | – |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |

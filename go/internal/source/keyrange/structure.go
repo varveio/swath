@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"context"
@@ -97,7 +97,7 @@ func hierarchical(c string, floor int) bool {
 
 // probeStructure lists the folders after c at every level at once and
 // returns the coarsest level that has any inside (c, hi).
-func (p *Provider) probeStructure(ctx context.Context, c, hi string) structure {
+func (p *Engine[P]) probeStructure(ctx context.Context, c, hi string) structure {
 	prefixes := structurePrefixes(c, hi, len(p.opt.Prefix))
 	type level struct {
 		cps    []string
@@ -107,8 +107,8 @@ func (p *Provider) probeStructure(ctx context.Context, c, hi string) structure {
 	var wg sync.WaitGroup
 	for i, pre := range prefixes {
 		wg.Go(func() {
-			in := p.input()
-			in.Prefix, in.StartAfter, in.Delimiter, in.MaxKeys, in.FetchOwner = pre, c, "/", structureKeys, false
+			in := p.query()
+			in.Prefix, in.After, in.Delimiter, in.Max, in.Probe = pre, c, "/", structureKeys, true
 			p.mu.Lock()
 			p.c.Inc(cStructureRequests)
 			p.mu.Unlock()
@@ -116,7 +116,7 @@ func (p *Provider) probeStructure(ctx context.Context, c, hi string) structure {
 			if err != nil {
 				return // structure is advice: a failed probe is no folder
 			}
-			got[i] = level{out.CommonPrefixes, out.IsTruncated}
+			got[i] = level{out.Prefixes, out.Truncated}
 		})
 	}
 	wg.Wait()
@@ -127,7 +127,7 @@ func (p *Provider) probeStructure(ctx context.Context, c, hi string) structure {
 		}
 		var b []string
 		for _, cp := range l.cps {
-			if cp > c && cp < hi && safeString(cp) {
+			if cp > c && cp < hi && p.safe(cp) {
 				b = append(b, cp)
 			}
 		}
@@ -144,8 +144,8 @@ func (p *Provider) probeStructure(ctx context.Context, c, hi string) structure {
 // the next split: structure on, a bounded range with a folder below the
 // scope at the cursor, no known boundary left inside (c, hi], none in
 // flight, not suppressed, and an idle worker now. Called without mu.
-func (p *Provider) maybeProbe(ctx context.Context, st *running, r Range, c string) {
-	if !p.opt.Structure || r.open || !hierarchical(c, len(p.opt.Prefix)) || !safeString(c) {
+func (p *Engine[P]) maybeProbe(ctx context.Context, st *running, r Range, c string) {
+	if !p.opt.Structure || r.open || !hierarchical(c, len(p.opt.Prefix)) || !p.safe(c) {
 		return
 	}
 	p.mu.Lock()
@@ -163,7 +163,7 @@ func (p *Provider) maybeProbe(ctx context.Context, st *running, r Range, c strin
 }
 
 // absorb takes a finished probe's result into st; mu held.
-func (p *Provider) absorb(st *running) {
+func (p *Engine[P]) absorb(st *running) {
 	if st.pending == nil {
 		return
 	}

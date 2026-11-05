@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package s3
+package keyrange
 
 import (
 	"fmt"
@@ -91,7 +91,7 @@ func TestFloorsGateDecide(t *testing.T) {
 	}
 	for _, floors := range []bool{true, false} {
 		for _, c := range cases {
-			p, err := New(t.Context(), Options{Bucket: "b", Client: newSorted(nil, false, 1), Workers: 64, Floors: floors})
+			p, err := newTest(newSorted(nil, false, 1), Options{Workers: 64, Floors: floors})
 			if err != nil {
 				t.Fatal(err)
 			}

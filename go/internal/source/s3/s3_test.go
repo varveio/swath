@@ -114,7 +114,7 @@ func TestListFakeBucket(t *testing.T) {
 	if !slices.Equal(keysOf(rows), keys) {
 		t.Fatalf("got %d keys, want %d", len(rows), len(keys))
 	}
-	if st.Get(cPages) != 3 || st.Get(cObjects) != int64(len(keys)) || !st.Anonymous {
+	if st.Counters.Value("pages") != 3 || st.Counters.Value("objects") != int64(len(keys)) || !st.Anonymous {
 		t.Fatalf("stats %+v", st)
 	}
 	r := rows[0]
@@ -141,7 +141,7 @@ func TestPrefixAndLimit(t *testing.T) {
 					t.Fatalf("w%d seed=%v: row %d differs", w, seed, i)
 				}
 			}
-			if seed && st.Get(cSeedCuts) == 0 {
+			if seed && st.Counters.Value("seed.cuts") == 0 {
 				t.Fatalf("seed produced no cuts: %+v", st.Counters)
 			}
 		}
@@ -151,8 +151,8 @@ func TestPrefixAndLimit(t *testing.T) {
 		t.Fatalf("prefix: %q", keysOf(pre))
 	}
 	lim, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Sequential: true, MaxKeys: 1500}, 1)
-	if len(lim) != 1500 || st.Get(cTruncated) == 0 || !slices.Equal(keysOf(lim), keys[:1500]) {
-		t.Fatalf("limit: %d rows truncated=%v", len(lim), st.Get(cTruncated))
+	if len(lim) != 1500 || st.Counters.Value("truncated_at_max_keys") == 0 || !slices.Equal(keysOf(lim), keys[:1500]) {
+		t.Fatalf("limit: %d rows truncated=%v", len(lim), st.Counters.Value("truncated_at_max_keys"))
 	}
 	if _, err := New(context.Background(), Options{Bucket: "bkt", MaxKeys: 1}); err == nil {
 		t.Fatal("a key limit without -sequential accepted")
@@ -163,8 +163,8 @@ func TestRetriesAreCounted(t *testing.T) {
 	keys := testKeys()[:50]
 	url := fakeBucket(t, keys, 2)
 	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Sequential: true}, 1)
-	if len(rows) != 50 || st.Get(cRetries) != 2 {
-		t.Fatalf("rows %d retries %d", len(rows), st.Get(cRetries))
+	if len(rows) != 50 || st.Counters.Value("retries") != 2 {
+		t.Fatalf("rows %d retries %d", len(rows), st.Counters.Value("retries"))
 	}
 }
 

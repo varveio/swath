@@ -15,14 +15,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/varveio/swath/go/internal/counters"
-	"math/rand/v2"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
@@ -73,9 +71,6 @@ type Resume struct {
 	After string // the last published key: every key <= After is in the dataset
 }
 
-// pageKeys is the ListObjectsV2 page size.
-const pageKeys = 1000
-
 // ParseURL splits s3://bucket/prefix.
 func ParseURL(u string) (bucket, prefix string, err error) {
 	rest, ok := strings.CutPrefix(u, "s3://")
@@ -104,24 +99,19 @@ type Stats struct {
 // Get is counter id's value.
 func (s *Stats) Get(id counters.ID) int64 { return s.Counters.Get(id) }
 
-// Provider lists one bucket (or prefix). It implements source.Provider[Range, Object].
+// Provider lists one bucket (or prefix) on the range engine. It implements
+// source.Provider[Range, Object].
 type Provider struct {
+	*keyrange.Engine[Object]
 	opt       Options
 	client    API
 	anonymous bool
 	creds     string
 	region    string
-	objects   atomic.Int64
-	ids       atomic.Uint64
-	start     time.Time
-
-	c       *counters.Set // the tally (Counters)
-	mu      sync.Mutex
-	running map[uint64]*running // ranges in Expand
-	queued  int
-	area    float64 // ∫ active dt, for the mean
-	areaAt  time.Time
 }
+
+// Range is the engine's unit of listing work.
+type Range = keyrange.Range
 
 var _ source.Provider[Range, Object] = (*Provider)(nil)
 
@@ -131,165 +121,88 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.Bucket == "" {
 		return nil, errors.New("no bucket")
 	}
-	if !opt.Sequential && opt.MaxKeys > 0 {
-		return nil, errors.New("a key limit needs the sequential listing")
+	p := &Provider{opt: opt, client: opt.Client}
+	if p.client == nil {
+		c, err := client.New(client.Config{
+			Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
+			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("S3 client: %w", err)
+		}
+		if n := c.Note(); n != "" && opt.Warn != nil {
+			opt.Warn(n)
+		}
+		p.client, p.region = c, c.Region()
+		p.creds, p.anonymous = c.Credentials()
 	}
-	if opt.Workers < 1 {
-		opt.Workers = 1
+	var resume *keyrange.Resume
+	if opt.Resume != nil {
+		resume = &keyrange.Resume{After: opt.Resume.After}
 	}
-	now := time.Now()
-	p := &Provider{opt: opt, client: opt.Client, running: map[uint64]*running{}, start: now, areaAt: now}
-	p.c = counters.New(Counters)
-	if p.client != nil {
-		return p, nil
-	}
-	c, err := client.New(client.Config{
-		Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
-		Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
-	})
+	e, err := keyrange.New(keyrange.Options{
+		Prefix: opt.Prefix, Sequential: opt.Sequential, Seed: opt.Seed, SeedDescent: opt.SeedDescent,
+		Structure: opt.Structure, Workers: opt.Workers, MaxKeys: opt.MaxKeys, Resume: resume, Probe: opt.Probe,
+		Floors: opt.Floors, SplitCoin: opt.splitCoin, Trace: opt.trace,
+	}, keyrange.Description[Object]{
+		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
+		Requeue:     requeue,
+		InvalidPage: client.ErrInvalidPage,
+		Size:        func(o *Object) int64 { return o.Size },
+		Counters:    clientCounters,
+	}, p.fetch)
 	if err != nil {
-		return nil, fmt.Errorf("S3 client: %w", err)
+		return nil, err
 	}
-	if n := c.Note(); n != "" && opt.Warn != nil {
-		opt.Warn(n)
-	}
-	p.client, p.region = c, c.Region()
-	p.creds, p.anonymous = c.Credentials()
+	p.Engine = e
 	return p, nil
+}
+
+// requeue: a transient failure whose client retries were exhausted is
+// asked again (keyrange.Description.Requeue).
+func requeue(err error) bool {
+	var ex *client.ExhaustedError
+	return errors.As(err, &ex) && client.Classify(err).Transient()
+}
+
+// Restart continues after the last published key.
+func (p *Provider) Restart(after string) {
+	p.opt.Resume = &Resume{After: after}
+	p.Engine.Restart(after)
 }
 
 // Stats returns the counters so far.
 func (p *Provider) Stats() Stats {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.account(time.Now())
 	if c, ok := p.client.(counted); ok {
-		n := c.Counters()
-		p.c.Set(cRetries, n.Retries)
-		p.c.Set(cThrottles, n.Throttles)
-		p.c.Set(cTimeouts, n.Timeouts)
-		p.c.Set(cAttempts, n.Attempts)
-		p.c.Set(cParseFailures, n.ParseFailures)
+		n, set := c.Counters(), p.Set()
+		set.Set(p.ID(cAttempts), n.Attempts)
+		set.Set(p.ID(cRetries), n.Retries)
+		set.Set(p.ID(cThrottles), n.Throttles)
+		set.Set(p.ID(cTimeouts), n.Timeouts)
+		set.Set(p.ID(cParseFailures), n.ParseFailures)
 	}
-	s := Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, Counters: p.c.Snapshot(p.disabled()...)}
-	if el := time.Since(p.start).Seconds(); el > 0 {
-		s.MeanActive = p.area / el
-	}
-	return s
+	e := p.Engine.Stats()
+	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
-func (p *Provider) list(ctx context.Context, in *client.ListInput) (*client.Page, error) {
-	p.mu.Lock()
-	p.c.Inc(cRequests)
-	p.mu.Unlock()
-	for wait := requeueBase; ; wait = min(2*wait, requeueMax) {
-		out, err := p.client.ListObjectsV2(ctx, in)
-		if err == nil {
-			return out, nil
-		}
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return nil, ctx.Err()
-		}
-		var ex *client.ExhaustedError
-		if errors.As(err, &ex) && client.Classify(err).Transient() && ctx.Err() == nil {
-			// Never fail the run on retry exhaustion: the page is asked
-			// again after a backoff, for as long as the run lives. Whether
-			// the run still makes progress is the command's watchdog's
-			// decision, not this one's.
-			p.c.Inc(cRequeues)
-			t := time.NewTimer(wait/2 + rand.N(wait/2+1))
-			select {
-			case <-ctx.Done():
-				t.Stop()
-				return nil, context.Cause(ctx)
-			case <-t.C:
-			}
-			continue
-		}
-		return nil, fmt.Errorf("list s3://%s/%s: %w", p.opt.Bucket, p.opt.Prefix, err)
+// fetch is the engine's page fetch: one ListObjectsV2. Start-after is
+// exclusive and there is no end bound, so the engine trims at hi.
+func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
+	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter, StartAfter: q.After,
+		ContinuationToken: q.Token, MaxKeys: q.Max, FetchOwner: p.opt.FetchOwner && !q.Probe}
+	out, err := p.client.ListObjectsV2(ctx, in)
+	if err != nil {
+		return nil, err
 	}
+	return &keyrange.Page[Object]{Rows: p.rows(out), Prefixes: out.CommonPrefixes, Truncated: out.IsTruncated,
+		Token: out.NextContinuationToken}, nil
 }
 
-// requeueBase and requeueMax bound the backoff before a page whose
-// client retries were exhausted is asked again.
-var requeueBase, requeueMax = 2 * time.Second, 60 * time.Second
-
-// expandSequential lists the whole scope with one continuation-token chain.
-func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range, Object]) error {
-	in := p.input()
-	last := ""
-	skip := ""
-	if p.opt.Resume != nil {
-		in.StartAfter, skip = safePrefix(p.opt.Resume.After), p.opt.Resume.After
-	}
-	for {
-		out, err := p.list(ctx, in)
-		if err != nil {
-			return err
-		}
-		for skip != "" && len(out.Contents) > 0 && out.Contents[0].Key <= skip {
-			out.Contents = out.Contents[1:] // resume: already published
-		}
-		n := len(out.Contents)
-		stop := false
-		if p.opt.MaxKeys > 0 {
-			left := p.opt.MaxKeys - p.objects.Add(int64(n)) + int64(n)
-			if left <= int64(n) {
-				n, stop = int(max(0, left)), true
-			}
-		}
-		rows := p.rows(out, n)
-		for i := range rows {
-			if last != "" && rows[i].Key <= last {
-				return fmt.Errorf("%w: listing out of order: %q after %q", client.ErrInvalidPage, rows[i].Key, last)
-			}
-			last = rows[i].Key
-		}
-		if err := p.emit(rows, e); err != nil {
-			return err
-		}
-		p.mu.Lock()
-		if stop {
-			p.c.Set(cTruncated, 1)
-		}
-		p.mu.Unlock()
-		if stop || !out.IsTruncated {
-			return nil
-		}
-		if out.NextContinuationToken == "" {
-			return fmt.Errorf("%w: truncated page without a continuation token", client.ErrInvalidPage)
-		}
-		in.ContinuationToken = out.NextContinuationToken
-	}
-}
-
-// emit counts and hands one page of rows to e.
-func (p *Provider) emit(rows []Row, e source.Emitter[Range, Object]) error {
-	var bytes int64
-	for i := range rows {
-		bytes += rows[i].Data.Size
-	}
-	t := time.Now()
-	err := e.Rows(rows)
-	p.mu.Lock()
-	p.c.Add(cSinkWaitNs, int64(time.Since(t)))
-	p.c.Inc(cPages)
-	p.c.Add(cObjects, int64(len(rows)))
-	p.c.Add(cBytes, bytes)
-	p.mu.Unlock()
-	return err
-}
-
-// input is the request for the provider's scope.
-func (p *Provider) input() *client.ListInput {
-	return &client.ListInput{Bucket: p.opt.Bucket, Prefix: p.opt.Prefix, MaxKeys: pageKeys, FetchOwner: p.opt.FetchOwner}
-}
-
-// rows converts the first n objects of a page to rows (Swath's mapping).
-// Rows share the page's strings.
-func (p *Provider) rows(out *client.Page, n int) []Row {
-	rows := make([]Row, n)
-	for i := range out.Contents[:n] {
+// rows converts a page's objects to rows (Swath's mapping). Rows share
+// the page's strings.
+func (p *Provider) rows(out *client.Page) []Row {
+	rows := make([]Row, len(out.Contents))
+	for i := range out.Contents {
 		o, r := &out.Contents[i], &rows[i]
 		m := &r.Data
 		r.Key = o.Key

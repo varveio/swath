@@ -17,14 +17,16 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 var updateGolden = flag.Bool("update-golden", false, "rewrite testdata/decisions.golden")
 
-// recorder logs every request a fake answers.
+// recorder is an S3 API over the range engine's fake listing; it logs
+// every request.
 type recorder struct {
-	*sorted
+	*keyrangetest.Sorted
 	mu  sync.Mutex
 	log []string
 }
@@ -33,7 +35,17 @@ func (r *recorder) ListObjectsV2(ctx context.Context, in *client.ListInput) (*cl
 	r.mu.Lock()
 	r.log = append(r.log, fmt.Sprintf("p=%q a=%q d=%q m=%d t=%v", in.Prefix, in.StartAfter, in.Delimiter, in.MaxKeys, in.ContinuationToken != ""))
 	r.mu.Unlock()
-	return r.sorted.ListObjectsV2(ctx, in)
+	out, err := r.List(ctx, &keyrangetest.ListInput{Prefix: in.Prefix, Delimiter: in.Delimiter, StartAfter: in.StartAfter,
+		ContinuationToken: in.ContinuationToken, MaxKeys: in.MaxKeys})
+	if err != nil {
+		return nil, err
+	}
+	pg := &client.Page{CommonPrefixes: out.CommonPrefixes, IsTruncated: out.IsTruncated,
+		HasContinuation: out.HasContinuation, NextContinuationToken: out.NextContinuationToken}
+	for _, o := range out.Contents {
+		pg.Contents = append(pg.Contents, client.Object{Key: o.Key, Size: o.Size})
+	}
+	return pg, nil
 }
 
 // TestDecisionsGolden pins the range engine's decisions: for every fixture
@@ -60,8 +72,8 @@ func TestDecisionsGolden(t *testing.T) {
 		{name: "coin/descent", opt: Options{Seed: true, SeedDescent: true}, coin: true, workers: 1},
 		{name: "sequential", opt: Options{Sequential: true}, short: true, workers: 1},
 	}
-	spaces := keyspaces()
-	for k, v := range hostile() {
+	spaces := keyrangetest.Keyspaces()
+	for k, v := range keyrangetest.Hostile() {
 		spaces["hostile/"+k] = v
 	}
 	names := slices.Sorted(func(yield func(string) bool) {
@@ -81,9 +93,9 @@ func TestDecisionsGolden(t *testing.T) {
 		}
 		for _, c := range cfgs {
 			for _, after := range resumes {
-				f := newSorted(keys, c.short, 7)
-				f.pageCap = c.pageCap
-				rec := &recorder{sorted: f}
+				f := keyrangetest.NewSorted(keys, c.short, 7)
+				f.PageCap = c.pageCap
+				rec := &recorder{Sorted: f}
 				opt := c.opt
 				opt.Bucket, opt.Client, opt.Workers = "b", rec, c.workers
 				if after != "" {
