@@ -1579,6 +1579,10 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
 - **Progress file.** `DIR/.swath/progress.json`, rewritten every 2 s by atomic rename: objects, ordered,
   encoded, parts, advance, started_at, as_of, duration_ms.
 
+- **Hostile fixtures and metamorphic laws.** The cardinality bomb and the encoding minefield list
+  row-identical to the sequential oracle; `TestMetamorphicLaws` checks invariance to page size, range
+  decomposition, memory budget and the probe toggle over 19 keyspaces × 12 variants (fake bucket, synthetic).
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

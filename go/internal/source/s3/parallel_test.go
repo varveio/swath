@@ -28,6 +28,7 @@ import (
 type sorted struct {
 	keys    []string
 	short   bool
+	pageCap int // if set, no page holds more than this many entries
 	latency time.Duration
 	mu      sync.Mutex
 	rng     *rand.Rand
@@ -55,6 +56,9 @@ func (f *sorted) ListObjectsV2(ctx context.Context, in *client.ListInput) (*clie
 	size := in.MaxKeys
 	if f.short {
 		size = 1 + f.rng.Intn(size)
+	}
+	if f.pageCap > 0 {
+		size = min(size, f.pageCap)
 	}
 	f.mu.Unlock()
 	prefix, delim := in.Prefix, in.Delimiter

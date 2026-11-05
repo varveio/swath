@@ -13,6 +13,8 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 
 | Invariant ([internals/contracts.md](internals/contracts.md)) | Test |
 |---|---|
+| hostile keyspaces | `source/s3` `TestHostileFixturesMatchSequential`: the cardinality bomb (6,000 keys after a 200-byte shared run, plus neighbours of the prefix) and the encoding minefield (percent-encoding traps, `+`, spaces, `?#&=`, control characters, NBSP, BOM, U+FFFD, non-BMP, combining marks, long runs of one byte or scalar) list row-identical to the sequential oracle, parallel and seeded, and their ranges tile the keyspace |
+| metamorphic laws | `source/s3` `TestMetamorphicLaws`: one table over every fixture and hostile keyspace; the listing is invariant to the page size (pages capped at 3, 7, 13, random short pages), the range decomposition (seed on and off, 1, 4, 8, 16, 64 workers, forced random splits), the memory budget (20 rows to 1 M rows) and the probe toggle |
 | dataset format contract | `listing` `TestDatasetContract`: multi-part S3 datasets (sequential, parallel, seeded) and a local one with a non-UTF-8 name, read from the manifest alone: parts are exactly `data/` in name order, bytes and MD5 match, footer rows and exact base64 bounds match, keys rise strictly within and across parts, footers carry exactly the four `swath.*` stamps and `sorting_columns` key ascending, and the three S3 runs hold the same keys |
 | no gap, no overlap; boundary to the left | `source/s3` T1 (random splits cover every key once, traced intervals tile the keyspace) |
 | safe pivots | `source/s3` T2 (pivot properties over adversarial bounds) |
