@@ -285,5 +285,8 @@ func logicalBytes(r *schema.Row) int64 {
 			n += 4
 		}
 	}
+	if o := r.Object; o != nil {
+		n += int64(len(o.ETag) + len(o.StorageClass) + len(o.OwnerID) + len(o.OwnerDisplayName) + len(o.ChecksumAlgorithm) + len(o.ChecksumType))
+	}
 	return n
 }

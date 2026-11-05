@@ -9,15 +9,17 @@
 // (the caller of Run) walks the tree depth-first and hands contiguous row
 // segments to the sink, consuming the range it is on as rows arrive.
 //
-// Memory: rows of ranges off the drain path are bounded by Options.Budget.
-// Workers wait before claiming a range, and inside Rows for any node other
-// than the drainer's current one, while the budget is used up. The current
-// node never blocks, and the drainer expands a needed range itself if no
-// worker has claimed it, so a full buffer cannot deadlock the walk. Rows on
-// the drain path itself are held on top of the budget: at most one range's
-// content per level of the current root-to-frontier path (the O(depth ×
-// fan-out) of a depth-first walk), plus one publish batch per worker (at most
-// publishRows rows plus one Rows call).
+// Memory: buffered rows are bounded by Options.Budget. Workers wait before
+// claiming a range, and when publishing rows, while the budget is used up,
+// unless the drainer is waiting for that very range (or expanding it
+// itself): then the rows it needs are always admitted, and the drainer
+// expands a needed range itself if no worker has claimed it, so a full
+// buffer cannot deadlock the walk. A streaming range on the drain path (an
+// S3 prefix) therefore also blocks while the sink is behind. Rows still
+// pending on the root-to-frontier path count against the budget and can
+// exceed it by at most one range's content per level (the O(depth ×
+// fan-out) of a depth-first walk), plus one publish batch per worker (at
+// most publishRows rows plus one Rows call).
 package order
 
 import (
@@ -69,7 +71,8 @@ type node[R any] struct {
 	state   state
 	items   []item[R]
 	pending []*node[R]  // children not yet pushed to the stack
-	onPath  atomic.Bool // the drainer's current node: its emitter never blocks (written under mu)
+	onPath  atomic.Bool // the drainer's current node: its emitter publishes at once (written under mu)
+	awaited atomic.Bool // the drainer waits for, or itself expands, this node: its emitter never blocks
 }
 
 type run[R any] struct {
@@ -85,6 +88,35 @@ type run[R any] struct {
 	max      int
 	finished bool
 	stopped  atomic.Bool // ctx is done; checked instead of ctx.Err(), which takes a mutex
+
+	// Drainer-owned output batch (only the drainer goroutine touches it).
+	sink    Sink
+	segs    [][]schema.Row
+	segRows int
+	rows    int64
+}
+
+// send appends rows to the drainer's output batch, writing full batches.
+func (o *run[R]) send(rows []schema.Row) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	o.segs = append(o.segs, rows)
+	o.segRows += len(rows)
+	if o.segRows >= batchRows {
+		return o.flush()
+	}
+	return nil
+}
+
+func (o *run[R]) flush() error {
+	if len(o.segs) == 0 {
+		return nil
+	}
+	o.rows += int64(o.segRows)
+	err := o.sink.Write(o.ctx, o.segs)
+	o.segs, o.segRows = nil, 0
+	return err
 }
 
 // Run drains p in ascending key order into sink. It returns the first error
@@ -95,7 +127,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	o := &run[R]{ctx: ctx, cancel: cancel, p: p, opt: opt}
+	o := &run[R]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink}
 	o.work = sync.NewCond(&o.mu)
 	o.drain = sync.NewCond(&o.mu)
 	stop := context.AfterFunc(ctx, func() {
@@ -127,7 +159,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		cancel(err)
 	}
 	wg.Wait()
-	st.MaxBuffered = int64(o.max)
+	st.Rows, st.MaxBuffered = o.rows, int64(o.max)
 	return st, err
 }
 
@@ -148,7 +180,7 @@ func (o *run[R]) worker() {
 		}
 		n.state = expanding
 		o.mu.Unlock()
-		err := o.expand(n)
+		err := o.expand(n, false)
 		o.mu.Lock()
 		if err != nil {
 			o.cancel(err)
@@ -157,9 +189,12 @@ func (o *run[R]) worker() {
 	}
 }
 
-// expand runs the provider on n and publishes its children; called without mu.
-func (o *run[R]) expand(n *node[R]) error {
-	e := &emitter[R]{o: o, n: n}
+// expand runs the provider on n and publishes its children; called without
+// mu. direct is set when the drainer expands the node it is draining: rows
+// up to the first child are then next in global order and go straight to the
+// sink, so a long streaming range is not buffered while the drainer is busy.
+func (o *run[R]) expand(n *node[R], direct bool) error {
+	e := &emitter[R]{o: o, n: n, direct: direct}
 	err := o.p.Expand(o.ctx, n.r, e)
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -186,11 +221,12 @@ func (o *run[R]) expand(n *node[R]) error {
 // therefore costs one lock round trip, while a long streaming range still
 // becomes visible to the drainer as it grows.
 type emitter[R any] struct {
-	o     *run[R]
-	n     *node[R]
-	items []item[R]
-	kids  []*node[R]
-	rows  int
+	o      *run[R]
+	n      *node[R]
+	items  []item[R]
+	kids   []*node[R]
+	rows   int
+	direct bool // drainer-expanded, no child yet: rows go straight to the sink
 }
 
 const publishRows = 1024
@@ -199,12 +235,19 @@ func (e *emitter[R]) Rows(rows []schema.Row) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	if e.direct {
+		if e.o.stopped.Load() {
+			return context.Cause(e.o.ctx)
+		}
+		return e.o.send(rows)
+	}
 	e.items = append(e.items, item[R]{rows: rows})
 	e.rows += len(rows)
 	return e.maybePublish()
 }
 
 func (e *emitter[R]) Child(r R) error {
+	e.direct = false
 	c := &node[R]{r: r}
 	e.items = append(e.items, item[R]{child: c})
 	e.kids = append(e.kids, c)
@@ -224,7 +267,7 @@ func (e *emitter[R]) maybePublish() error {
 // is on the drain path, it first waits while the budget is used up.
 func (e *emitter[R]) publish() error {
 	o := e.o
-	for !e.n.onPath.Load() && o.buffered >= o.opt.Budget && !o.stopped.Load() {
+	for !e.n.awaited.Load() && o.buffered >= o.opt.Budget && !o.stopped.Load() {
 		o.drain.Wait()
 	}
 	if o.stopped.Load() {
@@ -247,17 +290,7 @@ func (e *emitter[R]) publish() error {
 // drainTree walks the tree depth-first from root, streaming rows to sink.
 func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 	var st Stats
-	var segs [][]schema.Row
-	segRows, released := 0, 0
-	flush := func() error {
-		if len(segs) == 0 {
-			return nil
-		}
-		st.Rows += int64(segRows)
-		err := sink.Write(o.ctx, segs)
-		segs, segRows = nil, 0
-		return err
-	}
+	released := 0
 	release := func() { // mu held
 		if released == 0 {
 			return
@@ -301,11 +334,7 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 					break
 				}
 				released += len(it.rows)
-				segs = append(segs, it.rows)
-				segRows += len(it.rows)
-				if segRows >= batchRows {
-					err = flush()
-				}
+				err = o.send(it.rows)
 				if released >= releaseEvery {
 					o.mu.Lock()
 					release()
@@ -338,16 +367,12 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 			if released >= releaseEvery {
 				release()
 			}
-			segs = append(segs, it.rows)
-			segRows += len(it.rows)
-			if segRows >= batchRows {
+			o.mu.Unlock()
+			err := o.send(it.rows)
+			o.mu.Lock()
+			if err != nil {
 				o.mu.Unlock()
-				err := flush()
-				o.mu.Lock()
-				if err != nil {
-					o.mu.Unlock()
-					return st, err
-				}
+				return st, err
 			}
 			continue
 		}
@@ -362,9 +387,10 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 			}
 		case queued: // nobody has it: expand it here
 			n.state = expanding
+			n.awaited.Store(true)
 			release()
 			o.mu.Unlock()
-			err := o.expand(n)
+			err := o.expand(n, f.i == 0)
 			o.mu.Lock()
 			if err != nil {
 				o.mu.Unlock()
@@ -372,11 +398,13 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 			}
 		case expanding:
 			release()
-			o.drain.Broadcast() // its emitter may be blocked from before n joined the path
+			n.awaited.Store(true)
+			o.drain.Broadcast() // its emitter may be blocked on the budget
 			o.drain.Wait()
+			n.awaited.Store(false)
 		}
 	}
 	release()
 	o.mu.Unlock()
-	return st, flush()
+	return st, o.flush()
 }

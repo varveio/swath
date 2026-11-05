@@ -32,7 +32,9 @@ closes the encoders, removes the temporary parts and is returned wrapped with it
 | `internal/parquet` | file writer, schema binding, codec, part router and encoders | schema, dataset |
 | `internal/dataset` | layout, overwrite safety, manifest, sort stamps, publication gate and order | – |
 
-`order` and `parquet` know nothing about filesystems; `source/fs` knows nothing about Parquet.
+`order` and `parquet` know nothing about filesystems; `source/fs` knows nothing about Parquet. The row
+type (`schema.Row`) is shared by all providers: filesystem fields inline, object-store fields behind one
+pointer (`Row.Object`, nil for filesystem rows), so adding S3 changed the row type but not the contract.
 
 ## The provider contract (`internal/source`)
 
@@ -59,11 +61,18 @@ by the emitter, which signal cancellation or a failed sink).
   `a/…` < `a0`, so emitting the DIR row and then its subtree before the next sibling is global order. A
   directory with more than 4096 entries is split into chunk ranges of 2048 sorted names that share one
   reference-counted directory fd, so other workers stat them in parallel.
-- **S3 (not implemented).** A range is a key interval `[lo, hi)`. `Expand` lists it page by page and calls
-  `Rows` per page (pages are sorted by S3). A *split* is the expander ending its own listing at a pivot `p` and
-  emitting `Child([p, hi))` last; a *steal* is an idle worker asking (through the provider's own scheduler) a
-  running expander to split. Both only add children at the end of the range's sequence, which the contract
-  allows. Common prefixes become rows or children exactly like directories.
+- **S3** (`internal/source/s3`). A range is a key prefix. `Expand` pages ListObjectsV2 (1000 keys, continuation
+  tokens, no delimiter) and calls `Rows` once per page; S3 returns keys in UTF-8 binary order, which is the
+  unsigned byte order the pipeline needs (the provider checks it and fails otherwise). With `-seed` the root
+  is listed once with delimiter `/`: its objects become rows and each common prefix a child range at its sorted
+  position (`a/` sorts as the string `a/`, the directory rule); the order stage then lists the prefixes in
+  parallel. The seed cannot help when one prefix holds most keys: that prefix stays one sequential range. That
+  is where Swath's split/steal starts: an expander would end its listing at a pivot and emit the remainder as
+  further child ranges (the contract allows children at the end of a range; see the Stage 3 notes when
+  present). Credentials: the default chain, anonymous when it finds none; the SDK's standard retryer, counted.
+  Rows use Swath's canonical 13-column schema (`schema.S3`); the manifest carries `sourceBucket` and a
+  `_swath_summary.json` subset (schema_version 2, completed, no filters, target `s3://bucket[/prefix]`) so a
+  reader can tell a whole-bucket dataset from a prefix or truncated one.
 - **Checkpoint (not implemented).** The order stage's frontier is a key cursor: every key below the last
   emitted key is in a finished part or in the open one. A checkpoint is (last published part, its max key, the
   set of ranges not fully drained, each with its own resume cursor). Resume re-expands those ranges from their
@@ -81,14 +90,20 @@ by the emitter, which signal cancellation or a failed sink).
 segments to the sink in batches of at least 4096 rows. It streams the frontier: rows of the range it is
 draining are consumed as they arrive, not when the range completes.
 
-Memory: rows of ranges that finished early (off the drain path) are bounded by `Options.Budget` (rows). A
-worker blocks before claiming a new range, and inside `Rows` for any node other than the drainer's current
-one, while the buffer is full. The current node never blocks, and the drainer expands a queued range itself
-when it needs it and no worker has it, so a full buffer cannot deadlock the walk. On top of the budget the walk
-holds the rows still pending on the root-to-frontier path (at most one range per level, the O(depth ×
-fan-out) of any depth-first walk) and one publish batch per worker. Emitters collect a range's items locally
-and publish them under the lock at once when the drainer is on that range, or every 1024 rows, or when the
-range ends: one lock round trip per directory, while long streaming ranges stay visible as they grow.
+When the drainer expands the range it is draining itself (no worker had claimed it), rows up to that range's
+first child are next in global order and go straight to the sink instead of the buffer; without this a
+bucket-wide S3 range expanded by the drainer was buffered whole.
+
+Memory: buffered rows are bounded by `Options.Budget` (rows). A worker blocks before claiming a new range,
+and when publishing rows, while the buffer is full, unless the drainer is waiting for that very range or
+expanding it itself; the drainer expands a queued range itself when it needs it and no worker has it, so a
+full buffer cannot deadlock the walk. A long streaming range on the drain path (an S3 prefix) therefore also
+waits while the sink is behind; an earlier rule that exempted the whole drain path let a bucket-wide range
+buffer every row (found with the S3 provider: 971,927 rows buffered). On top of the budget the walk holds the
+rows still pending on the root-to-frontier path (at most one range per level, the O(depth × fan-out) of any
+depth-first walk) and one publish batch per worker. Emitters collect a range's items locally and publish them
+under the lock at once when the drainer is on that range, or every 1024 rows, or when the range ends: one
+lock round trip per directory, while long streaming ranges stay visible as they grow.
 
 ## Schema (`internal/schema`)
 

@@ -31,8 +31,9 @@ type Spec struct {
 // matching the type; ok=false means null.
 type Column struct {
 	Spec
-	Str func(r *Row) (v string, ok bool)
-	Int func(r *Row) (v int64, ok bool)
+	Str  func(r *Row) (v string, ok bool)
+	Int  func(r *Row) (v int64, ok bool)
+	Bool func(r *Row) (v bool, ok bool)
 }
 
 // Schema is a named, ordered column list.

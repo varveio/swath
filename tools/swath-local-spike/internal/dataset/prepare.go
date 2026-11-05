@@ -26,11 +26,15 @@ var (
 // root or an ancestor of root (by path and by directory identity, along the
 // given and the symlink-resolved root path). A non-empty out is refused
 // unless replace is set, and replacing requires a previous dataset of this
-// schema outside root; it removes only the dataset's own entries.
+// schema outside root; it removes only the dataset's own entries. An empty
+// root means the source is not a local tree.
 func Prepare(out, root, schemaID string, replace bool) error {
 	absOut, err := filepath.Abs(out)
 	if err != nil {
 		return err
+	}
+	if root == "" { // not a local listing: nothing to protect but the output itself
+		return prepareOut(out, absOut, schemaID, replace)
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -55,6 +59,11 @@ func Prepare(out, root, schemaID string, replace bool) error {
 			return fmt.Errorf("%s: %w", out, ErrInsideRoot)
 		}
 	}
+	return prepareOut(out, absOut, schemaID, replace)
+}
+
+// prepareOut applies the emptiness and replacement rules and creates out/data.
+func prepareOut(out, absOut, schemaID string, replace bool) error {
 	ents, err := os.ReadDir(absOut)
 	switch {
 	case err == nil && len(ents) > 0:

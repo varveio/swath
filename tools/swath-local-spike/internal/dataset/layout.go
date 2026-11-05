@@ -43,4 +43,4 @@ func TempPath(out string, i int) string {
 // ownEntries are the root entries a dataset owns; overwrite removes these and
 // their .tmp siblings, nothing else. .swath-state.json is Swath's resume
 // identity file, which this tool does not write but older outputs may hold.
-var ownEntries = []string{DataDir, ManifestName, SuccessName, SummaryName, SymlinkName, ".swath-state.json"}
+var ownEntries = []string{DataDir, ManifestName, SuccessName, SummaryName, SymlinkName, SwathSummaryName, ".swath-state.json"}

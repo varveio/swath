@@ -545,6 +545,124 @@ promptly (fewer than 200 of 9,331 ranges expanded); provider failure; an encoder
 leave no `_SUCCESS`; the dirent parser is fuzzed; the parquet-go copy contract behind zero-copy strings is
 pinned; the README flag list is generated from the flag set and checked by a test.
 
+## S3 provider 2026-11-05
+
+**What was built.**
+- **Provider** (`internal/source/s3`): ListObjectsV2 pages of 1000 keys with continuation tokens and no
+  delimiter, each page emitted as it arrives. Each page is checked for ascending keys, both within the page
+  and against the previous page.
+- **Connection and credentials:** `s3://bucket[/prefix]` roots, `-endpoint`, `-region`, `-path-style`.
+  The default credential chain is used, falling back to anonymous access when it finds none.
+- **Retries:** the SDK's standard retryer, wrapped so retries are counted (`s3.retries` in the summary).
+- **Experiment flags:** `-fetch-owner` and `-max-keys` (the experiment guard).
+- **Stage 2:** `-seed`, a static delimiter seed.
+- **Schema.** Rows use Swath's canonical schema bound as data in `internal/schema` (`schema.S3`), so the
+  writer, the manifest message string and the value filling are shared with the local schema. The mapping
+  follows Swath's Java (`S3ObjectEntryMapper`, `ListEntryWriteSupport`):
+  - the etag has one pair of quotes stripped, and the multipart `hex-N` form is kept;
+  - `size` is 0 and `last_modified` is epoch 0 when absent, as Java writes them;
+  - `version_id` and `is_latest` are null, `is_delete_marker` is false and `row_type` is `OBJECT`;
+  - `checksum_algorithm` is the first algorithm returned;
+  - `owner_*` is filled only with `-fetch-owner`.
+- **Dataset.**
+  - The manifest's `sourceBucket` is the bucket and `sourceKind` is `s3`.
+  - `_swath_summary.json` is written as the subset of Swath's schema_version 2 run summary that readers check:
+    `completed`, empty `filters`, and `config.target` = `s3://bucket` or `s3://bucket/prefix`.
+  - The local dataset still writes none, and its MD5 is unchanged (`5c1382b4…`).
+- **Interface fit.**
+  - **`internal/source`:** the contract was unchanged.
+  - **The shared row type:** it needed the object-store fields. They sit behind one pointer
+    (`Row.Object`), which is nil and costs 8 bytes in a filesystem row.
+  - **`internal/order` (two changes, both found with S3):**
+    1. Only a range the drainer is *waiting for* (or expanding itself) may exceed the budget. Before, the
+       drainer's whole current node was exempt, which let one bucket-wide streaming range buffer every row
+       when the sink was slower (971,927 rows, 621 MiB).
+    2. When the drainer expands its own current range, rows up to the first child go straight to the sink.
+       Without this, a root range the drainer reached before any worker was buffered whole.
+
+    After both changes: `max_buffered=0`, 68 MiB RSS.
+  - Both changes keep the deadlock argument, and the order tests passed 40× under `-race`.
+
+**Schema comparison** (`verify.py` against a fake-bucket dataset, `bench/results/verify-s3-fake.txt`). All 13
+columns match contracts §4 in order, physical type, repetition and logical type, as DuckDB reads them:
+- `key` BYTE_ARRAY REQUIRED String;
+- `size` INT64 OPTIONAL unannotated;
+- `last_modified` INT64 OPTIONAL Timestamp(UTC, MICROS);
+- `etag`, `storage_class`, `version_id`, `owner_id`, `owner_display_name`, `checksum_algorithm`, `checksum_type`
+  BYTE_ARRAY OPTIONAL String;
+- `is_latest` BOOLEAN OPTIONAL;
+- `is_delete_marker` BOOLEAN REQUIRED;
+- `row_type` BYTE_ARRAY REQUIRED String.
+
+Every row is a current object. The manifest's `fileSchema` is the parquet-mr message string rendered from the
+same column list.
+
+**Fake bucket** (gofakes3 in memory, `bench/s3fake`).
+- **Contents:** the 971,927 non-directory keys of the `realistic` tree with their mtimes. Each body is the
+  key, so sizes are key lengths and ETags differ.
+- **Loading:** 8.0 s straight into the backend.
+- **Server:** HTTP on localhost, warm.
+
+| Run (971,927 keys, 972 pages) | Wall s | Client user / sys s | Peak RSS MiB | Rows/s | Notes |
+|---|---:|---:|---:|---:|---|
+| sequential, full pipeline | 10.0–10.6 | 10.8–11.2 / 0.9–1.0 | 67–70 | 92k–97k | 1 part, 27.3 MB |
+| sequential, `-count-only` | 11.1 | 10.3 / 1.6 | | 87k | the fake server used 4.2 s of CPU for this listing |
+| `-seed`, 1 / 4 / 8 workers (3 runs each) | 9.3–9.9 | 11.0–11.9 | 148–153 | ~100k | 3 seed prefixes; byte-identical to sequential |
+| sequential 12 workers, same run set | 9.8–10.5 | 10.8–11.1 | 69–70 | | |
+
+**The client, not the fake, dominates.** A CPU profile of a sequential run attributes:
+- 8.4 s of 11.95 s client CPU (70 %) to the SDK's REST-XML deserializer (`awsRestxml_deserializeOpDocumentList…`),
+  about 8.6 µs per object;
+- 2.2 s to Parquet encoding;
+- about 0.2 s to the provider and the order stage together.
+
+A sequential listing parses one page at a time on one core. The seed helps only as far as the prefixes divide
+the keys: `realistic` has 3 top-level prefixes (`data/`, `home/`, `projects/`) and `projects/` holds most of
+them, so the seed gains 5–10 %. The seed's higher RSS comes from finished children waiting in the reorder
+buffer.
+
+**Real bucket: not reachable for listing.**
+- `curl -sI https://commoncrawl.s3.amazonaws.com/?list-type=2&max-keys=1` reached S3 through the proxy and got
+  `403 AccessDenied`.
+- With the SDK, the container's AWS environment credentials were used first and rejected:
+  `api error InvalidAccessKeyId: The AWS Access Key Id you provided does not exist in our records`.
+- Anonymously (credentials unset): `StatusCode: 403 … api error AccessDenied: Access Denied`. commoncrawl
+  refuses anonymous ListBucket.
+- Per the instructions, no other host was tried, so there are no real-bucket numbers.
+
+**Varve.** A temporary test in `varve/internal/swath` (Varve `2353ada`; deleted afterwards, `git status` clean;
+copy in the scratchpad) opened the datasets with `Open(ctx, DirSource(root), "s3", "bench")`:
+
+| Dataset | Open | Eligibility | Flat List | Delimiter List | Stream |
+|---|---|---|---|---|---|
+| whole bucket, 1 part | ok | eligible, no reasons | ok | root → `data/ home/ projects/`; `projects/proj-00-` → `projects/proj-00-model/` | 971,927 objects = manifest, ascending |
+| whole bucket, 7 parts (`-seed`, 4 MB parts) | ok | eligible | ok | same | 971,927, ascending |
+| `s3://bench/home/` (prefix) | refused: `run summary contradicts whole-bucket coverage` | | | | |
+| local `out-realistic` | refused: `manifest does not describe the selected bucket dataset` | | | | |
+
+The S3 dataset passes every check that the local one failed:
+- the bucket match;
+- the run summary;
+- the four S3 columns `version_id`, `is_latest`, `is_delete_marker` and `row_type`, with their pure-object
+  statistics.
+
+The prefix refusal is correct, not a bug. Varve treats a dataset as a whole-bucket listing, and the run
+summary says this one is not. Opening a prefix dataset would need a Varve-side notion of a prefix dataset.
+
+**Stage 2 (static delimiter seed).**
+- **Done:** one delimited ListObjectsV2 of the root yields the root's own objects (rows) and its common prefixes
+  (child ranges at their sorted positions, with the trailing-slash rule). The order stage lists the children in
+  parallel.
+- **Byte identity:** sequential, and the seed at 1, 4 and 8 workers, gave the same part MD5 (`2982b28d1b31…`).
+- **gofakes3 deviation:** gofakes3 returns a key equal to a common prefix (`a/`) both as an object and as a
+  prefix, so the seed listing drops objects whose key contains the delimiter after the prefix; S3 itself never
+  returns them.
+- **Limit:** one prefix with most of the keys stays a single sequential range; that is where Swath's split and
+  steal start (Stage 3).
+
+**Binary size:** the AWS SDK roughly doubles the stripped binary: linux/amd64 24.7 MB (was 13.3), linux/arm64
+22.5, darwin/arm64 23.1, windows/amd64 25.2 MB.
+
 ## Measurement drift
 
 The host slowed during the session (Firecracker guest; nothing else was running in the guest, and `vmstat`

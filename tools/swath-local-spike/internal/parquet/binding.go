@@ -137,6 +137,14 @@ func fill(c *schema.Column, col int, dst []pq.Value, rows []schema.Row) {
 				dst[i] = pq.NullValue().Level(0, 0, col)
 			}
 		}
+	case c.Bool != nil:
+		for i := range rows {
+			if v, ok := c.Bool(&rows[i]); ok {
+				dst[i] = pq.BooleanValue(v).Level(0, def, col)
+			} else {
+				dst[i] = pq.NullValue().Level(0, 0, col)
+			}
+		}
 	default:
 		for i := range rows {
 			if v, ok := c.Int(&rows[i]); ok {

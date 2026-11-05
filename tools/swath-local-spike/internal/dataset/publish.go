@@ -48,10 +48,29 @@ func Check(parts []Part, rows int64) error {
 
 // Meta describes the dataset in the manifest.
 type Meta struct {
-	SchemaID   string
-	FileSchema string // parquet-mr message string
-	SortKey    string
-	SourceRoot string
+	SchemaID     string
+	FileSchema   string // parquet-mr message string
+	SortKey      string
+	SourceKind   string // "local-fs" or "s3"
+	SourceBucket string // object-store bucket; empty for a filesystem
+	SourceRoot   string // absolute path or s3://bucket/prefix
+	// SwathSummary, if set, is written as _swath_summary.json: the subset of
+	// Swath's run summary (schema_version 2) that dataset readers check.
+	SwathSummary any
+}
+
+// SwathSummaryName is Swath's run-summary file.
+const SwathSummaryName = "_swath_summary.json"
+
+// RunSummary is the subset of Swath's schema_version 2 run summary that
+// readers check before trusting a dataset to cover its target.
+type RunSummary struct {
+	SchemaVersion int  `json:"schema_version"`
+	Completed     bool `json:"completed"`
+	Config        struct {
+		Target  string   `json:"target"`
+		Filters []string `json:"filters"`
+	} `json:"config"`
 }
 
 type manifestFile struct {
@@ -88,7 +107,7 @@ func Publish(out string, meta Meta, parts []Part, summary any) error {
 	m := manifest{
 		Version: "1", CreationTimestamp: time.Now().UnixMilli(), FileFormat: "Parquet",
 		FileSchema: meta.FileSchema, Sorted: true, SortKey: meta.SortKey, Files: []manifestFile{},
-		SchemaID: meta.SchemaID, SourceKind: "local-fs", SourceRoot: meta.SourceRoot,
+		SourceBucket: meta.SourceBucket, SchemaID: meta.SchemaID, SourceKind: meta.SourceKind, SourceRoot: meta.SourceRoot,
 	}
 	var links strings.Builder
 	for i, p := range parts {
@@ -111,6 +130,11 @@ func Publish(out string, meta Meta, parts []Part, summary any) error {
 	}
 	if err := writeJSON(out, SummaryName, summary); err != nil {
 		return err
+	}
+	if meta.SwathSummary != nil {
+		if err := writeJSON(out, SwathSummaryName, meta.SwathSummary); err != nil {
+			return err
+		}
 	}
 	return writeAtomic(out, SuccessName, nil)
 }

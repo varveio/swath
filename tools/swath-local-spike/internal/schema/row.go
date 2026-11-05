@@ -79,6 +79,17 @@ type Row struct {
 	Nlink      uint32
 	Present    Presence
 	Kind       Kind
+	Object     *ObjectMeta // object-store fields; nil for filesystem rows
+}
+
+// ObjectMeta holds the object-store columns of a row. Empty strings are null.
+type ObjectMeta struct {
+	ETag              string // quotes stripped; multipart "hex-N" kept
+	StorageClass      string
+	OwnerID           string
+	OwnerDisplayName  string
+	ChecksumAlgorithm string
+	ChecksumType      string
 }
 
 // Has reports whether every bit in p is present.

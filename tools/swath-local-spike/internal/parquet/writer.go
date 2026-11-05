@@ -77,6 +77,7 @@ func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func
 		pq.DefaultEncodingFor(pq.ByteArray, &pq.RLEDictionary),
 		pq.DefaultEncodingFor(pq.Int64, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Int32, &pq.DeltaBinaryPacked),
+		pq.DefaultEncodingFor(pq.Boolean, &pq.Plain),
 		pq.CreatedBy(createdBy, createdVersion, ""),
 		pq.KeyValueMetadata(dataset.StampOrder, s.SortOrder),
 		pq.KeyValueMetadata(dataset.StampMode, "objects"),

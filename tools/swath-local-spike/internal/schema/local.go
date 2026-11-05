@@ -45,21 +45,36 @@ func int32Col(name string, p Presence, get func(*Row) uint32) Column {
 	return Column{Spec: Spec{name, Int32, false}, Int: func(r *Row) (int64, bool) { return int64(int32(get(r))), r.Has(p) }}
 }
 
-// SwathS3 is Swath's canonical S3 schema (docs/internals/contracts.md §4) as
-// column specs only. It is not bound to Row; it shows the same model
-// describes it.
-var SwathS3 = []Spec{
-	{"key", String, true},
-	{"size", Int64, false},
-	{"last_modified", TimestampMicros, false},
-	{"etag", String, false},
-	{"storage_class", String, false},
-	{"version_id", String, false},
-	{"is_latest", Bool, false},
-	{"is_delete_marker", Bool, true},
-	{"owner_id", String, false},
-	{"owner_display_name", String, false},
-	{"checksum_algorithm", String, false},
-	{"checksum_type", String, false},
-	{"row_type", String, true},
+// S3 is Swath's canonical schema (docs/internals/contracts.md §4), bound to
+// Row: every row is a current object (version_id and is_latest null,
+// is_delete_marker false, row_type OBJECT).
+var S3 = Schema{
+	Name:      "swath_listing",
+	ID:        "swath/canonical",
+	SortOrder: SortOrder,
+	Columns: []Column{
+		{Spec: Spec{"key", String, true}, Str: func(r *Row) (string, bool) { return r.Key, true }},
+		int64Col("size", HasSize, func(r *Row) int64 { return r.Size }),
+		timeCol("last_modified", HasMtime, func(r *Row) int64 { return r.Mtime }),
+		objectCol("etag", func(o *ObjectMeta) string { return o.ETag }),
+		objectCol("storage_class", func(o *ObjectMeta) string { return o.StorageClass }),
+		{Spec: Spec{"version_id", String, false}, Str: func(*Row) (string, bool) { return "", false }},
+		{Spec: Spec{"is_latest", Bool, false}, Bool: func(*Row) (bool, bool) { return false, false }},
+		{Spec: Spec{"is_delete_marker", Bool, true}, Bool: func(*Row) (bool, bool) { return false, true }},
+		objectCol("owner_id", func(o *ObjectMeta) string { return o.OwnerID }),
+		objectCol("owner_display_name", func(o *ObjectMeta) string { return o.OwnerDisplayName }),
+		objectCol("checksum_algorithm", func(o *ObjectMeta) string { return o.ChecksumAlgorithm }),
+		objectCol("checksum_type", func(o *ObjectMeta) string { return o.ChecksumType }),
+		{Spec: Spec{"row_type", String, true}, Str: func(*Row) (string, bool) { return "OBJECT", true }},
+	},
+}
+
+func objectCol(name string, get func(*ObjectMeta) string) Column {
+	return Column{Spec: Spec{name, String, false}, Str: func(r *Row) (string, bool) {
+		if r.Object == nil {
+			return "", false
+		}
+		v := get(r.Object)
+		return v, v != ""
+	}}
 }

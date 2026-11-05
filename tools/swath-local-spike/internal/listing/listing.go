@@ -11,18 +11,21 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/varveio/swath/tools/swath-local-spike/internal/dataset"
 	"github.com/varveio/swath/tools/swath-local-spike/internal/order"
 	"github.com/varveio/swath/tools/swath-local-spike/internal/parquet"
 	"github.com/varveio/swath/tools/swath-local-spike/internal/schema"
+	"github.com/varveio/swath/tools/swath-local-spike/internal/source"
 	"github.com/varveio/swath/tools/swath-local-spike/internal/source/fs"
+	"github.com/varveio/swath/tools/swath-local-spike/internal/source/s3"
 )
 
 // Config is one listing. Zero values take the documented defaults.
 type Config struct {
-	Root     string
+	Root     string // a local directory, or s3://bucket[/prefix]
 	Out      string // dataset directory; empty for a dry run
 	Replace  bool   // replace a previous dataset in Out
 	Fields   fs.Fields
@@ -33,6 +36,17 @@ type Config struct {
 	Memory   int64 // budget in bytes for rows held between listing and encoding; default 256 MiB
 	PartSize int64 // target bytes per part; default 64 MiB
 	Portable bool  // use the portable filesystem engine (tests, comparisons)
+	S3       S3Config
+}
+
+// S3Config configures an s3:// root.
+type S3Config struct {
+	Endpoint, Region string
+	PathStyle        bool
+	FetchOwner       bool
+	Seed             bool  // list the root's common prefixes in parallel
+	MaxKeys          int64 // stop after this many objects (experiments)
+	Client           s3.API
 }
 
 // Defaults.
@@ -73,12 +87,13 @@ type Summary struct {
 	SchemaID    string    `json:"schema_id"`
 	Root        string    `json:"root"`
 	Out         string    `json:"out,omitempty"`
-	Fields      string    `json:"fields"`
+	Fields      string    `json:"fields,omitempty"`
 	Workers     int       `json:"workers"`
 	Encoders    int       `json:"encoders"`
 	ReorderRows int       `json:"reorder_rows"`
 	MaxBuffered int64     `json:"max_buffered_rows"`
-	Listing     fs.Stats  `json:"listing"`
+	Listing     *fs.Stats `json:"listing,omitempty"`
+	S3          *s3.Stats `json:"s3,omitempty"`
 	Rows        int64     `json:"rows"`
 	Parts       int       `json:"parts"`
 	OutBytes    int64     `json:"output_bytes"`
@@ -89,6 +104,14 @@ type Summary struct {
 	Started     time.Time `json:"started"`
 }
 
+// Errors is the listing's error count.
+func (s *Summary) Errors() int64 {
+	if s.Listing != nil {
+		return s.Listing.Errors()
+	}
+	return 0
+}
+
 // Run lists cfg.Root and, unless cfg.Out is empty, publishes the dataset.
 // On any error or cancellation nothing is published and unpublished parts
 // are removed; the error is the cause (ctx.Err() on cancellation).
@@ -97,21 +120,27 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if err := cfg.setDefaults(); err != nil {
 		return Summary{}, err
 	}
+	sum := Summary{
+		Tool: "swath-local", Out: cfg.Out, Workers: cfg.Workers, Encoders: cfg.Encoders,
+		ReorderRows: int(cfg.Memory / bytesPerBufferedRow), Started: start,
+	}
+	if strings.HasPrefix(cfg.Root, "s3://") {
+		return runS3(ctx, cfg, sum)
+	}
+	return runFS(ctx, cfg, sum)
+}
+
+func runFS(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 	root, err := filepath.Abs(cfg.Root)
 	if err != nil {
-		return Summary{}, err
+		return sum, err
 	}
 	s := &schema.Local
+	sum.Root, sum.SchemaID, sum.Fields = root, s.ID, cfg.Fields.String()
 	opt := fs.Options{Fields: cfg.Fields, NoDirs: cfg.NoDirs, LinkTarget: !cfg.NoLinks, Portable: cfg.Portable}
 	if _, err := fs.New(root, opt); err != nil { // validate the root before touching the output
-		return Summary{}, fmt.Errorf("root: %w", err)
+		return sum, fmt.Errorf("root: %w", err)
 	}
-	sum := Summary{
-		Tool: "swath-local", SchemaID: s.ID, Root: root, Out: cfg.Out, Fields: cfg.Fields.String(),
-		Workers: cfg.Workers, Encoders: cfg.Encoders, ReorderRows: int(cfg.Memory / bytesPerBufferedRow), Started: start,
-	}
-	var sink order.Sink = discard{}
-	var router *parquet.Router
 	if cfg.Out != "" {
 		if err := dataset.Prepare(cfg.Out, root, s.ID, cfg.Replace); err != nil {
 			return sum, fmt.Errorf("prepare output: %w", err)
@@ -121,34 +150,91 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		} else if inside {
 			opt.Skip = map[string]bool{rel + "/": true}
 		}
+	}
+	p, err := fs.New(root, opt)
+	if err != nil {
+		return sum, fmt.Errorf("root: %w", err)
+	}
+	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceKind: "local-fs", SourceRoot: root}
+	listed := func(sum *Summary) int64 {
+		st := p.Stats()
+		sum.Listing = &st
+		if cfg.NoDirs {
+			return st.Files
+		}
+		return st.Files + st.Dirs
+	}
+	return pipeline(ctx, cfg, sum, p, s, meta, listed)
+}
+
+func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
+	bucket, prefix, err := s3.ParseURL(cfg.Root)
+	if err != nil {
+		return sum, err
+	}
+	s := &schema.S3
+	sum.Root, sum.SchemaID = cfg.Root, s.ID
+	p, err := s3.New(ctx, s3.Options{
+		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, PathStyle: cfg.S3.PathStyle,
+		FetchOwner: cfg.S3.FetchOwner, Seed: cfg.S3.Seed, MaxKeys: cfg.S3.MaxKeys, Client: cfg.S3.Client,
+	})
+	if err != nil {
+		return sum, err
+	}
+	if cfg.Out != "" {
+		if err := dataset.Prepare(cfg.Out, "", s.ID, cfg.Replace); err != nil {
+			return sum, fmt.Errorf("prepare output: %w", err)
+		}
+	}
+	// The Swath run summary records the listed target, so a reader can tell
+	// a whole-bucket dataset from a prefix (or truncated) one.
+	run := dataset.RunSummary{SchemaVersion: 2, Completed: true}
+	run.Config.Target, run.Config.Filters = "s3://"+bucket, []string{}
+	if prefix != "" {
+		run.Config.Target += "/" + prefix
+	}
+	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceKind: "s3",
+		SourceBucket: bucket, SourceRoot: cfg.Root, SwathSummary: &run}
+	listed := func(sum *Summary) int64 {
+		st := p.Stats()
+		sum.S3 = &st
+		run.Completed = !st.Truncated
+		return st.Objects
+	}
+	return pipeline(ctx, cfg, sum, p, s, meta, listed)
+}
+
+// pipeline runs provider → order → router → publish for one provider.
+func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Provider[R], s *schema.Schema, meta dataset.Meta, listed func(*Summary) int64) (Summary, error) {
+	var sink order.Sink = discard{}
+	var router *parquet.Router
+	if cfg.Out != "" {
+		var err error
 		router, err = parquet.NewRouter(parquet.Options{Out: cfg.Out, Schema: s, PartSize: cfg.PartSize, Encoders: cfg.Encoders})
 		if err != nil {
 			return sum, err
 		}
 		sink = router
 	}
-	p, err := fs.New(root, opt)
-	if err != nil {
-		return sum, fmt.Errorf("root: %w", err)
-	}
 	fail := func(err error) (Summary, error) {
 		if router != nil {
 			router.Abort()
 			dataset.Cleanup(cfg.Out)
 		}
-		finish(&sum, start)
+		finish(&sum)
 		return sum, err
 	}
 	ost, err := order.Run(ctx, p, sink, order.Options{Workers: cfg.Workers, Budget: sum.ReorderRows})
-	sum.Listing, sum.MaxBuffered, sum.Rows = p.Stats(), ost.MaxBuffered, ost.Rows
+	sum.MaxBuffered, sum.Rows = ost.MaxBuffered, ost.Rows
+	want := listed(&sum)
 	if err != nil {
 		return fail(err)
 	}
-	if want := sum.Listing.Files + sum.Listing.Dirs; (cfg.NoDirs && sum.Rows != sum.Listing.Files) || (!cfg.NoDirs && sum.Rows != want) {
+	if sum.Rows != want {
 		return fail(fmt.Errorf("row count mismatch: listed %d, ordered %d", want, sum.Rows))
 	}
 	if router == nil {
-		finish(&sum, start)
+		finish(&sum)
 		return sum, nil
 	}
 	parts, err := router.Close()
@@ -159,18 +245,17 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	for _, part := range parts {
 		sum.OutBytes += part.Bytes
 	}
-	finish(&sum, start)
-	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceRoot: root}
+	finish(&sum)
 	if err := dataset.Publish(cfg.Out, meta, parts, sum); err != nil {
 		dataset.Cleanup(cfg.Out)
 		return sum, fmt.Errorf("publish: %w", err)
 	}
-	finish(&sum, start)
+	finish(&sum)
 	return sum, nil
 }
 
-func finish(s *Summary, start time.Time) {
-	s.Seconds = time.Since(start).Seconds()
+func finish(s *Summary) {
+	s.Seconds = time.Since(s.Started).Seconds()
 	u, sys := cpuTimes()
 	s.UserSeconds, s.SysSeconds = u.Seconds(), sys.Seconds()
 	s.PeakRSS = peakRSS()

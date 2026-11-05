@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Verify a swath-local dataset with DuckDB (independent of the Go writer).
 
-Checks: _SUCCESS present; run report named _swath_local_summary.json (not Swath's
-reserved _swath_summary.json); manifest totalRows == sum(rowCount) == DuckDB count;
+Checks: _SUCCESS present; run report named _swath_local_summary.json; for a
+local dataset no _swath_summary.json (Swath's reserved run-summary name, parsed by
+Varve), for an S3 dataset a compatible one (schema_version 2, completed, no
+filters, target s3://<sourceBucket>[/prefix]) and every column checked against
+Swath's canonical schema (contracts section 4); manifest totalRows == sum(rowCount) == DuckDB count;
 per-file DuckDB row count == manifest rowCount and min/max key == manifest
 minKey/maxKey; keys strictly ascending (unsigned bytes) within and across parts
 in file order; Parquet footer stamps (file_index 1..N, file_final only on N).
@@ -27,8 +30,16 @@ def main(out):
 
     check(os.path.exists(os.path.join(out, "_SUCCESS")), "_SUCCESS present")
     check(os.path.exists(os.path.join(out, "_swath_local_summary.json")), "_swath_local_summary.json present")
-    check(not os.path.exists(os.path.join(out, "_swath_summary.json")),
-          "no _swath_summary.json (Swath's reserved run-summary name, parsed by Varve)")
+    manifest = json.load(open(os.path.join(out, "manifest.json")))
+    s3 = manifest.get("sourceKind") == "s3"
+    swath_summary = os.path.join(out, "_swath_summary.json")
+    if s3:
+        run = json.load(open(swath_summary))
+        target = run.get("config", {}).get("target", "")
+        check(run.get("schema_version") == 2 and run.get("completed") is True and run.get("config", {}).get("filters") == []
+              and target.startswith("s3://" + manifest["sourceBucket"]), f"_swath_summary.json compatible (target {target})")
+    else:
+        check(not os.path.exists(swath_summary), "no _swath_summary.json (Swath's reserved run-summary name, parsed by Varve)")
     m = json.load(open(os.path.join(out, "manifest.json")))
     files = [f["key"] for f in m["files"]]
     paths = [os.path.join(out, k) for k in files]
@@ -40,6 +51,34 @@ def main(out):
     glob = os.path.join(out, "data", "*.parquet")
     total = con.execute(f"SELECT count(*) FROM read_parquet('{glob}')").fetchone()[0]
     check(total == m["totalRows"], f"DuckDB count {total} == manifest totalRows {m['totalRows']}")
+
+    if s3:
+        # Swath canonical schema, docs/internals/contracts.md section 4:
+        # name, physical type, repetition, logical type (None = unannotated).
+        contract = [
+            ("key", "BYTE_ARRAY", "REQUIRED", "String"), ("size", "INT64", "OPTIONAL", None),
+            ("last_modified", "INT64", "OPTIONAL", "Timestamp"), ("etag", "BYTE_ARRAY", "OPTIONAL", "String"),
+            ("storage_class", "BYTE_ARRAY", "OPTIONAL", "String"), ("version_id", "BYTE_ARRAY", "OPTIONAL", "String"),
+            ("is_latest", "BOOLEAN", "OPTIONAL", None), ("is_delete_marker", "BOOLEAN", "REQUIRED", None),
+            ("owner_id", "BYTE_ARRAY", "OPTIONAL", "String"), ("owner_display_name", "BYTE_ARRAY", "OPTIONAL", "String"),
+            ("checksum_algorithm", "BYTE_ARRAY", "OPTIONAL", "String"), ("checksum_type", "BYTE_ARRAY", "OPTIONAL", "String"),
+            ("row_type", "BYTE_ARRAY", "REQUIRED", "String"),
+        ]
+        got = con.execute(f"SELECT name, type, repetition_type, logical_type FROM parquet_schema('{paths[0]}') WHERE name <> 'swath_listing'").fetchall()
+        print("\nColumn-by-column against contracts section 4:")
+        for i, want in enumerate(contract):
+            g = got[i] if i < len(got) else (None, None, None, None)
+            logical = None if g[3] is None else str(g[3])
+            ok = g[0] == want[0] and g[1] == want[1] and g[2] == want[2] and (
+                logical is None if want[3] is None else (logical or "").startswith(want[3]))
+            if want[0] == "last_modified":
+                ok = ok and "isAdjustedToUTC=1" in (logical or "") and "MICROS=MicroSeconds" in (logical or "")
+            check(ok, f"  {want[0]}: {g[1]} {g[2]} {logical}")
+        check(len(got) == len(contract), f"  {len(got)} columns, contract has {len(contract)}")
+        bad = con.execute(f"""SELECT count(*) FROM read_parquet('{glob}') WHERE row_type <> 'OBJECT' OR is_delete_marker
+                              OR version_id IS NOT NULL OR is_latest IS NOT NULL OR size IS NULL OR last_modified IS NULL
+                              OR etag LIKE '"%'""").fetchone()[0]
+        check(bad == 0, "every row is a current object: row_type OBJECT, not a delete marker, no version, size and mtime set, etag unquoted")
 
     print("\nSchema as DuckDB sees it (DESCRIBE):")
     for name, typ, null, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}')").fetchall():

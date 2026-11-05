@@ -13,6 +13,17 @@ python3 verify.py /tmp/ds                         # independent DuckDB check
 go vet ./... && go test -race ./...
 ```
 
+## S3
+
+`swath-local list s3://bucket[/prefix] -out DIR` lists a bucket with ListObjectsV2 and writes the same dataset
+layout with Swath's canonical 13-column schema (contracts §4), so a Swath dataset reader (Varve) opens it.
+Credentials come from the default AWS chain; with none, requests are anonymous. `-endpoint` and
+`-path-style` point it at S3-compatible stores; `-seed` lists the root's common prefixes in parallel;
+`-max-keys` stops early for experiments (the dataset is then marked incomplete). The manifest records
+`sourceBucket`, and `_swath_summary.json` records the listed target (`s3://bucket` or `s3://bucket/prefix`)
+so readers can tell a whole-bucket dataset from a prefix one. `bench/s3fake` serves a gofakes3 bucket loaded
+from a key list, for tests and benchmarks without credentials.
+
 ## Flags
 
 Generated from the flag definitions (`TestReadmeFlags` fails when this block is stale; `UPDATE=1 go test
@@ -21,15 +32,22 @@ Generated from the flag definitions (`TestReadmeFlags` fails when this block is 
 <!-- flags:begin -->
 ```text
 usage: swath-local list <root> [flags]
+  <root> is a local directory or s3://bucket[/prefix]
 
   -count-only
     	walk and count without writing a dataset
   -encoders int
     	Parquet encoder goroutines (default GOMAXPROCS)
+  -endpoint URL
+    	S3: endpoint URL of an S3-compatible store
+  -fetch-owner
+    	S3: fill owner_id and owner_display_name
   -fields string
     	metadata per entry: names (no stat), stat, statx (adds birth_time; Linux) (default "stat")
   -json
     	print the summary as JSON
+  -max-keys int
+    	S3: stop after this many objects (experiments; the dataset is marked incomplete)
   -memory bytes
     	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -no-dirs
@@ -42,6 +60,12 @@ usage: swath-local list <root> [flags]
     	replace a previous swath-local dataset in -out
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
+  -path-style
+    	S3: path-style addressing
+  -region string
+    	S3: region (default us-east-1)
+  -seed
+    	S3: list the root with delimiter / and its common prefixes in parallel
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 

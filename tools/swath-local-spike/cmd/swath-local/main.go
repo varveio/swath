@@ -46,6 +46,10 @@ type options struct {
 	countOnly, json          bool
 	workers, encoders        int
 	partSize, memory         size
+	endpoint, region         string
+	pathStyle, fetchOwner    bool
+	seed                     bool
+	maxKeys                  int64
 }
 
 func newFlags(o *options) *flag.FlagSet {
@@ -62,6 +66,12 @@ func newFlags(o *options) *flag.FlagSet {
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))")
 	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS)")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
+	f.StringVar(&o.endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store")
+	f.StringVar(&o.region, "region", "", "S3: region (default us-east-1)")
+	f.BoolVar(&o.pathStyle, "path-style", false, "S3: path-style addressing")
+	f.BoolVar(&o.fetchOwner, "fetch-owner", false, "S3: fill owner_id and owner_display_name")
+	f.BoolVar(&o.seed, "seed", false, "S3: list the root with delimiter / and its common prefixes in parallel")
+	f.Int64Var(&o.maxKeys, "max-keys", 0, "S3: stop after this many objects (experiments; the dataset is marked incomplete)")
 	f.BoolVar(&o.json, "json", false, "print the summary as JSON")
 	f.SetOutput(io.Discard)
 	return f
@@ -70,6 +80,7 @@ func newFlags(o *options) *flag.FlagSet {
 // usage prints the flags generated from the flag set itself.
 func usage(w io.Writer, f *flag.FlagSet) {
 	fmt.Fprintln(w, "usage: swath-local list <root> [flags]")
+	fmt.Fprintln(w, "  <root> is a local directory or s3://bucket[/prefix]")
 	fmt.Fprintln(w)
 	f.SetOutput(w)
 	f.PrintDefaults()
@@ -110,6 +121,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		Root: root, Replace: o.overwrite, Fields: fields, NoDirs: o.noDirs, NoLinks: o.noLnk,
 		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
 		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable",
+		S3:       listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle, FetchOwner: o.fetchOwner, Seed: o.seed, MaxKeys: o.maxKeys},
 	}
 	if !o.countOnly {
 		cfg.Out = o.out
@@ -128,9 +140,14 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(sum)
 	}
-	st := sum.Listing
-	fmt.Fprintf(stdout, "files=%d dirs=%d bytes=%d errors=%d rows=%d parts=%d out_bytes=%d total=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
-		st.Files, st.Dirs, st.Bytes, st.Errors(), sum.Rows, sum.Parts, sum.OutBytes, sum.Seconds,
+	if st := sum.S3; st != nil {
+		fmt.Fprintf(stdout, "objects=%d bytes=%d pages=%d retries=%d seed_prefixes=%d truncated=%v ", st.Objects, st.Bytes, st.Pages, st.Retries, st.Prefixes, st.Truncated)
+	}
+	if st := sum.Listing; st != nil {
+		fmt.Fprintf(stdout, "files=%d dirs=%d bytes=%d errors=%d ", st.Files, st.Dirs, st.Bytes, st.Errors())
+	}
+	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d total=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
+		sum.Rows, sum.Parts, sum.OutBytes, sum.Seconds,
 		sum.UserSeconds, sum.SysSeconds, float64(sum.PeakRSS)/(1<<20), sum.MaxBuffered)
 	return nil
 }
