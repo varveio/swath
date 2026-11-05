@@ -5,7 +5,7 @@
 // Factory by URL scheme from an init function; the command imports them only
 // for that. An opened source is bound (Bind) to the typed pipeline stages
 // with its range and row types, which the pipeline itself never names:
-// listing, order, parquet, dataset, schema and the journal import no
+// listing, order, parquetout, dataset, schema and journal import no
 // provider.
 package registry
 
@@ -18,7 +18,7 @@ import (
 	"sync"
 
 	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/parquet"
+	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 )
@@ -58,14 +58,14 @@ type Source interface {
 	Listed() int64
 	// Run lists the source through the order stage into a part router
 	// (or nowhere, for a dry run).
-	Run(ctx context.Context, env Env) (order.Stats, parquet.Encoder, error)
+	Run(ctx context.Context, env Env) (order.Stats, parquetout.Encoder, error)
 }
 
 // Env is everything about a run except the row type.
 type Env struct {
 	Order order.Options
 	// Router, if set, routes the rows into parts; nil discards them.
-	Router *parquet.Options
+	Router *parquetout.Options
 	// After, if set, is a resume's last published key: every row must sort
 	// after it (the provider restarts there; this checks it).
 	After *string
@@ -88,11 +88,11 @@ func Bind[R, P any](p source.Provider[R, P], s *schema.Schema[P]) Bound[P] {
 func (b Bound[P]) Schema() schema.Info { return b.s.Info }
 
 // Run implements Source.Run with the provider's row type.
-func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquet.Encoder, error) {
+func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Encoder, error) {
 	var sink order.Sink[P] = discard[P]{}
-	var enc parquet.Encoder
+	var enc parquetout.Encoder
 	if env.Router != nil {
-		r, err := parquet.NewRouter(*env.Router, b.s)
+		r, err := parquetout.NewRouter(*env.Router, b.s)
 		if err != nil {
 			return order.Stats{}, nil, err
 		}

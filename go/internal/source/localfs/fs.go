@@ -8,7 +8,7 @@
 // before the next sibling yields global unsigned-byte key order, because
 // every key in the subtree starts with prefix+name+"/" and names contain no
 // '/'.
-package fs
+package localfs
 
 import (
 	"context"

@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/durable"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/parquet"
+	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
@@ -143,14 +143,14 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 
 // identity is the run's resume identity: what the pipeline freezes, and
 // what the source names (source.Identified).
-func identity(src registry.Source, s schema.Info, cfg Config) durable.Identity {
-	id := durable.Identity{Tool: "swath-go", Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquet.WriterID,
+func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
+	id := journal.Identity{Tool: "swath-go", Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.WriterID,
 		PartSize: cfg.PartSize, Provider: src.Locator().Kind}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()
 		id.Provider = sid.Provider
 		for _, f := range sid.Fields {
-			id.Source = append(id.Source, durable.Field{Name: f.Name, Value: f.Value, Canonical: f.Canonical})
+			id.Source = append(id.Source, journal.Field{Name: f.Name, Value: f.Value, Canonical: f.Canonical})
 		}
 	}
 	return id
@@ -177,7 +177,7 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 
 // pipeline runs provider → order → router → publish. p is src, or Empty
 // when a resume has nothing left to list.
-func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, s schema.Info, jr *journal) (Report, error) {
+func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, s schema.Info, jr *runJournal) (Report, error) {
 	defer jr.close()
 	// One shared cause: the first asynchronous failure (an encoder, the
 	// disk, the journal) cancels listing at once, and is what Run returns.
@@ -191,12 +191,12 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// final part on a changed source. Publish what is recorded.
 	env := registry.Env{After: jr.after(), Empty: jr.complete()}
 	if cfg.Out != "" {
-		ropt := parquet.Options{Out: cfg.Out, PartSize: cfg.PartSize, Encoders: cfg.Encoders, Account: shared.Add}
+		ropt := parquetout.Options{Out: cfg.Out, PartSize: cfg.PartSize, Encoders: cfg.Encoders, Account: shared.Add}
 		jr.routerOptions(&ropt)
 		ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
 		env.Router = &ropt
 	}
-	var router parquet.Encoder
+	var router parquetout.Encoder
 	fail := func(err error) (Report, error) {
 		if router != nil {
 			router.Abort()

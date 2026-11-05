@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package fs
+package localfs
 
 import (
 	"context"
@@ -42,7 +42,7 @@ func flags(f *flag.FlagSet) any {
 func open(_ context.Context, req registry.Request) (registry.Source, error) {
 	o, ok := req.Options.(*Options)
 	if !ok {
-		return nil, fmt.Errorf("fs: options are %T, not *fs.Options", req.Options)
+		return nil, fmt.Errorf("localfs: options are %T, not *localfs.Options", req.Options)
 	}
 	opt := *o
 	if os.Getenv("SWATH_LOCAL_ENGINE") == "portable" {

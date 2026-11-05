@@ -1519,6 +1519,13 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
     calls a synchronous `Append`. Journal version 5. The crash matrix and SIGKILL tests pass unchanged. The
     resume ramp-up cost without hints is not measured.
 
+## Cleanup pass (items 13–19)
+
+13. **Names and boundaries.** `parquet` → `parquetout` (distinct from its dependency), `source/fs` →
+    `source/localfs` (distinct from `io/fs`), `durable` → `journal` (listing's wrapper type became
+    `runJournal`). `source`, `order`, `dataset`, `listing` keep their names. `schema` was made provider-neutral
+    in item 7 (rows and bindings beside their producers); the library stays internal.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

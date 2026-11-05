@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package parquet
+package parquetout
 
 import "github.com/varveio/swath/go/internal/schema"
 

@@ -19,14 +19,14 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 | paging, trimming, truncation errors | `source/s3` T4, `TestOutOfOrderListingFails` |
 | split balance (synthetic) | `source/s3` T6 (`p/%07d`, 200k keys, 20 ms pages, 16 workers) |
 | order and memory bound | `order` `TestOrderedOutput`, `TestSinkFailureStopsPromptly`, `TestCancellation` |
-| deterministic output | `parquet` `TestRouterIsDeterministicAcrossEncoders`, `TestColumnParallelEncodingIsByteIdentical` |
+| deterministic output | `parquetout` `TestRouterIsDeterministicAcrossEncoders`, `TestColumnParallelEncodingIsByteIdentical` |
 | publication order and gate | `dataset` `TestCheck`, `TestPublishFailureLeavesNoSuccess`; `listing` cancellation and encoder-failure tests |
 | crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`: an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, every part published, manifest installed), at its 1st, 4th and 12th occurrence, then `-resume`: the dataset is byte-identical to an uninterrupted run. `cmd/swath` `TestSIGKILLAtEveryPoint` (the real process SIGKILLs itself at 13 points, including between a rename and its directory sync, before the manifest and after it), `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed. `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run |
 | resume after K (I4) | `source/s3` `TestResumeAfterKey`: random keyspaces, split coins and K; the resume lists exactly the keys after K and its ranges tile (K, ⊤] |
 | spill (step 3) | `order` `TestSpillKeepsWorkersBusy` (slow dense frontier, 56 fast siblings, 220-byte keys, 8 workers, 500-row budget: identical output, wall near the frontier's own time, buffered rows within budget + one batch per worker + the frontier path, no files left; plain and zstd), `TestSpillCleanedOnFailure`; `TestSpillDiskBudget` (a cap at a quarter of the uncapped peak holds with identical output; a reserve larger than the disk spills nothing); frontier and budget waits are nonzero without spill |
 | summary semantics | `listing` `TestSummaryDistinguishesOffFromZero`: a disabled policy's counters are absent and its feature reads false; an enabled one reports zeros |
 | layering | `source` `TestImportBoundary`: the pipeline packages import nothing under `internal/source/` (transitively), `internal/source` imports no provider, `cmd/swath` imports providers only with `_` |
-| journal | `durable` `TestJournalRoundTripAndTornTail`, `TestCheck` (identity table: pipeline fields, and source fields added, dropped, changed or respelled) |
+| journal | `journal` `TestJournalRoundTripAndTornTail`, `TestCheck` (identity table: pipeline fields, and source fields added, dropped, changed or respelled) |
 | overwrite safety | `dataset` `TestPrepareNeverDeletesTheTree`, `TestReplaceRemovesOnlyOwnEntries` |
 
 ## Oracles
@@ -129,7 +129,7 @@ stamps and no others, and for S3 datasets every column of the current-object sch
 ## Fuzzing
 
 ```bash
-go test -run XXX -fuzz FuzzParseDirents ./internal/source/fs         # getdents record parser
+go test -run XXX -fuzz FuzzParseDirents ./internal/source/localfs         # getdents record parser
 go test -run XXX -fuzz FuzzParseList -fuzztime 2m ./internal/source/s3/client
 go test -run XXX -fuzz FuzzParseFields -fuzztime 1m ./internal/source/s3/client
 ```

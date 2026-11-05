@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/varveio/swath/go/internal/source/fs"
+	"github.com/varveio/swath/go/internal/source/localfs"
 	"github.com/varveio/swath/go/internal/source/s3"
 )
 
@@ -25,15 +25,17 @@ func s3Stats(sum Report) *s3.Stats {
 	return nil
 }
 
-func fsStats(sum Report) *fs.Stats {
+func fsStats(sum Report) *localfs.Stats {
 	if r := sum.SourceReport(); r != nil {
-		st, _ := r.Stats.(*fs.Stats)
+		st, _ := r.Stats.(*localfs.Stats)
 		return st
 	}
 	return nil
 }
 
-func fsOptions(portable bool) *fs.Options { return &fs.Options{LinkTarget: true, Portable: portable} }
+func fsOptions(portable bool) *localfs.Options {
+	return &localfs.Options{LinkTarget: true, Portable: portable}
+}
 
 func readFile(t interface {
 	Helper()

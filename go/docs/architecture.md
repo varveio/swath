@@ -9,7 +9,7 @@ them is [internals/contracts.md](internals/contracts.md).
 
 ```text
 provider ──ranges──▶ order ──ascending row segments──▶ parquet router ──parts──▶ encoders ──▶ dataset publish
-(source/fs, source/s3) (bounded reorder)                 (boundaries, ordinals)   (one goroutine per part)
+(localfs, s3)           (bounded reorder)                 (boundaries, ordinals)   (one goroutine per part)
 ```
 
 Order comes from the ranges, not from a sort afterwards. A provider expands a *range* into rows that are
@@ -23,23 +23,23 @@ There is no external sort, no staging and no merge.
 | Package | Role | Imports |
 |---|---|---|
 | `cmd/swath` | flags into `listing.Config`, with each provider's own flag group; `signal.NotifyContext`; usage generated from the flag set | listing, source; providers only to register them (`_` imports) |
-| `internal/listing` | `Run(ctx, Config) (Summary, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run summary | source and all below, no provider |
+| `internal/listing` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
 | `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
-| `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`) | source, schema, order, parquet |
-| `internal/source/fs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath-local/v1`; registers the scheme-less roots | source, schema, registry, dataset |
+| `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`) | source, schema, order, parquetout |
+| `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath-local/v1`; registers the scheme-less roots | source, schema, registry, dataset |
 | `internal/source/s3` | S3 provider: `(lo, hi]` ranges, seed, owner-side splits, pivots; its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://` | source, schema, registry, s3/client |
 | `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, retries, the page parser | – |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]`), `Info` | – |
-| `internal/parquet` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset |
+| `internal/parquetout` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order | faults |
-| `internal/durable` | the journal (CRC-framed records of committed parts, synchronous appends by the ordered committer), resume identity | dataset |
+| `internal/journal` | the journal (CRC-framed records of committed parts, synchronous appends by the ordered committer), resume identity | dataset |
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
 | `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
 
-`order` and `parquet` know nothing about sources; providers know nothing about Parquet. The pipeline packages
-(listing, order, parquet, dataset, schema, durable) import nothing under `internal/source/`, and
+`order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
+(listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
 `internal/source` and `internal/registry` import no provider: `internal/source` `TestImportBoundary` checks it,
 transitively.
 

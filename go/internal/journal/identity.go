@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package durable
+package journal
 
 import "fmt"
 
@@ -14,7 +14,7 @@ type Identity struct {
 	Format   int     `json:"format"`    // dataset format version (the journal's own is in the header)
 	SchemaID string  `json:"schema_id"` // output schema
 	KeyCap   int     `json:"key_cap"`   // the schema's key length limit (rows it refuses)
-	Writer   string  `json:"writer"`    // the writer recipe (parquet.Recipe)
+	Writer   string  `json:"writer"`    // the writer recipe (parquetout.Recipe)
 	PartSize int64   `json:"part_size"` // part boundaries
 	Provider string  `json:"provider"`  // the source's provider ("s3")
 	Source   []Field `json:"source"`    // the provider's frozen settings, in report order

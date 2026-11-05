@@ -3,7 +3,7 @@
 
 //go:build linux
 
-package fs
+package localfs
 
 import (
 	"io/fs"

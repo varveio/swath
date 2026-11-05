@@ -3,7 +3,7 @@
 
 // Package parquet writes listing rows as Swath-layout sorted Parquet parts:
 // the file writer, the schema binding and the part router.
-package parquet
+package parquetout
 
 import (
 	"fmt"

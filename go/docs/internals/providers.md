@@ -22,7 +22,7 @@ call `Rows` many times (streaming) and runs concurrently for different ranges. P
 denied, a vanished entry) are counted by the provider; `Expand` returns an error only when the listing must
 stop, including any error returned by the emitter (cancellation or a failed sink).
 
-## Filesystem (`internal/source/fs`)
+## Filesystem (`internal/source/localfs`)
 
 A range is a directory. Its entries are sorted by key, where a directory's key is `prefix/name/` and anything
 else `prefix/name`; byte order puts `a-b` < `a.b` < `a/` < `a/…` < `a0`, so a directory's DIR row followed

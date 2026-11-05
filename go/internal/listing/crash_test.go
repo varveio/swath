@@ -24,8 +24,8 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/durable"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/journal"
 )
 
 // crashBucket serves 8,000 keys with 1 ms per request, enough for many
@@ -133,7 +133,7 @@ func TestResumeChecksIdentity(t *testing.T) {
 	}
 	cfg := crashConfig(url, out, true)
 	cfg.PartSize = 7 << 10
-	var mm *durable.MismatchError
+	var mm *journal.MismatchError
 	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "part size" {
 		t.Fatalf("changed part size accepted: %v", err)
 	}
@@ -273,12 +273,12 @@ func TestCompetingRunsAreRefused(t *testing.T) {
 		return names
 	}
 	before := snapshot()
-	if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, durable.ErrLocked) {
+	if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, journal.ErrLocked) {
 		t.Fatalf("competing resume: %v", err)
 	}
 	over := crashConfig(url, out, false)
 	over.Replace = true
-	if _, err := Run(context.Background(), over); !errors.Is(err, durable.ErrLocked) {
+	if _, err := Run(context.Background(), over); !errors.Is(err, journal.ErrLocked) {
 		t.Fatalf("competing overwrite: %v", err)
 	}
 	// The owner's other encoders keep working while one is paused, so new
@@ -352,7 +352,7 @@ func TestDamagedJournalRefusesBeforeDeleting(t *testing.T) {
 		if !errors.Is(err, faults.ErrCrash) {
 			t.Fatal(err)
 		}
-		path := durable.Path(out)
+		path := journal.Path(out)
 		b, _ := os.ReadFile(path)
 		// Walk the frames: header, then records 0..3.
 		var offs []int
@@ -368,7 +368,7 @@ func TestDamagedJournalRefusesBeforeDeleting(t *testing.T) {
 		}
 		os.WriteFile(path, b, 0o644)
 		before, _ := os.ReadDir(filepath.Join(out, "data"))
-		if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, durable.ErrCorrupt) {
+		if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, journal.ErrCorrupt) {
 			t.Fatalf("%s: resume did not refuse: %v", damage, err)
 		}
 		after, _ := os.ReadDir(filepath.Join(out, "data"))

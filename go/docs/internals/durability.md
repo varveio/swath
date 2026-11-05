@@ -2,7 +2,7 @@
 
 An S3 run with `-out` keeps a journal so that `-resume` continues an interrupted run. A resume never
 re-lists a published key and never skips one, and the final dataset is byte-identical to an uninterrupted
-run's. Package `internal/durable` holds the journal; `internal/listing/journal.go` connects it to the router
+run's. Package `internal/journal` holds the journal; `internal/listing/journal.go` connects it to the router
 and the provider. Filesystem runs opt out: they are fast enough to restart.
 
 ## Progress states
@@ -71,11 +71,11 @@ that is the commit. The run reports follow it.
 1. Takes the output lock (`-out/.swath/lock`, `flock`) before reading, recovering, removing or writing
    anything. It is held through the run's cleanup and publication. Fresh runs and overwrites take it too.
    Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
-2. Checks the identity in the journal header against the request (`durable.Check`, a pure function). The
-   pipeline freezes the schema, key cap, writer recipe (`parquet.Recipe`: encodings, geometry, part-size rule) and
+2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
+   pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that
    is the provider, the source (bucket and prefix), the endpoint, the region and `-fetch-owner`. A field
-   added, dropped or changed is a typed `*durable.MismatchError`. The S3 endpoint's canonical form is
+   added, dropped or changed is a typed `*journal.MismatchError`. The S3 endpoint's canonical form is
    `s3.NormalizeEndpoint` (scheme and host case, a trailing slash), the only equivalences allowed: another
    endpoint may serve another bucket of the same name. Workers, encoders, memory, `-seed`, `-probe` and
    credentials may change.
@@ -139,4 +139,4 @@ tail as JSON lines.
 
   Nothing tests this: SIGKILL cannot show power-loss behaviour.
 - **Unsupported on Windows:** directories cannot be synced and the lock is not enforced, so neither
-  guarantee holds there; a journaled run prints a warning (`durable.Enforced` is false).
+  guarantee holds there; a journaled run prints a warning (`journal.Enforced` is false).

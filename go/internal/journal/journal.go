@@ -18,7 +18,7 @@
 // payload (JSON). The first frame is the header (run identity). A torn
 // tail (a crash mid-append) ends the journal at the last whole frame; such
 // a frame was never acknowledged, so nothing depends on it.
-package durable
+package journal
 
 import (
 	"bufio"

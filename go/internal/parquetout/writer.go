@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package parquet
+package parquetout
 
 import (
 	"crypto/md5"
@@ -45,7 +45,7 @@ const (
 // A resume refuses a journal written under another recipe.
 //
 // Versions are separate: the dataset format (dataset.FormatVersion), the
-// logical schema (schema IDs), the private journal (durable.Version) and
+// logical schema (schema IDs), the private journal (journal.Version) and
 // this recipe. created_by names the real build, so bytes are identical
 // within a build; across builds only the recipe is promised.
 const Recipe = "swath-go/parquet-r2"

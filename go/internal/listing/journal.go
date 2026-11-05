@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/durable"
 	"github.com/varveio/swath/go/internal/faults"
-	"github.com/varveio/swath/go/internal/parquet"
+	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 )
@@ -28,13 +28,13 @@ var (
 )
 
 // journal ties a run of a resumable source to its durable journal. A nil
-// *journal (no output, or a source that cannot resume) and one without j
+// *runJournal (no output, or a source that cannot resume) and one without j
 // (-no-journal) publish parts only at the end.
-type journal struct {
+type runJournal struct {
 	out   string
-	lock  *durable.Lock    // held from before Prepare until the run is over
-	j     *durable.Journal // nil with -no-journal
-	state *durable.State   // the recovered journal on resume
+	lock  *journal.Lock    // held from before Prepare until the run is over
+	j     *journal.Journal // nil with -no-journal
+	state *journal.State   // the recovered journal on resume
 	src   source.Resumable
 }
 
@@ -42,7 +42,7 @@ type journal struct {
 // new journal), a resume (identity check, recovery of the published
 // parts), or no journal at all. A source that cannot resume gets a plain
 // Prepare, without the lock.
-func openJournal(cfg Config, src registry.Source, id durable.Identity) (*journal, error) {
+func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJournal, error) {
 	if cfg.Out == "" {
 		if cfg.Resume {
 			return nil, errors.New("-resume needs -out")
@@ -62,12 +62,12 @@ func openJournal(cfg Config, src registry.Source, id durable.Identity) (*journal
 		}
 		return nil, nil
 	}
-	if !durable.Enforced && cfg.Warn != nil {
+	if !journal.Enforced && cfg.Warn != nil {
 		cfg.Warn("the output lock and directory syncs are not enforced on this platform: a concurrent run or a power loss can damage the journal")
 	}
 	// Ownership first: nothing in the output is read, removed or renamed
 	// before this process holds its lock.
-	lock, err := durable.TakeLock(cfg.Out)
+	lock, err := journal.TakeLock(cfg.Out)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +81,7 @@ func openJournal(cfg Config, src registry.Source, id durable.Identity) (*journal
 }
 
 // openLocked does openJournal's work with the lock held.
-func openLocked(cfg Config, path string, id durable.Identity, lock *durable.Lock) (*journal, error) {
+func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock) (*runJournal, error) {
 	if !cfg.Resume {
 		if err := dataset.Prepare(cfg.Out, path, id.SchemaID, cfg.Replace); err != nil {
 			if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(cfg.Out) {
@@ -90,19 +90,19 @@ func openLocked(cfg Config, path string, id durable.Identity, lock *durable.Lock
 			return nil, fmt.Errorf("prepare output: %w", err)
 		}
 		if cfg.NoJournal {
-			return &journal{out: cfg.Out, lock: lock}, nil
+			return &runJournal{out: cfg.Out, lock: lock}, nil
 		}
-		j, err := durable.Create(cfg.Out, id)
+		j, err := journal.Create(cfg.Out, id)
 		if err != nil {
 			return nil, err
 		}
-		return &journal{out: cfg.Out, lock: lock, j: j}, nil
+		return &runJournal{out: cfg.Out, lock: lock, j: j}, nil
 	}
 	if dataset.Committed(cfg.Out) {
 		return nil, ErrComplete
 	}
-	st, err := durable.Read(cfg.Out)
-	if errors.Is(err, durable.ErrNoJournal) {
+	st, err := journal.Read(cfg.Out)
+	if errors.Is(err, journal.ErrNoJournal) {
 		if !dataset.Resumable(cfg.Out) {
 			return nil, ErrNothingToResume
 		}
@@ -115,24 +115,24 @@ func openLocked(cfg Config, path string, id durable.Identity, lock *durable.Lock
 	if err != nil {
 		return nil, err
 	}
-	if err := durable.Check(st.Header.Identity, id); err != nil {
+	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
 	if err := recoverParts(cfg.Out, st); err != nil {
 		return nil, err
 	}
-	j, err := durable.Reopen(cfg.Out, st)
+	j, err := journal.Reopen(cfg.Out, st)
 	if err != nil {
 		return nil, err
 	}
-	return &journal{out: cfg.Out, lock: lock, j: j, state: st}, nil
+	return &runJournal{out: cfg.Out, lock: lock, j: j, state: st}, nil
 }
 
 // recoverParts makes data/ hold exactly the journaled parts: a part whose
 // record is durable but whose rename did not happen is renamed now (its
 // temporary file was synced before the record); every other file in data/
 // (unrecorded temporary parts) is removed.
-func recoverParts(out string, st *durable.State) error {
+func recoverParts(out string, st *journal.State) error {
 	data := filepath.Join(out, dataset.DataDir)
 	// Refuse ambiguous damage before deleting anything: a part published
 	// under its final name beyond the recorded ones means an acknowledged
@@ -143,7 +143,7 @@ func recoverParts(out string, st *durable.State) error {
 			break
 		}
 		return fmt.Errorf("%w: part %d is published but the journal holds only %d records (%d damaged bytes); refusing to recover",
-			durable.ErrCorrupt, i, len(st.Records), st.TornBytes)
+			journal.ErrCorrupt, i, len(st.Records), st.TornBytes)
 	}
 	keep := map[string]bool{}
 	for i, rec := range st.Records {
@@ -209,7 +209,7 @@ func verifyPart(path string, want dataset.PartInfo) error {
 	return nil
 }
 
-func (jr *journal) last() *durable.Record {
+func (jr *runJournal) last() *journal.Record {
 	if jr == nil || jr.state == nil {
 		return nil
 	}
@@ -218,28 +218,28 @@ func (jr *journal) last() *durable.Record {
 
 // complete reports that the final part is durable: the listing finished
 // and a resume only has to publish.
-func (jr *journal) complete() bool {
+func (jr *runJournal) complete() bool {
 	last := jr.last()
 	return last != nil && last.Final
 }
 
 // listingStarted is when the listing began: the journal's creation for a
 // resumed run, else now.
-func (jr *journal) listingStarted(now time.Time) time.Time {
+func (jr *runJournal) listingStarted(now time.Time) time.Time {
 	if jr != nil && jr.state != nil {
 		return jr.state.Header.Created
 	}
 	return now
 }
 
-func (jr *journal) resumedParts() int {
+func (jr *runJournal) resumedParts() int {
 	if jr == nil || jr.state == nil {
 		return 0
 	}
 	return len(jr.state.Records)
 }
 
-func (jr *journal) resumedRows() int64 {
+func (jr *runJournal) resumedRows() int64 {
 	if last := jr.last(); last != nil {
 		return last.RowsTotal
 	}
@@ -248,7 +248,7 @@ func (jr *journal) resumedRows() int64 {
 
 // routerOptions makes the router publish each part as it closes (record,
 // then rename) and continue after the recovered parts.
-func (jr *journal) routerOptions(o *parquet.Options) {
+func (jr *runJournal) routerOptions(o *parquetout.Options) {
 	if jr == nil || jr.j == nil {
 		return
 	}
@@ -257,7 +257,7 @@ func (jr *journal) routerOptions(o *parquet.Options) {
 		for i, rec := range jr.state.Records {
 			parts[i] = dataset.Part{Path: filepath.Join(jr.out, dataset.DataDir, dataset.PartName(i)), PartInfo: rec.Part}
 		}
-		o.Resume = &parquet.Resume{Parts: parts, Limit: last.Limit, Rows: last.RowsTotal}
+		o.Resume = &parquetout.Resume{Parts: parts, Limit: last.Limit, Rows: last.RowsTotal}
 	}
 	o.Publish = jr.publish
 }
@@ -266,11 +266,11 @@ func (jr *journal) routerOptions(o *parquet.Options) {
 // and the writer state) is synced before the part is renamed into the
 // dataset. The router calls it for one part at a time, in ordinal order: it
 // is the one ordered committer.
-func (jr *journal) publish(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
+func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
 	if err := faults.At("part-closed"); err != nil {
 		return p, err
 	}
-	if err := jr.j.Append(durable.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final}); err != nil {
+	if err := jr.j.Append(journal.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final}); err != nil {
 		return p, err
 	}
 	if err := faults.At("recorded"); err != nil {
@@ -285,7 +285,7 @@ func (jr *journal) publish(ordinal int, p dataset.Part, limit, rows int64, final
 
 // close closes the journal and releases the output lock; the run (with
 // its cleanup and publication) is over.
-func (jr *journal) close() {
+func (jr *runJournal) close() {
 	if jr == nil {
 		return
 	}
@@ -298,7 +298,7 @@ func (jr *journal) close() {
 
 // after is the resume's last published key: every row must sort after it
 // (the provider starts there; the pipeline checks it). nil for a fresh run.
-func (jr *journal) after() *string {
+func (jr *runJournal) after() *string {
 	last := jr.last()
 	if last == nil {
 		return nil
@@ -309,4 +309,4 @@ func (jr *journal) after() *string {
 
 // journaled reports whether the run keeps a journal (and so leaves its
 // temporary parts for -resume to reconcile after a failure).
-func (jr *journal) journaled() bool { return jr != nil && jr.j != nil }
+func (jr *runJournal) journaled() bool { return jr != nil && jr.j != nil }

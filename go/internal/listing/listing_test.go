@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/source/fs"
+	"github.com/varveio/swath/go/internal/source/localfs"
 )
 
 func mk(t *testing.T, root string, files ...string) {
@@ -145,7 +145,7 @@ func TestEncoderFailureLeavesNothing(t *testing.T) {
 	src := t.TempDir()
 	mk(t, src, "a", "b", "c")
 	out := filepath.Join(t.TempDir(), "ds")
-	if err := dataset.Prepare(out, src, fs.Schema.ID, false); err != nil {
+	if err := dataset.Prepare(out, src, localfs.Schema.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	// Make the part path unwritable: a directory where part 0's file goes.

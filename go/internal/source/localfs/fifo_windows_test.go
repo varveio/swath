@@ -3,6 +3,6 @@
 
 //go:build windows
 
-package fs
+package localfs
 
 func mkfifo(string) error { return nil }

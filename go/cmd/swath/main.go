@@ -23,14 +23,14 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/durable"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/registry"
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
-	_ "github.com/varveio/swath/go/internal/source/fs"
+	_ "github.com/varveio/swath/go/internal/source/localfs"
 	_ "github.com/varveio/swath/go/internal/source/s3"
 )
 
@@ -41,7 +41,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if len(os.Args) == 3 && os.Args[1] == "inspect" {
-		if err := durable.Dump(os.Stdout, os.Args[2]); err != nil {
+		if err := journal.Dump(os.Stdout, os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, "swath:", err)
 			os.Exit(1)
 		}

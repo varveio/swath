@@ -3,7 +3,7 @@
 
 //go:build !windows
 
-package fs
+package localfs
 
 import "syscall"
 
