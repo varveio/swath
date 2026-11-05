@@ -59,8 +59,7 @@ func crashBucket(t *testing.T) string {
 func crashConfig(url, out string, resume bool) Config {
 	// A small reorder budget (512 rows) keeps listing and publication
 	// interleaved, so crashes during listing find published parts.
-	return Config{Root: "s3://bkt", Out: out, PartSize: 6 << 10, Workers: 8, Memory: 256 << 10, Resume: resume, NoSpill: true,
-		Source: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}
+	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, Memory: 256 << 10, Spill: SpillLimits{Off: true}}}
 }
 
 // TestCrashMatrix kills the run (an injected crash that skips all cleanup,
@@ -86,7 +85,7 @@ func TestCrashMatrix(t *testing.T) {
 						return nil
 					})
 					cfg := crashConfig(url, out, false)
-					cfg.NoSpill = !spill
+					cfg.Limits.Spill.Off = !spill
 					_, err := Run(context.Background(), cfg)
 					restore()
 					if seen.Load() < nth {
@@ -132,13 +131,13 @@ func TestResumeChecksIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := crashConfig(url, out, true)
-	cfg.PartSize = 7 << 10
+	cfg.Limits.PartSize = 7 << 10
 	var mm *journal.MismatchError
 	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "part size" {
 		t.Fatalf("changed part size accepted: %v", err)
 	}
 	cfg = crashConfig(url, out, true)
-	cfg.Source.(*S3Config).Endpoint = strings.Replace(url, "127.0.0.1", "localhost", 1) // another route, maybe another bucket
+	cfg.Source.Options.(*S3Config).Endpoint = strings.Replace(url, "127.0.0.1", "localhost", 1) // another route, maybe another bucket
 	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "endpoint" {
 		t.Fatalf("changed endpoint accepted: %v", err)
 	}
@@ -147,8 +146,8 @@ func TestResumeChecksIdentity(t *testing.T) {
 		t.Fatal("a fresh run over an interrupted one was accepted without -overwrite")
 	}
 	cfg = crashConfig(url, out, true)
-	cfg.Workers = 3
-	cfg.Source.(*S3Config).Endpoint = strings.ToUpper(url[:4]) + url[4:] + "/" // an equivalent spelling of the same endpoint
+	cfg.Limits.Workers = 3
+	cfg.Source.Options.(*S3Config).Endpoint = strings.ToUpper(url[:4]) + url[4:] + "/" // an equivalent spelling of the same endpoint
 	if _, err := Run(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +198,7 @@ func TestNoJournalAndCountOnly(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "ds")
 	cfg := crashConfig(url, out, false)
-	cfg.NoJournal = true
+	cfg.Output.NoJournal = true
 	if _, err := Run(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +227,7 @@ func TestEncoderFailureStopsListing(t *testing.T) {
 	})
 	defer restore()
 	cfg := crashConfig(url, filepath.Join(t.TempDir(), "ds"), false)
-	cfg.NoSpill = true
+	cfg.Limits.Spill.Off = true
 	sum, err := Run(context.Background(), cfg)
 	if !errors.Is(err, diskFull) {
 		t.Fatalf("got %v, want the encoder's error", err)
@@ -277,7 +276,7 @@ func TestCompetingRunsAreRefused(t *testing.T) {
 		t.Fatalf("competing resume: %v", err)
 	}
 	over := crashConfig(url, out, false)
-	over.Replace = true
+	over.Output.Replace = true
 	if _, err := Run(context.Background(), over); !errors.Is(err, journal.ErrLocked) {
 		t.Fatalf("competing overwrite: %v", err)
 	}

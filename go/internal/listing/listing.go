@@ -24,27 +24,55 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 )
 
-// Config is one listing. Zero values take the documented defaults.
+// Config is one listing, in three groups: what to list, where the dataset
+// goes, and the execution limits. Zero values take the documented defaults;
+// Run resolves them once and rejects invalid values and combinations with a
+// *ConfigError.
 type Config struct {
-	Root    string // a local directory, or scheme://...; the registered provider for the scheme lists it
-	Out     string // dataset directory; empty for a dry run
-	Replace bool   // replace a previous dataset in Out
-	// Source is the provider's options value (registry.Factory.Flags or
-	// Defaults); opaque here. nil takes the provider's defaults.
-	Source        any
-	Warn          func(string) // one-time warnings for the user (nil: dropped)
-	NoJournal     bool         // publish parts only at the end, without a journal (no resume)
-	Workers       int          // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
-	Encoders      int          // Parquet encoders; default GOMAXPROCS
-	Memory        int64        // budget in bytes for rows held between listing and encoding; default 256 MiB
-	PartSize      int64        // target bytes per part; default 64 MiB
-	Argv          []string     // the command line, recorded in the run summary
-	Resume        bool         // continue the interrupted journaled run in Out
-	NoSpill       bool         // wait on the reorder budget instead of spilling ahead-of-frontier rows
-	SpillCompress bool         // zstd level 1 on spill frames
-	SpillMax      int64        // cap on live spill bytes (0: none)
-	SpillReserve  int64        // free bytes spill leaves on its filesystem (0: none; the CLI default is 1 GiB)
+	Source SourceConfig
+	Output OutputConfig
+	Limits Limits
+	Argv   []string     // the command line, recorded in the run report and the journal
+	Warn   func(string) // one-time warnings for the user (nil: dropped)
 }
+
+// SourceConfig is what to list.
+type SourceConfig struct {
+	URI string // a local directory, or scheme://...; the registered provider for the scheme lists it
+	// Options is the provider's options value (registry.Factory.Flags or
+	// Defaults); opaque here. nil takes the provider's defaults.
+	Options any
+}
+
+// OutputConfig is where the dataset goes.
+type OutputConfig struct {
+	Dir       string // dataset directory; empty for a dry run
+	Replace   bool   // replace a previous dataset in Dir
+	Resume    bool   // continue the interrupted journaled run in Dir
+	NoJournal bool   // publish parts only at the end, without a journal (no resume)
+}
+
+// Limits are the execution limits; none changes the dataset's content.
+type Limits struct {
+	Workers  int   // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
+	Encoders int   // Parquet encoders; default GOMAXPROCS
+	Memory   int64 // budget in bytes for rows held between listing and encoding; default 256 MiB
+	PartSize int64 // target bytes per part; default 64 MiB (frozen for a resume)
+	Spill    SpillLimits
+}
+
+// SpillLimits bound spill.
+type SpillLimits struct {
+	Off      bool  // wait on the reorder budget instead of spilling ahead-of-frontier rows
+	Compress bool  // zstd level 1 on spill frames
+	Max      int64 // cap on live spill bytes (0: none)
+	Reserve  int64 // free bytes spill leaves on its filesystem (0: none; the CLI default is 1 GiB)
+}
+
+// ConfigError is an invalid configuration: a value or a combination.
+type ConfigError struct{ Reason string }
+
+func (e *ConfigError) Error() string { return "invalid configuration: " + e.Reason }
 
 // Spill describes the run's spill (see order.Stats).
 type Spill struct {
@@ -63,29 +91,43 @@ const (
 	minMemory = 256 << 10
 )
 
-func (c *Config) setDefaults() error {
-	if c.Root == "" {
-		return errors.New("no root")
+// resolve validates c and fills its defaults, once.
+func (c *Config) resolve() error {
+	bad := func(f string, a ...any) error { return &ConfigError{fmt.Sprintf(f, a...)} }
+	l, o := &c.Limits, &c.Output
+	switch {
+	case c.Source.URI == "":
+		return bad("no source")
+	case l.Workers < 0 || l.Encoders < 0 || l.Memory < 0 || l.PartSize < 0 || l.Spill.Max < 0 || l.Spill.Reserve < 0:
+		return bad("negative limit: %+v", *l)
+	case o.Resume && o.Dir == "":
+		return bad("resume needs an output directory")
+	case o.Resume && o.Replace:
+		return bad("resume and replace exclude each other")
+	case o.Resume && o.NoJournal:
+		return bad("resume needs the journal")
+	case o.Replace && o.Dir == "":
+		return bad("replace needs an output directory")
 	}
-	if c.Workers <= 0 {
-		c.Workers = min(64, max(4, 3*runtime.GOMAXPROCS(0)))
+	if l.Workers == 0 {
+		l.Workers = min(64, max(4, 3*runtime.GOMAXPROCS(0)))
 	}
-	if c.Encoders <= 0 {
-		c.Encoders = runtime.GOMAXPROCS(0)
+	if l.Encoders == 0 {
+		l.Encoders = runtime.GOMAXPROCS(0)
 	}
-	if c.Memory <= 0 {
-		c.Memory = DefaultMemory
+	if l.Memory == 0 {
+		l.Memory = DefaultMemory
 	}
-	if c.PartSize <= 0 {
-		c.PartSize = DefaultPartSize
+	if l.PartSize == 0 {
+		l.PartSize = DefaultPartSize
 	}
-	if c.Memory < minMemory {
-		return fmt.Errorf("memory budget %d is below %d bytes", c.Memory, minMemory)
+	if l.Memory < minMemory {
+		return bad("memory budget %d is below %d bytes", l.Memory, minMemory)
 	}
 	return nil
 }
 
-// Run lists cfg.Root and, unless cfg.Out is empty, publishes the dataset.
+// Run lists cfg.Source.URI and, unless cfg.Output.Dir is empty, publishes the dataset.
 // On any error or cancellation nothing is published and unpublished parts
 // are removed (a journaled run keeps them for -resume); the error is the
 // cause (ctx.Err() on cancellation).
@@ -93,21 +135,21 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	start := time.Now()
 	sum := Report{ReportVersion: ReportVersion, Build: build(), Timings: Timings{StartedAt: start.UTC()},
 		Outcome: Outcome{Status: "failed"}}
-	if err := cfg.setDefaults(); err != nil {
+	if err := cfg.resolve(); err != nil {
 		return sum.failed(err)
 	}
 	argv := cfg.Argv
 	if argv == nil {
 		argv = []string{}
 	}
-	sum.Invocation = Invocation{Argv: argv, Source: cfg.Root, Out: cfg.Out, Resume: cfg.Resume, Workers: cfg.Workers,
-		Encoders: cfg.Encoders, MemoryBytes: cfg.Memory, PartSizeBytes: cfg.PartSize}
-	sum.Resources.RowBudgetBytes = cfg.Memory / 2
-	f, err := registry.Lookup(cfg.Root)
+	sum.Invocation = Invocation{Argv: argv, Source: cfg.Source.URI, Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
+		Encoders: cfg.Limits.Encoders, MemoryBytes: cfg.Limits.Memory, PartSizeBytes: cfg.Limits.PartSize}
+	sum.Resources.RowBudgetBytes = cfg.Limits.Memory / 2
+	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {
 		return sum.failed(err)
 	}
-	opts := cfg.Source
+	opts := cfg.Source.Options
 	if opts == nil {
 		opts = f.Defaults()
 	}
@@ -115,7 +157,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	if warn == nil {
 		warn = func(string) {}
 	}
-	src, err := f.Open(ctx, registry.Request{Root: cfg.Root, Options: opts, Workers: cfg.Workers, Warn: warn})
+	src, err := f.Open(ctx, registry.Request{Root: cfg.Source.URI, Options: opts, Workers: cfg.Limits.Workers, Warn: warn})
 	if err != nil {
 		return sum.failed(err)
 	}
@@ -125,8 +167,8 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	if err != nil {
 		return sum.failed(err)
 	}
-	if ex, ok := src.(source.Excluder); ok && cfg.Out != "" {
-		if err := ex.Exclude(cfg.Out); err != nil {
+	if ex, ok := src.(source.Excluder); ok && cfg.Output.Dir != "" {
+		if err := ex.Exclude(cfg.Output.Dir); err != nil {
 			jr.close()
 			return sum.failed(err)
 		}
@@ -145,7 +187,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 // what the source names (source.Identified).
 func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
 	id := journal.Identity{Tool: "swath-go", Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.WriterID,
-		PartSize: cfg.PartSize, Provider: src.Locator().Kind}
+		PartSize: cfg.Limits.PartSize, Provider: src.Locator().Kind}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()
 		id.Provider = sid.Provider
@@ -190,8 +232,8 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// The final part is durable: listing again could only add a second
 	// final part on a changed source. Publish what is recorded.
 	env := registry.Env{After: jr.after(), Empty: jr.complete()}
-	if cfg.Out != "" {
-		ropt := parquetout.Options{Out: cfg.Out, PartSize: cfg.PartSize, Encoders: cfg.Encoders, Account: shared.Add}
+	if cfg.Output.Dir != "" {
+		ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add}
 		jr.routerOptions(&ropt)
 		ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
 		env.Router = &ropt
@@ -204,27 +246,27 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 			// keeps its temporary parts too: one may be recorded already
 			// (its rename failed), and -resume decides which are.
 			if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
-				dataset.Cleanup(cfg.Out)
+				dataset.Cleanup(cfg.Output.Dir)
 			}
 		}
 		return sum.failed(err)
 	}
-	oopt := order.Options{Workers: cfg.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.SpillCompress, SpillMax: cfg.SpillMax, SpillReserve: cfg.SpillReserve}
-	if !cfg.NoSpill {
+	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillMax: cfg.Limits.Spill.Max, SpillReserve: cfg.Limits.Spill.Reserve}
+	if !cfg.Limits.Spill.Off {
 		// Spill files are disposable: a crash relists their rows.
 		oopt.SpillDir = os.TempDir()
-		if cfg.Out != "" {
-			oopt.SpillDir = filepath.Join(cfg.Out, dataset.JournalDir, "spill")
+		if cfg.Output.Dir != "" {
+			oopt.SpillDir = filepath.Join(cfg.Output.Dir, dataset.JournalDir, "spill")
 			// Reclaim a crashed run's orphans (the output lock is held).
 			_ = os.RemoveAll(oopt.SpillDir)
 		}
 	}
 	env.Order = oopt
 	ost, router, err := src.Run(ctx, env)
-	if router == nil && cfg.Out != "" && err != nil {
+	if router == nil && cfg.Output.Dir != "" && err != nil {
 		return sum.failed(err) // the router could not start: nothing was written
 	}
-	if cfg.Out != "" && oopt.SpillDir != "" {
+	if cfg.Output.Dir != "" && oopt.SpillDir != "" {
 		_ = os.Remove(oopt.SpillDir) // only if empty; order.Run removed its own files
 		_ = os.Remove(filepath.Dir(oopt.SpillDir))
 	}
@@ -263,9 +305,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	for _, part := range parts {
 		sum.Output.Bytes += part.Bytes
 	}
-	if err := dataset.Publish(cfg.Out, manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed), parts); err != nil {
+	if err := dataset.Publish(cfg.Output.Dir, manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed), parts); err != nil {
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
-			dataset.Cleanup(cfg.Out)
+			dataset.Cleanup(cfg.Output.Dir)
 		}
 		return sum.failed(fmt.Errorf("publish: %w", err))
 	}
@@ -273,7 +315,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	sum.Outcome.Status = "committed"
 	sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
 	sum.finish()
-	if err := dataset.WriteReport(cfg.Out, sum); err != nil && cfg.Warn != nil {
+	if err := dataset.WriteReport(cfg.Output.Dir, sum); err != nil && cfg.Warn != nil {
 		cfg.Warn(err.Error())
 	}
 	return sum, nil

@@ -1535,6 +1535,14 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
     cannot be resumed (its command was never recorded; nothing was published): `swath resume` says so and
     the SIGKILL test reruns it with `--overwrite`.
 
+15. **Configuration groups.** `listing.Config` is `Source` (URI and the provider's options), `Output` (dir,
+    replace, resume, no journal) and `Limits` (workers, encoders, memory, part size, spill); `Root` is gone.
+    `Run` resolves defaults once and rejects negative values and invalid combinations (resume without an
+    output, with replace or without the journal; replace without an output) with a `*ConfigError` before
+    anything is opened (`TestConfigRejectsInvalid`). The S3 client is built once, by the provider from its
+    own options at open: since the registry (layering fix) no transport or auth field passes through the
+    CLI's or listing's types, so nothing else changed there.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

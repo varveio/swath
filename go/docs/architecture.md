@@ -22,7 +22,7 @@ There is no external sort, no staging and no merge.
 
 | Package | Role | Imports |
 |---|---|---|
-| `cmd/swath` | flags into `listing.Config`, with each provider's own flag group; `signal.NotifyContext`; usage generated from the flag set | listing, source; providers only to register them (`_` imports) |
+| `cmd/swath` | the commands (`list`, `resume`, `show`, `diag list`); flags into `listing.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*listing.ConfigError` for a bad value or combination), with each provider's own flag group; `signal.NotifyContext`; usage generated from the flag set | listing, registry, journal, dataset; providers only to register them (`_` imports) |
 | `internal/listing` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
 | `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
 | `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`) | source, schema, order, parquetout |

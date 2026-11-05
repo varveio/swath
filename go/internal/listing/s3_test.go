@@ -54,8 +54,7 @@ func TestS3Dataset(t *testing.T) {
 		seed         bool
 	}{{"s3://bkt", "s3://bkt", false}, {"s3://bkt", "s3://bkt", true}, {"s3://bkt/logs/03/", "s3://bkt/logs/03/", false}} {
 		out := filepath.Join(t.TempDir(), "ds")
-		sum, err := Run(context.Background(), Config{Root: tc.root, Out: out, PartSize: 16 << 10,
-			Source: &S3Config{Endpoint: url, PathStyle: true, Seed: tc.seed}})
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: tc.root, Options: &S3Config{Endpoint: url, PathStyle: true, Seed: tc.seed}}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 16 << 10}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,7 +135,7 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
 		s3cfg.Endpoint, s3cfg.PathStyle = srv.URL, true
-		sum, err := Run(context.Background(), Config{Root: "s3://bkt", Out: out, PartSize: 64 << 10, Workers: workers, Source: &s3cfg})
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 64 << 10, Workers: workers}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +180,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 	url := fakeS3(t, 300)
 	run := func(cfg Config) map[string]any {
 		t.Helper()
-		cfg.Root, cfg.Source.(*S3Config).Endpoint, cfg.Source.(*S3Config).PathStyle = "s3://bkt", url, true
+		cfg.Source.URI, cfg.Source.Options.(*S3Config).Endpoint, cfg.Source.Options.(*S3Config).PathStyle = "s3://bkt", url, true
 		sum, err := Run(context.Background(), cfg)
 		if err != nil {
 			t.Fatal(err)
@@ -217,7 +216,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 		return v.(map[string]any)
 	}
 	vals := []string{"source", "stats", "counters", "values"}
-	on := run(Config{Out: filepath.Join(t.TempDir(), "ds"), Workers: 4, Source: &S3Config{Seed: true, Probe: true}})
+	on := run(Config{Source: SourceConfig{Options: &S3Config{Seed: true, Probe: true}}, Output: OutputConfig{Dir: filepath.Join(t.TempDir(), "ds")}, Limits: Limits{Workers: 4}})
 	if !has(on, append(vals, "probe.requests")...) || !has(on, append(vals, "seed.cuts")...) || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
 		t.Fatalf("enabled policies must report their counters: %v", on)
 	}
@@ -227,7 +226,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 	if f := feat(on, "resources", "features"); f["spill"] != true {
 		t.Fatalf("pipeline features = %v", f)
 	}
-	cfg := Config{Workers: 4, NoSpill: true, Source: &S3Config{}}
+	cfg := Config{Source: SourceConfig{Options: &S3Config{}}, Limits: Limits{Workers: 4, Spill: SpillLimits{Off: true}}}
 	m := run(cfg)
 	if has(m, append(vals, "probe.requests")...) || has(m, append(vals, "seed.cuts")...) || has(m, "resources", "spill") || has(m, "resources", "encoder_wait_ns") {
 		t.Fatalf("disabled policies must not report counters: %v", m)

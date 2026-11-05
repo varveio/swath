@@ -239,14 +239,15 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		return err
 	}
 	cfg := listing.Config{
-		Root: root, Replace: o.overwrite, Source: o.sources[pf.Scheme],
-		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
-		Argv: argv, Resume: resumed, NoJournal: o.noJournal,
-		NoSpill: o.noSpill, SpillCompress: o.spillCompress, SpillMax: int64(o.spillMax), SpillReserve: int64(o.spillReserve),
+		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
+		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal},
+		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
+			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
+		Argv: argv,
 		Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) },
 	}
 	if !o.countOnly {
-		cfg.Out = o.out
+		cfg.Output.Dir = o.out
 	}
 	stopProfile, err := profile()
 	if err != nil {

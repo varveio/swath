@@ -63,7 +63,7 @@ func TestDatasetsMatchSDK(t *testing.T) {
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
 		s3cfg.Endpoint, s3cfg.PathStyle, s3cfg.FetchOwner = srv.URL, true, true
-		if _, err := Run(context.Background(), Config{Root: "s3://bkt", Out: out, PartSize: 8 << 10, Workers: workers, Source: &s3cfg}); err != nil {
+		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 8 << 10, Workers: workers}}); err != nil {
 			t.Fatal(err)
 		}
 		return out

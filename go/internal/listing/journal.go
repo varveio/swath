@@ -43,8 +43,8 @@ type runJournal struct {
 // parts), or no journal at all. A source that cannot resume gets a plain
 // Prepare, without the lock.
 func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJournal, error) {
-	if cfg.Out == "" {
-		if cfg.Resume {
+	if cfg.Output.Dir == "" {
+		if cfg.Output.Resume {
 			return nil, errors.New("resume needs an output directory")
 		}
 		return nil, nil
@@ -54,10 +54,10 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 		resumable = false
 	}
 	if !resumable {
-		if cfg.Resume {
+		if cfg.Output.Resume {
 			return nil, fmt.Errorf("resume: a %s source cannot resume", src.Locator().Kind)
 		}
-		if err := dataset.Prepare(cfg.Out, src.Locator().Path, id.SchemaID, cfg.Replace); err != nil {
+		if err := dataset.Prepare(cfg.Output.Dir, src.Locator().Path, id.SchemaID, cfg.Output.Replace); err != nil {
 			return nil, fmt.Errorf("prepare output: %w", err)
 		}
 		return nil, nil
@@ -67,7 +67,7 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 	}
 	// Ownership first: nothing in the output is read, removed or renamed
 	// before this process holds its lock.
-	lock, err := journal.TakeLock(cfg.Out)
+	lock, err := journal.TakeLock(cfg.Output.Dir)
 	if err != nil {
 		return nil, err
 	}
@@ -82,34 +82,34 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 
 // openLocked does openJournal's work with the lock held.
 func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock) (*runJournal, error) {
-	if !cfg.Resume {
-		if err := dataset.Prepare(cfg.Out, path, id.SchemaID, cfg.Replace); err != nil {
-			if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(cfg.Out) {
+	if !cfg.Output.Resume {
+		if err := dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
+			if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(cfg.Output.Dir) {
 				err = fmt.Errorf("%w (it holds an interrupted run: swath resume continues it)", err)
 			}
 			return nil, fmt.Errorf("prepare output: %w", err)
 		}
-		if cfg.NoJournal {
-			return &runJournal{out: cfg.Out, lock: lock}, nil
+		if cfg.Output.NoJournal {
+			return &runJournal{out: cfg.Output.Dir, lock: lock}, nil
 		}
-		j, err := journal.Create(cfg.Out, id, cfg.Argv)
+		j, err := journal.Create(cfg.Output.Dir, id, cfg.Argv)
 		if err != nil {
 			return nil, err
 		}
-		return &runJournal{out: cfg.Out, lock: lock, j: j}, nil
+		return &runJournal{out: cfg.Output.Dir, lock: lock, j: j}, nil
 	}
-	if dataset.Committed(cfg.Out) {
+	if dataset.Committed(cfg.Output.Dir) {
 		return nil, ErrComplete
 	}
-	st, err := journal.Read(cfg.Out)
+	st, err := journal.Read(cfg.Output.Dir)
 	if errors.Is(err, journal.ErrNoJournal) {
-		if !dataset.Resumable(cfg.Out) {
+		if !dataset.Resumable(cfg.Output.Dir) {
 			return nil, ErrNothingToResume
 		}
 		// A journal file whose header never became durable: the run
 		// published nothing, so it starts over.
 		fresh := cfg
-		fresh.Resume, fresh.Replace = false, true
+		fresh.Output.Resume, fresh.Output.Replace = false, true
 		return openLocked(fresh, path, id, lock)
 	}
 	if err != nil {
@@ -118,14 +118,14 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
-	if err := recoverParts(cfg.Out, st); err != nil {
+	if err := recoverParts(cfg.Output.Dir, st); err != nil {
 		return nil, err
 	}
-	j, err := journal.Reopen(cfg.Out, st)
+	j, err := journal.Reopen(cfg.Output.Dir, st)
 	if err != nil {
 		return nil, err
 	}
-	return &runJournal{out: cfg.Out, lock: lock, j: j, state: st}, nil
+	return &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st}, nil
 }
 
 // recoverParts makes data/ hold exactly the journaled parts: a part whose

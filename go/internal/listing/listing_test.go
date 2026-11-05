@@ -45,7 +45,7 @@ func TestEndToEnd(t *testing.T) {
 	src := t.TempDir()
 	mk(t, src, "a/1", "a/2", "b", "z/y/x")
 	out := filepath.Join(t.TempDir(), "ds")
-	sum, err := Run(context.Background(), Config{Root: src, Out: out})
+	sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestKeysAreBytes(t *testing.T) {
 	src := t.TempDir()
 	mk(t, src, "a", "z\xff")
 	out := filepath.Join(t.TempDir(), "ds")
-	if _, err := Run(context.Background(), Config{Root: src, Out: out}); err != nil {
+	if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out}}); err != nil {
 		t.Fatal(err)
 	}
 	var m dataset.Manifest
@@ -100,7 +100,7 @@ func TestOutputInsideRootIsSkipped(t *testing.T) {
 		src := t.TempDir()
 		mk(t, src, "a/1", "a/2", "b", "z/y/x")
 		out := filepath.Join(src, "a", "out")
-		sum, err := Run(context.Background(), Config{Root: src, Out: out, Source: fsOptions(portable), PartSize: 1})
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: src, Options: fsOptions(portable)}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 1}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func TestCancellationLeavesNothing(t *testing.T) {
 			time.Sleep(50 * time.Microsecond)
 		}
 	}()
-	sum, err := Run(ctx, Config{Root: src, Out: out, PartSize: 1, Workers: 1})
+	sum, err := Run(ctx, Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 1, Workers: 1}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -152,7 +152,7 @@ func TestEncoderFailureLeavesNothing(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dataset.TempPath(out, 0), "x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Run(context.Background(), Config{Root: src, Out: out, Replace: true})
+	_, err := Run(context.Background(), Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Replace: true}})
 	if err == nil {
 		t.Fatal("run succeeded")
 	}
@@ -164,11 +164,36 @@ func TestEncoderFailureLeavesNothing(t *testing.T) {
 func TestCountOnly(t *testing.T) {
 	src := t.TempDir()
 	mk(t, src, "a/1", "b")
-	sum, err := Run(context.Background(), Config{Root: src})
+	sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: src}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sum.Output.RowsListed != 3 || fsStats(sum).Files != 2 || fsStats(sum).Dirs != 1 {
 		t.Fatalf("%+v", sum)
+	}
+}
+
+// TestConfigRejectsInvalid: invalid values and combinations are a
+// *ConfigError before anything is opened.
+func TestConfigRejectsInvalid(t *testing.T) {
+	src := t.TempDir()
+	out := filepath.Join(t.TempDir(), "ds")
+	for name, cfg := range map[string]Config{
+		"no source":         {},
+		"negative workers":  {Source: SourceConfig{URI: src}, Limits: Limits{Workers: -1}},
+		"negative spill":    {Source: SourceConfig{URI: src}, Limits: Limits{Spill: SpillLimits{Max: -1}}},
+		"tiny memory":       {Source: SourceConfig{URI: src}, Limits: Limits{Memory: 1}},
+		"resume no output":  {Source: SourceConfig{URI: src}, Output: OutputConfig{Resume: true}},
+		"resume replace":    {Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Resume: true, Replace: true}},
+		"resume no journal": {Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Resume: true, NoJournal: true}},
+		"replace no output": {Source: SourceConfig{URI: src}, Output: OutputConfig{Replace: true}},
+	} {
+		var ce *ConfigError
+		if _, err := Run(context.Background(), cfg); !errors.As(err, &ce) {
+			t.Errorf("%s: %v, want a *ConfigError", name, err)
+		}
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatal("an invalid configuration touched the output")
 	}
 }
