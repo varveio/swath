@@ -154,11 +154,15 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	start := time.Now()
 	st := p.enter(r)
 	defer p.leave(r, st, start)
+	// A structure probe still in flight when the range ends is cancelled:
+	// its result could only serve this range's next split.
+	pctx, stop := context.WithCancel(ctx)
+	defer stop()
 	in := p.query()
 	in.After = r.lo
 	in.Through, in.Bounded = r.hi, !r.open
 	c := r.lo
-	p.maybeProbe(ctx, st, r, c)
+	p.maybeProbe(pctx, st, r, c)
 	for {
 		out, err := p.list(ctx, in)
 		if err != nil {
@@ -225,7 +229,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			lower, upper := p.commit(st, r, c, m, ext, ok)
 			if !ok {
 				in.After, in.Token = "", out.Token
-				p.maybeProbe(ctx, st, r, c)
+				p.maybeProbe(pctx, st, r, c)
 				continue
 			}
 			if err := faults.At("split"); err != nil {
@@ -238,7 +242,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			return e.Child(upper)
 		}
 		in.After, in.Token = "", out.Token
-		p.maybeProbe(ctx, st, r, c)
+		p.maybeProbe(pctx, st, r, c)
 	}
 }
 

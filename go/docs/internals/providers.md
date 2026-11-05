@@ -225,7 +225,7 @@ folder level: the folder where the cursor and `hi` diverge, then the next folder
 path. The coarsest level with a folder inside `(c, hi)` gives the range its boundaries. At a later split
 decision, if the result has arrived, the pivot is the median boundary inside `(c, hi)`, or the furthest when
 that level's page was full; the byte pivot is used otherwise. A split never waits for a probe
-(`structure.late` counts decisions taken while one was in flight). Children inherit the boundaries inside
+(`structure.late` counts decisions taken while one was in flight). A probe still in flight when its range's `Expand` returns is cancelled. Children inherit the boundaries inside
 their bounds, so one probe serves several generations of splits. Eight probes in a row that find no folder
 at any level stop probing in that range (`structure.suppressed`). Swath sends these probes serially, coarse
 to fine, after a 1-key probe found the upper child empty; here the levels go at once and nothing waits.
