@@ -54,6 +54,8 @@ const (
 	cProbeMoved
 	cSplitRejectedProbe
 	cRequeues
+	cSkippedRemainingFloor
+	cSkippedTailFloor
 	numCounters
 )
 
@@ -106,6 +108,8 @@ var Counters = []counters.Def{
 	d("probe.moved", counters.Count, "pivots", "pivots moved to the midpoint of (cursor, pivot] after an empty probe", "probe"),
 	d("split.rejected.probe_empty", counters.Count, "decisions", "splits skipped: probes found no key past any pivot tried", "probe"),
 	d("requeues", counters.Count, "requests", "pages asked again after the client's retries were exhausted (the run never fails on that)"),
+	d("split.skipped.remaining_floor", counters.Count, "decisions", "bounded range with at most 4 pages of keys left by its density estimate: not split", "floors"),
+	d("split.skipped.tail_floor", counters.Count, "decisions", "the child past the pivot would realize at most 2 pages of keys: not split", "floors"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {
@@ -123,6 +127,9 @@ func (p *Provider) disabled() []string {
 		off = append(off, "split", "probe")
 	} else if !p.opt.Probe {
 		off = append(off, "probe")
+	}
+	if p.opt.Sequential || !p.opt.Floors {
+		off = append(off, "floors")
 	}
 	if p.opt.Sequential || p.opt.Resume != nil || !p.opt.Seed {
 		off = append(off, "seed")

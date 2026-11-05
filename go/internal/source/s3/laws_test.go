@@ -63,7 +63,8 @@ func TestHostileFixturesMatchSequential(t *testing.T) {
 
 // TestMetamorphicLaws: the listing is invariant to the page size, to the
 // range decomposition (seed on and off, 1, 4 and 64 workers, forced random
-// splits), to the memory budget and to the policy toggles (the probe). One
+// splits), to the memory budget and to the policy toggles (the probe, the
+// floors). One
 // table, over the fixture keyspaces and the hostile ones; the reference is
 // the sorted keyspace itself.
 func TestMetamorphicLaws(t *testing.T) {
@@ -89,6 +90,8 @@ func TestMetamorphicLaws(t *testing.T) {
 		{name: "w16/budget=1M", workers: 16, budget: 1 << 20},
 		{name: "w16/probe", opt: Options{Probe: true}, workers: 16, budget: 500},
 		{name: "w16/seed/probe/short", opt: Options{Seed: true, Probe: true}, workers: 16, budget: 500, short: true},
+		{name: "w64/floors/page=13", opt: Options{Floors: true}, workers: 64, budget: 500, pageCap: 13},
+		{name: "w16/seed/floors/short", opt: Options{Seed: true, Floors: true}, workers: 16, budget: 500, short: true},
 	}
 	spaces := keyspaces()
 	for k, v := range hostile() {

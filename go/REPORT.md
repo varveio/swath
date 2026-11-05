@@ -1368,6 +1368,33 @@ columns (splits = splits + steals, empty children = `CHILD_MASS/empty`, overfetc
 The Java arms reproduce the earlier medians (45.2 / 41.5 s, 1,352 / 1,339 requests); Go's requests match the
 earlier no-probe arm (1,261) within noise. Raw: `bench/results/policy-harness-check-arms.tsv`.
 
+## Gate-chain floors
+
+**Change.** Swath's owner-split floors, ported as is (`OwnerSplitGovernor`'s `remaining_est_floor` and
+`floor_reflected_blocked` gates, `StealMath.estRemaining` and `childTailBelowObservedMassFloor` at its default
+`reach_floored` mode): a bounded range with at most 4 pages left by its window estimate is not split, and a
+split whose upper child would realize at most 2 pages is not taken (docs/internals/providers.md "Floors").
+Behind `swath diag list --floors`, off by default. In Java these gates bound the owner's proactive carve
+only; thieves split other ranges without them. The Go provider has one split path (owner-side, by demand),
+so the floors gate every split.
+
+**Engagement check** (replay at the recording's p50, 64 workers, seed, 2 interleaved reps, Go only,
+build of this commit, 2026-11-05; median):
+
+| Recording | Arm | Wall s | Requests | Splits | Empty children | Overfetched keys | Mean active |
+|---|---|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds (99 ms) | floors off | 4.0 | 1,231 | 472 | 148 | 381,597 | 40.8 |
+| | floors on | 10.5 | 908 | 44 | 14 | 59,066 | 9.4 |
+| pansurg (164 ms) | floors off | 5.8 | 797 | 393 | 158 | 292,042 | 24.7 |
+| | floors on | 24.9 | 529 | 40 | 14 | 24,042 | 3.6 |
+
+The floors remove 85–92 % of the overfetched keys and 90 % of the empty children and save 26–34 % of the
+requests, but concurrency falls 4–7×. The remaining floor is the gate that fires (753 skips on noaa-eri-pds):
+the estimate reads 12 bytes past the window's shared prefix, and when the range's lower bound and its cursor
+share more than that (`2005_Hurricane_Wilma/` and a key under it), the consumed fraction is 0 and the
+estimate falls back to the remaining fraction itself (below 1), so the range never splits again. Java has the
+same arithmetic, but there it only stops the owner's carve.
+
 ## Review items
 
 The Astra architecture review's deferred items, and the Sol durability review, as built:

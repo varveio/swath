@@ -16,7 +16,7 @@ journal recorded; only the runtime flags (`--workers`, `--encoders`, `--memory`,
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
-`list` flag plus the diagnostic ones: `--sequential`, `--probe`, `--max-keys` (S3), `--no-journal` and
+`list` flag plus the diagnostic ones: `--sequential`, `--probe`, `--floors`, `--max-keys` (S3), `--no-journal` and
 `--no-spill`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 
@@ -110,6 +110,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: fill owner_id and owner_display_name
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  -floors
+    	S3: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -max-keys int

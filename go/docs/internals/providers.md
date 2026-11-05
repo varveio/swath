@@ -145,6 +145,20 @@ ranges (open frontier first, then keys listed, then age), it emits `Child((c, m]
 returns, where `c` is the last key emitted. `(lo, hi] = (lo, c] ∪ (c, m] ∪ (m, hi]`, disjoint and in order.
 Every split feeds an idle worker and no LIST is repeated.
 
+**Floors** (Swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on; REPORT.md
+"Gate-chain floors").
+Two gates on bounded ranges, read from a position estimate rather than a request. Keys are read as base-256
+fractions of the window `(lo, hi]` past the bytes `lo` and `hi` share (12 bytes); the keys left are
+`keys listed ÷ fraction consumed × fraction remaining`.
+- *Remaining floor:* a range with at most 4 pages (4,000 keys) left is not split. Counted per full page,
+  before demand (`split.skipped.remaining_floor`).
+- *Child-tail floor:* the child past the pivot must realize more than 2 pages. It is credited with
+  `remaining × max(1/16, min(1, ρ) − f)`, where `f` is the pivot's fraction of the remaining window and `ρ`
+  the ratio of the trailing page density (EWMA, weight 0.3 on the newest page) to the range's average; a
+  thinning keyspace (`ρ < 1`) shrinks the credited tail (`split.skipped.tail_floor`).
+The open frontier's remainder is unbounded, so neither gate applies to it. On keys that use only part of
+each byte (decimal digits, printable names), the estimate over-states the remainder, as Java's does.
+
 **Guards**, checked before any child and counted per clause: `done` (never after the page that ended the
 range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), `bound` (`m < hi`, or below
 `prefixCeil(scope)` on the frontier), `no_pivot` (the owner keeps listing).
@@ -176,7 +190,7 @@ and the run used about 1 of 64 workers (REPORT.md "Step 5a").
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted
 bounded and frontier, rejected per guard clause, skipped for no demand, outranked or not continuing);
-`child_empty.{lower,upper}`; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
+`child_empty.{lower,upper}`; the floors' skips; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
 sink-wait time.
 
 **Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is

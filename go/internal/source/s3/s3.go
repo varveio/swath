@@ -58,6 +58,7 @@ type Options struct {
 	Client       API     // optional; built from the options above when nil
 	Resume       *Resume // continue after a journaled run's last published key
 	Probe        bool    // check each split's upper child with a 1-key request first (off by default)
+	Floors       bool    // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
 
 	// Test hooks: splitCoin replaces the demand gate; trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].

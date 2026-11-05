@@ -15,7 +15,7 @@ a policy names it (`Feature`). `features` maps every such policy to whether this
 an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
 - absent, feature `false`: the policy was off for this run (for S3: `seed` without `-seed` or on resume,
-  `split` and `probe` with `--sequential`, `probe` without `--probe` (both `swath diag list` flags), `resume` on a fresh run, `max_keys`
+  `split` and `probe` with `--sequential`, `probe` without `--probe`, `floors` without `--floors` (all `swath diag list` flags), `resume` on a fresh run, `max_keys`
   without `-max-keys`);
 - present and zero: the policy was on and never fired.
 
@@ -87,6 +87,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `probe.moved` | count | pivots | probe | pivots moved to the midpoint of (cursor, pivot] after an empty probe |
 | `split.rejected.probe_empty` | count | decisions | probe | splits skipped: probes found no key past any pivot tried |
 | `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
+| `split.skipped.remaining_floor` | count | decisions | floors | bounded range with at most 4 pages of keys left by its density estimate: not split |
+| `split.skipped.tail_floor` | count | decisions | floors | the child past the pivot would realize at most 2 pages of keys: not split |
 <!-- s3:end -->
 
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active

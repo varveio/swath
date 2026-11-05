@@ -61,6 +61,7 @@ type running struct {
 	id           uint64
 	cooldown     int // pages to skip after a probe found no key past the pivot
 	probeFails   int
+	dens         density // page density, for the floors
 }
 
 // Root is the scope: the sequential chain, a resumed tiling, the seed, or
@@ -197,6 +198,9 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		p.mu.Lock()
 		p.c.Add(cOverfetchKeys, int64(len(out.Contents)-kept))
 		st.keys += int64(kept)
+		if kept > 0 {
+			st.dens.observe(out.Contents[0].Key, out.Contents[kept-1].Key, r.lo, r.hi, kept)
+		}
 		p.mu.Unlock()
 		done := reached || !truncated || (!r.open && kept > 0 && c == r.hi)
 		if done {
@@ -261,6 +265,16 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 			return
 		}
 	}
+	// Remaining-estimate floor (bounded ranges; the frontier's estimate is
+	// unbounded): counted per page, before demand, as Java does.
+	est := math.Inf(1)
+	if p.opt.Floors && !r.open {
+		est = estRemaining(c, r.lo, r.hi, st.keys)
+		if belowRemainingFloor(est) {
+			p.c.Inc(cSkippedRemainingFloor)
+			return
+		}
+	}
 	hunger := p.opt.Workers - len(p.running) - p.queued
 	if p.opt.splitCoin == nil {
 		if hunger <= 0 {
@@ -319,6 +333,14 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (m stri
 	case clauseDone:
 		p.c.Inc(cSplitRejectedDone)
 		return
+	}
+	// Child-tail floor: the upper child must realize more than two pages.
+	if p.opt.Floors && !r.open {
+		f := pivotFraction(c, m, r.lo, r.hi)
+		if tailBelowFloor(est, f, st.dens.ratio(c, r.lo, r.hi, st.keys)) {
+			p.c.Inc(cSkippedTailFloor)
+			return "", false, false
+		}
 	}
 	p.queued += 2 // reserved while the pivot is probed
 	return m, extrapolated, true
