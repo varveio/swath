@@ -54,30 +54,30 @@ func TestSize(t *testing.T) {
 	}
 }
 
-// TestReadmeFlags keeps README.md's flag list generated from the flag set:
+// TestCLIDocFlags keeps docs/cli.md's flag list generated from the flag set:
 // run with UPDATE=1 to rewrite it.
-func TestReadmeFlags(t *testing.T) {
+func TestCLIDocFlags(t *testing.T) {
 	var b bytes.Buffer
 	usage(&b, newFlags(&options{}))
 	const begin, end = "<!-- flags:begin -->\n", "<!-- flags:end -->"
-	readme, err := os.ReadFile("../../README.md")
+	readme, err := os.ReadFile("../../docs/cli.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(readme)
 	i, j := strings.Index(s, begin), strings.Index(s, end)
 	if i < 0 || j < i {
-		t.Fatal("README.md lacks the flags markers")
+		t.Fatal("docs/cli.md lacks the flags markers")
 	}
 	want := s[:i+len(begin)] + "```text\n" + b.String() + "```\n" + s[j:]
 	if want == s {
 		return
 	}
 	if os.Getenv("UPDATE") != "" {
-		if err := os.WriteFile("../../README.md", []byte(want), 0o644); err != nil {
+		if err := os.WriteFile("../../docs/cli.md", []byte(want), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
-	t.Fatal("README.md flag list is stale; run UPDATE=1 go test ./cmd/swath")
+	t.Fatal("docs/cli.md flag list is stale; run UPDATE=1 go test ./cmd/swath")
 }

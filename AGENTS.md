@@ -82,7 +82,9 @@ The contributor reference is
   distribution until the Java code is retired.
 - The language-neutral documents bind it: [`docs/internals/contracts.md`](docs/internals/contracts.md)
   (invariants, schemas, dataset layout), the algorithms, and the usage semantics.
-  Go-specific design lives in [`go/DESIGN.md`](go/DESIGN.md); measurements in
+  [`go/docs/`](go/docs/) is the source of truth for the Go code (architecture, its
+  statement of the invariants, ordering, Parquet output, providers, testing, CLI); a change
+  to `go/` is not done until its page there is current. Measurements are recorded in
   [`go/REPORT.md`](go/REPORT.md).
 - Test it with `cd go && go vet ./... && go test -race ./...`. Static builds use
   `CGO_ENABLED=0`.

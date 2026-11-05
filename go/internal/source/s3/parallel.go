@@ -18,7 +18,7 @@ import (
 )
 
 // Parallel S3 core: Swath's range tiling, seed, demand-driven owner split
-// and safe pivot, without probes, checkpointing or pacing (DESIGN.md).
+// and safe pivot, without probes, checkpointing or pacing (docs/internals/providers.md).
 //
 // A range is (lo, hi]: start-after is exclusive, so a boundary key belongs
 // to the left range. lo "" is ⊥; open marks the frontier (hi = ⊤). The

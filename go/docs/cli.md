@@ -1,0 +1,75 @@
+# CLI
+
+```text
+swath list <root> [flags]
+```
+
+`<root>` is a local directory or `s3://bucket[/prefix]`. The command lists it and writes a dataset to `-out`
+([internals/parquet-output.md](internals/parquet-output.md)), or with `-count-only` only lists. It prints a
+human summary, or the run summary as JSON with `-json`. The Java distribution keeps its own `swath`
+launcher; the two are separate tools until the Java code is retired.
+
+## Flags
+
+Generated from the flag set (`TestCLIDocFlags` fails when this block is stale; `UPDATE=1 go test ./cmd/swath`
+rewrites it):
+
+<!-- flags:begin -->
+```text
+usage: swath list <root> [flags]
+  <root> is a local directory or s3://bucket[/prefix]
+
+  -count-only
+    	walk and count without writing a dataset
+  -encoders int
+    	Parquet encoder goroutines (default GOMAXPROCS)
+  -endpoint URL
+    	S3: endpoint URL of an S3-compatible store
+  -fetch-owner
+    	S3: fill owner_id and owner_display_name
+  -fields string
+    	metadata per entry: names (no stat), stat, statx (adds birth_time; Linux) (default "stat")
+  -json
+    	print the summary as JSON
+  -max-keys int
+    	S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)
+  -memory bytes
+    	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
+  -no-dirs
+    	omit kind=DIR rows
+  -no-link-target
+    	do not read symlink targets
+  -out directory
+    	output dataset directory (required unless -count-only)
+  -overwrite
+    	replace a previous swath-local dataset in -out
+  -part-size bytes
+    	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
+  -path-style
+    	S3: path-style addressing
+  -region string
+    	S3: region (default us-east-1)
+  -seed
+    	S3: tile the keyspace from one delimiter page before splitting
+  -sequential
+    	S3: list with one continuation-token chain (no ranges; the reference)
+  -workers int
+    	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
+
+Profiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.
+```
+<!-- flags:end -->
+
+## Semantics worth stating
+
+- **Sizes** accept `KiB`, `MiB`, `GiB` and `KB`, `MB`, `GB` suffixes.
+- **`-memory`** is one budget: the reorder bound is `memory / 2 KiB` rows; see
+  [internals/ordering.md](internals/ordering.md).
+- **`-out`** is refused when non-empty unless `-overwrite`, which replaces only a previous dataset of this
+  tool and never anything inside the listed root.
+- **S3 modes.** The default is the parallel core; `-seed` tiles the scope from one delimiter page first;
+  `-sequential` is the one-chain oracle and the only mode where `-max-keys` stops early (the dataset is then
+  marked incomplete). `-endpoint` and `-path-style` select S3-compatible stores.
+- **Exit status** is non-zero on any error; a failed or interrupted run (SIGINT, SIGTERM) leaves no `_SUCCESS`
+  and no temporary parts.
+- **Profiling:** `SWATH_LOCAL_CPUPROFILE` and `SWATH_LOCAL_MEMPROFILE` name pprof output files.

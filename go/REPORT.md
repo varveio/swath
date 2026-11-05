@@ -6,7 +6,7 @@ because parquet-go v0.32.0 and x/sys v0.49.0 need go >= 1.26), GNU find 4.9.0, f
 Python 3.13.18. Every number is labelled with the configuration that produced it. All trees are **synthetic**
 (see "Trees"). Raw data: `bench/results/`.
 
-> **Current code:** see "Restructure 2026-11-05" below and [DESIGN.md](DESIGN.md). The sections before it
+> **Current code:** see "Restructure 2026-11-05" below and [docs/architecture.md](docs/architecture.md). The sections before it
 > describe the pre-restructure spike (its engines, `--order` modes and encode schemes no longer exist); their
 > numbers stand as the record of how the design was chosen.
 
@@ -452,7 +452,7 @@ Reading:
 
 ## Restructure 2026-11-05
 
-The spike was rebuilt as a reusable seed ([DESIGN.md](DESIGN.md)). **Sections above this one describe the
+The spike was rebuilt as a reusable seed ([docs/architecture.md](docs/architecture.md)). **Sections above this one describe the
 pre-restructure code and CLI** (engines, `--order`, `--encode-scheme`, the external sort); their measurements
 stand as history but their flags no longer exist. The older `bench/*.sh` scripts drive the old binary.
 
@@ -467,7 +467,7 @@ stand as history but their flags no longer exist. The older `bench/*.sh` scripts
   `-part-size`, `-memory`, `-workers`, `-encoders`, `-count-only`, `-json`. The reorder bound is
   `memory / 2 KiB` rows (131,072 at the 256 MiB default).
 - **Provider contract** (`internal/source`): a tree of ranges, each streaming rows and ordered child ranges
-  (`Emitter.Rows`, `Emitter.Child`). The fs provider is the first implementation; DESIGN.md says how S3
+  (`Emitter.Rows`, `Emitter.Child`). The fs provider is the first implementation; docs/internals/providers.md says how S3
   split/steal, a key-cursor checkpoint, GCS, Azure and Drive fit it. The order stage streams the frontier as
   rows arrive and bounds rows of ranges that finished early.
 - **Encoding**: per-part architecture only (router-owned deterministic boundaries with a ratio frozen after
@@ -671,7 +671,7 @@ summary says this one is not. Opening a prefix dataset would need a Varve-side n
 
 **What was built** (`internal/source/s3/parallel.go`, `pivot.go`). The basics of Swath's parallel engine,
 following the spec written from the Java engine
-(`scratchpad/s3-parallel-core-spec.md`). DESIGN.md "S3" has the full rules. In short:
+(`scratchpad/s3-parallel-core-spec.md`). docs/internals/providers.md "S3" has the full rules. In short:
 - `(lo, hi]` ranges: the first page is sent with `StartAfter=lo`, later pages with continuation tokens. A page
   ending at `hi` ends the range without another request.
 - A one-page delimiter seed (`-seed`) with a cut cap of `min(1000, 4×workers)`, even subsampling and Swath's
