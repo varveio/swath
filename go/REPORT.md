@@ -1228,6 +1228,61 @@ the end.
 - bounded CLI shutdown;
 - the provider capability contract (documented in providers.md, to be implemented with GCS).
 
+## Step 3: spill
+
+The design is in [docs/internals/ordering.md](docs/internals/ordering.md), "Spill". When the reorder budget is
+used up, a range that is not being drained writes its next publish batch to its own spill file instead of
+waiting. Markers keep the batch's place in the range's item list, and the drainer replays the frames in order
+when it reaches them.
+- **Order:** no index, merge, dictionaries or front coding.
+- **Frames:** a length, a CRC-32C, then rows (plain or zstd level 1), with a CRC'd trailer holding the row
+  count.
+- **Active ranges:** they spill too, so a range larger than the remaining budget never blocks.
+- **Disposable:** files are deleted after replay, and the run's spill directory is removed on success and on
+  failure. After a crash, the resume relists.
+
+**Gate 1: the adversarial shape (synthetic, in-process).** `TestSpillKeepsWorkersBusy` lists a slow dense
+first range (40 pages × 10 ms) and 56 fast siblings (10 pages × 5 ms each) with 220-byte keys, using 8
+workers and a 500-row budget.
+
+| Run | Wall | In-memory rows (max) | Rows spilled |
+|---|---:|---:|---:|
+| no spill | 785 ms | 2,000 | 0 |
+| spill | 464 ms | 1,000 | 55,000 in 550 frames, 13.3 MB |
+| spill, zstd | 476 ms | 1,000 | 55,000, 0.23 MB |
+
+- The frontier alone takes 400 ms.
+- The output is identical in all three runs.
+- In-memory rows stay within the budget plus one publish batch per worker plus the frontier path, with and
+  without spill (the D1 bound).
+- No file is left behind.
+
+**Gate 2: the budget-stall shape on a real recording.** The noaa-eri-pds recording (845,693 keys) was
+replayed with its 98 ms p50 page latency and listed with 64 workers and `-seed`, writing the dataset. Step 4a
+had shown the stall on the live bucket: 832 s of worker time blocked on the reorder budget.
+
+| Arm (rep 1 / rep 2, interleaved) | Wall s | Requests | Mean active | Blocked on the order stage (sink wait, worker-s) | Rows spilled | Spill bytes | Peak RSS MiB | Parts MD5 |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| `-no-spill` | 68.2 / 65.9 | 1,288 / 1,280 | 11.5 / 9.9 | 609 / 514 | 0 | 0 | 221 / 213 | e7df5cdac368 |
+| spill | **6.2 / 5.9** | 1,243 / 1,285 | 23.6 / 25.6 | 1 / 1 | 575,087 / 585,111 | 84.6 / 85.8 MB | 258 / 265 | e7df5cdac368 |
+| spill, zstd 1 | **5.0 / 5.0** | 1,262 / 1,264 | 29.2 / 29.0 | 1 / 1 | 556,115 / 564,294 | 16.5 / 16.8 MB | 285 / 296 | e7df5cdac368 |
+
+Spill turns the stalled run into one that is 11–14× faster. Both repeats' datasets are also row-identical to
+the Java recording (`bench/diffds.py`). The script is `bench/spill_replay.sh`, and the raw data is in
+`bench/results/spill-noaa-eri-raw.tsv`. Both repeats' datasets are also row-identical to
+the Java recording (`bench/diffds.py`). The script is `bench/spill_replay.sh`, and the raw data is in
+`bench/results/spill-noaa-eri-raw.tsv`. The datasets are byte-identical across arms.
+zstd level 1 cut spill bytes by 5× and was not slower here, since disk writes, not CPU, were the cost on this
+box. Spill is on by default and compression is opt-in (`-spill-compress`), until a disk budget decides the
+trade.
+
+**Not built yet** (from the architecture review):
+- a disk budget with reserved publication space and a pressure policy;
+- one byte budget shared by pages, reorder storage and encoder queues;
+- frontier, reorder and encoder wait counters beyond `sink_wait_ns`.
+
+The spill counters (`spill_rows`, `spill_bytes`, `spill_ranges`) are in the run report.
+
 ## Measurement drift
 
 The host slowed during the session (Firecracker guest; nothing else was running in the guest, and `vmstat`

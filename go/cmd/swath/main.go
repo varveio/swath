@@ -87,6 +87,7 @@ type options struct {
 	seed, sequential         bool
 	maxKeys                  int64
 	resume, noJournal        bool
+	noSpill, spillCompress   bool
 }
 
 func newFlags(o *options) *flag.FlagSet {
@@ -114,6 +115,8 @@ func newFlags(o *options) *flag.FlagSet {
 	f.BoolVar(&o.fetchOwner, "fetch-owner", false, "S3: fill owner_id and owner_display_name")
 	f.BoolVar(&o.seed, "seed", false, "S3: tile the keyspace from one delimiter page before splitting")
 	f.BoolVar(&o.sequential, "sequential", false, "S3: list with one continuation-token chain (no ranges; the reference)")
+	f.BoolVar(&o.noSpill, "no-spill", false, "wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
+	f.BoolVar(&o.spillCompress, "spill-compress", false, "compress spill files (zstd level 1)")
 	f.BoolVar(&o.resume, "resume", false, "S3: continue the interrupted run in -out (same source and output settings)")
 	f.BoolVar(&o.noJournal, "no-journal", false, "S3: publish parts only at the end, without the journal that -resume needs")
 	f.Int64Var(&o.maxKeys, "max-keys", 0, "S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)")
@@ -166,7 +169,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	cfg := listing.Config{
 		Root: root, Replace: o.overwrite, Fields: fields, NoDirs: o.noDirs, NoLinks: o.noLnk,
 		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
-		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable", Argv: append([]string{"list"}, args...), Resume: o.resume,
+		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable", Argv: append([]string{"list"}, args...), Resume: o.resume, NoSpill: o.noSpill, SpillCompress: o.spillCompress,
 		S3: listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle, FIPS: o.fips, DualStack: o.dualStack,
 			Profile: o.profile, Anonymous: o.anonymous, Timeout: o.timeout, Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) }, FetchOwner: o.fetchOwner, Seed: o.seed, Sequential: o.sequential, MaxKeys: o.maxKeys, NoJournal: o.noJournal},
 	}

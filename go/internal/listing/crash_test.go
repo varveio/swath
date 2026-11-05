@@ -189,7 +189,7 @@ func TestNoJournalAndCountOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameDataset(t, "no journal", ref, out)
-	if _, err := os.Stat(filepath.Join(out, ".swath")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(out, ".swath", "journal")); !os.IsNotExist(err) {
 		t.Fatalf("journal written with NoJournal: %v", err)
 	}
 	cfg = crashConfig(url, "", false)

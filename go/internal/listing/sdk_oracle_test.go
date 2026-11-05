@@ -39,6 +39,7 @@ func oracleKeys() []string {
 // sequential and parallel, on the same fake bucket.
 func TestDatasetsMatchSDK(t *testing.T) {
 	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	t.Setenv("AWS_SESSION_TOKEN", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")

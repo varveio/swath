@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -27,20 +28,22 @@ import (
 
 // Config is one listing. Zero values take the documented defaults.
 type Config struct {
-	Root     string // a local directory, or s3://bucket[/prefix]
-	Out      string // dataset directory; empty for a dry run
-	Replace  bool   // replace a previous dataset in Out
-	Fields   fs.Fields
-	NoDirs   bool
-	NoLinks  bool     // do not read symlink targets
-	Workers  int      // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
-	Encoders int      // Parquet encoders; default GOMAXPROCS
-	Memory   int64    // budget in bytes for rows held between listing and encoding; default 256 MiB
-	PartSize int64    // target bytes per part; default 64 MiB
-	Portable bool     // use the portable filesystem engine (tests, comparisons)
-	Argv     []string // the command line, recorded in the run summary
-	Resume   bool     // continue the interrupted journaled run in Out
-	S3       S3Config
+	Root          string // a local directory, or s3://bucket[/prefix]
+	Out           string // dataset directory; empty for a dry run
+	Replace       bool   // replace a previous dataset in Out
+	Fields        fs.Fields
+	NoDirs        bool
+	NoLinks       bool     // do not read symlink targets
+	Workers       int      // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
+	Encoders      int      // Parquet encoders; default GOMAXPROCS
+	Memory        int64    // budget in bytes for rows held between listing and encoding; default 256 MiB
+	PartSize      int64    // target bytes per part; default 64 MiB
+	Portable      bool     // use the portable filesystem engine (tests, comparisons)
+	Argv          []string // the command line, recorded in the run summary
+	Resume        bool     // continue the interrupted journaled run in Out
+	NoSpill       bool     // wait on the reorder budget instead of spilling ahead-of-frontier rows
+	SpillCompress bool     // zstd level 1 on spill frames
+	S3            S3Config
 }
 
 // S3Config configures an s3:// root.
@@ -103,6 +106,9 @@ type Summary struct {
 	Encoders     int       `json:"encoders"`
 	ReorderRows  int       `json:"reorder_rows"`
 	MaxBuffered  int64     `json:"max_buffered_rows"`
+	SpillRows    int64     `json:"spill_rows"`   // rows written to spill files and replayed
+	SpillBytes   int64     `json:"spill_bytes"`  //
+	SpillFiles   int64     `json:"spill_ranges"` // ranges that spilled
 	Listing      *fs.Stats `json:"listing,omitempty"`
 	S3           *s3.Stats `json:"s3,omitempty"`
 	Rows         int64     `json:"rows"`
@@ -258,8 +264,21 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 		finish(&sum)
 		return sum, err
 	}
-	ost, err := order.Run(ctx, p, sink, order.Options{Workers: cfg.Workers, Budget: sum.ReorderRows})
+	oopt := order.Options{Workers: cfg.Workers, Budget: sum.ReorderRows, SpillCompress: cfg.SpillCompress}
+	if !cfg.NoSpill {
+		// Spill files are disposable: a crash relists their rows.
+		oopt.SpillDir = os.TempDir()
+		if cfg.Out != "" {
+			oopt.SpillDir = filepath.Join(cfg.Out, dataset.JournalDir, "spill")
+		}
+	}
+	ost, err := order.Run(ctx, p, sink, oopt)
+	if cfg.Out != "" && oopt.SpillDir != "" {
+		_ = os.Remove(oopt.SpillDir) // only if empty; order.Run removed its own files
+		_ = os.Remove(filepath.Dir(oopt.SpillDir))
+	}
 	sum.MaxBuffered, sum.Rows = ost.MaxBuffered, ost.Rows
+	sum.SpillRows, sum.SpillBytes, sum.SpillFiles = ost.SpillRows, ost.SpillBytes, ost.SpillFiles
 	sum.ListingSeconds = time.Since(sum.Started).Seconds()
 	want := listed(&sum)
 	if err != nil {

@@ -47,6 +47,8 @@ usage: swath list <root> [flags]
     	S3: publish parts only at the end, without the journal that -resume needs
   -no-link-target
     	do not read symlink targets
+  -no-spill
+    	wait on the reorder budget instead of spilling rows ahead of the frontier to disk
   -out directory
     	output dataset directory (required unless -count-only)
   -overwrite
@@ -67,6 +69,8 @@ usage: swath list <root> [flags]
     	S3: tile the keyspace from one delimiter page before splitting
   -sequential
     	S3: list with one continuation-token chain (no ranges; the reference)
+  -spill-compress
+    	compress spill files (zstd level 1)
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
@@ -91,6 +95,9 @@ Profiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.
   identity, credential processes, AssumeRole, container and instance roles. With nothing found, requests go
   unsigned. Secrets are never taken from flags (they would show in `ps`). Details:
   [internals/providers.md](internals/providers.md).
+- **Spill:** when the reorder budget is full, rows of ranges ahead of the frontier go to disposable files
+  under `-out/.swath/spill/` instead of stalling the workers; `-no-spill` turns it off, `-spill-compress`
+  compresses them ([internals/ordering.md](internals/ordering.md)).
 - **Resume:** an S3 run with `-out` keeps a journal in `-out/.swath/`; after a crash or interruption,
   rerun the same command with `-resume` ([internals/durability.md](internals/durability.md)).
   `-no-journal` turns it off (parts are then published only at the end). `swath inspect DIR` prints the

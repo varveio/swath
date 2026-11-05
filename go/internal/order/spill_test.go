@@ -1,0 +1,134 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package order
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/source"
+)
+
+// frontier is the step-3 adversarial shape: a slow, dense first range (the
+// frontier) and many fast siblings after it, with long keys.
+type frontier struct {
+	slowPages, siblings, sibPages, rows int
+	slowDelay, sibDelay                 time.Duration
+}
+
+type fr struct{ i int } // -1: root, 0: the slow range, 1..: siblings
+
+func (f *frontier) Root() fr { return fr{-1} }
+
+func (f *frontier) key(i, page, j int) string {
+	return fmt.Sprintf("r%04d/%0200d-%04d-%04d", i, 0, page, j) // about 220-byte keys
+}
+
+func (f *frontier) Expand(ctx context.Context, r fr, e source.Emitter[fr]) error {
+	if r.i < 0 {
+		for i := 0; i <= f.siblings; i++ {
+			if err := e.Child(fr{i}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	pages, delay := f.sibPages, f.sibDelay
+	if r.i == 0 {
+		pages, delay = f.slowPages, f.slowDelay
+	}
+	for p := range pages {
+		time.Sleep(delay)
+		rows := make([]schema.Row, f.rows)
+		for j := range rows {
+			rows[j] = schema.Row{Key: f.key(r.i, p, j), Size: int64(j), Present: schema.HasSize, Object: &schema.ObjectMeta{ETag: "e"}}
+		}
+		if err := e.Rows(rows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *frontier) keys() []string {
+	var out []string
+	for i := 0; i <= f.siblings; i++ {
+		pages := f.sibPages
+		if i == 0 {
+			pages = f.slowPages
+		}
+		for p := range pages {
+			for j := range f.rows {
+				out = append(out, f.key(i, p, j))
+			}
+		}
+	}
+	return out
+}
+
+// TestSpillKeepsWorkersBusy is the step-3 gate: with a reorder budget far
+// below one sibling's output, spill lets the siblings list while the slow
+// frontier holds the output back, so the run takes about the frontier's
+// time instead of frontier + siblings; the output is identical, and rows in
+// memory stay within the budget plus one batch per worker.
+func TestSpillKeepsWorkersBusy(t *testing.T) {
+	f := &frontier{slowPages: 40, siblings: 56, sibPages: 10, rows: 100, slowDelay: 10 * time.Millisecond, sibDelay: 5 * time.Millisecond}
+	want := f.keys()
+	const workers, budget = 8, 500
+	run := func(opt Options) (time.Duration, Stats) {
+		t.Helper()
+		c := &collect{}
+		start := time.Now()
+		st, err := Run[fr](context.Background(), f, c, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(c.keys, want) {
+			t.Fatalf("%+v: %d keys, want %d", opt, len(c.keys), len(want))
+		}
+		return time.Since(start), st
+	}
+	plain, pst := run(Options{Workers: workers, Budget: budget})
+	dir := t.TempDir()
+	for _, compress := range []bool{false, true} {
+		spilled, st := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillCompress: compress})
+		t.Logf("compress=%v: no spill %v (max buffered %d), spill %v (max buffered %d, %d rows in %d frames, %d bytes, %d files)",
+			compress, plain, pst.MaxBuffered, spilled, st.MaxBuffered, st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles)
+		if st.SpillRows == 0 {
+			t.Fatal("nothing spilled")
+		}
+		if !raceEnabled && spilled > plain*3/4 { // timing only without the race detector
+			t.Fatalf("spill did not keep workers busy: %v vs %v without spill", spilled, plain)
+		}
+		// D1: the budget, plus one publish batch per worker, plus the
+		// frontier path (here one range).
+		if limit := int64(budget + workers*publishRows + f.rows); st.MaxBuffered > limit {
+			t.Fatalf("max buffered %d > %d", st.MaxBuffered, limit)
+		}
+		if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+			t.Fatalf("spill files left: %d", len(ents))
+		}
+	}
+	if limit := int64(budget + workers*publishRows + f.rows); pst.MaxBuffered > limit {
+		t.Fatalf("no spill: max buffered %d > %d", pst.MaxBuffered, limit)
+	}
+}
+
+// TestSpillCleanedOnFailure: a failing run removes its spill directory.
+func TestSpillCleanedOnFailure(t *testing.T) {
+	f := &frontier{slowPages: 20, siblings: 20, sibPages: 5, rows: 100, slowDelay: 5 * time.Millisecond}
+	dir := t.TempDir()
+	c := &collect{fail: 2500}
+	if _, err := Run[fr](context.Background(), f, c, Options{Workers: 8, Budget: 300, SpillDir: dir}); err == nil {
+		t.Fatal("sink failure not reported")
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Fatalf("spill directory left after failure: %d entries", len(ents))
+	}
+}

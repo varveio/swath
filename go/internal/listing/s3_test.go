@@ -26,6 +26,7 @@ import (
 func fakeS3(t *testing.T, n int) string {
 	t.Helper()
 	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	t.Setenv("AWS_SESSION_TOKEN", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
@@ -103,6 +104,7 @@ func readJSON(t *testing.T, path string, v any) {
 // the same static bucket with request latency.
 func TestS3ParallelEqualsSequential(t *testing.T) {
 	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	t.Setenv("AWS_SESSION_TOKEN", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")

@@ -1,0 +1,8 @@
+no-spill	1	wall=68.17	rss_mib=221	requests=1288	mean_active=11.5	sink_wait_s=609	busy_s=786	max_buffered=134673	spill_rows=0	spill_bytes=0	spill_ranges=0
+spill	1	wall=6.16	rss_mib=258	requests=1243	mean_active=23.6	sink_wait_s=1	busy_s=143	max_buffered=134235	spill_rows=575087	spill_bytes=84550915	spill_ranges=605
+spill-zstd	1	wall=4.97	rss_mib=285	requests=1262	mean_active=29.2	sink_wait_s=1	busy_s=142	max_buffered=135017	spill_rows=556115	spill_bytes=16519434	spill_ranges=623
+no-spill	2	wall=65.89	rss_mib=213	requests=1280	mean_active=9.9	sink_wait_s=514	busy_s=652	max_buffered=134647	spill_rows=0	spill_bytes=0	spill_ranges=0
+spill	2	wall=5.93	rss_mib=265	requests=1285	mean_active=25.6	sink_wait_s=1	busy_s=149	max_buffered=135069	spill_rows=585111	spill_bytes=85797518	spill_ranges=683
+spill-zstd	2	wall=4.96	rss_mib=296	requests=1264	mean_active=29.0	sink_wait_s=1	busy_s=141	max_buffered=133538	spill_rows=564294	spill_bytes=16801986	spill_ranges=635
+
+[exited with code 0]

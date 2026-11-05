@@ -42,12 +42,21 @@ type Sink interface {
 type Options struct {
 	Workers int // expanding goroutines (>= 1)
 	Budget  int // rows read but not yet drained (>= 1)
+	// SpillDir, if set, enables spill: when the budget is used up, ranges
+	// that are not being drained write their rows to files there instead
+	// of waiting (see spill.go). SpillCompress compresses frames (zstd 1).
+	SpillDir      string
+	SpillCompress bool
 }
 
 // Stats describe a run.
 type Stats struct {
 	Rows        int64 // rows handed to the sink
-	MaxBuffered int64 // peak rows read but not yet drained
+	MaxBuffered int64 // peak rows read but not yet drained (in memory)
+	SpillRows   int64 // rows written to spill files and replayed
+	SpillFrames int64
+	SpillBytes  int64
+	SpillFiles  int64 // ranges that spilled
 }
 
 // batchRows is the minimum number of rows per sink call (except the last).
@@ -64,6 +73,7 @@ const (
 type item[R any] struct {
 	rows  []schema.Row
 	child *node[R]
+	spill *spillFile // rows of this item are the next frame of the node's spill file
 }
 
 type node[R any] struct {
@@ -71,6 +81,7 @@ type node[R any] struct {
 	state   state
 	items   []item[R]
 	pending []*node[R]  // children not yet pushed to the stack
+	spill   *spillFile  // the node's spill file, once it has spilled
 	onPath  atomic.Bool // the drainer's current node: its emitter publishes at once (written under mu)
 	awaited atomic.Bool // the drainer waits for, or itself expands, this node: its emitter never blocks
 }
@@ -90,6 +101,7 @@ type run[R any] struct {
 	stopped  atomic.Bool // ctx is done; checked instead of ctx.Err(), which takes a mutex
 
 	// Drainer-owned output batch (only the drainer goroutine touches it).
+	sp      *spiller // nil: no spill
 	sink    Sink
 	segs    [][]schema.Row
 	segRows int
@@ -128,6 +140,14 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	o := &run[R]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink}
+	if opt.SpillDir != "" {
+		sp, err := newSpiller(opt.SpillDir, opt.SpillCompress)
+		if err != nil {
+			return Stats{}, err
+		}
+		defer sp.close()
+		o.sp = sp
+	}
 	o.work = sync.NewCond(&o.mu)
 	o.drain = sync.NewCond(&o.mu)
 	stop := context.AfterFunc(ctx, func() {
@@ -165,6 +185,9 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 	}
 	wg.Wait()
 	st.Rows, st.MaxBuffered = o.rows, int64(o.max)
+	if o.sp != nil {
+		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
+	}
 	return st, err
 }
 
@@ -172,7 +195,7 @@ func (o *run[R]) worker() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for {
-		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || o.buffered >= o.opt.Budget) {
+		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || (o.sp == nil && o.buffered >= o.opt.Budget)) {
 			o.work.Wait()
 		}
 		if o.finished || o.stopped.Load() {
@@ -205,6 +228,11 @@ func (o *run[R]) expand(n *node[R], direct bool) error {
 	defer o.mu.Unlock()
 	if err == nil {
 		err = e.publish()
+	}
+	if err == nil && n.spill != nil { // the trailer, before the node is done
+		o.mu.Unlock()
+		err = o.sp.write(n.spill, nil, true)
+		o.mu.Lock()
 	}
 	n.state = done
 	for i := len(n.pending) - 1; i >= 0; i-- {
@@ -273,6 +301,21 @@ func (e *emitter[R]) maybePublish() error {
 func (e *emitter[R]) publish() error {
 	o := e.o
 	for !e.n.awaited.Load() && o.buffered >= o.opt.Budget && !o.stopped.Load() {
+		if o.sp != nil && e.rows > 0 {
+			// Spill instead of waiting: write the rows (without the lock),
+			// then publish markers. Frames precede their markers, so the
+			// drainer never reads ahead of the writer.
+			o.mu.Unlock()
+			err := e.spill()
+			o.mu.Lock()
+			if err != nil {
+				return err
+			}
+			break
+		}
+		if o.sp != nil && len(e.items) > 0 { // only children: never block
+			break
+		}
 		o.drain.Wait()
 	}
 	if o.stopped.Load() {
@@ -290,6 +333,38 @@ func (e *emitter[R]) publish() error {
 		o.drain.Broadcast()
 	}
 	return nil
+}
+
+// spill writes the collected row items to the node's spill file and
+// replaces them with markers; called without mu (the node's own emitter is
+// the only writer of its file).
+func (e *emitter[R]) spill() error {
+	if e.n.spill == nil {
+		e.n.spill = e.o.sp.file()
+	}
+	for i := range e.items {
+		if e.items[i].rows == nil {
+			continue
+		}
+		if err := e.o.sp.write(e.n.spill, e.items[i].rows, false); err != nil {
+			return err
+		}
+		e.items[i] = item[R]{spill: e.n.spill}
+	}
+	e.rows = 0
+	return nil
+}
+
+// replay reads one spilled frame and sends it; called without mu.
+func (o *run[R]) replay(f *spillFile) error {
+	rows, err := o.sp.next(f)
+	if err != nil {
+		return err
+	}
+	if rows == nil {
+		return errors.New("spill: trailer before the last frame")
+	}
+	return o.send(rows)
 }
 
 // drainTree walks the tree depth-first from root, streaming rows to sink.
@@ -338,6 +413,10 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 					child = it.child
 					break
 				}
+				if it.spill != nil {
+					err = o.replay(it.spill)
+					continue
+				}
 				released += len(it.rows)
 				err = o.send(it.rows)
 				if released >= releaseEvery {
@@ -368,6 +447,16 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 				frames = append(frames, frame{n: it.child})
 				continue
 			}
+			if it.spill != nil {
+				o.mu.Unlock()
+				err := o.replay(it.spill)
+				o.mu.Lock()
+				if err != nil {
+					o.mu.Unlock()
+					return st, err
+				}
+				continue
+			}
 			released += len(it.rows)
 			if released >= releaseEvery {
 				release()
@@ -383,6 +472,20 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 		}
 		switch n.state {
 		case done:
+			if n.spill != nil { // the trailer: check the count, delete the file
+				f := n.spill
+				n.spill = nil
+				o.mu.Unlock()
+				rows, err := o.sp.next(f)
+				o.mu.Lock()
+				if err == nil && rows != nil {
+					err = errors.New("spill: frames after the last marker")
+				}
+				if err != nil {
+					o.mu.Unlock()
+					return st, err
+				}
+			}
 			n.items = nil
 			n.onPath.Store(false)
 			frames = frames[:len(frames)-1]

@@ -35,9 +35,28 @@ A stop (sink error, provider error, or context cancellation) sets an atomic flag
 waiter; `ctx.Err()` is not polled on the hot path because it takes a mutex. Workers return, the drainer
 returns the first error.
 
-## Spill (planned, step 3)
+## Spill
 
-When the budget is exhausted, finished ranges ahead of the frontier will spill to sequential files and be
-replayed in order when the drainer reaches them. They are already sorted, so this is no merge. Workers then
-keep listing while a slow frontier range holds the output back, instead of waiting on the budget. Output is
-unchanged.
+When the budget is used up, a range that is not the one being drained spills instead of waiting. Its
+emitter writes the rows it would have published to the range's spill file and publishes markers in their
+place, so the range keeps listing while a slow frontier holds the output back:
+- **Order.** The rows of one range are already in key order, so the drainer replays a range's frames front to
+  back when it reaches the markers: no index, no merge, no dictionaries. Frames are written before their
+  markers are published, so the drainer never reads ahead of the writer.
+- **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
+  range larger than the remaining budget therefore never blocks; this is what the slow-frontier shape needs.
+- **Files.** One file per range under `-out/.swath/spill/spill-*/` (or the temp directory without `-out`).
+  Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`-spill-compress`, level 1),
+  or a trailer with the row count. The trailer is written when the range ends and checked after replay.
+  Children have their own files, so a parent's trailer says nothing about them.
+- **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
+  on success or failure. A crash leaves at most an orphan directory that is never read: the resume relists
+  from the durable frontier.
+- **Memory.** In-memory buffered rows stay within the budget plus one publish batch per worker plus the
+  frontier path, with or without spill (`TestSpillKeepsWorkersBusy`). Workers also claim new ranges while
+  the budget is full, since their rows will spill.
+- `-no-spill` restores waiting on the budget.
+
+**Not built yet** (from the architecture review): a disk budget with reserved publication space and a pressure
+policy; spill is bounded today only by the listing itself. A byte (not row) budget shared with encoder
+queues is not built either.

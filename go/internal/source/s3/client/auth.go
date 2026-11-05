@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/smithy-go/logging"
 )
 
 // Credentials and signing come from the AWS SDK's auth modules, not from
@@ -41,7 +42,9 @@ type auth struct {
 // credentials are looked up. Otherwise the default chain runs once; if it
 // finds nothing (and no profile was named) requests go unsigned.
 func loadAuth(cfg Config) (*auth, error) {
-	opts := []func(*config.LoadOptions) error{}
+	// The SDK's own log lines (an IMDS fallback warning on every host
+	// without instance metadata) are not for swath's users.
+	opts := []func(*config.LoadOptions) error{config.WithLogger(logging.Nop{})}
 	if cfg.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(cfg.Profile))
 	}
