@@ -7,7 +7,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // costPer1k is the reference LIST price swath reports cost with.
@@ -115,51 +115,42 @@ type RunShape struct {
 	} `json:"fingerprint"`
 }
 
-// swathSummary builds the S3 run summary from this tool's summary.
-func swathSummary(cfg Config, sum *Summary, target string) RunSummary {
-	st := sum.S3
-	if st == nil {
-		st = &s3.Stats{}
-	}
+// swathSummary builds swath's run summary from this tool's summary and the
+// source's report (its coverage and activity).
+func swathSummary(cfg Config, sum *Summary, rep *source.Report) RunSummary {
+	cov, act := rep.Coverage, rep.Activity
 	now := time.Now()
 	r := RunSummary{
 		SchemaVersion: 2, Producer: "swath-go", Argv: cfg.Argv, Strategy: "ordered_ranges",
-		Completed: !st.Truncated, StopReason: "completed",
+		Completed: cov.Complete, StopReason: cov.StopReason,
 		StartedAt: sum.Started.UTC(), AsOf: now.UTC(),
 		DurationMs: now.Sub(sum.Started).Milliseconds(), ListingDurationMs: int64(sum.ListingSeconds * 1000),
-		Objects: st.Objects, Go: sum,
-	}
-	if st.Truncated {
-		r.StopReason = "max_keys"
+		Objects: act.Items, Go: sum,
 	}
 	if r.Argv == nil {
 		r.Argv = []string{}
 	}
-	r.Config = RunConfig{Target: target, Region: st.Region, Format: "parquet", MaxParallelListings: cfg.Workers,
-		NoSignRequest: st.Anonymous, Filters: []string{}}
-	r.EngineFlags = map[string]bool{"owner_split": !cfg.S3.Sequential, "density_extrapolation": !cfg.S3.Sequential,
-		"seed": cfg.S3.Seed, "sequential": cfg.S3.Sequential}
+	filters := cov.Filters
+	if filters == nil {
+		filters = []string{}
+	}
+	r.Config = RunConfig{Target: cov.Target, Region: act.Region, Format: "parquet", MaxParallelListings: cfg.Workers,
+		NoSignRequest: act.Unsigned, Filters: filters}
+	r.EngineFlags = act.Flags
 	r.Output = RunOutput{Format: "parquet", Files: sum.Parts, CompressedSizeBytes: sum.OutBytes}
-	r.Cost.APICalls = st.Requests
-	r.Cost.CostUSD = float64(st.Requests) * costPer1k / 1000
+	r.Cost.APICalls = act.Requests
+	r.Cost.CostUSD = float64(act.Requests) * costPer1k / 1000
 	r.Cost.Basis.RatePer1kUSD, r.Cost.Basis.Source = costPer1k, "aws-list-reference-rate"
 	if sum.ListingSeconds > 0 {
-		r.Efficiency.KeysPerSec = float64(st.Objects) / sum.ListingSeconds
+		r.Efficiency.KeysPerSec = float64(act.Items) / sum.ListingSeconds
 	}
-	if st.Objects > 0 {
-		r.Efficiency.APICallsPer1kObjects = float64(st.Requests) * 1000 / float64(st.Objects)
+	if act.Items > 0 {
+		r.Efficiency.APICallsPer1kObjects = float64(act.Requests) * 1000 / float64(act.Items)
 	}
 	r.Efficiency.PeakRSSBytes, r.Efficiency.CPUSeconds = sum.PeakRSS, sum.UserSeconds+sum.SysSeconds
-	r.Engine = RunEngine{Pages: st.Pages, PeakInFlight: st.MaxActive, AvgInFlight: st.MeanActive,
-		Splits: st.Split.AcceptedBounded + st.Split.AcceptedFrontier}
-	r.RecoveredErrors = map[string]int64{"retries": st.Retries, "throttle_events": st.Throttles, "attempt_timeout_events": st.Timeouts, "parse_failures": st.ParseFailures}
-	r.Seed.Mode = "none"
-	if cfg.S3.Seed {
-		r.Seed = RunSeed{Mode: "shallow", CutPoints: st.Seed.Cuts, Ranges: st.Seed.Cuts + 1}
-		if st.Seed.Sentinel {
-			r.Seed.Ranges++
-		}
-	}
+	r.Engine = RunEngine{Pages: act.Pages, PeakInFlight: act.PeakInFlight, AvgInFlight: act.AvgInFlight, Splits: act.Splits}
+	r.RecoveredErrors = act.RecoveredErrors
+	r.Seed = RunSeed{Mode: act.SeedMode, CutPoints: act.SeedCuts, Ranges: act.SeedRanges}
 	r.Sort = RunSort{Enabled: true, Arm: "ordered_emission"}
 	r.Shape.Fingerprint.GitSHA = revision()
 	r.Shape.Fingerprint.StartedAt, r.Shape.Fingerprint.FinishedAt = r.StartedAt, r.AsOf

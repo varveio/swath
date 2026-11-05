@@ -6,13 +6,15 @@
 package listing
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -22,30 +24,28 @@ import (
 	"github.com/varveio/swath/go/internal/parquet"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/fs"
-	"github.com/varveio/swath/go/internal/source/s3"
 )
 
 // Config is one listing. Zero values take the documented defaults.
 type Config struct {
-	Root          string // a local directory, or s3://bucket[/prefix]
-	Out           string // dataset directory; empty for a dry run
-	Replace       bool   // replace a previous dataset in Out
-	Fields        fs.Fields
-	NoDirs        bool
-	NoLinks       bool     // do not read symlink targets
-	Workers       int      // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
-	Encoders      int      // Parquet encoders; default GOMAXPROCS
-	Memory        int64    // budget in bytes for rows held between listing and encoding; default 256 MiB
-	PartSize      int64    // target bytes per part; default 64 MiB
-	Portable      bool     // use the portable filesystem engine (tests, comparisons)
-	Argv          []string // the command line, recorded in the run summary
-	Resume        bool     // continue the interrupted journaled run in Out
-	NoSpill       bool     // wait on the reorder budget instead of spilling ahead-of-frontier rows
-	SpillCompress bool     // zstd level 1 on spill frames
-	SpillMax      int64    // cap on live spill bytes (0: none)
-	SpillReserve  int64    // free bytes spill leaves on its filesystem (0: none; the CLI default is 1 GiB)
-	S3            S3Config
+	Root    string // a local directory, or scheme://...; the registered provider for the scheme lists it
+	Out     string // dataset directory; empty for a dry run
+	Replace bool   // replace a previous dataset in Out
+	// Source is the provider's options value (source.Factory.Flags or
+	// Defaults); opaque here. nil takes the provider's defaults.
+	Source        any
+	Warn          func(string) // one-time warnings for the user (nil: dropped)
+	NoJournal     bool         // publish parts only at the end, without a journal (no resume)
+	Workers       int          // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
+	Encoders      int          // Parquet encoders; default GOMAXPROCS
+	Memory        int64        // budget in bytes for rows held between listing and encoding; default 256 MiB
+	PartSize      int64        // target bytes per part; default 64 MiB
+	Argv          []string     // the command line, recorded in the run summary
+	Resume        bool         // continue the interrupted journaled run in Out
+	NoSpill       bool         // wait on the reorder budget instead of spilling ahead-of-frontier rows
+	SpillCompress bool         // zstd level 1 on spill frames
+	SpillMax      int64        // cap on live spill bytes (0: none)
+	SpillReserve  int64        // free bytes spill leaves on its filesystem (0: none; the CLI default is 1 GiB)
 }
 
 // Spill describes the run's spill (see order.Stats).
@@ -55,24 +55,6 @@ type Spill struct {
 	Ranges    int64 `json:"ranges"` // ranges that spilled
 	PeakBytes int64 `json:"peak_bytes"`
 	Refused   int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
-}
-
-// S3Config configures an s3:// root.
-type S3Config struct {
-	Endpoint, Region string
-	PathStyle        bool
-	FIPS, DualStack  bool          // endpoint variants
-	Profile          string        // shared-file profile
-	Anonymous        bool          // never sign
-	Timeout          time.Duration // per request (0: 30 s)
-	Warn             func(string)  // one-time warnings (nil: dropped)
-	NoJournal        bool          // publish parts only at the end, without a journal (no resume)
-	NoProbe          bool          // split without the 1-key probe
-	FetchOwner       bool
-	Sequential       bool  // one continuation-token chain (the reference oracle)
-	Seed             bool  // tile the scope from one delimiter page first
-	MaxKeys          int64 // stop after this many objects (sequential only; experiments)
-	Client           s3.API
 }
 
 // Defaults.
@@ -124,15 +106,17 @@ type Summary struct {
 	EncoderWaitNs  *int64 `json:"encoder_wait_ns,omitempty"`
 	// Disabled lists the run's policies that were turned off, so a zero
 	// counter always means "on, never fired" (see docs/internals/counters.md).
-	Disabled     []string  `json:"disabled,omitempty"`
-	Listing      *fs.Stats `json:"listing,omitempty"`
-	S3           *s3.Stats `json:"s3,omitempty"`
-	Rows         int64     `json:"rows"`
-	Parts        int       `json:"parts"`
-	OutBytes     int64     `json:"output_bytes"`
-	ResumedParts int       `json:"resumed_parts,omitempty"` // parts kept from the interrupted run
-	ResumedRows  int64     `json:"resumed_rows,omitempty"`
-	Seconds      float64   `json:"seconds"`
+	Disabled []string `json:"disabled,omitempty"`
+	// The source's report goes here, under its own name ("s3", "listing");
+	// see MarshalJSON.
+	Source       json.RawMessage `json:"__source__,omitempty"`
+	report       *source.Report
+	Rows         int64   `json:"rows"`
+	Parts        int     `json:"parts"`
+	OutBytes     int64   `json:"output_bytes"`
+	ResumedParts int     `json:"resumed_parts,omitempty"` // parts kept from the interrupted run
+	ResumedRows  int64   `json:"resumed_rows,omitempty"`
+	Seconds      float64 `json:"seconds"`
 	// ListingSeconds is the time to the end of listing (the order stage).
 	ListingSeconds float64   `json:"listing_seconds"`
 	UserSeconds    float64   `json:"user_cpu_seconds"`
@@ -143,15 +127,44 @@ type Summary struct {
 
 // Errors is the listing's error count.
 func (s *Summary) Errors() int64 {
-	if s.Listing != nil {
-		return s.Listing.Errors()
+	if s.report != nil {
+		return s.report.Errors
 	}
 	return 0
 }
 
+// Report is the source's report (nil before the listing ends, or for a
+// source without one). Its Stats are the provider's own type.
+func (s *Summary) Report() *source.Report { return s.report }
+
+func (s *Summary) setReport(r source.Report) {
+	s.report = &r
+	s.Fields = r.Fields
+}
+
+// MarshalJSON writes the source's stats under the source's name, in the
+// place the placeholder field holds.
+func (s Summary) MarshalJSON() ([]byte, error) {
+	type plain Summary
+	p := plain(s)
+	if s.report != nil && s.report.Stats != nil {
+		b, err := json.Marshal(s.report.Stats)
+		if err != nil {
+			return nil, err
+		}
+		p.Source = b
+	}
+	out, err := json.Marshal(p)
+	if err != nil || s.report == nil {
+		return out, err
+	}
+	return bytes.Replace(out, []byte(`"__source__":`), []byte(strconv.Quote(s.report.Name)+":"), 1), nil
+}
+
 // Run lists cfg.Root and, unless cfg.Out is empty, publishes the dataset.
 // On any error or cancellation nothing is published and unpublished parts
-// are removed; the error is the cause (ctx.Err() on cancellation).
+// are removed (a journaled run keeps them for -resume); the error is the
+// cause (ctx.Err() on cancellation).
 func Run(ctx context.Context, cfg Config) (Summary, error) {
 	start := time.Now()
 	if err := cfg.setDefaults(); err != nil {
@@ -161,114 +174,80 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		Tool: "swath-go", Out: cfg.Out, Workers: cfg.Workers, Encoders: cfg.Encoders,
 		RowBudget: cfg.Memory / 2, Started: start,
 	}
-	if strings.HasPrefix(cfg.Root, "s3://") {
-		return runS3(ctx, cfg, sum)
-	}
-	return runFS(ctx, cfg, sum)
-}
-
-func runFS(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
-	root, err := filepath.Abs(cfg.Root)
+	f, err := source.Lookup(cfg.Root)
 	if err != nil {
 		return sum, err
 	}
-	s := &schema.Local
-	sum.Root, sum.SchemaID, sum.Fields = root, s.ID, cfg.Fields.String()
-	opt := fs.Options{Fields: cfg.Fields, NoDirs: cfg.NoDirs, LinkTarget: !cfg.NoLinks, Portable: cfg.Portable}
-	if _, err := fs.New(root, opt); err != nil { // validate the root before touching the output
-		return sum, fmt.Errorf("root: %w", err)
+	opts := cfg.Source
+	if opts == nil {
+		opts = f.Defaults()
 	}
-	if cfg.Out != "" {
-		if err := dataset.Prepare(cfg.Out, root, s.ID, cfg.Replace); err != nil {
-			return sum, fmt.Errorf("prepare output: %w", err)
+	warn := cfg.Warn
+	if warn == nil {
+		warn = func(string) {}
+	}
+	src, err := f.Open(ctx, source.Request{Root: cfg.Root, Options: opts, Workers: cfg.Workers, Warn: warn})
+	if err != nil {
+		return sum, err
+	}
+	s, loc := src.Schema(), src.Locator()
+	sum.Root, sum.SchemaID = loc.Root, s.ID
+	jr, err := openJournal(cfg, src, identity(src, s, cfg))
+	if err != nil {
+		return sum, err
+	}
+	if ex, ok := src.(source.Excluder); ok && cfg.Out != "" {
+		if err := ex.Exclude(cfg.Out); err != nil {
+			jr.close()
+			return sum, err
 		}
-		if rel, inside, err := dataset.LocateInside(root, cfg.Out); err != nil {
-			return sum, fmt.Errorf("locate output: %w", err)
-		} else if inside {
-			opt.Skip = map[string]bool{rel + "/": true}
+	}
+	if last := jr.last(); last != nil {
+		if err := jr.src.Restart(last.Part.MaxKey, jr.state.Checkpoints); err != nil {
+			jr.close()
+			return sum, err
 		}
-	}
-	p, err := fs.New(root, opt)
-	if err != nil {
-		return sum, fmt.Errorf("root: %w", err)
-	}
-	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceKind: "local-fs", SourceRoot: root}
-	listed := func(sum *Summary) int64 {
-		st := p.Stats()
-		sum.Listing = &st
-		if cfg.NoDirs {
-			return st.Files
-		}
-		return st.Files + st.Dirs
-	}
-	reports := func(sum *Summary) []dataset.File {
-		return []dataset.File{{Name: dataset.SummaryName, Value: sum}}
-	}
-	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports, nil)
-}
-
-func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
-	bucket, prefix, err := s3.ParseURL(cfg.Root)
-	if err != nil {
-		return sum, err
-	}
-	s := &schema.S3
-	sum.Root, sum.SchemaID = cfg.Root, s.ID
-	target := "s3://" + bucket
-	if prefix != "" {
-		target += "/" + prefix
-	}
-	jr, err := openJournal(cfg, durable.Identity{Tool: "swath-go", Format: 1, SchemaID: s.ID, Provider: "s3",
-		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, KeyCap: s.MaxKeyBytes,
-		Writer: parquet.WriterID, PartSize: cfg.PartSize, FetchOwner: cfg.S3.FetchOwner})
-	if err != nil {
-		return sum, err
-	}
-	p, err := s3.New(ctx, s3.Options{
-		Resume: jr.providerResume(), NoProbe: cfg.S3.NoProbe,
-		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, PathStyle: cfg.S3.PathStyle, FIPS: cfg.S3.FIPS, DualStack: cfg.S3.DualStack,
-		FetchOwner: cfg.S3.FetchOwner, Sequential: cfg.S3.Sequential, Seed: cfg.S3.Seed, Workers: cfg.Workers,
-		MaxKeys: cfg.S3.MaxKeys, Client: cfg.S3.Client,
-		Profile: cfg.S3.Profile, Anonymous: cfg.S3.Anonymous, Timeout: cfg.S3.Timeout, Warn: cfg.S3.Warn,
-	})
-	if err != nil {
-		jr.close()
-		return sum, err
-	}
-	if jr != nil {
-		jr.provider = p
 	}
 	sum.ResumedParts, sum.ResumedRows = jr.resumedParts(), jr.resumedRows()
-	// swath's run summary records the listed target, so a reader can tell a
-	// whole-bucket dataset from a prefix (or truncated) one.
-	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceKind: "s3",
-		SourceBucket: bucket, SourceRoot: cfg.Root}
-	listed := func(sum *Summary) int64 {
-		st := p.Stats()
-		sum.S3 = &st
-		return st.Objects
-	}
-	reports := func(sum *Summary) []dataset.File {
-		return []dataset.File{{Name: dataset.SwathSummaryName, Value: swathSummary(cfg, sum, target)}}
-	}
+	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceKind: loc.Kind,
+		SourceBucket: loc.Container, SourceRoot: loc.Root}
+	var p source.Provider[any] = src
 	if jr.complete() {
 		// The final part is durable: listing again could only add a
-		// second final part on a changed bucket. Publish what is recorded.
-		return pipeline[s3.Range](ctx, cfg, sum, nothing[s3.Range]{}, s, meta, func(*Summary) int64 { return 0 }, reports, jr)
+		// second final part on a changed source. Publish what is recorded.
+		p = source.Empty{}
 	}
-	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports, jr)
+	return pipeline(ctx, cfg, sum, src, p, s, meta, jr)
 }
 
-// nothing is a provider with no rows: a resume whose listing is complete.
-type nothing[R any] struct{}
+// identity is the run's resume identity: what the pipeline freezes, and
+// what the source names (source.Identified).
+func identity(src source.Source, s *schema.Schema, cfg Config) durable.Identity {
+	id := durable.Identity{Tool: "swath-go", Format: 1, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquet.WriterID,
+		PartSize: cfg.PartSize, Provider: src.Locator().Kind}
+	if idf, ok := src.(source.Identified); ok {
+		sid := idf.Identity()
+		id.Provider = sid.Provider
+		for _, f := range sid.Fields {
+			id.Source = append(id.Source, durable.Field{Name: f.Name, Value: f.Value, Canonical: f.Canonical})
+		}
+	}
+	return id
+}
 
-func (nothing[R]) Root() (r R)                                        { return r }
-func (nothing[R]) Expand(context.Context, R, source.Emitter[R]) error { return nil }
+// reports names the JSON run reports published beside the manifest: swath's
+// run summary for a source that states its coverage, else this summary.
+func reports(cfg Config, sum *Summary) []dataset.File {
+	if r := sum.report; r != nil && r.Coverage != nil {
+		return []dataset.File{{Name: dataset.SwathSummaryName, Value: swathSummary(cfg, sum, r)}}
+	}
+	return []dataset.File{{Name: dataset.SummaryName, Value: sum}}
+}
 
-// pipeline runs provider → order → router → publish for one provider.
-// reports names the JSON run reports published beside the manifest.
-func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Provider[R], s *schema.Schema, meta dataset.Meta,
-	listed func(*Summary) int64, reports func(*Summary) []dataset.File, jr *journal) (Summary, error) {
+// pipeline runs provider → order → router → publish. p is src, or Empty
+// when a resume has nothing left to list.
+func pipeline(ctx context.Context, cfg Config, sum Summary, src source.Source, p source.Provider[any], s *schema.Schema, meta dataset.Meta,
+	jr *journal) (Summary, error) {
 	defer jr.close()
 	// One shared cause: the first asynchronous failure (an encoder, the
 	// disk, the journal) cancels listing at once, and is what Run returns.
@@ -334,7 +313,10 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 		sum.EncoderWaitNs = &w
 	}
 	sum.ListingSeconds = time.Since(sum.Started).Seconds()
-	want := listed(&sum)
+	if r, ok := src.(source.Reporter); ok {
+		sum.setReport(r.Report())
+	}
+	want := src.Listed()
 	if err != nil {
 		return fail(err)
 	}
@@ -354,7 +336,7 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 		sum.OutBytes += part.Bytes
 	}
 	finish(&sum)
-	if err := dataset.Publish(cfg.Out, meta, parts, reports(&sum)); err != nil {
+	if err := dataset.Publish(cfg.Out, meta, parts, reports(cfg, &sum)); err != nil {
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
 			dataset.Cleanup(cfg.Out)
 		}

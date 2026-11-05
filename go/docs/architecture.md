@@ -22,11 +22,11 @@ There is no external sort, no staging and no merge.
 
 | Package | Role | Imports |
 |---|---|---|
-| `cmd/swath` | flags into `listing.Config`; `signal.NotifyContext`; usage generated from the flag set | listing |
-| `internal/listing` | `Run(ctx, Config) (Summary, error)`: wires provider, order, router, dataset; the run summary | all below |
-| `internal/source` | the provider contract: `Provider[R]`, `Emitter[R]` | schema |
-| `internal/source/fs` | filesystem provider: Linux `getdents64` engine, portable engine | source, schema |
-| `internal/source/s3` | S3 provider: `(lo, hi]` ranges, seed, owner-side splits, pivots | source, schema, s3/client |
+| `cmd/swath` | flags into `listing.Config`, with each provider's own flag group; `signal.NotifyContext`; usage generated from the flag set | listing, source; providers only to register them (`_` imports) |
+| `internal/listing` | `Run(ctx, Config) (Summary, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run summary | source and all below, no provider |
+| `internal/source` | the provider contract: `Provider[R]`, `Emitter[R]`, `Disposer[R]`; the registry (`Factory` by URL scheme, `Source`, `Erase`) and the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
+| `internal/source/fs` | filesystem provider: Linux `getdents64` engine, portable engine; registers the scheme-less roots | source, schema, dataset |
+| `internal/source/s3` | S3 provider: `(lo, hi]` ranges, seed, owner-side splits, pivots; registers `s3://` | source, schema, s3/client |
 | `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, retries, the page parser | – |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |
@@ -37,7 +37,9 @@ There is no external sort, no staging and no merge.
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
 | `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
 
-`order` and `parquet` know nothing about sources; providers know nothing about Parquet. `schema.Row` is shared:
+`order` and `parquet` know nothing about sources; providers know nothing about Parquet. The pipeline packages
+(listing, order, parquet, dataset, schema, durable) import nothing under `internal/source/`, and
+`internal/source` imports no provider: `internal/source` `TestImportBoundary` checks it, transitively. `schema.Row` is shared:
 filesystem fields inline, object-store fields behind one pointer (`Row.Object`, nil for filesystem rows).
 
 ## Goroutines and ownership

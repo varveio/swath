@@ -14,7 +14,10 @@ import (
 )
 
 func TestCheck(t *testing.T) {
-	base := Identity{Tool: "swath-go", Format: 1, SchemaID: "swath/canonical", Provider: "s3", Bucket: "b", Writer: "w1", PartSize: 64 << 20}
+	src := func(endpoint, canon string) []Field {
+		return []Field{{Name: "source", Value: "s3://b/"}, {Name: "endpoint", Value: endpoint, Canonical: canon}, {Name: "region", Value: ""}}
+	}
+	base := Identity{Tool: "swath-go", Format: 1, SchemaID: "swath/canonical", Provider: "s3", Source: src("http://h:9000", "http://h:9000"), Writer: "w1", PartSize: 64 << 20}
 	for _, c := range []struct {
 		name  string
 		edit  func(*Identity)
@@ -24,15 +27,18 @@ func TestCheck(t *testing.T) {
 		{"tool", func(i *Identity) { i.Tool = "swath" }, "tool"},
 		{"format", func(i *Identity) { i.Format = 2 }, "format"},
 		{"schema", func(i *Identity) { i.SchemaID = "swath-local/v0" }, "schema"},
-		{"bucket", func(i *Identity) { i.Bucket = "c" }, "source"},
-		{"prefix", func(i *Identity) { i.Prefix = "p/" }, "source"},
+		{"provider", func(i *Identity) { i.Provider = "gcs" }, "provider"},
+		{"source", func(i *Identity) { i.Source = src("http://h:9000", ""); i.Source[0].Value = "s3://c/" }, "source"},
 		{"writer", func(i *Identity) { i.Writer = "w2" }, "writer"},
-		{"endpoint", func(i *Identity) { i.Endpoint = "http://other:9000" }, "endpoint"},
-		{"endpoint spelling", func(i *Identity) { i.Endpoint = "" }, ""},
-		{"region", func(i *Identity) { i.Region = "eu-west-1" }, "region"},
+		{"endpoint", func(i *Identity) { i.Source = src("http://other:9000", "http://other:9000") }, "endpoint"},
+		{"endpoint spelling", func(i *Identity) { i.Source = src("HTTP://H:9000/", "http://h:9000") }, ""},
+		{"region", func(i *Identity) { i.Source = src("http://h:9000", ""); i.Source[2].Value = "eu-west-1" }, "region"},
+		{"field added", func(i *Identity) {
+			i.Source = append(src("http://h:9000", ""), Field{Name: "fetch owner", Value: "true"})
+		}, "fetch owner"},
+		{"field dropped", func(i *Identity) { i.Source = src("http://h:9000", "")[:2] }, "region"},
 		{"key cap", func(i *Identity) { i.KeyCap = 4096 }, "key cap"},
 		{"part size", func(i *Identity) { i.PartSize = 1 }, "part size"},
-		{"fetch owner", func(i *Identity) { i.FetchOwner = true }, "fetch owner"},
 	} {
 		req := base
 		c.edit(&req)
@@ -51,13 +57,13 @@ func TestCheck(t *testing.T) {
 // boundaries; a torn tail is ignored and truncated on reopen.
 func TestJournalRoundTripAndTornTail(t *testing.T) {
 	out := t.TempDir()
-	id := Identity{Tool: "swath-go", Format: 1, Provider: "s3", Bucket: "b"}
+	id := Identity{Tool: "swath-go", Format: 1, Provider: "s3", Source: []Field{{Name: "source", Value: "s3://b/"}}}
 	j, err := Create(out, id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range 3 {
-		if err := j.Append(Record{Ordinal: i, Part: dataset.Part{Rows: 10, MaxKey: string(rune('a' + i))}, RowsTotal: int64(10 * (i + 1)), Boundaries: []string{string(rune('k' + i))}}); err != nil {
+		if err := j.Append(Record{Ordinal: i, Part: dataset.Part{Rows: 10, MaxKey: string(rune('a' + i))}, RowsTotal: int64(10 * (i + 1)), Checkpoint: []byte{byte('k' + i)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,7 +75,7 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Header.Identity != id || len(st.Records) != 3 || st.Last().RowsTotal != 30 || len(st.Boundaries) != 3 || st.TornBytes != 7 {
+	if Check(st.Header.Identity, id) != nil || len(st.Records) != 3 || st.Last().RowsTotal != 30 || len(st.Checkpoints) != 3 || st.TornBytes != 7 {
 		t.Fatalf("%+v", st)
 	}
 	j, err = Reopen(out, st)
@@ -123,7 +129,7 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	j, _ = Create(out, Identity{})
 	j.Close()
 	b, _ = os.ReadFile(Path(out))
-	b2 := []byte(strings.Replace(string(b[8:]), `"version":2`, `"version":9`, 1))
+	b2 := []byte(strings.Replace(string(b[8:]), `"version":3`, `"version":9`, 1))
 	binary.LittleEndian.PutUint32(b[4:8], frameCRC(b[:4], b2))
 	os.WriteFile(Path(out), append(b[:8], b2...), 0o644)
 	if _, err := Read(out); err == nil || !strings.Contains(err.Error(), "version 9") {

@@ -19,7 +19,7 @@ import (
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquet"
 	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // Resume errors.
@@ -28,28 +28,43 @@ var (
 	ErrComplete        = errors.New("the run in the output directory is already complete")
 )
 
-// journal ties an S3 run to its durable journal. A nil *journal (no output,
-// or -no-journal) publishes parts only at the end, as before.
+// journal ties a run of a resumable source to its durable journal. A nil
+// *journal (no output, or a source that cannot resume) and one without j
+// (-no-journal) publish parts only at the end.
 type journal struct {
-	out      string
-	lock     *durable.Lock    // held from before Prepare until the run is over
-	j        *durable.Journal // nil with -no-journal
-	state    *durable.State   // the recovered journal on resume
-	provider *s3.Provider
+	out   string
+	lock  *durable.Lock    // held from before Prepare until the run is over
+	j     *durable.Journal // nil with -no-journal
+	state *durable.State   // the recovered journal on resume
+	src   source.Resumable
 }
 
 // openJournal prepares the output: a fresh journaled run (Prepare, then a
 // new journal), a resume (identity check, recovery of the published
-// parts), or no journal at all.
-func openJournal(cfg Config, id durable.Identity) (*journal, error) {
+// parts), or no journal at all. A source that cannot resume gets a plain
+// Prepare, without the lock.
+func openJournal(cfg Config, src source.Source, id durable.Identity) (*journal, error) {
 	if cfg.Out == "" {
 		if cfg.Resume {
 			return nil, errors.New("-resume needs -out")
 		}
 		return nil, nil
 	}
-	if !durable.Enforced && cfg.S3.Warn != nil {
-		cfg.S3.Warn("the output lock and directory syncs are not enforced on this platform: a concurrent run or a power loss can damage the journal")
+	rs, resumable := src.(source.Resumable)
+	if c, ok := src.(source.Capable); !ok || !c.Capabilities().Resume {
+		resumable = false
+	}
+	if !resumable {
+		if cfg.Resume {
+			return nil, fmt.Errorf("-resume: a %s source cannot resume", src.Locator().Kind)
+		}
+		if err := dataset.Prepare(cfg.Out, src.Locator().Path, id.SchemaID, cfg.Replace); err != nil {
+			return nil, fmt.Errorf("prepare output: %w", err)
+		}
+		return nil, nil
+	}
+	if !durable.Enforced && cfg.Warn != nil {
+		cfg.Warn("the output lock and directory syncs are not enforced on this platform: a concurrent run or a power loss can damage the journal")
 	}
 	// Ownership first: nothing in the output is read, removed or renamed
 	// before this process holds its lock.
@@ -57,24 +72,25 @@ func openJournal(cfg Config, id durable.Identity) (*journal, error) {
 	if err != nil {
 		return nil, err
 	}
-	jr, err := openLocked(cfg, id, lock)
+	jr, err := openLocked(cfg, src.Locator().Path, id, lock)
 	if err != nil {
 		lock.Release()
 		return nil, err
 	}
+	jr.src = rs
 	return jr, nil
 }
 
 // openLocked does openJournal's work with the lock held.
-func openLocked(cfg Config, id durable.Identity, lock *durable.Lock) (*journal, error) {
+func openLocked(cfg Config, path string, id durable.Identity, lock *durable.Lock) (*journal, error) {
 	if !cfg.Resume {
-		if err := dataset.Prepare(cfg.Out, "", id.SchemaID, cfg.Replace); err != nil {
+		if err := dataset.Prepare(cfg.Out, path, id.SchemaID, cfg.Replace); err != nil {
 			if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(cfg.Out) {
 				err = fmt.Errorf("%w (it holds an interrupted run: pass -resume to continue it)", err)
 			}
 			return nil, fmt.Errorf("prepare output: %w", err)
 		}
-		if cfg.S3.NoJournal {
+		if cfg.NoJournal {
 			return &journal{out: cfg.Out, lock: lock}, nil
 		}
 		j, err := durable.Create(cfg.Out, id)
@@ -95,7 +111,7 @@ func openLocked(cfg Config, id durable.Identity, lock *durable.Lock) (*journal, 
 		// published nothing, so it starts over.
 		fresh := cfg
 		fresh.Resume, fresh.Replace = false, true
-		return openLocked(fresh, id, lock)
+		return openLocked(fresh, path, id, lock)
 	}
 	if err != nil {
 		return nil, err
@@ -193,22 +209,11 @@ func (jr *journal) last() *durable.Record {
 	return jr.state.Last()
 }
 
-// maxBoundsPerRecord caps the boundaries one record carries, so the
-// journal grows with parts, not with splits.
-const maxBoundsPerRecord = 4096
-
 // complete reports that the final part is durable: the listing finished
 // and a resume only has to publish.
 func (jr *journal) complete() bool {
 	last := jr.last()
 	return last != nil && last.Final
-}
-
-func (jr *journal) providerResume() *s3.Resume {
-	if last := jr.last(); last != nil {
-		return &s3.Resume{After: last.Part.MaxKey, Boundaries: jr.state.Boundaries}
-	}
-	return nil
 }
 
 func (jr *journal) resumedParts() int {
@@ -243,20 +248,13 @@ func (jr *journal) routerOptions(o *parquet.Options) {
 }
 
 // publish is commit-before-emit at part granularity: the record (the part,
-// the frozen limit, the boundaries since the last record) is synced before
-// the part is renamed into the dataset.
+// the frozen limit, the source's checkpoint) is synced before the part is
+// renamed into the dataset.
 func (jr *journal) publish(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
 	if err := faults.At("part-closed"); err != nil {
 		return p, err
 	}
-	var bounds []string
-	if jr.provider != nil {
-		bounds = jr.provider.TakeBoundaries()
-	}
-	if len(bounds) > maxBoundsPerRecord { // bounded growth: boundaries only shape the resume tiling
-		bounds = bounds[len(bounds)-maxBoundsPerRecord:]
-	}
-	if err := jr.j.Append(durable.Record{Part: p, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Boundaries: bounds, Final: final}); err != nil {
+	if err := jr.j.Append(durable.Record{Part: p, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Checkpoint: jr.src.Checkpoint(), Final: final}); err != nil {
 		return p, err
 	}
 	if err := faults.At("recorded"); err != nil {

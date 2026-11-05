@@ -63,12 +63,12 @@ func TestOutputInsideRootIsSkipped(t *testing.T) {
 		src := t.TempDir()
 		mk(t, src, "a/1", "a/2", "b", "z/y/x")
 		out := filepath.Join(src, "a", "out")
-		sum, err := Run(context.Background(), Config{Root: src, Out: out, Portable: portable, PartSize: 1})
+		sum, err := Run(context.Background(), Config{Root: src, Out: out, Source: fsOptions(portable), PartSize: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sum.Rows != 7 || sum.Listing.Skipped != 1 {
-			t.Fatalf("portable=%v: rows %d skipped %d", portable, sum.Rows, sum.Listing.Skipped)
+		if sum.Rows != 7 || fsStats(sum).Skipped != 1 {
+			t.Fatalf("portable=%v: rows %d skipped %d", portable, sum.Rows, fsStats(sum).Skipped)
 		}
 	}
 }
@@ -131,7 +131,7 @@ func TestCountOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.Rows != 3 || sum.Listing.Files != 2 || sum.Listing.Dirs != 1 {
+	if sum.Rows != 3 || fsStats(sum).Files != 2 || fsStats(sum).Dirs != 1 {
 		t.Fatalf("%+v", sum)
 	}
 }

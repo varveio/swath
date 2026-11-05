@@ -26,7 +26,12 @@ import (
 	"github.com/varveio/swath/go/internal/durable"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source/fs"
+	"github.com/varveio/swath/go/internal/source"
+
+	// Providers register themselves (scheme and flag group); the command
+	// imports them for nothing else.
+	_ "github.com/varveio/swath/go/internal/source/fs"
+	_ "github.com/varveio/swath/go/internal/source/s3"
 )
 
 // shutdownGrace bounds the time an interrupted run spends stopping.
@@ -91,32 +96,21 @@ func killAt(spec string) {
 }
 
 type options struct {
-	out, fields              string
-	overwrite, noDirs, noLnk bool
-	countOnly, json          bool
-	workers, encoders        int
-	partSize, memory         size
-	spillMax, spillReserve   zsize
-	endpoint, region         string
-	profile                  string
-	anonymous                bool
-	timeout                  time.Duration
-	pathStyle, fetchOwner    bool
-	fips, dualStack          bool
-	seed, sequential         bool
-	maxKeys                  int64
-	resume, noJournal        bool
-	noSpill, spillCompress   bool
-	noProbe                  bool
+	out                    string
+	overwrite              bool
+	countOnly, json        bool
+	workers, encoders      int
+	partSize, memory       size
+	spillMax, spillReserve zsize
+	resume, noJournal      bool
+	noSpill, spillCompress bool
+	sources                map[string]any // each provider's options value, by scheme
 }
 
 func newFlags(o *options) *flag.FlagSet {
 	f := flag.NewFlagSet("list", flag.ContinueOnError)
 	f.StringVar(&o.out, "out", "", "output dataset `directory` (required unless -count-only)")
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous swath-local dataset in -out")
-	f.StringVar(&o.fields, "fields", "stat", "metadata per entry: names (no stat), stat, statx (adds birth_time; Linux)")
-	f.BoolVar(&o.noDirs, "no-dirs", false, "omit kind=DIR rows")
-	f.BoolVar(&o.noLnk, "no-link-target", false, "do not read symlink targets")
 	o.partSize = listing.DefaultPartSize
 	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB)")
 	o.memory = listing.DefaultMemory
@@ -124,18 +118,6 @@ func newFlags(o *options) *flag.FlagSet {
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))")
 	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS)")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
-	f.StringVar(&o.endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store")
-	f.StringVar(&o.region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
-	f.StringVar(&o.profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
-	f.BoolVar(&o.anonymous, "anonymous", false, "S3: send unsigned requests, ignoring any credentials")
-	f.DurationVar(&o.timeout, "request-timeout", 30*time.Second, "S3: per-request timeout; a request that exceeds it is retried")
-	f.BoolVar(&o.pathStyle, "path-style", false, "S3: path-style addressing")
-	f.BoolVar(&o.fips, "fips", false, "S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)")
-	f.BoolVar(&o.dualStack, "dualstack", false, "S3: use the dual-stack (IPv6) endpoint")
-	f.BoolVar(&o.fetchOwner, "fetch-owner", false, "S3: fill owner_id and owner_display_name")
-	f.BoolVar(&o.seed, "seed", false, "S3: tile the keyspace from one delimiter page before splitting")
-	f.BoolVar(&o.sequential, "sequential", false, "S3: list with one continuation-token chain (no ranges; the reference)")
-	f.BoolVar(&o.noProbe, "no-probe", false, "S3: split without the 1-key probe that checks the upper child is not empty")
 	f.BoolVar(&o.noSpill, "no-spill", false, "wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
 	f.BoolVar(&o.spillCompress, "spill-compress", false, "compress spill files (zstd level 1)")
 	f.Var(&o.spillMax, "spill-max", "cap on spill `bytes` on disk (0: no cap); past it, listing waits instead of spilling")
@@ -143,8 +125,12 @@ func newFlags(o *options) *flag.FlagSet {
 	f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem, for the parts still to be written")
 	f.BoolVar(&o.resume, "resume", false, "S3: continue the interrupted run in -out (same source and output settings)")
 	f.BoolVar(&o.noJournal, "no-journal", false, "S3: publish parts only at the end, without the journal that -resume needs")
-	f.Int64Var(&o.maxKeys, "max-keys", 0, "S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)")
 	f.BoolVar(&o.json, "json", false, "print the summary as JSON")
+	// Each provider owns its flag group.
+	o.sources = map[string]any{}
+	for _, p := range source.Factories() {
+		o.sources[p.Scheme] = p.Flags(f)
+	}
 	f.SetOutput(io.Discard)
 	return f
 }
@@ -186,16 +172,16 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if !o.countOnly && o.out == "" {
 		return errors.New("-out is required unless -count-only")
 	}
-	fields, err := fs.ParseFields(o.fields)
+	pf, err := source.Lookup(root)
 	if err != nil {
-		return fmt.Errorf("-fields: %w", err)
+		return err
 	}
 	cfg := listing.Config{
-		Root: root, Replace: o.overwrite, Fields: fields, NoDirs: o.noDirs, NoLinks: o.noLnk,
+		Root: root, Replace: o.overwrite, Source: o.sources[pf.Scheme],
 		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
-		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable", Argv: append([]string{"list"}, args...), Resume: o.resume, NoSpill: o.noSpill, SpillCompress: o.spillCompress, SpillMax: int64(o.spillMax), SpillReserve: int64(o.spillReserve),
-		S3: listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle, FIPS: o.fips, DualStack: o.dualStack,
-			Profile: o.profile, Anonymous: o.anonymous, Timeout: o.timeout, Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) }, FetchOwner: o.fetchOwner, Seed: o.seed, Sequential: o.sequential, MaxKeys: o.maxKeys, NoJournal: o.noJournal, NoProbe: o.noProbe},
+		Argv: append([]string{"list"}, args...), Resume: o.resume, NoJournal: o.noJournal,
+		NoSpill: o.noSpill, SpillCompress: o.spillCompress, SpillMax: int64(o.spillMax), SpillReserve: int64(o.spillReserve),
+		Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) },
 	}
 	if !o.countOnly {
 		cfg.Out = o.out
@@ -214,13 +200,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(sum)
 	}
-	if st := sum.S3; st != nil {
-		fmt.Fprintf(stdout, "objects=%d bytes=%d pages=%d requests=%d retries=%d splits=%d child_empty=%d max_active=%d truncated=%v ",
-			st.Objects, st.Bytes, st.Pages, st.Requests, st.Retries, st.Split.AcceptedBounded+st.Split.AcceptedFrontier,
-			st.ChildEmpty.Lower+st.ChildEmpty.Upper, st.MaxActive, st.Truncated)
-	}
-	if st := sum.Listing; st != nil {
-		fmt.Fprintf(stdout, "files=%d dirs=%d bytes=%d errors=%d ", st.Files, st.Dirs, st.Bytes, st.Errors())
+	if r := sum.Report(); r != nil && r.Brief != "" {
+		fmt.Fprint(stdout, r.Brief, " ")
 	}
 	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d total=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
 		sum.Rows, sum.Parts, sum.OutBytes, sum.Seconds,

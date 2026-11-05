@@ -7,12 +7,13 @@
 // Durability is per part. Before a part is renamed into data/, one record
 // is appended to an append-only journal and fsynced: the part (ordinal,
 // rows, size, MD5, min and max key), the router's frozen part limit, and
-// the range boundaries created since the previous record. A resume keeps
-// the published parts, drops nothing it has not listed, and re-lists
-// (K, ⊤] where K is the last published part's max key, tiled by the
-// recorded boundaries so it starts as parallel as the run was. Boundaries
-// only shape that tiling: a split the journal never saw costs parallelism
-// on resume, never correctness.
+// the source's checkpoint: an opaque, provider-versioned descriptor of
+// what it learned since the previous record (for S3, the range boundaries
+// it created). A resume keeps the published parts, drops nothing it has not
+// listed, and has the source restart after K, the last published part's
+// max key, with every checkpoint (S3 tiles (K, ⊤] by the boundaries so it
+// starts as parallel as the run was). A checkpoint only shapes the
+// restart: one the journal never saw costs parallelism, never correctness.
 //
 // The journal (out/.swath/journal) is a sequence of frames: a 4-byte
 // little-endian payload length, a 4-byte CRC-32C of the payload, and the
@@ -63,18 +64,18 @@ type Record struct {
 	Type       string       `json:"type"` // "part"
 	Part       dataset.Part `json:"part"`
 	Ordinal    int          `json:"ordinal"`
-	Limit      int64        `json:"limit"`      // the router's frozen logical bytes per part (0 before part 0 closes)
-	RowsTotal  int64        `json:"rows_total"` // rows in parts 0..Ordinal
-	Boundaries []string     `json:"boundaries,omitempty"`
-	Final      bool         `json:"final,omitempty"` // the last part (file_final): the listing is complete
+	Limit      int64        `json:"limit"`                // the router's frozen logical bytes per part (0 before part 0 closes)
+	RowsTotal  int64        `json:"rows_total"`           // rows in parts 0..Ordinal
+	Checkpoint []byte       `json:"checkpoint,omitempty"` // the source's, opaque here (source.Resumable)
+	Final      bool         `json:"final,omitempty"`      // the last part (file_final): the listing is complete
 }
 
 // State is what a journal says about a run.
 type State struct {
-	Header     Header
-	Records    []Record
-	Boundaries []string // every recorded boundary, in record order
-	TornBytes  int64    // bytes after the last whole frame (ignored)
+	Header      Header
+	Records     []Record
+	Checkpoints [][]byte // every non-empty checkpoint, in record order
+	TornBytes   int64    // bytes after the last whole frame (ignored)
 }
 
 // Last is the last record, or nil.
@@ -239,7 +240,7 @@ func (j *Journal) Close() error {
 }
 
 // Version is the journal format this tool writes and reads.
-const Version = 2
+const Version = 3
 
 // frameCRC covers the length field and the payload, so a damaged length
 // cannot pass for a different frame boundary.
@@ -327,7 +328,9 @@ func decode(r io.Reader) (*State, error) {
 			return nil, fmt.Errorf("journal: record for part %d after %d records", rec.Ordinal, len(st.Records))
 		}
 		st.Records = append(st.Records, rec)
-		st.Boundaries = append(st.Boundaries, rec.Boundaries...)
+		if len(rec.Checkpoint) > 0 {
+			st.Checkpoints = append(st.Checkpoints, rec.Checkpoint)
+		}
 	}
 }
 

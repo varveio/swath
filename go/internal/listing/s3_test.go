@@ -55,11 +55,11 @@ func TestS3Dataset(t *testing.T) {
 	}{{"s3://bkt", "s3://bkt", false}, {"s3://bkt", "s3://bkt", true}, {"s3://bkt/logs/03/", "s3://bkt/logs/03/", false}} {
 		out := filepath.Join(t.TempDir(), "ds")
 		sum, err := Run(context.Background(), Config{Root: tc.root, Out: out, PartSize: 16 << 10,
-			S3: S3Config{Endpoint: url, PathStyle: true, Seed: tc.seed}})
+			Source: &S3Config{Endpoint: url, PathStyle: true, Seed: tc.seed}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sum.S3 == nil || sum.Rows != sum.S3.Objects || sum.Rows == 0 {
+		if s3Stats(sum) == nil || sum.Rows != s3Stats(sum).Objects || sum.Rows == 0 {
 			t.Fatalf("%+v", sum)
 		}
 		var m struct {
@@ -75,8 +75,8 @@ func TestS3Dataset(t *testing.T) {
 		var run RunSummary
 		readJSON(t, filepath.Join(out, dataset.SwathSummaryName), &run)
 		if run.SchemaVersion != 2 || !run.Completed || run.Config.Target != tc.target || run.Config.Filters == nil ||
-			run.Objects != sum.Rows || run.Output.Files != sum.Parts || !run.Sort.Enabled || run.Cost.APICalls != sum.S3.Requests ||
-			run.Go == nil || run.Go.S3 == nil {
+			run.Objects != sum.Rows || run.Output.Files != sum.Parts || !run.Sort.Enabled || run.Cost.APICalls != s3Stats(sum).Requests ||
+			run.Go == nil || !bytes.Contains(readFile(t, filepath.Join(out, dataset.SwathSummaryName)), []byte(`"s3":`)) {
 			t.Fatalf("run summary %+v", run)
 		}
 		if _, err := os.Stat(filepath.Join(out, dataset.SummaryName)); !os.IsNotExist(err) {
@@ -132,11 +132,11 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
 		s3cfg.Endpoint, s3cfg.PathStyle = srv.URL, true
-		sum, err := Run(context.Background(), Config{Root: "s3://bkt", Out: out, PartSize: 64 << 10, Workers: workers, S3: s3cfg})
+		sum, err := Run(context.Background(), Config{Root: "s3://bkt", Out: out, PartSize: 64 << 10, Workers: workers, Source: &s3cfg})
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("%+v splits=%d child_empty=%+v max_active=%d", s3cfg, sum.S3.Split.AcceptedBounded+sum.S3.Split.AcceptedFrontier, sum.S3.ChildEmpty, sum.S3.MaxActive)
+		t.Logf("%+v splits=%d child_empty=%+v max_active=%d", s3cfg, s3Stats(sum).Split.AcceptedBounded+s3Stats(sum).Split.AcceptedFrontier, s3Stats(sum).ChildEmpty, s3Stats(sum).MaxActive)
 		return out
 	}
 	ref := build(S3Config{Sequential: true}, 1)
@@ -175,7 +175,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 	url := fakeS3(t, 300)
 	run := func(cfg Config) map[string]any {
 		t.Helper()
-		cfg.Root, cfg.S3.Endpoint, cfg.S3.PathStyle = "s3://bkt", url, true
+		cfg.Root, cfg.Source.(*S3Config).Endpoint, cfg.Source.(*S3Config).PathStyle = "s3://bkt", url, true
 		sum, err := Run(context.Background(), cfg)
 		if err != nil {
 			t.Fatal(err)
@@ -214,7 +214,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 		}
 		return out
 	}
-	on := run(Config{Out: filepath.Join(t.TempDir(), "ds"), Workers: 4, S3: S3Config{Seed: true}})
+	on := run(Config{Out: filepath.Join(t.TempDir(), "ds"), Workers: 4, Source: &S3Config{Seed: true}})
 	if !has(on, "s3", "probe", "requests") || !has(on, "s3", "seed", "cuts") || !has(on, "spill", "rows") || !has(on, "encoder_wait_ns") {
 		t.Fatalf("enabled policies must report their counters: %v", on)
 	}
@@ -224,7 +224,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 	if has(on, "disabled") {
 		t.Fatalf("nothing in the run is off: %v", on["disabled"])
 	}
-	cfg := Config{Workers: 4, NoSpill: true, S3: S3Config{NoProbe: true}}
+	cfg := Config{Workers: 4, NoSpill: true, Source: &S3Config{NoProbe: true}}
 	m := run(cfg)
 	if has(m, "s3", "probe") || has(m, "s3", "seed") || has(m, "spill") || has(m, "encoder_wait_ns") {
 		t.Fatalf("disabled policies must not report counters: %v", m)

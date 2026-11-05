@@ -1269,19 +1269,47 @@ had shown the stall on the live bucket: 832 s of worker time blocked on the reor
 
 Spill turns the stalled run into one that is 11–14× faster. Both repeats' datasets are also row-identical to
 the Java recording (`bench/diffds.py`). The script is `bench/spill_replay.sh`, and the raw data is in
-`bench/results/spill-noaa-eri-raw.tsv`. Both repeats' datasets are also row-identical to
-the Java recording (`bench/diffds.py`). The script is `bench/spill_replay.sh`, and the raw data is in
 `bench/results/spill-noaa-eri-raw.tsv`. The datasets are byte-identical across arms.
 zstd level 1 cut spill bytes by 5× and was not slower here, since disk writes, not CPU, were the cost on this
 box. Spill is on by default and compression is opt-in (`-spill-compress`), until a disk budget decides the
 trade.
 
-**Not built yet** (from the architecture review):
-- a disk budget with reserved publication space and a pressure policy;
-- one byte budget shared by pages, reorder storage and encoder queues;
-- frontier, reorder and encoder wait counters beyond `sink_wait_ns`.
+**Built since** (from the architecture review): one byte budget shared by reorder storage and encoder queues
+(ed858d2); a spill disk budget, `-spill-max` and a `-spill-reserve` of free space (1 GiB) kept for the parts,
+where a refused frame makes the emitter wait instead (e377a5c); frontier, budget and encoder wait counters
+(ec23ff8). Pages being parsed are still outside the byte budget.
 
-The spill counters (then `spill_rows`, `spill_bytes`, `spill_ranges`; now the `spill` object) are in the run report.
+The spill counters (then `spill_rows`, `spill_bytes`, `spill_ranges`; now the `spill` object, with
+`peak_bytes` and `refused`) are in the run report.
+
+## Layering: provider registry
+
+The pipeline no longer knows which providers exist. Before this change, `listing` imported both providers, held
+an `S3Config`, built the S3 identity, journalled S3 boundaries and filled the run summary from `s3.Stats`.
+Now:
+- **Registry.** `internal/source` keeps a factory per URL scheme. A provider registers it from `init`: the
+  scheme, its flag group, default options and `Open`. The command imports providers only for that (`_`
+  imports), and `listing.Config.Source` carries the provider's options value, opaque to the pipeline.
+- **Neutral pipeline.** `listing` runs one non-generic pipeline over `source.Source` (the provider with its
+  range type erased by `source.Erase`; ranges are boxed once each, rows pass through). It reads the schema,
+  a `Locator` and `Listed` from it, and the rest through optional interfaces: `Identified` (named identity
+  fields with canonical forms), `Resumable` (an opaque, provider-versioned checkpoint per part, and
+  `Restart`), `Capable`, `Excluder` (fs leaves an output inside its root out) and `Reporter` (stats, text
+  line, `Coverage` and `Activity` for swath's run summary).
+- **Durable.** The identity is the pipeline's frozen fields plus the source's named fields. Records carry
+  the opaque checkpoint instead of S3 boundaries. Journal version 3: a version-2 journal is refused.
+- **Boundary test.** `TestImportBoundary` fails if listing, order, parquet, dataset, schema or durable
+  depends on anything under `internal/source/`, even transitively, if `internal/source` imports a provider,
+  or if the command imports one for anything but registration.
+
+**Output unchanged.** The pre-change binary (ec23ff8) and the new one were run on a 20,000-key fake bucket
+(seeded, and `-sequential`) and on a local tree (`go/internal`):
+- Parquet parts are byte-identical.
+- `manifest.json`, `_swath_summary.json`, `_swath_local_summary.json` and the `-json` output have the same
+  keys in the same order.
+- With timings and paths removed, the sequential S3 run's values are equal. The seeded run differs only in
+  timing-dependent splits (31 against 30 pages).
+- Only the journal differs, by design.
 
 ## Measurement drift
 

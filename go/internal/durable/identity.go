@@ -3,26 +3,36 @@
 
 package durable
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 // Identity is what must not change between a run and its resume: anything
-// that changes which rows are listed or how they are written.
+// that changes which rows are listed or how they are written. The pipeline
+// freezes the schema, the writer, the part size and the key cap; the
+// source names the rest (Provider and Source, from source.Identified).
 type Identity struct {
-	Tool       string `json:"tool"`        // "swath-go"
-	Format     int    `json:"format"`      // journal and dataset format version
-	SchemaID   string `json:"schema_id"`   // output schema
-	Provider   string `json:"provider"`    // "s3"
-	Bucket     string `json:"bucket"`      // the source, not its URL: the endpoint may change
-	Prefix     string `json:"prefix"`      //
-	Endpoint   string `json:"endpoint"`    // "" for AWS; compared after NormalizeEndpoint
-	Region     string `json:"region"`      // as requested ("" for the resolved default)
-	KeyCap     int    `json:"key_cap"`     // the schema's key length limit (rows it refuses)
-	Writer     string `json:"writer"`      // encoding, geometry and part-size rule (parquet.WriterID)
-	PartSize   int64  `json:"part_size"`   // part boundaries
-	FetchOwner bool   `json:"fetch_owner"` // owner columns
+	Tool     string  `json:"tool"`      // "swath-go"
+	Format   int     `json:"format"`    // journal and dataset format version
+	SchemaID string  `json:"schema_id"` // output schema
+	KeyCap   int     `json:"key_cap"`   // the schema's key length limit (rows it refuses)
+	Writer   string  `json:"writer"`    // encoding, geometry and part-size rule (parquet.WriterID)
+	PartSize int64   `json:"part_size"` // part boundaries
+	Provider string  `json:"provider"`  // the source's provider ("s3")
+	Source   []Field `json:"source"`    // the provider's frozen settings, in report order
+}
+
+// Field is one frozen source setting. Two values are the same setting when
+// their Canonical forms are equal (Value when Canonical is empty).
+type Field struct {
+	Name      string `json:"name"`
+	Value     string `json:"value"`
+	Canonical string `json:"canonical,omitempty"`
+}
+
+func (f Field) canon() string {
+	if f.Canonical != "" {
+		return f.Canonical
+	}
+	return f.Value
 }
 
 // MismatchError says which part of the identity differs.
@@ -36,10 +46,9 @@ func (e *MismatchError) Error() string {
 }
 
 // Check compares a stored identity with a requested one. It is a pure
-// function. Workers, encoders, memory, seeding, probing and credentials may
-// change across a resume. The endpoint may change only to a spelling
-// NormalizeEndpoint treats as the same: a different endpoint can serve a
-// different bucket of the same name.
+// function. Workers, encoders, memory and whatever the source leaves out of
+// its identity (for S3: seeding, probing, credentials) may change across a
+// resume.
 func Check(stored, requested Identity) error {
 	switch {
 	case stored.Tool != requested.Tool:
@@ -48,36 +57,35 @@ func Check(stored, requested Identity) error {
 		return &MismatchError{"format", stored.Format, requested.Format}
 	case stored.SchemaID != requested.SchemaID:
 		return &MismatchError{"schema", stored.SchemaID, requested.SchemaID}
-	case stored.Provider != requested.Provider || stored.Bucket != requested.Bucket || stored.Prefix != requested.Prefix:
-		return &MismatchError{"source", stored.Provider + "://" + stored.Bucket + "/" + stored.Prefix, requested.Provider + "://" + requested.Bucket + "/" + requested.Prefix}
-	case NormalizeEndpoint(stored.Endpoint) != NormalizeEndpoint(requested.Endpoint):
-		return &MismatchError{"endpoint", stored.Endpoint, requested.Endpoint}
-	case stored.Region != requested.Region:
-		return &MismatchError{"region", stored.Region, requested.Region}
+	case stored.Provider != requested.Provider:
+		return &MismatchError{"provider", stored.Provider, requested.Provider}
+	}
+	byName := map[string]Field{}
+	for _, f := range stored.Source {
+		byName[f.Name] = f
+	}
+	for _, r := range requested.Source {
+		s, ok := byName[r.Name]
+		if !ok {
+			return &MismatchError{r.Name, "(not recorded)", r.Value}
+		}
+		if s.canon() != r.canon() {
+			return &MismatchError{r.Name, s.Value, r.Value}
+		}
+		delete(byName, r.Name)
+	}
+	for _, s := range stored.Source {
+		if _, left := byName[s.Name]; left {
+			return &MismatchError{s.Name, s.Value, "(not set)"}
+		}
+	}
+	switch {
 	case stored.KeyCap != requested.KeyCap:
 		return &MismatchError{"key cap", stored.KeyCap, requested.KeyCap}
 	case stored.Writer != requested.Writer:
 		return &MismatchError{"writer", stored.Writer, requested.Writer}
 	case stored.PartSize != requested.PartSize:
 		return &MismatchError{"part size", stored.PartSize, requested.PartSize}
-	case stored.FetchOwner != requested.FetchOwner:
-		return &MismatchError{"fetch owner", stored.FetchOwner, requested.FetchOwner}
 	}
 	return nil
-}
-
-// NormalizeEndpoint is the allowlist of equivalent endpoint spellings: the
-// scheme and host are case-insensitive and a trailing slash is ignored.
-// Nothing else is assumed equivalent.
-func NormalizeEndpoint(e string) string {
-	e = strings.TrimSuffix(e, "/")
-	if i := strings.Index(e, "://"); i >= 0 {
-		rest := e[i+3:]
-		host, path, _ := strings.Cut(rest, "/")
-		e = strings.ToLower(e[:i]) + "://" + strings.ToLower(host)
-		if path != "" {
-			e += "/" + path
-		}
-	}
-	return e
 }

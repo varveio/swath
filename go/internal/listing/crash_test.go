@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -58,7 +59,7 @@ func crashConfig(url, out string, resume bool) Config {
 	// A small reorder budget (512 rows) keeps listing and publication
 	// interleaved, so crashes during listing find published parts.
 	return Config{Root: "s3://bkt", Out: out, PartSize: 6 << 10, Workers: 8, Memory: 256 << 10, Resume: resume, NoSpill: true,
-		S3: S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}
+		Source: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}
 }
 
 // TestCrashMatrix kills the run (an injected crash that skips all cleanup,
@@ -136,7 +137,7 @@ func TestResumeChecksIdentity(t *testing.T) {
 		t.Fatalf("changed part size accepted: %v", err)
 	}
 	cfg = crashConfig(url, out, true)
-	cfg.S3.Endpoint = strings.Replace(url, "127.0.0.1", "localhost", 1) // another route, maybe another bucket
+	cfg.Source.(*S3Config).Endpoint = strings.Replace(url, "127.0.0.1", "localhost", 1) // another route, maybe another bucket
 	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "endpoint" {
 		t.Fatalf("changed endpoint accepted: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestResumeChecksIdentity(t *testing.T) {
 	}
 	cfg = crashConfig(url, out, true)
 	cfg.Workers = 3
-	cfg.S3.Endpoint = strings.ToUpper(url[:4]) + url[4:] + "/" // an equivalent spelling of the same endpoint
+	cfg.Source.(*S3Config).Endpoint = strings.ToUpper(url[:4]) + url[4:] + "/" // an equivalent spelling of the same endpoint
 	if _, err := Run(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +198,7 @@ func TestNoJournalAndCountOnly(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "ds")
 	cfg := crashConfig(url, out, false)
-	cfg.S3.NoJournal = true
+	cfg.NoJournal = true
 	if _, err := Run(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -279,8 +280,17 @@ func TestCompetingRunsAreRefused(t *testing.T) {
 	if _, err := Run(context.Background(), over); !errors.Is(err, durable.ErrLocked) {
 		t.Fatalf("competing overwrite: %v", err)
 	}
-	if after := snapshot(); fmt.Sprint(after) != fmt.Sprint(before) {
-		t.Fatalf("a refused run changed the owner's files:\n%v\n%v", before, after)
+	// The owner's other encoders keep working while one is paused, so new
+	// temporary parts may appear and earlier ones be published; nothing
+	// the owner had may be gone (a published part counts as its .tmp).
+	after := snapshot()
+	for i := range after {
+		after[i] = strings.TrimSuffix(after[i], ".tmp")
+	}
+	for _, name := range before {
+		if !slices.Contains(after, strings.TrimSuffix(name, ".tmp")) {
+			t.Fatalf("a refused run removed the owner's %s:\n%v\n%v", name, before, after)
+		}
 	}
 	close(release)
 	if err := <-done; err != nil {
@@ -388,8 +398,8 @@ func TestResumeAfterFinalPartDoesNotList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.S3 != nil && sum.S3.Requests != 0 {
-		t.Fatalf("resume after the final part listed again (%d requests)", sum.S3.Requests)
+	if s3Stats(sum) != nil && s3Stats(sum).Requests != 0 {
+		t.Fatalf("resume after the final part listed again (%d requests)", s3Stats(sum).Requests)
 	}
 	sameDataset(t, "final", ref, out)
 }

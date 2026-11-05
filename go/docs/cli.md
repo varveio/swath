@@ -31,8 +31,8 @@ usage: swath list <root> [flags]
     	S3: endpoint URL of an S3-compatible store
   -fetch-owner
     	S3: fill owner_id and owner_display_name
-  -fields string
-    	metadata per entry: names (no stat), stat, statx (adds birth_time; Linux) (default "stat")
+  -fields tier
+    	metadata tier per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
   -json

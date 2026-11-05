@@ -145,19 +145,42 @@ sink-wait time.
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
-**Resume.** `Options.Resume{After, Boundaries}` makes the root a tiling of `(After, ⊤]` at the recorded
-boundaries; `TakeBoundaries` hands the journal the split cursors, pivots and seed cuts made since the last
-part ([durability.md](durability.md)).
+**Resume.** The provider is `source.Resumable`. `Checkpoint` returns a version-1 descriptor: the split
+cursors, pivots and seed cuts made since the previous part (at most 4,096, the most recent). `Restart(K,
+checkpoints)` makes the root a tiling of `(K, ⊤]` at those boundaries ([durability.md](durability.md)).
 
 **What the full engine adds** (later steps, each by measured need; the 1-key probe is ported):
 structure and `max_keys=1` probes; density-aware pivots from probes; the owner gate chain, pacing and futility
 backoff; AIMD concurrency; mass-aware and multi-level seeding; the rate-anchored size estimator; versions mode.
 
+## Registry and optional interfaces
+
+A provider registers a `source.Factory` from `init`: its URL scheme (`s3`; the empty scheme takes local
+paths), its flag group (`Flags(*flag.FlagSet) any` returns the provider's options value, filled by the
+parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. The command imports providers only for that
+registration and passes the options value for the root's scheme as `listing.Config.Source`, opaque to the
+pipeline. `Open` validates the root without touching the output.
+
+A `Source` is the provider with its range type erased (`source.Erase`: ranges are boxed once each, rows pass
+through), its `Schema`, its `Locator` (kind, root, container, local path) and `Listed` (rows emitted, checked
+against the rows ordered). Optional interfaces, each found by a type assertion:
+
+| Interface | Meaning | S3 | fs |
+|---|---|---|---|
+| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `NormalizeEndpoint`), region, fetch owner | – |
+| `Resumable` | `Checkpoint() []byte` per part, `Restart(after, checkpoints)` before `Root`; descriptors are opaque to the journal and versioned by the provider | boundaries, version 1 | – |
+| `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | – |
+| `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | yes |
+| `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `listing` |
+
+A source that is not resumable (or declines `Resume`) runs without the output lock or journal, as the local
+listing always has; `-resume` on it is an error.
+
 ## The contract for the next providers (planned with GCS)
 
 From the architecture review. The current contract holds for S3 and the filesystem; GCS will make it
 explicit:
-- **Capabilities**, declared once per provider:
+- **Capabilities**, declared once per provider (built so far: `source.Capable` with `Resume`):
   - byte-ordered output or normalized (sorted inside the provider);
   - seekable restart (start-after a key) or token replay;
   - snapshot or live listing.
@@ -165,6 +188,7 @@ explicit:
   comparators (output order is always unsigned bytes).
 - **Bounded cost:** one `Rows` call has a bounded cost; no unbounded in-memory directory or page.
 - **Restart:** an opaque, versioned restart descriptor, which the journal stores instead of S3 boundaries.
+  Built: `source.Resumable`.
 - **Disposal:** a cancelled run releases every queued range's resources. Built: `source.Disposer`; the order
   stage disposes ranges it never expands, including children an `Expand` emitted before failing. Filesystem
   chunks release their shared directory descriptor this way (`TestCancelReleasesChunkFDs`).
