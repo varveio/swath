@@ -49,6 +49,9 @@ def go_row(path, d):
         "steals": 0, "peak_in_flight": src.get("max_active"), "avg_in_flight": src.get("mean_active"),
         "files_out": out["parts_written"] + out["parts_retained"], "bytes_out": out["bytes"],
         "retries": src.get("retries", ""), "throttle_events": src.get("throttles", ""),
+        "overfetch_keys": src.get("overfetch_keys"),
+        "empty_children": src.get("child_empty.lower", 0) + src.get("child_empty.upper", 0),
+        "probe_requests": src.get("probe.requests", 0) + src.get("probe.structure_requests", 0),
     }
     g = {}
     flat("go", {k: v for k, v in src.items() if k.split(".")[0] in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "timeouts", "attempts", "probe")}, g)
@@ -83,6 +86,12 @@ def row(path):
             r[f"{t.get('outcome')}.{t.get('reason')}"] = int(m.get("value", m.get("count", 0)) or 0)
         elif m.get("name") in ("swath.throttle.events", "swath.retries") and "value" in m:
             r[m["name"]] = m["value"]
+        elif m.get("name") == "swath.page.raw_keys" and d.get("objects") is not None:
+            # keys the worker pages returned less the keys listed: the trimmed past-bound keys
+            r["overfetch_keys"] = int(m.get("value", 0) or 0) - d["objects"]
+        elif m.get("name") in ("swath.probe.fetches", "swath.probe.structure_fetches"):
+            r["probe_requests"] = r.get("probe_requests", 0) + int(m.get("value", 0) or 0)
+    r["empty_children"] = r.get("CHILD_MASS.empty", 0)
     if "probes" in d.get("seed", {}):
         r["seed.probes"] = d["seed"]["probes"]
     if d.get("go", {}).get("s3"):
@@ -102,7 +111,8 @@ def main():
             print(f"skip {f}: {e}", file=sys.stderr)
     head = ["file", "producer", "bucket", "version", "concurrency", "seed_mode", "toggles_off", "completed", "objects",
             "duration_ms", "listing_duration_ms", "api_calls", "pages", "splits", "steals", "peak_in_flight",
-            "avg_in_flight", "retries", "throttle_events", "files_out", "bytes_out"]
+            "avg_in_flight", "retries", "throttle_events", "files_out", "bytes_out", "overfetch_keys", "empty_children",
+            "probe_requests"]
     extra = sorted({k for r in rows for k in r} - set(head))
     print("\t".join(head + extra))
     for r in sorted(rows, key=lambda r: (str(r["bucket"]), str(r["version"]), str(r["toggles_off"]), r["file"])):

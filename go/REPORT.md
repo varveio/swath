@@ -1352,6 +1352,22 @@ the old pivot), Go 5a (new pivot + probe) and Go 5a `-no-probe` (added afterward
 
 Raw data: `bench/results/step5a-arms.tsv` (wall and replay HTTP per arm) and `bench/results/step5a-table.md` (the tabulation above, from the per-arm summaries).
 
+**Harness.** `bench/policy_replay.sh ARMS BUCKET LATENCY PORT REPS OUT` runs Java and Go arms interleaved
+against the replay server (Go arms through `swath diag list`, `--report-format json`), and
+`bench/policy_table.py OUT` tabulates them through `summaries.py`, which maps Java's meters onto the Go
+columns (splits = splits + steals, empty children = `CHILD_MASS/empty`, overfetched keys =
+`swath.page.raw_keys` − objects). Check against the table above on noaa-eri-pds (99 ms, 64 workers, seed,
+3 interleaved reps, build `e11b8e0`, one run 2026-11-05; median, min–max):
+
+| Arm | Wall s | Requests | Splits | Empty children | Overfetched keys | Mean active |
+|---|---:|---:|---:|---:|---:|---:|
+| Java defaults | 44.1 (44.1–45.2) | 1,352 (1,351–1,353) | 94 | 99 | 146,904 | 7.4 |
+| Java policies off | 41.3 (41.2–41.6) | 1,339 | 38 | 10 | 184,881 | 9.9 |
+| Go (probe off, the default) | 3.7 (3.6–3.8) | 1,232 (1,224–1,247) | 479 | 148 | 382,597 | 36.5 |
+
+The Java arms reproduce the earlier medians (45.2 / 41.5 s, 1,352 / 1,339 requests); Go's requests match the
+earlier no-probe arm (1,261) within noise. Raw: `bench/results/policy-harness-check-arms.tsv`.
+
 ## Review items
 
 The Astra architecture review's deferred items, and the Sol durability review, as built:
