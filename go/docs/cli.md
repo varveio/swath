@@ -205,7 +205,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
   | 0 | `completed` | the dataset is committed (or a dry run finished) | – |
-  | 1 | `fatal` | a cause a resume will not fix (access denied, no such bucket, an invariant) | no |
+  | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
   | 2 | `usage` | a malformed command line | no |
   | 75 | `stuck` | no progress for `--stall-timeout` (default 10 min; a warning at half) | yes, journal intact |
   | 124 | `deadline` | `--max-duration` reached with the output unfinished | yes |

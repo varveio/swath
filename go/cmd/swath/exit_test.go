@@ -109,6 +109,15 @@ func TestExitCodes(t *testing.T) {
 	if o := outcome(fatal); o.Class != "fatal" || o.Resumable || o.Cause != "no_such_bucket" {
 		t.Fatalf("fatal: %+v", o)
 	}
+	// 1: a committed dataset with partial coverage (a key limit) never exits 0.
+	part := filepath.Join(t.TempDir(), "partial")
+	pargs := append([]string{"diag"}, s3args("bkt", part, "--sequential", "--max-keys", "10")...)
+	if c := code(exec.Command(bin, pargs...).Run()); c != exitFatal {
+		t.Fatalf("partial: exit %d", c)
+	}
+	if o := outcome(part); o.Class != "incomplete" || o.Resumable {
+		t.Fatalf("partial: %+v", o)
+	}
 	// 124: the deadline, resumable.
 	dl := filepath.Join(t.TempDir(), "deadline")
 	if c := code(exec.Command(bin, s3args("bkt", dl, "--max-duration", "50ms")...).Run()); c != exitDeadline {

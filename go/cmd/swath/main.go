@@ -282,6 +282,11 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	sum, err := listing.Run(ctx, cfg)
 	stopWatch()
 	stopProfile()
+	if err == nil && cfg.Output.Dir != "" && !sum.Outcome.Complete {
+		// A committed dataset that does not cover its scope (a key limit)
+		// never exits 0: a supervisor must not take it as complete.
+		err = errIncomplete
+	}
 	if err != nil && pf.Classify != nil {
 		if c := pf.Classify(err); c != "" {
 			err = &classified{err, c}

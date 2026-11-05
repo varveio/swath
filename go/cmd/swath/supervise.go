@@ -35,6 +35,8 @@ const (
 var (
 	errStuck    = errors.New("stuck: no progress within the stall timeout")
 	errDeadline = errors.New("deadline: --max-duration reached")
+	// errIncomplete: the dataset is committed, but its coverage is partial.
+	errIncomplete = errors.New("the dataset is committed with partial coverage (see the manifest's coverage)")
 )
 
 // signalError is a run stopped by a signal.
@@ -66,6 +68,8 @@ func classify(err, cause error, dir string) outcome {
 	switch {
 	case errors.As(err, &u), errors.Is(err, flag.ErrHelp):
 		o.Class, o.ExitCode, o.Resumable = "usage", exitUsage, false
+	case errors.Is(err, errIncomplete):
+		o.Class, o.ExitCode, o.Resumable = "incomplete", exitFatal, false
 	case errors.Is(cause, errStuck):
 		o.Class, o.ExitCode = "stuck", exitStuck
 	case errors.Is(cause, errDeadline):
@@ -110,7 +114,8 @@ func hasJournal(dir string) bool {
 // not complete.
 const errorName = dataset.ErrorName
 
-// writeOutcome records a failed run's outcome in DIR/error.json (atomic
+// writeOutcome records a failed run's outcome (an incomplete committed
+// dataset included) in DIR/error.json (atomic
 // replace), so a supervisor never parses stderr; a completed run removes a
 // stale one.
 func writeOutcome(dir string, o outcome) {
