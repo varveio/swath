@@ -1588,6 +1588,25 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
   environment's or profile's region, else us-east-1); a 2-second `credential_process` stands in for an
   hour-long session and the client re-fetches and re-signs without a failed request.
 
+## Hosted listing runner gate (2026-11-06)
+
+The hosted runner's swath adapter (`listing_runner/lister/swath/adapter.py` in the cloud repo, read and run
+locally, nothing pushed) was pointed at this build with `SWATH_CMD` and run on a small live public prefix
+(`s3://noaa-eri-pds/TEMP/`, anonymous). It fails at once: `flag provided but not defined: -format` (exit 1,
+classified from stderr). By reading the adapter, what it expects and this tool does not emit:
+
+| Runner expects (Java CLI contract) | This tool |
+|---|---|
+| `swath list URI --format parquet -o DIR --report PATH --sort` | `swath list URI -o DIR`; no `--format`, `--report` or `--sort` (output is always sorted Parquet; the report is `DIR/run.json`) |
+| `--concurrency N`, `--no-sign-request`, `--requester-pays requester`, `--engine-toggle NAME=on\|off` | `--workers N`, `--anonymous`, `--request-payer`; policy toggles only as `swath diag list` flags |
+| `--max-duration D` ends with exit 0 and a summary `completed: false` (a truncated `_SAMPLE`) | exit 124, resumable, `error.json` class `deadline` |
+| a summary JSON at `--report` (and `_swath_summary.json` in the dataset after `swath resume`) with `completed`, live `objects` rewritten during the run, `sort.merge_progress_units`, `output.compressed_size_bytes` and `sort.segment_bytes` for disk sizing, and `cost`/`efficiency` blocks | `run.json` after the commit (`outcome.complete`, `output.rows_listed`, `output.bytes`; no cost or efficiency); live progress in `.swath/progress.json` (`objects`, `advance`) |
+| engine-toggle passthrough | none in `list` |
+| `swath --version` first line | works: `swath-go <version> (<revision>)` |
+| `swath resume DIR` | works (same form) |
+| exit 75 resumable, 124 not resumable as a sample | 75 and 124 both resumable |
+| parts under `data/*.parquet` (renumbered on upload), the runner's own manifest | matches |
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and
