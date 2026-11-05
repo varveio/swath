@@ -17,7 +17,7 @@ const (
 	ManifestName = "manifest.json"
 	SuccessName  = "_SUCCESS"
 	SymlinkName  = "symlink.txt"
-	// SummaryName is swath-local's own run report. It avoids Swath's reserved
+	// SummaryName is the run report of filesystem datasets. It avoids Swath's reserved
 	// _swath_summary.json, whose schema readers such as Varve validate.
 	SummaryName = "_swath_local_summary.json"
 )

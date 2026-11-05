@@ -160,3 +160,26 @@ func TestURL(t *testing.T) {
 		}
 	}
 }
+
+// TestParseFailuresAreRetried: a 200 whose body is cut or garbled is
+// retried and counted, and the page is returned once a good body arrives.
+func TestParseFailuresAreRetried(t *testing.T) {
+	var n atomic.Int32
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch n.Add(1) {
+		case 1:
+			w.Write([]byte(okPage[:len(okPage)-30])) // complete response, truncated document
+		case 2:
+			w.Write([]byte(strings.Replace(okPage, "</Key>", "</Kye>", 1)))
+		default:
+			w.Write([]byte(okPage))
+		}
+	}, Config{Anonymous: true})
+	pg, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
+	if err != nil || len(pg.Contents) != 1 {
+		t.Fatalf("%v %+v", err, pg)
+	}
+	if got := c.Counters(); got.ParseFailures != 2 || got.Retries != 2 {
+		t.Fatalf("%+v", got)
+	}
+}

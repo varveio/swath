@@ -54,23 +54,15 @@ type Meta struct {
 	SourceKind   string // "local-fs" or "s3"
 	SourceBucket string // object-store bucket; empty for a filesystem
 	SourceRoot   string // absolute path or s3://bucket/prefix
-	// SwathSummary, if set, is written as _swath_summary.json: the subset of
-	// Swath's run summary (schema_version 2) that dataset readers check.
-	SwathSummary any
 }
 
 // SwathSummaryName is Swath's run-summary file.
 const SwathSummaryName = "_swath_summary.json"
 
-// RunSummary is the subset of Swath's schema_version 2 run summary that
-// readers check before trusting a dataset to cover its target.
-type RunSummary struct {
-	SchemaVersion int  `json:"schema_version"`
-	Completed     bool `json:"completed"`
-	Config        struct {
-		Target  string   `json:"target"`
-		Filters []string `json:"filters"`
-	} `json:"config"`
+// File is a JSON document published beside the manifest.
+type File struct {
+	Name  string
+	Value any
 }
 
 type manifestFile struct {
@@ -100,9 +92,9 @@ type manifest struct {
 }
 
 // Publish commits parts (already gated) in order: rename each part, fsync
-// the data directory, then manifest.json, symlink.txt and the summary, each
-// atomically, and _SUCCESS last.
-func Publish(out string, meta Meta, parts []Part, summary any) error {
+// the data directory, then manifest.json, symlink.txt and the run reports,
+// each atomically, and _SUCCESS last.
+func Publish(out string, meta Meta, parts []Part, reports []File) error {
 	data := filepath.Join(out, DataDir)
 	m := manifest{
 		Version: "1", CreationTimestamp: time.Now().UnixMilli(), FileFormat: "Parquet",
@@ -128,11 +120,8 @@ func Publish(out string, meta Meta, parts []Part, summary any) error {
 	if err := writeAtomic(out, SymlinkName, []byte(links.String())); err != nil {
 		return err
 	}
-	if err := writeJSON(out, SummaryName, summary); err != nil {
-		return err
-	}
-	if meta.SwathSummary != nil {
-		if err := writeJSON(out, SwathSummaryName, meta.SwathSummary); err != nil {
+	for _, r := range reports {
+		if err := writeJSON(out, r.Name, r.Value); err != nil {
 			return err
 		}
 	}

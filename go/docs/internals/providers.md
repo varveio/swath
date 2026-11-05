@@ -58,7 +58,9 @@ linked into the binary.
   `AuthorizationHeaderMalformed` answer names the bucket's region in the error.
 - *Retries:* up to 9 attempts with full-jitter exponential backoff (100 ms doubling, capped at 5 s) on 5xx,
   429, `SlowDown` and other throttling codes, `RequestTimeout`, connection errors and cut bodies, and attempts
-  past the per-request timeout (`-request-timeout`, default 30 s). Other 4xx answers are typed `*client.Error`
+  past the per-request timeout (`-request-timeout`, default 30 s), and 200 answers whose body does not parse
+  (a cut or garbled body is a transport fault: retried, counted as `parse_failures`, never a skipped page).
+  Other 4xx answers are typed `*client.Error`
   values (status, code, message, request id) and are not retried. Attempts, retries, throttles and timeouts are
   counted in the summary.
 - *Parsing:* a hand-rolled scanner over the whole body (read into a pooled buffer) with encoding/xml's

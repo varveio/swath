@@ -842,6 +842,250 @@ Secrets are not accepted as flags (they would show in `ps`): credentials come fr
 shared files; `-profile` and `-anonymous` are flags. `-anonymous` is authoritative. The container's three
 stale `AWS_*` variables are ignored with one warning; they had caused the earlier `InvalidAccessKeyId`.
 
+## Step 4a: differential against Java replay
+
+The Java tool and `swath-replay` are built from `replay/azure-fidelity` at `8fbdf6b` (version
+0.3.3-SNAPSHOT, JDK 25). Datasets are compared with `bench/diffds.py`, in DuckDB. It checks the row sets on
+the 13 canonical columns in both directions, strict ascent by key bytes within and across parts, and the
+dataset's minimum and maximum key; it also reports part counts and sizes. Replay renders S3 `LastModified` in
+milliseconds, and the Java recordings carry the same precision, so no column needed an exception. How to run
+the oracle in a fresh container: [docs/testing.md](docs/testing.md), "Replay oracle".
+
+**Gate result.** Every comparison was row-identical on all 13 columns, with identical min and max keys:
+
+| Comparison | Datasets |
+|---|---:|
+| Synthetic fixtures through replay | 2 × 5 Go modes |
+| Live buckets, Go direct vs the Java recording (all labelled live; nothing changed between runs) | 21 |
+| Java listing replay serving Go datasets | 2 |
+
+Go datasets are 0.4–5.3 % larger than Java's after the ETag change below (§ sizes). Requests and wall times
+differ a lot by shape (§ live, § toggles).
+
+### 4a-1 Synthetic fixtures (labelled synthetic)
+
+| Fixture | Run | Wall s | Requests | Splits / empty children | Identical | Size Go/Java |
+|---|---|---:|---:|---:|---|---:|
+| 10k (`replay/serve-synth.sh`) | Java `--sort` | 5.7 | 481 API calls | | | |
+| | Go `-sequential` | | 10 | 0 | yes | 1.057 |
+| | Go 4 / 8 workers | | 13 / 13 | | yes | 1.057 |
+| | Go 4 / 8 workers `-seed` | | 16 / 16 | | yes | 1.057 |
+| 1,000,020 keys (`bench/gen_fixture_1m.py`) | Java `--sort` | 12.3 | 1,453 (replay count) | | | |
+| | Go `-sequential` | 3.1 | 1,001 | 0 / 0 | yes | 1.050 → 1.027 |
+| | Go 4 workers | 3.1 | 1,336 | 443 / 201 | yes | |
+| | Go 8 workers | 3.1 | 1,594 | 720 / 494 | yes | |
+| | Go 4 workers `-seed` | 2.6 | 1,321 | 399 / 213 | yes | |
+| | Go 8 workers `-seed` | 3.8 | 1,555 | 662 / 461 | yes | |
+
+The 1M fixture's keys mix the following shapes:
+- nested Hive-style partitions;
+- dense numeric runs (`images/%08d`, `flat-%09d`);
+- deep paths;
+- names with spaces, `+`, `%`, apostrophes and non-ASCII;
+- 20 keys of 990 bytes.
+
+Replay ran without injected latency. Java's wall includes JVM start and its sort; replay's request counter
+includes all of Java's calls, while Java's own `api_calls` summary counted fewer.
+
+### 4a-2 Java's reader on Go datasets
+
+Replay's sorted serving mode validates parts before serving: footer stamps, sort order, and key-disjoint,
+densely named parts.
+- It accepted Go datasets of 1 part and of 6 parts (`go-1m-seq`, and `go-1m-multi` written with
+  `-part-size 3MiB`).
+- A full curl walk (`tools/walk.py`) returned 1,000,020 objects in 1,001 pages.
+- Java swath listing the replayed Go dataset produced a dataset row-identical to the Go one.
+- Nothing was rejected.
+
+### 4a-3 Run summary
+
+S3 datasets now carry swath's run summary as `_swath_summary.json` (`listing.RunSummary`), and
+`_swath_local_summary.json` is no longer written for S3.
+- **Fields written:** Java's schema_version 2 field set where the Go tool has a counterpart: `argv`,
+  `completed`, `stop_reason`, `started_at`, `as_of`, `duration_ms`, `listing_duration_ms`, `objects`,
+  `config` (target, region, format, max_parallel_listings, no_sign_request, filters), `output`, `cost`,
+  `efficiency`, `engine` (pages, peak and average in flight, splits; `steals` is 0 by construction), `seed`,
+  `sort.enabled=true` and the `shape.fingerprint`.
+- **The Go report:** under `go`.
+- **Fields left out:** those with no counterpart (Java's trajectory, AIMD, probes, sort pipeline) are left
+  out rather than written as null.
+- **Varve probe:** a temporary test in the Varve checkout opened a Go dataset of the 1M synthetic fixture
+  (1,000,020 objects streamed) and a live noaa-normals-pds Go dataset (148,917). It refused the wrong
+  bucket. The probe was deleted and `git status` is clean.
+
+`bench/summaries.py PATH...` tabulates `_swath_summary.json` files from either tool into one TSV row per run.
+Rows are keyed by bucket (`config.target`), version (`shape.fingerprint.git_sha`), producer, concurrency, seed
+mode and the toggles that are off. Java's `swath.steal_reason` counters appear as `OUTCOME.reason` columns,
+and the Go tool's split, seed and empty-child counters as `go.*` columns. It is meant to be reused on the
+owner's batch of run summaries.
+
+### Recordings (live, anonymous, Java `swath list --format parquet --sort`)
+
+All are under `/home/user/bench-data/recordings/<bucket>/` (`dataset/` with `_swath_summary.json`, `run.log`,
+`time.txt`), and all are whole buckets.
+
+| Bucket | Region | Objects | Java wall s | API calls | Dataset |
+|---|---|---:|---:|---:|---:|
+| noaa-normals-pds | us-east-1 | 148,917 | 15.0 | 422 | 3.8 MB |
+| noaa-normals-pds/normals-hourly/ (prefix) | us-east-1 | 2,549 | 6.0 | 142 | 64 KB |
+| noaa-nws-fourcastnetgfs-pds | us-east-1 | 4,081,170 | 73.3 | 5,053 | 81 MB |
+| real-changesets | us-west-2 | 13,868,442 | 86.1 | 14,834 | 304 MB |
+| nara-1950-census | us-east-2 | 13,540,310 | 124.3 | 15,082 | 311 MB |
+| 18 policy-feature buckets (below) | various | 1,018–845,693 | 6–57 | | |
+
+`sentinel-s2-l1c-zips` is Requester Pays: both tools get 403 anonymously, so it is not recorded.
+
+### Live: Go direct vs the Java recording
+
+These are the first latency-bound measurements of the Go parallel core, and they are separate from the
+fake-bucket numbers. The buckets are live: both tools listed them minutes apart, and in every case they
+listed the same rows.
+
+| Bucket | Run | Wall s | Requests | Splits | Empty children | Mean / max active | Identical | Size Go/Java |
+|---|---|---:|---:|---:|---:|---|---|---:|
+| noaa-normals-pds | Java (64) | 15.0 | 422 | 13 + 71 steals | | 4.7 / 18 | | |
+| | Go `-sequential` | 19.1 | 149 | 0 | 0 | | yes | 1.089 |
+| | Go 4 / 8 | 7.5 / 5.0 | 179 / 197 | 44 / 68 | 6 / 8 | 3.1 / 4.9 | yes | |
+| | Go 4 / 8 `-seed` | 6.3 / 4.1 | 166 / 179 | 19 / 42 | 1 / 2 | 3.6 / 6.0 | yes | |
+| | Go 64 / 64 `-seed` | 4.0 / **2.3** | 245 / 247 | 122 / 120 | 54 / 47 | 9.1 / 18.7 | yes | |
+| noaa-nws-fourcastnetgfs-pds | Java (64) | 73.3 | 5,053 | 273 + 94 steals | | / 28 | | |
+| | Go `-sequential` | 543 | 4,082 | 0 | 0 | | yes | 1.050 |
+| | Go 4 | 477 | 4,141 | 116 | 5 | 2.8 / 4 | yes | |
+| real-changesets | Java (64) | 86.1 | 14,834 | 843 + 171 steals | | / 64 | | |
+| | Go 64 `-seed` | 244.5 | 18,427 | 9,212 | 2,226 | 13.7 / 64 | yes | 1.024 |
+
+The 18 policy-feature buckets were listed by Go with 64 workers and `-seed`. All 18 are row-identical:
+
+| Bucket | Objects | Java s | Go s | Go/Java size |
+|---|---:|---:|---:|---:|
+| leopard-challenge | 1,018 | 7.0 | 1.4 | 1.017 |
+| laz-m3dc-pmsp | 5,544 | 8.9 | 3.2 | 1.011 |
+| sra-pub-sars-cov2-metadata-us-east-1 | 3,990 | 6.0 | 1.0 | 1.018 |
+| usgs-coawst | 6,595 | 32.5 | 2.2 | 1.041 |
+| gdc-ccle-2-open | 6,366 | 6.9 | 2.0 | 1.004 |
+| gdc-cptac-2-phs000892-2-open | 3,305 | 6.5 | 1.9 | 1.024 |
+| askap-odp | 1,614 | 9.5 | 2.8 | 1.005 |
+| deafrica-input-datasets-inventory | 10,492 | 11.2 | 6.1 | 1.039 |
+| openalex | 9,515 | 18.8 | 1.6 | 1.053 |
+| ctrees-amazon-canopy-height | 22,074 | 10.6 | 3.3 | 1.015 |
+| pacific-sound-256khz-2016 | 49,567 | 9.7 | 3.3 | 1.033 |
+| pacific-sound-256khz-2020 | 56,413 | 9.8 | 2.7 | 1.029 |
+| dmi-opendata | 59,268 | 14.8 | 8.6 | 1.033 |
+| gleif | 86,132 | 16.4 | 7.9 | 1.028 |
+| satpmdata | 144,312 | 20.2 | 6.6 | 1.018 |
+| noaa-gfs-warmstart-pds | 358,775 | 33.5 | 11.9 | 1.035 |
+| pansurg-curation-raw-open-data | 501,262 | 56.7 | **82.1** | 1.013 |
+| noaa-eri-pds | 845,693 | 34.3 | **86.9** | 1.017 |
+
+Java's wall includes JVM start (about 3 s), so it dominates on small buckets.
+
+**Findings.** The Go kernel without the policy layer is much slower than Java on four shapes:
+
+| Bucket | Go s | Java s | What went wrong in Go |
+|---|---:|---:|---|
+| fourcastnetgfs | 477 at 4 workers | 73 at 64 | mean active 2.8 of 4 |
+| real-changesets (flat) | 244 | 86 | 9,212 splits, of which 2,226 empty; mean active 13.7 of 64 |
+| pansurg (hierarchical, skewed) | 82 | 57 | mean active 3.3; 169 of 170 empty children were upper children |
+| noaa-eri-pds | 87 | 34 | workers spent 832 s in total blocked on the reorder budget behind a slow frontier |
+
+The causes:
+- **Frontier overshoot (pansurg).** Density extrapolation places the frontier pivot past the last key, so
+  the upper child is empty and the lower one keeps the work. Java's probes exist for this.
+- **Frontier stall (noaa-eri-pds).** The 832 s of budget waits are the step-3 spill case.
+- **Too many splits (real-changesets).** On a flat bucket the 2,226 empty children cost requests (18,427 vs
+  Java's 14,834) and keep parallelism low.
+
+Neither shape changes correctness; both are inputs to step 5. The 64-worker runs on fourcastnetgfs and
+nara-1950-census, the remaining live comparisons, are reported with step 2.
+
+### Toggle comparison on replayed recordings (latency injected at the recorded p50)
+
+Replay served each Java recording with `--inject-latency worker_page=P,pivot_probe=P,structure_probe=P`,
+where P is that recording's worker-page p50: 95 ms for noaa-normals-pds and 99 ms for fourcastnetgfs. Three
+Java configurations ran:
+- **Java defaults** (seed `shallow`, concurrency 64).
+- **"Java policies off"**: every policy toggle that has no Go counterpart switched off. The exact flags are
+  `--engine-toggle density_ewma=off radix_bands=off structure_probes=off far_ahead=off alphabet_pivots=off
+  reflect=off confetti_feedback=off reflect_lift=off fanout_tiling=off mass_aware_seed=off
+  rate_anchored_sensing=off` (each its own `--engine-toggle`). `owner_split` stays on, and `readahead` is
+  off by default.
+- **"noseed"**: the same, plus `--tune seed.mode=none`.
+
+AIMD, pacing and the gate chain have no toggle, and the shallow seed's structure probes stay on with
+`seed.mode=shallow`.
+
+noaa-normals-pds, 3 repeats per arm (ranges are min–max; Java's empty-children column is its
+`CHILD_MASS.empty` counter):
+
+| Arm | Requests | Pages | Splits | Steals | Empty children | Seed probes | Peak in flight | Listing ms (median) |
+|---|---|---|---|---|---|---|---|---:|
+| Java defaults | 394–399 | 198–200 | 8–10 | 3–6 | 108 | 65 | 16 | 4,104 |
+| Java policies off | 310–311 | 188 | 13–15 | 11–16 | 29–30 | 65 | 16 | 2,995 |
+| Java policies off, noseed | 231–236 | 155–157 | 16–19 | 61–69 | 2 | 0 | 7 | 8,204 |
+| Go 64 workers `-seed` | 248–250 | 248–250 | 118–119 | 0 | 48–52 | 0 | 64 | 1,230 |
+| Go 64 workers | 245 | 245 | 122 | 0 | 50–53 | 0 | 28–30 | 2,133 |
+| Go 16 workers `-seed` | 190–201 | 190–201 | 54–63 | 0 | 7–14 | 0 | 16 | 1,825 |
+| Go 16 workers | 228–235 | 228–235 | 106–115 | 0 | 28–33 | 0 | 16 | 3,311 |
+
+noaa-nws-fourcastnetgfs-pds, 1 repeat:
+
+| Arm | Wall s | Requests (replay) |
+|---|---:|---:|
+| Java defaults | 102.7 | 5,046 |
+| Java policies off | 395.4 | 7,884 |
+| Java policies off, noseed | 221.3 | 6,254 |
+
+The Go arms of this bucket are reported with step 2.
+
+**Reading.** The coordinator's revised gate takes these comparisons as end-to-end numbers (wall, requests)
+with ranges from repeats, not as a split-count equality. On noaa-normals-pds:
+- With the seed and the in-flight cap matched (Java policies off with no seed vs Go at 16 workers without
+  seed), request counts agree: 231–236 vs 228–235.
+- Splits are not comparable: Java splits by thieves (61–69 steals) plus owner splits (16–19); Go uses owner
+  splits only (106–115).
+- Java's AIMD held in-flight requests at 7–16 where Go keeps its worker count, so Go listed 1.3–3.4× faster
+  in wall time.
+
+On fourcastnetgfs the policy layer is worth a factor of 3.8 in wall time (103 vs 395 s) and 36 % fewer
+requests. That sets it first in the step-5 order for this shape.
+
+### Sizes and the ETag encoding
+
+Go datasets were 5–21 % larger than Java's:
+- normals-hourly: +21 %;
+- the 10k fixture: +5.7 %;
+- the 1M fixture: +5.0 %;
+- noaa-normals-pds: +8.9 %;
+- fourcastnetgfs: +5.0 %.
+
+Per-column metadata shows two causes:
+- **ETag.** parquet-mr tries a dictionary, then falls back to DELTA_BYTE_ARRAY for unique hex ETags. Go
+  fell back from dictionary to PLAIN.
+- **Integers.** Java keeps dictionary pages for `size` and `last_modified` until they overflow, then switches
+  to delta in the middle of a chunk. parquet-go can only fall back to PLAIN.
+
+Writing `etag` as DELTA_BYTE_ARRAY directly brings the gap to:
+- 1M fixture: 1.050 → 1.027;
+- fourcastnetgfs: 1.050 → 1.027;
+- noaa-normals-pds: 1.089 → 1.069;
+- the 18 feature buckets: 1.004–1.053.
+
+Dictionary integers in parquet-go made the 1M fixture 26 % larger, so they are not used. The remaining gap,
+`last_modified` on buckets with few distinct timestamps, is recorded in
+[docs/internals/parquet-output.md](docs/internals/parquet-output.md).
+
+### Custom client hardening from the corpus review
+
+The 0.3.2 Java parser hit `streaming_xml_unparseable` on real runs. In the Go client a 200 response whose
+body does not parse is now:
+- a retryable transport fault;
+- counted as `parse_failures`;
+- never a dropped page.
+
+Two tests hold this. `TestEveryTruncationFails` checks that no proper prefix of a page parses.
+`TestParseFailuresAreRetried` checks that a cut or garbled body is retried and counted. The parser reads the
+whole body before parsing, so chunk boundaries never fall inside a token.
+
 ## Measurement drift
 
 The host slowed during the session (Firecracker guest; nothing else was running in the guest, and `vmstat`

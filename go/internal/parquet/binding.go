@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	pq "github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/schema"
@@ -75,9 +76,25 @@ func (r root) Fields() []pq.Field {
 		if i == 0 {
 			fields[i] = ascendingKey{f}
 		}
+		if deltaBytes[r.s.Columns[i].Name] {
+			fields[i] = encoded{fields[i], &pq.DeltaByteArray}
+		}
 	}
 	return fields
 }
+
+// deltaBytes are byte-array columns written DELTA_BYTE_ARRAY instead of
+// dictionary-then-PLAIN: ETags are unique hex, so the dictionary never pays
+// and parquet-mr (Java swath) falls back to DELTA_BYTE_ARRAY for them.
+var deltaBytes = map[string]bool{"etag": true}
+
+// encoded overrides a field's encoding.
+type encoded struct {
+	pq.Field
+	enc encoding.Encoding
+}
+
+func (f encoded) Encoding() encoding.Encoding { return f.enc }
 
 // ascendingKey stamps BoundaryOrder ASCENDING on a one-page column index
 // (accepted by older Java readers); multi-page indexes are untouched.

@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Verify a swath-local dataset with DuckDB (independent of the Go writer).
 
-Checks: _SUCCESS present; run report named _swath_local_summary.json; for a
-local dataset no _swath_summary.json (Swath's reserved run-summary name, parsed by
-Varve), for an S3 dataset a compatible one (schema_version 2, completed, no
+Checks: _SUCCESS present; for a local dataset the run report
+_swath_local_summary.json and no _swath_summary.json (Swath's reserved run-summary
+name, parsed by Varve), for an S3 dataset a compatible one (schema_version 2, completed, no
 filters, target s3://<sourceBucket>[/prefix]) and every column checked against
 Swath's canonical schema (contracts section 4); manifest totalRows == sum(rowCount) == DuckDB count;
 per-file DuckDB row count == manifest rowCount and min/max key == manifest
@@ -29,9 +29,10 @@ def main(out):
         ok = ok and cond
 
     check(os.path.exists(os.path.join(out, "_SUCCESS")), "_SUCCESS present")
-    check(os.path.exists(os.path.join(out, "_swath_local_summary.json")), "_swath_local_summary.json present")
     manifest = json.load(open(os.path.join(out, "manifest.json")))
     s3 = manifest.get("sourceKind") == "s3"
+    check(os.path.exists(os.path.join(out, "_swath_local_summary.json")) != s3,
+          "_swath_local_summary.json " + ("absent (S3 reports in _swath_summary.json)" if s3 else "present"))
     swath_summary = os.path.join(out, "_swath_summary.json")
     if s3:
         run = json.load(open(swath_summary))

@@ -85,6 +85,7 @@ type Stats struct {
 	Throttles     int64      `json:"throttles"`
 	Timeouts      int64      `json:"timeouts"`
 	Attempts      int64      `json:"attempts"`       // HTTP requests, retries included
+	ParseFailures int64      `json:"parse_failures"` // 200 bodies that did not parse, retried
 	OverfetchKeys int64      `json:"overfetch_keys"` // listed past a range's hi and trimmed
 	Anonymous     bool       `json:"anonymous"`
 	Credentials   string     `json:"credentials,omitempty"` // where they came from
@@ -201,7 +202,7 @@ func (p *Provider) Stats() Stats {
 	}
 	if c, ok := p.client.(counted); ok {
 		n := c.Counters()
-		s.Retries, s.Throttles, s.Timeouts, s.Attempts = n.Retries, n.Throttles, n.Timeouts, n.Attempts
+		s.Retries, s.Throttles, s.Timeouts, s.Attempts, s.ParseFailures = n.Retries, n.Throttles, n.Timeouts, n.Attempts, n.ParseFailures
 	}
 	s.Anonymous, s.Credentials, s.Region = p.anonymous, p.creds, p.region
 	return s

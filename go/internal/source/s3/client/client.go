@@ -44,6 +44,9 @@ type Counters struct {
 	Retries   int64 `json:"retries"`   // attempts repeated after a retryable failure
 	Throttles int64 `json:"throttles"` // of those, 429/503/SlowDown answers
 	Timeouts  int64 `json:"timeouts"`  // of those, attempts past the per-request timeout
+	// ParseFailures counts 200 responses whose body did not parse (a cut or
+	// garbled body); they are retried like transport faults, never dropped.
+	ParseFailures int64 `json:"parse_failures"`
 }
 
 // Client lists S3 buckets. It is safe for concurrent use.
@@ -56,7 +59,7 @@ type Client struct {
 	http   *http.Client
 	note   string
 
-	attempts, retries, throttles, timeouts atomic.Int64
+	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
 
 	parsers sync.Pool // *parser
 	buffers sync.Pool // *bytes.Buffer
@@ -124,7 +127,7 @@ func (c *Client) Region() string { return c.region }
 
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
-	return Counters{c.attempts.Load(), c.retries.Load(), c.throttles.Load(), c.timeouts.Load()}
+	return Counters{c.attempts.Load(), c.retries.Load(), c.throttles.Load(), c.timeouts.Load(), c.parseFailures.Load()}
 }
 
 // ListObjectsV2 sends one ListObjectsV2 request, retrying retryable
@@ -177,7 +180,9 @@ func retryable(err error, timeout *bool) (retry, throttle bool) {
 		*timeout = true
 		return true, false
 	case errors.Is(err, ErrSyntax):
-		return false, false
+		// A 200 whose body does not parse is a transport fault (a cut or
+		// garbled body): retry it. A page is never skipped.
+		return true, false
 	}
 	var cert *tls.CertificateVerificationError
 	if errors.As(err, &cert) {
@@ -289,7 +294,12 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 		p = new(parser)
 	}
 	defer c.parsers.Put(p)
-	return p.parseList(buf.Bytes())
+	page, err := p.parseList(buf.Bytes())
+	if err != nil {
+		c.parseFailures.Add(1)
+		return nil, fmt.Errorf("ListObjectsV2 response (%d bytes): %w", buf.Len(), err)
+	}
+	return page, nil
 }
 
 // wrap marks an attempt that ran out of its own time (not the caller's).

@@ -105,7 +105,7 @@ func TestPublishFailureLeavesNoSuccess(t *testing.T) {
 	touch(t, TempPath(out, 0))
 	// A non-empty directory where manifest.json goes makes the commit fail.
 	touch(t, filepath.Join(out, ManifestName, "blocker"))
-	err := Publish(out, Meta{SchemaID: id}, []Part{{Path: TempPath(out, 0), Rows: 1, MinKey: "a", MaxKey: "a"}}, map[string]int{})
+	err := Publish(out, Meta{SchemaID: id}, []Part{{Path: TempPath(out, 0), Rows: 1, MinKey: "a", MaxKey: "a"}}, []File{{SummaryName, map[string]int{}}})
 	if err == nil {
 		t.Fatal("publish succeeded")
 	}

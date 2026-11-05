@@ -13,14 +13,23 @@ dataset layout"); this page says how the Go writer meets it.
 | Timestamps | INT64 `TIMESTAMP(MICROS, UTC)` | canonical `last_modified`. |
 | Key encoding | `DELTA_BYTE_ARRAY` | sorted keys share long prefixes. It is also what makes the column-index adapter possible: with dictionary keys the type is library-private. |
 | Key column index | one-page indexes stamped `BoundaryOrder = ASCENDING` (`ascendingKey` adapter); multi-page indexes untouched | older Java readers reject a one-page index with `UNORDERED`; Varve and current Java accept both. Built through parquet-go's public indexer factory, not by rewriting footers. |
-| Other byte arrays | `RLE_DICTIONARY`, 8 KiB dictionary limit per chunk | storage class, owner and checksum columns repeat; ETags fall back to plain once the dictionary fills. |
-| Other integers | `DELTA_BINARY_PACKED` | |
+| `etag` | `DELTA_BYTE_ARRAY` | ETags are unique hex: a dictionary never pays. parquet-mr (Java swath) tries a dictionary and falls back to `DELTA_BYTE_ARRAY`; writing delta directly matches its result and is 2–3 % smaller per dataset than dictionary-then-PLAIN. |
+| Other byte arrays | `RLE_DICTIONARY`, 8 KiB dictionary limit per chunk | storage class, owner and checksum columns repeat. |
+| Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap (REPORT.md "Step 4a"). |
 | Booleans | `PLAIN` | |
 | Pages | v2, 1024 rows, page-header statistics off | served geometry: point lookups decode one 1024-row page. The column index carries page bounds (truncated to 1024 bytes); header statistics would duplicate them. |
 | Row groups | byte target 8 MiB on the writer's `Size()` estimate, checked at page boundaries; ceiling 1,000,000 rows | served geometry; the estimate is the encoded payload, not a heap bound. |
 | Codec | zstd, klauspost `SpeedDefault` with entropy coding of all-literal blocks enabled | pure Go (`CGO_ENABLED=0`). The default wrapper skips entropy coding on all-literal blocks, which loses most of the gain on hex ETags. |
 | Column parallelism | a page's columns may be encoded on several goroutines | used when fewer parts than encoders are open, so a one-part run uses every core. Output is byte-identical to serial encoding (tested). |
 | `created_by` | `swath-local 0.0.0-spike` | changes at the first release; byte-identity checks pin it. |
+
+## Run reports
+
+S3 datasets carry swath's run summary as `_swath_summary.json` (`listing.RunSummary`): Java swath's
+schema_version 2 field set where this tool has a counterpart (target, completion, objects, durations, cost,
+efficiency, engine, seed, sort), plus this tool's own report under `go`. Varve reads `schema_version`,
+`completed`, `config.target` and `config.filters` to accept a dataset as whole-bucket coverage. Filesystem
+datasets carry this tool's report as `_swath_local_summary.json`; Java has no filesystem mode to mirror.
 
 ## Footer stamps
 
@@ -54,8 +63,8 @@ out/
   data/part-00000.parquet ...   dense, zero-based %05d; name order == key order; parts strictly disjoint
   manifest.json                 swath's consumer manifest fields + schemaId, sourceKind, sourceRoot|sourceBucket, totalRows
   symlink.txt                   data/<part> paths
-  _swath_local_summary.json     this tool's run report
-  _swath_summary.json           S3 only: swath's run-summary subset (schema_version 2, completed, target)
+  _swath_summary.json           S3: swath's run summary (schema_version 2) with this tool's report under "go"
+  _swath_local_summary.json     filesystem: this tool's run report
   _SUCCESS                      empty, written last
 ```
 

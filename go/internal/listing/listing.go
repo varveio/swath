@@ -30,12 +30,13 @@ type Config struct {
 	Replace  bool   // replace a previous dataset in Out
 	Fields   fs.Fields
 	NoDirs   bool
-	NoLinks  bool  // do not read symlink targets
-	Workers  int   // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
-	Encoders int   // Parquet encoders; default GOMAXPROCS
-	Memory   int64 // budget in bytes for rows held between listing and encoding; default 256 MiB
-	PartSize int64 // target bytes per part; default 64 MiB
-	Portable bool  // use the portable filesystem engine (tests, comparisons)
+	NoLinks  bool     // do not read symlink targets
+	Workers  int      // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
+	Encoders int      // Parquet encoders; default GOMAXPROCS
+	Memory   int64    // budget in bytes for rows held between listing and encoding; default 256 MiB
+	PartSize int64    // target bytes per part; default 64 MiB
+	Portable bool     // use the portable filesystem engine (tests, comparisons)
+	Argv     []string // the command line, recorded in the run summary
 	S3       S3Config
 }
 
@@ -103,10 +104,12 @@ type Summary struct {
 	Parts       int       `json:"parts"`
 	OutBytes    int64     `json:"output_bytes"`
 	Seconds     float64   `json:"seconds"`
-	UserSeconds float64   `json:"user_cpu_seconds"`
-	SysSeconds  float64   `json:"sys_cpu_seconds"`
-	PeakRSS     int64     `json:"peak_rss_bytes"`
-	Started     time.Time `json:"started"`
+	// ListingSeconds is the time to the end of listing (the order stage).
+	ListingSeconds float64   `json:"listing_seconds"`
+	UserSeconds    float64   `json:"user_cpu_seconds"`
+	SysSeconds     float64   `json:"sys_cpu_seconds"`
+	PeakRSS        int64     `json:"peak_rss_bytes"`
+	Started        time.Time `json:"started"`
 }
 
 // Errors is the listing's error count.
@@ -126,7 +129,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		return Summary{}, err
 	}
 	sum := Summary{
-		Tool: "swath-local", Out: cfg.Out, Workers: cfg.Workers, Encoders: cfg.Encoders,
+		Tool: "swath-go", Out: cfg.Out, Workers: cfg.Workers, Encoders: cfg.Encoders,
 		ReorderRows: int(cfg.Memory / bytesPerBufferedRow), Started: start,
 	}
 	if strings.HasPrefix(cfg.Root, "s3://") {
@@ -169,7 +172,10 @@ func runFS(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 		}
 		return st.Files + st.Dirs
 	}
-	return pipeline(ctx, cfg, sum, p, s, meta, listed)
+	reports := func(sum *Summary) []dataset.File {
+		return []dataset.File{{Name: dataset.SummaryName, Value: sum}}
+	}
+	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports)
 }
 
 func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
@@ -193,26 +199,29 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 			return sum, fmt.Errorf("prepare output: %w", err)
 		}
 	}
-	// The Swath run summary records the listed target, so a reader can tell
-	// a whole-bucket dataset from a prefix (or truncated) one.
-	run := dataset.RunSummary{SchemaVersion: 2, Completed: true}
-	run.Config.Target, run.Config.Filters = "s3://"+bucket, []string{}
+	// swath's run summary records the listed target, so a reader can tell a
+	// whole-bucket dataset from a prefix (or truncated) one.
+	target := "s3://" + bucket
 	if prefix != "" {
-		run.Config.Target += "/" + prefix
+		target += "/" + prefix
 	}
 	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceKind: "s3",
-		SourceBucket: bucket, SourceRoot: cfg.Root, SwathSummary: &run}
+		SourceBucket: bucket, SourceRoot: cfg.Root}
 	listed := func(sum *Summary) int64 {
 		st := p.Stats()
 		sum.S3 = &st
-		run.Completed = !st.Truncated
 		return st.Objects
 	}
-	return pipeline(ctx, cfg, sum, p, s, meta, listed)
+	reports := func(sum *Summary) []dataset.File {
+		return []dataset.File{{Name: dataset.SwathSummaryName, Value: swathSummary(cfg, sum, target)}}
+	}
+	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports)
 }
 
 // pipeline runs provider → order → router → publish for one provider.
-func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Provider[R], s *schema.Schema, meta dataset.Meta, listed func(*Summary) int64) (Summary, error) {
+// reports names the JSON run reports published beside the manifest.
+func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Provider[R], s *schema.Schema, meta dataset.Meta,
+	listed func(*Summary) int64, reports func(*Summary) []dataset.File) (Summary, error) {
 	var sink order.Sink = discard{}
 	var router *parquet.Router
 	if cfg.Out != "" {
@@ -233,6 +242,7 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 	}
 	ost, err := order.Run(ctx, p, sink, order.Options{Workers: cfg.Workers, Budget: sum.ReorderRows})
 	sum.MaxBuffered, sum.Rows = ost.MaxBuffered, ost.Rows
+	sum.ListingSeconds = time.Since(sum.Started).Seconds()
 	want := listed(&sum)
 	if err != nil {
 		return fail(err)
@@ -253,7 +263,7 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 		sum.OutBytes += part.Bytes
 	}
 	finish(&sum)
-	if err := dataset.Publish(cfg.Out, meta, parts, sum); err != nil {
+	if err := dataset.Publish(cfg.Out, meta, parts, reports(&sum)); err != nil {
 		dataset.Cleanup(cfg.Out)
 		return sum, fmt.Errorf("publish: %w", err)
 	}

@@ -256,3 +256,22 @@ func FuzzParseFields(f *testing.F) {
 }
 
 func unsafeData(s string) *byte { return unsafe.StringData(s) }
+
+// TestEveryTruncationFails: no proper prefix of a page parses, so a cut
+// body can never pass for a shorter page.
+func TestEveryTruncationFails(t *testing.T) {
+	for _, doc := range []string{sample, okPageEntities} {
+		for i := 0; i < len(doc); i++ {
+			if pg, err := parse([]byte(doc[:i])); err == nil {
+				t.Fatalf("prefix %d of %d parsed: %+v", i, len(doc), pg)
+			}
+		}
+		if _, err := parse([]byte(doc)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+const okPageEntities = `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>true</IsTruncated>` +
+	`<NextContinuationToken>a&amp;b</NextContinuationToken><Contents><Key>x%26y&amp;z</Key>` +
+	`<ETag>&#34;e&#x22;</ETag></Contents></ListBucketResult>`

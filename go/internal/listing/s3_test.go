@@ -71,10 +71,15 @@ func TestS3Dataset(t *testing.T) {
 		if m.SourceBucket != "bkt" || m.FileSchema != schema.S3.Message() || m.TotalRows != sum.Rows {
 			t.Fatalf("manifest %+v", m)
 		}
-		var run dataset.RunSummary
+		var run RunSummary
 		readJSON(t, filepath.Join(out, dataset.SwathSummaryName), &run)
-		if run.SchemaVersion != 2 || !run.Completed || run.Config.Target != tc.target || run.Config.Filters == nil {
+		if run.SchemaVersion != 2 || !run.Completed || run.Config.Target != tc.target || run.Config.Filters == nil ||
+			run.Objects != sum.Rows || run.Output.Files != sum.Parts || !run.Sort.Enabled || run.Cost.APICalls != sum.S3.Requests ||
+			run.Go == nil || run.Go.S3 == nil {
 			t.Fatalf("run summary %+v", run)
+		}
+		if _, err := os.Stat(filepath.Join(out, dataset.SummaryName)); !os.IsNotExist(err) {
+			t.Fatalf("S3 dataset has %s: %v", dataset.SummaryName, err)
 		}
 	}
 	if !strings.Contains(schema.S3.Message(), "required boolean is_delete_marker;") {
