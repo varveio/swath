@@ -113,16 +113,30 @@ Every split feeds an idle worker and no LIST is repeated.
 range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), `bound` (`m < hi`, or below
 `prefixCeil(scope)` on the frontier), `no_pivot` (the owner keeps listing).
 
-**Pivots.** First choice: density extrapolation from the last page. Keys are read as numbers in the alphabet
-seen on that page; the target is `c + page span × max(4, hunger)`, at most halfway to `hi`, cut after its first
-character that differs from `c`. Fallback: swath's `ByteMidpoint` (bounded midpoint; `ForwardReflect` on the
-frontier; the 1024-byte cap). Every pivot is safe (I12). Extrapolation is a deliberate deviation from the
-Java spec: on the synthetic T6 keyspace midpoints alone leave most lower children empty.
+**Pivots.** Three steps:
+1. **The spec's pivot is the default:** swath's `ByteMidpoint`, i.e. the safe midpoint of `(c, hi]`, or
+   `ForwardReflect` on the open frontier, with the 1,024-byte cap.
+2. **A density refinement from the last page.** Keys are read as numbers in the alphabet seen on that page.
+   The target is `c + page span × max(4, hunger)`, at most halfway to `hi`, cut after its first character
+   that differs from `c`. It is taken only when it lies between the cursor and the spec pivot (nearer the
+   cursor), or when the spec pivot is within one page span of the cursor. In that second case the spec
+   pivot would leave the lower child empty: reflection from ⊥ moves only the last character.
+3. **The 1-key probe (Java's pivot probe, the first ported policy feature).** Before the split is published,
+   one ListObjectsV2 with `max-keys=1` after the pivot checks that the upper child `(m, hi]` holds a key. If
+   it does not, the pivot moves to the safe midpoint of `(c, m]` and is probed again, up to 3 probes. Then
+   the split is skipped, and the range does not try again for 2, 4, … 64 pages.
+
+The split's demand slot is reserved while it is probed, so concurrent owners do not split for the same idle
+worker. Every pivot is safe (I12). `-no-probe` lists with the kernel alone.
+
+**Why.** Before the probe, the density estimate was the first choice and could reach far past the data on
+skewed shapes. On a replay of noaa-nws-fourcastnetgfs-pds, 1,362 of 2,927 splits left an empty upper child,
+and the run used about 1 of 64 workers (REPORT.md "Step 5a").
 
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted
 bounded and frontier, rejected per guard clause, skipped for no demand, outranked or not continuing);
-`child_empty.{lower,upper}` (the cost of not probing); `max_active`, `max_queued`, `mean_active`; busy and
+`child_empty.{lower,upper}`; `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
 sink-wait time.
 
 **Sequential oracle.** `-sequential` lists the scope as one continuation-token chain; its dataset is
@@ -133,7 +147,7 @@ then marked incomplete).
 boundaries; `TakeBoundaries` hands the journal the split cursors, pivots and seed cuts made since the last
 part ([durability.md](durability.md)).
 
-**What the full engine adds** (later steps, each by measured need):
+**What the full engine adds** (later steps, each by measured need; the 1-key probe is ported):
 structure and `max_keys=1` probes; density-aware pivots from probes; the owner gate chain, pacing and futility
 backoff; AIMD concurrency; mass-aware and multi-level seeding; the rate-anchored size estimator; versions mode.
 

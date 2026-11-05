@@ -55,6 +55,7 @@ type Options struct {
 	MaxKeys    int64   // stop after this many objects (sequential only; 0 = all)
 	Client     API     // optional; built from the options above when nil
 	Resume     *Resume // continue after a journaled run's last published key
+	NoProbe    bool    // split without the 1-key probe (the kernel alone, for comparisons)
 
 	// Test hooks: splitCoin replaces the demand gate; trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].

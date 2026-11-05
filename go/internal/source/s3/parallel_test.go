@@ -422,15 +422,28 @@ func TestT6BalanceSmoke(t *testing.T) {
 	}
 	f := newSorted(keys, false, 1)
 	f.latency = 20 * time.Millisecond
-	got, st, leaves := runBudget(t, f, Options{}, 16, 131_072)
-	if len(got) != len(keys) {
-		t.Fatalf("%d keys", len(got))
-	}
-	checkTiling(t, "T6", leaves)
-	accepted := st.Split.AcceptedBounded + st.Split.AcceptedFrontier
-	t.Logf("max_active=%d accepted=%d (bounded %d, frontier %d) child_empty=%+v requests=%d", st.MaxActive, accepted,
-		st.Split.AcceptedBounded, st.Split.AcceptedFrontier, st.ChildEmpty, st.Requests)
-	if st.MaxActive < 12 || accepted == 0 {
-		t.Fatalf("parallelism did not engage: max_active=%d accepted=%d", st.MaxActive, accepted)
+	// The kernel alone (no probe) must engage at least 12 of 16 workers. With
+	// the 1-key probe each split costs one more 20 ms request here, and
+	// probes catch pivots past the end of the keyspace; it must still engage
+	// most workers, and its empty upper children must be avoided.
+	for _, noProbe := range []bool{true, false} {
+		got, st, leaves := runBudget(t, f, Options{NoProbe: noProbe}, 16, 131_072)
+		if len(got) != len(keys) {
+			t.Fatalf("%d keys", len(got))
+		}
+		checkTiling(t, "T6", leaves)
+		accepted := st.Split.AcceptedBounded + st.Split.AcceptedFrontier
+		t.Logf("noProbe=%v max_active=%d accepted=%d (bounded %d, frontier %d) child_empty=%+v requests=%d probe=%v",
+			noProbe, st.MaxActive, accepted, st.Split.AcceptedBounded, st.Split.AcceptedFrontier, st.ChildEmpty, st.Requests, st.tally["probe"])
+		min := 12
+		if !noProbe {
+			min = 8
+			if st.ChildEmpty.Upper != 0 {
+				t.Fatalf("probe let %d empty upper children through", st.ChildEmpty.Upper)
+			}
+		}
+		if st.MaxActive < min || accepted == 0 {
+			t.Fatalf("noProbe=%v: parallelism did not engage: max_active=%d accepted=%d", noProbe, st.MaxActive, accepted)
+		}
 	}
 }

@@ -53,6 +53,10 @@ a boolean.
 | `max_queued` | max | ranges | peak ranges queued for a worker |
 | `busy_ns` | count | ns | sum of Expand wall time |
 | `sink_wait_ns` | count | ns | time Expand spent handing rows to the order stage (backpressure) |
+| `probe.requests` | count | requests | 1-key probes (max-keys=1 after a pivot), also counted in requests |
+| `probe.upper_empty` | count | probes | probes that found no key past the pivot: an empty upper child avoided |
+| `probe.moved` | count | pivots | pivots moved to the midpoint of (cursor, pivot] after an empty probe |
+| `split.rejected.probe_empty` | count | decisions | splits skipped: probes found no key past any pivot tried |
 <!-- s3:end -->
 
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active

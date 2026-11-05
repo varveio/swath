@@ -61,6 +61,8 @@ type running struct {
 	continuing   bool // last page full and not at the bound
 	unsplittable bool
 	id           uint64
+	cooldown     int // pages to skip after a probe found no key past the pivot
+	probeFails   int
 }
 
 // Root is the scope: the sequential chain, a resumed tiling, the seed, or
@@ -228,7 +230,17 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		for i := range page {
 			page[i] = out.Contents[i].Key
 		}
-		if lower, upper, ok := p.decide(st, r, page, c); ok {
+		if m, ext, ok := p.decide(st, r, page, c); ok {
+			m, ok, err := p.probe(ctx, r, c, m)
+			if err != nil {
+				p.commit(st, r, c, m, ext, false)
+				return err
+			}
+			lower, upper := p.commit(st, r, c, m, ext, ok)
+			if !ok {
+				in.StartAfter, in.ContinuationToken = "", out.NextContinuationToken
+				continue
+			}
 			if err := faults.At("split"); err != nil {
 				return err
 			}
@@ -251,13 +263,20 @@ func (p *Provider) covered(lo, hi string, open bool) {
 // decide runs after a full (continuing) page of r with cursor c: split iff
 // workers are idle (hunger = workers - active - queued > 0) and r ranks
 // among the hunger largest eligible ranges (the open frontier first, then by
-// keys listed). The pivot is the safe midpoint of (c, hi], or a forward
-// reflection for the frontier.
-func (p *Provider) decide(st *running, r Range, page []string, c string) (lower, upper Range, ok bool) {
+// keys listed). The pivot is the spec's: the safe midpoint of (c, hi], or a
+// forward reflection for the open frontier, refined by the last page's
+// density (see below). On success the two children are
+// reserved in the demand count; the caller probes the pivot and then
+// commits or releases the split.
+func (p *Provider) decide(st *running, r Range, page []string, c string) (m string, extrapolated, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st.continuing = true
 	if st.unsplittable {
+		return
+	}
+	if st.cooldown > 0 {
+		st.cooldown--
 		return
 	}
 	if coin := p.opt.splitCoin; coin != nil {
@@ -287,16 +306,23 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (lower,
 	if r.open {
 		ceil, bounded = prefixCeil(p.opt.Prefix)
 	}
-	// Density extrapolation from the last page (span·max(4, hunger) ahead,
-	// at most halfway to hi); the safe midpoint or forward reflection when
-	// it cannot produce a safe key.
-	m, found := extrapolate(page, c, ceil, bounded, int64(max(4, hunger)))
-	if found {
-		p.c.Inc(cSplitExtrapolated)
-	} else if r.open {
+	var found bool
+	if r.open {
 		m, found = forwardReflect(r.lo, c)
 	} else {
 		m, found = between(c, r.hi)
+	}
+	if found && m > c {
+		// Refinement from the page's density (span·max(4, hunger) past the
+		// cursor, at most halfway to hi): taken when it is nearer the cursor
+		// than the spec pivot, or when the spec pivot is within one page span
+		// of the cursor, where its lower child would be empty. The probe
+		// below catches a refinement that overshoots the data.
+		e, eok := extrapolate(page, c, ceil, bounded, int64(max(4, hunger)))
+		one, ook := extrapolate(page, c, ceil, bounded, 1)
+		if eok && c < e && (e < m || (ook && m < one)) {
+			m, extrapolated = e, true
+		}
 	}
 	switch guard(c, m, found, ceil, bounded, false) {
 	case clauseNoPivot:
@@ -317,12 +343,64 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (lower,
 		p.c.Inc(cSplitRejectedDone)
 		return
 	}
+	p.queued += 2 // reserved while the pivot is probed
+	return m, extrapolated, true
+}
+
+// maxProbes bounds the 1-key probes spent on one split.
+const maxProbes = 3
+
+// probe is Java's 1-key probe: one ListObjectsV2 with max-keys=1 after the
+// pivot tells whether the upper child (m, hi] holds a key. If it is empty
+// the pivot moves to the safe midpoint of (c, m] and is probed again, up to
+// maxProbes times; then the split is skipped. Called without mu.
+func (p *Provider) probe(ctx context.Context, r Range, c, m string) (string, bool, error) {
+	if p.opt.NoProbe {
+		return m, true, nil
+	}
+	for range maxProbes {
+		in := p.input()
+		in.StartAfter, in.MaxKeys, in.FetchOwner = m, 1, false
+		p.c.Inc(cProbeRequests)
+		out, err := p.list(ctx, in)
+		if err != nil {
+			return "", false, err
+		}
+		if len(out.Contents) > 0 && (r.open || out.Contents[0].Key <= r.hi) {
+			return m, true, nil
+		}
+		p.c.Inc(cProbeUpperEmpty) // an empty child avoided
+		next, found := between(c, m)
+		if !found || !(c < next && next < m) || !safeString(next) {
+			return "", false, nil
+		}
+		m = next
+		p.c.Inc(cProbeMoved)
+	}
+	return "", false, nil
+}
+
+// commit accepts a probed split (children, counters, boundaries for the
+// journal) or releases its reservation.
+func (p *Provider) commit(st *running, r Range, c, m string, extrapolated, ok bool) (lower, upper Range) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !ok {
+		p.queued -= 2
+		p.c.Inc(cSplitRejectedProbe)
+		st.probeFails++
+		st.cooldown = 1 << min(st.probeFails, 6) // back off: 2, 4, … 64 pages
+		return
+	}
+	st.probeFails = 0
+	if extrapolated {
+		p.c.Inc(cSplitExtrapolated)
+	}
 	if r.open {
 		p.c.Inc(cSplitAcceptedFrontier)
 	} else {
 		p.c.Inc(cSplitAcceptedBounded)
 	}
-	p.queued += 2
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.bounds = append(p.bounds, c, m) // in memory: the journal takes them at the next part
 	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower}
@@ -330,7 +408,7 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (lower,
 	if os.Getenv("SWATH_LOCAL_SPLIT_TRACE") != "" {
 		fmt.Fprintf(os.Stderr, "split id=%d lo=%q c=%q m=%q hi=%q open=%v keys=%d\n", r.id, r.lo, c, m, r.hi, r.open, st.keys)
 	}
-	return lower, upper, true
+	return lower, upper
 }
 
 // outranks reports whether a is a larger remainder than b: the open

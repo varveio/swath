@@ -52,6 +52,11 @@ const (
 	cMaxQueued
 	cBusyNs
 	cSinkWaitNs
+	cProbeRequests
+	cProbeUpperEmpty
+	cProbeMoved
+	cSplitRejectedProbe
+	numCounters
 )
 
 // Counters is the S3 provider's tally: every engagement counter, in
@@ -99,6 +104,10 @@ var Counters = []counters.Def{
 	d("max_queued", counters.Max, "ranges", "peak ranges queued for a worker"),
 	d("busy_ns", counters.Count, "ns", "sum of Expand wall time"),
 	d("sink_wait_ns", counters.Count, "ns", "time Expand spent handing rows to the order stage (backpressure)"),
+	d("probe.requests", counters.Count, "requests", "1-key probes (max-keys=1 after a pivot), also counted in requests"),
+	d("probe.upper_empty", counters.Count, "probes", "probes that found no key past the pivot: an empty upper child avoided"),
+	d("probe.moved", counters.Count, "pivots", "pivots moved to the midpoint of (cursor, pivot] after an empty probe"),
+	d("split.rejected.probe_empty", counters.Count, "decisions", "splits skipped: probes found no key past any pivot tried"),
 }
 
 func d(key string, kind counters.Kind, unit, help string) counters.Def {

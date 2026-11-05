@@ -47,6 +47,8 @@ usage: swath list <root> [flags]
     	S3: publish parts only at the end, without the journal that -resume needs
   -no-link-target
     	do not read symlink targets
+  -no-probe
+    	S3: split without the 1-key probe that checks the upper child is not empty
   -no-spill
     	wait on the reorder budget instead of spilling rows ahead of the frontier to disk
   -out directory

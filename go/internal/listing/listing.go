@@ -56,6 +56,7 @@ type S3Config struct {
 	Timeout          time.Duration // per request (0: 30 s)
 	Warn             func(string)  // one-time warnings (nil: dropped)
 	NoJournal        bool          // publish parts only at the end, without a journal (no resume)
+	NoProbe          bool          // split without the 1-key probe
 	FetchOwner       bool
 	Sequential       bool  // one continuation-token chain (the reference oracle)
 	Seed             bool  // tile the scope from one delimiter page first
@@ -208,7 +209,7 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 		return sum, err
 	}
 	p, err := s3.New(ctx, s3.Options{
-		Resume: jr.providerResume(),
+		Resume: jr.providerResume(), NoProbe: cfg.S3.NoProbe,
 		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, PathStyle: cfg.S3.PathStyle, FIPS: cfg.S3.FIPS, DualStack: cfg.S3.DualStack,
 		FetchOwner: cfg.S3.FetchOwner, Sequential: cfg.S3.Sequential, Seed: cfg.S3.Seed, Workers: cfg.Workers,
 		MaxKeys: cfg.S3.MaxKeys, Client: cfg.S3.Client,
