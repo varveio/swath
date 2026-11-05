@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,9 +23,6 @@ func testClient(t *testing.T, h http.HandlerFunc, cfg Config) (*Client, *httptes
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	cfg.Endpoint, cfg.PathStyle = srv.URL, true
-	if cfg.Env == nil {
-		cfg.Env = func(string) string { return "" }
-	}
 	cfg.BaseBackoff, cfg.MaxBackoff = time.Millisecond, 2*time.Millisecond
 	c, err := New(cfg)
 	if err != nil {
@@ -116,23 +115,60 @@ func TestCancelStopsBackoff(t *testing.T) {
 	}
 }
 
-func TestSignedAndAnonymousRequests(t *testing.T) {
+// isolate clears the AWS environment and points the shared files at dir.
+func isolate(t *testing.T, dir string) {
+	for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
+}
+
+// TestCredentialChain: the SDK's default chain signs with environment keys
+// and profiles; -anonymous never signs; nothing found means anonymous; a
+// named profile that does not exist is an error.
+func TestCredentialChain(t *testing.T) {
+	dir := t.TempDir()
+	isolate(t, dir)
+	os.WriteFile(filepath.Join(dir, "credentials"), []byte("[work]\naws_access_key_id = AKWORK\naws_secret_access_key = s\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile work]\nregion = eu-west-2\n"), 0o600)
 	var auth, token atomic.Value
 	h := func(w http.ResponseWriter, r *http.Request) {
 		auth.Store(r.Header.Get("Authorization"))
 		token.Store(r.Header.Get("X-Amz-Security-Token"))
 		w.Write([]byte(okPage))
 	}
-	env := map[string]string{"AWS_ACCESS_KEY_ID": "AK", "AWS_SECRET_ACCESS_KEY": "S", "AWS_SESSION_TOKEN": "T"}
-	c, _ := testClient(t, h, Config{Env: func(k string) string { return env[k] }})
-	c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-	if a := auth.Load().(string); !strings.HasPrefix(a, "AWS4-HMAC-SHA256 Credential=AK/") || token.Load() != "T" {
-		t.Fatalf("auth %q token %q", a, token.Load())
+	list := func(cfg Config) *Client {
+		t.Helper()
+		c, _ := testClient(t, h, cfg)
+		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+			t.Fatal(err)
+		}
+		return c
 	}
-	c, _ = testClient(t, h, Config{Anonymous: true, Env: func(k string) string { return env[k] }})
-	c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-	if auth.Load() != "" || token.Load() != "" || c.Note() == "" {
+	// Nothing configured: anonymous.
+	if c := list(Config{}); auth.Load() != "" || !c.auth.anonymous {
+		t.Fatalf("unsigned expected, got %q", auth.Load())
+	}
+	// A named profile from the shared files, with its region.
+	if c := list(Config{Profile: "work"}); !strings.Contains(auth.Load().(string), "Credential=AKWORK/") || c.Region() != "eu-west-2" ||
+		!strings.Contains(auth.Load().(string), "/eu-west-2/s3/aws4_request") {
+		t.Fatalf("profile: %q region %s", auth.Load(), c.Region())
+	}
+	// Environment keys with a session token.
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKENV")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "S")
+	t.Setenv("AWS_SESSION_TOKEN", "T")
+	if list(Config{}); !strings.HasPrefix(auth.Load().(string), "AWS4-HMAC-SHA256 Credential=AKENV/") || token.Load() != "T" {
+		t.Fatalf("env: %q token %q", auth.Load(), token.Load())
+	}
+	// -anonymous is authoritative, with a warning.
+	if c := list(Config{Anonymous: true}); auth.Load() != "" || token.Load() != "" || c.Note() == "" {
 		t.Fatalf("anonymous request signed: %q, note %q", auth.Load(), c.Note())
+	}
+	if _, err := New(Config{Profile: "nope"}); err == nil {
+		t.Fatal("missing profile accepted")
 	}
 }
 
@@ -149,6 +185,9 @@ func TestURL(t *testing.T) {
 		{Config{Region: "us-east-1"}, ListInput{Bucket: "a.b"}, "https://s3.us-east-1.amazonaws.com/a.b?encoding-type=url&list-type=2"},
 		{Config{Endpoint: "http://127.0.0.1:9000"}, ListInput{Bucket: "bkt"}, "http://127.0.0.1:9000/bkt?encoding-type=url&list-type=2"},
 		{Config{Endpoint: "https://minio.example/s3/"}, ListInput{Bucket: "bkt"}, "https://bkt.minio.example/s3/?encoding-type=url&list-type=2"},
+		{Config{Region: "us-gov-west-1", FIPS: true}, ListInput{Bucket: "bkt"}, "https://bkt.s3-fips.us-gov-west-1.amazonaws.com/?encoding-type=url&list-type=2"},
+		{Config{Region: "eu-west-1", DualStack: true}, ListInput{Bucket: "bkt"}, "https://bkt.s3.dualstack.eu-west-1.amazonaws.com/?encoding-type=url&list-type=2"},
+		{Config{Region: "cn-north-1"}, ListInput{Bucket: "bkt"}, "https://bkt.s3.cn-north-1.amazonaws.com.cn/?encoding-type=url&list-type=2"},
 	} {
 		c.cfg.Anonymous = true
 		cl, err := New(c.cfg)

@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,17 +23,18 @@ import (
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
-	Region         string        // else AWS_REGION, AWS_DEFAULT_REGION, the profile's region, us-east-1
+	Region         string        // else the SDK's resolution (AWS_REGION, profile), else us-east-1
 	Endpoint       string        // custom endpoint URL (S3-compatible stores, tests)
 	PathStyle      bool          // https://host/bucket instead of https://bucket.host/
-	Profile        string        // shared-file profile; overrides the environment keys
+	FIPS           bool          // s3-fips.REGION.amazonaws.com
+	DualStack      bool          // s3.dualstack.REGION.amazonaws.com (IPv6)
+	Profile        string        // shared config profile (else AWS_PROFILE, else default)
 	Anonymous      bool          // never sign
 	RequestTimeout time.Duration // per attempt, headers and body; default 30 s
 	MaxAttempts    int           // default 9
 	BaseBackoff    time.Duration // default 100 ms
 	MaxBackoff     time.Duration // default 5 s
 	HTTPClient     *http.Client
-	Env            Env              // default os.Getenv
 	Now            func() time.Time // signing clock; default time.Now
 }
 
@@ -52,10 +52,9 @@ type Counters struct {
 // Client lists S3 buckets. It is safe for concurrent use.
 type Client struct {
 	cfg    Config
-	creds  Credentials
+	auth   *auth
 	region string
 	base   *url.URL
-	signer *signer
 	http   *http.Client
 	note   string
 
@@ -67,9 +66,6 @@ type Client struct {
 
 // New resolves the region and credentials and builds the client.
 func New(cfg Config) (*Client, error) {
-	if cfg.Env == nil {
-		cfg.Env = os.Getenv
-	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -85,12 +81,11 @@ func New(cfg Config) (*Client, error) {
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = 5 * time.Second
 	}
-	creds, profileRegion, err := resolveCredentials(cfg.Profile, cfg.Anonymous, cfg.Env)
+	a, err := loadAuth(cfg)
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, creds: creds, http: cfg.HTTPClient}
-	c.region = firstNonEmpty(cfg.Region, cfg.Env("AWS_REGION"), cfg.Env("AWS_DEFAULT_REGION"), profileRegion, "us-east-1")
+	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: anonymousNote(cfg)}
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -98,13 +93,7 @@ func New(cfg Config) (*Client, error) {
 		}
 		c.base = &url.URL{Scheme: u.Scheme, Host: u.Host, Path: strings.TrimSuffix(u.Path, "/")}
 	} else {
-		c.base = &url.URL{Scheme: "https", Host: "s3." + c.region + ".amazonaws.com"}
-	}
-	if cfg.Anonymous && (cfg.Env("AWS_ACCESS_KEY_ID") != "" || cfg.Env("AWS_PROFILE") != "" || cfg.Env("AWS_SESSION_TOKEN") != "") {
-		c.note = "-anonymous: ignoring the AWS_* credentials in the environment"
-	}
-	if !creds.Anonymous() {
-		c.signer = &signer{creds: creds, region: c.region}
+		c.base = &url.URL{Scheme: "https", Host: awsHost(c.region, cfg.FIPS, cfg.DualStack)}
 	}
 	if c.http == nil {
 		t := http.DefaultTransport.(*http.Transport).Clone()
@@ -116,7 +105,7 @@ func New(cfg Config) (*Client, error) {
 
 // Credentials returns the resolved credentials' source (never the secret).
 func (c *Client) Credentials() (source string, anonymous bool) {
-	return c.creds.Source, c.creds.Anonymous()
+	return c.auth.source, c.auth.anonymous
 }
 
 // Note is a one-time warning for the user, or "".
@@ -170,6 +159,13 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 
 var errTimeout = errors.New("request timed out")
 
+// A ListObjectsV2 page of 1,000 keys of 1,024 bytes with owners and
+// checksums stays under 4 MiB; a larger body is refused, not buffered.
+const (
+	maxResponse = 16 << 20
+	maxPooled   = 4 << 20
+)
+
 // retryable classifies a failed attempt.
 func retryable(err error, timeout *bool) (retry, throttle bool) {
 	var se *Error
@@ -179,6 +175,8 @@ func retryable(err error, timeout *bool) (retry, throttle bool) {
 	case errors.Is(err, errTimeout):
 		*timeout = true
 		return true, false
+	case errors.Is(err, errCredentials):
+		return false, false
 	case errors.Is(err, ErrSyntax):
 		// A 200 whose body does not parse is a transport fault (a cut or
 		// garbled body): retry it. A page is never skipped.
@@ -236,6 +234,24 @@ func (c *Client) url(in *ListInput) *url.URL {
 	return &u
 }
 
+// awsHost is the regional S3 endpoint host: FIPS and dual-stack variants,
+// and the amazonaws.com.cn partition for China regions. Access points,
+// S3 Express directory buckets and other partitions are not supported yet.
+func awsHost(region string, fips, dualStack bool) string {
+	h := "s3"
+	if fips {
+		h += "-fips"
+	}
+	if dualStack {
+		h += ".dualstack"
+	}
+	domain := "amazonaws.com"
+	if strings.HasPrefix(region, "cn-") {
+		domain = "amazonaws.com.cn"
+	}
+	return h + "." + region + "." + domain
+}
+
 func hostname(hostport string) string {
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		return h
@@ -267,8 +283,8 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 	}
 	req.Host = u.Host
 	req.Header.Set("User-Agent", "swath-go")
-	if c.signer != nil {
-		c.signer.sign(req, c.cfg.Now())
+	if err := c.auth.sign(actx, req, c.cfg.Now()); err != nil {
+		return nil, err
 	}
 	c.attempts.Add(1)
 	resp, err := c.http.Do(req)
@@ -280,14 +296,22 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 	if buf == nil {
 		buf = new(bytes.Buffer)
 	}
-	defer func() { buf.Reset(); c.buffers.Put(buf) }()
+	defer func() {
+		if buf.Cap() <= maxPooled { // do not keep an outsized buffer
+			buf.Reset()
+			c.buffers.Put(buf)
+		}
+	}()
 	buf.Reset()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(buf, io.LimitReader(resp.Body, 64<<10))
 		return nil, responseError(resp, buf.Bytes())
 	}
-	if _, err := buf.ReadFrom(resp.Body); err != nil {
+	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxResponse+1)); err != nil {
 		return nil, c.wrap(actx, ctx, err)
+	}
+	if buf.Len() > maxResponse {
+		return nil, fmt.Errorf("ListObjectsV2 response larger than %d bytes", maxResponse)
 	}
 	p, _ := c.parsers.Get().(*parser)
 	if p == nil {
@@ -325,4 +349,33 @@ func responseError(resp *http.Response, body []byte) *Error {
 		e.Region = resp.Header.Get("X-Amz-Bucket-Region")
 	}
 	return e
+}
+
+// queryEscape is SigV4's URI encoding: everything but A-Z a-z 0-9 - _ . ~
+// is percent-encoded with upper-case hex. The query is sent exactly as the
+// signer canonicalises it.
+func queryEscape(s string) string {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if !unreserved(s[i]) {
+			n++
+		}
+	}
+	if n == 0 {
+		return s
+	}
+	b := make([]byte, 0, len(s)+2*n)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if unreserved(c) {
+			b = append(b, c)
+		} else {
+			b = append(b, '%', "0123456789ABCDEF"[c>>4], "0123456789ABCDEF"[c&15])
+		}
+	}
+	return string(b)
+}
+
+func unreserved(c byte) bool {
+	return 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~'
 }

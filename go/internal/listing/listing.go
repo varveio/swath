@@ -44,6 +44,7 @@ type Config struct {
 type S3Config struct {
 	Endpoint, Region string
 	PathStyle        bool
+	FIPS, DualStack  bool          // endpoint variants
 	Profile          string        // shared-file profile
 	Anonymous        bool          // never sign
 	Timeout          time.Duration // per request (0: 30 s)
@@ -186,7 +187,7 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 	s := &schema.S3
 	sum.Root, sum.SchemaID = cfg.Root, s.ID
 	p, err := s3.New(ctx, s3.Options{
-		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, PathStyle: cfg.S3.PathStyle,
+		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, PathStyle: cfg.S3.PathStyle, FIPS: cfg.S3.FIPS, DualStack: cfg.S3.DualStack,
 		FetchOwner: cfg.S3.FetchOwner, Sequential: cfg.S3.Sequential, Seed: cfg.S3.Seed, Workers: cfg.Workers,
 		MaxKeys: cfg.S3.MaxKeys, Client: cfg.S3.Client,
 		Profile: cfg.S3.Profile, Anonymous: cfg.S3.Anonymous, Timeout: cfg.S3.Timeout, Warn: cfg.S3.Warn,

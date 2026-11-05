@@ -41,6 +41,8 @@ type Options struct {
 	Endpoint   string // custom endpoint URL (S3-compatible stores, tests)
 	Region     string // else AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1
 	PathStyle  bool
+	FIPS       bool          // FIPS endpoint
+	DualStack  bool          // dual-stack (IPv6) endpoint
 	Profile    string        // shared-file profile
 	Anonymous  bool          // never sign, whatever the environment holds
 	Timeout    time.Duration // per request; default 30 s
@@ -177,7 +179,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		return p, nil
 	}
 	c, err := client.New(client.Config{
-		Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle,
+		Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
 		Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout,
 	})
 	if err != nil {

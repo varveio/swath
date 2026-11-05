@@ -1086,6 +1086,40 @@ Two tests hold this. `TestEveryTruncationFails` checks that no proper prefix of 
 `TestParseFailuresAreRetried` checks that a cut or garbled body is retried and counted. The parser reads the
 whole body before parsing, so chunk boundaries never fall inside a token.
 
+## Step 1b revision: SDK auth modules
+
+An owner rule change, after reviewing what rclone, s5cmd, mc and restic do: credentials and signing are not
+hand-rolled.
+- **From the SDK's modules:** credentials come from `aws-sdk-go-v2/config`'s default chain:
+  - environment and shared files with profiles;
+  - SSO and web identity;
+  - credential processes;
+  - AssumeRole through `stscreds`;
+  - container credentials and IMDSv2.
+
+  SigV4 comes from `aws/signer/v4`.
+- **Still this tool's own:** the ListObjectsV2 request (URL, query, virtual-hosted, path-style, custom,
+  FIPS, dual-stack and China endpoints), the retry policy and the response parser.
+- **Not linked:** the SDK's S3 service client.
+- **Anonymous mode:** uses the SDK's `aws.AnonymousCredentials`, so nothing is looked up, and it warns once
+  when `AWS_*` variables are set.
+- **Not supported yet (documented):** access points, S3 Express directory buckets, Outposts and FIPS or
+  dual-stack settings read from the shared config.
+
+| Build (stripped linux/amd64, `CGO_ENABLED=0 -trimpath -ldflags='-s -w'`) | Bytes |
+|---|---:|
+| before step 1 (full AWS SDK incl. `service/s3`) | 24,617,122 |
+| hand-rolled client and auth (step 1b as first committed) | 15,655,074 |
+| hand-rolled client, SDK auth modules (`config`, `credentials`, `sso`, `ssooidc`, `sts`, `imds`, `signer/v4`) | **19,464,354** |
+| no S3 at all (pre-S3 local lister; "Binary size" above) | about 13.3 MB |
+
+`go version -m` on the new binary lists no `service/s3`; the SDK's `service/s3` is a test-only dependency
+(the oracle). Client CPU per object is unchanged: signing was never measurable in the profile, and the
+parser is the same.
+- **Live check:** noaa-normals-pds/normals-hourly/ gave 2,549 objects in 5 requests with `-anonymous`.
+- **Stale keys:** the container's stale environment keys give a typed 403 `InvalidAccessKeyId` with the
+  request id.
+
 ## Measurement drift
 
 The host slowed during the session (Firecracker guest; nothing else was running in the guest, and `vmstat`

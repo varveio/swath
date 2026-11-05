@@ -37,25 +37,46 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 
 ## S3 (`internal/source/s3`)
 
-**Client** (`internal/source/s3/client`). One call, ListObjectsV2, implemented directly; the AWS SDK is not
-linked into the binary.
+**Client** (`internal/source/s3/client`). The ListObjectsV2 request, the retry policy and the response parser
+are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (`aws-sdk-go-v2/config`,
+`credentials`, `aws/signer/v4`). The SDK's S3 service client (`service/s3`) is not linked into the binary:
+`go version -m swath` lists no `service/s3`.
 
 - *Request:* one signed GET with `list-type=2`, `prefix`, `start-after`, `continuation-token`, `max-keys`,
   `delimiter`, `fetch-owner` and `encoding-type=url`. The query is built sorted and SigV4-encoded, so the URL
   sent is the canonical query that is signed.
-- *Addressing:* virtual-hosted (`bucket.s3.REGION.amazonaws.com`) by default; path-style with `-path-style`,
-  for bucket names with dots, and for IP endpoints; `-endpoint` for S3-compatible stores.
-- *Signing:* SigV4 with `UNSIGNED-PAYLOAD` (`x-amz-content-sha256`), plus `x-amz-security-token` for session
-  credentials. The signing key is derived once per day.
-- *Credentials,* first match wins: `-anonymous` (authoritative: environment keys are ignored, with one
-  warning); `-profile NAME`; `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_SESSION_TOKEN`); the profile
-  named by `AWS_PROFILE`, else `default`, from `~/.aws/credentials` and `~/.aws/config` (or
-  `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`); otherwise anonymous. **Not supported yet:** instance
-  roles (IMDS), container credentials, SSO, web identity, `role_arn` and `credential_process`. A profile or
-  environment that points at one of them is an `ErrUnsupportedCredentials` error rather than a silent
-  anonymous run. On EC2 without keys the run is anonymous.
-- *Region:* `-region`, else `AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's `region`, `us-east-1`. A 301 or
-  `AuthorizationHeaderMalformed` answer names the bucket's region in the error.
+- *Endpoints:* the client supports these forms:
+  - virtual-hosted `bucket.s3.REGION.amazonaws.com` (the default);
+  - path-style (`-path-style`; also used automatically for bucket names with dots and for IP endpoints);
+  - FIPS (`-fips`: `s3-fips.REGION…`) and dual-stack (`-dualstack`: `s3.dualstack.REGION…`), alone or
+    combined;
+  - the China partition (`*.amazonaws.com.cn` for `cn-` regions);
+  - custom endpoints (`-endpoint`, S3-compatible stores).
+
+  **Not supported yet:** access points and Multi-Region Access Points (ARNs), S3 Express One Zone directory
+  buckets, Outposts, the GovCloud-specific and ISO partitions beyond the plain regional host,
+  `use_fips_endpoint` and `use_dualstack_endpoint` read from the shared config (use the flags), and
+  automatic region redirects.
+- *Signing:* the SDK's SigV4 signer with `UNSIGNED-PAYLOAD` (`x-amz-content-sha256`), plus the session token
+  when the credentials have one.
+- *Credentials:* `-anonymous` is authoritative: nothing is looked up and one warning is printed if `AWS_*`
+  variables are set. Otherwise the SDK's default chain runs, with `-profile` selecting the shared-config
+  profile. The chain covers:
+  - environment keys (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`);
+  - the shared `config` and `credentials` files and their profiles (`AWS_PROFILE`, `AWS_CONFIG_FILE`,
+    `AWS_SHARED_CREDENTIALS_FILE`);
+  - IAM Identity Center (SSO) profiles;
+  - web identity (`AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_ARN`);
+  - `credential_process`;
+  - `role_arn` with `source_profile` or `credential_source` (AssumeRole through STS);
+  - container credentials (ECS, EKS Pod Identity);
+  - EC2 instance roles (IMDSv2).
+
+  Credentials are cached and refreshed by the SDK. The first lookup is bounded at 3 s. If the chain finds
+  nothing and no profile was named, requests go unsigned; a named profile that fails is an error.
+- *Region:* `-region`, else the SDK's resolution (`AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's
+  `region`), else `us-east-1`. A 301 or `AuthorizationHeaderMalformed` answer names the bucket's region in
+  the error.
 - *Retries:* up to 9 attempts with full-jitter exponential backoff (100 ms doubling, capped at 5 s) on 5xx,
   429, `SlowDown` and other throttling codes, `RequestTimeout`, connection errors and cut bodies, and attempts
   past the per-request timeout (`-request-timeout`, default 30 s), and 200 answers whose body does not parse
