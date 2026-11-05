@@ -135,12 +135,6 @@ type Meta struct {
 	Coverage Coverage
 }
 
-// File is a JSON document published beside the manifest.
-type File struct {
-	Name  string
-	Value any
-}
-
 // ReportError is a run report that could not be written after the dataset
 // was committed: the dataset stands.
 type ReportError struct{ Err error }
@@ -148,12 +142,20 @@ type ReportError struct{ Err error }
 func (e *ReportError) Error() string { return "dataset committed; run report: " + e.Err.Error() }
 func (e *ReportError) Unwrap() error { return e.Err }
 
+// WriteReport writes the run report (ReportName) beside a committed
+// dataset. A failure is a *ReportError: the dataset stands.
+func WriteReport(out string, v any) error {
+	if err := writeJSON(out, ReportName, v); err != nil {
+		return &ReportError{err}
+	}
+	return nil
+}
+
 // Publish commits parts (already gated): each part not yet published is
 // renamed into data/, data/ is synced, and manifest.json is installed by an
-// atomic rename and a directory sync. That rename is the commit. The run
-// reports follow; failing to write one returns a *ReportError and leaves
-// the dataset committed.
-func Publish(out string, meta Meta, parts []Part, reports []File) error {
+// atomic rename and a directory sync. That rename is the commit; the run
+// report follows (WriteReport).
+func Publish(out string, meta Meta, parts []Part) error {
 	data := filepath.Join(out, DataDir)
 	m := Manifest{Format: Format, FormatVersion: FormatVersion, SchemaID: meta.SchemaID,
 		Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
@@ -182,15 +184,7 @@ func Publish(out string, meta Meta, parts []Part, reports []File) error {
 	if err := writeJSON(out, ManifestName, m); err != nil {
 		return err
 	}
-	if err := faults.At("manifest"); err != nil {
-		return err
-	}
-	for _, r := range reports {
-		if err := writeJSON(out, r.Name, r.Value); err != nil {
-			return &ReportError{err}
-		}
-	}
-	return nil
+	return faults.At("manifest")
 }
 
 // Committed reports whether out holds a committed dataset (its manifest).

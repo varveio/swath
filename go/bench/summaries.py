@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Tabulate swath run summaries (_swath_summary.json, Java or Go) into one TSV row per run.
+"""Tabulate run reports into one TSV row per run: Java swath's _swath_summary.json and the Go tool's run.json
+(report_version 1), mapped onto the same columns (the Java-to-Go mapping lives here, see docs/upgrade.md).
 
 usage: summaries.py PATH... > runs.tsv     (files, or directories searched recursively)
 
@@ -18,7 +19,7 @@ def files(paths):
         if os.path.isdir(p):
             for r, _, fs in os.walk(p):
                 for f in fs:
-                    if f == "_swath_summary.json" or f.endswith("-report.json") or f.endswith(".summary.json"):
+                    if f in ("_swath_summary.json", "run.json") or f.endswith("-report.json") or f.endswith(".summary.json"):
                         yield os.path.join(r, f)
         else:
             yield p
@@ -32,8 +33,30 @@ def flat(prefix, x, out):
         out[prefix] = x
 
 
+def go_row(path, d):
+    """A Go run report (run.json, or what -json printed)."""
+    inv, out, t = d["invocation"], d["output"], d["timings"]
+    src = (d.get("source") or {}).get("stats", {})
+    r = {
+        "file": path, "producer": d["build"]["tool"], "bucket": inv["source"], "version": d["build"].get("revision", ""),
+        "concurrency": inv["workers"], "seed_mode": "shallow" if "seed" in src else "none",
+        "toggles_off": ",".join(src.get("disabled", [])), "completed": d["outcome"]["complete"], "objects": out["rows_listed"],
+        "duration_ms": t["wall_ms"], "listing_duration_ms": t["listing_ms"], "api_calls": src.get("requests"),
+        "pages": src.get("pages"), "splits": sum(v for k, v in src.get("split", {}).items() if k.startswith("accepted")),
+        "steals": 0, "peak_in_flight": src.get("max_active"), "avg_in_flight": src.get("mean_active"),
+        "files_out": out["parts_written"] + out["parts_retained"], "bytes_out": out["bytes"],
+        "retries": src.get("retries", ""), "throttle_events": src.get("throttles", ""),
+    }
+    g = {}
+    flat("go", {k: v for k, v in src.items() if k in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "timeouts", "attempts", "probe")}, g)
+    r.update(g)
+    return r
+
+
 def row(path):
     d = json.load(open(path))
+    if "report_version" in d:
+        return go_row(path, d)
     cfg, flags = d.get("config", {}), d.get("engine_flags", {})
     producer = d.get("producer", "swath-java")
     off = sorted(k for k, v in flags.items() if v is False and k not in ("readahead", "sequential", "seed"))

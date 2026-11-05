@@ -5,7 +5,7 @@
 
 Checks: manifest.json is format 2 (format, format_version, schema_id, source, scope, coverage, parts) and
 is the commit (no _SUCCESS, no symlink.txt); data/ holds exactly the manifest's parts; the run report
-exists (_swath_summary.json for S3, _swath_local_summary.json otherwise); for S3, every column against the
+(run.json) exists; for S3, every column against the
 current-object schema and every row a current object; per part: DuckDB row count == manifest rows,
 first/last key == manifest min_key_base64/max_key_base64 (exact bytes), keys strictly ascending (unsigned bytes) within and
 across parts; footer stamps (profile, profile version, schema id, index bound) and nothing else under
@@ -37,7 +37,7 @@ def main(out):
     for gone in ("_SUCCESS", "symlink.txt"):
         check(not os.path.exists(os.path.join(out, gone)), f"no {gone} (the manifest is the commit)")
     s3 = m["source"]["kind"] == "s3"
-    report = "_swath_summary.json" if s3 else "_swath_local_summary.json"
+    report = "run.json"
     check(os.path.exists(os.path.join(out, report)), f"{report} present (operational report)")
     files = [f["path"] for f in m["parts"]]
     paths = [os.path.join(out, k) for k in files]

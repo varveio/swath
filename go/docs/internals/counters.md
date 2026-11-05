@@ -2,7 +2,7 @@
 
 Every algorithm path counts its engagements. A provider declares its counters once, as a table of
 `counters.Def{Key, Kind, Unit, Help}` backed by one `atomic.Int64` each (package `internal/counters`). The run
-summary renders the table by iterating it (`_swath_summary.json` → `go.s3`), and the table below is
+report renders the table by iterating it (`run.json` → `source.stats`), and the table below is
 generated from the same definitions (`UPDATE=1 go test ./internal/source/s3 -run TestCountersDoc`). A new
 path costs one row and its increment. Kinds: `count` is a monotonic sum, `max` a high-water mark, `flag`
 a boolean.

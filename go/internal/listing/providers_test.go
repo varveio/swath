@@ -16,16 +16,16 @@ import (
 // S3Config is the S3 provider's options value (Config.Source).
 type S3Config = s3.Options
 
-func s3Stats(sum Summary) *s3.Stats {
-	if r := sum.Report(); r != nil {
+func s3Stats(sum Report) *s3.Stats {
+	if r := sum.SourceReport(); r != nil {
 		st, _ := r.Stats.(*s3.Stats)
 		return st
 	}
 	return nil
 }
 
-func fsStats(sum Summary) *fs.Stats {
-	if r := sum.Report(); r != nil {
+func fsStats(sum Report) *fs.Stats {
+	if r := sum.SourceReport(); r != nil {
 		st, _ := r.Stats.(*fs.Stats)
 		return st
 	}

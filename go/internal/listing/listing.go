@@ -6,15 +6,12 @@
 package listing
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -88,96 +85,27 @@ func (c *Config) setDefaults() error {
 	return nil
 }
 
-// Summary is the run report (also written as the dataset's summary file).
-type Summary struct {
-	Tool        string `json:"tool"`
-	SchemaID    string `json:"schema_id"`
-	Root        string `json:"root"`
-	Out         string `json:"out,omitempty"`
-	Fields      string `json:"fields,omitempty"`
-	Workers     int    `json:"workers"`
-	Encoders    int    `json:"encoders"`
-	RowBudget   int64  `json:"row_budget_bytes"` // rows in flight: reorder storage and encoder queues
-	MaxBuffered int64  `json:"max_buffered_bytes"`
-	Spill       *Spill `json:"spill,omitempty"` // nil: spill was off ("spill" is listed under Disabled)
-	// The order stage's waits (see order.Stats) and the time the order
-	// stage waited for an encoder (nil without output).
-	FrontierWaitNs int64  `json:"frontier_wait_ns"`
-	BudgetWaitNs   int64  `json:"budget_wait_ns"`
-	EncoderWaitNs  *int64 `json:"encoder_wait_ns,omitempty"`
-	// Disabled lists the run's policies that were turned off, so a zero
-	// counter always means "on, never fired" (see docs/internals/counters.md).
-	Disabled []string `json:"disabled,omitempty"`
-	// The source's report goes here, under its own name ("s3", "listing");
-	// see MarshalJSON.
-	Source       json.RawMessage `json:"__source__,omitempty"`
-	report       *source.Report
-	Rows         int64   `json:"rows"`
-	Parts        int     `json:"parts"`
-	OutBytes     int64   `json:"output_bytes"`
-	ResumedParts int     `json:"resumed_parts,omitempty"` // parts kept from the interrupted run
-	ResumedRows  int64   `json:"resumed_rows,omitempty"`
-	Seconds      float64 `json:"seconds"`
-	// ListingSeconds is the time to the end of listing (the order stage).
-	ListingSeconds float64   `json:"listing_seconds"`
-	UserSeconds    float64   `json:"user_cpu_seconds"`
-	SysSeconds     float64   `json:"sys_cpu_seconds"`
-	PeakRSS        int64     `json:"peak_rss_bytes"`
-	Started        time.Time `json:"started"`
-}
-
-// Errors is the listing's error count.
-func (s *Summary) Errors() int64 {
-	if s.report != nil {
-		return s.report.Errors
-	}
-	return 0
-}
-
-// Report is the source's report (nil before the listing ends, or for a
-// source without one). Its Stats are the provider's own type.
-func (s *Summary) Report() *source.Report { return s.report }
-
-func (s *Summary) setReport(r source.Report) {
-	s.report = &r
-	s.Fields = r.Fields
-}
-
-// MarshalJSON writes the source's stats under the source's name, in the
-// place the placeholder field holds.
-func (s Summary) MarshalJSON() ([]byte, error) {
-	type plain Summary
-	p := plain(s)
-	if s.report != nil && s.report.Stats != nil {
-		b, err := json.Marshal(s.report.Stats)
-		if err != nil {
-			return nil, err
-		}
-		p.Source = b
-	}
-	out, err := json.Marshal(p)
-	if err != nil || s.report == nil {
-		return out, err
-	}
-	return bytes.Replace(out, []byte(`"__source__":`), []byte(strconv.Quote(s.report.Name)+":"), 1), nil
-}
-
 // Run lists cfg.Root and, unless cfg.Out is empty, publishes the dataset.
 // On any error or cancellation nothing is published and unpublished parts
 // are removed (a journaled run keeps them for -resume); the error is the
 // cause (ctx.Err() on cancellation).
-func Run(ctx context.Context, cfg Config) (Summary, error) {
+func Run(ctx context.Context, cfg Config) (Report, error) {
 	start := time.Now()
+	sum := Report{ReportVersion: ReportVersion, Build: build(), Timings: Timings{StartedAt: start.UTC()},
+		Outcome: Outcome{Status: "failed"}}
 	if err := cfg.setDefaults(); err != nil {
-		return Summary{}, err
+		return sum.failed(err)
 	}
-	sum := Summary{
-		Tool: "swath-go", Out: cfg.Out, Workers: cfg.Workers, Encoders: cfg.Encoders,
-		RowBudget: cfg.Memory / 2, Started: start,
+	argv := cfg.Argv
+	if argv == nil {
+		argv = []string{}
 	}
+	sum.Invocation = Invocation{Argv: argv, Source: cfg.Root, Out: cfg.Out, Resume: cfg.Resume, Workers: cfg.Workers,
+		Encoders: cfg.Encoders, MemoryBytes: cfg.Memory, PartSizeBytes: cfg.PartSize}
+	sum.Resources.RowBudgetBytes = cfg.Memory / 2
 	f, err := registry.Lookup(cfg.Root)
 	if err != nil {
-		return sum, err
+		return sum.failed(err)
 	}
 	opts := cfg.Source
 	if opts == nil {
@@ -189,27 +117,27 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	}
 	src, err := f.Open(ctx, registry.Request{Root: cfg.Root, Options: opts, Workers: cfg.Workers, Warn: warn})
 	if err != nil {
-		return sum, err
+		return sum.failed(err)
 	}
 	s, loc := src.Schema(), src.Locator()
-	sum.Root, sum.SchemaID = loc.Root, s.ID
+	sum.Invocation.Source, sum.Invocation.SchemaID = loc.Root, s.ID
 	jr, err := openJournal(cfg, src, identity(src, s, cfg))
 	if err != nil {
-		return sum, err
+		return sum.failed(err)
 	}
 	if ex, ok := src.(source.Excluder); ok && cfg.Out != "" {
 		if err := ex.Exclude(cfg.Out); err != nil {
 			jr.close()
-			return sum, err
+			return sum.failed(err)
 		}
 	}
 	if last := jr.last(); last != nil {
 		if err := jr.src.Restart(string(last.Part.MaxKey), jr.state.Checkpoints); err != nil {
 			jr.close()
-			return sum, err
+			return sum.failed(err)
 		}
 	}
-	sum.ResumedParts, sum.ResumedRows = jr.resumedParts(), jr.resumedRows()
+	sum.Output.PartsRetained, sum.Output.RowsRetained = jr.resumedParts(), jr.resumedRows()
 	return pipeline(ctx, cfg, sum, src, s, jr)
 }
 
@@ -247,18 +175,9 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 	return m
 }
 
-// reports names the JSON run reports published beside the manifest: swath's
-// run summary for a source that states its coverage, else this summary.
-func reports(cfg Config, sum *Summary) []dataset.File {
-	if r := sum.report; r != nil && r.Activity != nil {
-		return []dataset.File{{Name: dataset.SwathSummaryName, Value: swathSummary(cfg, sum, r)}}
-	}
-	return []dataset.File{{Name: dataset.SummaryName, Value: sum}}
-}
-
 // pipeline runs provider → order → router → publish. p is src, or Empty
 // when a resume has nothing left to list.
-func pipeline(ctx context.Context, cfg Config, sum Summary, src registry.Source, s schema.Info, jr *journal) (Summary, error) {
+func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, s schema.Info, jr *journal) (Report, error) {
 	defer jr.close()
 	// One shared cause: the first asynchronous failure (an encoder, the
 	// disk, the journal) cancels listing at once, and is what Run returns.
@@ -278,7 +197,7 @@ func pipeline(ctx context.Context, cfg Config, sum Summary, src registry.Source,
 		env.Router = &ropt
 	}
 	var router parquet.Encoder
-	fail := func(err error) (Summary, error) {
+	fail := func(err error) (Report, error) {
 		if router != nil {
 			router.Abort()
 			// A crash leaves the output as a kill would; a journaled run
@@ -288,10 +207,9 @@ func pipeline(ctx context.Context, cfg Config, sum Summary, src registry.Source,
 				dataset.Cleanup(cfg.Out)
 			}
 		}
-		finish(&sum)
-		return sum, err
+		return sum.failed(err)
 	}
-	oopt := order.Options{Workers: cfg.Workers, Budget: sum.RowBudget, Shared: shared, SpillCompress: cfg.SpillCompress, SpillMax: cfg.SpillMax, SpillReserve: cfg.SpillReserve}
+	oopt := order.Options{Workers: cfg.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.SpillCompress, SpillMax: cfg.SpillMax, SpillReserve: cfg.SpillReserve}
 	if !cfg.NoSpill {
 		// Spill files are disposable: a crash relists their rows.
 		oopt.SpillDir = os.TempDir()
@@ -304,69 +222,67 @@ func pipeline(ctx context.Context, cfg Config, sum Summary, src registry.Source,
 	env.Order = oopt
 	ost, router, err := src.Run(ctx, env)
 	if router == nil && cfg.Out != "" && err != nil {
-		return sum, err // the router could not start: nothing was written
+		return sum.failed(err) // the router could not start: nothing was written
 	}
 	if cfg.Out != "" && oopt.SpillDir != "" {
 		_ = os.Remove(oopt.SpillDir) // only if empty; order.Run removed its own files
 		_ = os.Remove(filepath.Dir(oopt.SpillDir))
 	}
-	sum.MaxBuffered, sum.Rows = ost.MaxBuffered, ost.Rows
+	sum.Resources.MaxBufferedBytes, sum.Output.RowsListed = ost.MaxBuffered, ost.Rows
 	if oopt.SpillDir != "" {
-		sum.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused}
+		sum.Resources.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused}
 	} else {
-		sum.Disabled = append(sum.Disabled, "spill")
+		sum.Resources.Disabled = append(sum.Resources.Disabled, "spill")
 	}
-	sum.FrontierWaitNs, sum.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
+	sum.Resources.FrontierWaitNs, sum.Resources.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
 	if router != nil {
 		w := int64(router.EncoderWait())
-		sum.EncoderWaitNs = &w
+		sum.Resources.EncoderWaitNs = &w
 	}
 	listed := time.Now()
-	sum.ListingSeconds = listed.Sub(sum.Started).Seconds()
+	sum.Timings.ListingFinishedAt, sum.Timings.ListingMs = listed.UTC(), listed.Sub(sum.Timings.StartedAt).Milliseconds()
 	if r, ok := src.(source.Reporter); ok {
-		sum.setReport(r.Report())
+		sum.setSource(r.Report())
 	}
 	want := src.Listed()
 	if err != nil {
 		return fail(err)
 	}
-	if sum.Rows != want {
-		return fail(fmt.Errorf("row count mismatch: listed %d, ordered %d", want, sum.Rows))
+	if sum.Output.RowsListed != want {
+		return fail(fmt.Errorf("row count mismatch: listed %d, ordered %d", want, sum.Output.RowsListed))
 	}
 	if router == nil {
-		finish(&sum)
+		sum.Outcome.Status = "listed"
+		sum.finish()
 		return sum, nil
 	}
 	parts, err := router.Close()
 	if err != nil {
 		return fail(fmt.Errorf("encode: %w", err))
 	}
-	sum.Parts = len(parts)
+	sum.Output.PartsWritten = len(parts) - sum.Output.PartsRetained
 	for _, part := range parts {
-		sum.OutBytes += part.Bytes
+		sum.Output.Bytes += part.Bytes
 	}
-	finish(&sum)
-	err = dataset.Publish(cfg.Out, manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Started), listed), parts, reports(cfg, &sum))
-	var rerr *dataset.ReportError
-	if errors.As(err, &rerr) { // committed: the dataset stands
-		if cfg.Warn != nil {
-			cfg.Warn(rerr.Error())
-		}
-		err = nil
-	}
-	if err != nil {
+	if err := dataset.Publish(cfg.Out, manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed), parts); err != nil {
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
 			dataset.Cleanup(cfg.Out)
 		}
-		return sum, fmt.Errorf("publish: %w", err)
+		return sum.failed(fmt.Errorf("publish: %w", err))
 	}
-	finish(&sum)
+	// Committed: the report follows and can no longer revoke the dataset.
+	sum.Outcome.Status = "committed"
+	sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
+	sum.finish()
+	if err := dataset.WriteReport(cfg.Out, sum); err != nil && cfg.Warn != nil {
+		cfg.Warn(err.Error())
+	}
 	return sum, nil
 }
 
-func finish(s *Summary) {
-	s.Seconds = time.Since(s.Started).Seconds()
-	u, sys := cpuTimes()
-	s.UserSeconds, s.SysSeconds = u.Seconds(), sys.Seconds()
-	s.PeakRSS = peakRSS()
+// failed records err as the outcome and returns the report with it.
+func (r Report) failed(err error) (Report, error) {
+	r.Outcome.Status, r.Outcome.Error = "failed", err.Error()
+	r.finish()
+	return r, err
 }

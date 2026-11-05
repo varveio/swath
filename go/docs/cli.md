@@ -6,7 +6,7 @@ swath list <root> [flags]
 
 `<root>` is a local directory or `s3://bucket[/prefix]`. The command lists it and writes a dataset to `-out`
 ([internals/parquet-output.md](internals/parquet-output.md)), or with `-count-only` only lists. It prints a
-human summary, or the run summary as JSON with `-json`. The Java distribution keeps its own `swath`
+human summary, or the run report (`run.json`, see internals/parquet-output.md) as JSON with `-json`. The Java distribution keeps its own `swath`
 launcher; the two are separate tools until the Java code is retired.
 
 ## Flags
@@ -36,7 +36,7 @@ usage: swath list <root> [flags]
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
   -json
-    	print the summary as JSON
+    	print the run report (the content of run.json) as JSON
   -max-keys int
     	S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)
   -memory bytes

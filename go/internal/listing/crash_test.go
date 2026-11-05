@@ -107,7 +107,7 @@ func TestCrashMatrix(t *testing.T) {
 						t.Fatalf("resume: %v", err)
 					}
 					sameDataset(t, point, ref, out)
-					t.Logf("resumed %d parts (%d rows), listed %d more rows", sum.ResumedParts, sum.ResumedRows, sum.Rows)
+					t.Logf("resumed %d parts (%d rows), listed %d more rows", sum.Output.PartsRetained, sum.Output.RowsRetained, sum.Output.RowsListed)
 				})
 			}
 		}
@@ -208,8 +208,8 @@ func TestNoJournalAndCountOnly(t *testing.T) {
 		t.Fatalf("journal written with NoJournal: %v", err)
 	}
 	cfg = crashConfig(url, "", false)
-	if sum, err := Run(context.Background(), cfg); err != nil || sum.Rows != 8000 {
-		t.Fatalf("count-only: %v %d", err, sum.Rows)
+	if sum, err := Run(context.Background(), cfg); err != nil || sum.Output.RowsListed != 8000 {
+		t.Fatalf("count-only: %v %d", err, sum.Output.RowsListed)
 	}
 }
 
@@ -233,8 +233,8 @@ func TestEncoderFailureStopsListing(t *testing.T) {
 	if !errors.Is(err, diskFull) {
 		t.Fatalf("got %v, want the encoder's error", err)
 	}
-	if sum.Rows >= 8000 {
-		t.Fatalf("the pipeline ran to the end (%d rows ordered) after the encoder failed", sum.Rows)
+	if sum.Output.RowsListed >= 8000 {
+		t.Fatalf("the pipeline ran to the end (%d rows ordered) after the encoder failed", sum.Output.RowsListed)
 	}
 }
 

@@ -24,7 +24,7 @@ A format-2 manifest never falls into a reader's thin-manifest (legacy) fallback.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape (below) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | unchanged names; operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 1); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `-out/.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -117,13 +117,18 @@ logical schema (`schema_id`), the private journal (version 4, never read by read
 (`parquet.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
 parts are byte-identical within a build only.
 
-## Run summary and counters
+## Run report and counters
 
-The run summary keeps the Varve coverage fields of the Java schema (`schema_version`, `completed`,
-`config.target`, `config.filters`), but format 2 no longer needs them for acceptance. This tool's own report
-sits under `go`, with Go names. Java meters map to them as follows (for `bench/summaries.py`):
+`run.json` replaces Java's run summary; it has none of its field names and none of its Java-only fields
+(`steals`, `sort.arm`, `shape.fingerprint`, `cost`). Varve does not read it. A reader that tabulates runs
+(`bench/summaries.py`) maps Java's top-level fields as: `completed` → `outcome.complete`, `objects` →
+`output.rows_listed`, `duration_ms`/`listing_duration_ms` → `timings.wall_ms`/`listing_ms`, `config.target` →
+`invocation.source`, `config.max_parallel_listings` → `invocation.workers`, `output.files` →
+`output.parts_written` + `parts_retained`, `output.compressed_size_bytes` → `output.bytes`,
+`shape.fingerprint.git_sha` → `build.revision`. Java meters map to the provider's statistics
+(`source.stats`, here for S3) as follows:
 
-| Java meter or field | Go (`go.s3` unless noted) |
+| Java meter or field | Go (`source.stats` unless noted) |
 |---|---|
 | `cost.api_calls`, `swath.api.calls` | `requests` (logical calls); `attempts` counts HTTP requests with retries |
 | `swath.retries`, `recovered_errors.retries` | `retries` |
@@ -142,8 +147,8 @@ sits under `go`, with Go names. Java meters map to them as follows (for `bench/s
 | `swath.steal_reason{RETRY,cursor_passed_pivot}`, `swath.split.guard_aborts` | `split.rejected.cursor`, `split.rejected.*` |
 | `swath.steal_reason{OWNER_SPLIT,demand_gated}` | `split.skipped.no_demand` |
 | `swath.steal_reason{SEED,*}` | `seed.*` |
-| `swath.sort.backpressure.wait` | `sink_wait_ns`; top level: `budget_wait_ns`, `frontier_wait_ns`, `encoder_wait_ns` |
-| `swath.sort.segment.bytes` (staging) | top level `spill.bytes` (spill replaces staging) |
+| `swath.sort.backpressure.wait` | `sink_wait_ns`; `resources`: `budget_wait_ns`, `frontier_wait_ns`, `encoder_wait_ns` |
+| `swath.sort.segment.bytes` (staging) | `resources.spill.bytes` (spill replaces staging) |
 
 A policy that was off is listed under `disabled` and its counters are absent; a present zero means the
 policy was on and never fired ([internals/counters.md](internals/counters.md)).

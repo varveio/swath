@@ -102,7 +102,8 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   `structure_probes`, `far_ahead`, `alphabet_pivots`, `reflect`, `confetti_feedback`, `reflect_lift`,
   `fanout_tiling`, `mass_aware_seed` and `rate_anchored_sensing`, plus `readahead=on` and
   `tail_floor=MODE`. The seed is set with `--tune seed.mode=none|shallow`.
-- **Run summaries:** `bench/summaries.py PATH...` tabulates `_swath_summary.json` files from either tool.
+- **Run summaries:** `bench/summaries.py PATH...` tabulates Java's `_swath_summary.json` and the Go tool's `run.json` into the same columns (the Java-to-Go
+  name mapping lives there).
   Each run is one TSV row, keyed by bucket, version and configuration, with every engagement counter as a
   column.
 

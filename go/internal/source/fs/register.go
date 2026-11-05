@@ -99,7 +99,7 @@ func (o *opened) Report() source.Report {
 	for k := range o.p.opt.Skip {
 		cov.Exclusions = append(cov.Exclusions, k)
 	}
-	return source.Report{Name: "listing", Stats: &st, Errors: st.Errors(), Fields: o.p.opt.Fields.String(), Coverage: cov,
+	return source.Report{Name: "local", Stats: &st, Errors: st.Errors(), Fields: o.p.opt.Fields.String(), Coverage: cov,
 		Brief: fmt.Sprintf("files=%d dirs=%d bytes=%d errors=%d", st.Files, st.Dirs, st.Bytes, st.Errors())}
 }
 

@@ -78,9 +78,6 @@ type Report struct {
 	// Coverage is what the dataset covers; it goes into the manifest,
 	// where readers accept or refuse the dataset.
 	Coverage Coverage
-	// Activity, if set, makes the dataset carry swath's run summary (a
-	// remote listing's engine activity).
-	Activity *Activity
 }
 
 // Coverage is what a dataset claims to cover.
@@ -92,20 +89,4 @@ type Coverage struct {
 	Skipped    int64    // entries not listed (unreadable, invalid names)
 	Complete   bool     // false if the listing stopped early (a key limit)
 	StopReason string   // "completed", or why it stopped
-}
-
-// Activity is a remote listing's engine activity, for swath's run summary.
-type Activity struct {
-	Items           int64 // objects listed
-	Requests, Pages int64
-	PeakInFlight    int
-	AvgInFlight     float64
-	Splits          int64
-	Region          string
-	Unsigned        bool
-	Flags           map[string]bool  // engine flags in effect
-	RecoveredErrors map[string]int64 // by summary name
-	SeedMode        string           // "shallow" or "none"
-	SeedCuts        int64
-	SeedRanges      int64
 }

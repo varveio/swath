@@ -22,10 +22,8 @@ const (
 const (
 	DataDir      = "data"
 	ManifestName = "manifest.json"
-	// SummaryName is the run report of filesystem datasets; SwathSummaryName
-	// that of S3 datasets. Both are operational, written after the commit.
-	SummaryName      = "_swath_local_summary.json"
-	SwathSummaryName = "_swath_summary.json"
+	// ReportName is the run report, operational, written after the commit.
+	ReportName = "run.json"
 	// Workspace is the run's private directory: the lock, the journal,
 	// unpublished parts and spill. Readers ignore it.
 	Workspace = ".swath"
@@ -61,13 +59,16 @@ func TempPath(out string, i int) string {
 
 // ownEntries are the root entries a dataset owns; overwrite removes these and
 // their .tmp siblings, nothing else. The workspace is emptied except for the
-// lock. Earlier layouts' entries (_SUCCESS, symlink.txt, .swath.lock and
+// lock. Earlier layouts' entries (_SUCCESS, symlink.txt, .swath.lock, the
+// _swath_*summary.json reports and
 // Swath's .swath-state.json) are removed too, so an old dataset can be
 // replaced.
-var ownEntries = []string{DataDir, ManifestName, SummaryName, SwathSummaryName, legacySuccess, legacySymlink, legacyLock, ".swath-state.json"}
+var ownEntries = []string{DataDir, ManifestName, ReportName, legacyLocalSummary, legacySummary, legacySuccess, legacySymlink, legacyLock, ".swath-state.json"}
 
 const (
-	legacySuccess = "_SUCCESS"
-	legacySymlink = "symlink.txt"
-	legacyLock    = ".swath.lock"
+	legacyLocalSummary = "_swath_local_summary.json"
+	legacySummary      = "_swath_summary.json"
+	legacySuccess      = "_SUCCESS"
+	legacySymlink      = "symlink.txt"
+	legacyLock         = ".swath.lock"
 )

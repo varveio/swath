@@ -1494,6 +1494,14 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
    counted the payload's logical bytes against the memory budget (integers twice) spilled 6× more rows and
    ran 1.7× slower; the budget now counts the payload's `Heap` (its strings).
 
+8. **One run report.** `run.json` (`listing.Report`, `report_version` 1) replaces `_swath_summary.json` (Java's
+   schema with this tool's report under `go`) and `_swath_local_summary.json`; `-json` prints the same type.
+   Sections: build, invocation, outcome (`committed`, `listed`, `failed` with the error), timings (integer
+   `*_ms`), output (rows listed by this invocation, retained, committed; parts written and retained), resources
+   and the provider's statistics under its name. No cost estimate, no Java-only fields (`source.Activity` is
+   gone). `dataset.Publish` no longer writes reports: the manifest is installed, then `dataset.WriteReport`
+   writes `run.json`, whose failure is a warning. `bench/summaries.py` maps both tools' reports onto one row.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

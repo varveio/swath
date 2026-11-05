@@ -125,7 +125,7 @@ func newFlags(o *options) *flag.FlagSet {
 	f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem, for the parts still to be written")
 	f.BoolVar(&o.resume, "resume", false, "S3: continue the interrupted run in -out (same source and output settings)")
 	f.BoolVar(&o.noJournal, "no-journal", false, "S3: publish parts only at the end, without the journal that -resume needs")
-	f.BoolVar(&o.json, "json", false, "print the summary as JSON")
+	f.BoolVar(&o.json, "json", false, "print the run report (the content of run.json) as JSON")
 	// Each provider owns its flag group.
 	o.sources = map[string]any{}
 	for _, p := range registry.Factories() {
@@ -200,12 +200,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(sum)
 	}
-	if r := sum.Report(); r != nil && r.Brief != "" {
+	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
 	}
-	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d total=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
-		sum.Rows, sum.Parts, sum.OutBytes, sum.Seconds,
-		sum.UserSeconds, sum.SysSeconds, float64(sum.PeakRSS)/(1<<20), sum.MaxBuffered)
+	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d wall=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
+		sum.Output.RowsListed, sum.Output.PartsWritten+sum.Output.PartsRetained, sum.Output.Bytes, float64(sum.Timings.WallMs)/1000,
+		float64(sum.Timings.UserCPUMs)/1000, float64(sum.Timings.SysCPUMs)/1000, float64(sum.Resources.PeakRSSBytes)/(1<<20), sum.Resources.MaxBufferedBytes)
 	return nil
 }
 

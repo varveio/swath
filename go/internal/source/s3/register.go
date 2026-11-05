@@ -169,20 +169,9 @@ func (o *opened) Report() source.Report {
 			st.Objects, st.Bytes, st.Pages, st.Requests, st.Retries, st.Split.AcceptedBounded+st.Split.AcceptedFrontier,
 			st.ChildEmpty.Lower+st.ChildEmpty.Upper, st.MaxActive, st.Truncated),
 		Coverage: source.Coverage{Target: o.target(), Prefix: opt.Prefix, Complete: !st.Truncated, StopReason: "completed"},
-		Activity: &source.Activity{Items: st.Objects, Requests: st.Requests, Pages: st.Pages, PeakInFlight: st.MaxActive, AvgInFlight: st.MeanActive,
-			Splits: st.Split.AcceptedBounded + st.Split.AcceptedFrontier, Region: st.Region, Unsigned: st.Anonymous,
-			Flags:           map[string]bool{"owner_split": !opt.Sequential, "density_extrapolation": !opt.Sequential, "seed": opt.Seed, "sequential": opt.Sequential},
-			RecoveredErrors: map[string]int64{"retries": st.Retries, "throttle_events": st.Throttles, "attempt_timeout_events": st.Timeouts, "parse_failures": st.ParseFailures},
-			SeedMode:        "none"},
 	}
 	if st.Truncated {
 		r.Coverage.StopReason = "max_keys"
-	}
-	if opt.Seed {
-		r.Activity.SeedMode, r.Activity.SeedCuts, r.Activity.SeedRanges = "shallow", st.Seed.Cuts, st.Seed.Cuts+1
-		if st.Seed.Sentinel {
-			r.Activity.SeedRanges++
-		}
 	}
 	return r
 }

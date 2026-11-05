@@ -60,7 +60,7 @@ func TestS3Dataset(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s3Stats(sum) == nil || sum.Rows != s3Stats(sum).Objects || sum.Rows == 0 {
+		if s3Stats(sum) == nil || sum.Output.RowsListed != s3Stats(sum).Objects || sum.Output.RowsListed == 0 {
 			t.Fatalf("%+v", sum)
 		}
 		var m dataset.Manifest
@@ -74,19 +74,16 @@ func TestS3Dataset(t *testing.T) {
 			scope = dataset.Scope{Kind: "prefix", Prefix: "logs/03/"}
 		}
 		if m.Source != (dataset.Source{Kind: "s3", URI: tc.root, Container: "bkt"}) || m.Scope != scope || m.SchemaID != s3.Schema.ID ||
-			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Rows ||
+			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Output.RowsListed ||
 			m.Coverage.ListingStartedAt.IsZero() || m.Coverage.ListingFinishedAt.Before(m.Coverage.ListingStartedAt) {
 			t.Fatalf("manifest %+v", m)
 		}
-		var run RunSummary
-		readJSON(t, filepath.Join(out, dataset.SwathSummaryName), &run)
-		if run.SchemaVersion != 2 || !run.Completed || run.Config.Target != tc.target || run.Config.Filters == nil ||
-			run.Objects != sum.Rows || run.Output.Files != sum.Parts || !run.Sort.Enabled || run.Cost.APICalls != s3Stats(sum).Requests ||
-			run.Go == nil || !bytes.Contains(readFile(t, filepath.Join(out, dataset.SwathSummaryName)), []byte(`"s3":`)) {
-			t.Fatalf("run summary %+v", run)
-		}
-		if _, err := os.Stat(filepath.Join(out, dataset.SummaryName)); !os.IsNotExist(err) {
-			t.Fatalf("S3 dataset has %s: %v", dataset.SummaryName, err)
+		var run Report
+		readJSON(t, filepath.Join(out, dataset.ReportName), &run)
+		if run.ReportVersion != ReportVersion || run.Outcome.Status != "committed" || !run.Outcome.Complete || run.Invocation.Source != tc.target ||
+			run.Output.RowsListed != sum.Output.RowsListed || run.Output.RowsCommitted != rows || run.Output.PartsWritten != len(m.Parts) ||
+			run.Source == nil || run.Source.Name != "s3" || run.Timings.WallMs < run.Timings.ListingMs {
+			t.Fatalf("run report %+v", run)
 		}
 	}
 	for _, c := range s3.Schema.Columns {
@@ -225,24 +222,24 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 		return out
 	}
 	on := run(Config{Out: filepath.Join(t.TempDir(), "ds"), Workers: 4, Source: &S3Config{Seed: true, Probe: true}})
-	if !has(on, "s3", "probe", "requests") || !has(on, "s3", "seed", "cuts") || !has(on, "spill", "rows") || !has(on, "encoder_wait_ns") {
+	if !has(on, "source", "stats", "probe", "requests") || !has(on, "source", "stats", "seed", "cuts") || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
 		t.Fatalf("enabled policies must report their counters: %v", on)
 	}
-	if got := off(on, "s3", "disabled"); strings.Join(got, ",") != "max_keys,resume" {
+	if got := off(on, "source", "stats", "disabled"); strings.Join(got, ",") != "max_keys,resume" {
 		t.Fatalf("disabled = %v", got)
 	}
-	if has(on, "disabled") {
-		t.Fatalf("nothing in the run is off: %v", on["disabled"])
+	if has(on, "resources", "disabled") {
+		t.Fatalf("nothing in the run is off: %v", on["resources"])
 	}
 	cfg := Config{Workers: 4, NoSpill: true, Source: &S3Config{}}
 	m := run(cfg)
-	if has(m, "s3", "probe") || has(m, "s3", "seed") || has(m, "spill") || has(m, "encoder_wait_ns") {
+	if has(m, "source", "stats", "probe") || has(m, "source", "stats", "seed") || has(m, "resources", "spill") || has(m, "resources", "encoder_wait_ns") {
 		t.Fatalf("disabled policies must not report counters: %v", m)
 	}
-	if got := off(m, "s3", "disabled"); strings.Join(got, ",") != "max_keys,probe,resume,seed" {
+	if got := off(m, "source", "stats", "disabled"); strings.Join(got, ",") != "max_keys,probe,resume,seed" {
 		t.Fatalf("disabled = %v", got)
 	}
-	if got := off(m, "disabled"); strings.Join(got, ",") != "spill" {
+	if got := off(m, "resources", "disabled"); strings.Join(got, ",") != "spill" {
 		t.Fatalf("disabled = %v", got)
 	}
 }

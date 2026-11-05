@@ -27,11 +27,16 @@ dataset layout"); this page says how the Go writer meets it.
 
 ## Run reports
 
-S3 datasets carry swath's run summary as `_swath_summary.json` (`listing.RunSummary`): Java swath's
-schema_version 2 field set where this tool has a counterpart (target, completion, objects, durations, cost,
-efficiency, engine, seed, sort), plus this tool's own report under `go`. Filesystem datasets carry this
-tool's report as `_swath_local_summary.json`. Both are operational: written after the commit, and not part
-of acceptance, which reads the manifest's coverage ([../upgrade.md](../upgrade.md)).
+Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 1); `-json` prints the
+same type, also for a dry run or a failure. Sections: `build` (tool, module version, VCS revision),
+`invocation` (argv, source, output, schema, workers, encoders, memory and part size), `outcome` (`committed`,
+`listed` or `failed`, the error, completeness, stop reason, per-entry errors), `timings` (timestamps and
+integer `*_ms` durations, wall, listing, user and system CPU), `output` (rows this invocation listed, rows
+retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (peak RSS,
+row budget, peak buffered, waits in `*_ns`, spill, `disabled`) and `source` (the provider's statistics under
+its name: `s3`, `local`; requests and attempts are this invocation's). It is operational: written after the
+commit (a failure to write it is a warning, the dataset stands) and never part of acceptance, which reads the
+manifest's coverage ([../upgrade.md](../upgrade.md)). There is no cost estimate and no Java-only field.
 
 ## Footer stamps
 
@@ -68,8 +73,7 @@ cancellation removes the unpublished parts and writes no manifest.
 out/
   data/part-00000.parquet ...   dense, zero-based %05d; name order == key order; parts strictly disjoint
   manifest.json                 format 2: source, scope, coverage, ordered parts with exact bounds (the commit)
-  _swath_summary.json           S3: swath's run summary (schema_version 2) with this tool's report under "go"
-  _swath_local_summary.json     filesystem: this tool's run report
+  run.json                      the run report (operational, written after the commit)
   .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/
 ```
 
