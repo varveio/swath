@@ -1456,8 +1456,8 @@ probe off) with `-workers 64 -seed`, against Java swath with the recording's arg
   reported none.
 - **Rows identical:** `diffds.py` finds every Go and Java dataset identical to the recording (845,693 and
   501,262 rows both ways; the buckets did not change since they were recorded).
-- Go's cost: about 31 % (noaa-eri-pds) and 36 % (pansurg) of its keys were fetched past a range's bound and
-  dropped, and a third of splits leave an empty upper child; the step-5b floors target exactly that.
+- Go's cost: keys fetched past a range's bound and dropped equal about 47 % (noaa-eri-pds) and 58 %
+  (pansurg) of the objects, and 31–44 % of splits leave an empty child; the step-5b floors target that.
 - Earlier non-interleaved live runs of the same build (same session, minutes before): noaa-eri-pds 5.21,
   4.45 s; pansurg 15.07, 14.75 s (mean active 13.2–13.6), so pansurg's live wall varies by 1.4× between
   runs minutes apart.
