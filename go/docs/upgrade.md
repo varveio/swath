@@ -75,6 +75,7 @@ or may not be in it.
 | Column | Format 1 | Format 2 |
 |---|---|---|
 | `key`, `size`, `last_modified`, `etag`, `storage_class` | present | unchanged |
+| `size` | INT64, unannotated | INT64 with the standard `INT(64,true)` annotation (physical type unchanged) |
 | `owner_id`, `owner_display_name` | present | unchanged; null unless the run used `-fetch-owner` |
 | `checksum_algorithm`, `checksum_type` | present | unchanged; null when S3 omits them |
 | `version_id` | always null for current objects | removed |

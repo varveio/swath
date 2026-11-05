@@ -30,7 +30,7 @@ There is no external sort, no staging and no merge.
 | `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, retries, the page parser | – |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |
-| `internal/schema` | `Row`, schemas as data (`Local`, `S3`), the sort rule, the Parquet message string | – |
+| `internal/schema` | `Row`, schemas as data (`Local`, `S3`), the sort rule | – |
 | `internal/parquet` | file writer, schema binding, codec, part router, encoders | schema, dataset |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order | faults |
 | `internal/durable` | the journal (CRC-framed records, one writer goroutine), resume identity | dataset |

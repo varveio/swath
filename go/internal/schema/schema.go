@@ -6,8 +6,6 @@ package schema
 
 import (
 	"errors"
-	"fmt"
-	"strings"
 )
 
 // Type is a column's physical and logical type.
@@ -59,35 +57,3 @@ func (s *Schema) Specs() []Spec {
 	}
 	return out
 }
-
-// Message renders the parquet-mr MessageType.toString() form that Swath
-// stores as manifest fileSchema.
-func Message(name string, specs []Spec) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "message %s {\n", name)
-	for _, s := range specs {
-		rep := "optional"
-		if s.Required {
-			rep = "required"
-		}
-		var typ string
-		switch s.Type {
-		case String:
-			typ = "binary " + s.Name + " (STRING)"
-		case Int32:
-			typ = "int32 " + s.Name
-		case Int64:
-			typ = "int64 " + s.Name
-		case TimestampMicros:
-			typ = "int64 " + s.Name + " (TIMESTAMP(MICROS,true))"
-		case Bool:
-			typ = "boolean " + s.Name
-		}
-		fmt.Fprintf(&b, "  %s %s;\n", rep, typ)
-	}
-	b.WriteString("}\n")
-	return b.String()
-}
-
-// Message renders this schema's message string.
-func (s *Schema) Message() string { return Message(s.Name, s.Specs()) }

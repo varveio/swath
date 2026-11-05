@@ -9,7 +9,7 @@ dataset layout"); this page says how the Go writer meets it.
 | Choice | Value | Why / who depends on it |
 |---|---|---|
 | Row path | parquet-go `GenericWriter[any]` fed column values (`[]parquet.Value` per column, one page at a time) | No per-row reflection: a schema mismatch with a struct row silently selects parquet-go's reflective conversion. The column path keeps parquet-go's 64-row write quantum, so pages are identical to its row path. |
-| `size` and other integers | bare INT64 / INT32, no INT annotation (`bareInt` adapter) | swath's canonical schema declares `size` as unannotated INT64; parquet-go would add `INT(64,true)`. Java's schema check and Varve's reader compare the physical schema. |
+| `size` and other integers | INT64 / INT32 with the standard `INT(64,true)` / `INT(32,true)` annotation | Format 2 drops the Java adapter that stripped it; Varve's reader checks the physical type only. |
 | Timestamps | INT64 `TIMESTAMP(MICROS, UTC)` | canonical `last_modified`. |
 | Key encoding | `DELTA_BYTE_ARRAY` | sorted keys share long prefixes. It is also what makes the column-index adapter possible: with dictionary keys the type is library-private. |
 | Key column index | one-page indexes stamped `BoundaryOrder = ASCENDING` (`ascendingKey` adapter); multi-page indexes untouched | older Java readers reject a one-page index with `UNORDERED`; Varve and current Java accept both. Built through parquet-go's public indexer factory, not by rewriting footers. |
@@ -88,9 +88,9 @@ this tool, outside the root, removing only its own entries. An `-out` inside the
 
 ## Schemas
 
-Schemas are data (`schema.Schema`: name, id, sort order, columns with type, required flag and an accessor on
-`Row`). `Message()` renders the parquet-mr message string stored in the manifest; the Parquet node is built
-from the same list.
+Schemas are data (`schema.Schema`: name, id, columns with type, required flag and an accessor on `Row`); the
+Parquet node is built from that list, and `TestFooterMatchesSchema` checks the footer against it. There is no
+message string any more.
 
 **`schema.S3`** (`swath/s3-objects/v1`) is the current-object schema, nine columns: `key`, `size`,
 `last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name` (null unless `-fetch-owner`),
@@ -104,15 +104,15 @@ restores their constant values for comparison. ETags lose one pair of surroundin
 | Column | Parquet physical / logical | Null? | Source |
 |---|---|---|---|
 | `key` | BINARY (STRING) | required | path relative to the root, `/`-separated, no leading `/`; directories end in `/` |
-| `size` | INT64, unannotated | optional | `st_size` (apparent bytes) |
+| `size` | INT64 `INT(64,true)` | optional | `st_size` (apparent bytes) |
 | `last_modified` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_mtime` |
 | `kind` | BINARY (STRING) | required | `FILE`, `DIR`, `SYMLINK`, `FIFO`, `SOCKET`, `CHAR_DEVICE`, `BLOCK_DEVICE`, `UNKNOWN` |
-| `mode` | INT32, unannotated | optional | `st_mode & 0o7777` (permission + setuid/setgid/sticky) |
-| `uid`, `gid` | INT32, unannotated | optional | `st_uid`, `st_gid` (bit pattern: ids >= 2^31 read back negative) |
-| `nlink` | INT32, unannotated | optional | `st_nlink` |
-| `inode` | INT64, unannotated | optional | `st_ino` (bit pattern) |
-| `dev` | INT64, unannotated | optional | `st_dev` (statx: `makedev(major, minor)`) |
-| `blocks` | INT64, unannotated | optional | `st_blocks * 512` = allocated bytes (sparse files show `blocks < size`) |
+| `mode` | INT32 `INT(32,true)` | optional | `st_mode & 0o7777` (permission + setuid/setgid/sticky) |
+| `uid`, `gid` | INT32 `INT(32,true)` | optional | `st_uid`, `st_gid` (bit pattern: ids >= 2^31 read back negative) |
+| `nlink` | INT32 `INT(32,true)` | optional | `st_nlink` |
+| `inode` | INT64 `INT(64,true)` | optional | `st_ino` (bit pattern) |
+| `dev` | INT64 `INT(64,true)` | optional | `st_dev` (statx: `makedev(major, minor)`) |
+| `blocks` | INT64 `INT(64,true)` | optional | `st_blocks * 512` = allocated bytes (sparse files show `blocks < size`) |
 | `ctime`, `atime` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_ctime`, `st_atime` |
 | `birth_time` | INT64 TIMESTAMP(MICROS, UTC) | optional | statx `stx_btime` (only `--fields statx`, mask `all`, when the filesystem reports it); Windows `CreationTime` |
 | `link_target` | BINARY (STRING) | optional | `readlink` result, symlinks only (stat/statx tiers unless `--no-link-target`) |

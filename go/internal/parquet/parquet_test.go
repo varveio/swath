@@ -177,9 +177,10 @@ func TestValuesAreCopied(t *testing.T) {
 	}
 }
 
-// TestFooterMatchesMessage ties the three views of the schema together: the
-// column list, the Parquet footer and the manifest message string.
-func TestFooterMatchesMessage(t *testing.T) {
+// TestFooterMatchesSchema: the Parquet footer holds the schema's columns,
+// in order, with standard logical types (STRING, INT(n, signed), TIMESTAMP
+// micros UTC) and the declared repetition.
+func TestFooterMatchesSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x")
 	writeFile(t, path, testRows(100, 3), 1)
 	f, _ := os.Open(path)
@@ -190,30 +191,22 @@ func TestFooterMatchesMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	elems := pf.Metadata().Schema[1:]
-	var specs []schema.Spec
-	for _, e := range elems {
+	if len(elems) != len(schema.Local.Columns) {
+		t.Fatalf("%d footer columns, schema has %d", len(elems), len(schema.Local.Columns))
+	}
+	for i, e := range elems {
+		c := schema.Local.Columns[i]
 		typ, _ := e.Type.Get()
 		rep, _ := e.RepetitionType.Get()
-		spec := schema.Spec{Name: e.Name, Required: rep.String() == "REQUIRED"}
-		switch {
-		case typ.String() == "BYTE_ARRAY" && e.LogicalType.Value != nil && e.LogicalType.String() == "STRING":
-			spec.Type = schema.String
-		case typ.String() == "INT32" && e.LogicalType.Value == nil:
-			spec.Type = schema.Int32
-		case typ.String() == "INT64" && e.LogicalType.Value == nil:
-			spec.Type = schema.Int64
-		case typ.String() == "INT64" && e.LogicalType.String() == "TIMESTAMP(isAdjustedToUTC=true,unit=MICROS)":
-			spec.Type = schema.TimestampMicros
-		default:
-			t.Fatalf("%s: unexpected footer type %s %v", e.Name, typ, e.LogicalType.Value)
+		want := map[schema.Type]string{schema.String: "BYTE_ARRAY STRING", schema.Int32: "INT32 INT(32,true)",
+			schema.Int64: "INT64 INT(64,true)", schema.TimestampMicros: "INT64 TIMESTAMP(isAdjustedToUTC=true,unit=MICROS)", schema.Bool: "BOOLEAN <nil>"}[c.Type]
+		logical := "<nil>"
+		if e.LogicalType.Value != nil {
+			logical = e.LogicalType.String()
 		}
-		specs = append(specs, spec)
-	}
-	if got, want := schema.Message(pf.Schema().Name(), specs), schema.Local.Message(); got != want {
-		t.Fatalf("footer schema renders\n%s\nwant\n%s", got, want)
-	}
-	if !strings.Contains(schema.Local.Message(), "required binary key (STRING);\n  optional int64 size;\n  optional int64 last_modified (TIMESTAMP(MICROS,true));") {
-		t.Fatal("key/size/last_modified no longer match Swath's canonical columns")
+		if got := typ.String() + " " + logical; e.Name != c.Name || got != want || (rep.String() == "REQUIRED") != c.Required {
+			t.Errorf("column %d: %s %s %s, want %s %s required=%v", i, e.Name, got, rep, c.Name, want, c.Required)
+		}
 	}
 }
 

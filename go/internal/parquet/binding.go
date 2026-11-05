@@ -67,12 +67,6 @@ type root struct {
 func (r root) Fields() []pq.Field {
 	fields := append([]pq.Field(nil), r.Node.Fields()...)
 	for i, f := range fields {
-		switch r.s.Columns[i].Type {
-		case schema.Int64:
-			fields[i] = bareInt{f, pq.Int64Type}
-		case schema.Int32:
-			fields[i] = bareInt{f, pq.Int32Type}
-		}
 		if i == 0 {
 			fields[i] = ascendingKey{f}
 		}
@@ -117,18 +111,6 @@ func (ix ascendingIndexer) ColumnIndex() format.ColumnIndex {
 	}
 	return index
 }
-
-// bareInt removes parquet-go's INT(n,true) annotation.
-type bareInt struct {
-	pq.Field
-	typ pq.Type
-}
-
-func (f bareInt) Type() pq.Type { return plainInt{f.typ} }
-
-type plainInt struct{ pq.Type }
-
-func (plainInt) LogicalType() *format.LogicalType { return nil }
 
 // fill writes column c of rows into dst as parquet values: the single
 // row-to-column mapping, driven by the schema's accessors.

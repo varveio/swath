@@ -53,7 +53,7 @@ def main(out):
         # The current-object schema (swath/s3-objects/v1):
         # name, physical type, repetition, logical type (None = unannotated).
         contract = [
-            ("key", "BYTE_ARRAY", "REQUIRED", "String"), ("size", "INT64", "OPTIONAL", None),
+            ("key", "BYTE_ARRAY", "REQUIRED", "String"), ("size", "INT64", "OPTIONAL", "IntType("),
             ("last_modified", "INT64", "OPTIONAL", "Timestamp"), ("etag", "BYTE_ARRAY", "OPTIONAL", "String"),
             ("storage_class", "BYTE_ARRAY", "OPTIONAL", "String"),
             ("owner_id", "BYTE_ARRAY", "OPTIONAL", "String"), ("owner_display_name", "BYTE_ARRAY", "OPTIONAL", "String"),
@@ -64,11 +64,11 @@ def main(out):
         for i, want in enumerate(contract):
             g = got[i] if i < len(got) else (None, None, None, None)
             logical = None if g[3] is None else str(g[3])
-            ok = g[0] == want[0] and g[1] == want[1] and g[2] == want[2] and (
+            good = g[0] == want[0] and g[1] == want[1] and g[2] == want[2] and (
                 logical is None if want[3] is None else (logical or "").startswith(want[3]))
             if want[0] == "last_modified":
-                ok = ok and "isAdjustedToUTC=1" in (logical or "") and "MICROS=MicroSeconds" in (logical or "")
-            check(ok, f"  {want[0]}: {g[1]} {g[2]} {logical}")
+                good = good and "isAdjustedToUTC=1" in (logical or "") and "MICROS=MicroSeconds" in (logical or "")
+            check(good, f"  {want[0]}: {g[1]} {g[2]} {logical}")
         check(len(got) == len(contract), f"  {len(got)} columns, contract has {len(contract)}")
         bad = con.execute(f"""SELECT count(*) FROM read_parquet('{glob}') WHERE size IS NULL OR last_modified IS NULL
                               OR etag LIKE '"%'""").fetchone()[0]

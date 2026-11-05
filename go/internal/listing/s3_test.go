@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -88,9 +89,9 @@ func TestS3Dataset(t *testing.T) {
 			t.Fatalf("S3 dataset has %s: %v", dataset.SummaryName, err)
 		}
 	}
-	for _, reserved := range []string{"version_id", "is_latest", "is_delete_marker", "row_type"} {
-		if strings.Contains(schema.S3.Message(), " "+reserved+";") {
-			t.Fatalf("the current-object schema has %s", reserved)
+	for _, c := range schema.S3.Columns {
+		if slices.Contains([]string{"version_id", "is_latest", "is_delete_marker", "row_type"}, c.Name) {
+			t.Fatalf("the current-object schema has %s", c.Name)
 		}
 	}
 }
