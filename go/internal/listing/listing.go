@@ -43,6 +43,10 @@ type Config struct {
 type S3Config struct {
 	Endpoint, Region string
 	PathStyle        bool
+	Profile          string        // shared-file profile
+	Anonymous        bool          // never sign
+	Timeout          time.Duration // per request (0: 30 s)
+	Warn             func(string)  // one-time warnings (nil: dropped)
 	FetchOwner       bool
 	Sequential       bool  // one continuation-token chain (the reference oracle)
 	Seed             bool  // tile the scope from one delimiter page first
@@ -179,6 +183,7 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, PathStyle: cfg.S3.PathStyle,
 		FetchOwner: cfg.S3.FetchOwner, Sequential: cfg.S3.Sequential, Seed: cfg.S3.Seed, Workers: cfg.Workers,
 		MaxKeys: cfg.S3.MaxKeys, Client: cfg.S3.Client,
+		Profile: cfg.S3.Profile, Anonymous: cfg.S3.Anonymous, Timeout: cfg.S3.Timeout, Warn: cfg.S3.Warn,
 	})
 	if err != nil {
 		return sum, err

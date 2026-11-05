@@ -18,12 +18,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 // sorted is a fake ListObjectsV2 over a sorted key slice: Prefix,
@@ -46,7 +43,7 @@ func newSorted(keys []string, short bool, seed int64) *sorted {
 
 var errBadStartAfter = errors.New("400 InvalidArgument: start-after")
 
-func (f *sorted) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input, _ ...func(*awss3.Options)) (*awss3.ListObjectsV2Output, error) {
+func (f *sorted) ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error) {
 	if f.latency > 0 {
 		select {
 		case <-time.After(f.latency):
@@ -56,16 +53,16 @@ func (f *sorted) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input
 	}
 	f.mu.Lock()
 	f.calls++
-	size := int(aws.ToInt32(in.MaxKeys))
+	size := in.MaxKeys
 	if f.short {
 		size = 1 + f.rng.Intn(size)
 	}
 	f.mu.Unlock()
-	prefix, delim := aws.ToString(in.Prefix), aws.ToString(in.Delimiter)
+	prefix, delim := in.Prefix, in.Delimiter
 	i := sort.SearchStrings(f.keys, prefix)
-	if tok := aws.ToString(in.ContinuationToken); tok != "" {
+	if tok := in.ContinuationToken; tok != "" {
 		i, _ = strconv.Atoi(tok)
-	} else if sa := aws.ToString(in.StartAfter); sa != "" {
+	} else if sa := in.StartAfter; sa != "" {
 		for _, r := range sa {
 			if !isSafe(int(r)) && r != '%' {
 				return nil, errBadStartAfter
@@ -73,25 +70,25 @@ func (f *sorted) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input
 		}
 		i = max(i, sort.Search(len(f.keys), func(j int) bool { return f.keys[j] > sa }))
 	}
-	out := &awss3.ListObjectsV2Output{IsTruncated: aws.Bool(false)}
+	out := &client.Page{}
 	n := 0
 	for ; i < len(f.keys) && strings.HasPrefix(f.keys[i], prefix); i++ {
 		if n == size {
-			out.IsTruncated, out.NextContinuationToken = aws.Bool(true), aws.String(strconv.Itoa(i))
+			out.IsTruncated, out.NextContinuationToken, out.HasContinuation = true, strconv.Itoa(i), true
 			break
 		}
 		k := f.keys[i]
 		if delim != "" {
 			if j := strings.Index(k[len(prefix):], delim); j >= 0 {
 				cp := k[:len(prefix)+j+len(delim)]
-				if m := len(out.CommonPrefixes); m == 0 || aws.ToString(out.CommonPrefixes[m-1].Prefix) != cp {
-					out.CommonPrefixes = append(out.CommonPrefixes, types.CommonPrefix{Prefix: aws.String(cp)})
+				if m := len(out.CommonPrefixes); m == 0 || out.CommonPrefixes[m-1] != cp {
+					out.CommonPrefixes = append(out.CommonPrefixes, cp)
 					n++
 				}
 				continue
 			}
 		}
-		out.Contents = append(out.Contents, types.Object{Key: aws.String(k), Size: aws.Int64(int64(len(k)))})
+		out.Contents = append(out.Contents, client.Object{Key: k, Size: int64(len(k))})
 		n++
 	}
 	return out, nil
@@ -357,18 +354,18 @@ func TestT4Paging(t *testing.T) {
 		t.Fatalf("page ending at hi: err=%v rows=%d calls=%d", err, len(c.rows), f.calls)
 	}
 	// Truncated empty page.
-	empty := &stub{pages: []*awss3.ListObjectsV2Output{{IsTruncated: aws.Bool(true), NextContinuationToken: aws.String("1")}, {}}}
+	empty := &stub{pages: []*client.Page{{IsTruncated: true, NextContinuationToken: "1"}, {}}}
 	p, _ = New(context.Background(), Options{Bucket: "b", Client: empty, Workers: 1})
 	if err := p.expandRange(context.Background(), Range{open: true}, &direct{&collect{}}); err == nil {
 		t.Fatal("truncated empty page accepted")
 	}
 	// Non-ascending keys and keys not after lo.
-	bad := &stub{pages: []*awss3.ListObjectsV2Output{{Contents: []types.Object{{Key: aws.String("b")}, {Key: aws.String("a")}}}}}
+	bad := &stub{pages: []*client.Page{{Contents: []client.Object{{Key: "b"}, {Key: "a"}}}}}
 	p, _ = New(context.Background(), Options{Bucket: "b", Client: bad, Workers: 1})
 	if err := p.expandRange(context.Background(), Range{open: true}, &direct{&collect{}}); err == nil {
 		t.Fatal("non-ascending page accepted")
 	}
-	behind := &stub{pages: []*awss3.ListObjectsV2Output{{Contents: []types.Object{{Key: aws.String("a")}}}}}
+	behind := &stub{pages: []*client.Page{{Contents: []client.Object{{Key: "a"}}}}}
 	p, _ = New(context.Background(), Options{Bucket: "b", Client: behind, Workers: 1})
 	if err := p.expandRange(context.Background(), Range{lo: "b", open: true}, &direct{&collect{}}); err == nil {
 		t.Fatal("key not after lo accepted")

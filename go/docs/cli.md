@@ -19,6 +19,8 @@ rewrites it):
 usage: swath list <root> [flags]
   <root> is a local directory or s3://bucket[/prefix]
 
+  -anonymous
+    	S3: send unsigned requests, ignoring any credentials
   -count-only
     	walk and count without writing a dataset
   -encoders int
@@ -47,8 +49,12 @@ usage: swath list <root> [flags]
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
     	S3: path-style addressing
+  -profile name
+    	S3: credentials named in ~/.aws/credentials or ~/.aws/config (default: AWS_ACCESS_KEY_ID..., else AWS_PROFILE or default)
   -region string
-    	S3: region (default us-east-1)
+    	S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
+  -request-timeout duration
+    	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
     	S3: tile the keyspace from one delimiter page before splitting
   -sequential
@@ -70,6 +76,11 @@ Profiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.
 - **S3 modes.** The default is the parallel core; `-seed` tiles the scope from one delimiter page first;
   `-sequential` is the one-chain oracle and the only mode where `-max-keys` stops early (the dataset is then
   marked incomplete). `-endpoint` and `-path-style` select S3-compatible stores.
+- **S3 credentials:** `-anonymous` sends unsigned requests whatever the environment holds; otherwise
+  `-profile`, then the `AWS_*` keys, then the `AWS_PROFILE`/`default` profile of the shared files, else
+  anonymous. Instance roles, SSO and web identity are not supported yet
+  ([internals/providers.md](internals/providers.md)). Secrets are never taken from flags (they would show in
+  `ps`).
 - **Exit status** is non-zero on any error; a failed or interrupted run (SIGINT, SIGTERM) leaves no `_SUCCESS`
   and no temporary parts.
 - **Profiling:** `SWATH_LOCAL_CPUPROFILE` and `SWATH_LOCAL_MEMPROFILE` name pprof output files.

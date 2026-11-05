@@ -29,6 +29,15 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
   engines, every tier, with and without DIR rows, reorder budgets from 1 to unbounded, tricky names.
 - **S3 parallel vs sequential:** the parallel core's dataset is byte-identical to the sequential
   continuation-token listing (`listing` `TestS3ParallelEqualsSequential`, on gofakes3).
+- **S3 client vs the AWS SDK:** `internal/source/s3/sdkoracle` puts the SDK behind the provider's `API`.
+  `TestClientPagesMatchSDK` sends the same requests through both and compares every page field;
+  `TestRowsMatchSDK` compares rows, sequential and parallel; `listing` `TestDatasetsMatchSDK` requires
+  byte-identical datasets (SDK sequential vs client sequential, parallel and seeded, and SDK parallel) on a
+  bucket with spaces, `+`, `%`, XML metacharacters, non-ASCII and 900-byte keys. The SignV4 signature is
+  checked against the SDK's signer (`TestSignMatchesSDK`).
+- **Page parser vs encoding/xml:** `FuzzParseList` (arbitrary documents) and `FuzzParseFields` (valid
+  documents from fuzzed values) require that whenever encoding/xml accepts a document, the scanner returns the
+  same page.
 - **Replay** (step 4): placeholder. Recorded listings served by `swath-replay`; row-identical to Java swath.
 
 ## The fake bucket
@@ -51,7 +60,13 @@ exactly the manifest's parts, row counts, strictly ascending raw key bytes withi
 
 ## Fuzzing
 
-`go test -fuzz FuzzParseDirents ./internal/source/fs` (the getdents record parser).
+```bash
+go test -run XXX -fuzz FuzzParseDirents ./internal/source/fs         # getdents record parser
+go test -run XXX -fuzz FuzzParseList -fuzztime 2m ./internal/source/s3/client
+go test -run XXX -fuzz FuzzParseFields -fuzztime 1m ./internal/source/s3/client
+```
+
+Failing inputs land in `testdata/fuzz/` and run as regular tests from then on.
 
 ## Measurements
 

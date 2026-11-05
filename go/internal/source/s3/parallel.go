@@ -11,9 +11,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -127,13 +124,8 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 	start := time.Now()
 	st := p.enter(r)
 	defer p.leave(r, st, start)
-	in := &awss3.ListObjectsV2Input{
-		Bucket: aws.String(p.opt.Bucket), Prefix: aws.String(p.opt.Prefix),
-		MaxKeys: aws.Int32(pageKeys), FetchOwner: aws.Bool(p.opt.FetchOwner),
-	}
-	if r.lo != "" {
-		in.StartAfter = aws.String(r.lo)
-	}
+	in := p.input()
+	in.StartAfter = r.lo
 	c := r.lo
 	for {
 		out, err := p.list(ctx, in)
@@ -141,8 +133,8 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 			return err
 		}
 		kept, reached := len(out.Contents), false
-		for i, o := range out.Contents {
-			k := aws.ToString(o.Key)
+		for i := range out.Contents {
+			k := out.Contents[i].Key
 			if (c != "" || i > 0) && k <= c {
 				return fmt.Errorf("listing out of order in (%q, %q]: %q after %q", r.lo, r.hi, k, c)
 			}
@@ -152,8 +144,8 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 			}
 			c = k
 		}
-		truncated := aws.ToBool(out.IsTruncated)
-		if truncated && out.NextContinuationToken == nil {
+		truncated := out.IsTruncated
+		if truncated && out.NextContinuationToken == "" {
 			return errors.New("truncated page without a continuation token")
 		}
 		if truncated && kept == 0 && !reached {
@@ -173,7 +165,7 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		}
 		page := make([]string, kept)
 		for i := range page {
-			page[i] = aws.ToString(out.Contents[i].Key)
+			page[i] = out.Contents[i].Key
 		}
 		if lower, upper, ok := p.decide(st, r, page, c); ok {
 			p.covered(r.lo, c, false)
@@ -182,7 +174,7 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 			}
 			return e.Child(upper)
 		}
-		in.StartAfter, in.ContinuationToken = nil, out.NextContinuationToken
+		in.StartAfter, in.ContinuationToken = "", out.NextContinuationToken
 	}
 }
 
@@ -329,10 +321,8 @@ func guard(c, m string, found bool, ceil string, bounded, done bool) clause {
 // prefixes; it emits no rows (the tiles list every key, including the
 // page's own objects).
 func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range]) error {
-	in := &awss3.ListObjectsV2Input{
-		Bucket: aws.String(p.opt.Bucket), Prefix: aws.String(p.opt.Prefix),
-		MaxKeys: aws.Int32(pageKeys), Delimiter: aws.String("/"),
-	}
+	in := p.input()
+	in.FetchOwner, in.Delimiter = false, "/"
 	out, err := p.list(ctx, in)
 	if err != nil {
 		return err
@@ -341,9 +331,9 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range]) erro
 	p.mu.Lock()
 	ss := &p.stats.Seed
 	ss.Prefixes = int64(len(out.CommonPrefixes))
-	ss.Truncated = aws.ToBool(out.IsTruncated)
-	for _, cp := range out.CommonPrefixes {
-		if k := aws.ToString(cp.Prefix); safeString(k) {
+	ss.Truncated = out.IsTruncated
+	for _, k := range out.CommonPrefixes {
+		if safeString(k) {
 			cuts = append(cuts, k)
 		} else {
 			ss.Unsafe++
@@ -365,9 +355,9 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range]) erro
 		pk := cuts[k-1]
 		lastObject := ""
 		if n := len(out.Contents); n > 0 {
-			lastObject = aws.ToString(out.Contents[n-1].Key)
+			lastObject = out.Contents[n-1].Key
 		}
-		lastPrefix := aws.ToString(out.CommonPrefixes[len(out.CommonPrefixes)-1].Prefix)
+		lastPrefix := out.CommonPrefixes[len(out.CommonPrefixes)-1]
 		u, ok := prefixCeil(pk)
 		switch {
 		case ss.Truncated:

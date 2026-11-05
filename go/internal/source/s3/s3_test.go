@@ -15,14 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 // clock gives every put its own, increasing modification time.
@@ -84,7 +82,8 @@ func (c *collect) Write(_ context.Context, segs [][]schema.Row) error {
 
 func list(t *testing.T, opt Options, workers int) ([]schema.Row, Stats) {
 	t.Helper()
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
@@ -170,30 +169,29 @@ func TestRetriesAreCounted(t *testing.T) {
 }
 
 // stub returns canned pages.
-type stub struct{ pages []*awss3.ListObjectsV2Output }
+type stub struct{ pages []*client.Page }
 
-func (s *stub) ListObjectsV2(_ context.Context, in *awss3.ListObjectsV2Input, _ ...func(*awss3.Options)) (*awss3.ListObjectsV2Output, error) {
+func (s *stub) ListObjectsV2(_ context.Context, in *client.ListInput) (*client.Page, error) {
 	i := 0
-	if in.ContinuationToken != nil {
-		fmt.Sscan(*in.ContinuationToken, &i)
+	if in.ContinuationToken != "" {
+		fmt.Sscan(in.ContinuationToken, &i)
 	}
 	out := *s.pages[i]
 	if i+1 < len(s.pages) {
-		out.IsTruncated, out.NextContinuationToken = aws.Bool(true), aws.String(fmt.Sprint(i+1))
+		out.IsTruncated, out.NextContinuationToken = true, fmt.Sprint(i+1)
 	}
 	return &out, nil
 }
 
 func TestObjectFields(t *testing.T) {
 	when := time.Date(2026, 3, 4, 5, 6, 7, 891_234_000, time.UTC)
-	page := &awss3.ListObjectsV2Output{Contents: []types.Object{
-		{Key: aws.String("a"), Size: aws.Int64(7), LastModified: &when, ETag: aws.String(`"0123456789abcdef0123456789abcdef-3"`),
-			StorageClass: types.ObjectStorageClassGlacier, ChecksumAlgorithm: []types.ChecksumAlgorithm{types.ChecksumAlgorithmCrc32, types.ChecksumAlgorithmSha256},
-			ChecksumType: types.ChecksumTypeFullObject, Owner: &types.Owner{ID: aws.String("o1"), DisplayName: aws.String("me")}},
-		{Key: aws.String("b"), ETag: aws.String("unquoted")},
+	page := &client.Page{Contents: []client.Object{
+		{Key: "a", Size: 7, Mtime: when.UnixMicro(), ETag: `"0123456789abcdef0123456789abcdef-3"`,
+			StorageClass: "GLACIER", ChecksumAlgorithm: "CRC32", ChecksumType: "FULL_OBJECT", OwnerID: "o1", OwnerDisplayName: "me"},
+		{Key: "b", ETag: "unquoted"},
 	}}
 	for _, owner := range []bool{false, true} {
-		rows, _ := list(t, Options{Bucket: "x", Client: &stub{pages: []*awss3.ListObjectsV2Output{page}}, FetchOwner: owner, Sequential: true}, 1)
+		rows, _ := list(t, Options{Bucket: "x", Client: &stub{pages: []*client.Page{page}}, FetchOwner: owner, Sequential: true}, 1)
 		a, b := rows[0], rows[1]
 		want := schema.ObjectMeta{ETag: "0123456789abcdef0123456789abcdef-3", StorageClass: "GLACIER", ChecksumAlgorithm: "CRC32", ChecksumType: "FULL_OBJECT"}
 		if owner {
@@ -209,9 +207,9 @@ func TestObjectFields(t *testing.T) {
 }
 
 func TestOutOfOrderListingFails(t *testing.T) {
-	pages := []*awss3.ListObjectsV2Output{
-		{Contents: []types.Object{{Key: aws.String("b")}}},
-		{Contents: []types.Object{{Key: aws.String("a")}}},
+	pages := []*client.Page{
+		{Contents: []client.Object{{Key: "b"}}},
+		{Contents: []client.Object{{Key: "a"}}},
 	}
 	p, _ := New(context.Background(), Options{Bucket: "x", Client: &stub{pages: pages}, Sequential: true})
 	if _, err := order.Run[Range](context.Background(), p, &collect{}, order.Options{Workers: 1, Budget: 10}); err == nil {

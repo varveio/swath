@@ -769,6 +769,79 @@ Reading:
 - versions mode;
 - per-worker idle-time stats in `order`.
 
+## Step 1: custom S3 client
+
+The AWS SDK is replaced in the binary by `internal/source/s3/client` (design: [docs/internals/providers.md](docs/internals/providers.md),
+"Client"). The SDK stays as a test-only oracle (`internal/source/s3/sdkoracle`).
+
+**Gate 1, byte identity: passed.**
+- `listing` `TestDatasetsMatchSDK`: SDK sequential vs client sequential, client parallel (4 workers), client
+  seeded (8 workers) and SDK parallel. The datasets are byte-identical. The bucket holds 6,026 keys with spaces,
+  `+`, `%`, XML metacharacters, non-ASCII and a 900-byte key, with `-fetch-owner`.
+- `TestClientPagesMatchSDK` compares every page field for the same requests; `TestRowsMatchSDK` compares
+  rows.
+- On the 971,927-key fake bucket below, every run of both binaries, sequential and parallel, wrote the
+  dataset with parts MD5 `2982b28d1b31`. That is the same digest as before the change.
+
+**Gate 2, the SDK is not linked.** `go list -deps ./cmd/swath` lists no `aws-sdk-go-v2` or `smithy-go`
+package, and `go version -m swath` shows none among the binary's dependencies; the before binary listed 18.
+`go.mod` keeps the SDK (`aws-sdk-go-v2`, `service/s3`) for tests only; `config` and `credentials` are gone.
+
+**Binary size** (stripped linux/amd64, `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w'`):
+**24,617,122 → 15,655,074 bytes (−36 %)**.
+
+**Client CPU per object** (CPU profile of one sequential fake-bucket listing, 971,927 objects; "client" means
+samples under the SDK, `s3/client` or `net/http`):
+
+| | Before (SDK) | After |
+|---|---:|---:|
+| client CPU | 8.49 s, 8.7 µs/object (73 % of process CPU) | 0.99 s, 1.0 µs/object (26 %) |
+| of which response parsing | 8.30 s, 8.5 µs/object | 0.59 s, 0.61 µs/object |
+| process CPU (user + sys, median of 3) | 12.05 s, 12.4 µs/object | 4.59 s, 4.7 µs/object |
+
+**Fake-bucket wall table.** These numbers are synthetic: `bench/s3fake` serves the 971,927 keys of the
+`realistic` tree (gofakes3, in memory, localhost), so they measure client CPU and coordination, not S3 latency.
+The two binaries ran interleaved in one session (`bench/client_gate.sh`), median of 3; raw data is in
+`bench/results/client-gate-raw.tsv`. "Before" is commit `bcbc889`.
+
+| Config | Wall s before | Wall s after | CPU s before | CPU s after | Peak RSS MiB before / after | Requests before / after |
+|---|---:|---:|---:|---:|---:|---|
+| sequential | 10.42 | **4.80** | 12.05 | 4.59 | 66 / 66 | 972 / 972 |
+| 4 workers | 6.04 | **2.41** | 15.24 | 3.90 | 157 / 140 | 1,082–1,118 / 1,099–1,128 |
+| 8 workers | 6.15 | **2.54** | 16.90 | 4.00 | 162 / 170 | 1,219–1,247 / 1,191–1,256 |
+| 16 workers | 6.86 | **2.76** | 19.33 | 4.12 | 164 / 224 | 1,384–1,462 / 1,400–1,427 |
+
+Notes:
+- There were no retries in any run.
+- Request counts vary between runs because splits depend on timing.
+- With the SDK, wall time rose with workers: parsing was CPU-bound on 4 vCPUs. Now parallel runs are bound by
+  the fake server and Parquet encoding.
+- Peak RSS at 16 workers rose because the reorder budget fills faster when the producer is faster: the
+  budget counts rows, and rows keep their page's strings.
+- A first version sized each page arena to the whole response body and peaked at 295 MiB at 16 workers. The
+  shipped version collects values in a pooled scratch arena and copies them into an exact-size arena per page.
+
+**Parser.** A hand-rolled scanner rather than encoding/xml's token decoder, so that a page costs a handful
+of allocations: the page, its object slice, one exact-size arena, and the common-prefix slice.
+- It is held to encoding/xml by two fuzz targets: whenever encoding/xml accepts a document, the scanner must
+  return the same page.
+- `FuzzParseList` ran 2.4M executions over arbitrary documents. Its one finding: encoding/xml takes the first
+  character after `<!` literally in directives. The scanner was fixed and the input kept as a regression
+  case.
+- `FuzzParseFields` builds valid documents from fuzzed values.
+- The SigV4 signature matches the SDK's signer for 32 combinations: path- and virtual-style, custom endpoint,
+  session token, encoded prefixes and tokens.
+
+**Deferred and documented** (providers.md, cli.md):
+- instance roles (IMDS), container credentials, SSO, web identity, `role_arn` and `credential_process`. A
+  profile or environment that names one is an `ErrUnsupportedCredentials` error, not a silent anonymous run;
+  on EC2 without keys the run is anonymous;
+- automatic region redirect: a 301 or `AuthorizationHeaderMalformed` error names the bucket's region instead.
+
+Secrets are not accepted as flags (they would show in `ps`): credentials come from the environment and the
+shared files; `-profile` and `-anonymous` are flags. `-anonymous` is authoritative. The container's three
+stale `AWS_*` variables are ignored with one warning; they had caused the earlier `InvalidAccessKeyId`.
+
 ## Measurement drift
 
 The host slowed during the session (Firecracker guest; nothing else was running in the guest, and `vmstat`

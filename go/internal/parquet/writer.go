@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -104,7 +105,7 @@ func (w *writer) write(r *schema.Row) error {
 		return fmt.Errorf("keys not strictly ascending: %q after %q", r.Key, w.maxKey)
 	}
 	if w.rows == 0 {
-		w.minKey = r.Key
+		w.minKey = strings.Clone(r.Key) // outlives the part: do not pin the provider's arena
 	}
 	w.maxKey = r.Key
 	w.rows++
@@ -223,7 +224,7 @@ func (w *writer) close(final bool) (dataset.Part, error) {
 	}
 	return dataset.Part{
 		Path: w.file.Name(), Rows: w.rows, Bytes: w.out.n,
-		MD5: hex.EncodeToString(w.out.digest.Sum(nil)), MinKey: w.minKey, MaxKey: w.maxKey,
+		MD5: hex.EncodeToString(w.out.digest.Sum(nil)), MinKey: w.minKey, MaxKey: strings.Clone(w.maxKey),
 	}, nil
 }
 

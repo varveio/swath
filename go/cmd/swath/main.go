@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/listing"
@@ -47,6 +48,9 @@ type options struct {
 	workers, encoders        int
 	partSize, memory         size
 	endpoint, region         string
+	profile                  string
+	anonymous                bool
+	timeout                  time.Duration
 	pathStyle, fetchOwner    bool
 	seed, sequential         bool
 	maxKeys                  int64
@@ -67,7 +71,10 @@ func newFlags(o *options) *flag.FlagSet {
 	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS)")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
 	f.StringVar(&o.endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store")
-	f.StringVar(&o.region, "region", "", "S3: region (default us-east-1)")
+	f.StringVar(&o.region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
+	f.StringVar(&o.profile, "profile", "", "S3: credentials `name`d in ~/.aws/credentials or ~/.aws/config (default: AWS_ACCESS_KEY_ID..., else AWS_PROFILE or default)")
+	f.BoolVar(&o.anonymous, "anonymous", false, "S3: send unsigned requests, ignoring any credentials")
+	f.DurationVar(&o.timeout, "request-timeout", 30*time.Second, "S3: per-request timeout; a request that exceeds it is retried")
 	f.BoolVar(&o.pathStyle, "path-style", false, "S3: path-style addressing")
 	f.BoolVar(&o.fetchOwner, "fetch-owner", false, "S3: fill owner_id and owner_display_name")
 	f.BoolVar(&o.seed, "seed", false, "S3: tile the keyspace from one delimiter page before splitting")
@@ -122,7 +129,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		Root: root, Replace: o.overwrite, Fields: fields, NoDirs: o.noDirs, NoLinks: o.noLnk,
 		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
 		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable",
-		S3:       listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle, FetchOwner: o.fetchOwner, Seed: o.seed, Sequential: o.sequential, MaxKeys: o.maxKeys},
+		S3: listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle,
+			Profile: o.profile, Anonymous: o.anonymous, Timeout: o.timeout, Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) }, FetchOwner: o.fetchOwner, Seed: o.seed, Sequential: o.sequential, MaxKeys: o.maxKeys},
 	}
 	if !o.countOnly {
 		cfg.Out = o.out

@@ -26,7 +26,9 @@ There is no external sort, no staging and no merge.
 | `internal/listing` | `Run(ctx, Config) (Summary, error)`: wires provider, order, router, dataset; the run summary | all below |
 | `internal/source` | the provider contract: `Provider[R]`, `Emitter[R]` | schema |
 | `internal/source/fs` | filesystem provider: Linux `getdents64` engine, portable engine | source, schema |
-| `internal/source/s3` | S3 provider: `(lo, hi]` ranges, seed, owner-side splits, pivots | source, schema |
+| `internal/source/s3` | S3 provider: `(lo, hi]` ranges, seed, owner-side splits, pivots | source, schema, s3/client |
+| `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, retries, the page parser | – |
+| `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |
 | `internal/schema` | `Row`, schemas as data (`Local`, `S3`), the sort rule, the Parquet message string | – |
 | `internal/parquet` | file writer, schema binding, codec, part router, encoders | schema, dataset |
@@ -48,7 +50,8 @@ filesystem fields inline, object-store fields behind one pointer (`Row.Object`, 
 - **Ownership.** A slice passed to `Emitter.Rows` belongs to the order stage from then on; the provider must not
   touch it. Segments handed to the sink belong to the router until the encoder has written them. parquet-go
   copies byte-array values, so rows may alias provider buffers (keys are zero-copy views into a per-page or
-  per-directory arena).
+  per-directory arena). Anything that outlives a part (its min and max key) is cloned so it does not pin an
+  arena.
 - **Cancellation.** Every stage takes the `context.Context`. The first error stops the walk (an atomic flag,
   checked without taking `ctx`'s mutex), wakes every waiter, closes the encoders, removes temporary parts and
   is returned wrapped with its path or phase. `_SUCCESS` is written only after a complete publish.

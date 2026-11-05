@@ -25,8 +25,10 @@ import (
 
 func fakeS3(t *testing.T, n int) string {
 	t.Helper()
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
 	b := s3mem.New()
@@ -95,8 +97,10 @@ func readJSON(t *testing.T, path string, v any) {
 // provider's (Parquet parts and manifest, apart from its creation time) on
 // the same static bucket with request latency.
 func TestS3ParallelEqualsSequential(t *testing.T) {
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
 	b := s3mem.New()

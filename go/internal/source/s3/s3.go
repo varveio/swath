@@ -20,27 +20,31 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/retry"
-	"github.com/aws/aws-sdk-go-v2/config"
-	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
-// API is the subset of the S3 client the provider uses.
+// API is the one S3 call the provider makes. *client.Client implements
+// it; tests substitute fakes and the AWS SDK (the oracle).
 type API interface {
-	ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input, opts ...func(*awss3.Options)) (*awss3.ListObjectsV2Output, error)
+	ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error)
 }
+
+// counted is implemented by clients that count their requests.
+type counted interface{ Counters() client.Counters }
 
 // Options configure a Provider.
 type Options struct {
 	Bucket     string
 	Prefix     string
 	Endpoint   string // custom endpoint URL (S3-compatible stores, tests)
-	Region     string // default us-east-1
+	Region     string // else AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1
 	PathStyle  bool
+	Profile    string        // shared-file profile
+	Anonymous  bool          // never sign, whatever the environment holds
+	Timeout    time.Duration // per request; default 30 s
+	Warn       func(string)  // one-time warnings for the user; may be nil
 	FetchOwner bool
 	Sequential bool  // one continuation-token chain, no ranges (the oracle)
 	Seed       bool  // parallel: tile the scope from one delimiter page first
@@ -78,8 +82,13 @@ type Stats struct {
 	Pages         int64      `json:"pages"`
 	Requests      int64      `json:"requests"`
 	Retries       int64      `json:"retries"`
+	Throttles     int64      `json:"throttles"`
+	Timeouts      int64      `json:"timeouts"`
+	Attempts      int64      `json:"attempts"`       // HTTP requests, retries included
 	OverfetchKeys int64      `json:"overfetch_keys"` // listed past a range's hi and trimmed
 	Anonymous     bool       `json:"anonymous"`
+	Credentials   string     `json:"credentials,omitempty"` // where they came from
+	Region        string     `json:"region,omitempty"`
 	Truncated     bool       `json:"truncated_at_max_keys"`
 	Seed          SeedStats  `json:"seed"`
 	Split         SplitStats `json:"split"`
@@ -131,8 +140,9 @@ type SplitStats struct {
 type Provider struct {
 	opt       Options
 	client    API
-	retries   *atomic.Int64
 	anonymous bool
+	creds     string
+	region    string
 	objects   atomic.Int64
 	ids       atomic.Uint64
 	start     time.Time
@@ -147,9 +157,8 @@ type Provider struct {
 
 var _ source.Provider[Range] = (*Provider)(nil)
 
-// New builds the client: the default credential chain, or anonymous access
-// when it finds none; the SDK's standard retryer (9 attempts, backoff up to
-// 5 s), counted.
+// New builds the client (see package client for credentials and retries)
+// unless Options.Client supplies one.
 func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.Bucket == "" {
 		return nil, errors.New("no bucket")
@@ -161,48 +170,24 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		opt.Workers = 1
 	}
 	now := time.Now()
-	p := &Provider{opt: opt, client: opt.Client, retries: new(atomic.Int64), running: map[uint64]*running{}, start: now, areaAt: now}
+	p := &Provider{opt: opt, client: opt.Client, running: map[uint64]*running{}, start: now, areaAt: now}
 	p.stats.Seed.Declined = map[string]int64{}
 	if p.client != nil {
 		return p, nil
 	}
-	region := opt.Region
-	if region == "" {
-		region = "us-east-1"
-	}
-	retryer := func() aws.Retryer {
-		return counting{retry.NewStandard(func(o *retry.StandardOptions) {
-			o.MaxAttempts, o.MaxBackoff = 9, 5*time.Second
-		}), p.retries}
-	}
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region), config.WithRetryer(retryer))
-	if err != nil {
-		return nil, fmt.Errorf("load AWS configuration: %w", err)
-	}
-	probe, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	if _, err := cfg.Credentials.Retrieve(probe); err != nil {
-		cfg.Credentials = aws.AnonymousCredentials{}
-		p.anonymous = true
-	}
-	p.client = awss3.NewFromConfig(cfg, func(o *awss3.Options) {
-		if opt.Endpoint != "" {
-			o.BaseEndpoint = aws.String(opt.Endpoint)
-		}
-		o.UsePathStyle = opt.PathStyle
+	c, err := client.New(client.Config{
+		Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle,
+		Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("S3 client: %w", err)
+	}
+	if n := c.Note(); n != "" && opt.Warn != nil {
+		opt.Warn(n)
+	}
+	p.client, p.region = c, c.Region()
+	p.creds, p.anonymous = c.Credentials()
 	return p, nil
-}
-
-// counting is the standard retryer, counting the retries it allows.
-type counting struct {
-	aws.RetryerV2
-	n *atomic.Int64
-}
-
-func (c counting) RetryDelay(attempt int, err error) (time.Duration, error) {
-	c.n.Add(1)
-	return c.RetryerV2.RetryDelay(attempt, err)
 }
 
 // Stats returns the counters so far.
@@ -214,12 +199,15 @@ func (p *Provider) Stats() Stats {
 	if el := time.Since(p.start).Seconds(); el > 0 {
 		s.MeanActive = p.area / el
 	}
-	s.Retries = p.retries.Load()
-	s.Anonymous = p.anonymous
+	if c, ok := p.client.(counted); ok {
+		n := c.Counters()
+		s.Retries, s.Throttles, s.Timeouts, s.Attempts = n.Retries, n.Throttles, n.Timeouts, n.Attempts
+	}
+	s.Anonymous, s.Credentials, s.Region = p.anonymous, p.creds, p.region
 	return s
 }
 
-func (p *Provider) list(ctx context.Context, in *awss3.ListObjectsV2Input) (*awss3.ListObjectsV2Output, error) {
+func (p *Provider) list(ctx context.Context, in *client.ListInput) (*client.Page, error) {
 	p.mu.Lock()
 	p.stats.Requests++
 	p.mu.Unlock()
@@ -235,10 +223,7 @@ func (p *Provider) list(ctx context.Context, in *awss3.ListObjectsV2Input) (*aws
 
 // expandSequential lists the whole scope with one continuation-token chain.
 func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range]) error {
-	in := &awss3.ListObjectsV2Input{
-		Bucket: aws.String(p.opt.Bucket), Prefix: aws.String(p.opt.Prefix),
-		MaxKeys: aws.Int32(pageKeys), FetchOwner: aws.Bool(p.opt.FetchOwner),
-	}
+	in := p.input()
 	last := ""
 	for {
 		out, err := p.list(ctx, in)
@@ -266,10 +251,10 @@ func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range]
 		p.mu.Lock()
 		p.stats.Truncated = p.stats.Truncated || stop
 		p.mu.Unlock()
-		if stop || !aws.ToBool(out.IsTruncated) {
+		if stop || !out.IsTruncated {
 			return nil
 		}
-		if out.NextContinuationToken == nil {
+		if out.NextContinuationToken == "" {
 			return errors.New("truncated page without a continuation token")
 		}
 		in.ContinuationToken = out.NextContinuationToken
@@ -293,27 +278,27 @@ func (p *Provider) emit(rows []schema.Row, e source.Emitter[Range]) error {
 	return err
 }
 
+// input is the request for the provider's scope.
+func (p *Provider) input() *client.ListInput {
+	return &client.ListInput{Bucket: p.opt.Bucket, Prefix: p.opt.Prefix, MaxKeys: pageKeys, FetchOwner: p.opt.FetchOwner}
+}
+
 // rows converts the first n objects of a page to rows (Swath's mapping).
-func (p *Provider) rows(out *awss3.ListObjectsV2Output, n int) []schema.Row {
+// Rows share the page's strings.
+func (p *Provider) rows(out *client.Page, n int) []schema.Row {
 	rows := make([]schema.Row, n)
 	meta := make([]schema.ObjectMeta, n)
-	for i, o := range out.Contents[:n] {
-		m := &meta[i]
-		m.ETag = stripQuotes(aws.ToString(o.ETag))
-		m.StorageClass = string(o.StorageClass)
-		if p.opt.FetchOwner && o.Owner != nil {
-			m.OwnerID, m.OwnerDisplayName = aws.ToString(o.Owner.ID), aws.ToString(o.Owner.DisplayName)
+	for i := range out.Contents[:n] {
+		o, m := &out.Contents[i], &meta[i]
+		m.ETag = stripQuotes(o.ETag)
+		m.StorageClass = o.StorageClass
+		if p.opt.FetchOwner {
+			m.OwnerID, m.OwnerDisplayName = o.OwnerID, o.OwnerDisplayName
 		}
-		if len(o.ChecksumAlgorithm) > 0 {
-			m.ChecksumAlgorithm = string(o.ChecksumAlgorithm[0])
-		}
-		m.ChecksumType = string(o.ChecksumType)
+		m.ChecksumAlgorithm, m.ChecksumType = o.ChecksumAlgorithm, o.ChecksumType
 		r := &rows[i]
-		r.Key, r.Kind, r.Object = aws.ToString(o.Key), schema.KindFile, m
-		r.Size = aws.ToInt64(o.Size)
-		if o.LastModified != nil {
-			r.Mtime = o.LastModified.UnixMicro()
-		}
+		r.Key, r.Kind, r.Object = o.Key, schema.KindFile, m
+		r.Size, r.Mtime = o.Size, o.Mtime
 		r.Present = schema.HasSize | schema.HasMtime
 	}
 	return rows
