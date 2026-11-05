@@ -52,7 +52,8 @@ type Options struct {
 	Warn         func(string)  // one-time warnings for the user; may be nil
 	FetchOwner   bool
 	Sequential   bool    // one continuation-token chain, no ranges (the oracle)
-	Seed         bool    // parallel: tile the scope from one delimiter page first
+	Seed         bool    // parallel: tile the scope from delimiter probes first
+	SeedDescent  bool    // the seed walks the folder hierarchy (seedplan.go); else one delimiter page
 	Workers      int     // parallel: the order stage's worker count (split demand)
 	MaxKeys      int64   // stop after this many objects (sequential only; 0 = all)
 	Client       API     // optional; built from the options above when nil

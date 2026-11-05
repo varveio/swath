@@ -75,7 +75,7 @@ usage: swath list SOURCE --output DIR [flags]
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
-    	S3: tile the keyspace from one delimiter page before splitting
+    	S3: tile the keyspace from delimiter probes of the folder hierarchy before splitting
   -spill-compress
     	compress spill files (zstd level 1)
   -spill-max bytes
@@ -151,7 +151,9 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
-    	S3: tile the keyspace from one delimiter page before splitting
+    	S3: tile the keyspace from delimiter probes of the folder hierarchy before splitting
+  -seed-descent
+    	S3: with -seed, walk the folder hierarchy (false: one delimiter page) (default true)
   -sequential
     	S3: list with one continuation-token chain (no ranges; the reference)
   -spill-compress

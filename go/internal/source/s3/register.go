@@ -35,8 +35,10 @@ func flags(f *flag.FlagSet, diag bool) any {
 	f.BoolVar(&o.FIPS, "fips", false, "S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)")
 	f.BoolVar(&o.DualStack, "dualstack", false, "S3: use the dual-stack (IPv6) endpoint")
 	f.BoolVar(&o.FetchOwner, "fetch-owner", false, "S3: fill owner_id and owner_display_name")
-	f.BoolVar(&o.Seed, "seed", false, "S3: tile the keyspace from one delimiter page before splitting")
+	f.BoolVar(&o.Seed, "seed", false, "S3: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
+	o.SeedDescent = true
 	if diag {
+		f.BoolVar(&o.SeedDescent, "seed-descent", true, "S3: with -seed, walk the folder hierarchy (false: one delimiter page)")
 		f.BoolVar(&o.Floors, "floors", false, "S3: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		f.BoolVar(&o.Sequential, "sequential", false, "S3: list with one continuation-token chain (no ranges; the reference)")
 		f.BoolVar(&o.Probe, "probe", false, "S3: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")

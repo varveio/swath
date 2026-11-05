@@ -1395,6 +1395,34 @@ share more than that (`2005_Hurricane_Wilma/` and a key under it), the consumed 
 estimate falls back to the remaining fraction itself (below 1), so the range never splits again. Java has the
 same arithmetic, but there it only stops the owner's carve.
 
+## Seed descent
+
+**Change.** `-seed` runs Swath's hybrid seed descent (`HybridSeedPlanner` at its defaults: mass-aware,
+fan-out tiling, radix bands) instead of one delimiter page (docs/internals/providers.md "Root and seed").
+The walk is a state machine ported as is; the provider fetches the probes it knows the walk will ask for
+next (the queued folders at the depth being walked, the rest of a sample) together, so a level costs about
+one round trip, and a test holds the tiles equal to a serial walk's. `swath diag list --seed-descent=false`
+keeps the one-page seed. On the recordings Java's radix bands fire only on the flat and shallow ones
+(93 bands on noaa-eri-pds, pansurg and real-changesets); on fourcastnetgfs and nara the descent itself
+(224–256 probes, 144–257 tiles) is what differs from the one-page seed, and Java runs it with every policy
+toggle off as well.
+
+**Engagement check** (replay at the recording's p50, 64 workers, one rep each, Go only, 2026-11-05):
+
+| Recording | Seed | Wall s | Requests | Seed probes | Splits | Empty children | Overfetched keys | Mean active |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds | one page | 4.7 | 1,248 | – | 496 | 163 | 398,130 | 39.5 |
+| | descent | 5.0 | 1,595 | 256 | 534 | 177 | 502,603 | 30.8 |
+| pansurg | one page | 6.0 | 805 | – | 399 | 168 | 300,042 | 23.8 |
+| | descent | 7.1 | 1,291 | 256 | 331 | 132 | 520,057 | 25.5 |
+| fourcastnetgfs | one page | 47.2 | 6,015 | – | 2,604 | 1,283 | 1,932,578 | 14.5 |
+| | descent | 32.5 | 6,173 | 256 | 2,497 | 1,184 | 1,846,569 | 19.9 |
+
+One rep each, so a direction, not a result: the descent costs its 256 probes and the shallow recordings
+gain nothing from it (their tiles are already small; the seed ranges' final pages add overfetch), while on
+fourcastnetgfs it raises concurrency. Note the one-page arm's 47 s on fourcastnetgfs against 403–426 s in
+the step 5a table: single runs of this shape vary widely with where the first splits land.
+
 ## Review items
 
 The Astra architecture review's deferred items, and the Sol durability review, as built:

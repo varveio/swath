@@ -44,7 +44,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 |---|---|---|---|---|
 | `objects` | count | objects |  | objects listed (emitted rows) |
 | `bytes` | count | bytes |  | sum of listed object sizes |
-| `pages` | count | pages |  | ListObjectsV2 pages processed (and the seed page) |
+| `pages` | count | pages |  | ListObjectsV2 pages processed (and the seed's probes) |
 | `requests` | count | requests |  | ListObjectsV2 calls, retries not counted |
 | `attempts` | count | requests |  | HTTP requests, retries included |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
@@ -53,10 +53,10 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
 | `overfetch_keys` | count | keys |  | keys listed past a range's hi (or at or below a resume key) and dropped |
 | `truncated_at_max_keys` | flag |  | max_keys | -max-keys stopped the listing; the dataset is incomplete |
-| `seed.prefixes` | count | prefixes | seed | common prefixes on the seed page |
+| `seed.prefixes` | count | prefixes | seed | common prefixes on the top seed page |
 | `seed.cuts` | count | cuts | seed | cut points the seed tiled the scope at |
 | `seed.unsafe` | count | prefixes | seed | prefixes dropped as unusable start-after values |
-| `seed.subsampled` | flag |  | seed | more than min(1000, 4×workers) usable prefixes: cuts were subsampled |
+| `seed.subsampled` | flag |  | seed | more cut points than min(1000, 4×workers): cuts were subsampled |
 | `seed.truncated` | flag |  | seed | the seed page was truncated |
 | `seed.sentinel` | flag |  | seed | the closing sentinel (pk, prefixCeil(pk)] was added |
 | `seed.sentinel_declined.truncated` | count | decisions | seed | sentinel declined: the seed page was truncated |
@@ -89,6 +89,27 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
 | `split.skipped.remaining_floor` | count | decisions | floors | bounded range with at most 4 pages of keys left by its density estimate: not split |
 | `split.skipped.tail_floor` | count | decisions | floors | the child past the pivot would realize at most 2 pages of keys: not split |
+| `seed.probes` | count | requests | seed | probes the seed descent asked for (a probe asked twice is fetched once; also in requests) |
+| `seed.probes_unused` | count | requests | seed | probes fetched ahead that the descent did not ask for |
+| `seed.radix_bands` | count | cuts | seed | cuts synthesized after a dense flat folder ('!'..'~' without '%') |
+| `seed.top_paginated` | flag |  | seed | the top level was truncated and a second top page was read |
+| `seed.mass_weighted` | flag |  | seed | cuts were subsampled by sampled mass, not evenly |
+| `seed.sampled_levels` | count | levels | seed | ambiguous truncated folders sampled (up to 3 children each) |
+| `seed.explosions_confirmed` | count | levels | seed | sampled folders found one object per subfolder: left whole |
+| `seed.heavy_prior` | count | levels | seed | ambiguous folders classified from earlier samples (sample budget spent) |
+| `seed.frontier_continued` | count | levels | seed | the walk went on past a truncated folder |
+| `seed.flat_trivial` | flag |  | seed | no folders and a complete top page: one range |
+| `seed.sentinel_declined.no_prefix` | count | decisions | seed | sentinel declined: the top level has no folder |
+| `seed.sentinel_declined.no_greatest_item` | count | decisions | seed | sentinel declined: the top probe returned nothing |
+| `seed.sentinel_declined.no_spare_slot` | count | decisions | seed | sentinel declined: the cuts already fill min(1000, 4×workers) |
+| `seed.sentinel_declined.not_above_last_cut` | count | decisions | seed | sentinel declined: the ceiling is not above the last cut |
+| `seed.levels.narrow` | count | levels | seed | folders listed whole in one page: their subfolders are cuts and are walked |
+| `seed.levels.flat_wide` | count | levels | seed | truncated folders of objects only |
+| `seed.levels.fanout_tiled` | count | levels | seed | truncated folders of key=value partitions: up to workers of them are cuts |
+| `seed.levels.heavy_cut_banded` | count | levels | seed | truncated folders sampled heavy: up to workers subfolders are cuts |
+| `seed.levels.tiny_leaf_explosion` | count | levels | seed | truncated folders of one-object subfolders: left whole |
+| `seed.levels.dense_root_radix_banded` | count | levels | seed | the dense flat folder cut into radix bands |
+| `seed.levels.delimiter_seeded` | count | levels | seed | a complete top level whose folders seeded the tiles (nothing else engaged) |
 <!-- s3:end -->
 
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active

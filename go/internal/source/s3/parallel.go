@@ -458,10 +458,10 @@ func guard(c, m string, found bool, ceil string, bounded, done bool) clause {
 	return clauseOK
 }
 
-// expandSeed sends one delimiter page and tiles the scope at its common
+// expandSeedPage sends one delimiter page and tiles the scope at its common
 // prefixes; it emits no rows (the tiles list every key, including the
-// page's own objects).
-func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range, Object]) error {
+// page's own objects). The seed with --seed-descent=false.
+func (p *Provider) expandSeedPage(ctx context.Context, e source.Emitter[Range, Object]) error {
 	in := p.input()
 	in.FetchOwner, in.Delimiter = false, "/"
 	out, err := p.list(ctx, in)

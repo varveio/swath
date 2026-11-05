@@ -133,9 +133,34 @@ keys are at most 1,024 bytes (`schema.ErrKeyTooLong`).
 whose last key equals `hi` ends the range without another request; `IsTruncated = false` ends it. A truncated
 page without a token, a truncated page with no key in range, or a key not after its predecessor is an error.
 
-**Root and seed.** The root is `(⊥, ⊤]`. With `-seed` the root is one delimiter page that emits no rows and
-tiles the scope at its common prefixes `(⊥,p1], …, (pk, ⊤]`: unusable start-after values are dropped; at most
-`min(1000, 4 × workers)` cuts, evenly subsampled; and swath's closing sentinel
+**Root and seed.** The root is `(⊥, ⊤]`. With `-seed` the root is a seed that emits no rows and tiles the
+scope at cut points `(⊥,c1], …, (ck, ⊤]`. The seed is Swath's hybrid seed descent (`HybridSeedPlanner` at
+its defaults: mass-aware, fan-out tiling, radix bands), a walk of the folder hierarchy with delimiter
+pages (`/`, one page of 1,000 each, never paginated):
+- *Budget:* aims at `min(1000, 4 × workers)` tiles with at most `min(256, that)` probes, of which up to 32
+  are samples; the walk itself stops at the budget less the sample share.
+- *Top level:* its folders are cuts. A truncated top page is read once more from its last item; a top level
+  that still holds more than a page of folders is left whole (no descent). No folders and a truncated page:
+  the scope is one dense flat folder, cut into radix bands (below).
+- *Descent:* queued folders are probed shallowest first, then by the widest byte gap to the next cut. A
+  folder listed in one page adds its subfolders as cuts and queues them (`narrow`). A truncated folder is
+  classified: objects only (`flat_wide`, the first one is cut into radix bands); mostly `key=value`
+  subfolders (`fanout_tiled`: an even subsample of up to `workers` of them become cuts); otherwise 3
+  subfolders are sampled, and if at least half hold 8 or more objects, subfolders or a full page
+  (`heavy_cut_banded`), up to `workers` subfolders become cuts, else it is a one-object-per-folder explosion
+  left whole. Past the sample budget, the earlier samples' majority decides.
+- *Cuts:* more cuts than the target are subsampled evenly, or by mass when at least 8 cuts were sampled
+  for their weight (one sample probe each, a full page weighing 1,000). Radix bands: after a dense flat
+  folder `d`, cuts `d·b` for up to `min(93, max(8, target))` bytes `b` spread over `!`..`~` without `%`.
+  The closing sentinel `prefixCeil(pk)` is added when the top level was complete, ended with its greatest
+  folder `pk` and a tile slot is spare. Unusable start-after values are dropped (`seed.unsafe`).
+- *Probes in parallel:* the walk is a state machine fed one probe result at a time, so its plan is the one a
+  serial walk makes (`TestSeedDescentConcurrentEqualsSerial`). Where its next probes are known (the queued
+  folders of the depth being walked, the rest of a sample) they are fetched together, up to one per
+  worker; a probe fetched ahead and never asked for is counted (`seed.probes_unused`) and dropped.
+
+`swath diag list --seed-descent=false` keeps the single delimiter page instead: its common prefixes are the
+cuts, at most `min(1000, 4 × workers)` evenly subsampled, with the closing sentinel
 `(pk, prefixCeil(pk)], (prefixCeil(pk), ⊤]` when the page was complete and ended with a prefix.
 
 **Splits are owner-side.** A range's children become claimable only when its `Expand` returns, so there are
@@ -190,7 +215,8 @@ and the run used about 1 of 64 workers (REPORT.md "Step 5a").
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted
 bounded and frontier, rejected per guard clause, skipped for no demand, outranked or not continuing);
-`child_empty.{lower,upper}`; the floors' skips; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
+`child_empty.{lower,upper}`; the floors' skips; the seed descent's probes, classifications and
+sentinel; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
 sink-wait time.
 
 **Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is
