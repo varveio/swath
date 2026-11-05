@@ -109,6 +109,11 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   name mapping lives there).
   Each run is one TSV row, keyed by bucket, version and configuration, with every engagement counter as a
   column.
+- **Policy arms on a recording:** `bench/policy_replay.sh ARMS BUCKET LATENCY_MS PORT REPS OUT` serves one
+  recording with a fixed page latency and runs the arms listed in `ARMS` (Java flags, or a Go binary and its
+  `swath diag list` flags) interleaved, `REPS` times; `bench/policy_table.py OUT` prints wall, requests,
+  attempts (the replay server's HTTP count), splits, empty children, overfetched keys, probes and mean active
+  ranges per arm.
 
 ## The fake bucket
 
