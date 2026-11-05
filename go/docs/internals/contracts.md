@@ -1,23 +1,52 @@
-# Invariants
+# Contracts
 
-The invariants the Go tool keeps, stated for its ordered design. Java numbers refer to
-[`docs/internals/contracts.md`](../../../docs/internals/contracts.md) §0; where Go keeps the same rule by a
-different mechanism, the mechanism is named. Tests that hold each one: [../testing.md](../testing.md).
+What the Go tool promises, by responsibility: what a dataset guarantees to its readers, what each producer
+means by its rows, and how a run executes and recovers. Each rule names its mechanism and the test that holds
+it ([../testing.md](../testing.md)). Provider-specific rules (S3's `(lo, hi]` ranges, safe pivots, the key
+limit) live with the provider ([providers.md](providers.md)); the correspondence with Java's I1–I12 is
+migration history, at the end.
 
-| Go invariant | Java | Mechanism in Go | State |
-|---|---|---|---|
-| **No gap, no overlap.** The ranges of a run partition the keyspace: every key in scope is listed by exactly one range. | I2 | A split of `(lo, hi]` at cursor `c` and pivot `m` yields `(lo, c]` (already listed), `(c, m]`, `(m, hi]`; seed tiles `(⊥,p1], …, (pk, ⊤]`. | built |
-| **The boundary belongs to the left.** `(a, b]` lists `a < k ≤ b`; the right neighbour starts after `b`. | I3 | `StartAfter = lo`; keys `> hi` are trimmed; a page ending at `hi` ends the range. | built |
-| **Unsigned byte order.** Keys are compared, split and written as bytes, never as UTF-16 or by locale. | I10 | Go string comparison is bytewise; every stage checks strict ascent (provider, writer, gate). | built |
-| **Safe pivots.** A synthesized pivot is valid UTF-8, strictly between its bounds, and adds no code point from the unsafe set E. | I12 | `ByteMidpoint` port; extrapolated pivots pass `safeString` and the same betweenness check. | built |
-| **A split is atomic and has one owner.** | I4 | Only the range's owner splits it, after a full page, under the provider mutex; nobody else holds its cursor. Splits are never journaled; resume correctness depends only on the last published key ([durability.md](durability.md)). | built |
-| **No infinite loop.** A truncated page without a token, or without a key in range, is an error. | I9 | Checked per page in `expandRange` and `expandSequential`. | built |
-| **No wait on child work.** A worker never blocks on work it created. | I7 | Children become claimable; the drainer expands what it awaits itself. | built |
-| **Bounded buffers.** Buffered rows are a function of `-memory`, not of object count, apart from the awaited node and the root-to-frontier path. | I11 | `order.Options.Budget`; bounded encoder channels; per-part metadata is O(parts). | built |
-| **Commit before emit.** Progress is durable before rows past it are published. | I1 | Per part: the journal record (`PartInfo`, frozen limit, row total) is fsynced before the part's rename. | built |
-| **Resume never relists published keys and never skips one.** | I5, I6 | Resume lists `(K, ⊤]` after the last recorded part's max key K, as one range split as on a fresh run; a part is published iff its record is durable and it is renamed (a recorded but unrenamed part is renamed on resume). | built |
-| **Publication order.** Parts are complete and fsynced before rename; renames go in ordinal order; `manifest.json` is installed last by an atomic rename and a directory sync, and is the commit; run reports follow it. A failed or cancelled run leaves no manifest and no unpublished part. | §4.1 (format 2: the manifest replaces `_SUCCESS`) | `dataset.Publish` after the gate (dense ordinals, strictly ascending disjoint parts, rows written = rows routed). | built |
-| **Deterministic output.** The same listing produces byte-identical parts for any worker or encoder count. | – (Go only) | Part boundaries depend only on rows ([parquet-output.md](parquet-output.md)); parallel column encoding is byte-identical to serial. | built |
+## Dataset guarantees (readers rely on these)
 
-I8 (shutdown order) maps to: the drainer stops consuming, sets the stop flag, wakes all waiters, waits for the
-workers, then closes the router, which waits for its encoders.
+| Rule | Mechanism | Test |
+|---|---|---|
+| **The manifest is the commit.** A directory without `manifest.json` holds no dataset; one with it holds exactly the parts it lists, in key order, under `data/`. | `dataset.Publish` installs `manifest.json` last by an atomic rename and a directory sync, after every part is fsynced and renamed. A failed or cancelled run leaves no manifest. | `TestDatasetContract`, `TestPublishFailureLeavesNoManifest`, crash matrix |
+| **Coverage is stated.** The manifest says what was listed (`source`, `scope`) and how much of it (`coverage`: complete, stop reason, skipped entries, exclusions, filters, `snapshot: false`). A reader that needs the whole source fails closed on anything less. | Coverage comes from the provider's report; the run report is never part of acceptance. | `TestS3Dataset`, Varve probe |
+| **Keys are bytes in unsigned order, unique, strictly ascending within and across parts.** Parts are key-disjoint, so they concatenate without a merge. | Every stage checks strict ascent (provider, writer, publication gate: `*dataset.InvariantError`). | `TestDatasetContract`, `verify.py`, `diffds.py` |
+| **Part facts are exact.** Each part's `rows`, `bytes`, `md5` and `min_key_base64`/`max_key_base64` (the first and last key's exact bytes) are true. | The writer measures them; the gate checks counts and order. | `TestDatasetContract` |
+| **The page-index profile.** Footers carry exactly `swath.profile`, `swath.profile_version`, `swath.schema_id`, `swath.index_bound_bytes` and standard `sorting_columns`; 1,024-row pages with column and offset indexes; index bounds over 1,024 bytes are truncated conservatively. | `parquetout` writer constants ([parquet-output.md](parquet-output.md)). | `TestDatasetContract`, `TestKeyLimits`, `verify.py` |
+| **Parts are immutable.** A published part is never rewritten; a resume verifies retained parts by size and MD5 before continuing. | `recoverParts` (`ErrPartAltered`). | crash matrix, `TestAlteredPartIsRefused` |
+
+## Producer semantics (what a row means)
+
+| Rule | Mechanism | Test |
+|---|---|---|
+| **One row per listed entry, once.** The ranges of a run partition the scope: every key in it is listed by exactly one range, and no key outside it. | Providers split ranges into disjoint children; the order stage drains them depth-first. | S3 T1 random-split tiling, `TestListingEqualsSortedOracle` (filesystem) |
+| **S3: every row is a current object** (`swath/s3-objects/v1`); a key ending in `/` is an object; delimiter prefixes are derived, never stored; owner columns are null unless asked for at run start. | `s3.Schema`. | `TestS3Dataset`, `diffds.py` against Java |
+| **Filesystem: one row per entry below the root**, directories included with a named `kind`; names are bytes, never skipped or normalised; symlinks are not followed. | `localfs.Schema`; `getdents64` and portable engines. | `TestListingEqualsSortedOracle`, `TestKeysAreBytes` |
+| **A listing is not a snapshot.** Entries that change while it runs may or may not be in it. | `coverage.snapshot` is always false. | – |
+
+## Execution and recovery
+
+| Rule | Mechanism | Test |
+|---|---|---|
+| **Bounded memory.** Rows in flight are bounded by `--memory`, not by object count, apart from the awaited range and the root-to-frontier path; spill takes ranges ahead of the frontier to disk within its disk budget. | `order.Options.Budget` shared with the encoders' queues; spill ([ordering.md](ordering.md)). | `TestSpillKeepsWorkersBusy`, `TestSpillDiskBudget` |
+| **No wait on child work; no deadlock on a full buffer.** | Children become claimable; the drainer expands what it awaits itself. | order tests |
+| **No infinite loop.** A truncated page without a continuation, or without a key in range, is an error. | Checked per page by the S3 provider. | S3 paging tests |
+| **Deterministic output within a build.** The same listing produces byte-identical parts for any worker or encoder count. | Part boundaries depend only on rows; column-parallel encoding equals serial. | `TestRouterIsDeterministicAcrossEncoders`, gates (same-build MD5s) |
+| **Commit before emit.** A part is renamed into `data/` only after its journal record (its `PartInfo` and the writer state) is fsynced. | The router's in-order `Publish` hook, the one ordered committer. | crash matrix, `TestSIGKILLAtEveryPoint` |
+| **Durable-prefix recovery.** A resume never re-lists a published key and never skips one: it lists after the last recorded part's max key K. On a static source the result is byte-identical to an uninterrupted run; on a live one, durable output is exactly-once. | `swath resume`, `source.Resumable.Restart(K)`; no split or cursor is journaled ([durability.md](durability.md)). | crash matrix, `TestResumeAfterKey`, `TestSIGKILLResume` |
+| **One owner per output.** Nothing in the output is read, removed or renamed before the process holds its lock. | `journal.TakeLock` before preparation or recovery. | `TestCompetingRunsAreRefused` |
+| **A frozen identity.** A resume refuses changed schema, writer recipe, part size, key cap or source identity (`*journal.MismatchError`) and a journal of another version (`*journal.VersionError`). | `journal.Check`, a pure function. | `TestCheck`, `TestResumeChecksIdentity` |
+| **Shutdown order.** On cancellation the drainer stops, wakes all waiters, waits for the workers, then the router closes and waits for its encoders; an interrupted run gets 15 s. | `order.Run`, `cmd/swath`. | cancellation tests |
+
+## Migration history: Java's I1–I12
+
+The rules above were first stated as Java swath's contracts (`docs/internals/contracts.md` §0 in the Java
+tree). Correspondence: I1 commit before emit; I2 one row per entry (no gap, no overlap); I3 the boundary
+belongs to the left (`(a, b]`, an S3 rule now in providers.md); I4 a split is atomic with one owner (owner-only
+splits, never journaled); I5 and I6 durable-prefix recovery; I7 no wait on child work; I8 shutdown order; I9 no
+infinite loop; I10 unsigned byte order; I11 bounded memory; I12 safe pivots (an S3 rule). Java's §4.1
+publication order (`_SUCCESS` last) became "the manifest is the commit". Retired as Go requirements: the
+`_SUCCESS` ordering, the compound version/row-type sort stamps, the 13-column canonical schema and Java's
+schema-string spelling ([../upgrade.md](../upgrade.md)).

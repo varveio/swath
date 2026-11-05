@@ -1558,6 +1558,14 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
     reserved-column projection; retained-part verification and same-build determinism tests stay. "Java
     reader opens Go output" is not a gate; Java stays the producer oracle.
 
+19. **Contracts by responsibility.** `docs/internals/contracts.md` is rewritten in three tables: dataset
+    guarantees (manifest as commit, stated coverage, byte order, exact part facts, the page-index profile,
+    immutable parts), producer semantics (one row per entry; what an S3 and a filesystem row mean; not a
+    snapshot) and execution and recovery (bounded memory, no wait on children, no infinite loop, same-build
+    determinism, commit before emit, durable-prefix recovery, one owner, frozen identity, shutdown order), each
+    with its mechanism and test. S3's `(lo, hi]` boundary, safe pivots and key limit moved to providers.md;
+    I1–I12 are a migration-history paragraph. `docs/upgrade.md` remains the one reader upgrade guide.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

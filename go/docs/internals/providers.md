@@ -97,6 +97,11 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   in place (form semantics, as the AWS SDKs decode). Rows keep pointing into the arena until encoded; the
   writer clones the only keys that outlive a part (its min and max).
 
+**S3 rules** (provider-local; the generic contracts are in [contracts.md](contracts.md)): a range `(a, b]`
+lists `a < k ≤ b`, and its right neighbour starts after `b` (the boundary belongs to the left); a synthesized
+pivot is valid UTF-8, strictly between its bounds and adds no code point from the unsafe set (safe pivots);
+keys are at most 1,024 bytes (`schema.ErrKeyTooLong`).
+
 **Paging.** A range is `(lo, hi]`: `lo = ""` is ⊥, the open frontier has `hi = ⊤`. The first page sends
 `StartAfter = lo`, later pages the continuation token. Keys past `hi` are trimmed (`overfetch_keys`); a page
 whose last key equals `hi` ends the range without another request; `IsTruncated = false` ends it. A truncated
