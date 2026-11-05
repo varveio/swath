@@ -75,6 +75,18 @@ router for `P` (Go has no generic methods, so the binding happens where `P` is k
   checked without taking `ctx`'s mutex), wakes every waiter, closes the encoders, removes temporary parts and
   is returned wrapped with its path or phase. `manifest.json`, the commit, is installed only after a complete publish.
 
+## Errors
+
+Errors are wrapped Go errors (`errors.Is`/`As`, cancellation causes), with types only where a caller decides
+something: `*listing.ConfigError` (an invalid value or combination, before anything is opened),
+`*journal.MismatchError` (a resume asked with frozen settings changed), `*journal.VersionError` (a journal of
+another build), `*dataset.InvariantError` (the publication gate or the row count found a violated invariant;
+nothing is published), `*dataset.ReportError` (the report failed after the commit: the dataset stands),
+`listing.ErrComplete`, `ErrNothingToResume`, `ErrInterrupted`, and the S3 client's `*client.Error` (status,
+code, request id, the bucket's region). No package names a flag: `cmd/swath`'s `explain` adds the advice. `Run`
+returns the run report with every error, and `--report-format json` prints it on failure too (outcome
+`failed` with the error).
+
 ## How a provider plugs in
 
 Implement `source.Provider[R, P]` for a range type `R` and a row payload `P`, define `P`'s

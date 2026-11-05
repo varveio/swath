@@ -30,6 +30,12 @@ func TestRun(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--overwrite") {
 		t.Fatalf("non-empty output: %v", err)
 	}
+	// The report goes out on failure too, with the outcome.
+	buf.Reset()
+	if err := run(context.Background(), []string{src, "--output", out, "--report-format", "json"}, &buf, false); err == nil ||
+		!strings.Contains(buf.String(), `"status": "failed"`) || !strings.Contains(buf.String(), "not empty") {
+		t.Fatalf("failure report: %v\n%s", err, buf.String())
+	}
 	if err := run(context.Background(), []string{src, "--output", out, "--overwrite"}, &buf, false); err != nil {
 		t.Fatal(err)
 	}

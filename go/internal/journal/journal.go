@@ -235,6 +235,14 @@ func frameCRC(length, payload []byte) uint32 {
 // MaxFrame is the largest record accepted, on append and on read.
 const MaxFrame = maxFrame
 
+// VersionError is a journal of a version this build does not read: an
+// interrupted run of another build.
+type VersionError struct{ Found, Want int }
+
+func (e *VersionError) Error() string {
+	return fmt.Sprintf("journal version %d is not supported (this tool writes %d)", e.Found, e.Want)
+}
+
 // Errors.
 var (
 	ErrNoJournal = errors.New("no journal")
@@ -299,7 +307,7 @@ func decode(r io.Reader) (*State, error) {
 				return nil, fmt.Errorf("%w: first frame is not a header", ErrCorrupt)
 			}
 			if st.Header.Version != Version {
-				return nil, fmt.Errorf("journal version %d is not supported (this tool writes %d)", st.Header.Version, Version)
+				return nil, &VersionError{Found: st.Header.Version, Want: Version}
 			}
 			first = false
 			continue

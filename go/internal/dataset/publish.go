@@ -56,6 +56,12 @@ type Part struct {
 	PartInfo
 }
 
+// InvariantError is a violated dataset invariant found by the publication
+// gate: nothing is published.
+type InvariantError struct{ Reason string }
+
+func (e *InvariantError) Error() string { return "dataset invariant violated: " + e.Reason }
+
 // Check is the publication gate: dense ordinals (part i at TempPath i, or
 // at its final name once published early), strictly ascending disjoint key
 // ranges, and rows written == rows routed.
@@ -63,18 +69,18 @@ func Check(parts []Part, rows int64) error {
 	var n int64
 	for i, p := range parts {
 		if filepath.Base(p.Path) != PartName(i) {
-			return fmt.Errorf("part ordinals not dense: index %d holds %s", i, p.Path)
+			return &InvariantError{fmt.Sprintf("part ordinals not dense: index %d holds %s", i, p.Path)}
 		}
 		if p.Rows == 0 || p.MinKey > p.MaxKey {
-			return fmt.Errorf("part %d: empty or inverted key range", i)
+			return &InvariantError{fmt.Sprintf("part %d: empty or inverted key range", i)}
 		}
 		if i > 0 && !(parts[i-1].MaxKey < p.MinKey) {
-			return fmt.Errorf("parts %d and %d overlap: %q !< %q", i-1, i, parts[i-1].MaxKey, p.MinKey)
+			return &InvariantError{fmt.Sprintf("parts %d and %d overlap: %q !< %q", i-1, i, parts[i-1].MaxKey, p.MinKey)}
 		}
 		n += p.Rows
 	}
 	if n != rows {
-		return fmt.Errorf("row count mismatch: routed %d, written %d", rows, n)
+		return &InvariantError{fmt.Sprintf("row count mismatch: routed %d, written %d", rows, n)}
 	}
 	return nil
 }

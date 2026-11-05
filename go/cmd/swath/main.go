@@ -24,6 +24,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/registry"
 
@@ -255,13 +256,16 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	}
 	sum, err := listing.Run(ctx, cfg)
 	stopProfile()
-	if err != nil {
-		return explain(err)
-	}
 	if o.reportFormat == "json" {
+		// The report goes out on failure too: its outcome names the error.
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(sum)
+		if jerr := enc.Encode(sum); err == nil {
+			return jerr
+		}
+	}
+	if err != nil {
+		return explain(err)
 	}
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
@@ -272,13 +276,22 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	return nil
 }
 
-// explain maps package errors to flag names.
+// explain adds command-line advice to the errors a user can act on; the
+// packages' own messages name no flag.
 func explain(err error) error {
+	var mm *journal.MismatchError
+	var ve *journal.VersionError
 	switch {
+	case errors.Is(err, listing.ErrInterrupted):
+		return fmt.Errorf("%w (swath resume DIR continues it; --overwrite starts over)", err)
 	case errors.Is(err, dataset.ErrNotEmpty):
-		return fmt.Errorf("%w (use --overwrite to replace a previous dataset, or swath resume to continue an interrupted run)", err)
+		return fmt.Errorf("%w (use --overwrite to replace a previous dataset)", err)
 	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrInsideRoot), errors.Is(err, dataset.ErrNotDataset):
 		return fmt.Errorf("--output: %w", err)
+	case errors.As(err, &mm):
+		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
+	case errors.As(err, &ve):
+		return fmt.Errorf("%w (finish it with the build that started it, or start over with --overwrite)", err)
 	}
 	return err
 }

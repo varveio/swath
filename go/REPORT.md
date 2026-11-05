@@ -1543,6 +1543,12 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
     own options at open: since the registry (layering fix) no transport or auth field passes through the
     CLI's or listing's types, so nothing else changed there.
 
+16. **Error types where callers decide.** New: `*journal.VersionError` (unsupported journal format),
+    `*dataset.InvariantError` (publication gate and row-count checks), `listing.ErrInterrupted`; with item 15's
+    `*ConfigError` and the existing `*MismatchError`. The packages' messages name no flag (the S3 error still
+    names the bucket's region; the mismatch error no longer says `-overwrite`); `cmd/swath`'s `explain` adds
+    the advice. The report is returned with every error and `--report-format json` prints it on failure.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

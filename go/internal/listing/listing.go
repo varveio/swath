@@ -290,7 +290,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		return fail(err)
 	}
 	if sum.Output.RowsListed != want {
-		return fail(fmt.Errorf("row count mismatch: listed %d, ordered %d", want, sum.Output.RowsListed))
+		return fail(&dataset.InvariantError{Reason: fmt.Sprintf("row count mismatch: listed %d, ordered %d", want, sum.Output.RowsListed)})
 	}
 	if router == nil {
 		sum.Outcome.Status = "listed"

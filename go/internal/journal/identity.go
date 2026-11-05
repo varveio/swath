@@ -42,7 +42,7 @@ type MismatchError struct {
 }
 
 func (e *MismatchError) Error() string {
-	return fmt.Sprintf("cannot resume: %s was %v, now %v (start over with -overwrite, or resume with the original settings)", e.Field, e.Stored, e.Requested)
+	return fmt.Sprintf("cannot resume: %s was %v, now %v", e.Field, e.Stored, e.Requested)
 }
 
 // Check compares a stored identity with a requested one. It is a pure

@@ -24,7 +24,8 @@ func TestCheck(t *testing.T) {
 		"rowcount": {part(0, "a", "c", 2), part(1, "d", "f", 2)},
 		"inverted": {part(0, "c", "a", 2), part(1, "d", "f", 3)},
 	} {
-		if err := Check(parts, 5); err == nil {
+		var ie *InvariantError
+		if err := Check(parts, 5); !errors.As(err, &ie) {
 			t.Errorf("%s: gate passed", name)
 		}
 	}

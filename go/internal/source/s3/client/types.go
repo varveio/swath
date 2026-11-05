@@ -61,7 +61,7 @@ func (e *Error) Error() string {
 		s += ": " + e.Message
 	}
 	if e.Region != "" {
-		s += fmt.Sprintf(" (the bucket is in %s; pass -region %s)", e.Region, e.Region)
+		s += " (the bucket is in " + e.Region + ")"
 	}
 	if e.RequestID != "" {
 		s += " (request id " + e.RequestID + ")"

@@ -133,7 +133,8 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	b2 := []byte(strings.Replace(string(b[8:]), fmt.Sprintf(`"version":%d`, Version), `"version":9`, 1))
 	binary.LittleEndian.PutUint32(b[4:8], frameCRC(b[:4], b2))
 	os.WriteFile(Path(out), append(b[:8], b2...), 0o644)
-	if _, err := Read(out); err == nil || !strings.Contains(err.Error(), "version 9") {
+	var ve *VersionError
+	if _, err := Read(out); !errors.As(err, &ve) || ve.Found != 9 {
 		t.Fatalf("unknown version: %v", err)
 	}
 }

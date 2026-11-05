@@ -23,6 +23,9 @@ import (
 
 // Resume errors.
 var (
+	// ErrInterrupted: the output holds an interrupted run (a fresh run was
+	// asked for).
+	ErrInterrupted     = errors.New("it holds an interrupted run")
 	ErrNothingToResume = errors.New("nothing to resume: no interrupted run in the output directory")
 	ErrComplete        = errors.New("the run in the output directory is already complete")
 )
@@ -85,7 +88,7 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 	if !cfg.Output.Resume {
 		if err := dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
 			if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(cfg.Output.Dir) {
-				err = fmt.Errorf("%w (it holds an interrupted run: swath resume continues it)", err)
+				err = fmt.Errorf("%w: %w", err, ErrInterrupted)
 			}
 			return nil, fmt.Errorf("prepare output: %w", err)
 		}
