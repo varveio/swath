@@ -131,6 +131,10 @@ range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), 
 The split's demand slot is reserved while it is probed, so concurrent owners do not split for the same idle
 worker. Every pivot is safe (I12). `-no-probe` lists with the kernel alone.
 
+Measured on five replayed recordings (REPORT.md, "Step 5a"), the probe costs more than the empty children
+it saves: it is a serial round trip before each split, so it lowers concurrency, and runs were 1.4–2.2× slower
+than without it. Without it the refined pivot matches the old one. The default is the owner's decision.
+
 **Why.** Before the probe, the density estimate was the first choice and could reach far past the data on
 skewed shapes. On a replay of noaa-nws-fourcastnetgfs-pds, 1,362 of 2,927 splits left an empty upper child,
 and the run used about 1 of 64 workers (REPORT.md "Step 5a").

@@ -1282,6 +1282,96 @@ where a refused frame makes the emitter wait instead (e377a5c); frontier, budget
 The spill counters (then `spill_rows`, `spill_bytes`, `spill_ranges`; now the `spill` object, with
 `peak_bytes` and `refused`) are in the run report.
 
+## Step 5a: pivot and probe
+
+**Change (5833103).** The pivot defaults to the spec pivot (`between(c, hi)`, or a forward reflection on the
+open frontier). Density extrapolation is used only when it lands below the spec pivot, or when the spec pivot
+is within one page span of the cursor (clamped refinement). Java's 1-key probe is ported:
+`max-keys=1 start-after=m`. If the upper child would be empty, the pivot moves to `between(c, m)`, up to
+three probes; otherwise the split is skipped, with a cooldown of 2^fails pages (at most 64). `-no-probe`
+keeps the refined pivot without the probe.
+
+**Measurement.** Replay of the five slow recordings at each recording's p50 page latency, 64 workers, `-seed`,
+writing the dataset. Arms run interleaved: Java defaults, Java policies off (11 toggles), Go step3 (2ebd745,
+the old pivot), Go 5a (new pivot + probe) and Go 5a `-no-probe` (added afterwards, one rep).
+- Attempts are the replay server's HTTP count.
+- Empty children: Go `child_empty.*`; Java `CHILD_MASS/empty`.
+- Probes: Go `probe.requests`; Java `swath.probe.fetches`.
+- Median (min–max) over 3 reps for the first two recordings, 1 rep for the others.
+- Caveat: the no-probe arms for noaa-eri-pds, pansurg and real-changesets ran concurrently with nara's Go
+  arms (a wait condition misfired), on the same 4-core host.
+
+| Recording (latency) | Arm | Wall s | Requests | Attempts | Splits | Empty children | Probes | Mean active |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds (99 ms) | Java defaults | 45.2 (44.9–45.2) | 1,352 | 1,352 | 93 | 99 | 74 | 7.6 |
+| | Java policies off | 41.5 (41.4–42.3) | 1,339 | 1,339 | 39 | 10 | 48 | 9.9 |
+| | Go step3 | **4.6** (4.3–5.3) | 1,254 | 1,254 | 496 | 161 | 0 | 29.6 |
+| | Go 5a | 6.6 (6.5–6.9) | 1,473 | 1,473 | 243 | 13 | 440 | 23.3 |
+| | Go 5a `-no-probe` | 6.6 | 1,261 | 1,261 | 504 | 173 | 0 | 30.9 |
+| pansurg (164 ms) | Java defaults | 70.3 (69.9–71.8) | 1,182 | 1,182 | 78 | 98 | 61 | 6.6 |
+| | Java policies off | 76.1 (75.1–76.6) | 1,099 | 1,099 | 373 | 9 | 75 | 4.5 |
+| | Go step3 | 5.8 (5.3–5.9) | 792 | 792 | 392 | 154 | 0 | 24.3 |
+| | Go 5a | 13.0 (12.6–14.2) | 1,157 | 1,157 | 219 | 10 | 516 | 15.0 |
+| | Go 5a `-no-probe` | **5.3** | 774 | 774 | 374 | 152 | 0 | 26.8 |
+| real-changesets (122 ms) | Java defaults | **79.2** | 14,689 | 14,689 | 924 | 298 | 193 | 26.7 |
+| | Java policies off | 576.3 | 25,050 | 25,050 | 38,759 | 120 | 249 | 5.5 |
+| | Go step3 | 93.6 | 18,468 | 18,468 | 9,216 | 2,237 | 0 | 25.6 |
+| | Go 5a | 207.1 | 27,210 | 27,210 | 6,594 | 89 | 11,108 | 16.6 |
+| | Go 5a `-no-probe` | 94.5 | 18,793 | 18,793 | 9,365 | 2,723 | 0 | 25.9 |
+| fourcastnetgfs (99 ms) | Java defaults | **88.5** | 4,955 | 4,955 | 282 | 54 | 290 | 7.9 |
+| | Java policies off | 390.8 | 7,916 | 7,916 | 5,950 | 1 | 2,225 | 1.4 |
+| | Go step3 | 403.3 | 6,356 | 6,356 | 3,047 | 1,760 | 0 | 1.6 |
+| | Go 5a | 629.4 | 10,702 | 10,702 | 2,216 | 1,207 | 4,894 | 1.8 |
+| | Go 5a `-no-probe` | 425.9 | 6,732 | 6,732 | 3,226 | 2,115 | 0 | 1.7 |
+| nara-1950-census (103 ms) | Java defaults | **125.8** | 14,966 | 14,966 | 1,027 | 168 | 342 | 20.3 |
+| | Java policies off | 785.9 | 17,256 | 17,256 | 19,161 | 6 | 1,734 | 2.1 |
+| | Go step3 | 1,965.6 | 22,658 | 22,658 | 11,323 | 6,485 | 0 | 1.2 |
+| | Go 5a | not finished (the run hit the 2-hour background limit) | | | | | | |
+| | Go 5a `-no-probe` | 1,905.1 | 22,650 | 22,650 | 11,317 | 6,537 | 0 | 1.3 |
+
+**Findings.**
+- **The probe costs more than the empty children it saves.** Without the probe, 5a matches step3 within
+  noise everywhere it was measured. With it, 5a is 1.4–2.2× slower than step3 on all four finished
+  recordings. The probe removes most empty children (161→13, 154→10, 2,237→89), but each probe is a serial
+  round trip in the owner's `Expand` before its split. Requests rise 17–47% and mean active falls (29.6→23.3,
+  24.3→15.0, 25.6→16.6). Recommendation for the owner: default `-no-probe` (or remove the probe) until a
+  cheaper check exists; the decision is the owner's.
+- **Go's kernel beats Java on flat-ish shapes and loses badly on deep hierarchies.** Go is 9–13× faster than
+  Java on noaa-eri-pds and pansurg, and close to Java defaults on real-changesets. It is far behind on
+  fourcastnetgfs (4.6×) and nara (15.6×). On those, Go runs about one range at a time (mean active 1.2–1.8),
+  close to Java with its policies off.
+  - fourcastnet: 3.87 M of 4.08 M keys sit under `dataset/ufs/…` with non-padded numeric suffixes, in one
+    seed tile.
+  - nara: 13.2 M of 13.5 M keys sit under `tiff/` and `1950census/`. 6,475 of 11,323 splits had an empty
+    upper child, and 9.1 M keys (67% of the objects) were fetched past a range's upper bound and dropped.
+  - Byte-space density extrapolation overshoots on long shared prefixes, so splits are wasted. Java's
+    structure policies (radix-banded seed, structure probes, alphabet pivots) get Java defaults from 391 s
+    to 88 s and from 786 s to 126 s. Porting them is step 5's next work, by measured need (fourcastnet and
+    nara are the gates).
+- **The live nara comparison with the 5a binary was not run.** The measurement chain reached its time limit
+  during nara's 5a replay arm. The replay arms above already show the shape.
+
+Raw data: `bench/results/step5a-arms.tsv` (wall and replay HTTP per arm) and `bench/results/step5a-table.md` (the tabulation above, from the per-arm summaries).
+
+## Review items
+
+The Astra architecture review's deferred items, and the Sol durability review, as built:
+
+| Item | Change | Test | Commit |
+|---|---|---|---|
+| Shared failure cause | the pipeline runs under `context.WithCancelCause`; the first asynchronous failure (encoder, disk, journal) cancels listing at once and is what `Run` returns | `TestEncoderFailureStopsListing` | ed858d2 |
+| Shared byte budget | `-memory`/2 bytes (`schema.RowBytes`) shared by reorder storage and the encoders' queues (`order.Shared`, `router.Account`); a slow encoder slows producers | crash matrix at a 256 KiB budget | ed858d2 |
+| Spill disk budget | `-spill-max` and `-spill-reserve` (1 GiB free kept for the parts); a refused frame waits instead (graceful backpressure); ENOSPC treated the same after truncating the torn frame; `spill.peak_bytes`, `spill.refused` | `TestSpillDiskBudget` (found and fixed a lost wakeup after a refusal) | e377a5c |
+| Wait counters | `frontier_wait_ns`, `budget_wait_ns`, `encoder_wait_ns` | nonzero on the slow-frontier shape | ec23ff8 |
+| Off, absent, zero | a policy's counters name it; an off policy is listed under `disabled` and its counters are absent | `TestSummaryDistinguishesOffFromZero` | ec23ff8 |
+| fs cancellation, bounded shutdown | directory reads check the context every 64 reads and around the sort; the CLI exits 130 after 15 s of stopping | fs and CLI tests | 400012f |
+| fs chunk fd leak | `source.Disposer`: ranges never expanded release their shared directory descriptor | `TestCancelReleasesChunkFDs` | 400012f |
+| Sol P1-1…P1-6 | success never after a failed expand; lock before touching the output; recorded parts kept on error; directory sync before the record; endpoint, region and key cap in the identity; damaged frames refused | one regression test each | 3c257d1…212a830 |
+| Sol P2 | finality on resume; bounded checkpoints; spill frame bound and reader close; orphan spill reclaimed; 13 SIGKILL points; ENOSPC on the journal; Windows warns that lock and syncs are not enforced | crash matrix with spill on and off, `TestSIGKILLAtEveryPoint`, `TestENOSPCOnJournalResumes` | cf88757, e377a5c |
+
+Not done: EIO injection beyond ENOSPC (no portable way to make a write return EIO without a fault-injecting
+filesystem); power-loss behaviour stays untested (SIGKILL cannot show it).
+
 ## Layering: provider registry
 
 The pipeline no longer knows which providers exist. Before this change, `listing` imported both providers, held
