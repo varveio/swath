@@ -95,7 +95,7 @@ part. The journal grows with parts only. A record over the frame limit is refuse
 **The trade-off.** Earlier versions also journaled every split boundary so a resume could start with the
 interrupted run's tiling. That costs journal growth and ties the journal to S3's range model; without it a
 resume ramps up from one range, as a fresh run does from the root (splits engage after the first page of
-each range). The ramp-up cost has not been measured; hints come back only if a measurement shows it.
+each range). The ramp-up cost has not been measured.
 
 A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
 may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.

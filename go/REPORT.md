@@ -467,8 +467,8 @@ stand as history but their flags no longer exist. The older `bench/*.sh` scripts
   `-part-size`, `-memory`, `-workers`, `-encoders`, `-count-only`, `-json`. The reorder bound is
   `memory / 2 KiB` rows (131,072 at the 256 MiB default).
 - **Provider contract** (`internal/source`): a tree of ranges, each streaming rows and ordered child ranges
-  (`Emitter.Rows`, `Emitter.Child`). The fs provider is the first implementation; docs/internals/providers.md says how S3
-  split/steal, a key-cursor checkpoint, GCS, Azure and Drive fit it. The order stage streams the frontier as
+  (`Emitter.Rows`, `Emitter.Child`). The fs provider is the first implementation; docs/internals/providers.md describes
+  the contract. The order stage streams the frontier as
   rows arrive and bounds rows of ranges that finished early.
 - **Encoding**: per-part architecture only (router-owned deterministic boundaries with a ratio frozen after
   part 0, dense ordinals, router-set `file_final`, publication gate). Parts are fed while open through bounded
@@ -995,8 +995,7 @@ The causes:
 - **Too many splits (real-changesets).** On a flat bucket the 2,226 empty children cost requests (18,427 vs
   Java's 14,834) and keep parallelism low.
 
-Neither shape changes correctness; both are inputs to step 5. The 64-worker runs on fourcastnetgfs and
-nara-1950-census, the remaining live comparisons, are reported with step 2.
+Neither shape changes correctness.
 
 ### Toggle comparison on replayed recordings (latency injected at the recorded p50)
 
@@ -1212,8 +1211,7 @@ the end.
   Java's 102.7 s with defaults and 395.4 s with policies off. Its mean active was **1.06** of 64: 2,927
   bounded splits, of which 1,362 left an empty upper child. Density extrapolation caps the pivot at halfway
   to `hi`, and on this skewed hierarchical shape that point lies beyond the data, so the lower child keeps
-  everything and the listing stays effectively sequential. This kernel weakness is the first input to step 5
-  (Java's structure and pivot probes address it).
+  everything and the listing stays effectively sequential.
 - **nara-1950-census and fourcastnetgfs, live Go at 64 workers.** Still running when this was written;
   reported later.
 
@@ -1226,7 +1224,7 @@ the end.
   order stage through the sink today);
 - cooperative cancellation inside filesystem enumeration;
 - bounded CLI shutdown;
-- the provider capability contract (documented in providers.md, to be implemented with GCS).
+- the provider capability contract.
 
 ## Step 3: spill
 
@@ -1570,7 +1568,7 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and
 its test stay (`TestT6BalanceSmoke` runs both arms). Reason: Step 5a, where the probe made every finished
-recording 1.4–2.2× slower than without it. It is revisited only as an asynchronous or speculative check.
+recording 1.4–2.2× slower than without it.
 With the probe off its counters are absent and `probe` is listed under the S3 section's `disabled`.
 
 ## Measurement drift

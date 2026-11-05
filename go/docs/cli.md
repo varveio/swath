@@ -17,7 +17,7 @@ rows, key range) or an interrupted run's recorded command, frozen identity, comm
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
 `list` flag plus the diagnostic ones: `--sequential`, `--probe`, `--max-keys` (S3), `--no-journal` and
 `--no-spill`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
-Java distribution keeps its own `swath` launcher; the two are separate tools until the Java code is retired.
+Java distribution keeps its own `swath` launcher; the two are separate tools.
 
 ## Flags
 

@@ -141,8 +141,7 @@ worker. Every pivot is safe (I12). Without `-probe` the provider lists with the 
 
 Measured on five replayed recordings (REPORT.md, "Step 5a"), the probe costs more than the empty children
 it saves: it is a serial round trip before each split, so it lowers concurrency, and runs were 1.4–2.2× slower
-than without it. Without it the refined pivot matches the old one. So the probe is off by default; the code
-stays, to be revisited only as an asynchronous or speculative check, never a serial pre-split round trip.
+than without it. Without it the refined pivot matches the old one. So the probe is off by default.
 
 **Why.** Before the probe, the density estimate was the first choice and could reach far past the data on
 skewed shapes. On a replay of noaa-nws-fourcastnetgfs-pds, 1,362 of 2,927 splits left an empty upper child,
@@ -160,10 +159,6 @@ then marked incomplete).
 
 **Resume.** The provider is `source.Resumable`: `Restart(K)` makes the root one range `(K, ⊤]`, split as on
 a fresh run ([durability.md](durability.md)).
-
-**What the full engine adds** (later steps, each by measured need; the 1-key probe is ported):
-structure and `max_keys=1` probes; density-aware pivots from probes; the owner gate chain, pacing and futility
-backoff; AIMD concurrency; mass-aware and multi-level seeding; the rate-anchored size estimator; versions mode.
 
 ## Registry and optional interfaces
 
@@ -189,27 +184,16 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 A source that is not resumable (or declines `Resume`) runs without the output lock or journal, as the local
 listing always has; `swath resume` on it is an error.
 
-## The contract for the next providers (planned with GCS)
+## Provider capabilities
 
-From the architecture review. The current contract holds for S3 and the filesystem; GCS will make it
-explicit:
-- **Capabilities**, declared once per provider (built so far: `source.Capable` with `Resume`):
-  - byte-ordered output or normalized (sorted inside the provider);
-  - seekable restart (start-after a key) or token replay;
-  - snapshot or live listing.
-- **Bounds:** explicit bound inclusivity per provider, as S3's `(lo, hi]` is today; no per-range
-  comparators (output order is always unsigned bytes).
+What a provider must state about itself (built: `source.Capable` with `Resume`, `source.Resumable`,
+`source.Disposer`):
+- **Order:** output is unsigned byte order; a provider whose native order differs sorts or partitions inside
+  itself; there are no per-range comparators.
+- **Bounds:** explicit bound inclusivity, as S3's `(lo, hi]`.
 - **Bounded cost:** one `Rows` call has a bounded cost; no unbounded in-memory directory or page.
-- **Restart:** start after a key; the journal stores no provider state (built: `source.Resumable`). A
-  provider that can only replay tokens must re-list to the key or declare `Capabilities.Resume` false.
-- **Disposal:** a cancelled run releases every queued range's resources. Built: `source.Disposer`; the order
-  stage disposes ranges it never expands, including children an `Expand` emitted before failing. Filesystem
-  chunks release their shared directory descriptor this way (`TestCancelReleasesChunkFDs`).
-- **Scheduler observation:** a narrow interface (idle capacity, frontier distance, output pressure) replaces
-  the provider's own active/queued bookkeeping.
-
-## Next providers
-
-GCS lists in unsigned UTF-8 byte order with continuation tokens: S3-shaped. Azure Blob lists in UTF-16
-code-unit order, so pivots must stay out of the zone where it differs from byte order and ranges are sorted
-internally. Google Drive is unsorted: a folder is a range, read fully and sorted by the filesystem key rule.
+- **Restart:** start after a key; the journal stores no provider state. A provider that can only replay
+  tokens must re-list to the key or declare `Capabilities.Resume` false.
+- **Disposal:** a cancelled run releases every queued range's resources: the order stage disposes ranges it
+  never expands, including children an `Expand` emitted before failing. Filesystem chunks release their shared
+  directory descriptor this way (`TestCancelReleasesChunkFDs`).

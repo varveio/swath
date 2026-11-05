@@ -4,7 +4,7 @@ This directory is the Go port of swath: module `github.com/varveio/swath/go`, co
 `swath`. It lists a local directory tree or an S3 bucket in parallel and writes a globally key-sorted Parquet
 dataset in Swath's sorted-dataset layout (`data/part-NNNNN.parquet` and `manifest.json`, the commit; format 2, [docs/upgrade.md](docs/upgrade.md)), as a
 pure-Go (`CGO_ENABLED=0`) static binary. The Java distribution keeps its own `swath` launcher (`swath-cli`);
-the two are separate tools until the Java code is retired (see the port plan). Documentation:
+the two are separate tools. Documentation:
 [docs/architecture.md](docs/architecture.md) (start here), [docs/cli.md](docs/cli.md),
 [docs/testing.md](docs/testing.md). Measurements and findings: [REPORT.md](REPORT.md).
 

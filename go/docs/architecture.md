@@ -93,8 +93,7 @@ Implement `source.Provider[R, P]` for a range type `R` and a row payload `P`, de
 `schema.Schema[P]`, and register a `registry.Factory` from `init` whose `Open` returns
 `registry.Bind(provider, &schema)` embedded in a value with the `Locator`, `Listed` and the optional interfaces
 (see [internals/providers.md](internals/providers.md)). The command imports the package for that registration
-only; `listing` does the rest. A provider whose listing API is not sorted (Google Drive) sorts within each range; one whose order
-is not unsigned byte order (Azure's UTF-16 order) must keep its range boundaries where the two orders agree.
+only; `listing` does the rest.
 
 ## Memory
 
