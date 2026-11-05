@@ -112,6 +112,22 @@ type run[R any] struct {
 	rows    int64
 }
 
+// dispose releases the ranges that were queued but never expanded (a
+// cancelled or failed run); called after the workers have stopped.
+func (o *run[R]) dispose() {
+	d, ok := o.p.(source.Disposer[R])
+	if !ok {
+		return
+	}
+	for _, n := range o.stack {
+		if n.state == queued {
+			n.state = done
+			d.Dispose(n.r)
+		}
+	}
+	o.stack = nil
+}
+
 // rowBytes measures rows for the budget (tests count rows instead).
 var rowBytes = schema.RowsBytes
 
@@ -240,6 +256,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		cancel(err)
 	}
 	wg.Wait()
+	o.dispose()
 	st.Rows, st.MaxBuffered = o.rows, o.max
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
@@ -284,6 +301,14 @@ func (o *run[R]) expand(n *node[R], direct bool) error {
 	defer o.mu.Unlock()
 	if err == nil {
 		err = e.publish()
+	}
+	if err != nil { // children emitted but never published will not be expanded
+		if d, ok := o.p.(source.Disposer[R]); ok {
+			for _, k := range e.kids {
+				d.Dispose(k.r)
+			}
+		}
+		e.kids = nil
 	}
 	if err == nil && n.spill != nil { // the trailer, before the node is done
 		o.mu.Unlock()

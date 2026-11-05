@@ -68,6 +68,13 @@ func (d *sharedFD) release() {
 	}
 }
 
+// disposeChunk releases a chunk range that will never be expanded.
+func disposeChunk(r Range) {
+	if c := r.chunk; c != nil {
+		c.dir.release()
+	}
+}
+
 // expandNative lists a range with raw getdents64 and fd-relative stat.
 // Per directory it allocates one key arena, one row slab sized from the
 // entry count and one range per subdirectory; entries are sorted by key
@@ -89,10 +96,21 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	st.DirsRead++
 	sc := scratchPool.Get().(*scratch)
 	defer scratchPool.Put(sc)
-	readNames(fd, r.path, sc, st)
+	if err := readNames(ctx, fd, r.path, sc, st); err != nil {
+		unix.Close(fd)
+		return err
+	}
 	p.resolveUnknown(fd, sc)
 	buildKeys(r.prefix, sc)
+	if done(ctx) { // a sort of a huge directory is not interruptible: check around it
+		unix.Close(fd)
+		return ctx.Err()
+	}
 	slices.SortFunc(sc.ents, func(a, b entry) int { return strings.Compare(a.key, b.key) })
+	if done(ctx) {
+		unix.Close(fd)
+		return ctx.Err()
+	}
 
 	if len(sc.ents) > chunkThreshold && p.opt.Fields != Names {
 		return p.emitChunks(fd, r, sc, e, st)
@@ -116,7 +134,7 @@ func openDir(path string, noFollow bool) (int, error) {
 }
 
 // readNames parses all entries of fd into sc (names and entries).
-func readNames(fd int, path string, sc *scratch, st *Stats) {
+func readNames(ctx context.Context, fd int, path string, sc *scratch, st *Stats) error {
 	sc.names, sc.ents = sc.names[:0], sc.ents[:0]
 	add := func(ino uint64, typ uint8, name []byte) {
 		if !utf8.Valid(name) {
@@ -126,21 +144,24 @@ func readNames(fd int, path string, sc *scratch, st *Stats) {
 		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), ino: ino, typ: typ})
 		sc.names = append(sc.names, name...)
 	}
-	for {
+	for batches := 0; ; batches++ {
+		if batches%64 == 63 && done(ctx) { // a huge directory: stay cancellable
+			return ctx.Err()
+		}
 		n, err := unix.Getdents(fd, sc.buf)
 		if err == unix.EINTR {
 			continue
 		}
 		if err != nil {
 			st.note(&st.ReadErrors, path, err)
-			return
+			return nil
 		}
 		if n <= 0 {
-			return
+			return nil
 		}
 		if err := parseDirents(sc.buf[:n], add); err != nil {
 			st.note(&st.ReadErrors, path, err)
-			return
+			return nil
 		}
 	}
 }
@@ -190,7 +211,9 @@ func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Ran
 	for i := 0; i < len(ents); i += chunkEntries {
 		c := &chunk{dir: d, names: names, ents: ents[i:min(i+chunkEntries, len(ents))]}
 		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: c}); err != nil {
-			for j := i; j < len(ents); j += chunkEntries {
+			// The emitter owns chunk i now (the order stage disposes it);
+			// release the references of the chunks never emitted.
+			for j := i + chunkEntries; j < len(ents); j += chunkEntries {
 				d.release()
 			}
 			return err

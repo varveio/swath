@@ -29,3 +29,10 @@ type Provider[R any] interface {
 	Root() R
 	Expand(ctx context.Context, r R, e Emitter[R]) error
 }
+
+// Disposer is implemented by providers whose ranges hold resources (open
+// directory descriptors): the order stage calls Dispose for every range it
+// will never expand, when a run is cancelled or fails.
+type Disposer[R any] interface {
+	Dispose(r R)
+}

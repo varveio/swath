@@ -21,3 +21,5 @@ type chunk struct{}
 func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range], st *Stats) error {
 	return p.expandPortable(ctx, r, e, st)
 }
+
+func disposeChunk(Range) {}

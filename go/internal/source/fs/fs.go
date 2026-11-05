@@ -163,6 +163,10 @@ func (p *Provider) Stats() Stats {
 }
 
 // Expand lists one range.
+// Dispose releases a range that will never be expanded (a chunk's share of
+// its directory descriptor). It implements source.Disposer.
+func (p *Provider) Dispose(r Range) { disposeChunk(r) }
+
 func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range]) error {
 	if done(ctx) {
 		return ctx.Err()
@@ -232,7 +236,7 @@ func sortRows(rows []schema.Row) {
 }
 
 // expandPortable lists a directory with os.File.ReadDir and Lstat.
-func (p *Provider) expandPortable(_ context.Context, r Range, e source.Emitter[Range], st *Stats) error {
+func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range], st *Stats) error {
 	f, ok := openChecked(r, st)
 	if !ok {
 		return nil
@@ -244,7 +248,10 @@ func (p *Provider) expandPortable(_ context.Context, r Range, e source.Emitter[R
 		st.note(&st.ReadErrors, r.path, err)
 	}
 	rows := make([]schema.Row, 0, len(ents))
-	for _, d := range ents {
+	for i, d := range ents {
+		if i%1024 == 1023 && done(ctx) { // stat-heavy loop: stay cancellable
+			return ctx.Err()
+		}
 		name := d.Name()
 		if !utf8.ValidString(name) {
 			st.InvalidUTF8++

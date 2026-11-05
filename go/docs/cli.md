@@ -105,6 +105,6 @@ Profiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.
   rerun the same command with `-resume` ([internals/durability.md](internals/durability.md)).
   `-no-journal` turns it off (parts are then published only at the end). `swath inspect DIR` prints the
   journal.
-- **Exit status** is non-zero on any error; a failed or interrupted run (SIGINT, SIGTERM) leaves no `_SUCCESS`
-  and no temporary parts.
+- **Exit status** is non-zero on any error; a failed or interrupted run (SIGINT, SIGTERM) leaves no `_SUCCESS`.
+  An interrupted run gets 15 s to stop cleanly, and is then exited with status 130; an S3 run can be resumed.
 - **Profiling:** `SWATH_LOCAL_CPUPROFILE` and `SWATH_LOCAL_MEMPROFILE` name pprof output files.

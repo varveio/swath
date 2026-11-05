@@ -5,6 +5,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -262,4 +263,57 @@ func TestCancelledExpand(t *testing.T) {
 	if _, err := order.Run[Range](ctx, p, &collect{}, order.Options{Workers: 2, Budget: 10 * 256}); err == nil {
 		t.Fatal("expected cancellation")
 	}
+}
+
+// TestCancelReleasesChunkFDs: a run that fails while large-directory chunks
+// are still queued releases their shared directory descriptor (the order
+// stage disposes ranges it never expands).
+func TestCancelReleasesChunkFDs(t *testing.T) {
+	if !nativeEngine {
+		t.Skip("chunks are a getdents-engine feature")
+	}
+	root := t.TempDir()
+	for d := range 6 {
+		dir := filepath.Join(root, fmt.Sprintf("big%d", d))
+		os.Mkdir(dir, 0o755)
+		for i := range 5000 {
+			os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%05d", i)), nil, 0o644)
+		}
+	}
+	fds := func() int { ents, _ := os.ReadDir("/proc/self/fd"); return len(ents) }
+	before := -1
+	for i := range 6 { // the first run warms up the runtime's own descriptors (poller)
+		if i == 1 {
+			before = fds()
+		}
+		p, err := New(root, Options{Fields: Stat})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &failAfter{n: 3000}
+		if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: 4, Budget: 2000 * 256}); err == nil {
+			t.Fatal("sink failure not reported")
+		}
+	}
+	if after := fds(); after > before+2 {
+		ents, _ := os.ReadDir("/proc/self/fd")
+		var targets []string
+		for _, e := range ents {
+			l, _ := os.Readlink("/proc/self/fd/" + e.Name())
+			targets = append(targets, l)
+		}
+		t.Fatalf("descriptors leaked: %d before, %d after: %v", before, after, targets)
+	}
+}
+
+type failAfter struct{ n, seen int }
+
+func (f *failAfter) Write(_ context.Context, segs [][]schema.Row) error {
+	for _, s := range segs {
+		f.seen += len(s)
+	}
+	if f.seen >= f.n {
+		return errors.New("sink failed")
+	}
+	return nil
 }

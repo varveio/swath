@@ -32,6 +32,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   the one that was listed.
 - **Tiers** (`-fields`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
+- **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
+  is bracketed by checks, the portable engine checks every 1,024 entries, and stat checks as before.
 - Symlinks are never followed (`O_NOFOLLOW`). Names that are not valid UTF-8 are counted and skipped (a
   directory's whole subtree). Mount points are crossed; there is no `-one-file-system` yet.
 
@@ -163,8 +165,9 @@ explicit:
   comparators (output order is always unsigned bytes).
 - **Bounded cost:** one `Rows` call has a bounded cost; no unbounded in-memory directory or page.
 - **Restart:** an opaque, versioned restart descriptor, which the journal stores instead of S3 boundaries.
-- **Disposal:** a cancelled run releases every queued range's resources. Queued filesystem chunks hold
-  directory file descriptors today; that leak is a known defect.
+- **Disposal:** a cancelled run releases every queued range's resources. Built: `source.Disposer`; the order
+  stage disposes ranges it never expands, including children an `Expand` emitted before failing. Filesystem
+  chunks release their shared directory descriptor this way (`TestCancelReleasesChunkFDs`).
 - **Scheduler observation:** a narrow interface (idle capacity, frontier distance, output pressure) replaces
   the provider's own active/queued bookkeeping.
 

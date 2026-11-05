@@ -29,6 +29,9 @@ import (
 	"github.com/varveio/swath/go/internal/source/fs"
 )
 
+// shutdownGrace bounds the time an interrupted run spends stopping.
+const shutdownGrace = 15 * time.Second
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -44,6 +47,21 @@ func main() {
 		usage(os.Stderr, newFlags(&options{}))
 		os.Exit(2)
 	}
+	finished := make(chan struct{})
+	defer close(finished)
+	go func() { // bounded shutdown: an interrupted run gets 15 s to clean up
+		select {
+		case <-finished:
+			return
+		case <-ctx.Done():
+		}
+		select {
+		case <-finished:
+		case <-time.After(shutdownGrace):
+			fmt.Fprintf(os.Stderr, "swath: still stopping after %s; exiting (an interrupted S3 run can be resumed)\n", shutdownGrace)
+			os.Exit(130)
+		}
+	}()
 	if err := run(ctx, os.Args[2:], os.Stdout); err != nil {
 		if !errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(os.Stderr, "swath:", err)
