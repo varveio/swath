@@ -128,6 +128,9 @@ func (o *run[R]) dispose() {
 	o.stack = nil
 }
 
+// Test hooks that widen race windows; nil in production.
+var hookBeforeDrain, hookAfterExpand func()
+
 // rowBytes measures rows for the budget (tests count rows instead).
 var rowBytes = schema.RowsBytes
 
@@ -241,6 +244,9 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 			o.worker()
 		}()
 	}
+	if hookBeforeDrain != nil {
+		hookBeforeDrain()
+	}
 	st, err := o.drainTree(root, sink)
 	if err != nil && ctx.Err() != nil {
 		// A worker failed first and cancelled the run; report its error,
@@ -256,6 +262,11 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		cancel(err)
 	}
 	wg.Wait()
+	if err == nil && ctx.Err() != nil {
+		// A worker failed (or the run was cancelled) after the drainer had
+		// finished: never report success for a failed listing.
+		err = context.Cause(ctx)
+	}
 	o.dispose()
 	st.Rows, st.MaxBuffered = o.rows, o.max
 	if o.sp != nil {
@@ -282,6 +293,9 @@ func (o *run[R]) worker() {
 		n.state = expanding
 		o.mu.Unlock()
 		err := o.expand(n, false)
+		if hookAfterExpand != nil {
+			hookAfterExpand()
+		}
 		o.mu.Lock()
 		if err != nil {
 			o.cancel(err)
@@ -301,6 +315,11 @@ func (o *run[R]) expand(n *node[R], direct bool) error {
 	defer o.mu.Unlock()
 	if err == nil {
 		err = e.publish()
+	}
+	if err != nil {
+		// Latch the failure before the node is exposed as done: otherwise
+		// the drainer could see a finished tree and succeed first.
+		o.cancel(err)
 	}
 	if err != nil { // children emitted but never published will not be expanded
 		if d, ok := o.p.(source.Disposer[R]); ok {

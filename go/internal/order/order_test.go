@@ -163,3 +163,28 @@ func TestCancellation(t *testing.T) {
 		t.Fatal("cancellation was not prompt")
 	}
 }
+
+// failingRoot's root emits nothing and fails, the shape where the drainer
+// could find the tree finished between the node's completion and the
+// failure being recorded.
+type failingRoot struct{}
+
+func (failingRoot) Root() rng { return rng{} }
+func (failingRoot) Expand(context.Context, rng, source.Emitter[rng]) error {
+	return errors.New("first LIST failed")
+}
+
+// TestWorkerFailureNeverSucceeds: a worker failure on the final node is
+// always reported, never a successful empty run (Sol P1-1).
+func TestWorkerFailureNeverSucceeds(t *testing.T) {
+	// Force the window: a worker (not the drainer) expands the root, and
+	// the worker pauses after expand returns while the drainer runs.
+	hookBeforeDrain = func() { time.Sleep(2 * time.Millisecond) }
+	hookAfterExpand = func() { time.Sleep(2 * time.Millisecond) }
+	defer func() { hookBeforeDrain, hookAfterExpand = nil, nil }()
+	for i := range 200 {
+		if _, err := Run[rng](context.Background(), failingRoot{}, &collect{}, Options{Workers: 4, Budget: 10}); err == nil {
+			t.Fatalf("iteration %d: a failed listing reported success", i)
+		}
+	}
+}
