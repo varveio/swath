@@ -13,6 +13,7 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 
 | Invariant ([internals/contracts.md](internals/contracts.md)) | Test |
 |---|---|
+| dataset format contract | `listing` `TestDatasetContract`: multi-part S3 datasets (sequential, parallel, seeded) and a local one with a non-UTF-8 name, read from the manifest alone: parts are exactly `data/` in name order, bytes and MD5 match, footer rows and exact base64 bounds match, keys rise strictly within and across parts, footers carry exactly the four `swath.*` stamps and `sorting_columns` key ascending, and the three S3 runs hold the same keys |
 | no gap, no overlap; boundary to the left | `source/s3` T1 (random splits cover every key once, traced intervals tile the keyspace) |
 | safe pivots | `source/s3` T2 (pivot properties over adversarial bounds) |
 | guards | `source/s3` T3 (every clause) |

@@ -1549,6 +1549,15 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
     names the bucket's region; the mismatch error no longer says `-overwrite`); `cmd/swath`'s `explain` adds
     the advice. The report is returned with every error and `--report-format json` prints it on failure.
 
+18. **Tests around format properties.** `TestDatasetContract` reads datasets as a reader does, from the
+    manifest alone, and checks the format-2 contract end to end (parts = `data/`, bytes and MD5, footer rows,
+    exact base64 bounds, strict key order across parts, exactly the four `swath.*` stamps, `sorting_columns`),
+    on multi-part S3 datasets of three modes and a local dataset with a non-UTF-8 name. The Java-shaped
+    expectations went with items 1–5 and 8–9 (`TestFooterMatchesSchema` checks a test schema of every type;
+    the summary tests check `run.json`); `diffds.py` keeps the bidirectional `EXCEPT ALL` with the
+    reserved-column projection; retained-part verification and same-build determinism tests stay. "Java
+    reader opens Go output" is not a gate; Java stays the producer oracle.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and
