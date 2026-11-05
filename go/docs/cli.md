@@ -69,6 +69,8 @@ usage: swath list SOURCE --output DIR [flags]
     	S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   -report-format text
     	text (one line) or json (the run report, as in run.json) (default "text")
+  -request-payer
+    	S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
@@ -141,6 +143,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   -report-format text
     	text (one line) or json (the run report, as in run.json) (default "text")
+  -request-payer
+    	S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
@@ -177,6 +181,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **S3 modes.** The default is the parallel core; `--seed` tiles the scope from one delimiter page first;
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
   dataset is then marked incomplete). `--endpoint` and `--path-style` select S3-compatible stores.
+- **Requester pays:** `--request-payer` sends `x-amz-request-payer: requester` (signed) on every request, so
+  a requester-pays bucket can be listed at the caller's charge.
 - **S3 credentials:** `--anonymous` sends unsigned requests whatever the environment holds. Otherwise the AWS
   SDK's default credential chain applies: environment, shared files and profiles (`--profile`), SSO, web
   identity, credential processes, AssumeRole, container and instance roles. With nothing found, requests go

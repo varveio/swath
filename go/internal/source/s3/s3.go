@@ -37,25 +37,27 @@ type counted interface{ Counters() client.Counters }
 
 // Options configure a Provider.
 type Options struct {
-	Bucket     string
-	Prefix     string
-	Endpoint   string // custom endpoint URL (S3-compatible stores, tests)
-	Region     string // else AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1
-	PathStyle  bool
-	FIPS       bool          // FIPS endpoint
-	DualStack  bool          // dual-stack (IPv6) endpoint
-	Profile    string        // shared-file profile
-	Anonymous  bool          // never sign, whatever the environment holds
-	Timeout    time.Duration // per request; default 30 s
-	Warn       func(string)  // one-time warnings for the user; may be nil
-	FetchOwner bool
-	Sequential bool    // one continuation-token chain, no ranges (the oracle)
-	Seed       bool    // parallel: tile the scope from one delimiter page first
-	Workers    int     // parallel: the order stage's worker count (split demand)
-	MaxKeys    int64   // stop after this many objects (sequential only; 0 = all)
-	Client     API     // optional; built from the options above when nil
-	Resume     *Resume // continue after a journaled run's last published key
-	Probe      bool    // check each split's upper child with a 1-key request first (off by default)
+	Bucket    string
+	Prefix    string
+	Endpoint  string // custom endpoint URL (S3-compatible stores, tests)
+	Region    string // else AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1
+	PathStyle bool
+	FIPS      bool   // FIPS endpoint
+	DualStack bool   // dual-stack (IPv6) endpoint
+	Profile   string // shared-file profile
+	Anonymous bool   // never sign, whatever the environment holds
+	// RequestPayer accepts the request charges of a requester-pays bucket.
+	RequestPayer bool
+	Timeout      time.Duration // per request; default 30 s
+	Warn         func(string)  // one-time warnings for the user; may be nil
+	FetchOwner   bool
+	Sequential   bool    // one continuation-token chain, no ranges (the oracle)
+	Seed         bool    // parallel: tile the scope from one delimiter page first
+	Workers      int     // parallel: the order stage's worker count (split demand)
+	MaxKeys      int64   // stop after this many objects (sequential only; 0 = all)
+	Client       API     // optional; built from the options above when nil
+	Resume       *Resume // continue after a journaled run's last published key
+	Probe        bool    // check each split's upper child with a 1-key request first (off by default)
 
 	// Test hooks: splitCoin replaces the demand gate; trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].
@@ -140,7 +142,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	}
 	c, err := client.New(client.Config{
 		Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
-		Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout,
+		Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("S3 client: %w", err)

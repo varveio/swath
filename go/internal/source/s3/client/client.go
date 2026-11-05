@@ -32,6 +32,7 @@ type Config struct {
 	DualStack      bool          // s3.dualstack.REGION.amazonaws.com (IPv6)
 	Profile        string        // shared config profile (else AWS_PROFILE, else default)
 	Anonymous      bool          // never sign
+	RequestPayer   bool          // send x-amz-request-payer: requester (signed): the caller pays for a requester-pays bucket
 	RequestTimeout time.Duration // per attempt, headers and body; default 30 s
 	MaxAttempts    int           // default 9
 	BaseBackoff    time.Duration // default 100 ms
@@ -285,6 +286,9 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 	}
 	req.Host = u.Host
 	req.Header.Set("User-Agent", "swath-go")
+	if c.cfg.RequestPayer {
+		req.Header.Set("X-Amz-Request-Payer", "requester") // before signing: it is a signed header
+	}
 	if err := c.auth.sign(actx, req, c.cfg.Now()); err != nil {
 		return nil, err
 	}

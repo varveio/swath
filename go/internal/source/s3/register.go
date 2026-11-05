@@ -29,6 +29,7 @@ func flags(f *flag.FlagSet, diag bool) any {
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
 	f.BoolVar(&o.Anonymous, "anonymous", false, "S3: send unsigned requests, ignoring any credentials")
+	f.BoolVar(&o.RequestPayer, "request-payer", false, "S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)")
 	f.DurationVar(&o.Timeout, "request-timeout", 30*time.Second, "S3: per-request timeout; a request that exceeds it is retried")
 	f.BoolVar(&o.PathStyle, "path-style", false, "S3: path-style addressing")
 	f.BoolVar(&o.FIPS, "fips", false, "S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)")

@@ -172,6 +172,31 @@ func TestCredentialChain(t *testing.T) {
 	}
 }
 
+// TestRequestPayer: --request-payer sends x-amz-request-payer: requester
+// and signs it.
+func TestRequestPayer(t *testing.T) {
+	dir := t.TempDir()
+	isolate(t, dir)
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKENV")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "S")
+	var payer, auth atomic.Value
+	h := func(w http.ResponseWriter, r *http.Request) {
+		payer.Store(r.Header.Get("X-Amz-Request-Payer"))
+		auth.Store(r.Header.Get("Authorization"))
+		w.Write([]byte(okPage))
+	}
+	for _, on := range []bool{false, true} {
+		c, _ := testClient(t, h, Config{RequestPayer: on})
+		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+			t.Fatal(err)
+		}
+		signed := strings.Contains(auth.Load().(string), "x-amz-request-payer")
+		if (payer.Load() == "requester") != on || signed != on {
+			t.Fatalf("request payer %v: header %q, signed %v", on, payer.Load(), signed)
+		}
+	}
+}
+
 func TestURL(t *testing.T) {
 	for _, c := range []struct {
 		cfg  Config
