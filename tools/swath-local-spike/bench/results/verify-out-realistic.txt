@@ -1,0 +1,53 @@
+PASS _SUCCESS present
+PASS _swath_local_summary.json present
+PASS no _swath_summary.json (Swath's reserved run-summary name, parsed by Varve)
+PASS data/ holds exactly the 1 manifest parts, in name order
+PASS manifest totalRows == sum(rowCount)
+PASS DuckDB count 1071819 == manifest totalRows 1071819
+
+Schema as DuckDB sees it (DESCRIBE):
+  key                  VARCHAR                      null=YES
+  size                 BIGINT                       null=YES
+  last_modified        TIMESTAMP WITH TIME ZONE     null=YES
+  kind                 VARCHAR                      null=YES
+  mode                 INTEGER                      null=YES
+  uid                  INTEGER                      null=YES
+  gid                  INTEGER                      null=YES
+  nlink                INTEGER                      null=YES
+  inode                BIGINT                       null=YES
+  dev                  BIGINT                       null=YES
+  blocks               BIGINT                       null=YES
+  ctime                TIMESTAMP WITH TIME ZONE     null=YES
+  atime                TIMESTAMP WITH TIME ZONE     null=YES
+  birth_time           TIMESTAMP WITH TIME ZONE     null=YES
+  link_target          VARCHAR                      null=YES
+
+Parquet physical schema (part 0):
+  swath_listing | None | None | None | None
+  key | BYTE_ARRAY | REQUIRED | UTF8 | StringType()
+  size | INT64 | OPTIONAL | None | None
+  last_modified | INT64 | OPTIONAL | TIMESTAMP_MICROS | TimestampType(isAdjustedToUTC=1, unit=TimeUnit(MILLIS=<null>, MICROS=MicroSeconds(), NANOS=<null>))
+  kind | BYTE_ARRAY | REQUIRED | UTF8 | StringType()
+  mode | INT32 | OPTIONAL | None | None
+  uid | INT32 | OPTIONAL | None | None
+  gid | INT32 | OPTIONAL | None | None
+  nlink | INT32 | OPTIONAL | None | None
+  inode | INT64 | OPTIONAL | None | None
+  dev | INT64 | OPTIONAL | None | None
+  blocks | INT64 | OPTIONAL | None | None
+  ctime | INT64 | OPTIONAL | TIMESTAMP_MICROS | TimestampType(isAdjustedToUTC=1, unit=TimeUnit(MILLIS=<null>, MICROS=MicroSeconds(), NANOS=<null>))
+  atime | INT64 | OPTIONAL | TIMESTAMP_MICROS | TimestampType(isAdjustedToUTC=1, unit=TimeUnit(MILLIS=<null>, MICROS=MicroSeconds(), NANOS=<null>))
+  birth_time | INT64 | OPTIONAL | TIMESTAMP_MICROS | TimestampType(isAdjustedToUTC=1, unit=TimeUnit(MILLIS=<null>, MICROS=MicroSeconds(), NANOS=<null>))
+  link_target | BYTE_ARRAY | OPTIONAL | UTF8 | StringType()
+
+Per part:
+  data/part-00000.parquet: rows=1071819 bytes=19155989 min_key='data/' max_key='projects/proj-39-parse/src/util_3996.java'
+PASS   rowCount 1071819
+PASS   keys strictly ascending within part (file row order)
+PASS   first/last key == manifest minKey/maxKey
+PASS   first/last are byte min/max
+PASS   swath.sort.file_index == 1
+PASS   file_final only on last part
+PASS   sort order/mode/format stamps
+
+RESULT: OK
