@@ -261,7 +261,10 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 	fail := func(err error) (Summary, error) {
 		if router != nil {
 			router.Abort()
-			if !errors.Is(err, faults.ErrCrash) { // a crash leaves the output as a kill would
+			// A crash leaves the output as a kill would; a journaled run
+			// keeps its temporary parts too: one may be recorded already
+			// (its rename failed), and -resume decides which are.
+			if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
 				dataset.Cleanup(cfg.Out)
 			}
 		}
@@ -312,7 +315,7 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 	}
 	finish(&sum)
 	if err := dataset.Publish(cfg.Out, meta, parts, reports(&sum)); err != nil {
-		if !errors.Is(err, faults.ErrCrash) {
+		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
 			dataset.Cleanup(cfg.Out)
 		}
 		return sum, fmt.Errorf("publish: %w", err)

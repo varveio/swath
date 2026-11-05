@@ -275,3 +275,32 @@ func TestCompetingRunsAreRefused(t *testing.T) {
 	}
 	sameDataset(t, "owner", ref, out)
 }
+
+// TestRenameFailureAfterRecordResumes: an ordinary error between a part's
+// durable record and its rename leaves the recorded temporary part in
+// place, and -resume publishes it (Sol P1-3).
+func TestRenameFailureAfterRecordResumes(t *testing.T) {
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	eio := errors.New("rename: input/output error")
+	var n atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "rename" && n.Add(1) == 3 {
+			return eio
+		}
+		return nil
+	})
+	_, err := Run(context.Background(), crashConfig(url, out, false))
+	restore()
+	if !errors.Is(err, eio) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	sameDataset(t, "after rename failure", ref, out)
+}

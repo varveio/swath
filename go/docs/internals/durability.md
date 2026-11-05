@@ -80,6 +80,8 @@ resume lists them again. `manifest.json`, the run reports and `_SUCCESS` are wri
 5. Continues the router at the next ordinal with the recorded limit, so part boundaries fall exactly where
    the uninterrupted run would have put them.
 
+A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
+may already be recorded (its rename failed), and only `-resume`'s reconciliation decides which are.
 `-resume` on a complete dataset returns `ErrComplete`; on a directory without a journal,
 `ErrNothingToResume`. A new run over an interrupted one needs `-overwrite`.
 

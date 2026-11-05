@@ -277,3 +277,7 @@ func (a afterSink) Write(ctx context.Context, segs [][]schema.Row) error {
 	}
 	return a.Sink.Write(ctx, segs)
 }
+
+// journaled reports whether the run keeps a journal (and so leaves its
+// temporary parts for -resume to reconcile after a failure).
+func (jr *journal) journaled() bool { return jr != nil && jr.j != nil }
