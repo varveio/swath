@@ -68,10 +68,8 @@ type S3Config struct {
 const (
 	DefaultMemory   = 256 << 20
 	DefaultPartSize = 64 << 20
-	// bytesPerBufferedRow converts the memory budget into the reorder bound:
-	// about 2 KiB per buffered row covers the row, its key and the slab and
-	// heap overhead around it (256 MiB → 131,072 rows; 100k measured best).
-	bytesPerBufferedRow = 2 << 10
+	// minMemory is the smallest budget accepted.
+	minMemory = 1 << 20
 )
 
 func (c *Config) setDefaults() error {
@@ -90,8 +88,8 @@ func (c *Config) setDefaults() error {
 	if c.PartSize <= 0 {
 		c.PartSize = DefaultPartSize
 	}
-	if c.Memory < bytesPerBufferedRow {
-		return fmt.Errorf("memory budget %d is below %d bytes", c.Memory, bytesPerBufferedRow)
+	if c.Memory < minMemory {
+		return fmt.Errorf("memory budget %d is below %d bytes", c.Memory, minMemory)
 	}
 	return nil
 }
@@ -105,8 +103,8 @@ type Summary struct {
 	Fields       string    `json:"fields,omitempty"`
 	Workers      int       `json:"workers"`
 	Encoders     int       `json:"encoders"`
-	ReorderRows  int       `json:"reorder_rows"`
-	MaxBuffered  int64     `json:"max_buffered_rows"`
+	RowBudget    int64     `json:"row_budget_bytes"` // rows in flight: reorder storage and encoder queues
+	MaxBuffered  int64     `json:"max_buffered_bytes"`
 	SpillRows    int64     `json:"spill_rows"`   // rows written to spill files and replayed
 	SpillBytes   int64     `json:"spill_bytes"`  //
 	SpillFiles   int64     `json:"spill_ranges"` // ranges that spilled
@@ -144,7 +142,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	}
 	sum := Summary{
 		Tool: "swath-go", Out: cfg.Out, Workers: cfg.Workers, Encoders: cfg.Encoders,
-		ReorderRows: int(cfg.Memory / bytesPerBufferedRow), Started: start,
+		RowBudget: cfg.Memory / 2, Started: start,
 	}
 	if strings.HasPrefix(cfg.Root, "s3://") {
 		return runS3(ctx, cfg, sum)
@@ -243,12 +241,17 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Provider[R], s *schema.Schema, meta dataset.Meta,
 	listed func(*Summary) int64, reports func(*Summary) []dataset.File, jr *journal) (Summary, error) {
 	defer jr.close()
+	// One shared cause: the first asynchronous failure (an encoder, the
+	// disk, the journal) cancels listing at once, and is what Run returns.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	var sink order.Sink = discard{}
 	var router *parquet.Router
 	if cfg.Out != "" {
 		var err error
 		ropt := parquet.Options{Out: cfg.Out, Schema: s, PartSize: cfg.PartSize, Encoders: cfg.Encoders}
 		jr.routerOptions(&ropt)
+		ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
 		router, err = parquet.NewRouter(ropt)
 		if err != nil {
 			return sum, err
@@ -265,7 +268,14 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 		finish(&sum)
 		return sum, err
 	}
-	oopt := order.Options{Workers: cfg.Workers, Budget: sum.ReorderRows, SpillCompress: cfg.SpillCompress}
+	// One byte budget for rows in flight, shared by the order stage and the
+	// encoders' queues (half of -memory; the rest is headroom for pages
+	// being parsed, codecs and the garbage collector).
+	shared := &order.Shared{}
+	if router != nil {
+		router.Account(shared.Add)
+	}
+	oopt := order.Options{Workers: cfg.Workers, Budget: sum.RowBudget, Shared: shared, SpillCompress: cfg.SpillCompress}
 	if !cfg.NoSpill {
 		// Spill files are disposable: a crash relists their rows.
 		oopt.SpillDir = os.TempDir()

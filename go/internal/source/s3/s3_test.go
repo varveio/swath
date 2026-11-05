@@ -94,7 +94,7 @@ func list(t *testing.T, opt Options, workers int) ([]schema.Row, Stats) {
 		t.Fatal(err)
 	}
 	c := &collect{}
-	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: 100}); err != nil {
+	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: 100 * 256}); err != nil {
 		t.Fatal(err)
 	}
 	return c.rows, p.Stats()
@@ -213,7 +213,7 @@ func TestOutOfOrderListingFails(t *testing.T) {
 		{Contents: []client.Object{{Key: "a"}}},
 	}
 	p, _ := New(context.Background(), Options{Bucket: "x", Client: &stub{pages: pages}, Sequential: true})
-	if _, err := order.Run[Range](context.Background(), p, &collect{}, order.Options{Workers: 1, Budget: 10}); err == nil {
+	if _, err := order.Run[Range](context.Background(), p, &collect{}, order.Options{Workers: 1, Budget: 10 * 256}); err == nil {
 		t.Fatal("out-of-order pages accepted")
 	}
 }

@@ -197,3 +197,28 @@ func TestNoJournalAndCountOnly(t *testing.T) {
 		t.Fatalf("count-only: %v %d", err, sum.Rows)
 	}
 }
+
+// TestEncoderFailureStopsListing: the first asynchronous failure (here an
+// encoder error) cancels the whole pipeline through one cause: listing
+// stops early and Run returns that error, not a cancellation.
+func TestEncoderFailureStopsListing(t *testing.T) {
+	url := crashBucket(t)
+	diskFull := errors.New("disk full")
+	var n atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "encoding" && n.Add(1) == 2 {
+			return diskFull
+		}
+		return nil
+	})
+	defer restore()
+	cfg := crashConfig(url, filepath.Join(t.TempDir(), "ds"), false)
+	cfg.NoSpill = true
+	sum, err := Run(context.Background(), cfg)
+	if !errors.Is(err, diskFull) {
+		t.Fatalf("got %v, want the encoder's error", err)
+	}
+	if sum.Rows >= 8000 {
+		t.Fatalf("the pipeline ran to the end (%d rows ordered) after the encoder failed", sum.Rows)
+	}
+}

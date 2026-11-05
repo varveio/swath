@@ -3,6 +3,8 @@
 
 package schema
 
+import "unsafe"
+
 // Kind is a file type; its String form is the kind column value.
 type Kind uint8
 
@@ -98,3 +100,23 @@ func (r *Row) Has(p Presence) bool { return r.Present&p == p }
 // Micros converts seconds and nanoseconds (0 <= nsec < 1e9) to epoch
 // microseconds, truncating the sub-microsecond part.
 func Micros(sec, nsec int64) int64 { return sec*1_000_000 + nsec/1000 }
+
+// RowBytes is the memory a row holds: the struct, its object metadata and
+// its strings (which may be views of a shared page arena; counting them
+// approximates the arena they keep alive).
+func RowBytes(r *Row) int64 {
+	n := int64(unsafe.Sizeof(*r)) + int64(len(r.Key)+len(r.LinkTarget))
+	if o := r.Object; o != nil {
+		n += int64(unsafe.Sizeof(*o)) + int64(len(o.ETag)+len(o.StorageClass)+len(o.OwnerID)+len(o.OwnerDisplayName)+len(o.ChecksumAlgorithm)+len(o.ChecksumType))
+	}
+	return n
+}
+
+// RowsBytes sums RowBytes.
+func RowsBytes(rows []Row) int64 {
+	var n int64
+	for i := range rows {
+		n += RowBytes(&rows[i])
+	}
+	return n
+}

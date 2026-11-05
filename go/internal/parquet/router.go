@@ -40,6 +40,12 @@ type Options struct {
 	Publish func(ordinal int, p dataset.Part, limit, rows int64) (dataset.Part, error)
 	// Resume continues a run whose first parts are already published.
 	Resume *Resume
+	// Fail, if set, is called once with the first asynchronous failure (an
+	// encoder, the disk, the journal), so the whole pipeline stops at once.
+	Fail func(error)
+	// Account, if set, is told the bytes (schema.RowsBytes) queued to the
+	// encoders (+) and written (-): they share the order stage's budget.
+	Account func(int64)
 }
 
 // Resume is the router state recovered from a journal.
@@ -80,7 +86,7 @@ type Router struct {
 type part struct {
 	ordinal   int
 	prev      *part // the previous part of this run, nil for the first
-	segs      chan [][]schema.Row
+	segs      chan batch
 	done      chan struct{}
 	published chan struct{} // closed once published (or failed), with Publish set
 	logical   int64
@@ -102,6 +108,10 @@ func NewRouter(opt Options) (*Router, error) {
 	}
 	return r, nil
 }
+
+// Account sets the byte accounting hook (see Options.Account); call before
+// the first Write.
+func (r *Router) Account(f func(int64)) { r.opt.Account = f }
 
 // Write routes ascending segments into parts. Each part receives the
 // segments of one Write call as a single batch.
@@ -144,17 +154,39 @@ func (r *Router) Write(ctx context.Context, segs [][]schema.Row) error {
 	return r.send(ctx, batch)
 }
 
-func (r *Router) send(ctx context.Context, batch [][]schema.Row) error {
-	if len(batch) == 0 {
+// batch is one order-stage batch queued to a part's encoder.
+type batch struct {
+	segs  [][]schema.Row
+	bytes int64
+}
+
+func (r *Router) send(ctx context.Context, segs [][]schema.Row) error {
+	if len(segs) == 0 {
 		return nil
 	}
+	b := batch{segs: segs}
+	if r.opt.Account != nil {
+		for _, s := range segs {
+			b.bytes += schema.RowsBytes(s)
+		}
+		r.opt.Account(b.bytes)
+	}
 	select {
-	case r.cur.segs <- batch:
+	case r.cur.segs <- b:
 		return nil
 	case <-r.cur.done: // the encoder stopped early
+		r.done1(b)
 		return r.cur.err
 	case <-ctx.Done():
+		r.done1(b)
 		return context.Cause(ctx)
+	}
+}
+
+// done1 releases a batch's bytes once it is written or dropped.
+func (r *Router) done1(b batch) {
+	if r.opt.Account != nil && b.bytes != 0 {
+		r.opt.Account(-b.bytes)
 	}
 }
 
@@ -168,7 +200,7 @@ func (r *Router) open(ctx context.Context) error {
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	}
-	p := &part{ordinal: len(r.done) + len(r.parts), segs: make(chan [][]schema.Row, partQueue), done: make(chan struct{}),
+	p := &part{ordinal: len(r.done) + len(r.parts), segs: make(chan batch, partQueue), done: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}
 	if n := len(r.parts); n > 0 {
 		p.prev = r.parts[n-1]
@@ -192,21 +224,24 @@ func (r *Router) encode(p *part) {
 	if err != nil {
 		p.err = err
 		r.fail(p.err)
-		for range p.segs { // drain so the router never blocks
+		for b := range p.segs { // drain so the router never blocks
+			r.done1(b)
 		}
 		return
 	}
-	for batch := range p.segs {
+	for b := range p.segs {
 		if p.err != nil || r.aborted.Load() {
+			r.done1(b)
 			continue
 		}
 		if err := faults.At("encoding"); err != nil {
 			p.err = err
 			r.fail(err)
+			r.done1(b)
 			continue
 		}
 	write:
-		for _, seg := range batch {
+		for _, seg := range b.segs {
 			for i := range seg {
 				if err := w.write(&seg[i]); err != nil {
 					p.err = fmt.Errorf("part %d: %w", p.ordinal, err)
@@ -215,6 +250,7 @@ func (r *Router) encode(p *part) {
 				}
 			}
 		}
+		r.done1(b)
 	}
 	if p.err != nil || r.aborted.Load() {
 		w.abort()
@@ -271,10 +307,14 @@ func (r *Router) cut(ctx context.Context, final bool) error {
 
 func (r *Router) fail(err error) {
 	r.errMu.Lock()
-	if r.err == nil {
+	first := r.err == nil
+	if first {
 		r.err = err
 	}
 	r.errMu.Unlock()
+	if first && r.opt.Fail != nil {
+		r.opt.Fail(err)
+	}
 }
 
 func (r *Router) firstErr() error {

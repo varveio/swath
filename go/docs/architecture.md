@@ -58,7 +58,9 @@ filesystem fields inline, object-store fields behind one pointer (`Row.Object`, 
   copies byte-array values, so rows may alias provider buffers (keys are zero-copy views into a per-page or
   per-directory arena). Anything that outlives a part (its min and max key) is cloned so it does not pin an
   arena.
-- **Cancellation.** Every stage takes the `context.Context`. The first error stops the walk (an atomic flag,
+- **Cancellation.** Every stage takes the `context.Context`. The first asynchronous failure (an encoder, the
+  disk, the journal) cancels the pipeline's context with that error as its cause, so listing stops at once
+  and `Run` returns that error. The first error stops the walk (an atomic flag,
   checked without taking `ctx`'s mutex), wakes every waiter, closes the encoders, removes temporary parts and
   is returned wrapped with its path or phase. `_SUCCESS` is written only after a complete publish.
 
@@ -72,8 +74,9 @@ is not unsigned byte order (Azure's UTF-16 order) must keep its range boundaries
 
 ## Memory
 
-One `-memory` budget: the reorder bound is `memory / 2 KiB` rows; encoder channels hold at most
-`Encoders × 16` segments. See [internals/ordering.md](internals/ordering.md) for what may exceed the budget.
+One `-memory` budget: half of it is a byte budget for rows in flight, shared by the order stage's buffers
+and the encoders' queues. The other half is headroom for pages being parsed, codecs and the garbage
+collector. See [internals/ordering.md](internals/ordering.md) for what may exceed the budget.
 
 ## Further reading
 

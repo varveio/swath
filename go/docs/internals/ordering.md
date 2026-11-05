@@ -14,9 +14,17 @@ The drainer walks the tree depth-first: it hands the sink each row segment in or
 4096 rows), descends into each child, and frees a node once it is drained and its `Expand` has returned. It
 streams the frontier: rows of the node it is draining are consumed as they arrive.
 
-## The reorder budget
+## The budget
 
-`Options.Budget` bounds rows read but not yet drained. A worker waits before claiming a range, and before
+`Options.Budget` is a byte budget: half of `-memory`, for rows in flight. A row counts its struct, its object
+metadata and its strings (`schema.RowBytes`). The strings are views of the page arena they came from, so
+counting them approximates the arena they keep alive. The encoders' queues add the bytes of every queued
+batch to the same budget (`order.Shared`, fed by the router's `Account` hook) and release them once
+written. A slow encoder therefore slows producers instead of growing a second, unaccounted buffer. The other
+half of `-memory` is headroom for pages being parsed (each capped at 16 MiB), codecs and the garbage
+collector.
+
+The budget bounds the bytes of rows read but not yet drained. A worker waits before claiming a range, and before
 publishing rows, while the budget is used up. Two exceptions keep the walk live and both were forced by S3,
 where one range can hold a whole bucket:
 
@@ -58,5 +66,4 @@ place, so the range keeps listing while a slow frontier holds the output back:
 - `-no-spill` restores waiting on the budget.
 
 **Not built yet** (from the architecture review): a disk budget with reserved publication space and a pressure
-policy; spill is bounded today only by the listing itself. A byte (not row) budget shared with encoder
-queues is not built either.
+policy; spill is bounded today only by the listing itself.

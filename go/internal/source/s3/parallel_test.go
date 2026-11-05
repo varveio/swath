@@ -182,7 +182,7 @@ func runBudget(t *testing.T, api *sorted, opt Options, workers, budget int) ([]s
 		t.Fatal(err)
 	}
 	c := &collect{}
-	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: budget}); err != nil {
+	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: int64(budget) * 256}); err != nil {
 		t.Fatal(err)
 	}
 	return keysOf(c.rows), p.Stats(), leaves
@@ -377,7 +377,7 @@ func TestT4Paging(t *testing.T) {
 	before := runtime.NumGoroutine()
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
-	if _, err := order.Run[Range](ctx, p, &collect{}, order.Options{Workers: 4, Budget: 100}); !errors.Is(err, context.Canceled) {
+	if _, err := order.Run[Range](ctx, p, &collect{}, order.Options{Workers: 4, Budget: 100 * 256}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)

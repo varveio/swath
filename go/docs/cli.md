@@ -85,7 +85,8 @@ Profiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.
 ## Semantics worth stating
 
 - **Sizes** accept `KiB`, `MiB`, `GiB` and `KB`, `MB`, `GB` suffixes.
-- **`-memory`** is one budget: the reorder bound is `memory / 2 KiB` rows; see
+- **`-memory`** is one budget: half of it bounds the bytes of rows in flight (reorder storage and encoder
+  queues); see
   [internals/ordering.md](internals/ordering.md).
 - **`-out`** is refused when non-empty unless `-overwrite`, which replaces only a previous dataset of this
   tool and never anything inside the listed root.

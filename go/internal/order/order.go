@@ -40,8 +40,11 @@ type Sink interface {
 
 // Options configure Run.
 type Options struct {
-	Workers int // expanding goroutines (>= 1)
-	Budget  int // rows read but not yet drained (>= 1)
+	Workers int   // expanding goroutines (>= 1)
+	Budget  int64 // bytes of rows read but not yet drained (schema.RowBytes), shared with Shared (>= 1)
+	// Shared, if set, holds bytes owned downstream (the encoders' queues);
+	// they count against the same budget, so a slow encoder slows producers.
+	Shared *Shared
 	// SpillDir, if set, enables spill: when the budget is used up, ranges
 	// that are not being drained write their rows to files there instead
 	// of waiting (see spill.go). SpillCompress compresses frames (zstd 1).
@@ -52,7 +55,7 @@ type Options struct {
 // Stats describe a run.
 type Stats struct {
 	Rows        int64 // rows handed to the sink
-	MaxBuffered int64 // peak rows read but not yet drained (in memory)
+	MaxBuffered int64 // peak bytes read but not yet drained (in memory, excluding Shared)
 	SpillRows   int64 // rows written to spill files and replayed
 	SpillFrames int64
 	SpillBytes  int64
@@ -72,6 +75,7 @@ const (
 
 type item[R any] struct {
 	rows  []schema.Row
+	units int64 // budget bytes of rows
 	child *node[R]
 	spill *spillFile // rows of this item are the next frame of the node's spill file
 }
@@ -95,8 +99,8 @@ type run[R any] struct {
 	work     *sync.Cond // workers: stack empty or budget used
 	drain    *sync.Cond // drainer and blocked emitters
 	stack    []*node[R]
-	buffered int
-	max      int
+	buffered int64
+	max      int64
 	finished bool
 	stopped  atomic.Bool // ctx is done; checked instead of ctx.Err(), which takes a mutex
 
@@ -106,6 +110,49 @@ type run[R any] struct {
 	segs    [][]schema.Row
 	segRows int
 	rows    int64
+}
+
+// rowBytes measures rows for the budget (tests count rows instead).
+var rowBytes = schema.RowsBytes
+
+// full reports whether the budget is used up (mu held): bytes buffered here
+// plus bytes held downstream.
+func (o *run[R]) full() bool {
+	n := o.buffered
+	if o.opt.Shared != nil {
+		n += o.opt.Shared.n.Load()
+	}
+	return n >= o.opt.Budget
+}
+
+// Shared counts bytes held downstream of the order stage against its
+// budget. Add with a negative delta wakes producers waiting for room.
+type Shared struct {
+	n    atomic.Int64
+	mu   sync.Mutex
+	wake func()
+}
+
+// Add records d bytes taken (d > 0) or released (d < 0).
+func (s *Shared) Add(d int64) {
+	s.n.Add(d)
+	if d < 0 {
+		s.mu.Lock()
+		w := s.wake
+		s.mu.Unlock()
+		if w != nil {
+			w()
+		}
+	}
+}
+
+// Load is the bytes held now.
+func (s *Shared) Load() int64 { return s.n.Load() }
+
+func (s *Shared) setWake(f func()) {
+	s.mu.Lock()
+	s.wake = f
+	s.mu.Unlock()
 }
 
 // send appends rows to the drainer's output batch, writing full batches.
@@ -140,6 +187,15 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	o := &run[R]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink}
+	if opt.Shared != nil {
+		opt.Shared.setWake(func() {
+			o.mu.Lock()
+			o.work.Broadcast()
+			o.drain.Broadcast()
+			o.mu.Unlock()
+		})
+		defer opt.Shared.setWake(nil)
+	}
 	if opt.SpillDir != "" {
 		sp, err := newSpiller(opt.SpillDir, opt.SpillCompress)
 		if err != nil {
@@ -184,7 +240,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		cancel(err)
 	}
 	wg.Wait()
-	st.Rows, st.MaxBuffered = o.rows, int64(o.max)
+	st.Rows, st.MaxBuffered = o.rows, o.max
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
 	}
@@ -195,7 +251,7 @@ func (o *run[R]) worker() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for {
-		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || (o.sp == nil && o.buffered >= o.opt.Budget)) {
+		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || (o.sp == nil && o.full())) {
 			o.work.Wait()
 		}
 		if o.finished || o.stopped.Load() {
@@ -259,6 +315,7 @@ type emitter[R any] struct {
 	items  []item[R]
 	kids   []*node[R]
 	rows   int
+	units  int64
 	direct bool // drainer-expanded, no child yet: rows go straight to the sink
 }
 
@@ -274,8 +331,10 @@ func (e *emitter[R]) Rows(rows []schema.Row) error {
 		}
 		return e.o.send(rows)
 	}
-	e.items = append(e.items, item[R]{rows: rows})
+	u := rowBytes(rows)
+	e.items = append(e.items, item[R]{rows: rows, units: u})
 	e.rows += len(rows)
+	e.units += u
 	return e.maybePublish()
 }
 
@@ -300,7 +359,7 @@ func (e *emitter[R]) maybePublish() error {
 // is on the drain path, it first waits while the budget is used up.
 func (e *emitter[R]) publish() error {
 	o := e.o
-	for !e.n.awaited.Load() && o.buffered >= o.opt.Budget && !o.stopped.Load() {
+	for !e.n.awaited.Load() && o.full() && !o.stopped.Load() {
 		if o.sp != nil && e.rows > 0 {
 			// Spill instead of waiting: write the rows (without the lock),
 			// then publish markers. Frames precede their markers, so the
@@ -326,9 +385,9 @@ func (e *emitter[R]) publish() error {
 	}
 	e.n.items = append(e.n.items, e.items...)
 	e.n.pending = append(e.n.pending, e.kids...)
-	o.buffered += e.rows
+	o.buffered += e.units
 	o.max = max(o.max, o.buffered)
-	e.items, e.kids, e.rows = nil, nil, 0
+	e.items, e.kids, e.rows, e.units = nil, nil, 0, 0
 	if e.n.onPath.Load() {
 		o.drain.Broadcast()
 	}
@@ -351,7 +410,7 @@ func (e *emitter[R]) spill() error {
 		}
 		e.items[i] = item[R]{spill: e.n.spill}
 	}
-	e.rows = 0
+	e.rows, e.units = 0, 0
 	return nil
 }
 
@@ -370,20 +429,20 @@ func (o *run[R]) replay(f *spillFile) error {
 // drainTree walks the tree depth-first from root, streaming rows to sink.
 func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 	var st Stats
-	released := 0
+	var released int64
 	release := func() { // mu held
 		if released == 0 {
 			return
 		}
-		full := o.buffered >= o.opt.Budget
+		full := o.full()
 		o.buffered -= released
 		released = 0
-		if full && o.buffered < o.opt.Budget {
+		if full && !o.full() {
 			o.work.Broadcast()
 			o.drain.Broadcast()
 		}
 	}
-	releaseEvery := max(1, min(batchRows, o.opt.Budget/16))
+	releaseEvery := max(1, o.opt.Budget/16)
 
 	type frame struct {
 		n *node[R]
@@ -417,7 +476,7 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 					err = o.replay(it.spill)
 					continue
 				}
-				released += len(it.rows)
+				released += it.units
 				err = o.send(it.rows)
 				if released >= releaseEvery {
 					o.mu.Lock()
@@ -457,7 +516,7 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 				}
 				continue
 			}
-			released += len(it.rows)
+			released += it.units
 			if released >= releaseEvery {
 				release()
 			}

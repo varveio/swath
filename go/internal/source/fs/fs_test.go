@@ -126,7 +126,7 @@ func list(t *testing.T, root string, opt Options, workers, budget int) ([]schema
 		t.Fatal(err)
 	}
 	c := &collect{}
-	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: budget}); err != nil {
+	if _, err := order.Run[Range](context.Background(), p, c, order.Options{Workers: workers, Budget: int64(budget) * 256}); err != nil {
 		t.Fatal(err)
 	}
 	return c.rows, p.Stats()
@@ -259,7 +259,7 @@ func TestCancelledExpand(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := order.Run[Range](ctx, p, &collect{}, order.Options{Workers: 2, Budget: 10}); err == nil {
+	if _, err := order.Run[Range](ctx, p, &collect{}, order.Options{Workers: 2, Budget: 10 * 256}); err == nil {
 		t.Fatal("expected cancellation")
 	}
 }

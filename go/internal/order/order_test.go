@@ -77,6 +77,9 @@ func (t *tree) keys() []string {
 	return out
 }
 
+// The tests state budgets in rows: count each row as one unit.
+func init() { rowBytes = func(rows []schema.Row) int64 { return int64(len(rows)) } }
+
 type collect struct {
 	mu   sync.Mutex
 	keys []string
@@ -106,7 +109,7 @@ func TestOrderedOutput(t *testing.T) {
 	for _, tc := range []struct{ workers, budget int }{{1, 1}, {4, 3}, {8, 50}, {3, 1 << 20}} {
 		t.Run(fmt.Sprintf("w%d_b%d", tc.workers, tc.budget), func(t *testing.T) {
 			c := &collect{}
-			st, err := Run[rng](context.Background(), tr, c, Options{Workers: tc.workers, Budget: tc.budget})
+			st, err := Run[rng](context.Background(), tr, c, Options{Workers: tc.workers, Budget: int64(tc.budget)})
 			if err != nil {
 				t.Fatal(err)
 			}

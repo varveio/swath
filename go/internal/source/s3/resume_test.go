@@ -49,7 +49,7 @@ func TestSplitStateModel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := order.Run[Range](context.Background(), p, &collect{}, order.Options{Workers: 8, Budget: 200}); err != nil {
+			if _, err := order.Run[Range](context.Background(), p, &collect{}, order.Options{Workers: 8, Budget: 200 * 256}); err != nil {
 				t.Fatal(err)
 			}
 			history := p.TakeBoundaries()
