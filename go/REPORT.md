@@ -1510,6 +1510,15 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
    spill was on. The filesystem provider's `Stats` stays a plain struct (its only representation; it has no
    policies to toggle). `bench/summaries.py` reads the new paths.
 
+10. **Journal about committed output.** Records hold the ordinal, `dataset.PartInfo` (rows, bytes, MD5, exact
+    bounds: the type the manifest's parts embed) and the writer state (frozen limit, row total). Split
+    boundaries, S3's checkpoint descriptor, `TakeBoundaries` and the resume tiling are gone:
+    `source.Resumable` is `Restart(after)`, and S3 resumes as one range `(K, ⊤]` split as on a fresh run
+    (`TestResumeAfterKey` replaces the split-state model). The journal has no writer goroutine or
+    request/acknowledgement channels: the router's in-order `Publish` hook is the one ordered committer and
+    calls a synchronous `Append`. Journal version 5. The crash matrix and SIGKILL tests pass unchanged. The
+    resume ramp-up cost without hints is not measured.
+
 ## Probe default off
 
 The 1-key probe is off by default; `-probe` turns it on and `-no-probe` is gone. The code, its counters and

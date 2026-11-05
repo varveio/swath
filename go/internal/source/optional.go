@@ -34,16 +34,12 @@ type IdentityField struct {
 }
 
 // Resumable sources restart after a journaled run's last published key.
-// The pipeline journals a checkpoint with every part; the descriptors are
-// opaque to it, and versioned by the provider.
+// The journal keeps committed output only, no scheduling history: the
+// source starts up as on a fresh run, over the keys after.
 type Resumable interface {
-	// Checkpoint returns what the provider learned since the previous
-	// call that a restart can use (for S3, the range boundaries), or nil.
-	Checkpoint() []byte
 	// Restart is called before Root: every row the source emits must sort
-	// after key after. checkpoints are the journaled descriptors, oldest
-	// first.
-	Restart(after string, checkpoints [][]byte) error
+	// after key after.
+	Restart(after string) error
 }
 
 // Capable sources say which optional behaviours this instance supports;

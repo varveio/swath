@@ -24,7 +24,7 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | Crash boundary | Recovery |
 |---|---|
 | response fetched, nothing emitted (`response-read`) | fetched again; the frontier does not move |
-| split decided, children partly queued (`split`) | the tiling is rebuilt from K and the recorded boundaries; the split is lost harmlessly |
+| split decided, children partly queued (`split`) | in memory only: the resume starts from K; the split is lost harmlessly |
 | rows buffered or queued to an encoder (`range-done`, `encoding`) | relisted from K |
 | part closed and synced, no record (`part-closed`, `journal-append`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
 | record written, not synced (`journal-sync`) | a torn tail is ignored; a whole unsynced frame that survived is a valid record of a synced part |
@@ -48,13 +48,15 @@ resume and compare with an uninterrupted run.
 
 ## The unit is the part
 
-Parts are published as soon as they close, in ordinal order, by the router's `Publish` hook:
+Parts are published as soon as they close, in ordinal order, by the router's `Publish` hook. That hook is
+the one ordered committer: the router calls it for one part at a time (part i after part i−1), and it owns
+the append, the sync and the rename; the journal's `Append` is a plain synchronous call, with no writer
+goroutine, request or acknowledgement channel.
 
 1. The part's encoder closes the file and fsyncs it, then the directory (`.swath/parts/part-NNNNN.parquet`).
-2. One journal record is appended and fsynced: the part (ordinal, rows, bytes, MD5, min and max key), the
-   router's frozen part limit, the total rows so far, and the source's checkpoint: an opaque descriptor,
-   versioned by the provider, of what it learned since the previous record (for S3, the range boundaries it
-   created; `source.Resumable`).
+2. One journal record is appended and fsynced: the ordinal, the part's `dataset.PartInfo` (rows, bytes,
+   MD5, min and max key: the same type the manifest lists) and the writer state (the router's frozen part
+   limit, the total rows so far). The journal is about committed output only: no split history, no cursor.
 3. The part is renamed to `data/part-NNNNN.parquet` and the directory is fsynced.
 
 This is commit-before-emit (I1) at part granularity: no row is published before the record that covers it.
@@ -80,17 +82,20 @@ that is the commit. The run reports follow it.
 3. Recovers `data/`. Every retained part must match its record's size and MD5 (`ErrPartAltered` otherwise).
    A part whose record is durable but whose rename did not happen is renamed now. Every unrecorded file in
    `data/` is removed.
-4. Has the source restart after K, the last recorded part's max key, with every recorded checkpoint. S3
-   lists `(K, ⊤]` tiled at the recorded boundaries above K:
-   `(K, b1], …, (bn, ⊤]`. If K holds scalars S3 refuses in `start-after`, the first range starts at K's safe
-   prefix and drops keys up to K.
+4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
+   normal start-up. S3 lists one range `(K, ⊤]` and splits it as on a fresh run. If K holds scalars S3
+   refuses in `start-after`, the range starts at K's safe prefix and drops keys up to K.
 5. Continues the router at the next ordinal with the recorded limit, so part boundaries fall exactly where
    the uninterrupted run would have put them.
 
 A record also carries whether its part is the final one. Once the final part is durable, a
 resume does not list again: it only publishes. On a changed bucket, listing again could add a second final
-part. S3's checkpoint carries at most 4,096 boundaries (the most recent), so the journal grows with parts, not
-splits. A record over the frame limit is refused on append as well as on read.
+part. The journal grows with parts only. A record over the frame limit is refused on append as well as on read.
+
+**The trade-off.** Earlier versions also journaled every split boundary so a resume could start with the
+interrupted run's tiling. That costs journal growth and ties the journal to S3's range model; without it a
+resume ramps up from one range, as a fresh run does from the root (splits engage after the first page of
+each range). The ramp-up cost has not been measured; hints come back only if a measurement shows it.
 
 A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
 may already be recorded (its rename failed), and only `-resume`'s reconciliation decides which are.
@@ -99,21 +104,19 @@ may already be recorded (its rename failed), and only `-resume`'s reconciliation
 
 ## Why splits need no transaction
 
-Splits are owner-only (no thieves), so there is no stale-snapshot race and no compare-and-swap. A split moves
-DECIDED (its boundaries appended to the provider's list, in memory, under the provider mutex) → DURABLE (taken
-into the next part's record) → CHILDREN_EMITTED. Resume correctness depends only on K. The boundaries only
-choose how `(K, ⊤]` is cut, and every cut is a valid tiling. A split that never became durable costs
-parallelism on resume, never a key. The only work under the split mutex is the in-memory append.
+Splits are owner-only (no thieves), so there is no stale-snapshot race and no compare-and-swap, and they are
+never durable: resume correctness depends only on K, and any tiling of `(K, ⊤]` is valid. Nothing blocks
+under the split mutex.
 
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 4 (version 3 made the identity and the checkpoint provider-neutral, version 4 writes part
-bounds as base64;
+the payload, and the payload (JSON); journal version 5 (version 3 made the identity provider-neutral, version 4 writes part
+bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest;
 an older journal is refused, so an interrupted run of an older build is finished with that build or started
 over with `-overwrite`). The first frame is the header (tool, format, identity, creation time).
-Every later frame is a part record, with the ordinals dense from 0. One writer goroutine owns the file;
-`Append` returns after `fsync`.
+Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after
+`fsync`; its one caller is the ordered committer.
 
 An incomplete last frame, or a bad checksum on the last frame, is a torn tail, unless a part is published
 under its final name beyond the recorded ones. A rename only follows an acknowledged record, so such a part

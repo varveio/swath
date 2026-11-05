@@ -11,7 +11,7 @@ import (
 )
 
 func part(i int, lo, hi string, n int64) Part {
-	return Part{Path: TempPath("/x", i), MinKey: Key(lo), MaxKey: Key(hi), Rows: n}
+	return Part{Path: TempPath("/x", i), PartInfo: PartInfo{MinKey: Key(lo), MaxKey: Key(hi), Rows: n}}
 }
 
 func TestCheck(t *testing.T) {
@@ -108,7 +108,7 @@ func TestPublishFailureLeavesNoManifest(t *testing.T) {
 	touch(t, TempPath(out, 0))
 	// A non-empty directory where manifest.json goes makes the commit fail.
 	touch(t, filepath.Join(out, ManifestName, "blocker"))
-	err := Publish(out, Meta{SchemaID: id}, []Part{{Path: TempPath(out, 0), Rows: 1, MinKey: "a", MaxKey: "a"}})
+	err := Publish(out, Meta{SchemaID: id}, []Part{{Path: TempPath(out, 0), PartInfo: PartInfo{Rows: 1, MinKey: "a", MaxKey: "a"}}})
 	if err == nil {
 		t.Fatal("publish succeeded")
 	}

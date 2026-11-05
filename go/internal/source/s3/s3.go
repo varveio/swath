@@ -64,8 +64,7 @@ type Options struct {
 
 // Resume restarts a listing after the last published key.
 type Resume struct {
-	After      string   // the last published key: every key <= After is in the dataset
-	Boundaries []string // recorded range boundaries; those above After tile the rest
+	After string // the last published key: every key <= After is in the dataset
 }
 
 // pageKeys is the ListObjectsV2 page size.
@@ -112,7 +111,6 @@ type Provider struct {
 
 	c       *counters.Set // the tally (Counters)
 	mu      sync.Mutex
-	bounds  []string            // range boundaries created since the last TakeBoundaries
 	running map[uint64]*running // ranges in Expand
 	queued  int
 	area    float64 // ∫ active dt, for the mean
@@ -152,17 +150,6 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	p.client, p.region = c, c.Region()
 	p.creds, p.anonymous = c.Credentials()
 	return p, nil
-}
-
-// TakeBoundaries returns the range boundaries (split cursors and pivots,
-// seed cuts) created since the previous call. The journal records them so a
-// resume starts with the same tiling.
-func (p *Provider) TakeBoundaries() []string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	b := p.bounds
-	p.bounds = nil
-	return b
 }
 
 // Stats returns the counters so far.

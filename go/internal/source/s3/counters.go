@@ -95,7 +95,7 @@ var Counters = []counters.Def{
 	d("split.skipped.not_continuing", counters.Count, "decisions", "the range's last page did not continue", "split"),
 	d("child_empty.lower", counters.Count, "ranges", "lower split children that listed no key (the cost of not probing)", "split"),
 	d("child_empty.upper", counters.Count, "ranges", "upper split children that listed no key", "split"),
-	d("resumed_ranges", counters.Count, "ranges", "tiles of (K, ⊤] a resume started with", "resume"),
+	d("resumed_ranges", counters.Count, "ranges", "ranges a resume started with: (K, ⊤]", "resume"),
 	d("max_active", counters.Max, "ranges", "peak ranges in Expand at once"),
 	d("max_queued", counters.Max, "ranges", "peak ranges queued for a worker", "split"),
 	d("busy_ns", counters.Count, "ns", "sum of Expand wall time"),

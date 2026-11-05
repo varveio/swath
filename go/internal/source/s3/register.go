@@ -5,8 +5,6 @@ package s3
 
 import (
 	"context"
-	"encoding/binary"
-	"errors"
 	"flag"
 	"fmt"
 	"strconv"
@@ -111,53 +109,10 @@ func NormalizeEndpoint(e string) string {
 
 func (o *opened) Capabilities() source.Capabilities { return source.Capabilities{Resume: true} }
 
-// Checkpoint descriptors are version 1: the version byte, then the range
-// boundaries (split cursors and pivots, seed cuts) created since the
-// previous checkpoint, each a uvarint length and the key, at most
-// maxCheckpointBounds of them (the most recent), so the journal grows with
-// parts, not splits. Boundaries only shape the restart's tiling.
-const (
-	checkpointV1        = 1
-	maxCheckpointBounds = 4096
-)
-
-func (o *opened) Checkpoint() []byte {
-	b := o.p.TakeBoundaries()
-	if len(b) > maxCheckpointBounds {
-		b = b[len(b)-maxCheckpointBounds:]
-	}
-	if len(b) == 0 {
-		return nil
-	}
-	buf := []byte{checkpointV1}
-	for _, k := range b {
-		buf = binary.AppendUvarint(buf, uint64(len(k)))
-		buf = append(buf, k...)
-	}
-	return buf
-}
-
-var errCheckpoint = errors.New("s3: unreadable checkpoint descriptor")
-
-func (o *opened) Restart(after string, checkpoints [][]byte) error {
-	var bounds []string
-	for _, c := range checkpoints {
-		if len(c) == 0 {
-			continue
-		}
-		if c[0] != checkpointV1 {
-			return fmt.Errorf("s3: checkpoint version %d is not supported (this tool writes %d)", c[0], checkpointV1)
-		}
-		for c = c[1:]; len(c) > 0; {
-			n, k := binary.Uvarint(c)
-			if k <= 0 || uint64(len(c)-k) < n {
-				return errCheckpoint
-			}
-			bounds = append(bounds, string(c[k:k+int(n)]))
-			c = c[k+int(n):]
-		}
-	}
-	o.p.opt.Resume = &Resume{After: after, Boundaries: bounds}
+// Restart continues after the last published key, from the normal
+// start-up: one range (after, ⊤], split as on a fresh run.
+func (o *opened) Restart(after string) error {
+	o.p.opt.Resume = &Resume{After: after}
 	return nil
 }
 

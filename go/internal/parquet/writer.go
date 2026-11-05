@@ -283,8 +283,8 @@ func (w *writer[P]) close() (dataset.Part, error) {
 		return dataset.Part{}, fmt.Errorf("close %s: %w", w.file.Name(), err)
 	}
 	return dataset.Part{
-		Path: w.file.Name(), Rows: w.rows, Bytes: w.out.n,
-		MD5: hex.EncodeToString(w.out.digest.Sum(nil)), MinKey: dataset.Key(w.minKey), MaxKey: dataset.Key(strings.Clone(w.maxKey)),
+		Path: w.file.Name(), PartInfo: dataset.PartInfo{Rows: w.rows, Bytes: w.out.n,
+			MD5: hex.EncodeToString(w.out.digest.Sum(nil)), MinKey: dataset.Key(w.minKey), MaxKey: dataset.Key(strings.Clone(w.maxKey))},
 	}, nil
 }
 

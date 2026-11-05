@@ -153,9 +153,8 @@ sink-wait time.
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
-**Resume.** The provider is `source.Resumable`. `Checkpoint` returns a version-1 descriptor: the split
-cursors, pivots and seed cuts made since the previous part (at most 4,096, the most recent). `Restart(K,
-checkpoints)` makes the root a tiling of `(K, ⊤]` at those boundaries ([durability.md](durability.md)).
+**Resume.** The provider is `source.Resumable`: `Restart(K)` makes the root one range `(K, ⊤]`, split as on
+a fresh run ([durability.md](durability.md)).
 
 **What the full engine adds** (later steps, each by measured need; the 1-key probe is ported):
 structure and `max_keys=1` probes; density-aware pivots from probes; the owner gate chain, pacing and futility
@@ -177,7 +176,7 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 | Interface | Meaning | S3 | fs |
 |---|---|---|---|
 | `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `NormalizeEndpoint`), region, fetch owner | – |
-| `Resumable` | `Checkpoint() []byte` per part, `Restart(after, checkpoints)` before `Root`; descriptors are opaque to the journal and versioned by the provider | boundaries, version 1 | – |
+| `Resumable` | `Restart(after)` before `Root`: list only keys after the last published key | `(K, ⊤]` | – |
 | `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | – |
 | `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | yes |
 | `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `listing` |
@@ -196,8 +195,8 @@ explicit:
 - **Bounds:** explicit bound inclusivity per provider, as S3's `(lo, hi]` is today; no per-range
   comparators (output order is always unsigned bytes).
 - **Bounded cost:** one `Rows` call has a bounded cost; no unbounded in-memory directory or page.
-- **Restart:** an opaque, versioned restart descriptor, which the journal stores instead of S3 boundaries.
-  Built: `source.Resumable`.
+- **Restart:** start after a key; the journal stores no provider state (built: `source.Resumable`). A
+  provider that can only replay tokens must re-list to the key or declare `Capabilities.Resume` false.
 - **Disposal:** a cancelled run releases every queued range's resources. Built: `source.Disposer`; the order
   stage disposes ranges it never expands, including children an `Expand` emitted before failing. Filesystem
   chunks release their shared directory descriptor this way (`TestCancelReleasesChunkFDs`).

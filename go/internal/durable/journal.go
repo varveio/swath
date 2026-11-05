@@ -4,16 +4,14 @@
 // Package durable keeps a run's progress on disk so an interrupted listing
 // resumes without re-listing published keys and without skipping any.
 //
-// Durability is per part. Before a part is renamed into data/, one record
-// is appended to an append-only journal and fsynced: the part (ordinal,
-// rows, size, MD5, min and max key), the router's frozen part limit, and
-// the source's checkpoint: an opaque, provider-versioned descriptor of
-// what it learned since the previous record (for S3, the range boundaries
-// it created). A resume keeps the published parts, drops nothing it has not
-// listed, and has the source restart after K, the last published part's
-// max key, with every checkpoint (S3 tiles (K, ⊤] by the boundaries so it
-// starts as parallel as the run was). A checkpoint only shapes the
-// restart: one the journal never saw costs parallelism, never correctness.
+// The journal is about committed output only. Before a part is renamed
+// into data/, one record is appended and fsynced: the part (ordinal and
+// dataset.PartInfo: rows, size, MD5, min and max key) and the writer state
+// needed to continue (the router's frozen part limit, the running row
+// total). A resume keeps the published parts and has the source restart
+// after K, the last published part's max key, from its normal start-up:
+// no scheduling history is kept (a restart may ramp up more slowly, never
+// list less).
 //
 // The journal (out/.swath/journal) is a sequence of frames: a 4-byte
 // little-endian payload length, a 4-byte CRC-32C of the payload, and the
@@ -32,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -61,21 +60,19 @@ type Header struct {
 
 // Record is one durable step: a part published.
 type Record struct {
-	Type       string       `json:"type"` // "part"
-	Part       dataset.Part `json:"part"`
-	Ordinal    int          `json:"ordinal"`
-	Limit      int64        `json:"limit"`                // the router's frozen logical bytes per part (0 before part 0 closes)
-	RowsTotal  int64        `json:"rows_total"`           // rows in parts 0..Ordinal
-	Checkpoint []byte       `json:"checkpoint,omitempty"` // the source's, opaque here (source.Resumable)
-	Final      bool         `json:"final,omitempty"`      // the last part (file_final): the listing is complete
+	Type      string           `json:"type"` // "part"
+	Ordinal   int              `json:"ordinal"`
+	Part      dataset.PartInfo `json:"part"`
+	Limit     int64            `json:"limit"`           // the router's frozen logical bytes per part (0 before part 0 closes)
+	RowsTotal int64            `json:"rows_total"`      // rows in parts 0..Ordinal
+	Final     bool             `json:"final,omitempty"` // the last part: the listing is complete
 }
 
 // State is what a journal says about a run.
 type State struct {
-	Header      Header
-	Records     []Record
-	Checkpoints [][]byte // every non-empty checkpoint, in record order
-	TornBytes   int64    // bytes after the last whole frame (ignored)
+	Header    Header
+	Records   []Record
+	TornBytes int64 // bytes after the last whole frame (ignored)
 }
 
 // Last is the last record, or nil.
@@ -86,17 +83,13 @@ func (s *State) Last() *Record {
 	return &s.Records[len(s.Records)-1]
 }
 
-// Journal appends records with one writer goroutine; Append returns once
-// the record is on disk. The caller holds the output's Lock.
+// Journal appends records; Append returns once the record is on disk. Its
+// one caller is the ordered committer (the part router publishes parts in
+// ordinal order, one at a time); the mutex only makes misuse safe. The
+// caller holds the output's Lock.
 type Journal struct {
-	f    *os.File
-	reqs chan req
-	done chan struct{}
-}
-
-type req struct {
-	payload []byte
-	ack     chan error
+	mu sync.Mutex
+	f  *os.File
 }
 
 // Create starts a new journal at Path(out), replacing any old one, with
@@ -184,35 +177,7 @@ func (l *Lock) Release() {
 	}
 }
 
-func start(f *os.File) *Journal {
-	j := &Journal{f: f, reqs: make(chan req), done: make(chan struct{})}
-	go j.writer()
-	return j
-}
-
-// writer is the only goroutine that touches the file.
-func (j *Journal) writer() {
-	defer close(j.done)
-	var hdr [8]byte
-	for r := range j.reqs {
-		binary.LittleEndian.PutUint32(hdr[:4], uint32(len(r.payload)))
-		binary.LittleEndian.PutUint32(hdr[4:], frameCRC(hdr[:4], r.payload))
-		err := faults.At("journal-append")
-		if err == nil {
-			_, err = j.f.Write(append(hdr[:], r.payload...))
-		}
-		if err == nil {
-			err = faults.At("journal-sync")
-		}
-		if err == nil {
-			err = j.f.Sync()
-		}
-		if err != nil {
-			err = fmt.Errorf("journal: %w", err)
-		}
-		r.ack <- err
-	}
-}
+func start(f *os.File) *Journal { return &Journal{f: f} }
 
 // Append writes rec and returns after it is synced.
 func (j *Journal) Append(rec Record) error {
@@ -228,20 +193,36 @@ func (j *Journal) append(v any) error {
 	if len(payload) > maxFrame {
 		return fmt.Errorf("journal: record of %d bytes exceeds %d", len(payload), maxFrame)
 	}
-	ack := make(chan error, 1)
-	j.reqs <- req{payload, ack}
-	return <-ack
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var hdr [8]byte
+	binary.LittleEndian.PutUint32(hdr[:4], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(hdr[4:], frameCRC(hdr[:4], payload))
+	err = faults.At("journal-append")
+	if err == nil {
+		_, err = j.f.Write(append(hdr[:], payload...))
+	}
+	if err == nil {
+		err = faults.At("journal-sync")
+	}
+	if err == nil {
+		err = j.f.Sync()
+	}
+	if err != nil {
+		return fmt.Errorf("journal: %w", err)
+	}
+	return nil
 }
 
-// Close stops the writer, closes the file and releases the lock.
+// Close closes the file.
 func (j *Journal) Close() error {
-	close(j.reqs)
-	<-j.done
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	return j.f.Close()
 }
 
 // Version is the journal format this tool writes and reads.
-const Version = 4
+const Version = 5
 
 // frameCRC covers the length field and the payload, so a damaged length
 // cannot pass for a different frame boundary.
@@ -329,9 +310,6 @@ func decode(r io.Reader) (*State, error) {
 			return nil, fmt.Errorf("journal: record for part %d after %d records", rec.Ordinal, len(st.Records))
 		}
 		st.Records = append(st.Records, rec)
-		if len(rec.Checkpoint) > 0 {
-			st.Checkpoints = append(st.Checkpoints, rec.Checkpoint)
-		}
 	}
 }
 

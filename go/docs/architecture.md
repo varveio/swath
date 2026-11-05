@@ -34,7 +34,7 @@ There is no external sort, no staging and no merge.
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]`), `Info` | – |
 | `internal/parquet` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order | faults |
-| `internal/durable` | the journal (CRC-framed records, one writer goroutine), resume identity | dataset |
+| `internal/durable` | the journal (CRC-framed records of committed parts, synchronous appends by the ordered committer), resume identity | dataset |
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
 | `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
 
@@ -60,7 +60,7 @@ router for `P` (Go has no generic methods, so the binding happens where `P` is k
   worker has claimed it, so a full buffer cannot deadlock the walk.
 - **Publication**: with a journal (S3 with `-out`), each encoder goroutine publishes its part when it closes,
   after the previous part's publication (a channel per part keeps ordinal order): journal record, then
-  rename. See [internals/durability.md](internals/durability.md).
+  rename. That chain is the one ordered committer; the journal's append is a synchronous call. See [internals/durability.md](internals/durability.md).
 - **Encoders**: the router starts one goroutine per open part, at most `Encoders` at a time (a semaphore
   channel), each with its own writer and zstd encoder, fed through a bounded channel. When fewer parts than
   encoders are open, a part encodes a page's columns on several goroutines; the bytes are identical.

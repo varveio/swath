@@ -132,7 +132,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		}
 	}
 	if last := jr.last(); last != nil {
-		if err := jr.src.Restart(string(last.Part.MaxKey), jr.state.Checkpoints); err != nil {
+		if err := jr.src.Restart(string(last.Part.MaxKey)); err != nil {
 			jr.close()
 			return sum.failed(err)
 		}

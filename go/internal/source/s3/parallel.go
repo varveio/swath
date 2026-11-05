@@ -4,8 +4,6 @@
 package s3
 
 import (
-	"slices"
-
 	"context"
 	"errors"
 	"fmt"
@@ -32,7 +30,7 @@ const (
 	interval kind = iota
 	whole         // sequential oracle: the scope as one continuation chain
 	seed          // one delimiter page that emits the first tiling
-	resume        // the tiling of (after, ⊤] from a journal's boundaries
+	resume        // (after, ⊤] after a journaled run's last published key
 )
 
 type origin uint8
@@ -92,41 +90,23 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	return p.expandRange(ctx, r, e)
 }
 
-// expandResume tiles (after, ⊤] at the recorded boundaries above after:
-// (after, b1], …, (bn, ⊤]. It lists nothing itself.
+// expandResume hands on (after, ⊤], the rest of the scope after a
+// journaled run's last published key; splits ramp it up as on a fresh run.
+// It lists nothing itself.
 func (p *Provider) expandResume(e source.Emitter[Range, Object]) error {
 	after := p.opt.Resume.After
-	cuts := make([]string, 0, len(p.opt.Resume.Boundaries))
-	for _, b := range p.opt.Resume.Boundaries {
-		if b > after {
-			cuts = append(cuts, b)
-		}
-	}
-	slices.Sort(cuts)
-	cuts = slices.Compact(cuts)
 	p.mu.Lock()
-	tiles := make([]Range, 0, len(cuts)+1)
-	lo := after
-	for _, c := range cuts {
-		tiles = append(tiles, Range{lo: lo, hi: c, id: p.ids.Add(1), born: fromSeed})
-		lo = c
-	}
-	tiles = append(tiles, Range{lo: lo, open: true, id: p.ids.Add(1), born: fromSeed})
+	t := Range{lo: after, open: true, id: p.ids.Add(1), born: fromSeed}
 	// K is a real key and may hold scalars S3 refuses in start-after: start
-	// the first tile at its safe prefix and drop keys up to K there.
+	// at its safe prefix and drop keys up to K there.
 	if s := safePrefix(after); s != after {
-		tiles[0].lo, tiles[0].after = s, after
+		t.lo, t.after = s, after
 	}
-	p.queued += len(tiles)
+	p.queued++
 	p.c.Max(cMaxQueued, int64(p.queued))
-	p.c.Set(cResumedRanges, int64(len(tiles)))
+	p.c.Set(cResumedRanges, 1)
 	p.mu.Unlock()
-	for _, t := range tiles {
-		if err := e.Child(t); err != nil {
-			return err
-		}
-	}
-	return nil
+	return e.Child(t)
 }
 
 // account integrates the active count over time; mu held.
@@ -399,7 +379,6 @@ func (p *Provider) commit(st *running, r Range, c, m string, extrapolated, ok bo
 		p.c.Inc(cSplitAcceptedBounded)
 	}
 	p.c.Max(cMaxQueued, int64(p.queued))
-	p.bounds = append(p.bounds, c, m) // in memory: the journal takes them at the next part
 	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower}
 	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper}
 	if os.Getenv("SWATH_LOCAL_SPLIT_TRACE") != "" {
@@ -527,9 +506,6 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range, Objec
 		lo = sentinel
 	}
 	tiles = append(tiles, Range{lo: lo, open: true, id: p.ids.Add(1), born: fromSeed})
-	for _, t := range tiles[1:] {
-		p.bounds = append(p.bounds, t.lo)
-	}
 	p.queued += len(tiles)
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.c.Inc(cPages)

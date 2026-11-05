@@ -40,14 +40,20 @@ func (k *Key) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Part is the close-gated metadata of one written part.
-type Part struct {
-	Path   string `json:"path"` // temporary path while unpublished, the final path once published
+// PartInfo is what is durable about a part, shared by the manifest and the
+// journal's recovery records: its rows, size, digest and exact key bounds.
+type PartInfo struct {
 	Rows   int64  `json:"rows"`
 	Bytes  int64  `json:"bytes"`
-	MD5    string `json:"md5"`
 	MinKey Key    `json:"min_key_base64"`
 	MaxKey Key    `json:"max_key_base64"`
+	MD5    string `json:"md5"`
+}
+
+// Part is a written part at run time: its file and its PartInfo.
+type Part struct {
+	Path string // temporary path while unpublished, the final path once published
+	PartInfo
 }
 
 // Check is the publication gate: dense ordinals (part i at TempPath i, or
@@ -116,15 +122,11 @@ type Coverage struct {
 	ListingFinishedAt time.Time `json:"listing_finished_at"`
 }
 
-// ManifestPart is one part in the manifest. Keys are exact (never
-// truncated) and base64; path is relative to the dataset root.
+// ManifestPart is one part in the manifest: its path, relative to the
+// dataset root, and its PartInfo (keys exact, never truncated, base64).
 type ManifestPart struct {
-	Path   string `json:"path"`
-	Rows   int64  `json:"rows"`
-	Bytes  int64  `json:"bytes"`
-	MinKey Key    `json:"min_key_base64"`
-	MaxKey Key    `json:"max_key_base64"`
-	MD5    string `json:"md5"`
+	Path string `json:"path"`
+	PartInfo
 }
 
 // Meta is what Publish needs beyond the parts.
@@ -171,8 +173,7 @@ func Publish(out string, meta Meta, parts []Part) error {
 				return fmt.Errorf("publish part %d: %w", i, err)
 			}
 		}
-		m.Parts = append(m.Parts, ManifestPart{Path: DataDir + "/" + PartName(i), Rows: p.Rows, Bytes: p.Bytes,
-			MinKey: p.MinKey, MaxKey: p.MaxKey, MD5: p.MD5})
+		m.Parts = append(m.Parts, ManifestPart{Path: DataDir + "/" + PartName(i), PartInfo: p.PartInfo})
 	}
 	if err := syncDir(data); err != nil {
 		return fmt.Errorf("sync data directory: %w", err)

@@ -162,7 +162,7 @@ func recoverParts(out string, st *durable.State) error {
 			return fmt.Errorf("resume: part %d: %w", i, err)
 		}
 		if path != final {
-			if _, err := dataset.PublishPart(out, i, rec.Part); err != nil {
+			if _, err := dataset.PublishPart(out, i, dataset.Part{Path: path, PartInfo: rec.Part}); err != nil {
 				return fmt.Errorf("resume: %w", err)
 			}
 		}
@@ -192,7 +192,7 @@ func recoverParts(out string, st *durable.State) error {
 // ErrPartAltered reports a retained part that does not match its record.
 var ErrPartAltered = errors.New("retained part does not match its journal record")
 
-func verifyPart(path string, want dataset.Part) error {
+func verifyPart(path string, want dataset.PartInfo) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -255,22 +255,22 @@ func (jr *journal) routerOptions(o *parquet.Options) {
 	if last := jr.last(); last != nil {
 		parts := make([]dataset.Part, len(jr.state.Records))
 		for i, rec := range jr.state.Records {
-			parts[i] = rec.Part
-			parts[i].Path = filepath.Join(jr.out, dataset.DataDir, dataset.PartName(i))
+			parts[i] = dataset.Part{Path: filepath.Join(jr.out, dataset.DataDir, dataset.PartName(i)), PartInfo: rec.Part}
 		}
 		o.Resume = &parquet.Resume{Parts: parts, Limit: last.Limit, Rows: last.RowsTotal}
 	}
 	o.Publish = jr.publish
 }
 
-// publish is commit-before-emit at part granularity: the record (the part,
-// the frozen limit, the source's checkpoint) is synced before the part is
-// renamed into the dataset.
+// publish is commit-before-emit at part granularity: the record (the part
+// and the writer state) is synced before the part is renamed into the
+// dataset. The router calls it for one part at a time, in ordinal order: it
+// is the one ordered committer.
 func (jr *journal) publish(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
 	if err := faults.At("part-closed"); err != nil {
 		return p, err
 	}
-	if err := jr.j.Append(durable.Record{Part: p, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Checkpoint: jr.src.Checkpoint(), Final: final}); err != nil {
+	if err := jr.j.Append(durable.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final}); err != nil {
 		return p, err
 	}
 	if err := faults.At("recorded"); err != nil {

@@ -77,7 +77,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.skipped.not_continuing` | count | decisions | split | the range's last page did not continue |
 | `child_empty.lower` | count | ranges | split | lower split children that listed no key (the cost of not probing) |
 | `child_empty.upper` | count | ranges | split | upper split children that listed no key |
-| `resumed_ranges` | count | ranges | resume | tiles of (K, ⊤] a resume started with |
+| `resumed_ranges` | count | ranges | resume | ranges a resume started with: (K, ⊤] |
 | `max_active` | max | ranges |  | peak ranges in Expand at once |
 | `max_queued` | max | ranges | split | peak ranges queued for a worker |
 | `busy_ns` | count | ns |  | sum of Expand wall time |

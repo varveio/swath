@@ -64,7 +64,7 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 3 {
-		if err := j.Append(Record{Ordinal: i, Part: dataset.Part{Rows: 10, MaxKey: dataset.Key(string(rune('a' + i)))}, RowsTotal: int64(10 * (i + 1)), Checkpoint: []byte{byte('k' + i)}}); err != nil {
+		if err := j.Append(Record{Ordinal: i, Part: dataset.PartInfo{Rows: 10, MaxKey: dataset.Key(string(rune('a' + i)))}, RowsTotal: int64(10 * (i + 1))}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -76,7 +76,7 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if Check(st.Header.Identity, id) != nil || len(st.Records) != 3 || st.Last().RowsTotal != 30 || len(st.Checkpoints) != 3 || st.TornBytes != 7 {
+	if Check(st.Header.Identity, id) != nil || len(st.Records) != 3 || st.Last().RowsTotal != 30 || st.TornBytes != 7 {
 		t.Fatalf("%+v", st)
 	}
 	j, err = Reopen(out, st)
@@ -117,7 +117,7 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	}
 	lock.Release()
 	for i := range 3 {
-		j.Append(Record{Ordinal: i, Part: dataset.Part{MaxKey: "k"}})
+		j.Append(Record{Ordinal: i, Part: dataset.PartInfo{MaxKey: "k"}})
 	}
 	j.Close()
 	b, _ := os.ReadFile(Path(out))
