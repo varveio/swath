@@ -18,8 +18,11 @@ go vet ./... && go test -race ./...
 `swath-local list s3://bucket[/prefix] -out DIR` lists a bucket with ListObjectsV2 and writes the same dataset
 layout with Swath's canonical 13-column schema (contracts §4), so a Swath dataset reader (Varve) opens it.
 Credentials come from the default AWS chain; with none, requests are anonymous. `-endpoint` and
-`-path-style` point it at S3-compatible stores; `-seed` lists the root's common prefixes in parallel;
-`-max-keys` stops early for experiments (the dataset is then marked incomplete). The manifest records
+`-path-style` point it at S3-compatible stores. The keyspace is listed as `(lo, hi]` ranges in parallel: a
+range splits itself at a page boundary when workers are idle (DESIGN.md, "S3"); `-seed` first tiles it
+from one delimiter page; `-sequential` lists with one continuation-token chain instead (the reference, and
+the only mode where `-max-keys` stops early for experiments, marking the dataset incomplete). The JSON
+summary reports pages, requests, retries, splits by outcome, empty split children and peak concurrency. The manifest records
 `sourceBucket`, and `_swath_summary.json` records the listed target (`s3://bucket` or `s3://bucket/prefix`)
 so readers can tell a whole-bucket dataset from a prefix one. `bench/s3fake` serves a gofakes3 bucket loaded
 from a key list, for tests and benchmarks without credentials.
@@ -47,7 +50,7 @@ usage: swath-local list <root> [flags]
   -json
     	print the summary as JSON
   -max-keys int
-    	S3: stop after this many objects (experiments; the dataset is marked incomplete)
+    	S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)
   -memory bytes
     	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -no-dirs
@@ -65,7 +68,9 @@ usage: swath-local list <root> [flags]
   -region string
     	S3: region (default us-east-1)
   -seed
-    	S3: list the root with delimiter / and its common prefixes in parallel
+    	S3: tile the keyspace from one delimiter page before splitting
+  -sequential
+    	S3: list with one continuation-token chain (no ranges; the reference)
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 

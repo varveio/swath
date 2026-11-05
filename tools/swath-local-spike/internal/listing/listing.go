@@ -44,8 +44,9 @@ type S3Config struct {
 	Endpoint, Region string
 	PathStyle        bool
 	FetchOwner       bool
-	Seed             bool  // list the root's common prefixes in parallel
-	MaxKeys          int64 // stop after this many objects (experiments)
+	Sequential       bool  // one continuation-token chain (the reference oracle)
+	Seed             bool  // tile the scope from one delimiter page first
+	MaxKeys          int64 // stop after this many objects (sequential only; experiments)
 	Client           s3.API
 }
 
@@ -176,7 +177,8 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 	sum.Root, sum.SchemaID = cfg.Root, s.ID
 	p, err := s3.New(ctx, s3.Options{
 		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, PathStyle: cfg.S3.PathStyle,
-		FetchOwner: cfg.S3.FetchOwner, Seed: cfg.S3.Seed, MaxKeys: cfg.S3.MaxKeys, Client: cfg.S3.Client,
+		FetchOwner: cfg.S3.FetchOwner, Sequential: cfg.S3.Sequential, Seed: cfg.S3.Seed, Workers: cfg.Workers,
+		MaxKeys: cfg.S3.MaxKeys, Client: cfg.S3.Client,
 	})
 	if err != nil {
 		return sum, err

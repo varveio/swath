@@ -48,7 +48,7 @@ type options struct {
 	partSize, memory         size
 	endpoint, region         string
 	pathStyle, fetchOwner    bool
-	seed                     bool
+	seed, sequential         bool
 	maxKeys                  int64
 }
 
@@ -70,8 +70,9 @@ func newFlags(o *options) *flag.FlagSet {
 	f.StringVar(&o.region, "region", "", "S3: region (default us-east-1)")
 	f.BoolVar(&o.pathStyle, "path-style", false, "S3: path-style addressing")
 	f.BoolVar(&o.fetchOwner, "fetch-owner", false, "S3: fill owner_id and owner_display_name")
-	f.BoolVar(&o.seed, "seed", false, "S3: list the root with delimiter / and its common prefixes in parallel")
-	f.Int64Var(&o.maxKeys, "max-keys", 0, "S3: stop after this many objects (experiments; the dataset is marked incomplete)")
+	f.BoolVar(&o.seed, "seed", false, "S3: tile the keyspace from one delimiter page before splitting")
+	f.BoolVar(&o.sequential, "sequential", false, "S3: list with one continuation-token chain (no ranges; the reference)")
+	f.Int64Var(&o.maxKeys, "max-keys", 0, "S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)")
 	f.BoolVar(&o.json, "json", false, "print the summary as JSON")
 	f.SetOutput(io.Discard)
 	return f
@@ -121,7 +122,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		Root: root, Replace: o.overwrite, Fields: fields, NoDirs: o.noDirs, NoLinks: o.noLnk,
 		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
 		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable",
-		S3:       listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle, FetchOwner: o.fetchOwner, Seed: o.seed, MaxKeys: o.maxKeys},
+		S3:       listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle, FetchOwner: o.fetchOwner, Seed: o.seed, Sequential: o.sequential, MaxKeys: o.maxKeys},
 	}
 	if !o.countOnly {
 		cfg.Out = o.out
@@ -141,7 +142,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return enc.Encode(sum)
 	}
 	if st := sum.S3; st != nil {
-		fmt.Fprintf(stdout, "objects=%d bytes=%d pages=%d retries=%d seed_prefixes=%d truncated=%v ", st.Objects, st.Bytes, st.Pages, st.Retries, st.Prefixes, st.Truncated)
+		fmt.Fprintf(stdout, "objects=%d bytes=%d pages=%d requests=%d retries=%d splits=%d child_empty=%d max_active=%d truncated=%v ",
+			st.Objects, st.Bytes, st.Pages, st.Requests, st.Retries, st.Split.AcceptedBounded+st.Split.AcceptedFrontier,
+			st.ChildEmpty.Lower+st.ChildEmpty.Upper, st.MaxActive, st.Truncated)
 	}
 	if st := sum.Listing; st != nil {
 		fmt.Fprintf(stdout, "files=%d dirs=%d bytes=%d errors=%d ", st.Files, st.Dirs, st.Bytes, st.Errors())

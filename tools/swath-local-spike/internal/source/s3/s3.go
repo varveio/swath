@@ -1,12 +1,14 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package s3 is the S3 listing provider. A range is a key prefix listed with
-// ListObjectsV2, whose pages arrive in UTF-8 binary (unsigned byte) key
-// order, so each page is emitted as it arrives. The root range may instead
-// be a delimiter seed: one delimited listing of the root whose objects are
-// rows and whose common prefixes become child ranges, listed in parallel by
-// the order stage.
+// Package s3 is the S3 listing provider. ListObjectsV2 returns keys in UTF-8
+// binary (unsigned byte) order, so every page can be emitted as it arrives.
+//
+// By default ranges are key intervals (lo, hi] listed in parallel: the root
+// is (⊥, ⊤] or, with Seed, one delimiter page that tiles the scope; a range
+// whose owner sees idle workers splits itself at a page boundary into
+// (cursor, pivot] and (pivot, hi] (see parallel.go). With Sequential the
+// whole scope is one continuation-token chain: the reference oracle.
 package s3
 
 import (
@@ -40,9 +42,16 @@ type Options struct {
 	Region     string // default us-east-1
 	PathStyle  bool
 	FetchOwner bool
-	Seed       bool  // list the root with delimiter "/" and its prefixes in parallel
-	MaxKeys    int64 // stop after this many objects (sequential listing only; 0 = all)
+	Sequential bool  // one continuation-token chain, no ranges (the oracle)
+	Seed       bool  // parallel: tile the scope from one delimiter page first
+	Workers    int   // parallel: the order stage's worker count (split demand)
+	MaxKeys    int64 // stop after this many objects (sequential only; 0 = all)
 	Client     API   // optional; built from the options above when nil
+
+	// Test hooks: splitCoin replaces the demand gate; trace receives every
+	// interval an Expand covered, (lo, hi] or (lo, ⊤].
+	splitCoin func() bool
+	trace     func(lo, hi string, open bool)
 }
 
 // pageKeys is the ListObjectsV2 page size.
@@ -61,21 +70,61 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 	return bucket, prefix, nil
 }
 
-// Stats count what a listing did.
+// Stats count what a listing did. Split and seed counters say which
+// algorithm paths engaged and what constrained them.
 type Stats struct {
-	Objects   int64 `json:"objects"`
-	Bytes     int64 `json:"bytes"`
-	Pages     int64 `json:"pages"`
-	Prefixes  int64 `json:"seed_prefixes"`
-	Retries   int64 `json:"retries"`
-	Anonymous bool  `json:"anonymous"`
-	Truncated bool  `json:"truncated_at_max_keys"`
+	Objects       int64      `json:"objects"`
+	Bytes         int64      `json:"bytes"`
+	Pages         int64      `json:"pages"`
+	Requests      int64      `json:"requests"`
+	Retries       int64      `json:"retries"`
+	OverfetchKeys int64      `json:"overfetch_keys"` // listed past a range's hi and trimmed
+	Anonymous     bool       `json:"anonymous"`
+	Truncated     bool       `json:"truncated_at_max_keys"`
+	Seed          SeedStats  `json:"seed"`
+	Split         SplitStats `json:"split"`
+	ChildEmpty    struct {
+		Lower int64 `json:"lower"`
+		Upper int64 `json:"upper"`
+	} `json:"child_empty"` // split children that listed no key (the cost of not probing)
+	MaxActive  int     `json:"max_active"`
+	MaxQueued  int     `json:"max_queued"`
+	MeanActive float64 `json:"mean_active"` // time-weighted
+	BusyNs     int64   `json:"busy_ns"`     // sum of Expand wall time
+	SinkWaitNs int64   `json:"sink_wait_ns"`
 }
 
-// Range is a key prefix; seed marks the delimited root listing.
-type Range struct {
-	prefix string
-	seed   bool
+// SeedStats describe the one-page seed.
+type SeedStats struct {
+	Prefixes   int64            `json:"prefixes"` // common prefixes returned
+	Cuts       int64            `json:"cuts"`     // cut points used
+	Unsafe     int64            `json:"unsafe"`   // prefixes dropped as unusable start-after values
+	Subsampled bool             `json:"subsampled"`
+	Truncated  bool             `json:"truncated"`
+	Sentinel   bool             `json:"sentinel"`
+	Declined   map[string]int64 `json:"sentinel_declined,omitempty"`
+	Skipped    bool             `json:"skipped"`
+}
+
+// SplitStats count split decisions; every accepted split is a steal for an
+// idle worker.
+type SplitStats struct {
+	Considered       int64 `json:"considered"`
+	Extrapolated     int64 `json:"pivot_extrapolated"` // pivots from page density (else midpoint/reflection)
+	AcceptedBounded  int64 `json:"accepted_bounded"`
+	AcceptedFrontier int64 `json:"accepted_frontier"`
+	Rejected         struct {
+		Cursor       int64 `json:"cursor"`
+		Bound        int64 `json:"bound"`
+		Done         int64 `json:"done"`
+		NoPivot      int64 `json:"no_pivot"`
+		UnsafeCursor int64 `json:"unsafe_cursor"`
+	} `json:"rejected"`
+	Skipped struct {
+		NoDemand      int64 `json:"no_demand"`
+		Outranked     int64 `json:"outranked"`
+		NotContinuing int64 `json:"not_continuing"`
+	} `json:"skipped"`
 }
 
 // Provider lists one bucket (or prefix). It implements source.Provider[Range].
@@ -85,22 +134,35 @@ type Provider struct {
 	retries   *atomic.Int64
 	anonymous bool
 	objects   atomic.Int64
-	mu        sync.Mutex
-	stats     Stats
+	ids       atomic.Uint64
+	start     time.Time
+
+	mu      sync.Mutex
+	stats   Stats
+	running map[uint64]*running // ranges in Expand
+	queued  int
+	area    float64 // ∫ active dt, for the mean
+	areaAt  time.Time
 }
 
 var _ source.Provider[Range] = (*Provider)(nil)
 
 // New builds the client: the default credential chain, or anonymous access
-// when it finds no credentials; the SDK's standard retryer, counted.
+// when it finds none; the SDK's standard retryer (9 attempts, backoff up to
+// 5 s), counted.
 func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.Bucket == "" {
 		return nil, errors.New("no bucket")
 	}
-	if opt.Seed && opt.MaxKeys > 0 {
-		return nil, errors.New("a key limit needs the sequential listing (no seed)")
+	if !opt.Sequential && opt.MaxKeys > 0 {
+		return nil, errors.New("a key limit needs the sequential listing")
 	}
-	p := &Provider{opt: opt, client: opt.Client, retries: new(atomic.Int64)}
+	if opt.Workers < 1 {
+		opt.Workers = 1
+	}
+	now := time.Now()
+	p := &Provider{opt: opt, client: opt.Client, retries: new(atomic.Int64), running: map[uint64]*running{}, start: now, areaAt: now}
+	p.stats.Seed.Declined = map[string]int64{}
 	if p.client != nil {
 		return p, nil
 	}
@@ -108,8 +170,12 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if region == "" {
 		region = "us-east-1"
 	}
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region),
-		config.WithRetryer(func() aws.Retryer { return counting{retry.NewStandard(), p.retries} }))
+	retryer := func() aws.Retryer {
+		return counting{retry.NewStandard(func(o *retry.StandardOptions) {
+			o.MaxAttempts, o.MaxBackoff = 9, 5*time.Second
+		}), p.retries}
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region), config.WithRetryer(retryer))
 	if err != nil {
 		return nil, fmt.Errorf("load AWS configuration: %w", err)
 	}
@@ -139,67 +205,97 @@ func (c counting) RetryDelay(attempt int, err error) (time.Duration, error) {
 	return c.RetryerV2.RetryDelay(attempt, err)
 }
 
-// Root is the bucket or prefix range.
-func (p *Provider) Root() Range { return Range{prefix: p.opt.Prefix, seed: p.opt.Seed} }
-
 // Stats returns the counters so far.
 func (p *Provider) Stats() Stats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.account(time.Now())
 	s := p.stats
+	if el := time.Since(p.start).Seconds(); el > 0 {
+		s.MeanActive = p.area / el
+	}
 	s.Retries = p.retries.Load()
 	s.Anonymous = p.anonymous
 	return s
 }
 
-// Expand lists one range page by page, emitting each page as it arrives.
-func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range]) error {
-	in := &awss3.ListObjectsV2Input{
-		Bucket: aws.String(p.opt.Bucket), Prefix: aws.String(r.prefix),
-		MaxKeys: aws.Int32(pageKeys), FetchOwner: aws.Bool(p.opt.FetchOwner),
+func (p *Provider) list(ctx context.Context, in *awss3.ListObjectsV2Input) (*awss3.ListObjectsV2Output, error) {
+	p.mu.Lock()
+	p.stats.Requests++
+	p.mu.Unlock()
+	out, err := p.client.ListObjectsV2(ctx, in)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("list s3://%s/%s: %w", p.opt.Bucket, p.opt.Prefix, err)
 	}
-	if r.seed {
-		in.Delimiter = aws.String("/")
+	return out, nil
+}
+
+// expandSequential lists the whole scope with one continuation-token chain.
+func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range]) error {
+	in := &awss3.ListObjectsV2Input{
+		Bucket: aws.String(p.opt.Bucket), Prefix: aws.String(p.opt.Prefix),
+		MaxKeys: aws.Int32(pageKeys), FetchOwner: aws.Bool(p.opt.FetchOwner),
 	}
 	last := ""
 	for {
-		out, err := p.client.ListObjectsV2(ctx, in)
+		out, err := p.list(ctx, in)
 		if err != nil {
-			return fmt.Errorf("list s3://%s/%s: %w", p.opt.Bucket, r.prefix, err)
+			return err
 		}
-		rows, prefixes, stop := p.page(out)
-		if r.seed {
-			rows = ownLevel(rows, r.prefix)
+		n := len(out.Contents)
+		stop := false
+		if p.opt.MaxKeys > 0 {
+			left := p.opt.MaxKeys - p.objects.Add(int64(n)) + int64(n)
+			if left <= int64(n) {
+				n, stop = int(max(0, left)), true
+			}
 		}
-		if err := emitPage(rows, prefixes, &last, e); err != nil {
+		rows := p.rows(out, n)
+		for i := range rows {
+			if last != "" && rows[i].Key <= last {
+				return fmt.Errorf("listing out of order: %q after %q", rows[i].Key, last)
+			}
+			last = rows[i].Key
+		}
+		if err := p.emit(rows, e); err != nil {
 			return err
 		}
 		p.mu.Lock()
-		p.stats.Pages++
-		p.stats.Objects += int64(len(rows))
-		p.stats.Prefixes += int64(len(prefixes))
-		for i := range rows {
-			p.stats.Bytes += rows[i].Size
-		}
 		p.stats.Truncated = p.stats.Truncated || stop
 		p.mu.Unlock()
-		if stop || out.IsTruncated == nil || !*out.IsTruncated || out.NextContinuationToken == nil {
+		if stop || !aws.ToBool(out.IsTruncated) {
 			return nil
+		}
+		if out.NextContinuationToken == nil {
+			return errors.New("truncated page without a continuation token")
 		}
 		in.ContinuationToken = out.NextContinuationToken
 	}
 }
 
-// page converts one response; stop reports that the key limit was reached.
-func (p *Provider) page(out *awss3.ListObjectsV2Output) (rows []schema.Row, prefixes []string, stop bool) {
-	n := len(out.Contents)
-	if p.opt.MaxKeys > 0 {
-		left := p.opt.MaxKeys - p.objects.Add(int64(n)) + int64(n)
-		if left <= int64(n) {
-			n, stop = int(max(0, left)), true
-		}
+// emit counts and hands one page of rows to e.
+func (p *Provider) emit(rows []schema.Row, e source.Emitter[Range]) error {
+	var bytes int64
+	for i := range rows {
+		bytes += rows[i].Size
 	}
-	rows = make([]schema.Row, n)
+	t := time.Now()
+	err := e.Rows(rows)
+	p.mu.Lock()
+	p.stats.SinkWaitNs += int64(time.Since(t))
+	p.stats.Pages++
+	p.stats.Objects += int64(len(rows))
+	p.stats.Bytes += bytes
+	p.mu.Unlock()
+	return err
+}
+
+// rows converts the first n objects of a page to rows (Swath's mapping).
+func (p *Provider) rows(out *awss3.ListObjectsV2Output, n int) []schema.Row {
+	rows := make([]schema.Row, n)
 	meta := make([]schema.ObjectMeta, n)
 	for i, o := range out.Contents[:n] {
 		m := &meta[i]
@@ -220,68 +316,7 @@ func (p *Provider) page(out *awss3.ListObjectsV2Output) (rows []schema.Row, pref
 		}
 		r.Present = schema.HasSize | schema.HasMtime
 	}
-	for _, cp := range out.CommonPrefixes {
-		prefixes = append(prefixes, aws.ToString(cp.Prefix))
-	}
-	return rows, prefixes, stop
-}
-
-// emitPage hands a page to e in key order: objects as rows and, for a seed
-// listing, each common prefix as a child range at its position ("a/" sorts
-// as the string "a/", like a directory key).
-func emitPage(rows []schema.Row, prefixes []string, last *string, e source.Emitter[Range]) error {
-	check := func(k string) error {
-		if *last != "" && k <= *last {
-			return fmt.Errorf("listing out of order: %q after %q", k, *last)
-		}
-		*last = k
-		return nil
-	}
-	start, j := 0, 0
-	for i := range rows {
-		for j < len(prefixes) && prefixes[j] < rows[i].Key {
-			if err := check(prefixes[j]); err != nil {
-				return err
-			}
-			if err := e.Rows(rows[start:i]); err != nil {
-				return err
-			}
-			start = i
-			if err := e.Child(Range{prefix: prefixes[j]}); err != nil {
-				return err
-			}
-			j++
-		}
-		if err := check(rows[i].Key); err != nil {
-			return err
-		}
-	}
-	if err := e.Rows(rows[start:]); err != nil {
-		return err
-	}
-	for ; j < len(prefixes); j++ {
-		if err := check(prefixes[j]); err != nil {
-			return err
-		}
-		if err := e.Child(Range{prefix: prefixes[j]}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ownLevel drops objects of a delimited listing whose key holds the
-// delimiter after the prefix: they belong to a common prefix and are listed
-// by its child range. S3 never returns them as objects; some S3-compatible
-// stores (gofakes3) return a key equal to a common prefix ("a/") as both.
-func ownLevel(rows []schema.Row, prefix string) []schema.Row {
-	out := rows[:0]
-	for _, r := range rows {
-		if !strings.Contains(r.Key[len(prefix):], "/") {
-			out = append(out, r)
-		}
-	}
-	return out
+	return rows
 }
 
 // stripQuotes removes one pair of surrounding quotes, as Swath does; the

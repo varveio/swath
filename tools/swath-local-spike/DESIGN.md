@@ -61,18 +61,59 @@ by the emitter, which signal cancellation or a failed sink).
   `a/…` < `a0`, so emitting the DIR row and then its subtree before the next sibling is global order. A
   directory with more than 4096 entries is split into chunk ranges of 2048 sorted names that share one
   reference-counted directory fd, so other workers stat them in parallel.
-- **S3** (`internal/source/s3`). A range is a key prefix. `Expand` pages ListObjectsV2 (1000 keys, continuation
-  tokens, no delimiter) and calls `Rows` once per page; S3 returns keys in UTF-8 binary order, which is the
-  unsigned byte order the pipeline needs (the provider checks it and fails otherwise). With `-seed` the root
-  is listed once with delimiter `/`: its objects become rows and each common prefix a child range at its sorted
-  position (`a/` sorts as the string `a/`, the directory rule); the order stage then lists the prefixes in
-  parallel. The seed cannot help when one prefix holds most keys: that prefix stays one sequential range. That
-  is where Swath's split/steal starts: an expander would end its listing at a pivot and emit the remainder as
-  further child ranges (the contract allows children at the end of a range; see the Stage 3 notes when
-  present). Credentials: the default chain, anonymous when it finds none; the SDK's standard retryer, counted.
-  Rows use Swath's canonical 13-column schema (`schema.S3`); the manifest carries `sourceBucket` and a
-  `_swath_summary.json` subset (schema_version 2, completed, no filters, target `s3://bucket[/prefix]`) so a
-  reader can tell a whole-bucket dataset from a prefix or truncated one.
+- **S3** (`internal/source/s3`): the basics of Swath's parallel engine, without the full engine.
+  - **Ranges are `(lo, hi]`.** S3 `start-after` is exclusive, so a boundary key belongs to the left range;
+    `lo = ""` is ⊥ and the open frontier has hi = ⊤. A range's first page uses `StartAfter=lo` and later
+    pages use continuation tokens. Keys past `hi` are trimmed (`overfetch_keys`), and a page whose last key
+    equals `hi` ends the range without another request. Paging stops on `IsTruncated == false`. A truncated
+    page without a token, a truncated empty page, or a key not after the previous one is an error.
+  - **Root.** `(⊥, ⊤]`. With `-seed` the root is one delimiter page that emits no rows and tiles the scope
+    at its common prefixes `(⊥,p1], …, (pk, ⊤]`:
+    - unusable start-after values are dropped;
+    - there are at most `min(1000, 4×workers)` cuts, evenly subsampled;
+    - Swath's closing sentinel `(pk, prefixCeil(pk)], (prefixCeil(pk), ⊤]` applies when the page was
+      complete and ended with a prefix.
+  - **Splits are owner-side.** `order` makes a range's children claimable only when its `Expand` returns,
+    so a thief could not run a child of a still-running range. Instead, after each full page the owner
+    checks demand under the provider mutex: `hunger = workers − active − queued`. If `hunger > 0` and the
+    range ranks among the `hunger` largest eligible ranges, it emits `Child((c, m])` and
+    `Child((m, hi])` and returns. Ranking puts the open frontier first, then orders by keys listed, then by
+    age. `c` is the last key emitted. Every split is therefore a steal for an idle worker, and no LIST is
+    repeated. `(lo, hi] = (lo, c] ∪ (c, m] ∪ (m, hi]`, disjoint and in order, which the `Emitter` contract
+    allows.
+  - **Guard**, checked before any child and counted per clause:
+    - `done`: never after the page that ended the range;
+    - `unsafe_cursor`: `c` becomes a start-after;
+    - `cursor`: `m > c`;
+    - `bound`: `m < hi`, or below `prefixCeil(scope)` on the frontier;
+    - `no_pivot`: the owner then finishes the range.
+  - **Pivot.** Swath's `ByteMidpoint` is ported: safe scalars only, the bounded midpoint, `ForwardReflect`
+    for the frontier, and the 1024-byte fallback. **Deviation from the spec:** the first choice is density
+    extrapolation from the last page:
+    - keys are read as numbers in the alphabet seen on that page;
+    - the target is `cursor + page span × max(4, hunger)`, at most halfway to `hi`;
+    - it is cut after its first character that differs from the cursor.
+
+    The midpoint and reflection remain the fallback when that does not yield a safe key. The reason is the
+    spec's synthetic balance check T6 (`p/%07d`, 200k keys, 20 ms per page, 16 workers). With midpoint and
+    reflection only, most lower children are empty: the cursor and `hi` diverge at adjacent scalars
+    (`'/'`, `'0'`), or reflection from ⊥ moves only the last character. That run took 2.58 s; with
+    extrapolation it took 1.15 s (both `max_active = 16`).
+  - **No probes.** A split that lands in empty space costs one empty-child LIST, counted as
+    `child_empty.{lower,upper}`.
+  - **Retries.** The SDK's standard retryer, 9 attempts, backoff to 5 s, counted.
+  - **The sequential continuation-token listing** stays as the reference oracle (`-sequential`). Its
+    output, and the Parquet built from it, is byte-identical to the parallel core's.
+
+  **What the full engine adds** (left out here):
+  - durability: checkpoint, resume and `durable_cursor`;
+  - thief-side narrowing, with the per-key `hi` re-read and the commit re-trim it requires;
+  - the structure probes and `max_keys=1` probes;
+  - the owner gate chain, pacing and futility backoff;
+  - mass-aware and multi-level seeding;
+  - the rate-anchored size estimator;
+  - AIMD concurrency;
+  - versions mode.
 - **Checkpoint (not implemented).** The order stage's frontier is a key cursor: every key below the last
   emitted key is in a finished part or in the open one. A checkpoint is (last published part, its max key, the
   set of ranges not fully drained, each with its own resume cursor). Resume re-expands those ranges from their

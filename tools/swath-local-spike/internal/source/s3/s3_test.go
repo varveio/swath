@@ -111,7 +111,7 @@ func keysOf(rows []schema.Row) []string {
 func TestListFakeBucket(t *testing.T) {
 	keys := testKeys()
 	url := fakeBucket(t, keys, 0)
-	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true}, 1)
+	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Sequential: true}, 1)
 	if !slices.Equal(keysOf(rows), keys) {
 		t.Fatalf("got %d keys, want %d", len(rows), len(keys))
 	}
@@ -124,38 +124,46 @@ func TestListFakeBucket(t *testing.T) {
 	}
 }
 
-func TestPrefixSeedAndLimit(t *testing.T) {
+func TestPrefixAndLimit(t *testing.T) {
 	keys := testKeys()
 	url := fakeBucket(t, keys, 0)
-	seq, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true}, 1)
+	seq, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Sequential: true}, 1)
+	if !slices.Equal(keysOf(seq), keys) {
+		t.Fatalf("sequential: %d keys", len(seq))
+	}
 	for _, w := range []int{1, 4, 8} {
-		seeded, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Seed: true}, w)
-		if !slices.Equal(keysOf(seeded), keysOf(seq)) || st.Prefixes == 0 {
-			t.Fatalf("seed w%d: %d keys, %d prefixes", w, len(seeded), st.Prefixes)
-		}
-		for i := range seeded {
-			if seeded[i].Size != seq[i].Size || seeded[i].Mtime != seq[i].Mtime || *seeded[i].Object != *seq[i].Object {
-				t.Fatalf("seed w%d: row %d differs", w, i)
+		for _, seed := range []bool{false, true} {
+			par, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Seed: seed, Workers: w}, w)
+			if !slices.Equal(keysOf(par), keys) {
+				t.Fatalf("parallel w%d seed=%v: %d keys", w, seed, len(par))
+			}
+			for i := range par {
+				if par[i].Size != seq[i].Size || par[i].Mtime != seq[i].Mtime || *par[i].Object != *seq[i].Object {
+					t.Fatalf("w%d seed=%v: row %d differs", w, seed, i)
+				}
+			}
+			if seed && st.Seed.Cuts == 0 {
+				t.Fatalf("seed produced no cuts: %+v", st.Seed)
 			}
 		}
 	}
-	pre, _ := list(t, Options{Bucket: "bkt", Prefix: "a/", Endpoint: url, PathStyle: true}, 2)
+	pre, _ := list(t, Options{Bucket: "bkt", Prefix: "a/", Endpoint: url, PathStyle: true, Workers: 2}, 2)
 	if !slices.Equal(keysOf(pre), []string{"a/", "a/x", "a/y/z"}) {
 		t.Fatalf("prefix: %q", keysOf(pre))
 	}
-	lim, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, MaxKeys: 1500}, 1)
+	lim, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Sequential: true, MaxKeys: 1500}, 1)
 	if len(lim) != 1500 || !st.Truncated || !slices.Equal(keysOf(lim), keys[:1500]) {
 		t.Fatalf("limit: %d rows truncated=%v", len(lim), st.Truncated)
 	}
-	if _, err := New(context.Background(), Options{Bucket: "bkt", Seed: true, MaxKeys: 1}); err == nil {
-		t.Fatal("seed with a key limit accepted")
+	if _, err := New(context.Background(), Options{Bucket: "bkt", MaxKeys: 1}); err == nil {
+		t.Fatal("a key limit without -sequential accepted")
 	}
 }
 
 func TestRetriesAreCounted(t *testing.T) {
 	keys := testKeys()[:50]
 	url := fakeBucket(t, keys, 2)
-	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true}, 1)
+	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Sequential: true}, 1)
 	if len(rows) != 50 || st.Retries != 2 {
 		t.Fatalf("rows %d retries %d", len(rows), st.Retries)
 	}
@@ -185,7 +193,7 @@ func TestObjectFields(t *testing.T) {
 		{Key: aws.String("b"), ETag: aws.String("unquoted")},
 	}}
 	for _, owner := range []bool{false, true} {
-		rows, _ := list(t, Options{Bucket: "x", Client: &stub{pages: []*awss3.ListObjectsV2Output{page}}, FetchOwner: owner}, 1)
+		rows, _ := list(t, Options{Bucket: "x", Client: &stub{pages: []*awss3.ListObjectsV2Output{page}}, FetchOwner: owner, Sequential: true}, 1)
 		a, b := rows[0], rows[1]
 		want := schema.ObjectMeta{ETag: "0123456789abcdef0123456789abcdef-3", StorageClass: "GLACIER", ChecksumAlgorithm: "CRC32", ChecksumType: "FULL_OBJECT"}
 		if owner {
@@ -205,7 +213,7 @@ func TestOutOfOrderListingFails(t *testing.T) {
 		{Contents: []types.Object{{Key: aws.String("b")}}},
 		{Contents: []types.Object{{Key: aws.String("a")}}},
 	}
-	p, _ := New(context.Background(), Options{Bucket: "x", Client: &stub{pages: pages}})
+	p, _ := New(context.Background(), Options{Bucket: "x", Client: &stub{pages: pages}, Sequential: true})
 	if _, err := order.Run[Range](context.Background(), p, &collect{}, order.Options{Workers: 1, Budget: 10}); err == nil {
 		t.Fatal("out-of-order pages accepted")
 	}

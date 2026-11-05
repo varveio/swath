@@ -649,7 +649,7 @@ The S3 dataset passes every check that the local one failed:
 The prefix refusal is correct, not a bug. Varve treats a dataset as a whole-bucket listing, and the run
 summary says this one is not. Opening a prefix dataset would need a Varve-side notion of a prefix dataset.
 
-**Stage 2 (static delimiter seed).**
+**Stage 2 (static delimiter seed; since replaced by the parallel core's seed, see the next section).**
 - **Done:** one delimited ListObjectsV2 of the root yields the root's own objects (rows) and its common prefixes
   (child ranges at their sorted positions, with the trailing-slash rule). The order stage lists the children in
   parallel.
@@ -662,6 +662,108 @@ summary says this one is not. Opening a prefix dataset would need a Varve-side n
 
 **Binary size:** the AWS SDK roughly doubles the stripped binary: linux/amd64 24.7 MB (was 13.3), linux/arm64
 22.5, darwin/arm64 23.1, windows/amd64 25.2 MB.
+
+## S3 parallel core 2026-11-05
+
+**What was built** (`internal/source/s3/parallel.go`, `pivot.go`). The basics of Swath's parallel engine,
+following the spec written from the Java engine
+(`scratchpad/s3-parallel-core-spec.md`). DESIGN.md "S3" has the full rules. In short:
+- `(lo, hi]` ranges: the first page is sent with `StartAfter=lo`, later pages with continuation tokens. A page
+  ending at `hi` ends the range without another request.
+- A one-page delimiter seed (`-seed`) with a cut cap of `min(1000, 4×workers)`, even subsampling and Swath's
+  closing sentinel.
+- Owner-side, demand-driven splits at page boundaries, with `hunger = workers − active − queued`, the progress
+  gate, the largest-remainder victim with the frontier first, and the guard clauses, each counted.
+- A port of Swath's `ByteMidpoint`: safe scalars, the bounded midpoint, ForwardReflect and the cap fallback.
+- The instrumentation in the JSON summary:
+  - `pages`, `requests`, `retries`, `overfetch_keys`;
+  - `seed.*`;
+  - `split.{considered, pivot_extrapolated, accepted_bounded, accepted_frontier, rejected.*, skipped.*}`;
+  - `child_empty.{lower, upper}`;
+  - `max_active`, `max_queued`, `mean_active`, `busy_ns`, `sink_wait_ns`.
+- The sequential continuation-token provider stays as the reference (`-sequential`).
+- The parallel core's seed replaces stage 2's static prefix seed, whose children were whole prefixes.
+
+**Deviations from the spec, each with its reason:**
+1. **Pivot: density extrapolation first.** Keys are read as numbers in the alphabet seen on the last page. The
+   target is `cursor + page span × max(4, hunger)`, at most halfway to `hi`, cut after its first character that
+   differs from the cursor. The midpoint or reflection is the fallback. Synthetic T6 balance check, both runs at
+   `max_active=16`:
+   - midpoint and reflection only: 2.58 s, 171 empty children;
+   - with extrapolation: 1.15 s, 187 empty children.
+
+   On `p/%07d` keys the spec's pivots mostly land just after the cursor. The cursor and `hi` diverge at
+   adjacent scalars (`'/'` vs `'0'`), so `between` falls back to `cursor + " "`. ForwardReflect from ⊥ moves
+   only the last character, and later frontier pivots truncate to the next block start.
+2. **No optional order wait-time stats.** Aggregate idle time is `workers × wall − busy_ns`.
+
+**Contract and `order`: no change in this stage.** The provider contract held as written. Splits end the
+owner's `Expand` with two `Child` calls, which `order` already supports. The two `order` changes in this
+session were made earlier, in the S3 provider stage: the budget exemption is limited to the awaited node, and a
+drainer-expanded range streams directly. This stage kept them.
+
+**Invariant tests** (all pass; `go test -race ./...` green):
+
+| Test | What | Result |
+|---|---|---|
+| T1 | 14 keyspaces × 50 seeds × W ∈ {1, 4, 64} | Every key exactly once, in order, and the covered intervals tile (⊥, ⊤] |
+| T2 | pivot properties | 20,000 random pairs plus named cases: `a < m < b`, valid UTF-8, ≤ 1024 bytes, safe; no pivot for `a`/`a\x00`; ForwardReflect `m > c`; prefixCeil |
+| T3 | guard and gates | One case per clause (cursor, bound, done, unsafe cursor, no pivot); no split at 1 worker (no demand); no split on a single final page |
+| T4 | paging | Page ending at `hi` uses 1 request; truncated empty page, out-of-order page and key ≤ lo are errors; cancellation mid-request returns `context.Canceled` with no goroutines left; seed truncated, cap 8 at W=2 with subsampling; sentinel |
+| T5 | parallel = sequential | Through `listing.Run` on gofakes3 with 5 ms latency, 12,000 keys, 64 KiB parts: Parquet parts byte-identical and manifest equal apart from its timestamp, without and with the seed |
+| T6 | balance smoke | Synthetic: `p/%07d` × 200k, 20 ms per page, W=16, default budget: `max_active=16`, 191 splits, 187 empty children of 382, 391 requests for 200 pages of keys, 1.15 s |
+
+T1's keyspaces:
+- empty, oneKey, exactly3000, flatRandom, singlePrefixFlat, flatUpperHex;
+- longKeys1024, lastByteDiffer, maxScalarRun, supplementaryPlane;
+- deepTree, badlySkewed, hotNeedle;
+- markers plus keys with `%`, controls and DEL.
+
+T1 runs on a fake that returns short truncated pages and rejects unsafe start-after values like real S3. Splits
+are taken by a seeded coin, with the guard on.
+
+**Fake bucket** (971,927 keys of `realistic`, gofakes3 on localhost with no added latency; the client and the
+fake share the 4 vCPUs; median of 3, interleaved; `bench/s3_parallel.sh`, raw data in
+`bench/results/s3-parallel-raw.tsv`). Every run produced the same Parquet bytes (`2982b28d1b31…`).
+
+| Config | Wall s | User s | RSS MiB | Splits | Empty children | Requests | max_active |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| sequential (oracle) | 10.62 | 11.10 | 66 | 0 | 0 | 972 | n/a |
+| parallel W=1 | 11.02 | 11.41 | 66 | 0 | 0 | 972 | 1 |
+| parallel W=4 | **5.82** | 14.46 | 168 | 165–228 | 20–30 | 1,074–1,120 | 4 |
+| parallel W=8 | 6.24 | 16.41 | 145 | 365–393 | 85–102 | 1,219–1,245 | 8 |
+| parallel W=16 | 6.89 | 18.39 | 160 | 592–633 | 227–233 | 1,411–1,433 | 16 |
+| parallel + seed W=1 | 11.00 | 11.21 | 67 | 0 | 0 | 977 | 2 |
+| parallel + seed W=4 | 6.78 | 13.87 | 154 | 159–190 | 22–31 | 1,085–1,108 | 5 |
+| parallel + seed W=8 | 7.21 | 16.17 | 169 | 395–427 | 121–127 | 1,258–1,273 | 8 |
+| parallel + seed W=16 | 7.73 | 18.51 | 171 | 631–651 | 264–266 | 1,445–1,457 | 16 |
+
+Reading:
+- **Speedup.** The parallel core gives 1.8x at 4 workers on this host. It is CPU-bound: the SDK's XML
+  deserialization (about 8.6 µs per object, see "S3 provider") and the fake server share 4 cores. More workers
+  add splits, empty children and extra requests without adding cores: 16 workers needs 47 % more requests than
+  sequential, of which 230 are empty children. Against real S3, latency rather than CPU bounds a page, so more
+  workers should pay off; that was not measured.
+- **The no-probe cost is visible.** At W=16 about 37 % of split children list nothing, while at W=4 about 6 %
+  do. A probe (or the owner-gate floors left out) would remove most of them. `child_empty` is the counter to
+  watch.
+- **The seed does not help here.** `realistic` has 3 top-level prefixes, so the seed adds 3 tiles while
+  splitting does the rest. Its tiles are bounded, so splits use the midpoint path more and children are more
+  often empty.
+
+**Real bucket:** not measured. As recorded in "S3 provider", commoncrawl refuses anonymous ListBucket
+(`403 AccessDenied`), and no other host was tried.
+
+**Left out** (per the spec, §E):
+- durability and resume;
+- thief-side narrowing;
+- structure and point probes;
+- the owner gate chain and pacing;
+- multi-level and mass-aware seeding;
+- the rate-anchored estimator;
+- AIMD;
+- versions mode;
+- per-worker idle-time stats in `order`.
 
 ## Measurement drift
 
