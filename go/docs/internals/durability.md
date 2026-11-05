@@ -82,6 +82,11 @@ resume lists them again. `manifest.json`, the run reports and `_SUCCESS` are wri
 5. Continues the router at the next ordinal with the recorded limit, so part boundaries fall exactly where
    the uninterrupted run would have put them.
 
+A record also carries whether its part is the final one (`file_final`). Once the final part is durable, a
+resume does not list again: it only publishes. On a changed bucket, listing again could add a second final
+part. One record carries at most 4,096 boundaries (the most recent), so the journal grows with parts, not
+splits. A record over the frame limit is refused on append as well as on read.
+
 A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
 may already be recorded (its rename failed), and only `-resume`'s reconciliation decides which are.
 `-resume` on a complete dataset returns `ErrComplete`; on a directory without a journal,

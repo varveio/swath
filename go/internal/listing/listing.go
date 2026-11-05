@@ -69,7 +69,7 @@ const (
 	DefaultMemory   = 256 << 20
 	DefaultPartSize = 64 << 20
 	// minMemory is the smallest budget accepted.
-	minMemory = 1 << 20
+	minMemory = 256 << 10
 )
 
 func (c *Config) setDefaults() error {
@@ -234,8 +234,19 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 	reports := func(sum *Summary) []dataset.File {
 		return []dataset.File{{Name: dataset.SwathSummaryName, Value: swathSummary(cfg, sum, target)}}
 	}
+	if jr.complete() {
+		// The final part is durable: listing again could only add a
+		// second final part on a changed bucket. Publish what is recorded.
+		return pipeline[s3.Range](ctx, cfg, sum, nothing[s3.Range]{}, s, meta, func(*Summary) int64 { return 0 }, reports, jr)
+	}
 	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports, jr)
 }
+
+// nothing is a provider with no rows: a resume whose listing is complete.
+type nothing[R any] struct{}
+
+func (nothing[R]) Root() (r R)                                        { return r }
+func (nothing[R]) Expand(context.Context, R, source.Emitter[R]) error { return nil }
 
 // pipeline runs provider → order → router → publish for one provider.
 // reports names the JSON run reports published beside the manifest.
@@ -285,6 +296,8 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 		oopt.SpillDir = os.TempDir()
 		if cfg.Out != "" {
 			oopt.SpillDir = filepath.Join(cfg.Out, dataset.JournalDir, "spill")
+			// Reclaim a crashed run's orphans (the output lock is held).
+			_ = os.RemoveAll(oopt.SpillDir)
 		}
 	}
 	ost, err := order.Run(ctx, p, sink, oopt)

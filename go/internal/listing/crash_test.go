@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -56,7 +57,7 @@ func crashBucket(t *testing.T) string {
 func crashConfig(url, out string, resume bool) Config {
 	// A small reorder budget (512 rows) keeps listing and publication
 	// interleaved, so crashes during listing find published parts.
-	return Config{Root: "s3://bkt", Out: out, PartSize: 6 << 10, Workers: 8, Memory: 1 << 20, Resume: resume,
+	return Config{Root: "s3://bkt", Out: out, PartSize: 6 << 10, Workers: 8, Memory: 256 << 10, Resume: resume, NoSpill: true,
 		S3: S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}
 }
 
@@ -70,39 +71,43 @@ func TestCrashMatrix(t *testing.T) {
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
 		t.Fatal(err)
 	}
-	for _, point := range faults.Points {
-		for _, nth := range []int64{1, 4, 12} {
-			t.Run(fmt.Sprintf("%s#%d", point, nth), func(t *testing.T) {
-				out := filepath.Join(t.TempDir(), "ds")
-				var seen atomic.Int64
-				restore := faults.Set(func(p string) error {
-					if p == point && seen.Add(1) == nth {
-						return faults.ErrCrash
+	for _, spill := range []bool{false, true} {
+		for _, point := range faults.Points {
+			for _, nth := range []int64{1, 4, 12} {
+				t.Run(fmt.Sprintf("spill=%v/%s#%d", spill, point, nth), func(t *testing.T) {
+					out := filepath.Join(t.TempDir(), "ds")
+					var seen atomic.Int64
+					restore := faults.Set(func(p string) error {
+						if p == point && seen.Add(1) == nth {
+							return faults.ErrCrash
+						}
+						return nil
+					})
+					cfg := crashConfig(url, out, false)
+					cfg.NoSpill = !spill
+					_, err := Run(context.Background(), cfg)
+					restore()
+					if seen.Load() < nth {
+						if err != nil {
+							t.Fatal(err)
+						}
+						t.Skipf("%s reached %d times only", point, seen.Load())
 					}
-					return nil
+					if !errors.Is(err, faults.ErrCrash) {
+						t.Fatalf("crash not injected: %v", err)
+					}
+					sum, err := Run(context.Background(), crashConfig(url, out, true))
+					if point == "success" {
+						if !errors.Is(err, ErrComplete) {
+							t.Fatalf("resume after _SUCCESS: %v", err)
+						}
+					} else if err != nil {
+						t.Fatalf("resume: %v", err)
+					}
+					sameDataset(t, point, ref, out)
+					t.Logf("resumed %d parts (%d rows), listed %d more rows", sum.ResumedParts, sum.ResumedRows, sum.Rows)
 				})
-				_, err := Run(context.Background(), crashConfig(url, out, false))
-				restore()
-				if seen.Load() < nth {
-					if err != nil {
-						t.Fatal(err)
-					}
-					t.Skipf("%s reached %d times only", point, seen.Load())
-				}
-				if !errors.Is(err, faults.ErrCrash) {
-					t.Fatalf("crash not injected: %v", err)
-				}
-				sum, err := Run(context.Background(), crashConfig(url, out, true))
-				if point == "success" {
-					if !errors.Is(err, ErrComplete) {
-						t.Fatalf("resume after _SUCCESS: %v", err)
-					}
-				} else if err != nil {
-					t.Fatalf("resume: %v", err)
-				}
-				sameDataset(t, point, ref, out)
-				t.Logf("resumed %d parts (%d rows), listed %d more rows", sum.ResumedParts, sum.ResumedRows, sum.Rows)
-			})
+			}
 		}
 	}
 }
@@ -356,4 +361,62 @@ func TestDamagedJournalRefusesBeforeDeleting(t *testing.T) {
 			t.Fatalf("%s: recovery deleted parts (%d -> %d) before refusing", damage, len(before), len(after))
 		}
 	}
+}
+
+// TestResumeAfterFinalPartDoesNotList: once the final part is durable a
+// resume publishes without listing again, so a bucket that changed in
+// between cannot add a second final part (Sol P2, finality).
+func TestResumeAfterFinalPartDoesNotList(t *testing.T) {
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	restore := faults.Set(func(p string) error {
+		if p == "manifest" {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	_, err := Run(context.Background(), crashConfig(url, out, false))
+	restore()
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatal(err)
+	}
+	sum, err := Run(context.Background(), crashConfig(url, out, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.S3 != nil && sum.S3.Requests != 0 {
+		t.Fatalf("resume after the final part listed again (%d requests)", sum.S3.Requests)
+	}
+	sameDataset(t, "final", ref, out)
+}
+
+// TestENOSPCOnJournalResumes: a disk-full error on a journal append fails
+// the run without losing anything durable; -resume completes it.
+func TestENOSPCOnJournalResumes(t *testing.T) {
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	var n atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "journal-append" && n.Add(1) == 4 {
+			return syscall.ENOSPC
+		}
+		return nil
+	})
+	_, err := Run(context.Background(), crashConfig(url, out, false))
+	restore()
+	if !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	sameDataset(t, "after ENOSPC", ref, out)
 }

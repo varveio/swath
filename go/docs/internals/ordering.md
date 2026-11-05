@@ -57,9 +57,11 @@ place, so the range keeps listing while a slow frontier holds the output back:
   Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`-spill-compress`, level 1),
   or a trailer with the row count. The trailer is written when the range ends and checked after replay.
   Children have their own files, so a parent's trailer says nothing about them.
+- **Defensive reads.** A frame length is checked against a bound (256 MiB) before anything is allocated, and
+  the reader is closed on every error path.
 - **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
-  on success or failure. A crash leaves at most an orphan directory that is never read: the resume relists
-  from the durable frontier.
+  on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it, under the output
+  lock, and the resume relists from the durable frontier.
 - **Memory.** In-memory buffered rows stay within the budget plus one publish batch per worker plus the
   frontier path, with or without spill (`TestSpillKeepsWorkersBusy`). Workers also claim new ranges while
   the budget is full, since their rows will spill.

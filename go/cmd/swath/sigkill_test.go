@@ -129,7 +129,8 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
 		t.Fatalf("reference: %v\n%s", err, out)
 	}
-	for _, point := range []string{"response-read", "encoding", "journal-append", "journal-sync", "rename", "renamed", "manifest"} {
+	for _, point := range []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append", "journal-sync",
+		"recorded", "rename", "renamed-unsynced", "renamed", "manifest", "success"} {
 		for _, nth := range []string{"1", "5"} {
 			out := filepath.Join(t.TempDir(), "ds")
 			cmd := exec.Command(bin, args(out)...)
@@ -143,7 +144,11 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 				t.Fatalf("%s:%s: not killed: %v", point, nth, err)
 			}
 			if o, err := exec.Command(bin, args(out, "-resume")...).CombinedOutput(); err != nil {
-				t.Fatalf("%s:%s resume: %v\n%s", point, nth, err, o)
+				// Killed after _SUCCESS: the dataset is complete, which is
+				// what -resume reports.
+				if point != "success" || !bytes.Contains(o, []byte("already complete")) {
+					t.Fatalf("%s:%s resume: %v\n%s", point, nth, err, o)
+				}
 			}
 			parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
 			got, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))

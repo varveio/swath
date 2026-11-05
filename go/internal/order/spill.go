@@ -139,6 +139,16 @@ func (s *spiller) write(f *spillFile, rows []schema.Row, final bool) error {
 
 var errSpillFrame = errors.New("spill: corrupt frame")
 
+// maxSpillFrame bounds a frame read back: an emitter batch is far smaller.
+const maxSpillFrame = 256 << 20
+
+func (f *spillFile) close() {
+	if f.f != nil {
+		f.f.Close()
+		f.f = nil
+	}
+}
+
 // next reads the next rows frame; at the trailer it checks the count,
 // closes and deletes the file and returns nil rows.
 func (s *spiller) next(f *spillFile) ([]schema.Row, error) {
@@ -151,32 +161,42 @@ func (s *spiller) next(f *spillFile) ([]schema.Row, error) {
 	}
 	var hdr [8]byte
 	if _, err := io.ReadFull(f.r, hdr[:]); err != nil {
+		f.close()
 		return nil, fmt.Errorf("spill: %w", err)
 	}
-	payload := make([]byte, binary.LittleEndian.Uint32(hdr[:4]))
-	if _, err := io.ReadFull(f.r, payload); err != nil || len(payload) == 0 || crc32.Checksum(payload, spillCRC) != binary.LittleEndian.Uint32(hdr[4:]) {
+	size := binary.LittleEndian.Uint32(hdr[:4])
+	if size == 0 || size > maxSpillFrame { // checked before allocating
+		f.close()
+		return nil, errSpillFrame
+	}
+	payload := make([]byte, size)
+	if _, err := io.ReadFull(f.r, payload); err != nil || crc32.Checksum(payload, spillCRC) != binary.LittleEndian.Uint32(hdr[4:]) {
+		f.close()
 		return nil, errSpillFrame
 	}
 	body := payload[1:]
 	switch payload[0] {
 	case 'T':
 		n, k := binary.Uvarint(body)
+		f.close()
 		if k <= 0 || int64(n) != f.read {
 			return nil, fmt.Errorf("spill: %s holds %d rows, trailer says %d", f.path, f.read, n)
 		}
-		f.f.Close()
 		return nil, os.Remove(f.path)
 	case 'Z':
 		var err error
 		if body, err = s.dec.DecodeAll(body, nil); err != nil {
+			f.close()
 			return nil, errSpillFrame
 		}
 	case 'R':
 	default:
+		f.close()
 		return nil, errSpillFrame
 	}
 	rows, err := schema.DecodeRows(body)
 	if err != nil {
+		f.close()
 		return nil, err
 	}
 	f.read += int64(len(rows))

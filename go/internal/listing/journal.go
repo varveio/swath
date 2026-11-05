@@ -190,6 +190,17 @@ func (jr *journal) last() *durable.Record {
 	return jr.state.Last()
 }
 
+// maxBoundsPerRecord caps the boundaries one record carries, so the
+// journal grows with parts, not with splits.
+const maxBoundsPerRecord = 4096
+
+// complete reports that the final part is durable: the listing finished
+// and a resume only has to publish.
+func (jr *journal) complete() bool {
+	last := jr.last()
+	return last != nil && last.Final
+}
+
 func (jr *journal) providerResume() *s3.Resume {
 	if last := jr.last(); last != nil {
 		return &s3.Resume{After: last.Part.MaxKey, Boundaries: jr.state.Boundaries}
@@ -231,7 +242,7 @@ func (jr *journal) routerOptions(o *parquet.Options) {
 // publish is commit-before-emit at part granularity: the record (the part,
 // the frozen limit, the boundaries since the last record) is synced before
 // the part is renamed into the dataset.
-func (jr *journal) publish(ordinal int, p dataset.Part, limit, rows int64) (dataset.Part, error) {
+func (jr *journal) publish(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
 	if err := faults.At("part-closed"); err != nil {
 		return p, err
 	}
@@ -239,7 +250,10 @@ func (jr *journal) publish(ordinal int, p dataset.Part, limit, rows int64) (data
 	if jr.provider != nil {
 		bounds = jr.provider.TakeBoundaries()
 	}
-	if err := jr.j.Append(durable.Record{Part: p, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Boundaries: bounds}); err != nil {
+	if len(bounds) > maxBoundsPerRecord { // bounded growth: boundaries only shape the resume tiling
+		bounds = bounds[len(bounds)-maxBoundsPerRecord:]
+	}
+	if err := jr.j.Append(durable.Record{Part: p, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Boundaries: bounds, Final: final}); err != nil {
 		return p, err
 	}
 	if err := faults.At("recorded"); err != nil {

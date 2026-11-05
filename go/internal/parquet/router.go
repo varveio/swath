@@ -37,7 +37,7 @@ type Options struct {
 	// the part durable and renames it. limit is the frozen logical bytes
 	// per part (for resume), rows the total rows in parts 0..ordinal. It
 	// returns the part with its final path.
-	Publish func(ordinal int, p dataset.Part, limit, rows int64) (dataset.Part, error)
+	Publish func(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error)
 	// Resume continues a run whose first parts are already published.
 	Resume *Resume
 	// Fail, if set, is called once with the first asynchronous failure (an
@@ -279,7 +279,7 @@ func (r *Router) encode(p *part) {
 	}
 	p.rows += base
 	if r.opt.Publish != nil && !r.aborted.Load() {
-		if p.info, p.err = r.opt.Publish(p.ordinal, p.info, p.limit, p.rows); p.err != nil {
+		if p.info, p.err = r.opt.Publish(p.ordinal, p.info, p.limit, p.rows, p.final); p.err != nil {
 			r.fail(p.err)
 		}
 	}

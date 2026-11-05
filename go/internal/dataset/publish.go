@@ -200,6 +200,9 @@ func PublishPart(out string, ordinal int, p Part) (Part, error) {
 	if err := os.Rename(p.Path, final); err != nil {
 		return p, fmt.Errorf("publish part %d: %w", ordinal, err)
 	}
+	if err := faults.At("renamed-unsynced"); err != nil { // between the rename and its directory sync
+		return p, err
+	}
 	if err := syncDir(filepath.Join(out, DataDir)); err != nil {
 		return p, fmt.Errorf("sync data directory: %w", err)
 	}

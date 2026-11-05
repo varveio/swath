@@ -66,6 +66,7 @@ type Record struct {
 	Limit      int64        `json:"limit"`      // the router's frozen logical bytes per part (0 before part 0 closes)
 	RowsTotal  int64        `json:"rows_total"` // rows in parts 0..Ordinal
 	Boundaries []string     `json:"boundaries,omitempty"`
+	Final      bool         `json:"final,omitempty"` // the last part (file_final): the listing is complete
 }
 
 // State is what a journal says about a run.
