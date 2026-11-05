@@ -97,12 +97,15 @@ parallelism on resume, never a key. The only work under the split mutex is the i
 
 ## The journal
 
-`DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) of
-the payload, and the payload (JSON). The first frame is the header (tool, format, identity, creation time).
+`DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
+the payload, and the payload (JSON); journal version 2. The first frame is the header (tool, format, identity, creation time).
 Every later frame is a part record, with the ordinals dense from 0. One writer goroutine owns the file;
 `Append` returns after `fsync`.
 
-An incomplete last frame, or a bad checksum on the last frame, is a torn tail. It was never acknowledged, so
+An incomplete last frame, or a bad checksum on the last frame, is a torn tail, unless a part is published
+under its final name beyond the recorded ones. A rename only follows an acknowledged record, so such a part
+proves a record was lost (a damaged length, or bit rot in the last frame). The resume then refuses
+(`ErrCorrupt`) before deleting anything. It was never acknowledged, so
 nothing depends on it, and a reopen truncates it. A bad checksum with data after it is interior corruption
 (`ErrCorrupt`), and the resume refuses. So does an unknown header version. A journal whose header never
 became durable means nothing was durable, and the run starts over. `swath inspect DIR` prints the header, every record and any torn

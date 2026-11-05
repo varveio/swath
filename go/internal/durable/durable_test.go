@@ -6,7 +6,6 @@ package durable
 import (
 	"encoding/binary"
 	"errors"
-	"hash/crc32"
 	"os"
 	"strings"
 	"testing"
@@ -124,8 +123,8 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	j, _ = Create(out, Identity{})
 	j.Close()
 	b, _ = os.ReadFile(Path(out))
-	b2 := []byte(strings.Replace(string(b[8:]), `"version":1`, `"version":9`, 1))
-	binary.LittleEndian.PutUint32(b[4:8], crc32.Checksum(b2, castagnoli))
+	b2 := []byte(strings.Replace(string(b[8:]), `"version":2`, `"version":9`, 1))
+	binary.LittleEndian.PutUint32(b[4:8], frameCRC(b[:4], b2))
 	os.WriteFile(Path(out), append(b[:8], b2...), 0o644)
 	if _, err := Read(out); err == nil || !strings.Contains(err.Error(), "version 9") {
 		t.Fatalf("unknown version: %v", err)

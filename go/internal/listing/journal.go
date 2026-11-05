@@ -116,6 +116,17 @@ func openLocked(cfg Config, id durable.Identity, lock *durable.Lock) (*journal, 
 // (unrecorded temporary parts) is removed.
 func recoverParts(out string, st *durable.State) error {
 	data := filepath.Join(out, dataset.DataDir)
+	// Refuse ambiguous damage before deleting anything: a part published
+	// under its final name beyond the recorded ones means an acknowledged
+	// record was lost (a damaged frame length, or bit rot in the last
+	// frame), not a torn append, which is never followed by a rename.
+	for i := len(st.Records); ; i++ {
+		if _, err := os.Stat(filepath.Join(data, dataset.PartName(i))); err != nil {
+			break
+		}
+		return fmt.Errorf("%w: part %d is published but the journal holds only %d records (%d damaged bytes); refusing to recover",
+			durable.ErrCorrupt, i, len(st.Records), st.TornBytes)
+	}
 	keep := map[string]bool{}
 	for i, rec := range st.Records {
 		final := filepath.Join(data, dataset.PartName(i))

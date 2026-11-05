@@ -193,7 +193,7 @@ func (j *Journal) writer() {
 	var hdr [8]byte
 	for r := range j.reqs {
 		binary.LittleEndian.PutUint32(hdr[:4], uint32(len(r.payload)))
-		binary.LittleEndian.PutUint32(hdr[4:], crc32.Checksum(r.payload, castagnoli))
+		binary.LittleEndian.PutUint32(hdr[4:], frameCRC(hdr[:4], r.payload))
 		err := faults.At("journal-append")
 		if err == nil {
 			_, err = j.f.Write(append(hdr[:], r.payload...))
@@ -222,6 +222,9 @@ func (j *Journal) append(v any) error {
 	if err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
+	if len(payload) > maxFrame {
+		return fmt.Errorf("journal: record of %d bytes exceeds %d", len(payload), maxFrame)
+	}
 	ack := make(chan error, 1)
 	j.reqs <- req{payload, ack}
 	return <-ack
@@ -235,7 +238,16 @@ func (j *Journal) Close() error {
 }
 
 // Version is the journal format this tool writes and reads.
-const Version = 1
+const Version = 2
+
+// frameCRC covers the length field and the payload, so a damaged length
+// cannot pass for a different frame boundary.
+func frameCRC(length, payload []byte) uint32 {
+	return crc32.Update(crc32.Checksum(length, castagnoli), castagnoli, payload)
+}
+
+// MaxFrame is the largest record accepted, on append and on read.
+const MaxFrame = maxFrame
 
 // Errors.
 var (
@@ -286,7 +298,7 @@ func decode(r io.Reader) (*State, error) {
 			st.TornBytes += 8 + int64(m)
 			return st, finish(st, first)
 		}
-		if crc32.Checksum(payload, castagnoli) != sum {
+		if frameCRC(hdr[:4], payload) != sum {
 			rest, _ := io.Copy(io.Discard, r)
 			if rest > 0 {
 				// A whole frame with a bad checksum and data after it is

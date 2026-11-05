@@ -6,6 +6,7 @@ package listing
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/http"
@@ -310,4 +311,49 @@ func TestRenameFailureAfterRecordResumes(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	sameDataset(t, "after rename failure", ref, out)
+}
+
+// TestDamagedJournalRefusesBeforeDeleting: a damaged interior frame length
+// (overrunning the file) and a corrupt last frame of an acknowledged,
+// published part are refused, and nothing is deleted (Sol P1-6).
+func TestDamagedJournalRefusesBeforeDeleting(t *testing.T) {
+	url := crashBucket(t)
+	for _, damage := range []string{"interior length", "last frame"} {
+		out := filepath.Join(t.TempDir(), "ds")
+		var n atomic.Int64
+		restore := faults.Set(func(p string) error {
+			if p == "renamed" && n.Add(1) == 4 {
+				return faults.ErrCrash
+			}
+			return nil
+		})
+		_, err := Run(context.Background(), crashConfig(url, out, false))
+		restore()
+		if !errors.Is(err, faults.ErrCrash) {
+			t.Fatal(err)
+		}
+		path := durable.Path(out)
+		b, _ := os.ReadFile(path)
+		// Walk the frames: header, then records 0..3.
+		var offs []int
+		for off := 0; off+8 <= len(b); {
+			offs = append(offs, off)
+			off += 8 + int(binary.LittleEndian.Uint32(b[off:off+4]))
+		}
+		switch damage {
+		case "interior length": // record 1's length overruns the file
+			binary.LittleEndian.PutUint32(b[offs[2]:offs[2]+4], uint32(len(b)))
+		case "last frame": // bit rot in the last acknowledged record
+			b[len(b)-3] ^= 0xff
+		}
+		os.WriteFile(path, b, 0o644)
+		before, _ := os.ReadDir(filepath.Join(out, "data"))
+		if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, durable.ErrCorrupt) {
+			t.Fatalf("%s: resume did not refuse: %v", damage, err)
+		}
+		after, _ := os.ReadDir(filepath.Join(out, "data"))
+		if len(after) != len(before) {
+			t.Fatalf("%s: recovery deleted parts (%d -> %d) before refusing", damage, len(before), len(after))
+		}
+	}
 }
