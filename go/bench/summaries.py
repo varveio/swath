@@ -51,7 +51,7 @@ def go_row(path, d):
         "retries": src.get("retries", ""), "throttle_events": src.get("throttles", ""),
         "overfetch_keys": src.get("overfetch_keys"),
         "empty_children": src.get("child_empty.lower", 0) + src.get("child_empty.upper", 0),
-        "probe_requests": src.get("probe.requests", 0) + src.get("probe.structure_requests", 0),
+        "probe_requests": src.get("probe.requests", 0) + src.get("structure.requests", 0) + src.get("seed.probes", 0),
     }
     g = {}
     flat("go", {k: v for k, v in src.items() if k.split(".")[0] in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "timeouts", "attempts", "probe")}, g)
@@ -94,6 +94,7 @@ def row(path):
     r["empty_children"] = r.get("CHILD_MASS.empty", 0)
     if "probes" in d.get("seed", {}):
         r["seed.probes"] = d["seed"]["probes"]
+        r["probe_requests"] = r.get("probe_requests", 0) + d["seed"]["probes"]
     if d.get("go", {}).get("s3"):
         g = {}
         flat("go", {k: v for k, v in d["go"]["s3"].items() if k in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "retries", "throttles", "timeouts", "attempts")}, g)

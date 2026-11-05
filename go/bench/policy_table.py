@@ -6,7 +6,8 @@ usage: policy_table.py OUTDIR [ARM...]   (arms in the given order; default: the 
 Wall and attempts come from arms.tsv (process wall, the replay server's HTTP request count); the rest
 from each run report through summaries.row, which maps Java's meters onto the Go columns: splits are
 Java's splits plus steals, empty children Java's CHILD_MASS/empty, overfetched keys Java's
-swath.page.raw_keys less the objects listed (keys fetched past a range's bound and dropped).
+swath.page.raw_keys less the objects listed (keys fetched past a range's bound and dropped). Probes are
+every request that is not a listing page: seed probes, 1-key probes and structure probes.
 """
 import collections, json, os, statistics, sys
 
