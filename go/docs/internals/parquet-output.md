@@ -23,7 +23,7 @@ dataset layout"); this page says how the Go writer meets it.
 | Column parallelism | a page's columns may be encoded on several goroutines | used when fewer parts than encoders are open, so a one-part run uses every core. Output is byte-identical to serial encoding (tested). |
 | Key length | per schema (`schema.MaxKeyBytes`): 1,024 bytes for S3 (contracts §6; a longer key is the typed `schema.ErrKeyTooLong`), no cap for filesystem paths | filesystem keys longer than the 1,024-byte bound truncation get truncated, conservative column-index bounds (min truncated, max rounded up); `TestKeyLimits` covers both. |
 | `sorting_columns` | every row group records `key` ascending (standard Parquet metadata) | generic readers learn the order without the swath stamps; metadata only, rows already arrive sorted. |
-| `created_by` | `swath-local 0.0.0-spike` | changes at the first release; byte-identity checks pin it. |
+| `created_by` | `swath-go version <module version or devel> (build <revision>[-dirty])`, from the build itself | bytes are identical within a build; across builds only the recipe (`parquet.Recipe`, `swath-go/parquet-r2`) is promised. |
 
 ## Run reports
 

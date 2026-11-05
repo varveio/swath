@@ -102,6 +102,13 @@ schema (`swath-local/v0`) is unchanged.
 **Truncation.** ColumnIndex min/max values longer than `swath.index_bound_bytes` (1,024) are truncated, so
 readers treat page bounds as conservative. Manifest bounds are exact.
 
+## Versions
+
+Four versions move independently: the dataset format (`format_version` and `swath.profile_version`, 2), the
+logical schema (`schema_id`), the private journal (version 3, never read by readers) and the writer recipe
+(`parquet.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
+parts are byte-identical within a build only.
+
 ## Run summary and counters
 
 The run summary keeps the Varve coverage fields of the Java schema (`schema_version`, `completed`,

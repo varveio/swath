@@ -70,7 +70,7 @@ that is the commit. The run reports follow it.
    anything. It is held through the run's cleanup and publication. Fresh runs and overwrites take it too.
    Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
 2. Checks the identity in the journal header against the request (`durable.Check`, a pure function). The
-   pipeline freezes the schema, key cap, writer (`parquet.WriterID`: encodings, geometry, part-size rule) and
+   pipeline freezes the schema, key cap, writer recipe (`parquet.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that
    is the provider, the source (bucket and prefix), the endpoint, the region and `-fetch-owner`. A field
    added, dropped or changed is a typed `*durable.MismatchError`. The S3 endpoint's canonical form is

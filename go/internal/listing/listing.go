@@ -221,7 +221,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 // identity is the run's resume identity: what the pipeline freezes, and
 // what the source names (source.Identified).
 func identity(src source.Source, s *schema.Schema, cfg Config) durable.Identity {
-	id := durable.Identity{Tool: "swath-go", Format: 1, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquet.WriterID,
+	id := durable.Identity{Tool: "swath-go", Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquet.WriterID,
 		PartSize: cfg.PartSize, Provider: src.Locator().Kind}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()

@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,15 +34,55 @@ const (
 	pageBufferBytes = 1 << 20 // parquet-go page buffer
 	writeBuffer     = 4096    // parquet-go output buffer
 	writeQuantum    = 64      // parquet-go's WriteRows batching, kept for identical pages
-	createdBy       = "swath-local"
-	createdVersion  = "0.0.0-spike"
 )
 
-// WriterID names everything about the writer that decides a part's bytes:
-// geometry, encodings, codec and the part-size rule. A resume refuses a
-// journal written under another WriterID; change it with any of those.
-const WriterID = "swath-go parquet/1: parquet-go v0.32.0, v2 pages of 1024 rows, 8 MiB groups, dict 8 KiB, " +
-	"bounds 1024, delta key and etag, delta ints, zstd SpeedDefault+entropy, part 0 at size/0.1 then frozen ratio"
+// Recipe identifies everything about the writer that decides a part's
+// bytes apart from the build: parquet-go v0.32.0, v2 pages of 1,024 rows,
+// 8 MiB row groups, 8 KiB dictionaries, 1,024-byte index bounds, delta keys
+// and etags, delta integers with standard INT annotations, zstd
+// SpeedDefault with entropy coding, and parts cut at size/0.1 for part 0,
+// then at the frozen ratio. Bump the revision with any change to these.
+// A resume refuses a journal written under another recipe.
+//
+// Versions are separate: the dataset format (dataset.FormatVersion), the
+// logical schema (schema IDs), the private journal (durable.Version) and
+// this recipe. created_by names the real build, so bytes are identical
+// within a build; across builds only the recipe is promised.
+const Recipe = "swath-go/parquet-r2"
+
+// WriterID is the resume identity's writer field.
+const WriterID = Recipe
+
+// createdBy is the footer's created_by: the tool, its module version and
+// its VCS revision, from the build itself.
+var createdBy, createdVersion, createdBuild = build()
+
+func build() (app, version, rev string) {
+	app, version = "swath-go", "devel"
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		version = v
+	}
+	dirty := false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if dirty {
+		rev += "-dirty"
+	}
+	return
+}
 
 // writer writes one sorted part in strictly ascending key order.
 type writer struct {
@@ -86,7 +127,7 @@ func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func
 		pq.DefaultEncodingFor(pq.Int64, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Int32, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Boolean, &pq.Plain),
-		pq.CreatedBy(createdBy, createdVersion, ""),
+		pq.CreatedBy(createdBy, createdVersion, createdBuild),
 		pq.KeyValueMetadata(dataset.StampProfile, dataset.Format),
 		pq.KeyValueMetadata(dataset.StampProfileVersion, strconv.Itoa(dataset.FormatVersion)),
 		pq.KeyValueMetadata(dataset.StampSchema, s.ID),
