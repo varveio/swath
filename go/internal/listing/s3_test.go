@@ -167,3 +167,72 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 		}
 	}
 }
+
+// TestSummaryDistinguishesOffFromZero: a policy turned off is listed under
+// "disabled" and its counters are absent; a policy that was on reports its
+// counters even when they are zero.
+func TestSummaryDistinguishesOffFromZero(t *testing.T) {
+	url := fakeS3(t, 300)
+	run := func(cfg Config) map[string]any {
+		t.Helper()
+		cfg.Root, cfg.S3.Endpoint, cfg.S3.PathStyle = "s3://bkt", url, true
+		sum, err := Run(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(sum)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	has := func(m map[string]any, path ...string) bool {
+		var v any = m
+		for _, p := range path {
+			mm, ok := v.(map[string]any)
+			if !ok {
+				return false
+			}
+			if v, ok = mm[p]; !ok {
+				return false
+			}
+		}
+		return true
+	}
+	off := func(m map[string]any, path ...string) []string {
+		var v any = m
+		for _, p := range path {
+			v = v.(map[string]any)[p]
+		}
+		var out []string
+		for _, x := range v.([]any) {
+			out = append(out, x.(string))
+		}
+		return out
+	}
+	on := run(Config{Out: filepath.Join(t.TempDir(), "ds"), Workers: 4, S3: S3Config{Seed: true}})
+	if !has(on, "s3", "probe", "requests") || !has(on, "s3", "seed", "cuts") || !has(on, "spill", "rows") || !has(on, "encoder_wait_ns") {
+		t.Fatalf("enabled policies must report their counters: %v", on)
+	}
+	if got := off(on, "s3", "disabled"); strings.Join(got, ",") != "max_keys,resume" {
+		t.Fatalf("disabled = %v", got)
+	}
+	if has(on, "disabled") {
+		t.Fatalf("nothing in the run is off: %v", on["disabled"])
+	}
+	cfg := Config{Workers: 4, NoSpill: true, S3: S3Config{NoProbe: true}}
+	m := run(cfg)
+	if has(m, "s3", "probe") || has(m, "s3", "seed") || has(m, "spill") || has(m, "encoder_wait_ns") {
+		t.Fatalf("disabled policies must not report counters: %v", m)
+	}
+	if got := off(m, "s3", "disabled"); strings.Join(got, ",") != "max_keys,probe,resume,seed" {
+		t.Fatalf("disabled = %v", got)
+	}
+	if got := off(m, "disabled"); strings.Join(got, ",") != "spill" {
+		t.Fatalf("disabled = %v", got)
+	}
+}

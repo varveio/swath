@@ -76,9 +76,6 @@ func (p *Provider) Root() Range {
 	case p.opt.Seed:
 		return Range{kind: seed}
 	}
-	p.mu.Lock()
-	p.c.Set(cSeedSkipped, 1)
-	p.mu.Unlock()
 	return Range{kind: interval, open: true}
 }
 

@@ -118,6 +118,12 @@ func TestSpillKeepsWorkersBusy(t *testing.T) {
 	if limit := int64(budget + workers*publishRows + f.rows); pst.MaxBuffered > limit {
 		t.Fatalf("no spill: max buffered %d > %d", pst.MaxBuffered, limit)
 	}
+	// The slow frontier makes the drainer wait for it, and without spill
+	// the siblings wait on the full budget.
+	t.Logf("no spill: frontier wait %v, budget wait %v", pst.FrontierWait, pst.BudgetWait)
+	if pst.FrontierWait <= 0 || pst.BudgetWait <= 0 {
+		t.Fatalf("no spill: frontier wait %v, budget wait %v", pst.FrontierWait, pst.BudgetWait)
+	}
 }
 
 // TestSpillCleanedOnFailure: a failing run removes its spill directory.

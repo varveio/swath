@@ -10,6 +10,7 @@ package counters
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 )
@@ -26,11 +27,17 @@ const (
 func (k Kind) String() string { return [...]string{"count", "max", "flag"}[k] }
 
 // Def defines one counter. Key is its dotted path in the summary JSON.
+// Feature, if set, names the policy the counter measures: when the run
+// turns that policy off, the counter is left out of the summary and the
+// feature is listed under "disabled". So a summary distinguishes a counter
+// this build does not have (absent), a policy that was off (listed under
+// "disabled"), and a policy that was on but never fired (present, zero).
 type Def struct {
-	Key  string
-	Kind Kind
-	Unit string
-	Help string
+	Key     string
+	Kind    Kind
+	Unit    string
+	Help    string
+	Feature string
 }
 
 // Set holds the values of one table.
@@ -65,9 +72,18 @@ func (s *Set) Max(id int, n int64) {
 func (s *Set) Load(id int) int64 { return s.v[id].Load() }
 
 // Map renders the set as nested maps by the dotted keys, flags as booleans.
-func (s *Set) Map() map[string]any {
+// Counters of a disabled feature are left out, and the disabled features
+// that have counters are listed, sorted, under "disabled".
+func (s *Set) Map(disabled ...string) map[string]any {
 	root := map[string]any{}
+	var off []string
 	for i, d := range s.defs {
+		if d.Feature != "" && slices.Contains(disabled, d.Feature) {
+			if !slices.Contains(off, d.Feature) {
+				off = append(off, d.Feature)
+			}
+			continue
+		}
 		parts := strings.Split(d.Key, ".")
 		m := root
 		for _, p := range parts[:len(parts)-1] {
@@ -84,15 +100,19 @@ func (s *Set) Map() map[string]any {
 		}
 		m[parts[len(parts)-1]] = v
 	}
+	if len(off) > 0 {
+		slices.Sort(off)
+		root["disabled"] = off
+	}
 	return root
 }
 
 // Markdown renders defs as a documentation table.
 func Markdown(defs []Def) string {
 	var b strings.Builder
-	b.WriteString("| Key | Kind | Unit | Meaning |\n|---|---|---|---|\n")
+	b.WriteString("| Key | Kind | Unit | Feature | Meaning |\n|---|---|---|---|---|\n")
 	for _, d := range defs {
-		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", d.Key, d.Kind, d.Unit, d.Help)
+		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s |\n", d.Key, d.Kind, d.Unit, d.Feature, d.Help)
 	}
 	return b.String()
 }

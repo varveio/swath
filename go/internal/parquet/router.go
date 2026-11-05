@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
@@ -79,6 +80,7 @@ type Router struct {
 	errMu   sync.Mutex
 	err     error // first encoder error
 	aborted atomic.Bool
+	waitNs  atomic.Int64 // time Write waited for an encoder (queue or slot)
 	closed  bool
 	done    []dataset.Part // resumed parts, already published
 }
@@ -108,6 +110,10 @@ func NewRouter(opt Options) (*Router, error) {
 	}
 	return r, nil
 }
+
+// EncoderWait is the time Write waited for an encoder: a full part queue,
+// or every encoder busy when a part was opened.
+func (r *Router) EncoderWait() time.Duration { return time.Duration(r.waitNs.Load()) }
 
 // Account sets the byte accounting hook (see Options.Account); call before
 // the first Write.
@@ -174,6 +180,13 @@ func (r *Router) send(ctx context.Context, segs [][]schema.Row) error {
 	select {
 	case r.cur.segs <- b:
 		return nil
+	default: // the part's queue is full: the encoder is the bottleneck
+	}
+	t := time.Now()
+	defer func() { r.waitNs.Add(int64(time.Since(t))) }()
+	select {
+	case r.cur.segs <- b:
+		return nil
 	case <-r.cur.done: // the encoder stopped early
 		r.done1(b)
 		return r.cur.err
@@ -197,8 +210,14 @@ func (r *Router) open(ctx context.Context) error {
 	}
 	select {
 	case r.slots <- struct{}{}:
-	case <-ctx.Done():
-		return context.Cause(ctx)
+	default:
+		t := time.Now()
+		select {
+		case r.slots <- struct{}{}:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+		r.waitNs.Add(int64(time.Since(t)))
 	}
 	p := &part{ordinal: len(r.done) + len(r.parts), segs: make(chan batch, partQueue), done: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}

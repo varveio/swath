@@ -48,6 +48,15 @@ type Config struct {
 	S3            S3Config
 }
 
+// Spill describes the run's spill (see order.Stats).
+type Spill struct {
+	Rows      int64 `json:"rows"`   // rows written to spill files and replayed
+	Bytes     int64 `json:"bytes"`  // bytes written
+	Ranges    int64 `json:"ranges"` // ranges that spilled
+	PeakBytes int64 `json:"peak_bytes"`
+	Refused   int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
+}
+
 // S3Config configures an s3:// root.
 type S3Config struct {
 	Endpoint, Region string
@@ -98,20 +107,24 @@ func (c *Config) setDefaults() error {
 
 // Summary is the run report (also written as the dataset's summary file).
 type Summary struct {
-	Tool         string    `json:"tool"`
-	SchemaID     string    `json:"schema_id"`
-	Root         string    `json:"root"`
-	Out          string    `json:"out,omitempty"`
-	Fields       string    `json:"fields,omitempty"`
-	Workers      int       `json:"workers"`
-	Encoders     int       `json:"encoders"`
-	RowBudget    int64     `json:"row_budget_bytes"` // rows in flight: reorder storage and encoder queues
-	MaxBuffered  int64     `json:"max_buffered_bytes"`
-	SpillRows    int64     `json:"spill_rows"`   // rows written to spill files and replayed
-	SpillBytes   int64     `json:"spill_bytes"`  //
-	SpillFiles   int64     `json:"spill_ranges"` // ranges that spilled
-	SpillPeak    int64     `json:"spill_peak_bytes"`
-	SpillRefused int64     `json:"spill_refused"` // frames the disk budget refused (the emitter waited instead)
+	Tool        string `json:"tool"`
+	SchemaID    string `json:"schema_id"`
+	Root        string `json:"root"`
+	Out         string `json:"out,omitempty"`
+	Fields      string `json:"fields,omitempty"`
+	Workers     int    `json:"workers"`
+	Encoders    int    `json:"encoders"`
+	RowBudget   int64  `json:"row_budget_bytes"` // rows in flight: reorder storage and encoder queues
+	MaxBuffered int64  `json:"max_buffered_bytes"`
+	Spill       *Spill `json:"spill,omitempty"` // nil: spill was off ("spill" is listed under Disabled)
+	// The order stage's waits (see order.Stats) and the time the order
+	// stage waited for an encoder (nil without output).
+	FrontierWaitNs int64  `json:"frontier_wait_ns"`
+	BudgetWaitNs   int64  `json:"budget_wait_ns"`
+	EncoderWaitNs  *int64 `json:"encoder_wait_ns,omitempty"`
+	// Disabled lists the run's policies that were turned off, so a zero
+	// counter always means "on, never fired" (see docs/internals/counters.md).
+	Disabled     []string  `json:"disabled,omitempty"`
 	Listing      *fs.Stats `json:"listing,omitempty"`
 	S3           *s3.Stats `json:"s3,omitempty"`
 	Rows         int64     `json:"rows"`
@@ -310,8 +323,16 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 		_ = os.Remove(filepath.Dir(oopt.SpillDir))
 	}
 	sum.MaxBuffered, sum.Rows = ost.MaxBuffered, ost.Rows
-	sum.SpillRows, sum.SpillBytes, sum.SpillFiles = ost.SpillRows, ost.SpillBytes, ost.SpillFiles
-	sum.SpillPeak, sum.SpillRefused = ost.SpillPeak, ost.SpillRefused
+	if oopt.SpillDir != "" {
+		sum.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused}
+	} else {
+		sum.Disabled = append(sum.Disabled, "spill")
+	}
+	sum.FrontierWaitNs, sum.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
+	if router != nil {
+		w := int64(router.EncoderWait())
+		sum.EncoderWaitNs = &w
+	}
 	sum.ListingSeconds = time.Since(sum.Started).Seconds()
 	want := listed(&sum)
 	if err != nil {

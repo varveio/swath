@@ -1281,7 +1281,7 @@ trade.
 - one byte budget shared by pages, reorder storage and encoder queues;
 - frontier, reorder and encoder wait counters beyond `sink_wait_ns`.
 
-The spill counters (`spill_rows`, `spill_bytes`, `spill_ranges`) are in the run report.
+The spill counters (then `spill_rows`, `spill_bytes`, `spill_ranges`; now the `spill` object) are in the run report.
 
 ## Measurement drift
 

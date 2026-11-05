@@ -27,6 +27,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
@@ -68,6 +69,11 @@ type Stats struct {
 	// SpillRefused counts frames the disk budget refused; each made its
 	// emitter wait on the reorder budget instead.
 	SpillRefused int64
+	// FrontierWait is the time the drainer waited for the range it needs
+	// next while a worker was still listing it (the slow-frontier cost).
+	// BudgetWait is the time emitters and workers with ranges queued waited
+	// on a full budget (the reorder cost). Both sum over goroutines.
+	FrontierWait, BudgetWait time.Duration
 }
 
 // batchRows is the minimum number of rows per sink call (except the last).
@@ -109,6 +115,8 @@ type run[R any] struct {
 	stack    []*node[R]
 	buffered int64
 	max      int64
+	frontier time.Duration // Stats.FrontierWait (under mu)
+	budget   time.Duration // Stats.BudgetWait (under mu)
 	finished bool
 	stopped  atomic.Bool // ctx is done; checked instead of ctx.Err(), which takes a mutex
 
@@ -276,7 +284,7 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		err = context.Cause(ctx)
 	}
 	o.dispose()
-	st.Rows, st.MaxBuffered = o.rows, o.max
+	st.Rows, st.MaxBuffered, st.FrontierWait, st.BudgetWait = o.rows, o.max, o.frontier, o.budget
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
@@ -289,7 +297,13 @@ func (o *run[R]) worker() {
 	defer o.mu.Unlock()
 	for {
 		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || ((o.sp == nil || o.sp.full.Load()) && o.full())) {
+			if len(o.stack) == 0 {
+				o.work.Wait()
+				continue
+			}
+			t := time.Now()
 			o.work.Wait()
+			o.budget += time.Since(t)
 		}
 		if o.finished || o.stopped.Load() {
 			return
@@ -435,7 +449,9 @@ func (e *emitter[R]) publish() error {
 		} else if o.sp != nil && e.rows == 0 && len(e.items) > 0 { // only children: never block
 			break
 		}
+		t := time.Now()
 		o.drain.Wait()
+		o.budget += time.Since(t)
 		refused = false
 	}
 	if o.stopped.Load() {
@@ -629,7 +645,9 @@ func (o *run[R]) drainTree(root *node[R], sink Sink) (Stats, error) {
 			release()
 			n.awaited.Store(true)
 			o.drain.Broadcast() // its emitter may be blocked on the budget
+			t := time.Now()
 			o.drain.Wait()
+			o.frontier += time.Since(t)
 			n.awaited.Store(false)
 		}
 	}

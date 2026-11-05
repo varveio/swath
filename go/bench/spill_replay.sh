@@ -16,8 +16,8 @@ for rep in 1 2; do
     read -r wall user sys rss < $G/t
     python3 - $G/$arm-$rep.json "$arm" "$rep" "$wall" "$rss" <<'PY'
 import json,sys
-d=json.load(open(sys.argv[1])); s=d['s3']
-print(f"{sys.argv[2]}\t{sys.argv[3]}\twall={sys.argv[4]}\trss_mib={int(sys.argv[5])//1024}\trequests={s['requests']}\tmean_active={s['mean_active']:.1f}\tsink_wait_s={s['sink_wait_ns']/1e9:.0f}\tbusy_s={s['busy_ns']/1e9:.0f}\tmax_buffered={d['max_buffered_rows']}\tspill_rows={d['spill_rows']}\tspill_bytes={d['spill_bytes']}\tspill_ranges={d['spill_ranges']}")
+d=json.load(open(sys.argv[1])); s=d['s3']; sp=d.get('spill',{})
+print(f"{sys.argv[2]}\t{sys.argv[3]}\twall={sys.argv[4]}\trss_mib={int(sys.argv[5])//1024}\trequests={s['requests']}\tmean_active={s['mean_active']:.1f}\tsink_wait_s={s['sink_wait_ns']/1e9:.0f}\tbusy_s={s['busy_ns']/1e9:.0f}\tmax_buffered={d['max_buffered_bytes']}\tfrontier_wait_s={d['frontier_wait_ns']/1e9:.0f}\tbudget_wait_s={d['budget_wait_ns']/1e9:.0f}\tspill_rows={sp.get('rows',0)}\tspill_bytes={sp.get('bytes',0)}\tspill_ranges={sp.get('ranges',0)}")
 PY
     md5sum < <(cat $G/out/data/*.parquet) | cut -c1-12
   done

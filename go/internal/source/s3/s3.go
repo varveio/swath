@@ -127,7 +127,6 @@ type SeedStats struct {
 	Truncated  bool             `json:"truncated"`
 	Sentinel   bool             `json:"sentinel"`
 	Declined   map[string]int64 `json:"sentinel_declined,omitempty"`
-	Skipped    bool             `json:"skipped"`
 }
 
 // SplitStats count split decisions; every accepted split is a steal for an
@@ -236,7 +235,7 @@ func (p *Provider) Stats() Stats {
 	s.Attempts, s.Retries, s.Throttles, s.Timeouts, s.ParseFailures = c(cAttempts), c(cRetries), c(cThrottles), c(cTimeouts), c(cParseFailures)
 	s.OverfetchKeys, s.Truncated = c(cOverfetchKeys), c(cTruncated) != 0
 	s.Seed = SeedStats{Prefixes: c(cSeedPrefixes), Cuts: c(cSeedCuts), Unsafe: c(cSeedUnsafe), Subsampled: c(cSeedSubsampled) != 0,
-		Truncated: c(cSeedTruncated) != 0, Sentinel: c(cSeedSentinel) != 0, Skipped: c(cSeedSkipped) != 0,
+		Truncated: c(cSeedTruncated) != 0, Sentinel: c(cSeedSentinel) != 0,
 		Declined: map[string]int64{}}
 	for id, k := range map[int]string{cSentinelDeclinedTruncated: "truncated", cSentinelDeclinedObjectLast: "object_last",
 		cSentinelDeclinedNoCeiling: "no_ceiling", cSentinelDeclinedUnsafe: "unsafe"} {
@@ -255,7 +254,7 @@ func (p *Provider) Stats() Stats {
 		s.MeanActive = p.area / el
 	}
 	s.Anonymous, s.Credentials, s.Region = p.anonymous, p.creds, p.region
-	s.tally = p.c.Map()
+	s.tally = p.c.Map(p.disabled()...)
 	return s
 }
 
