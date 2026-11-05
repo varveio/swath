@@ -75,6 +75,20 @@ The contributor reference is
 - Docker is available for Testcontainers, LocalStack, MinIO, and replay checks.
 - Use DuckDB or the repository verifier for Parquet output.
 
+## Go port
+
+- The Go port lives in [`go/`](go/): module `github.com/varveio/swath/go`, command
+  `go/cmd/swath`, packages under `go/internal/`. It is a separate tool from the Java
+  distribution until the Java code is retired.
+- The language-neutral documents bind it: [`docs/internals/contracts.md`](docs/internals/contracts.md)
+  (invariants, schemas, dataset layout), the algorithms, and the usage semantics.
+  Go-specific design lives in [`go/DESIGN.md`](go/DESIGN.md); measurements in
+  [`go/REPORT.md`](go/REPORT.md).
+- Test it with `cd go && go vet ./... && go test -race ./...`. Static builds use
+  `CGO_ENABLED=0`.
+- A commit that touches `go/` needs the `go` CI job green (vet, race tests, cross-builds
+  for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64).
+
 ## Repository discipline
 
 - Use one integration branch per effort and one pull request to `main`.
