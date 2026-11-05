@@ -1427,6 +1427,41 @@ format 1 of the same listing identical through the projection; the Varve probe p
 Java reading Go output is no longer a gate. Byte baselines change once here: the S3 parts lose four columns
 and every part's footer changes.
 
+## Live check: the shallow recordings (2026-11-05)
+
+The replay result that Go beats Java 9–13× on noaa-eri-pds and pansurg (Step 5a) was re-checked live, as
+the owner asked, since fixed-latency replay inflates Java's serial tail. Live S3, anonymous, from this
+container (GCP to AWS; noaa-eri-pds in us-east-1, pansurg in eu-west-2), build `d67db9d` (spill, pivot fix,
+probe off) with `-workers 64 -seed`, against Java swath with the recording's argv (`--concurrency 64
+--format parquet --sort`), interleaved Go/Java, 2 repeats each, nothing else running. Process wall from
+`/usr/bin/time`; Java also reports its own run duration, which excludes JVM start and exit. Raw:
+`bench/results/live-shallow-raw.tsv`.
+
+| Bucket (objects) | Arm | Wall s | Java's reported s (listing) | Requests | Attempts | Mean active | Splits | Empty children |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds (845,693) | Go | 4.95, 5.20 | – (listing 4.8, 5.1) | 1,244, 1,253 | 1,245, 1,253 | 37.6, 36.1 | 486, 493 | 152, 158 |
+| | Java | 30.45, 31.16 | 13.1, 13.5 (10.2, 10.4) | 1,434, 1,437 | – | 7.5, 7.6 | 73, 68 | – |
+| pansurg (501,262) | Go | 11.66, 10.40 | – (listing 11.6, 10.3) | 795, 813 | 795, 813 | 17.4, 17.5 | 394, 403 | 165, 186 |
+| | Java | 54.31, 52.66 | 21.7, 19.9 (19.5, 17.9) | 1,208, 1,198 | – | 7.9, 8.3 | 42, 37 | – |
+
+- **The win holds live, smaller than in replay.** Go's process wall is 6× Java's on noaa-eri-pds and 5× on
+  pansurg; against Java's own reported duration (which leaves out about 17 s and 33 s of JVM start-up,
+  shutdown and post-run work that the user still waits for) it is 2.6× and 1.8×, and against Java's
+  listing phase alone 2.1× and 1.7×. The recordings' own runs agree: Java's noaa-eri-pds recording took
+  34.3 s of process wall for a reported 14.7 s.
+- **It is concurrency, not requests:** Go makes 13–33 % fewer requests and keeps 36–38 (noaa-eri-pds) or
+  17 (pansurg) ranges active against Java's 7.5–8.3; Java's latency-freeze gate fired on 741 of 1,004 and
+  175 of 504 checks on noaa-eri-pds.
+- **No throttling:** no 503, no timeout; one Go retry in four runs (an attempt beyond the requests), Java
+  reported none.
+- **Rows identical:** `diffds.py` finds every Go and Java dataset identical to the recording (845,693 and
+  501,262 rows both ways; the buckets did not change since they were recorded).
+- Go's cost: about 31 % (noaa-eri-pds) and 36 % (pansurg) of its keys were fetched past a range's bound and
+  dropped, and a third of splits leave an empty upper child; the step-5b floors target exactly that.
+- Earlier non-interleaved live runs of the same build (same session, minutes before): noaa-eri-pds 5.21,
+  4.45 s; pansurg 15.07, 14.75 s (mean active 13.2–13.6), so pansurg's live wall varies by 1.4× between
+  runs minutes apart.
+
 ## Format revision, group 2 (items 6–10)
 
 Gates for every item below, run by one script on a 20,000-key fake bucket (synthetic, `keys.tsv`) and a

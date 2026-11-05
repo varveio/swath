@@ -1,0 +1,9 @@
+# live S3 2026-11-05 ~20:20 UTC, interleaved, Go d67db9d (-anonymous -workers 64 -seed, probe off) vs Java (recording argv); process wall from /usr/bin/time
+noaa-eri-pds	go	1	rc=0	wall=4.95
+noaa-eri-pds	java	1	rc=0	wall=30.45
+pansurg-curation-raw-open-data	go	1	rc=0	wall=11.66
+pansurg-curation-raw-open-data	java	1	rc=0	wall=54.31
+noaa-eri-pds	go	2	rc=0	wall=5.20
+noaa-eri-pds	java	2	rc=0	wall=31.16
+pansurg-curation-raw-open-data	go	2	rc=0	wall=10.40
+pansurg-curation-raw-open-data	java	2	rc=0	wall=52.66
