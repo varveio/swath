@@ -6,6 +6,10 @@ because parquet-go v0.32.0 and x/sys v0.49.0 need go >= 1.26), GNU find 4.9.0, f
 Python 3.13.18. Every number is labelled with the configuration that produced it. All trees are **synthetic**
 (see "Trees"). Raw data: `bench/results/`.
 
+> **Current code:** see "Restructure 2026-11-05" below and [DESIGN.md](DESIGN.md). The sections before it
+> describe the pre-restructure spike (its engines, `--order` modes and encode schemes no longer exist); their
+> numbers stand as the record of how the design was chosen.
+
 ## Answers
 
 1. **Is the parallel fd-relative walker materially faster than find and the naive Go walk (warm cache)? Yes.**
@@ -441,6 +445,105 @@ Reading:
   `dfs-parallel`, 1.3x the fastest tool that only sums sizes. The sort-based `--order none` costs 3.58 s.
 - **Not established here:** cold-cache behaviour of these tools, hard-link de-duplication (several du tools
   count hard links once; `swath-local` lists every name), and behaviour on network or overlay filesystems.
+
+## Restructure 2026-11-05
+
+The spike was rebuilt as a reusable seed ([DESIGN.md](DESIGN.md)). **Sections above this one describe the
+pre-restructure code and CLI** (engines, `--order`, `--encode-scheme`, the external sort); their measurements
+stand as history but their flags no longer exist. The older `bench/*.sh` scripts drive the old binary.
+
+**What changed**
+- **One pipeline.** provider → order → part router → dataset (`listing.Run(ctx, Config)`); `cmd/swath-local`
+  only parses flags. Deleted: the external sort, spill runs, run reader, k-way merge, pointer sort, split
+  batches, `--order none`/`dfs-sequential`, the `fstatat` and `parallel-lstat` engines (`walkdir` survives only
+  as the test oracle `filepath.WalkDir`), `--ino-sort`, `--statx-mask`, `--split-entries` (internal constants
+  now), `--encode-scheme`, `--codec`, `--gc-percent`, `--cpuprofile`/`--memprofile` (now
+  `SWATH_LOCAL_CPUPROFILE`/`SWATH_LOCAL_MEMPROFILE`), `--sort-buffer-*`, `--reorder-rows` and
+  `--row-group-bytes`. **11 flags remain**: `-out`, `-overwrite`, `-fields`, `-no-dirs`, `-no-link-target`,
+  `-part-size`, `-memory`, `-workers`, `-encoders`, `-count-only`, `-json`. The reorder bound is
+  `memory / 2 KiB` rows (131,072 at the 256 MiB default).
+- **Provider contract** (`internal/source`): a tree of ranges, each streaming rows and ordered child ranges
+  (`Emitter.Rows`, `Emitter.Child`). The fs provider is the first implementation; DESIGN.md says how S3
+  split/steal, a key-cursor checkpoint, GCS, Azure and Drive fit it. The order stage streams the frontier as
+  rows arrive and bounds rows of ranges that finished early.
+- **Encoding**: per-part architecture only (router-owned deterministic boundaries with a ratio frozen after
+  part 0, dense ordinals, router-set `file_final`, publication gate). Parts are fed while open through bounded
+  queues, at most `-encoders` in flight, and a part encodes its page columns in parallel when fewer parts than
+  encoders are active. That keeps the single 64 MiB part at today's speed (below) and bounds memory for any
+  part size. Part 0 is cut at `part-size / 0.1` logical bytes (0.1 is the assumed compression ratio), so the
+  default run on `realistic` is still one part and **byte-identical**.
+- **Context and errors**: `signal.NotifyContext` in main; every stage takes the context and stops on the first
+  error (sink, encoder, provider); unpublished parts are removed on every error path; errors are wrapped with
+  path or phase; sentinel errors from `dataset` are mapped to flag names only in the CLI.
+- **Schema as data** (`internal/schema`): one column list drives the Parquet node, the row-to-column fill and
+  the manifest message string (`TestFooterMatchesMessage` ties them together); Swath's 13-column S3 schema is
+  expressed as specs only.
+- **Linux engine**: one `getdents64` parser (`binary.NativeEndian`, `bytes.IndexByte`, fuzzed), one open helper,
+  one `statAt`, `readNames`/`buildKeys`/`statInto`/`emitChunks` phases; directories over 4096 entries become
+  2048-entry chunk ranges sharing one fd (the same chunk mechanism as an S3 split). An entry whose type changes
+  between listing and stat is now dropped and counted (`changed`) instead of re-sorted.
+- `.swath-state.json` is no longer written (no resume; consumers ignore it). `-statx` uses the full mask;
+  the default `stat` tier stays on `fstatat` (full-mask statx would fill `birth_time` and change the bytes).
+
+**Byte identity** (`realistic`): default settings give one part with MD5 `5c1382b494b1b17aa9c8303077a5ab25`,
+unchanged. `-part-size 4000000` gives 5 parts (it gave 6 before the ratio guess changed part 0), identical
+across `-encoders` 1, 2 and 4 (`verify.py` passes on both).
+
+**Performance work during the restructure** (each measured by A/B before keeping):
+- The emitter now collects a range's items and takes the order lock once per range (or per 1024 rows, or at
+  once when the drainer is on that range); one lock per `Rows`/`Child` call had added about 25 % to the
+  names tier.
+- The drainer reads finished ranges without the lock (their items are immutable).
+- `ctx.Err()` takes the context's mutex in Go 1.26; hot loops now check an atomic flag (order) or a
+  non-blocking receive on `ctx.Done()` (provider). Profile before the fix: `futex` and `Mutex.Lock` among the
+  top entries.
+- The router sends each order batch to a part as one channel message instead of one message per directory
+  segment: the 64 MiB full pipeline went from 2.21 s to 1.97 s (median of 5, A/B against the previous build).
+- Not kept: waking one worker per new range instead of broadcasting (no difference).
+
+**Before / after** (`realistic`, warm, median of 3, interleaved, pre-restructure binary built from commit
+`7d99970`; `bench/restructure.sh`, raw data in `bench/results/restructure-raw.tsv`). The host was noisy
+(load average 2.6 at the start; several configurations, before and after, have one run 0.3–0.5 s off).
+
+| Configuration | Before wall s | After wall s | Before user / sys s | After user / sys s | Before RSS MiB | After RSS MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| count-only, stat (before: unordered) | 1.24 | | 1.02 / 3.42 | | 40 | |
+| count-only, stat (before: dfs-parallel 100k) | 1.64 | 1.81 | 0.95 / 3.22 | 1.19 / 3.41 | 70 | 93 |
+| count-only, names (before: unordered) | 0.52 | | 0.64 / 1.13 | | 41 | |
+| count-only, names (before: dfs-parallel 100k) | 0.51 | 0.58 | 0.70 / 1.11 | 0.92 / 1.07 | 68 | 87 |
+| full, 64 MiB part (before: dfs-parallel, column) | 1.93 | 1.99 | 2.83 / 3.28 | 3.35 / 3.43 | 124 | 158 |
+| full, 4 MB parts, 1 encoder (before: part scheme) | 2.67 | **2.17** | 2.50 / 3.56 | 2.83 / 3.37 | 315 | **121** |
+| full, 4 MB parts, 2 encoders | 2.16 | 2.02 | 2.55 / 3.56 | 2.98 / 3.60 | 325 | **132** |
+| full, 4 MB parts, 4 encoders | 1.99 | 1.96 | 2.80 / 3.72 | 3.30 / 3.48 | 327 | **156** |
+
+Individual runs, stat count-only: before 1.64 / 1.79 / 1.33 s, after 1.26 / 1.82 / 1.81 s; both builds have
+runs near 1.2–1.3 s and near 1.6–1.8 s in this session, so the difference is inside the noise.
+
+Reading: the full pipelines are level or faster, with a third to a half of the memory at 4 MB parts
+(streaming per-part encoding no longer holds whole parts). **Residual regression:** the names tier is about
+10–14 % slower (0.58 vs 0.51 s) with about 0.2 s more user CPU, and every row uses 0.2–0.5 s more user CPU.
+Profiles of old and new names runs show the same top entries (syscalls ~50 %, sort, allocation, GC); I did not
+find a single cause. Suspects not yet isolated: one `Emitter` and node allocation per range plus the generic
+order stage's item lists (the old code used one fixed rows-plus-children node), and the extra parts machinery
+(logical-size accounting per row) in the full pipeline.
+
+**Line counts** (non-test / test Go lines):
+
+| Before | src | test | After | src | test |
+|---|---:|---:|---|---:|---:|
+| `cmd/swath-local` | 305 | 180 | `cmd/swath-local` | 202 | 83 |
+| `walk` | 1,618 | 413 | `internal/source` + `internal/source/fs` | 31 + 836 | 349 |
+| `sortout` | 1,162 | 498 | `internal/order` | 382 | 162 |
+| `pqout` | 767 | 108 | `internal/parquet` | 790 | 265 |
+| `record` | 105 | 0 | `internal/schema` | 239 | 0 |
+| `internal/proc` | 56 | 0 | `internal/listing` | 233 | 137 |
+| | | | `internal/dataset` | 426 | 115 |
+| **total** | **4,013** | **1,199** | **total** | **3,139** | **1,111** |
+
+New tests: mid-walk cancellation leaves no parts and returns `context.Canceled`; a sink failure stops the walk
+promptly (fewer than 200 of 9,331 ranges expanded); provider failure; an encoder failure and a publish failure
+leave no `_SUCCESS`; the dirent parser is fuzzed; the parquet-go copy contract behind zero-copy strings is
+pinned; the README flag list is generated from the flag set and checked by a test.
 
 ## Measurement drift
 

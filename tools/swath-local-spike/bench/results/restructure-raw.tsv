@@ -1,0 +1,43 @@
+config	rep	wall_s	user_s	sys_s	maxrss_kb
+before count-only stat (unordered)	1	1.25	1.13	3.42	41208
+before count-only stat (dfs-parallel 100k)	1	1.64	0.92	3.21	71648
+after count-only stat	1	1.26	1.12	2.98	89952
+before count-only names (unordered)	1	0.51	0.65	1.09	41696
+before count-only names (dfs-parallel 100k)	1	0.62	0.70	1.05	69880
+after count-only names	1	0.55	0.94	1.08	90848
+before full 64MiB (dfs-parallel 100k, column)	1	2.26	2.93	3.28	129124
+after full 64MiB	1	2.44	3.35	3.55	163808
+before full 4MB enc1 (dfs-parallel 100k, part)	1	2.97	2.39	3.46	322892
+after full 4MB enc1	1	2.55	3.05	3.29	128444
+before full 4MB enc2 (dfs-parallel 100k, part)	1	2.03	2.52	3.56	332740
+after full 4MB enc2	1	2.02	3.17	3.60	143200
+before full 4MB enc4 (dfs-parallel 100k, part)	1	2.01	2.80	3.72	325020
+after full 4MB enc4	1	1.83	3.14	3.36	152160
+before count-only stat (unordered)	2	1.19	1.02	3.24	41688
+before count-only stat (dfs-parallel 100k)	2	1.79	0.95	3.37	71832
+after count-only stat	2	1.82	1.31	3.42	94756
+before count-only names (unordered)	2	0.52	0.61	1.13	46400
+before count-only names (dfs-parallel 100k)	2	0.50	0.69	1.11	74860
+after count-only names	2	0.58	0.92	1.07	89356
+before full 64MiB (dfs-parallel 100k, column)	2	1.93	2.83	3.44	123732
+after full 64MiB	2	1.99	3.36	3.43	159328
+before full 4MB enc1 (dfs-parallel 100k, part)	2	2.67	2.52	3.56	328084
+after full 4MB enc1	2	2.09	2.79	3.45	124036
+before full 4MB enc2 (dfs-parallel 100k, part)	2	2.16	2.75	3.90	335824
+after full 4MB enc2	2	1.94	2.98	3.70	134880
+before full 4MB enc4 (dfs-parallel 100k, part)	2	1.99	3.04	3.76	335140
+after full 4MB enc4	2	1.96	3.30	3.77	159584
+before count-only stat (unordered)	3	1.24	0.96	3.43	40716
+before count-only stat (dfs-parallel 100k)	3	1.33	1.02	3.22	69868
+after count-only stat	3	1.81	1.19	3.41	97184
+before count-only names (unordered)	3	0.52	0.64	1.15	40108
+before count-only names (dfs-parallel 100k)	3	0.51	0.70	1.13	69736
+after count-only names	3	0.59	0.85	1.06	88700
+before full 64MiB (dfs-parallel 100k, column)	3	1.78	2.72	3.17	126568
+after full 64MiB	3	1.90	3.15	3.41	161952
+before full 4MB enc1 (dfs-parallel 100k, part)	3	2.54	2.50	3.60	322448
+after full 4MB enc1	3	2.17	2.83	3.37	119904
+before full 4MB enc2 (dfs-parallel 100k, part)	3	2.59	2.55	3.52	322908
+after full 4MB enc2	3	2.04	2.96	3.47	135008
+before full 4MB enc4 (dfs-parallel 100k, part)	3	1.89	2.62	3.56	343824
+after full 4MB enc4	3	2.02	3.35	3.48	159840
