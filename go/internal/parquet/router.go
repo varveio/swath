@@ -4,6 +4,8 @@
 package parquet
 
 import (
+	"github.com/varveio/swath/go/internal/faults"
+
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +31,22 @@ type Options struct {
 	Schema   *schema.Schema //
 	PartSize int64          // target encoded bytes per part
 	Encoders int            // parts encoded concurrently (>= 1)
+
+	// Publish, if set, publishes each part as soon as it is closed, in
+	// ordinal order (part i only after part i-1): the journaled run makes
+	// the part durable and renames it. limit is the frozen logical bytes
+	// per part (for resume), rows the total rows in parts 0..ordinal. It
+	// returns the part with its final path.
+	Publish func(ordinal int, p dataset.Part, limit, rows int64) (dataset.Part, error)
+	// Resume continues a run whose first parts are already published.
+	Resume *Resume
+}
+
+// Resume is the router state recovered from a journal.
+type Resume struct {
+	Parts []dataset.Part // published parts 0..n-1, final paths
+	Limit int64          // frozen logical bytes per part
+	Rows  int64          // rows in Parts
 }
 
 // Router is the order stage's sink. It owns part boundaries: a row's logical
@@ -56,16 +74,21 @@ type Router struct {
 	err     error // first encoder error
 	aborted atomic.Bool
 	closed  bool
+	done    []dataset.Part // resumed parts, already published
 }
 
 type part struct {
-	ordinal int
-	segs    chan [][]schema.Row
-	done    chan struct{}
-	logical int64
-	final   bool
-	info    dataset.Part
-	err     error
+	ordinal   int
+	prev      *part // the previous part of this run, nil for the first
+	segs      chan [][]schema.Row
+	done      chan struct{}
+	published chan struct{} // closed once published (or failed), with Publish set
+	logical   int64
+	final     bool
+	limit     int64 // logical bytes per part in effect after this part
+	rows      int64 // rows in parts 0..ordinal
+	info      dataset.Part
+	err       error
 }
 
 // NewRouter returns a router writing into opt.Out.
@@ -73,7 +96,11 @@ func NewRouter(opt Options) (*Router, error) {
 	if opt.PartSize <= 0 || opt.Encoders < 1 || opt.Schema == nil {
 		return nil, errors.New("parquet router: part size, encoders and schema are required")
 	}
-	return &Router{opt: opt, slots: make(chan struct{}, opt.Encoders)}, nil
+	r := &Router{opt: opt, slots: make(chan struct{}, opt.Encoders)}
+	if res := opt.Resume; res != nil {
+		r.done, r.limit, r.rows = res.Parts, res.Limit, res.Rows
+	}
+	return r, nil
 }
 
 // Write routes ascending segments into parts. Each part receives the
@@ -141,7 +168,11 @@ func (r *Router) open(ctx context.Context) error {
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	}
-	p := &part{ordinal: len(r.parts), segs: make(chan [][]schema.Row, partQueue), done: make(chan struct{})}
+	p := &part{ordinal: len(r.done) + len(r.parts), segs: make(chan [][]schema.Row, partQueue), done: make(chan struct{}),
+		published: make(chan struct{}), limit: r.limit}
+	if n := len(r.parts); n > 0 {
+		p.prev = r.parts[n-1]
+	}
 	r.parts = append(r.parts, p)
 	r.cur = p
 	r.active.Add(1)
@@ -155,6 +186,7 @@ func (r *Router) encode(p *part) {
 		<-r.slots
 		close(p.done)
 	}()
+	defer close(p.published)
 	columns := func() int { return max(1, r.opt.Encoders/max(1, int(r.active.Load()))) }
 	w, err := create(dataset.TempPath(r.opt.Out, p.ordinal), r.opt.Schema, p.ordinal, r.opt.Encoders, columns)
 	if err != nil {
@@ -166,6 +198,11 @@ func (r *Router) encode(p *part) {
 	}
 	for batch := range p.segs {
 		if p.err != nil || r.aborted.Load() {
+			continue
+		}
+		if err := faults.At("encoding"); err != nil {
+			p.err = err
+			r.fail(err)
 			continue
 		}
 	write:
@@ -186,6 +223,29 @@ func (r *Router) encode(p *part) {
 	p.info, p.err = w.close(p.final)
 	if p.err != nil {
 		r.fail(p.err)
+		return
+	}
+	if p.ordinal == 0 && !p.final {
+		ratio := float64(p.info.Bytes) / float64(max(1, p.logical))
+		p.limit = max(1, int64(float64(r.opt.PartSize)/ratio))
+	}
+	p.rows = p.info.Rows
+	base := int64(0)
+	if p.prev != nil {
+		<-p.prev.published // publication goes in ordinal order
+		if p.prev.err != nil {
+			p.err = fmt.Errorf("part %d: not published after part %d failed", p.ordinal, p.prev.ordinal)
+			return
+		}
+		base = p.prev.rows
+	} else if len(r.done) > 0 {
+		base = r.opt.Resume.Rows
+	}
+	p.rows += base
+	if r.opt.Publish != nil && !r.aborted.Load() {
+		if p.info, p.err = r.opt.Publish(p.ordinal, p.info, p.limit, p.rows); p.err != nil {
+			r.fail(p.err)
+		}
 	}
 }
 
@@ -204,8 +264,7 @@ func (r *Router) cut(ctx context.Context, final bool) error {
 		if p.err != nil {
 			return p.err
 		}
-		ratio := float64(p.info.Bytes) / float64(max(1, p.logical))
-		r.limit = max(1, int64(float64(r.opt.PartSize)/ratio))
+		r.limit = p.limit
 	}
 	return nil
 }
@@ -237,17 +296,20 @@ func (r *Router) Close() ([]dataset.Part, error) {
 		}
 	}
 	r.closed = true
-	out := make([]dataset.Part, len(r.parts))
+	out := append([]dataset.Part(nil), r.done...)
 	var errs []error
-	for i, p := range r.parts {
+	for _, p := range r.parts {
 		<-p.done
 		if p.err != nil {
 			errs = append(errs, p.err)
 		}
-		out[i] = p.info
+		out = append(out, p.info)
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
+	}
+	if len(out) == 0 && r.rows == 0 {
+		return out, nil
 	}
 	if err := dataset.Check(out, r.rows); err != nil {
 		return nil, fmt.Errorf("publication gate: %w", err)

@@ -49,9 +49,10 @@ func int32Col(name string, p Presence, get func(*Row) uint32) Column {
 // Row: every row is a current object (version_id and is_latest null,
 // is_delete_marker false, row_type OBJECT).
 var S3 = Schema{
-	Name:      "swath_listing",
-	ID:        "swath/canonical",
-	SortOrder: SortOrder,
+	Name:        "swath_listing",
+	ID:          "swath/canonical",
+	SortOrder:   SortOrder,
+	MaxKeyBytes: 1024,
 	Columns: []Column{
 		{Spec: Spec{"key", String, true}, Str: func(r *Row) (string, bool) { return r.Key, true }},
 		int64Col("size", HasSize, func(r *Row) int64 { return r.Size }),

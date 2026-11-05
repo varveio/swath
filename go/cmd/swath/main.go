@@ -18,10 +18,13 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/durable"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/fs"
 )
@@ -29,6 +32,14 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) == 3 && os.Args[1] == "inspect" {
+		if err := durable.Dump(os.Stdout, os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "swath:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	killAt(os.Getenv("SWATH_TEST_KILL_AT"))
 	if len(os.Args) < 2 || os.Args[1] != "list" {
 		usage(os.Stderr, newFlags(&options{}))
 		os.Exit(2)
@@ -39,6 +50,26 @@ func main() {
 		}
 		os.Exit(1)
 	}
+}
+
+// killAt is a test hook: "point:n" makes the process SIGKILL itself the
+// n-th time it reaches crash point point (package faults).
+func killAt(spec string) {
+	point, n, ok := strings.Cut(spec, ":")
+	if !ok {
+		return
+	}
+	nth, err := strconv.ParseInt(n, 10, 64)
+	if err != nil {
+		return
+	}
+	var seen atomic.Int64
+	faults.Set(func(p string) error {
+		if p == point && seen.Add(1) == nth {
+			kill()
+		}
+		return nil
+	})
 }
 
 type options struct {
@@ -55,6 +86,7 @@ type options struct {
 	fips, dualStack          bool
 	seed, sequential         bool
 	maxKeys                  int64
+	resume, noJournal        bool
 }
 
 func newFlags(o *options) *flag.FlagSet {
@@ -82,6 +114,8 @@ func newFlags(o *options) *flag.FlagSet {
 	f.BoolVar(&o.fetchOwner, "fetch-owner", false, "S3: fill owner_id and owner_display_name")
 	f.BoolVar(&o.seed, "seed", false, "S3: tile the keyspace from one delimiter page before splitting")
 	f.BoolVar(&o.sequential, "sequential", false, "S3: list with one continuation-token chain (no ranges; the reference)")
+	f.BoolVar(&o.resume, "resume", false, "S3: continue the interrupted run in -out (same source and output settings)")
+	f.BoolVar(&o.noJournal, "no-journal", false, "S3: publish parts only at the end, without the journal that -resume needs")
 	f.Int64Var(&o.maxKeys, "max-keys", 0, "S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)")
 	f.BoolVar(&o.json, "json", false, "print the summary as JSON")
 	f.SetOutput(io.Discard)
@@ -96,6 +130,7 @@ func usage(w io.Writer, f *flag.FlagSet) {
 	f.SetOutput(w)
 	f.PrintDefaults()
 	f.SetOutput(io.Discard)
+	fmt.Fprintln(w, "\nswath inspect <out> prints an S3 run's journal (.swath/journal) as JSON lines.")
 	fmt.Fprintln(w, "\nProfiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.")
 }
 
@@ -131,9 +166,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	cfg := listing.Config{
 		Root: root, Replace: o.overwrite, Fields: fields, NoDirs: o.noDirs, NoLinks: o.noLnk,
 		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
-		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable", Argv: append([]string{"list"}, args...),
+		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable", Argv: append([]string{"list"}, args...), Resume: o.resume,
 		S3: listing.S3Config{Endpoint: o.endpoint, Region: o.region, PathStyle: o.pathStyle, FIPS: o.fips, DualStack: o.dualStack,
-			Profile: o.profile, Anonymous: o.anonymous, Timeout: o.timeout, Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) }, FetchOwner: o.fetchOwner, Seed: o.seed, Sequential: o.sequential, MaxKeys: o.maxKeys},
+			Profile: o.profile, Anonymous: o.anonymous, Timeout: o.timeout, Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) }, FetchOwner: o.fetchOwner, Seed: o.seed, Sequential: o.sequential, MaxKeys: o.maxKeys, NoJournal: o.noJournal},
 	}
 	if !o.countOnly {
 		cfg.Out = o.out

@@ -1120,6 +1120,114 @@ parser is the same.
 - **Stale keys:** the container's stale environment keys give a typed 403 `InvalidAccessKeyId` with the
   request id.
 
+## Step 2: durable worklist and resume
+
+The design is in [docs/internals/durability.md](docs/internals/durability.md); it is laid out around the
+architecture review's crash-state table.
+
+**The unit is the part.** The router publishes each part as soon as it closes, in ordinal order:
+1. the part is synced;
+2. one fsynced journal record holds the part (ordinal, rows, bytes, MD5, min and max key), the router's
+   frozen part limit, the total rows so far and the range boundaries created since the previous record;
+3. the part is renamed and the directory synced.
+
+The journal (`.swath/journal`) is an append-only sequence of CRC-32C frames written by one goroutine; `swath
+inspect DIR` dumps it.
+
+`-resume`:
+- **checks:** it takes a `flock` on `.swath/lock`, then checks the frozen identity (provider, bucket, prefix,
+  schema, `parquet.WriterID`, part size, `-fetch-owner`; the endpoint may change) and every retained part's
+  size and MD5;
+- **lists:** from K (the last record's max key) through `(K, ⊤]`, tiled at the recorded boundaries;
+- **writes:** with the recorded part limit.
+
+Splits need no transaction: they only shape the resume tiling, never its correctness.
+
+**What the architecture review changed before this commit:**
+- the journal fails closed on interior corruption (a bad frame with data after it); only a torn tail is
+  tolerated;
+- unknown header versions are refused;
+- retained parts are verified by size and digest (`ErrPartAltered`);
+- an exclusive lock file gives one owning process;
+- the identity is provider- and writer-specific, not a URL;
+- new real kill points (response read, encoding, journal append, journal sync, rename);
+- a journal whose header never became durable starts the run over.
+
+**Gate: passed.** All of these hold:
+- `TestCrashMatrix` stops the run without cleanup at 12 named points (response read, split, range done,
+  encoding, part closed, journal append, journal sync, record written, rename, renamed, manifest,
+  `_SUCCESS`), at their 1st, 4th and 12th occurrence where reached. The fake bucket has 8,000 keys, 8
+  workers and parallel splits; the reorder budget is 512 rows, so crashes during listing find up to 14
+  published parts. Every `-resume` gives a dataset byte-identical to an uninterrupted run (parts and
+  manifest).
+- `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself at response read, encoding, journal append,
+  journal sync, rename, renamed and manifest (1st and 5th occurrence). Every resume is byte-identical.
+- `TestSIGKILLResume` kills the process from outside after 4 published parts; the resume is byte-identical.
+- `TestSplitStateModel` runs 14 keyspaces × 40 seeds. Each crashes at a random published key with a random
+  durable prefix of the boundary history; the resume lists exactly the keys after K and its ranges tile
+  (K, ⊤].
+- `TestResumeChecksIdentity`, `TestAlteredPartIsRefused` and `TestInteriorCorruptionFailsClosed` hold:
+  - a typed identity mismatch is refused;
+  - a fresh run over an interrupted one needs `-overwrite`;
+  - an altered part is refused;
+  - interior corruption, an unknown version and a second owner are refused.
+- T1–T6 still pass.
+
+The promise is byte-identical recovery on static sources and exactly-once durable output on live buckets.
+
+**Counters (A12).** The S3 provider's 41 counters are one table (`s3.Counters`:
+key, kind, unit, meaning) backed by `atomic.Int64`. The summary's `go.s3` object is rendered by iterating the
+table, and [docs/internals/counters.md](docs/internals/counters.md) is generated from it (`TestCountersDoc`).
+HTTP attempts and logical requests are separate counters.
+
+**Writer changes from the format discussion:**
+- every row group carries the standard Parquet `sorting_columns` (`key` ascending);
+- the footer records `swath.sort.index_bound_bytes=1024`;
+- the key length limit is per schema: 1,024 bytes for S3 (`schema.ErrKeyTooLong`), no cap for filesystem
+  paths, whose longer keys get truncated, conservative bounds (`TestKeyLimits`).
+
+These change part bytes once, so the fake-bucket MD5 baseline `2982b28d1b31` of steps 1 and 4a no longer
+applies; byte-identity tests compare runs of one build.
+
+**SIGPIPE.** No row text output exists yet (D5 text sinks are not ported). The only stdout write is the
+end-of-run summary, where Go's default SIGPIPE exit is acceptable. Clean broken-pipe handling lands with the
+text sinks.
+
+**Journal cost** (fake bucket, 971,927 keys, `-part-size 8MiB` so 3 parts and 3 records; the same binary
+with and without `-no-journal`, interleaved, median of 3; raw data in `bench/results/journal-cost-raw.tsv`).
+Other jobs (a live listing and a replay run) were running on the machine:
+
+| Config | Wall s with journal | Wall s without | CPU s with / without | Same parts |
+|---|---:|---:|---:|---|
+| sequential | 5.07 (4.80–5.11) | 4.88 (4.78–4.90) | 4.15 / 4.13 | yes, MD5 `07948e75ba25` |
+| 4 workers | 2.39 (2.29–2.50) | 2.82 (2.69–2.86) | 3.45 / 3.73 | yes |
+| 8 workers | 2.22 (2.18–2.34) | 2.47 (2.31–2.50) | 3.46 / 3.67 | yes |
+
+The journal's cost (one fsynced record and one rename and directory sync per part) is below the noise.
+Parallel runs were faster with it, plausibly because parts are published as they close instead of all at
+the end.
+
+**4a, continued** (the runs that were still going at the 4a commit):
+- **fourcastnetgfs replay, Go arm.** Go with 64 workers and `-seed` took 597.7 s and 6,116 requests, against
+  Java's 102.7 s with defaults and 395.4 s with policies off. Its mean active was **1.06** of 64: 2,927
+  bounded splits, of which 1,362 left an empty upper child. Density extrapolation caps the pivot at halfway
+  to `hi`, and on this skewed hierarchical shape that point lies beyond the data, so the lower child keeps
+  everything and the listing stays effectively sequential. This kernel weakness is the first input to step 5
+  (Java's structure and pivot probes address it).
+- **nara-1950-census and fourcastnetgfs, live Go at 64 workers.** Still running when this was written;
+  reported later.
+
+**Deferred from the architecture review:**
+- one shared byte admission budget across provider pages, reorder storage and encoder queues (today: a row
+  budget, bounded channels and a 16 MiB response cap);
+- separate frontier, reorder and encoder wait counters, and unimplemented/disabled/zero states in the
+  summary;
+- the first asynchronous failure cancelling the whole pipeline through one cause (encoder errors reach the
+  order stage through the sink today);
+- cooperative cancellation inside filesystem enumeration;
+- bounded CLI shutdown;
+- the provider capability contract (documented in providers.md, to be implemented with GCS).
+
 ## Measurement drift
 
 The host slowed during the session (Firecracker guest; nothing else was running in the guest, and `vmstat`

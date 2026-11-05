@@ -150,6 +150,11 @@ func Run[R any](ctx context.Context, p source.Provider[R], sink Sink, opt Option
 		}()
 	}
 	st, err := o.drainTree(root, sink)
+	if err != nil && ctx.Err() != nil {
+		// A worker failed first and cancelled the run; report its error,
+		// not the cancellation the drainer saw because of it.
+		err = context.Cause(ctx)
+	}
 	o.mu.Lock()
 	o.finished = true
 	o.work.Broadcast()

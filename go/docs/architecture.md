@@ -32,7 +32,10 @@ There is no external sort, no staging and no merge.
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |
 | `internal/schema` | `Row`, schemas as data (`Local`, `S3`), the sort rule, the Parquet message string | – |
 | `internal/parquet` | file writer, schema binding, codec, part router, encoders | schema, dataset |
-| `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order | – |
+| `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order | faults |
+| `internal/durable` | the journal (CRC-framed records, one writer goroutine), resume identity | dataset |
+| `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
+| `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
 
 `order` and `parquet` know nothing about sources; providers know nothing about Parquet. `schema.Row` is shared:
 filesystem fields inline, object-store fields behind one pointer (`Row.Object`, nil for filesystem rows).
@@ -44,6 +47,9 @@ filesystem fields inline, object-store fields behind one pointer (`Row.Object`, 
 - **One drainer** (the goroutine that called `order.Run`) walks the node tree depth-first and calls the sink
   (the router) with contiguous ascending segments. It expands a queued range itself when it needs it and no
   worker has claimed it, so a full buffer cannot deadlock the walk.
+- **Publication**: with a journal (S3 with `-out`), each encoder goroutine publishes its part when it closes,
+  after the previous part's publication (a channel per part keeps ordinal order): journal record, then
+  rename. See [internals/durability.md](internals/durability.md).
 - **Encoders**: the router starts one goroutine per open part, at most `Encoders` at a time (a semaphore
   channel), each with its own writer and zstd encoder, fed through a bounded channel. When fewer parts than
   encoders are open, a part encodes a page's columns on several goroutines; the bytes are identical.
@@ -72,5 +78,6 @@ One `-memory` budget: the reorder bound is `memory / 2 KiB` rows; encoder channe
 ## Further reading
 
 [internals/ordering.md](internals/ordering.md) · [internals/parquet-output.md](internals/parquet-output.md) ·
+[internals/durability.md](internals/durability.md) ·
 [internals/providers.md](internals/providers.md) · [internals/contracts.md](internals/contracts.md) ·
 [testing.md](testing.md) · [cli.md](cli.md) · measurements: [../REPORT.md](../REPORT.md)

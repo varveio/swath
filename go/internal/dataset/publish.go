@@ -4,6 +4,8 @@
 package dataset
 
 import (
+	"github.com/varveio/swath/go/internal/faults"
+
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -16,20 +18,21 @@ import (
 
 // Part is the close-gated metadata of one written part.
 type Part struct {
-	Path   string // temporary path while unpublished
-	Rows   int64
-	Bytes  int64
-	MD5    string
-	MinKey string
-	MaxKey string
+	Path   string `json:"path"` // temporary path while unpublished, the final path once published
+	Rows   int64  `json:"rows"`
+	Bytes  int64  `json:"bytes"`
+	MD5    string `json:"md5"`
+	MinKey string `json:"min_key"`
+	MaxKey string `json:"max_key"`
 }
 
-// Check is the publication gate: dense ordinals (part i at TempPath i),
-// strictly ascending disjoint key ranges, and rows written == rows routed.
+// Check is the publication gate: dense ordinals (part i at TempPath i, or
+// at its final name once published early), strictly ascending disjoint key
+// ranges, and rows written == rows routed.
 func Check(parts []Part, rows int64) error {
 	var n int64
 	for i, p := range parts {
-		if filepath.Base(p.Path) != PartName(i)+".tmp" {
+		if b := filepath.Base(p.Path); b != PartName(i)+".tmp" && b != PartName(i) {
 			return fmt.Errorf("part ordinals not dense: index %d holds %s", i, p.Path)
 		}
 		if p.Rows == 0 || p.MinKey > p.MaxKey {
@@ -103,8 +106,10 @@ func Publish(out string, meta Meta, parts []Part, reports []File) error {
 	}
 	var links strings.Builder
 	for i, p := range parts {
-		if err := os.Rename(p.Path, filepath.Join(data, PartName(i))); err != nil {
-			return fmt.Errorf("publish part %d: %w", i, err)
+		if final := filepath.Join(data, PartName(i)); p.Path != final {
+			if err := os.Rename(p.Path, final); err != nil {
+				return fmt.Errorf("publish part %d: %w", i, err)
+			}
 		}
 		key := DataDir + "/" + PartName(i)
 		m.Files = append(m.Files, manifestFile{Key: key, Size: p.Bytes, MD5checksum: p.MD5, RowCount: p.Rows, MinKey: p.MinKey, MaxKey: p.MaxKey})
@@ -117,6 +122,9 @@ func Publish(out string, meta Meta, parts []Part, reports []File) error {
 	if err := writeJSON(out, ManifestName, m); err != nil {
 		return err
 	}
+	if err := faults.At("manifest"); err != nil {
+		return err
+	}
 	if err := writeAtomic(out, SymlinkName, []byte(links.String())); err != nil {
 		return err
 	}
@@ -125,7 +133,10 @@ func Publish(out string, meta Meta, parts []Part, reports []File) error {
 			return err
 		}
 	}
-	return writeAtomic(out, SuccessName, nil)
+	if err := writeAtomic(out, SuccessName, nil); err != nil {
+		return err
+	}
+	return faults.At("success")
 }
 
 func writeJSON(dir, name string, v any) error {
@@ -172,4 +183,22 @@ func syncDir(dir string) error {
 		err = nil
 	}
 	return errors.Join(err, d.Close())
+}
+
+// PublishPart renames one closed part to its final name and syncs the data
+// directory: the early publication of a journaled run, after the part's
+// journal record is durable. It returns the part with its final path.
+func PublishPart(out string, ordinal int, p Part) (Part, error) {
+	final := filepath.Join(out, DataDir, PartName(ordinal))
+	if err := faults.At("rename"); err != nil {
+		return p, err
+	}
+	if err := os.Rename(p.Path, final); err != nil {
+		return p, fmt.Errorf("publish part %d: %w", ordinal, err)
+	}
+	if err := syncDir(filepath.Join(out, DataDir)); err != nil {
+		return p, fmt.Errorf("sync data directory: %w", err)
+	}
+	p.Path = final
+	return p, nil
 }

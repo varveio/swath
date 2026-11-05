@@ -21,6 +21,8 @@ dataset layout"); this page says how the Go writer meets it.
 | Row groups | byte target 8 MiB on the writer's `Size()` estimate, checked at page boundaries; ceiling 1,000,000 rows | served geometry; the estimate is the encoded payload, not a heap bound. |
 | Codec | zstd, klauspost `SpeedDefault` with entropy coding of all-literal blocks enabled | pure Go (`CGO_ENABLED=0`). The default wrapper skips entropy coding on all-literal blocks, which loses most of the gain on hex ETags. |
 | Column parallelism | a page's columns may be encoded on several goroutines | used when fewer parts than encoders are open, so a one-part run uses every core. Output is byte-identical to serial encoding (tested). |
+| Key length | per schema (`schema.MaxKeyBytes`): 1,024 bytes for S3 (contracts §6; a longer key is the typed `schema.ErrKeyTooLong`), no cap for filesystem paths | filesystem keys longer than the 1,024-byte bound truncation get truncated, conservative column-index bounds (min truncated, max rounded up); `TestKeyLimits` covers both. |
+| `sorting_columns` | every row group records `key` ascending (standard Parquet metadata) | generic readers learn the order without the swath stamps; metadata only, rows already arrive sorted. |
 | `created_by` | `swath-local 0.0.0-spike` | changes at the first release; byte-identity checks pin it. |
 
 ## Run reports
@@ -35,8 +37,9 @@ datasets carry this tool's report as `_swath_local_summary.json`; Java has no fi
 
 Every part carries swath's `SortedParquetWriter` stamps: `swath.sort.order`
 (`key_bytes_unsigned,version_id_null_first,row_type_rank`), `swath.sort.mode=objects`,
-`swath.sort.format_version=1`, `swath.sort.file_index` (1-based) and `swath.sort.file_final=true` on the last
-part only. Readers use them to trust the global order without re-sorting; `file_final` lets a reader tell a
+`swath.sort.format_version=1`, `swath.sort.file_index` (1-based), `swath.sort.file_final=true` on the last
+part only, and `swath.sort.index_bound_bytes=1024`: the column-index truncation, so readers know bounds of
+longer values are conservative. `sorting_columns` repeats the key order in standard Parquet metadata. Readers use them to trust the global order without re-sorting; `file_final` lets a reader tell a
 complete dataset from a truncated copy.
 
 ## Part router and deterministic boundaries

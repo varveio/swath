@@ -5,6 +5,7 @@
 package schema
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -41,8 +42,15 @@ type Schema struct {
 	Name      string // Parquet message name
 	ID        string // stamped into manifest.json as schemaId
 	SortOrder string // swath.sort.order footer value
-	Columns   []Column
+	// MaxKeyBytes caps key length (0: no cap). S3 keys are at most 1,024
+	// bytes (contracts §6); filesystem paths are not capped, and their
+	// column-index bounds are truncated (conservative) instead.
+	MaxKeyBytes int
+	Columns     []Column
 }
+
+// ErrKeyTooLong reports a key over the schema's MaxKeyBytes.
+var ErrKeyTooLong = errors.New("key longer than the schema allows")
 
 // Specs returns the column specs in order.
 func (s *Schema) Specs() []Spec {

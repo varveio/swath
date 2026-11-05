@@ -4,6 +4,8 @@
 package client
 
 import (
+	"github.com/varveio/swath/go/internal/faults"
+
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -312,6 +314,9 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 	}
 	if buf.Len() > maxResponse {
 		return nil, fmt.Errorf("ListObjectsV2 response larger than %d bytes", maxResponse)
+	}
+	if err := faults.At("response-read"); err != nil {
+		return nil, err
 	}
 	p, _ := c.parsers.Get().(*parser)
 	if p == nil {

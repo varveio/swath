@@ -43,6 +43,8 @@ usage: swath list <root> [flags]
     	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -no-dirs
     	omit kind=DIR rows
+  -no-journal
+    	S3: publish parts only at the end, without the journal that -resume needs
   -no-link-target
     	do not read symlink targets
   -out directory
@@ -59,12 +61,16 @@ usage: swath list <root> [flags]
     	S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
+  -resume
+    	S3: continue the interrupted run in -out (same source and output settings)
   -seed
     	S3: tile the keyspace from one delimiter page before splitting
   -sequential
     	S3: list with one continuation-token chain (no ranges; the reference)
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
+
+swath inspect <out> prints an S3 run's journal (.swath/journal) as JSON lines.
 
 Profiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.
 ```
@@ -85,6 +91,10 @@ Profiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.
   identity, credential processes, AssumeRole, container and instance roles. With nothing found, requests go
   unsigned. Secrets are never taken from flags (they would show in `ps`). Details:
   [internals/providers.md](internals/providers.md).
+- **Resume:** an S3 run with `-out` keeps a journal in `-out/.swath/`; after a crash or interruption,
+  rerun the same command with `-resume` ([internals/durability.md](internals/durability.md)).
+  `-no-journal` turns it off (parts are then published only at the end). `swath inspect DIR` prints the
+  journal.
 - **Exit status** is non-zero on any error; a failed or interrupted run (SIGINT, SIGTERM) leaves no `_SUCCESS`
   and no temporary parts.
 - **Profiling:** `SWATH_LOCAL_CPUPROFILE` and `SWATH_LOCAL_MEMPROFILE` name pprof output files.

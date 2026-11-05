@@ -45,6 +45,17 @@ func safeString(s string) bool {
 	return true
 }
 
+// safePrefix is the longest prefix of s made of safe scalars. It sorts at
+// or before s, so it is a usable start-after for listing from s.
+func safePrefix(s string) string {
+	for i, r := range s {
+		if r == utf8.RuneError || !isSafe(int(r)) {
+			return s[:i]
+		}
+	}
+	return s
+}
+
 // idx/cp map scalars to a dense index without surrogates and back.
 func idx(cp int) int {
 	if cp < 0xD800 {

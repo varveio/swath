@@ -20,6 +20,8 @@ const (
 	// SummaryName is the run report of filesystem datasets. It avoids Swath's reserved
 	// _swath_summary.json, whose schema readers such as Varve validate.
 	SummaryName = "_swath_local_summary.json"
+	// JournalDir holds an S3 run's durable journal (package durable).
+	JournalDir = ".swath"
 )
 
 // Footer key/value stamps on every sorted part (Swath's SortedParquetWriter).
@@ -29,6 +31,9 @@ const (
 	StampFormat    = "swath.sort.format_version"
 	StampFileIndex = "swath.sort.file_index" // 1-based
 	StampFileFinal = "swath.sort.file_final" // "true", last part only
+	// StampIndexBound is the ColumnIndex min/max truncation in bytes: bounds
+	// of longer values are truncated, so readers treat them as conservative.
+	StampIndexBound = "swath.sort.index_bound_bytes"
 )
 
 // PartName is the published name of part ordinal i: dense, zero-based, %05d,
@@ -43,4 +48,4 @@ func TempPath(out string, i int) string {
 // ownEntries are the root entries a dataset owns; overwrite removes these and
 // their .tmp siblings, nothing else. .swath-state.json is Swath's resume
 // identity file, which this tool does not write but older outputs may hold.
-var ownEntries = []string{DataDir, ManifestName, SuccessName, SummaryName, SymlinkName, SwathSummaryName, ".swath-state.json"}
+var ownEntries = []string{DataDir, ManifestName, SuccessName, SummaryName, SymlinkName, SwathSummaryName, ".swath-state.json", JournalDir}

@@ -4,9 +4,12 @@
 package s3
 
 import (
+	"slices"
+
 	"context"
 	"errors"
 	"fmt"
+	"github.com/varveio/swath/go/internal/faults"
 	"math"
 	"os"
 	"time"
@@ -29,6 +32,7 @@ const (
 	interval kind = iota
 	whole         // sequential oracle: the scope as one continuation chain
 	seed          // one delimiter page that emits the first tiling
+	resume        // the tiling of (after, ⊤] from a journal's boundaries
 )
 
 type origin uint8
@@ -45,6 +49,7 @@ type Range struct {
 	kind   kind
 	lo, hi string
 	open   bool
+	after  string // on resume: keys <= after are already published; lo is a safe start-after at or below it
 	id     uint64
 	born   origin
 }
@@ -58,16 +63,19 @@ type running struct {
 	id           uint64
 }
 
-// Root is the scope: the sequential chain, the seed, or (⊥, ⊤].
+// Root is the scope: the sequential chain, a resumed tiling, the seed, or
+// (⊥, ⊤].
 func (p *Provider) Root() Range {
 	switch {
 	case p.opt.Sequential:
 		return Range{kind: whole}
+	case p.opt.Resume != nil:
+		return Range{kind: resume}
 	case p.opt.Seed:
 		return Range{kind: seed}
 	}
 	p.mu.Lock()
-	p.stats.Seed.Skipped = true
+	p.c.Set(cSeedSkipped, 1)
 	p.mu.Unlock()
 	return Range{kind: interval, open: true}
 }
@@ -79,8 +87,47 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range])
 		return p.expandSequential(ctx, e)
 	case seed:
 		return p.expandSeed(ctx, e)
+	case resume:
+		return p.expandResume(e)
 	}
 	return p.expandRange(ctx, r, e)
+}
+
+// expandResume tiles (after, ⊤] at the recorded boundaries above after:
+// (after, b1], …, (bn, ⊤]. It lists nothing itself.
+func (p *Provider) expandResume(e source.Emitter[Range]) error {
+	after := p.opt.Resume.After
+	cuts := make([]string, 0, len(p.opt.Resume.Boundaries))
+	for _, b := range p.opt.Resume.Boundaries {
+		if b > after {
+			cuts = append(cuts, b)
+		}
+	}
+	slices.Sort(cuts)
+	cuts = slices.Compact(cuts)
+	p.mu.Lock()
+	tiles := make([]Range, 0, len(cuts)+1)
+	lo := after
+	for _, c := range cuts {
+		tiles = append(tiles, Range{lo: lo, hi: c, id: p.ids.Add(1), born: fromSeed})
+		lo = c
+	}
+	tiles = append(tiles, Range{lo: lo, open: true, id: p.ids.Add(1), born: fromSeed})
+	// K is a real key and may hold scalars S3 refuses in start-after: start
+	// the first tile at its safe prefix and drop keys up to K there.
+	if s := safePrefix(after); s != after {
+		tiles[0].lo, tiles[0].after = s, after
+	}
+	p.queued += len(tiles)
+	p.c.Max(cMaxQueued, int64(p.queued))
+	p.c.Set(cResumedRanges, int64(len(tiles)))
+	p.mu.Unlock()
+	for _, t := range tiles {
+		if err := e.Child(t); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // account integrates the active count over time; mu held.
@@ -98,7 +145,7 @@ func (p *Provider) enter(r Range) *running {
 	}
 	st := &running{id: r.id, open: r.open}
 	p.running[r.id] = st
-	p.stats.MaxActive = max(p.stats.MaxActive, len(p.running))
+	p.c.Max(cMaxActive, int64(len(p.running)))
 	return st
 }
 
@@ -107,13 +154,13 @@ func (p *Provider) leave(r Range, st *running, start time.Time) {
 	defer p.mu.Unlock()
 	p.account(time.Now())
 	delete(p.running, r.id)
-	p.stats.BusyNs += int64(time.Since(start))
+	p.c.Add(cBusyNs, int64(time.Since(start)))
 	if st.keys == 0 {
 		switch r.born {
 		case fromLower:
-			p.stats.ChildEmpty.Lower++
+			p.c.Inc(cChildEmptyLower)
 		case fromUpper:
-			p.stats.ChildEmpty.Upper++
+			p.c.Inc(cChildEmptyUpper)
 		}
 	}
 }
@@ -132,6 +179,20 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		if err != nil {
 			return err
 		}
+		skipped := 0
+		if r.after != "" { // resume: drop keys already published
+			n := 0
+			for n < len(out.Contents) && out.Contents[n].Key <= r.after {
+				n++
+			}
+			if n > 0 {
+				c, skipped = out.Contents[n-1].Key, n
+				out.Contents = out.Contents[n:]
+				p.mu.Lock()
+				p.c.Add(cOverfetchKeys, int64(n))
+				p.mu.Unlock()
+			}
+		}
 		kept, reached := len(out.Contents), false
 		for i := range out.Contents {
 			k := out.Contents[i].Key
@@ -148,26 +209,29 @@ func (p *Provider) expandRange(ctx context.Context, r Range, e source.Emitter[Ra
 		if truncated && out.NextContinuationToken == "" {
 			return errors.New("truncated page without a continuation token")
 		}
-		if truncated && kept == 0 && !reached {
+		if truncated && kept == 0 && !reached && skipped == 0 {
 			return fmt.Errorf("truncated page with no key in (%q, %q]", r.lo, r.hi)
 		}
 		if err := p.emit(p.rows(out, kept), e); err != nil {
 			return err
 		}
 		p.mu.Lock()
-		p.stats.OverfetchKeys += int64(len(out.Contents) - kept)
+		p.c.Add(cOverfetchKeys, int64(len(out.Contents)-kept))
 		st.keys += int64(kept)
 		p.mu.Unlock()
 		done := reached || !truncated || (!r.open && kept > 0 && c == r.hi)
 		if done {
 			p.covered(r.lo, r.hi, r.open)
-			return nil
+			return faults.At("range-done")
 		}
 		page := make([]string, kept)
 		for i := range page {
 			page[i] = out.Contents[i].Key
 		}
 		if lower, upper, ok := p.decide(st, r, page, c); ok {
+			if err := faults.At("split"); err != nil {
+				return err
+			}
 			p.covered(r.lo, c, false)
 			if err := e.Child(lower); err != nil {
 				return err
@@ -204,7 +268,7 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (lower,
 	hunger := p.opt.Workers - len(p.running) - p.queued
 	if p.opt.splitCoin == nil {
 		if hunger <= 0 {
-			p.stats.Split.Skipped.NoDemand++
+			p.c.Inc(cSplitSkippedNoDemand)
 			return
 		}
 		rank := 0
@@ -213,9 +277,9 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (lower,
 				rank++
 			}
 		}
-		p.stats.Split.Considered++
+		p.c.Inc(cSplitConsidered)
 		if rank >= hunger {
-			p.stats.Split.Skipped.Outranked++
+			p.c.Inc(cSplitSkippedOutranked)
 			return
 		}
 	}
@@ -228,7 +292,7 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (lower,
 	// it cannot produce a safe key.
 	m, found := extrapolate(page, c, ceil, bounded, int64(max(4, hunger)))
 	if found {
-		p.stats.Split.Extrapolated++
+		p.c.Inc(cSplitExtrapolated)
 	} else if r.open {
 		m, found = forwardReflect(r.lo, c)
 	} else {
@@ -236,30 +300,31 @@ func (p *Provider) decide(st *running, r Range, page []string, c string) (lower,
 	}
 	switch guard(c, m, found, ceil, bounded, false) {
 	case clauseNoPivot:
-		p.stats.Split.Rejected.NoPivot++
+		p.c.Inc(cSplitRejectedNoPivot)
 		st.unsplittable = true
 		return
 	case clauseUnsafeCursor:
-		p.stats.Split.Rejected.UnsafeCursor++
+		p.c.Inc(cSplitRejectedUnsafeCursor)
 		st.unsplittable = true
 		return
 	case clauseCursor:
-		p.stats.Split.Rejected.Cursor++
+		p.c.Inc(cSplitRejectedCursor)
 		return
 	case clauseBound:
-		p.stats.Split.Rejected.Bound++
+		p.c.Inc(cSplitRejectedBound)
 		return
 	case clauseDone:
-		p.stats.Split.Rejected.Done++
+		p.c.Inc(cSplitRejectedDone)
 		return
 	}
 	if r.open {
-		p.stats.Split.AcceptedFrontier++
+		p.c.Inc(cSplitAcceptedFrontier)
 	} else {
-		p.stats.Split.AcceptedBounded++
+		p.c.Inc(cSplitAcceptedBounded)
 	}
 	p.queued += 2
-	p.stats.MaxQueued = max(p.stats.MaxQueued, p.queued)
+	p.c.Max(cMaxQueued, int64(p.queued))
+	p.bounds = append(p.bounds, c, m) // in memory: the journal takes them at the next part
 	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower}
 	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper}
 	if os.Getenv("SWATH_LOCAL_SPLIT_TRACE") != "" {
@@ -329,14 +394,16 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range]) erro
 	}
 	var cuts []string
 	p.mu.Lock()
-	ss := &p.stats.Seed
-	ss.Prefixes = int64(len(out.CommonPrefixes))
-	ss.Truncated = out.IsTruncated
+	p.c.Set(cSeedPrefixes, int64(len(out.CommonPrefixes)))
+	seedTruncated := out.IsTruncated
+	if seedTruncated {
+		p.c.Set(cSeedTruncated, 1)
+	}
 	for _, k := range out.CommonPrefixes {
 		if safeString(k) {
 			cuts = append(cuts, k)
 		} else {
-			ss.Unsafe++
+			p.c.Inc(cSeedUnsafe)
 		}
 	}
 	if limit := min(1000, 4*p.opt.Workers); len(cuts) > limit {
@@ -344,9 +411,10 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range]) erro
 		for i := range limit {
 			picked = append(picked, cuts[(i*len(cuts)+limit/2)/limit])
 		}
-		cuts, ss.Subsampled = picked, true
+		cuts = picked
+		p.c.Set(cSeedSubsampled, 1)
 	}
-	ss.Cuts = int64(len(cuts))
+	p.c.Set(cSeedCuts, int64(len(cuts)))
 	// Closing sentinel: when the page holds the whole top level and ends with
 	// a prefix, bound the last tile at prefixCeil(pk) so it is not the open
 	// frontier (the bounded midpoint then applies to it).
@@ -360,16 +428,17 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range]) erro
 		lastPrefix := out.CommonPrefixes[len(out.CommonPrefixes)-1]
 		u, ok := prefixCeil(pk)
 		switch {
-		case ss.Truncated:
-			ss.Declined["truncated"]++
+		case seedTruncated:
+			p.c.Inc(cSentinelDeclinedTruncated)
 		case lastObject > lastPrefix || pk != lastPrefix:
-			ss.Declined["object_last"]++
+			p.c.Inc(cSentinelDeclinedObjectLast)
 		case !ok || u <= pk:
-			ss.Declined["no_ceiling"]++
+			p.c.Inc(cSentinelDeclinedNoCeiling)
 		case !safeString(u):
-			ss.Declined["unsafe"]++
+			p.c.Inc(cSentinelDeclinedUnsafe)
 		default:
-			sentinel, ss.Sentinel = u, true
+			sentinel = u
+			p.c.Set(cSeedSentinel, 1)
 		}
 	}
 	tiles := make([]Range, 0, len(cuts)+2)
@@ -383,9 +452,12 @@ func (p *Provider) expandSeed(ctx context.Context, e source.Emitter[Range]) erro
 		lo = sentinel
 	}
 	tiles = append(tiles, Range{lo: lo, open: true, id: p.ids.Add(1), born: fromSeed})
+	for _, t := range tiles[1:] {
+		p.bounds = append(p.bounds, t.lo)
+	}
 	p.queued += len(tiles)
-	p.stats.MaxQueued = max(p.stats.MaxQueued, p.queued)
-	p.stats.Pages++
+	p.c.Max(cMaxQueued, int64(p.queued))
+	p.c.Inc(cPages)
 	p.mu.Unlock()
 	for _, t := range tiles {
 		if err := e.Child(t); err != nil {

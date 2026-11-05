@@ -129,9 +129,30 @@ sink-wait time.
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
-**What the full engine adds** (later steps, each by measured need): durable worklist and resume (step 2);
+**Resume.** `Options.Resume{After, Boundaries}` makes the root a tiling of `(After, ⊤]` at the recorded
+boundaries; `TakeBoundaries` hands the journal the split cursors, pivots and seed cuts made since the last
+part ([durability.md](durability.md)).
+
+**What the full engine adds** (later steps, each by measured need):
 structure and `max_keys=1` probes; density-aware pivots from probes; the owner gate chain, pacing and futility
 backoff; AIMD concurrency; mass-aware and multi-level seeding; the rate-anchored size estimator; versions mode.
+
+## The contract for the next providers (planned with GCS)
+
+From the architecture review. The current contract holds for S3 and the filesystem; GCS will make it
+explicit:
+- **Capabilities**, declared once per provider:
+  - byte-ordered output or normalized (sorted inside the provider);
+  - seekable restart (start-after a key) or token replay;
+  - snapshot or live listing.
+- **Bounds:** explicit bound inclusivity per provider, as S3's `(lo, hi]` is today; no per-range
+  comparators (output order is always unsigned bytes).
+- **Bounded cost:** one `Rows` call has a bounded cost; no unbounded in-memory directory or page.
+- **Restart:** an opaque, versioned restart descriptor, which the journal stores instead of S3 boundaries.
+- **Disposal:** a cancelled run releases every queued range's resources. Queued filesystem chunks hold
+  directory file descriptors today; that leak is a known defect.
+- **Scheduler observation:** a narrow interface (idle capacity, frontier distance, output pressure) replaces
+  the provider's own active/queued bookkeeping.
 
 ## Next providers
 

@@ -198,5 +198,17 @@ func isDataset(out, schemaID string) bool {
 	}
 	_, e1 := os.Stat(filepath.Join(out, SuccessName))
 	fi, e2 := os.Stat(filepath.Join(out, DataDir))
-	return e1 == nil && e2 == nil && fi.IsDir()
+	if e1 == nil && e2 == nil && fi.IsDir() {
+		return true
+	}
+	// An interrupted journaled run: data/ and .swath/journal, no manifest yet.
+	_, e3 := os.Stat(filepath.Join(out, JournalDir, "journal"))
+	return e2 == nil && fi.IsDir() && e3 == nil
+}
+
+// Resumable reports whether out holds an interrupted journaled run.
+func Resumable(out string) bool {
+	_, e1 := os.Stat(filepath.Join(out, SuccessName))
+	_, e2 := os.Stat(filepath.Join(out, JournalDir, "journal"))
+	return e1 != nil && e2 == nil
 }

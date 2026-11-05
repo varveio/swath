@@ -21,6 +21,9 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 | order and memory bound | `order` `TestOrderedOutput`, `TestSinkFailureStopsPromptly`, `TestCancellation` |
 | deterministic output | `parquet` `TestRouterIsDeterministicAcrossEncoders`, `TestColumnParallelEncodingIsByteIdentical` |
 | publication order and gate | `dataset` `TestCheck`, `TestPublishFailureLeavesNoSuccess`; `listing` cancellation and encoder-failure tests |
+| crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`: an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, manifest, `_SUCCESS`), at its 1st, 4th and 12th occurrence, then `-resume`: the dataset is byte-identical to an uninterrupted run. `cmd/swath` `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed. `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run |
+| split states (I4) | `source/s3` `TestSplitStateModel`: random runs, a crash at a random published key with a random durable prefix of the boundary history; the resume lists exactly the keys after K and its ranges tile (K, ⊤] |
+| journal | `durable` `TestJournalRoundTripAndTornTail`, `TestCheck` (identity table) |
 | overwrite safety | `dataset` `TestPrepareNeverDeletesTheTree`, `TestReplaceRemovesOnlyOwnEntries` |
 
 ## Oracles

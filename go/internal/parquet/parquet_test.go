@@ -5,6 +5,7 @@ package parquet
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -262,4 +263,58 @@ func keysOf(rows []schema.Row) []string {
 		out[i] = rows[i].Key
 	}
 	return out
+}
+
+// TestKeyLimits: the S3 schema refuses a key over 1,024 bytes with a typed
+// error; the filesystem schema writes longer keys, and the footer records
+// the bound truncation, sorting_columns and readable truncated bounds.
+func TestKeyLimits(t *testing.T) {
+	out := t.TempDir()
+	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
+	long := strings.Repeat("k", 1500)
+	r, _ := NewRouter(Options{Out: out, Schema: &schema.S3, PartSize: 1 << 20, Encoders: 1})
+	_ = r.Write(context.Background(), [][]schema.Row{{{Key: long, Object: &schema.ObjectMeta{}}}})
+	if _, err := r.Close(); !errors.Is(err, schema.ErrKeyTooLong) {
+		t.Fatalf("S3 schema: %v", err)
+	}
+	out = t.TempDir()
+	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
+	r, _ = NewRouter(Options{Out: out, Schema: &schema.Local, PartSize: 1 << 20, Encoders: 1})
+	rows := []schema.Row{{Key: "a" + long, Kind: schema.KindFile}, {Key: "b" + long, Kind: schema.KindFile}}
+	if err := r.Write(context.Background(), [][]schema.Row{rows}); err != nil {
+		t.Fatal(err)
+	}
+	parts, err := r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(parts[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	st, _ := f.Stat()
+	pf, err := pq.OpenFile(f, st.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	kv := map[string]string{}
+	for _, m := range pf.Metadata().KeyValueMetadata {
+		kv[m.Key] = m.Value
+	}
+	if kv[dataset.StampIndexBound] != "1024" {
+		t.Fatalf("footer: %v", kv)
+	}
+	rg := pf.Metadata().RowGroups[0]
+	if len(rg.SortingColumns) != 1 || rg.SortingColumns[0].ColumnIdx != 0 || rg.SortingColumns[0].Descending {
+		t.Fatalf("sorting_columns: %+v", rg.SortingColumns)
+	}
+	ci, err := pf.RowGroups()[0].ColumnChunks()[0].ColumnIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lo, hi := ci.MinValue(0).ByteArray(), ci.MaxValue(0).ByteArray()
+	if len(lo) > 1024 || len(hi) > 1024 || string(lo) > rows[0].Key || string(hi) < rows[1].Key[:len(hi)] {
+		t.Fatalf("bounds %d/%d bytes not conservative", len(lo), len(hi))
+	}
 }

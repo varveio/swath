@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/varveio/swath/go/internal/counters"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,16 +49,23 @@ type Options struct {
 	Timeout    time.Duration // per request; default 30 s
 	Warn       func(string)  // one-time warnings for the user; may be nil
 	FetchOwner bool
-	Sequential bool  // one continuation-token chain, no ranges (the oracle)
-	Seed       bool  // parallel: tile the scope from one delimiter page first
-	Workers    int   // parallel: the order stage's worker count (split demand)
-	MaxKeys    int64 // stop after this many objects (sequential only; 0 = all)
-	Client     API   // optional; built from the options above when nil
+	Sequential bool    // one continuation-token chain, no ranges (the oracle)
+	Seed       bool    // parallel: tile the scope from one delimiter page first
+	Workers    int     // parallel: the order stage's worker count (split demand)
+	MaxKeys    int64   // stop after this many objects (sequential only; 0 = all)
+	Client     API     // optional; built from the options above when nil
+	Resume     *Resume // continue after a journaled run's last published key
 
 	// Test hooks: splitCoin replaces the demand gate; trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].
 	splitCoin func() bool
 	trace     func(lo, hi string, open bool)
+}
+
+// Resume restarts a listing after the last published key.
+type Resume struct {
+	After      string   // the last published key: every key <= After is in the dataset
+	Boundaries []string // recorded range boundaries; those above After tile the rest
 }
 
 // pageKeys is the ListObjectsV2 page size.
@@ -99,11 +107,14 @@ type Stats struct {
 		Lower int64 `json:"lower"`
 		Upper int64 `json:"upper"`
 	} `json:"child_empty"` // split children that listed no key (the cost of not probing)
-	MaxActive  int     `json:"max_active"`
-	MaxQueued  int     `json:"max_queued"`
-	MeanActive float64 `json:"mean_active"` // time-weighted
-	BusyNs     int64   `json:"busy_ns"`     // sum of Expand wall time
-	SinkWaitNs int64   `json:"sink_wait_ns"`
+	ResumedRanges int64   `json:"resumed_ranges,omitempty"` // tiles of (after, ⊤] on resume
+	MaxActive     int     `json:"max_active"`
+	MaxQueued     int     `json:"max_queued"`
+	MeanActive    float64 `json:"mean_active"` // time-weighted
+	BusyNs        int64   `json:"busy_ns"`     // sum of Expand wall time
+	SinkWaitNs    int64   `json:"sink_wait_ns"`
+
+	tally map[string]any // the counter table, rendered for MarshalJSON
 }
 
 // SeedStats describe the one-page seed.
@@ -150,8 +161,9 @@ type Provider struct {
 	ids       atomic.Uint64
 	start     time.Time
 
+	c       *counters.Set // the tally (Counters)
 	mu      sync.Mutex
-	stats   Stats
+	bounds  []string            // range boundaries created since the last TakeBoundaries
 	running map[uint64]*running // ranges in Expand
 	queued  int
 	area    float64 // ∫ active dt, for the mean
@@ -174,7 +186,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	}
 	now := time.Now()
 	p := &Provider{opt: opt, client: opt.Client, running: map[uint64]*running{}, start: now, areaAt: now}
-	p.stats.Seed.Declined = map[string]int64{}
+	p.c = counters.New(Counters)
 	if p.client != nil {
 		return p, nil
 	}
@@ -193,26 +205,62 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	return p, nil
 }
 
+// TakeBoundaries returns the range boundaries (split cursors and pivots,
+// seed cuts) created since the previous call. The journal records them so a
+// resume starts with the same tiling.
+func (p *Provider) TakeBoundaries() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	b := p.bounds
+	p.bounds = nil
+	return b
+}
+
 // Stats returns the counters so far.
 func (p *Provider) Stats() Stats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.account(time.Now())
-	s := p.stats
+	if c, ok := p.client.(counted); ok {
+		n := c.Counters()
+		p.c.Set(cRetries, n.Retries)
+		p.c.Set(cThrottles, n.Throttles)
+		p.c.Set(cTimeouts, n.Timeouts)
+		p.c.Set(cAttempts, n.Attempts)
+		p.c.Set(cParseFailures, n.ParseFailures)
+	}
+	c := p.c.Load
+	var s Stats
+	s.Objects, s.Bytes, s.Pages, s.Requests = c(cObjects), c(cBytes), c(cPages), c(cRequests)
+	s.Attempts, s.Retries, s.Throttles, s.Timeouts, s.ParseFailures = c(cAttempts), c(cRetries), c(cThrottles), c(cTimeouts), c(cParseFailures)
+	s.OverfetchKeys, s.Truncated = c(cOverfetchKeys), c(cTruncated) != 0
+	s.Seed = SeedStats{Prefixes: c(cSeedPrefixes), Cuts: c(cSeedCuts), Unsafe: c(cSeedUnsafe), Subsampled: c(cSeedSubsampled) != 0,
+		Truncated: c(cSeedTruncated) != 0, Sentinel: c(cSeedSentinel) != 0, Skipped: c(cSeedSkipped) != 0,
+		Declined: map[string]int64{}}
+	for id, k := range map[int]string{cSentinelDeclinedTruncated: "truncated", cSentinelDeclinedObjectLast: "object_last",
+		cSentinelDeclinedNoCeiling: "no_ceiling", cSentinelDeclinedUnsafe: "unsafe"} {
+		if v := c(id); v > 0 {
+			s.Seed.Declined[k] = v
+		}
+	}
+	sp := &s.Split
+	sp.Considered, sp.Extrapolated, sp.AcceptedBounded, sp.AcceptedFrontier = c(cSplitConsidered), c(cSplitExtrapolated), c(cSplitAcceptedBounded), c(cSplitAcceptedFrontier)
+	sp.Rejected.Cursor, sp.Rejected.Bound, sp.Rejected.Done = c(cSplitRejectedCursor), c(cSplitRejectedBound), c(cSplitRejectedDone)
+	sp.Rejected.NoPivot, sp.Rejected.UnsafeCursor = c(cSplitRejectedNoPivot), c(cSplitRejectedUnsafeCursor)
+	sp.Skipped.NoDemand, sp.Skipped.Outranked, sp.Skipped.NotContinuing = c(cSplitSkippedNoDemand), c(cSplitSkippedOutranked), c(cSplitSkippedNotContinuing)
+	s.ChildEmpty.Lower, s.ChildEmpty.Upper, s.ResumedRanges = c(cChildEmptyLower), c(cChildEmptyUpper), c(cResumedRanges)
+	s.MaxActive, s.MaxQueued, s.BusyNs, s.SinkWaitNs = int(c(cMaxActive)), int(c(cMaxQueued)), c(cBusyNs), c(cSinkWaitNs)
 	if el := time.Since(p.start).Seconds(); el > 0 {
 		s.MeanActive = p.area / el
 	}
-	if c, ok := p.client.(counted); ok {
-		n := c.Counters()
-		s.Retries, s.Throttles, s.Timeouts, s.Attempts, s.ParseFailures = n.Retries, n.Throttles, n.Timeouts, n.Attempts, n.ParseFailures
-	}
 	s.Anonymous, s.Credentials, s.Region = p.anonymous, p.creds, p.region
+	s.tally = p.c.Map()
 	return s
 }
 
 func (p *Provider) list(ctx context.Context, in *client.ListInput) (*client.Page, error) {
 	p.mu.Lock()
-	p.stats.Requests++
+	p.c.Inc(cRequests)
 	p.mu.Unlock()
 	out, err := p.client.ListObjectsV2(ctx, in)
 	if err != nil {
@@ -228,10 +276,17 @@ func (p *Provider) list(ctx context.Context, in *client.ListInput) (*client.Page
 func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range]) error {
 	in := p.input()
 	last := ""
+	skip := ""
+	if p.opt.Resume != nil {
+		in.StartAfter, skip = safePrefix(p.opt.Resume.After), p.opt.Resume.After
+	}
 	for {
 		out, err := p.list(ctx, in)
 		if err != nil {
 			return err
+		}
+		for skip != "" && len(out.Contents) > 0 && out.Contents[0].Key <= skip {
+			out.Contents = out.Contents[1:] // resume: already published
 		}
 		n := len(out.Contents)
 		stop := false
@@ -252,7 +307,9 @@ func (p *Provider) expandSequential(ctx context.Context, e source.Emitter[Range]
 			return err
 		}
 		p.mu.Lock()
-		p.stats.Truncated = p.stats.Truncated || stop
+		if stop {
+			p.c.Set(cTruncated, 1)
+		}
 		p.mu.Unlock()
 		if stop || !out.IsTruncated {
 			return nil
@@ -273,10 +330,10 @@ func (p *Provider) emit(rows []schema.Row, e source.Emitter[Range]) error {
 	t := time.Now()
 	err := e.Rows(rows)
 	p.mu.Lock()
-	p.stats.SinkWaitNs += int64(time.Since(t))
-	p.stats.Pages++
-	p.stats.Objects += int64(len(rows))
-	p.stats.Bytes += bytes
+	p.c.Add(cSinkWaitNs, int64(time.Since(t)))
+	p.c.Inc(cPages)
+	p.c.Add(cObjects, int64(len(rows)))
+	p.c.Add(cBytes, bytes)
 	p.mu.Unlock()
 	return err
 }

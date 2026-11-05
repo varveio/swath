@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/durable"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquet"
 	"github.com/varveio/swath/go/internal/schema"
@@ -37,6 +39,7 @@ type Config struct {
 	PartSize int64    // target bytes per part; default 64 MiB
 	Portable bool     // use the portable filesystem engine (tests, comparisons)
 	Argv     []string // the command line, recorded in the run summary
+	Resume   bool     // continue the interrupted journaled run in Out
 	S3       S3Config
 }
 
@@ -49,6 +52,7 @@ type S3Config struct {
 	Anonymous        bool          // never sign
 	Timeout          time.Duration // per request (0: 30 s)
 	Warn             func(string)  // one-time warnings (nil: dropped)
+	NoJournal        bool          // publish parts only at the end, without a journal (no resume)
 	FetchOwner       bool
 	Sequential       bool  // one continuation-token chain (the reference oracle)
 	Seed             bool  // tile the scope from one delimiter page first
@@ -90,21 +94,23 @@ func (c *Config) setDefaults() error {
 
 // Summary is the run report (also written as the dataset's summary file).
 type Summary struct {
-	Tool        string    `json:"tool"`
-	SchemaID    string    `json:"schema_id"`
-	Root        string    `json:"root"`
-	Out         string    `json:"out,omitempty"`
-	Fields      string    `json:"fields,omitempty"`
-	Workers     int       `json:"workers"`
-	Encoders    int       `json:"encoders"`
-	ReorderRows int       `json:"reorder_rows"`
-	MaxBuffered int64     `json:"max_buffered_rows"`
-	Listing     *fs.Stats `json:"listing,omitempty"`
-	S3          *s3.Stats `json:"s3,omitempty"`
-	Rows        int64     `json:"rows"`
-	Parts       int       `json:"parts"`
-	OutBytes    int64     `json:"output_bytes"`
-	Seconds     float64   `json:"seconds"`
+	Tool         string    `json:"tool"`
+	SchemaID     string    `json:"schema_id"`
+	Root         string    `json:"root"`
+	Out          string    `json:"out,omitempty"`
+	Fields       string    `json:"fields,omitempty"`
+	Workers      int       `json:"workers"`
+	Encoders     int       `json:"encoders"`
+	ReorderRows  int       `json:"reorder_rows"`
+	MaxBuffered  int64     `json:"max_buffered_rows"`
+	Listing      *fs.Stats `json:"listing,omitempty"`
+	S3           *s3.Stats `json:"s3,omitempty"`
+	Rows         int64     `json:"rows"`
+	Parts        int       `json:"parts"`
+	OutBytes     int64     `json:"output_bytes"`
+	ResumedParts int       `json:"resumed_parts,omitempty"` // parts kept from the interrupted run
+	ResumedRows  int64     `json:"resumed_rows,omitempty"`
+	Seconds      float64   `json:"seconds"`
 	// ListingSeconds is the time to the end of listing (the order stage).
 	ListingSeconds float64   `json:"listing_seconds"`
 	UserSeconds    float64   `json:"user_cpu_seconds"`
@@ -176,7 +182,7 @@ func runFS(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 	reports := func(sum *Summary) []dataset.File {
 		return []dataset.File{{Name: dataset.SummaryName, Value: sum}}
 	}
-	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports)
+	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports, nil)
 }
 
 func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
@@ -186,26 +192,32 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 	}
 	s := &schema.S3
 	sum.Root, sum.SchemaID = cfg.Root, s.ID
+	target := "s3://" + bucket
+	if prefix != "" {
+		target += "/" + prefix
+	}
+	jr, err := openJournal(cfg, durable.Identity{Tool: "swath-go", Format: 1, SchemaID: s.ID, Provider: "s3",
+		Bucket: bucket, Prefix: prefix, Writer: parquet.WriterID, PartSize: cfg.PartSize, FetchOwner: cfg.S3.FetchOwner})
+	if err != nil {
+		return sum, err
+	}
 	p, err := s3.New(ctx, s3.Options{
+		Resume: jr.providerResume(),
 		Bucket: bucket, Prefix: prefix, Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, PathStyle: cfg.S3.PathStyle, FIPS: cfg.S3.FIPS, DualStack: cfg.S3.DualStack,
 		FetchOwner: cfg.S3.FetchOwner, Sequential: cfg.S3.Sequential, Seed: cfg.S3.Seed, Workers: cfg.Workers,
 		MaxKeys: cfg.S3.MaxKeys, Client: cfg.S3.Client,
 		Profile: cfg.S3.Profile, Anonymous: cfg.S3.Anonymous, Timeout: cfg.S3.Timeout, Warn: cfg.S3.Warn,
 	})
 	if err != nil {
+		jr.close()
 		return sum, err
 	}
-	if cfg.Out != "" {
-		if err := dataset.Prepare(cfg.Out, "", s.ID, cfg.Replace); err != nil {
-			return sum, fmt.Errorf("prepare output: %w", err)
-		}
+	if jr != nil {
+		jr.provider = p
 	}
+	sum.ResumedParts, sum.ResumedRows = jr.resumedParts(), jr.resumedRows()
 	// swath's run summary records the listed target, so a reader can tell a
 	// whole-bucket dataset from a prefix (or truncated) one.
-	target := "s3://" + bucket
-	if prefix != "" {
-		target += "/" + prefix
-	}
 	meta := dataset.Meta{SchemaID: s.ID, FileSchema: s.Message(), SortKey: s.SortOrder, SourceKind: "s3",
 		SourceBucket: bucket, SourceRoot: cfg.Root}
 	listed := func(sum *Summary) int64 {
@@ -216,27 +228,32 @@ func runS3(ctx context.Context, cfg Config, sum Summary) (Summary, error) {
 	reports := func(sum *Summary) []dataset.File {
 		return []dataset.File{{Name: dataset.SwathSummaryName, Value: swathSummary(cfg, sum, target)}}
 	}
-	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports)
+	return pipeline(ctx, cfg, sum, p, s, meta, listed, reports, jr)
 }
 
 // pipeline runs provider → order → router → publish for one provider.
 // reports names the JSON run reports published beside the manifest.
 func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Provider[R], s *schema.Schema, meta dataset.Meta,
-	listed func(*Summary) int64, reports func(*Summary) []dataset.File) (Summary, error) {
+	listed func(*Summary) int64, reports func(*Summary) []dataset.File, jr *journal) (Summary, error) {
+	defer jr.close()
 	var sink order.Sink = discard{}
 	var router *parquet.Router
 	if cfg.Out != "" {
 		var err error
-		router, err = parquet.NewRouter(parquet.Options{Out: cfg.Out, Schema: s, PartSize: cfg.PartSize, Encoders: cfg.Encoders})
+		ropt := parquet.Options{Out: cfg.Out, Schema: s, PartSize: cfg.PartSize, Encoders: cfg.Encoders}
+		jr.routerOptions(&ropt)
+		router, err = parquet.NewRouter(ropt)
 		if err != nil {
 			return sum, err
 		}
-		sink = router
+		sink = jr.guard(router)
 	}
 	fail := func(err error) (Summary, error) {
 		if router != nil {
 			router.Abort()
-			dataset.Cleanup(cfg.Out)
+			if !errors.Is(err, faults.ErrCrash) { // a crash leaves the output as a kill would
+				dataset.Cleanup(cfg.Out)
+			}
 		}
 		finish(&sum)
 		return sum, err
@@ -265,7 +282,9 @@ func pipeline[R any](ctx context.Context, cfg Config, sum Summary, p source.Prov
 	}
 	finish(&sum)
 	if err := dataset.Publish(cfg.Out, meta, parts, reports(&sum)); err != nil {
-		dataset.Cleanup(cfg.Out)
+		if !errors.Is(err, faults.ErrCrash) {
+			dataset.Cleanup(cfg.Out)
+		}
 		return sum, fmt.Errorf("publish: %w", err)
 	}
 	finish(&sum)

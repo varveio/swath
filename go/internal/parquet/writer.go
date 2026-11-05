@@ -36,6 +36,12 @@ const (
 	createdVersion  = "0.0.0-spike"
 )
 
+// WriterID names everything about the writer that decides a part's bytes:
+// geometry, encodings, codec and the part-size rule. A resume refuses a
+// journal written under another WriterID; change it with any of those.
+const WriterID = "swath-go parquet/1: parquet-go v0.32.0, v2 pages of 1024 rows, 8 MiB groups, dict 8 KiB, " +
+	"bounds 1024, delta key and etag, delta ints, zstd SpeedDefault+entropy, part 0 at size/0.1 then frozen ratio"
+
 // writer writes one sorted part in strictly ascending key order.
 type writer struct {
 	schema    *schema.Schema
@@ -84,6 +90,10 @@ func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func
 		pq.KeyValueMetadata(dataset.StampMode, "objects"),
 		pq.KeyValueMetadata(dataset.StampFormat, "1"),
 		pq.KeyValueMetadata(dataset.StampFileIndex, strconv.Itoa(ordinal+1)),
+		pq.KeyValueMetadata(dataset.StampIndexBound, strconv.Itoa(indexBoundBytes)),
+		// Standard Parquet sorting_columns on every row group (metadata only:
+		// rows arrive sorted; GenericWriter does not reorder them).
+		pq.SortingWriterConfig(pq.SortingColumns(pq.Ascending(s.Columns[0].Name))),
 	}
 	out := &tracking{w: f, digest: md5.New()}
 	w := &writer{
@@ -101,6 +111,9 @@ func create(path string, s *schema.Schema, ordinal, maxColumns int, columns func
 
 // write appends one row; keys must be strictly ascending.
 func (w *writer) write(r *schema.Row) error {
+	if n := w.schema.MaxKeyBytes; n > 0 && len(r.Key) > n {
+		return fmt.Errorf("%w: %d bytes (limit %d): %.64q…", schema.ErrKeyTooLong, len(r.Key), n, r.Key)
+	}
 	if w.rows > 0 && r.Key <= w.maxKey {
 		return fmt.Errorf("keys not strictly ascending: %q after %q", r.Key, w.maxKey)
 	}
