@@ -1,305 +1,202 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Command swath-local lists a local directory tree in parallel and writes a
-// globally key-sorted Parquet dataset in Swath's sorted dataset layout.
+// Command swath-local lists a local directory tree and writes a globally
+// key-sorted Parquet dataset in Swath's sorted dataset layout.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
+	"os/signal"
 	"runtime"
-	"runtime/debug"
 	"runtime/pprof"
-	"time"
+	"strconv"
+	"strings"
+	"syscall"
 
-	"github.com/varveio/swath/tools/swath-local-spike/internal/proc"
-	"github.com/varveio/swath/tools/swath-local-spike/pqout"
-	"github.com/varveio/swath/tools/swath-local-spike/record"
-	"github.com/varveio/swath/tools/swath-local-spike/sortout"
-	"github.com/varveio/swath/tools/swath-local-spike/walk"
+	"github.com/varveio/swath/tools/swath-local-spike/internal/dataset"
+	"github.com/varveio/swath/tools/swath-local-spike/internal/listing"
+	"github.com/varveio/swath/tools/swath-local-spike/internal/source/fs"
 )
 
-const usage = `usage: swath-local list <root> [--out DIR] [flags]
-
-  --out DIR               output dataset directory (required unless --count-only)
-  --overwrite             replace a non-empty --out
-  --workers N             walker goroutines (default min(64, max(4, 3*GOMAXPROCS)))
-  --engine E              fstatat|getdents|parallel-lstat|portable|walkdir (default: platform fast path)
-  --fields T              names|stat|statx (default stat)
-  --statx-mask M          basic|all (statx tier; default all = basic + btime)
-  --no-dirs               omit kind=DIR rows
-  --no-link-target        skip readlink for symlinks
-  --ino-sort              stat entries in d_ino order (getdents engine)
-  --split-entries N       stat directories larger than N entries in parallel chunks (default 4096, 0 = off)
-  --sort-buffer-rows N    rows per in-memory sort run (default 2000000)
-  --sort-buffer-bytes B   also spill at this estimated byte size (default 0 = off)
-  --part-size BYTES       final part byte target (default 67108864)
-  --row-group-bytes B     row-group byte target (default 8388608)
-  --codec C               go|go-entropy|go-entropy-fastest (default go-entropy)
-  --encoders N            encoder goroutines (default GOMAXPROCS)
-  --encode-scheme S       column (default: one part at a time, page columns encoded in parallel) |
-                          part (N goroutines each write whole parts; boundaries fixed by a router with a
-                          compression ratio frozen after part 0; faster with --order none and >= N parts)
-  --order O               none (parallel walk + external sort) | dfs-sequential | dfs-parallel
-                          (sorted depth-first emission streamed straight into the writer)
-  --reorder-rows N        dfs-parallel: max rows read but not yet emitted (default 2000000)
-  --count-only            walk without writing
-  --json-stats            print the summary as JSON instead of one line
-  --gc-percent N          set GOGC for the run (default: Go's 100)
-  --cpuprofile FILE       write a Go CPU profile
-  --memprofile FILE       write a Go allocation profile (allocs)
-`
-
-type summary struct {
-	Tool        string         `json:"tool"`
-	SchemaID    string         `json:"schema_id"`
-	Root        string         `json:"root"`
-	Out         string         `json:"out,omitempty"`
-	Engine      string         `json:"engine"`
-	Order       string         `json:"order"`
-	Fields      string         `json:"fields"`
-	StatxMask   string         `json:"statx_mask,omitempty"`
-	Workers     int            `json:"workers"`
-	Encoders    int            `json:"encoders,omitempty"`
-	Scheme      string         `json:"encode_scheme,omitempty"`
-	GOMAXPROCS  int            `json:"gomaxprocs"`
-	CountOnly   bool           `json:"count_only"`
-	Walk        walk.Stats     `json:"walk"`
-	Errors      int64          `json:"errors"`
-	Rows        int64          `json:"rows"`
-	WalkSec     float64        `json:"walk_seconds"`
-	SortSec     float64        `json:"sort_write_seconds"` // after the walk: final sort + merge + encode + publish
-	TotalSec    float64        `json:"total_seconds"`
-	UserSec     float64        `json:"user_cpu_seconds"`
-	SysSec      float64        `json:"sys_cpu_seconds"`
-	PeakRSS     int64          `json:"peak_rss_bytes"`
-	WalkRate    float64        `json:"walk_entries_per_second"`
-	WriteRate   float64        `json:"write_rows_per_second"` // rows / sort_write_seconds
-	Sort        *sortout.Stats `json:"sort,omitempty"`
-	Parts       int            `json:"parts"`
-	OutputBytes int64          `json:"output_bytes"`
-}
-
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if len(os.Args) < 2 || os.Args[1] != "list" {
-		fmt.Fprint(os.Stderr, usage)
+		usage(os.Stderr, newFlags(&options{}))
 		os.Exit(2)
 	}
-	if err := list(os.Args[2:]); err != nil {
-		fmt.Fprintln(os.Stderr, "swath-local:", err)
+	if err := run(ctx, os.Args[2:], os.Stdout); err != nil {
+		if !errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stderr, "swath-local:", err)
+		}
 		os.Exit(1)
 	}
 }
 
-func list(args []string) error {
-	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
-	out := fs.String("out", "", "")
-	overwrite := fs.Bool("overwrite", false, "")
-	workers := fs.Int("workers", 0, "")
-	engine := fs.String("engine", walk.DefaultEngine(), "")
-	fields := fs.String("fields", "stat", "")
-	statxMask := fs.String("statx-mask", "all", "")
-	noDirs := fs.Bool("no-dirs", false, "")
-	noLink := fs.Bool("no-link-target", false, "")
-	inoSort := fs.Bool("ino-sort", false, "")
-	split := fs.Int("split-entries", 4096, "")
-	bufRows := fs.Int("sort-buffer-rows", 2_000_000, "")
-	bufBytes := fs.Int64("sort-buffer-bytes", 0, "")
-	partSize := fs.Int64("part-size", 64<<20, "")
-	groupBytes := fs.Int64("row-group-bytes", 8<<20, "")
-	codec := fs.String("codec", "go-entropy", "")
-	encoders := fs.Int("encoders", runtime.GOMAXPROCS(0), "")
-	scheme := fs.String("encode-scheme", sortout.SchemeColumn, "")
-	countOnly := fs.Bool("count-only", false, "")
-	order := fs.String("order", walk.OrderNone, "")
-	reorderRows := fs.Int("reorder-rows", 2_000_000, "")
-	jsonStats := fs.Bool("json-stats", false, "")
-	cpuProfile := fs.String("cpuprofile", "", "")
-	memProfile := fs.String("memprofile", "", "")
-	gcPercent := fs.Int("gc-percent", 0, "")
-	// Accept <root> before or after flags.
+type options struct {
+	out, fields              string
+	overwrite, noDirs, noLnk bool
+	countOnly, json          bool
+	workers, encoders        int
+	partSize, memory         size
+}
+
+func newFlags(o *options) *flag.FlagSet {
+	f := flag.NewFlagSet("list", flag.ContinueOnError)
+	f.StringVar(&o.out, "out", "", "output dataset `directory` (required unless -count-only)")
+	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous swath-local dataset in -out")
+	f.StringVar(&o.fields, "fields", "stat", "metadata per entry: names (no stat), stat, statx (adds birth_time; Linux)")
+	f.BoolVar(&o.noDirs, "no-dirs", false, "omit kind=DIR rows")
+	f.BoolVar(&o.noLnk, "no-link-target", false, "do not read symlink targets")
+	o.partSize = listing.DefaultPartSize
+	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB)")
+	o.memory = listing.DefaultMemory
+	f.Var(&o.memory, "memory", "`bytes` of rows held between listing and encoding; sets the reorder bound")
+	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))")
+	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS)")
+	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
+	f.BoolVar(&o.json, "json", false, "print the summary as JSON")
+	f.SetOutput(io.Discard)
+	return f
+}
+
+// usage prints the flags generated from the flag set itself.
+func usage(w io.Writer, f *flag.FlagSet) {
+	fmt.Fprintln(w, "usage: swath-local list <root> [flags]")
+	fmt.Fprintln(w)
+	f.SetOutput(w)
+	f.PrintDefaults()
+	f.SetOutput(io.Discard)
+	fmt.Fprintln(w, "\nProfiling: SWATH_LOCAL_CPUPROFILE=FILE and SWATH_LOCAL_MEMPROFILE=FILE.")
+}
+
+func run(ctx context.Context, args []string, stdout io.Writer) error {
+	var o options
+	f := newFlags(&o)
 	var root string
-	rest := args
-	for {
-		if err := fs.Parse(rest); err != nil {
+	for rest := args; ; {
+		if err := f.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				usage(stdout, f)
+			}
 			return err
 		}
-		if fs.NArg() == 0 {
+		if f.NArg() == 0 {
 			break
 		}
 		if root != "" {
-			return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+			return fmt.Errorf("unexpected argument %q", f.Arg(0))
 		}
-		root = fs.Arg(0)
-		rest = fs.Args()[1:]
+		root, rest = f.Arg(0), f.Args()[1:]
 	}
 	if root == "" {
 		return errors.New("missing <root>")
 	}
-	if !*countOnly && *out == "" {
-		return errors.New("--out is required unless --count-only")
+	if !o.countOnly && o.out == "" {
+		return errors.New("-out is required unless -count-only")
 	}
-	tier, err := walk.ParseFields(*fields)
+	fields, err := fs.ParseFields(o.fields)
+	if err != nil {
+		return fmt.Errorf("-fields: %w", err)
+	}
+	cfg := listing.Config{
+		Root: root, Replace: o.overwrite, Fields: fields, NoDirs: o.noDirs, NoLinks: o.noLnk,
+		Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
+		Portable: os.Getenv("SWATH_LOCAL_ENGINE") == "portable",
+	}
+	if !o.countOnly {
+		cfg.Out = o.out
+	}
+	stopProfile, err := profile()
 	if err != nil {
 		return err
 	}
-	if *split != 0 && *split < 2 {
-		return errors.New("--split-entries must be 0 (off) or >= 2")
-	}
-	absRoot, err := filepath.Abs(root)
+	sum, err := listing.Run(ctx, cfg)
+	stopProfile()
 	if err != nil {
-		return err
+		return explain(err)
 	}
-	// Validate the root before touching --out (Prepare may create or clear it).
-	if fi, err := os.Stat(absRoot); err != nil {
-		return err
-	} else if !fi.IsDir() {
-		return fmt.Errorf("%s is not a directory", root)
-	}
-	opt := walk.Options{
-		Engine: *engine, Workers: *workers, Fields: tier, StatxMask: *statxMask, NoDirs: *noDirs,
-		LinkTarget: !*noLink, InoSort: *inoSort, SplitEntries: *split,
-	}
-	if opt.Workers <= 0 {
-		opt.Workers = walk.DefaultWorkers()
-	}
-	sum := summary{
-		Tool: "swath-local", SchemaID: record.SchemaID, Root: absRoot, Out: *out, Engine: *engine, Order: *order, Fields: tier.String(),
-		Workers: opt.Workers, GOMAXPROCS: runtime.GOMAXPROCS(0), CountOnly: *countOnly,
-	}
-	if tier == walk.FieldsStatx {
-		sum.StatxMask = *statxMask
-	}
-	if *gcPercent != 0 {
-		debug.SetGCPercent(*gcPercent)
-	}
-	if *cpuProfile != "" {
-		f, err := os.Create(*cpuProfile)
-		if err != nil {
-			return err
-		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			return err
-		}
-		defer pprof.StopCPUProfile()
-	}
-	if *memProfile != "" {
-		runtime.MemProfileRate = 64 << 10
-		defer func() {
-			if f, err := os.Create(*memProfile); err == nil {
-				_ = pprof.Lookup("allocs").WriteTo(f, 0)
-				f.Close()
-			}
-		}()
-	}
-	start := time.Now()
-	var sink walk.Sink = discard{}
-	var sorter interface {
-		Finish() ([]pqout.PartInfo, sortout.Stats, error)
-	}
-	ordered := *order != walk.OrderNone
-	if !*countOnly {
-		if err := sortout.Prepare(*out, absRoot, *overwrite); err != nil {
-			return err
-		}
-		// An --out inside the root must not list itself (its spill runs and
-		// half-written parts): skip it by directory identity.
-		if rel, inside, err := sortout.LocateInside(absRoot, *out); err != nil {
-			return err
-		} else if inside {
-			opt.SkipDirKeys = map[string]bool{rel + "/": true}
-		}
-		cfg := pqout.DefaultConfig()
-		cfg.GroupBytes, cfg.Codec, cfg.Encoders = *groupBytes, *codec, *encoders
-		if *scheme != sortout.SchemePart && *scheme != sortout.SchemeColumn {
-			return fmt.Errorf("--encode-scheme must be part or column")
-		}
-		sopt := sortout.Options{Out: *out, SortBufferRows: *bufRows, SortBufferBytes: *bufBytes, PartSize: *partSize, Writer: cfg, EncodeScheme: *scheme}
-		if ordered {
-			st := sortout.NewStreamer(sopt)
-			sorter, sink = st, st
-		} else {
-			st, err := sortout.NewSorter(sopt)
-			if err != nil {
-				return err
-			}
-			sorter, sink = st, st
-		}
-		sum.Encoders, sum.Scheme = *encoders, *scheme
-	}
-	var ws walk.Stats
-	if ordered {
-		ws, err = walk.WalkOrdered(root, *order, opt, *reorderRows, sink)
-	} else {
-		ws, err = walk.Walk(root, opt, sink)
-	}
-	if err != nil {
-		return err
-	}
-	walkDone := time.Now()
-	sum.Walk = ws
-	sum.Errors = ws.Errors()
-	sum.Rows = ws.Files
-	if !opt.NoDirs {
-		sum.Rows += ws.Dirs
-	}
-	sum.WalkSec = walkDone.Sub(start).Seconds()
-	sum.WalkRate = float64(ws.Files+ws.Dirs) / sum.WalkSec
-	var parts []pqout.PartInfo
-	if sorter != nil {
-		var st sortout.Stats
-		parts, st, err = sorter.Finish()
-		if err != nil {
-			return err
-		}
-		if st.Rows != sum.Rows {
-			return fmt.Errorf("row count mismatch: walked %d, wrote %d", sum.Rows, st.Rows)
-		}
-		sum.Sort = &st
-		sum.Parts = st.Parts
-		sum.OutputBytes = st.DatasetBytes
-	}
-	finish := func() {
-		end := time.Now()
-		sum.TotalSec = end.Sub(start).Seconds()
-		if sorter != nil {
-			sum.SortSec = end.Sub(walkDone).Seconds()
-			sum.WriteRate = float64(sum.Rows) / sum.SortSec
-		}
-		u, s := proc.CPU()
-		sum.UserSec, sum.SysSec = u.Seconds(), s.Seconds()
-		sum.PeakRSS = proc.PeakRSS()
-	}
-	if sorter != nil {
-		finish() // summary inside the dataset excludes its own publication I/O
-		if _, err := sortout.Publish(*out, absRoot, os.Args[1:], parts, sum); err != nil {
-			return err
-		}
-	}
-	finish()
-	if *jsonStats {
-		enc := json.NewEncoder(os.Stdout)
+	if o.json {
+		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(sum)
 	}
-	spills := 0
-	if sum.Sort != nil {
-		spills = sum.Sort.Runs
-	}
-	fmt.Printf("files=%d dirs=%d bytes=%d errors=%d rows=%d parts=%d out_bytes=%d walk=%.3fs sort+write=%.3fs total=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB engine=%s fields=%s workers=%d order=%s spill_runs=%d reorder_max=%d\n",
-		ws.Files, ws.Dirs, ws.Bytes, sum.Errors, sum.Rows, sum.Parts, sum.OutputBytes, sum.WalkSec, sum.SortSec, sum.TotalSec,
-		sum.UserSec, sum.SysSec, float64(sum.PeakRSS)/(1<<20), *engine, tier, opt.Workers, *order, spills, ws.ReorderMaxBuffered)
+	st := sum.Listing
+	fmt.Fprintf(stdout, "files=%d dirs=%d bytes=%d errors=%d rows=%d parts=%d out_bytes=%d total=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
+		st.Files, st.Dirs, st.Bytes, st.Errors(), sum.Rows, sum.Parts, sum.OutBytes, sum.Seconds,
+		sum.UserSeconds, sum.SysSeconds, float64(sum.PeakRSS)/(1<<20), sum.MaxBuffered)
 	return nil
 }
 
-type discard struct{}
+// explain maps package errors to flag names.
+func explain(err error) error {
+	switch {
+	case errors.Is(err, dataset.ErrNotEmpty):
+		return fmt.Errorf("%w (use -overwrite to replace a previous swath-local dataset)", err)
+	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrInsideRoot), errors.Is(err, dataset.ErrNotDataset):
+		return fmt.Errorf("-out: %w", err)
+	}
+	return err
+}
 
-func (discard) Emit(rows []record.Row) []record.Row { return rows[:0] }
+// profile starts the CPU profile and arranges the allocation profile named
+// by the environment, for development.
+func profile() (stop func(), err error) {
+	stops := []func(){}
+	if path := os.Getenv("SWATH_LOCAL_CPUPROFILE"); path != "" {
+		f, err := os.Create(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return nil, err
+		}
+		stops = append(stops, func() { pprof.StopCPUProfile(); f.Close() })
+	}
+	if path := os.Getenv("SWATH_LOCAL_MEMPROFILE"); path != "" {
+		runtime.MemProfileRate = 64 << 10
+		stops = append(stops, func() {
+			if f, err := os.Create(path); err == nil {
+				_ = pprof.Lookup("allocs").WriteTo(f, 0)
+				f.Close()
+			}
+		})
+	}
+	return func() {
+		for _, s := range stops {
+			s()
+		}
+	}, nil
+}
 
-func (discard) EmitSegments([][]record.Row) {}
+// size is a byte count flag accepting binary and decimal suffixes.
+type size int64
+
+func (s *size) String() string { return strconv.FormatInt(int64(*s), 10) }
+
+func (s *size) Set(v string) error {
+	units := []struct {
+		suffix string
+		mult   int64
+	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"KB", 1e3}, {"MB", 1e6}, {"GB", 1e9}, {"B", 1}}
+	mult := int64(1)
+	for _, u := range units {
+		if n, ok := strings.CutSuffix(v, u.suffix); ok {
+			v, mult = n, u.mult
+			break
+		}
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("invalid size %q", v)
+	}
+	*s = size(n * mult)
+	return nil
+}
