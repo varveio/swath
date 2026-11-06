@@ -54,12 +54,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-s.slots }()
 	case <-s.stopCtx.Done():
 	}
-	if s.closing.Load() {
+	if !s.begin() {
 		s.refuse(w, r, path, arrived, errStopping)
 		return
 	}
-	s.ops.Add(1)
-	defer s.ops.Done()
+	defer s.end()
 	s.s3Active.Add(1)
 	defer s.s3Active.Add(-1)
 
