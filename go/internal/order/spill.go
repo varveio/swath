@@ -58,12 +58,14 @@ type spiller[P any] struct {
 	refused  atomic.Int64 // frames refused by the disk budget
 	full     atomic.Bool  // the last frame was refused; cleared when a file is deleted
 	wake     func()       // rouses the run's waiters (credit returned); nil in tests
+	g        *Gauges      // live bytes and open readers (nil in tests)
 	seq      atomic.Uint64
 	enc      sync.Pool // *zstd.Encoder
 	dec      *zstd.Decoder
 
 	mu   sync.Mutex
 	open map[*spillFile]struct{} // files with an open reader, closed by close
+	tick uint64                  // reader use order, for eviction (mu)
 
 	rows, frames, bytes, files atomic.Int64
 }
@@ -105,9 +107,69 @@ func (s *spiller[P]) close() {
 // closeFile closes f's reader and forgets it.
 func (s *spiller[P]) closeFile(f *spillFile) {
 	s.mu.Lock()
-	delete(s.open, f)
+	if _, ok := s.open[f]; ok {
+		delete(s.open, f)
+		s.readers(-1)
+	}
 	s.mu.Unlock()
 	f.close()
+}
+
+// maxReaders caps the open spill readers (one descriptor and a 64 KiB
+// buffer each). A deep walk leaves a partly replayed file per spilled
+// ancestor; past the cap the least recently used reader is closed and
+// reopened at its position when the drainer comes back to it.
+const maxReaders = 8
+
+// MaxSpillReaders is maxReaders, for descriptor admission.
+const MaxSpillReaders = maxReaders
+
+func (s *spiller[P]) readers(d int64) {
+	if s.g != nil {
+		s.g.readers.add(d)
+	}
+}
+
+// track reports the live spill bytes to the gauges.
+func (s *spiller[P]) track() {
+	if s.g != nil {
+		s.g.spill.set(s.live.Load())
+	}
+}
+
+// openReader opens f's reader at its position (mu not held), first closing
+// the least recently used other reader when maxReaders are open.
+func (s *spiller[P]) openReader(f *spillFile) error {
+	s.mu.Lock()
+	if len(s.open) >= maxReaders {
+		var lru *spillFile
+		for o := range s.open {
+			if lru == nil || o.used < lru.used {
+				lru = o
+			}
+		}
+		delete(s.open, lru)
+		s.readers(-1)
+		lru.close()
+		lru.r = nil
+	}
+	s.mu.Unlock()
+	fh, err := os.Open(f.path)
+	if err != nil {
+		return fmt.Errorf("spill: %w", err)
+	}
+	if f.pos > 0 {
+		if _, err := fh.Seek(f.pos, io.SeekStart); err != nil {
+			fh.Close()
+			return fmt.Errorf("spill: %w", err)
+		}
+	}
+	f.f, f.r = fh, bufio.NewReaderSize(fh, 1<<16)
+	s.mu.Lock()
+	s.open[f] = struct{}{}
+	s.readers(1)
+	s.mu.Unlock()
+	return nil
 }
 
 // spillFile is one range's file. Its owner (the range's emitter) appends;
@@ -119,6 +181,8 @@ type spillFile struct {
 	r       *bufio.Reader
 	f       *os.File
 	read    int64 // rows replayed (drainer only)
+	pos     int64 // bytes replayed: where a closed reader reopens (drainer only)
+	used    uint64
 	// most is the row count of the largest frame written: a frame read
 	// back that claims more is malformed, refused before any allocation.
 	most atomic.Int64
@@ -183,6 +247,7 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 	}
 	if err != nil {
 		s.live.Add(-n)
+		s.track()
 		if err == errSpillFull && final {
 			// A trailer cannot wait: the range is complete and its file is
 			// unreadable without it. The run stops (resumable).
@@ -224,6 +289,7 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 	}
 	for p := s.peak.Load(); live > p && !s.peak.CompareAndSwap(p, live); p = s.peak.Load() {
 	}
+	s.track()
 	return true
 }
 
@@ -232,6 +298,7 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 // refused, may now spill.
 func (s *spiller[P]) release(f *spillFile) {
 	s.live.Add(-f.size)
+	s.track()
 	s.full.Store(false)
 	if s.wake != nil {
 		s.wake()
@@ -258,15 +325,14 @@ func (f *spillFile) close() {
 // closes and deletes the file and returns nil rows.
 func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 	if f.r == nil {
-		fh, err := os.Open(f.path)
-		if err != nil {
-			return nil, fmt.Errorf("spill: %w", err)
+		if err := s.openReader(f); err != nil {
+			return nil, err
 		}
-		f.f, f.r = fh, bufio.NewReaderSize(fh, 1<<16)
-		s.mu.Lock()
-		s.open[f] = struct{}{}
-		s.mu.Unlock()
 	}
+	s.mu.Lock()
+	s.tick++
+	f.used = s.tick
+	s.mu.Unlock()
 	var hdr [8]byte
 	if _, err := io.ReadFull(f.r, hdr[:]); err != nil {
 		s.closeFile(f)
@@ -282,6 +348,7 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		s.closeFile(f)
 		return nil, errSpillFrame
 	}
+	f.pos += int64(len(hdr)) + int64(size)
 	body := payload[1:]
 	switch payload[0] {
 	case 'T':
@@ -348,3 +415,10 @@ func decodeRows[P any](src []byte, c schema.Codec[P], most uint64) ([]schema.Row
 	}
 	return rows, nil
 }
+
+// Unlimited is what FreeBytes reports when it cannot measure.
+const Unlimited = 1<<63 - 1
+
+// FreeBytes is the space available to an unprivileged writer on dir's
+// filesystem, or Unlimited when it cannot be measured.
+func FreeBytes(dir string) int64 { return freeBytes(dir) }

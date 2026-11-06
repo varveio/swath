@@ -15,11 +15,12 @@
 // itself): then the rows it needs are always admitted, and the drainer
 // expands a needed range itself if no worker has claimed it, so a full
 // buffer cannot deadlock the walk. A streaming range on the drain path (an
-// S3 prefix) therefore also blocks while the sink is behind. Rows still
+// S3 prefix) therefore also blocks while the sink is behind. Child nodes
+// and spill markers count against the budget as metadata. Rows still
 // pending on the root-to-frontier path count against the budget and can
 // exceed it by at most one range's content per level (the O(depth ×
 // fan-out) of a depth-first walk), plus one publish batch per worker (at
-// most publishRows rows plus one Rows call).
+// most 2 × publishRows rows or publishItems items).
 package order
 
 import (
@@ -58,6 +59,8 @@ type Options struct {
 	// free space spill leaves on its filesystem (0: none). Past either, an
 	// emitter waits on the budget instead of spilling.
 	SpillMax, SpillReserve int64
+	// Gauges, if set, receives the stage's live resource counts.
+	Gauges *Gauges
 	// After, if set, is a resume's last published key: every row must sort
 	// after it. The stream-wide order guard checks it with every other row.
 	After *string
@@ -81,6 +84,54 @@ type Stats struct {
 	// BudgetWait is the time emitters and workers with ranges queued waited
 	// on a full budget (the reorder cost). Both sum over goroutines.
 	FrontierWait, BudgetWait time.Duration
+	// Peaks of the stage's metadata (Gauges): outstanding range nodes,
+	// spill markers in memory, open spill readers.
+	PeakNodes, PeakMarkers, PeakReaders int64
+}
+
+// Gauges are the order stage's live resource counts, read while it runs
+// (the progress file): outstanding range nodes (created and not yet
+// drained), spill markers in memory, open spill readers and live spill
+// bytes, each with its peak.
+type Gauges struct {
+	nodes, markers, readers, spill gauge
+}
+
+// gauge is a count and its peak.
+type gauge struct{ n, peak atomic.Int64 }
+
+func (g *gauge) add(d int64) { g.raise(g.n.Add(d)) }
+
+// set records an absolute value (a level read elsewhere).
+func (g *gauge) set(n int64) {
+	g.n.Store(n)
+	g.raise(n)
+}
+
+func (g *gauge) raise(n int64) {
+	for p := g.peak.Load(); n > p && !g.peak.CompareAndSwap(p, n); p = g.peak.Load() {
+	}
+}
+
+// GaugeSnapshot is Gauges at one moment.
+type GaugeSnapshot struct {
+	Nodes            int64 `json:"nodes"`
+	PeakNodes        int64 `json:"peak_nodes"`
+	Markers          int64 `json:"markers"`
+	PeakMarkers      int64 `json:"peak_markers"`
+	SpillReaders     int64 `json:"spill_readers"`
+	PeakSpillReaders int64 `json:"peak_spill_readers"`
+	SpillLiveBytes   int64 `json:"spill_live_bytes"`
+	PeakSpillBytes   int64 `json:"peak_spill_live_bytes"`
+}
+
+// Snapshot reads g; a nil Gauges reads as zero.
+func (g *Gauges) Snapshot() GaugeSnapshot {
+	if g == nil {
+		return GaugeSnapshot{}
+	}
+	return GaugeSnapshot{Nodes: g.nodes.n.Load(), PeakNodes: g.nodes.peak.Load(), Markers: g.markers.n.Load(), PeakMarkers: g.markers.peak.Load(),
+		SpillReaders: g.readers.n.Load(), PeakSpillReaders: g.readers.peak.Load(), SpillLiveBytes: g.spill.n.Load(), PeakSpillBytes: g.spill.peak.Load()}
 }
 
 // batchRows is the minimum number of rows per sink call (except the last).
@@ -107,6 +158,7 @@ type node[R, P any] struct {
 	items   []item[R, P]
 	pending []*node[R, P] // children not yet pushed to the stack
 	spill   *spillFile    // the node's spill file, once it has spilled
+	queued  int64         // units published and not yet drained (mu; kept for running nodes only)
 	onPath  atomic.Bool   // the drainer's current node: its emitter publishes at once (written under mu)
 	awaited atomic.Bool   // the drainer waits for, or itself expands, this node: its emitter never blocks
 }
@@ -121,11 +173,12 @@ type run[R, P any] struct {
 	drain    *sync.Cond // drainer and blocked emitters
 	stack    []*node[R, P]
 	buffered int64
-	markers  int64 // the part of buffered held by spill markers
+	meta     int64 // the part of buffered held by metadata: spill markers and child nodes
 	max      int64
 	frontier time.Duration // Stats.FrontierWait (under mu)
 	budget   time.Duration // Stats.BudgetWait (under mu)
 	finished bool
+	g        *Gauges
 	stopped  atomic.Bool // ctx is done; checked instead of ctx.Err(), which takes a mutex
 
 	// Drainer-owned output batch (only the drainer goroutine touches it).
@@ -135,9 +188,9 @@ type run[R, P any] struct {
 	segs    [][]schema.Row[P]
 	segRows int
 	rows    int64
-	// released: bytes drained but still counted; releasedMarkers: the part
-	// of it held by spill markers (drainer only; returned under mu).
-	released, releasedMarkers int64
+	// released: bytes drained but still counted; releasedMeta: the part
+	// of it held by metadata (drainer only; returned under mu).
+	released, releasedMeta int64
 	// The stream-wide order guard: the last key handed on (drainer only).
 	last    string
 	hasLast bool
@@ -225,6 +278,19 @@ func markerUnits() int64 {
 	}
 	return int64(unsafe.Sizeof(item[struct{}, struct{}]{}))
 }
+
+// childUnits is what a child node counts against the budget, as
+// metadata: its node and its item. Nothing when the budget counts rows.
+func childUnits() int64 {
+	if countRows {
+		return 0
+	}
+	return int64(unsafe.Sizeof(node[struct{}, struct{}]{}) + unsafe.Sizeof(item[struct{}, struct{}]{}))
+}
+
+// leadLimit is how far the awaited node may run ahead of the drainer past a
+// full budget: the units it has published and the drainer not yet taken.
+func (o *run[R, P]) leadLimit() int64 { return max(1, o.opt.Budget/4) }
 
 // full reports whether the budget is used up (mu held): bytes buffered here
 // plus bytes held downstream.
@@ -314,6 +380,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	ctx, cancel := o.ctx, o.cancel
 	root := &node[R, P]{r: p.Root()}
 	o.stack = []*node[R, P]{root}
+	o.g.nodes.add(1)
 
 	var wg sync.WaitGroup
 	for range opt.Workers {
@@ -349,6 +416,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	o.dispose()
 	st.Rows, st.MaxBuffered, st.FrontierWait, st.BudgetWait = o.rows, o.max, o.frontier, o.budget
 	st.Received = o.received.Load()
+	st.PeakNodes, st.PeakMarkers, st.PeakReaders = o.g.nodes.peak.Load(), o.g.markers.peak.Load(), o.g.readers.peak.Load()
 	if err == nil && st.Received != st.Rows {
 		// Conservation inside the stage (spill, compaction, replay): a row
 		// received and never handed on is a lost row, never a success.
@@ -368,6 +436,10 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes}
 	o.work = sync.NewCond(&o.mu)
 	o.drain = sync.NewCond(&o.mu)
+	o.g = opt.Gauges
+	if o.g == nil {
+		o.g = &Gauges{}
+	}
 	if opt.After != nil {
 		o.last, o.hasLast = *opt.After, true
 	}
@@ -390,6 +462,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 			return nil, nil, err
 		}
 		sp.wake = wake
+		sp.g = o.g
 		o.sp = sp
 	}
 	if opt.Shared != nil {
@@ -451,7 +524,12 @@ func (o *run[R, P]) worker() {
 // up to the first child are then next in global order and go straight to the
 // sink, so a long streaming range is not buffered while the drainer is busy.
 func (o *run[R, P]) expand(n *node[R, P], direct bool) error {
-	e := &emitter[R, P]{o: o, n: n, direct: direct}
+	return o.expandBy(n, direct, false)
+}
+
+// expandBy is expand; drainer is set when the drainer runs it.
+func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
+	e := &emitter[R, P]{o: o, n: n, direct: direct, drainer: drainer}
 	err := o.p.Expand(o.ctx, n.r, e)
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -496,13 +574,14 @@ func (o *run[R, P]) expand(n *node[R, P], direct bool) error {
 // therefore costs one lock round trip, while a long streaming range still
 // becomes visible to the drainer as it grows.
 type emitter[R, P any] struct {
-	o      *run[R, P]
-	n      *node[R, P]
-	items  []item[R, P]
-	kids   []*node[R, P]
-	rows   int
-	units  int64
-	direct bool // drainer-expanded, no child yet: rows go straight to the sink
+	drainer bool // run by the drainer itself: it can never wait for the drainer
+	o       *run[R, P]
+	n       *node[R, P]
+	items   []item[R, P]
+	kids    []*node[R, P]
+	rows    int
+	units   int64
+	direct  bool // drainer-expanded, no child yet: rows go straight to the sink
 }
 
 const publishRows = 1024
@@ -518,23 +597,40 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 		}
 		return e.o.send(rows)
 	}
-	u := e.o.measure(rows)
-	e.items = append(e.items, item[R, P]{rows: rows, units: u})
-	e.rows += len(rows)
-	e.units += u
-	return e.maybePublish()
+	// A batch is published in pieces of at most publishRows rows, so one
+	// large Rows call is admitted (and spilled) as several bounded ones.
+	for len(rows) > 0 {
+		chunk := rows[:min(len(rows), publishRows)]
+		rows = rows[len(chunk):]
+		u := e.o.measure(chunk)
+		e.items = append(e.items, item[R, P]{rows: chunk, units: u})
+		e.rows += len(chunk)
+		e.units += u
+		if err := e.maybePublish(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *emitter[R, P]) Child(r R) error {
 	e.direct = false
 	c := &node[R, P]{r: r}
-	e.items = append(e.items, item[R, P]{child: c})
+	u := childUnits()
+	e.items = append(e.items, item[R, P]{child: c, units: u})
 	e.kids = append(e.kids, c)
+	e.units += u
+	e.o.g.nodes.add(1)
 	return e.maybePublish()
 }
 
+// publishItems bounds the items an emitter collects before it publishes:
+// a range emitting children without rows is admitted (and charged) in
+// bounded batches.
+const publishItems = 1024
+
 func (e *emitter[R, P]) maybePublish() error {
-	if e.rows < publishRows && !e.n.onPath.Load() {
+	if e.rows < publishRows && len(e.items) < publishItems && !e.n.onPath.Load() {
 		return nil
 	}
 	e.o.mu.Lock()
@@ -558,7 +654,15 @@ func (e *emitter[R, P]) publish() error {
 		return nil
 	}
 	refused := false // the disk budget refused the last spill: wait before retrying
-	for !e.n.awaited.Load() && o.full() && !o.stopped.Load() {
+	for o.full() && !o.stopped.Load() {
+		awaited := e.n.awaited.Load()
+		// The awaited node publishes past a full budget (the drainer needs
+		// it), except a node the drainer expands itself once its published
+		// lead passes leadLimit: nothing drains it until Expand returns,
+		// so its rows spill when they can.
+		if awaited && !(e.drainer && e.n.queued >= o.leadLimit()) {
+			break
+		}
 		if o.sp != nil && e.rows > 0 && !refused {
 			// Spill instead of waiting: write the rows (without the lock),
 			// then publish markers. Frames precede their markers, so the
@@ -577,15 +681,17 @@ func (e *emitter[R, P]) publish() error {
 			// may have marked this node awaited meanwhile).
 			refused = true
 			continue
+		} else if awaited {
+			// The drainer past its lead without spill (off, or refused):
+			// it cannot wait for itself. The documented exception.
+			break
 		} else if e.rows == 0 {
-			// Only children and spill markers: admitted without a wait
-			// unless the markers in memory would by themselves fill the
-			// budget, so spilling keeps workers busy and the markers stay
-			// bounded. Children alone (a range that ends after its last
-			// split, with spill on or off) cost nothing here and are
-			// admitted: holding them back would free nothing and keep the
-			// subtree from the drainer.
-			if o.markers+e.units < o.opt.Budget {
+			// Only children and spill markers (metadata): admitted without
+			// a wait unless the metadata in memory would by itself fill the
+			// budget, so spilling keeps workers busy, a range that ends
+			// after its last split is not held back, and the metadata (the
+			// speculative tree included) stays bounded.
+			if o.meta+e.units < o.opt.Budget {
 				break
 			}
 		}
@@ -601,12 +707,16 @@ func (e *emitter[R, P]) publish() error {
 		return nil
 	}
 	for i := range e.items {
-		if e.items[i].spill != nil {
-			o.markers += e.items[i].units
+		if it := &e.items[i]; it.spill != nil || it.child != nil {
+			o.meta += it.units
+			if it.spill != nil {
+				o.g.markers.add(1)
+			}
 		}
 	}
+	e.n.queued += e.units
 	if hookMarkers != nil {
-		hookMarkers(o.markers)
+		hookMarkers(o.meta)
 	}
 	e.n.items = append(e.n.items, e.items...)
 	e.n.pending = append(e.n.pending, e.kids...)
@@ -663,8 +773,8 @@ func (o *run[R, P]) release() {
 		return
 	}
 	o.buffered -= o.released
-	o.markers -= o.releasedMarkers
-	o.released, o.releasedMarkers = 0, 0
+	o.meta -= o.releasedMeta
+	o.released, o.releasedMeta = 0, 0
 	o.work.Broadcast()
 	o.drain.Broadcast()
 }
@@ -672,7 +782,7 @@ func (o *run[R, P]) release() {
 // drainTree walks the tree depth-first from root, streaming rows to sink.
 func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	var st Stats
-	released, releasedMarkers := &o.released, &o.releasedMarkers
+	released, releasedMeta := &o.released, &o.releasedMeta
 	release := o.release
 	releaseEvery := max(1, o.opt.Budget/16)
 
@@ -701,12 +811,15 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 				items[f.i] = item[R, P]{}
 				f.i++
 				if it.child != nil {
+					*released += it.units
+					*releasedMeta += it.units
 					child = it.child
 					break
 				}
 				if it.spill != nil {
 					*released += it.units
-					*releasedMarkers += it.units
+					*releasedMeta += it.units
+					o.g.markers.add(-1)
 					err = o.replay(it.spill)
 					if *released >= releaseEvery {
 						o.mu.Lock()
@@ -751,6 +864,8 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 				hookItems(f.i, len(n.items)-f.i)
 			}
 			if it.child != nil {
+				*released += it.units
+				*releasedMeta += it.units
 				n.onPath.Store(false)
 				it.child.onPath.Store(true)
 				frames = append(frames, frame{n: it.child})
@@ -758,7 +873,8 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			}
 			if it.spill != nil {
 				*released += it.units
-				*releasedMarkers += it.units
+				*releasedMeta += it.units
+				o.g.markers.add(-1)
 				if *released >= releaseEvery {
 					release()
 				}
@@ -803,6 +919,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			n.items = nil
 			n.onPath.Store(false)
 			frames = frames[:len(frames)-1]
+			o.g.nodes.add(-1)
 			if len(frames) > 0 {
 				frames[len(frames)-1].n.onPath.Store(true)
 				o.drain.Broadcast() // its emitter may be blocked on the budget
@@ -812,7 +929,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			n.awaited.Store(true)
 			release()
 			o.mu.Unlock()
-			err := o.expand(n, f.i == 0)
+			err := o.expandBy(n, f.i == 0, true)
 			o.mu.Lock()
 			if err != nil {
 				o.mu.Unlock()
@@ -830,7 +947,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	}
 	release()
 	if hookDrained != nil {
-		hookDrained(o.buffered, o.markers)
+		hookDrained(o.buffered, o.meta)
 	}
 	o.mu.Unlock()
 	return st, o.flush()

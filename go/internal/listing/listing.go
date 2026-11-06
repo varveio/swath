@@ -70,7 +70,7 @@ type OutputConfig struct {
 // Limits are the execution limits; none changes the dataset's content.
 type Limits struct {
 	Workers  int   // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
-	Encoders int   // Parquet encoders; default GOMAXPROCS
+	Encoders int   // Parquet encoders; default GOMAXPROCS, admitted against memory and descriptors (admitEncoders)
 	Memory   int64 // budget in bytes for rows held between listing and encoding; default 256 MiB
 	PartSize int64 // target bytes per part; default 64 MiB (frozen for a resume)
 	Spill    SpillLimits
@@ -80,7 +80,7 @@ type Limits struct {
 type SpillLimits struct {
 	Off      bool  // wait on the reorder budget instead of spilling ahead-of-frontier rows
 	Compress bool  // zstd level 1 on spill frames
-	Max      int64 // cap on live spill bytes (0: none)
+	Max      int64 // cap on live spill bytes (0: half the free space on the spill filesystem at start; negative: none)
 	Reserve  int64 // free bytes spill leaves on its filesystem (0: none; the CLI default is 1 GiB)
 }
 
@@ -96,6 +96,32 @@ type Spill struct {
 	Ranges    int64 `json:"ranges"` // ranges that spilled
 	PeakBytes int64 `json:"peak_bytes"`
 	Refused   int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
+	// MaxBytes is the cap on live spill bytes in effect (0: none).
+	MaxBytes    int64 `json:"max_bytes"`
+	PeakReaders int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
+}
+
+// spillMax is the live spill cap for spill under dir: the configured one,
+// none for a negative one, else half the space free on dir's filesystem
+// (its nearest existing ancestor) when the run starts, after the reserve.
+func spillMax(l SpillLimits, dir string) int64 {
+	switch {
+	case l.Max > 0:
+		return l.Max
+	case l.Max < 0:
+		return 0
+	}
+	for {
+		if _, err := os.Stat(dir); err == nil || filepath.Dir(dir) == dir {
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+	free := order.FreeBytes(dir)
+	if free == order.Unlimited {
+		return 0
+	}
+	return max(1, (free-l.Reserve)/2)
 }
 
 // Defaults.
@@ -113,7 +139,7 @@ func (c *Config) resolve() error {
 	switch {
 	case c.Source.URI == "":
 		return bad("no source")
-	case l.Workers < 0 || l.Encoders < 0 || l.Memory < 0 || l.PartSize < 0 || l.Spill.Max < 0 || l.Spill.Reserve < 0:
+	case l.Workers < 0 || l.Encoders < 0 || l.Memory < 0 || l.PartSize < 0 || l.Spill.Reserve < 0:
 		return bad("negative limit: %+v", *l)
 	case o.Resume && o.Dir == "":
 		return bad("resume needs an output directory")
@@ -127,11 +153,11 @@ func (c *Config) resolve() error {
 	if l.Workers == 0 {
 		l.Workers = min(64, max(4, 3*runtime.GOMAXPROCS(0)))
 	}
-	if l.Encoders == 0 {
-		l.Encoders = runtime.GOMAXPROCS(0)
-	}
 	if l.Memory == 0 {
 		l.Memory = DefaultMemory
+	}
+	if l.Encoders == 0 {
+		l.Encoders = min(runtime.GOMAXPROCS(0), admitEncoders(l.Memory, l.Workers, fdLimit()))
 	}
 	if l.PartSize == 0 {
 		l.PartSize = DefaultPartSize
@@ -142,6 +168,23 @@ func (c *Config) resolve() error {
 	return nil
 }
 
+// admitEncoders is how many Parquet encoders the run's resources carry,
+// never fewer than one: each holds a writer's working set
+// (parquetout.EncoderBytes) in the half of memory outside the row budget,
+// and one descriptor beside the spill readers, the workers' connections
+// and spill writes, and a reserve (fds 0 when the limit is unknown).
+func admitEncoders(memory int64, workers int, fds int64) int {
+	n := (memory - memory/2) / parquetout.EncoderBytes
+	if fds > 0 {
+		n = min(n, fds-int64(order.MaxSpillReaders)-2*int64(workers)-fdReserve)
+	}
+	return int(max(1, n))
+}
+
+// fdReserve is the descriptors kept for the journal, lock, output and
+// spill directories, standard streams and the runtime.
+const fdReserve = 32
+
 // Run lists cfg.Source.URI and, unless cfg.Output.Dir is empty, publishes the dataset.
 // On any error or cancellation nothing is published and unpublished parts
 // are removed (a journaled run keeps them for -resume); the error is the
@@ -150,8 +193,13 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	start := time.Now()
 	sum := Report{ReportVersion: ReportVersion, Build: build(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: start.UTC()},
 		Outcome: Outcome{Status: "failed"}}
+	asked := cfg.Limits.Encoders
 	if err := cfg.resolve(); err != nil {
 		return sum.failed(err)
+	}
+	if n := admitEncoders(cfg.Limits.Memory, cfg.Limits.Workers, fdLimit()); asked > n && cfg.Warn != nil {
+		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory outside the row budget and %d descriptors; --memory %d MiB and the descriptor limit carry %d",
+			asked, int64(asked)*parquetout.EncoderBytes>>20, asked, cfg.Limits.Memory>>20, n))
 	}
 	argv := cfg.Argv
 	if argv == nil {
@@ -317,8 +365,12 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		}
 		return sum.failed(err)
 	}
-	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillMax: cfg.Limits.Spill.Max, SpillReserve: cfg.Limits.Spill.Reserve,
-		After: jr.after()}
+	gauges := &order.Gauges{}
+	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillReserve: cfg.Limits.Spill.Reserve,
+		After: jr.after(), Gauges: gauges}
+	if pr := cfg.Progress; pr != nil {
+		pr.gauges.Store(gauges)
+	}
 	// Spill files are disposable: a crash relists their rows.
 	if cfg.Output.Dir != "" {
 		spill := filepath.Join(cfg.Output.Dir, dataset.JournalDir, "spill")
@@ -333,6 +385,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	} else if !cfg.Limits.Spill.Off {
 		oopt.SpillDir = os.TempDir()
 	}
+	if oopt.SpillDir != "" {
+		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
+	}
 	env.Order = oopt
 	ost, router, err := src.Run(ctx, env)
 	if router == nil && cfg.Output.Dir != "" && err != nil {
@@ -345,8 +400,10 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	sum.Resources.MaxBufferedBytes, sum.Output.RowsListed = ost.MaxBuffered, ost.Rows
 	sum.Resources.Features = map[string]bool{"spill": oopt.SpillDir != ""}
 	if oopt.SpillDir != "" {
-		sum.Resources.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused}
+		sum.Resources.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
+			MaxBytes: oopt.SpillMax, PeakReaders: ost.PeakReaders}
 	}
+	sum.Resources.PeakNodes, sum.Resources.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
 	sum.Resources.FrontierWaitNs, sum.Resources.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
 	if router != nil {
 		w := int64(router.EncoderWait())

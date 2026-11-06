@@ -46,8 +46,37 @@ where one range can hold a whole bucket:
 2. **The drainer streams what it expands.** When the drainer expands the range it needs itself, rows up to
    that range's first child are next in global order and go straight to the sink.
 
+**Metadata is charged too.** A child node counts its node and item (`childUnits`, about 150 bytes) and a
+spill marker its item (`markerUnits`) against the same budget, as metadata: a publish of only children and
+markers waits once the metadata in memory would fill the budget by itself, so a provider emitting many
+children, or a deep speculative tree behind a slow frontier, is bounded (`TestDelayedFrontierPlateaus`:
+2,201 ranges, outstanding nodes peak at 929 under a 128 KiB budget; all 2,201 were held before).
+
+**Batches are bounded.** An emitter publishes after `publishRows` (1,024) rows or 1,024 items, and a single
+`Rows` call larger than that is published in pieces of at most 1,024 rows, so one producer batch never exceeds
+about 2,048 rows. The awaited node's lead is one such batch: the drainer clears the exemption once it wakes and
+takes what was published. A range the drainer expands itself cannot be drained until its `Expand` returns;
+past a full budget its published lead is capped at a quarter of the budget and its rows spill
+(`TestDrainerExpandedLeadIsBounded`). Without spill (off, or the disk budget refusing) that one range is the
+remaining exception: it proceeds, since the drainer cannot wait for itself. Object-store ranges return right
+after their children, so they never take it.
+
 Beyond the budget the walk holds the rows pending on the root-to-frontier path (the O(depth × fan-out) of any
-depth-first walk) and one publish batch per worker.
+depth-first walk, the awaited root's children included) and one publish batch per worker.
+
+**What `--memory` is not.** It is not a cap on the process's resident memory. Half of it bounds rows and
+metadata in flight; outside it are response bodies being parsed (up to 16 MiB each, one per worker in the
+worst case), arena slack (a surviving string keeps its page's allocation alive, which the row count only
+approximates), compression scratch, open spill readers (at most 8 × 64 KiB), the encoders' writers (budgeted
+at `parquetout.EncoderBytes`, 24 MiB each, against the other half: below) and the garbage collector's
+headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (synthetic, above) grows the heap
+by about 15 MiB at the smallest `--memory`; RSS at 512 workers with 1 KiB keys has not been measured.
+
+**Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
+a floor of one: as many writers as fit in the half of `--memory` outside the row budget (24 MiB each,
+measured at about 20 MiB of heap for one writer) and as many descriptors as the soft limit leaves after 8
+spill readers, two per worker and a reserve of 32 (`listing.admitEncoders`; the default 256 MiB admits 5). An
+explicit `--encoders` above that is honoured with a warning.
 
 ## The waits
 
@@ -100,19 +129,26 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   Children have their own files, so a parent's trailer says nothing about them.
 - **Defensive reads.** A frame length is checked against a bound (256 MiB) before anything is allocated, and
   the reader is closed on every error path.
+- **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 readers
+  (a descriptor and a 64 KiB buffer each, `order.MaxSpillReaders`) are open; past that the least recently
+  used one is closed and reopened at its position when the drainer comes back to it
+  (`TestSpillReadersAreCapped`).
 - **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
   on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it (spill on or off; a failed removal is a warning), under the output
   lock, and the resume relists from the durable frontier.
 - **Memory.** In-memory buffered rows stay within the budget plus one publish batch per worker plus the
   frontier path, with or without spill (`TestSpillKeepsWorkersBusy`). Workers also claim new ranges while
   the budget is full, since their rows will spill, unless the disk budget has refused a frame.
-- **Disk budget.** A frame is written only if the live spill bytes stay within `-spill-max` (default: no cap)
-  and the spill filesystem keeps `-spill-reserve` bytes free afterwards (default 1 GiB, room for the parts
+- **Disk budget.** A frame is written only if the live spill bytes stay within `-spill-max` (default: half
+  the space free on the spill filesystem when the run starts, after the reserve; a library caller's negative
+  value means no cap; the cap in effect is the report's `spill.max_bytes`) and the spill filesystem keeps `-spill-reserve` bytes free afterwards (default 1 GiB, room for the parts
   still to be published; the spill directory is under the output directory, so they share the filesystem). A refused
   frame is not an error: the emitter waits on the reorder budget, as with `swath diag list --no-spill`, and retries after the
   drainer moves. An ENOSPC on a frame of rows is handled the same way after truncating the torn frame; one
   that cannot be undone, or on a trailer, stops the run (resumable: nothing durable is lost). A
-  range's bytes return to the budget when its file is deleted after replay. Trailers (a few bytes) are
+  range's bytes return to the budget when its file is deleted after replay, not frame by frame: a consumed
+  frame's bytes stay on disk until the file goes (punching holes is not portable, and a range's file is
+  deleted at its trailer), so live spill is what the disk really holds. Trailers (a few bytes) are
   always admitted, and concurrent emitters can each pass the free-space check before either writes, so the
   reserve can be undershot by at most one frame per worker; the reserve is checked, not held, so parts
   being published can use it too. A frame read back is refused (before allocating) past 256 MiB, compressed
@@ -121,7 +157,10 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   size against the row budget: after a spill, markers and children are admitted without a wait unless the
   markers in memory would by themselves fill the budget, and a marker's bytes are released when its frame
   is replayed (`TestSpillMarkersInByteMode`, the one order test in byte mode). A failed run closes every
-  open spill reader. The summary reports `spill_peak_bytes` and
+  open spill reader. The report's `resources` carries `peak_nodes`, `peak_markers` and, under `spill`,
+  `peak_bytes`, `peak_readers` and `max_bytes`; `progress.json` carries the same as live values with their peaks
+  under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, each with a `peak_` twin). The summary
+  reports `spill_peak_bytes` and
   `spill_refused` (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical
   output; a reserve larger than the disk spills nothing).
 - `swath diag list --no-spill` restores waiting on the budget.

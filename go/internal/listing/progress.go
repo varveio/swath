@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/varveio/swath/go/internal/order"
 )
 
 // Progress is a run's live progress, read while it runs: by the command's
@@ -23,6 +25,7 @@ type Progress struct {
 	ordered  atomic.Int64
 	encoded  atomic.Int64
 	parts    atomic.Int64
+	gauges   atomic.Pointer[order.Gauges]
 
 	mu    sync.Mutex // held across an owned write and across a change of ownership
 	owner bool       // the run holds the output's lock
@@ -65,6 +68,10 @@ type ProgressSnapshot struct {
 	StartedAt  time.Time `json:"started_at"`  // zero before the run starts
 	AsOf       time.Time `json:"as_of"`       //
 	DurationMs int64     `json:"duration_ms"` // since StartedAt
+	// Order is the order stage's live resources with their peaks:
+	// outstanding nodes, spill markers, open spill readers, live spill
+	// bytes (nil before the stage starts).
+	Order *order.GaugeSnapshot `json:"order,omitempty"`
 }
 
 // Snapshot reads p; a nil Progress reads as zero.
@@ -82,6 +89,10 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	}
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Advance = s.Objects + s.Ordered + s.Encoded + s.Parts
+	if g := p.gauges.Load(); g != nil {
+		o := g.Snapshot()
+		s.Order = &o
+	}
 	if st := p.started.Load(); st != 0 {
 		s.StartedAt = time.Unix(0, st).UTC()
 		s.DurationMs = now.Sub(s.StartedAt).Milliseconds()

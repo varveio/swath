@@ -256,7 +256,7 @@ func TestSpillReadFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.close()
-	f.r = nil
+	f.r, f.pos = nil, 0
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	_, err := s.next(f)
@@ -322,7 +322,9 @@ func TestSpillMarkersInByteMode(t *testing.T) {
 	if leftBytes != 0 || leftMarkers != 0 {
 		t.Fatalf("the drain ended with %d bytes, %d of markers, still counted", leftBytes, leftMarkers)
 	}
-	if limit := budget + 2*publishRows/int64(f.rows)*markerUnits(); peak > limit {
+	// Metadata also counts child nodes: the root's siblings are published
+	// at once by the awaited root, past the budget.
+	if limit := budget + 2*publishRows/int64(f.rows)*markerUnits() + int64(f.siblings+1)*childUnits(); peak > limit {
 		t.Fatalf("marker bytes peaked at %d, budget %d (limit %d)", peak, budget, limit)
 	}
 	t.Logf("%d frames, marker peak %d of budget %d, budget wait %v", st.SpillFrames, peak, budget, st.BudgetWait)
@@ -394,4 +396,73 @@ func TestRunningNodeStorageIsBounded(t *testing.T) {
 		t.Fatalf("a running node retained storage for consumed items after %d pages: %s", pages, worst)
 	}
 	t.Logf("at most %d consumed items held over %d pages (%d drained while running)", peak, pages, seen)
+}
+
+// TestSpillReadersAreCapped: a deep walk leaves one partly replayed spill
+// file per spilled ancestor. With 3 x maxReaders files each read part way,
+// at most maxReaders readers (descriptors and 64 KiB buffers) are open at
+// once; an evicted reader reopens at its position and every file replays
+// exactly, trailer checks included. Before, every partly read file kept
+// its reader open.
+func TestSpillReadersAreCapped(t *testing.T) {
+	s, err := newSpiller(testSchema.Codec, t.TempDir(), false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &Gauges{}
+	s.g = g
+	defer s.close()
+	var files []*spillFile
+	for i := range 3 * maxReaders {
+		f := s.file()
+		for j := range 3 {
+			if err := s.write(f, []schema.Row[tp]{{Key: fmt.Sprintf("%02d-%d", i, j), Data: tp{Size: int64(j)}}}, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.write(f, nil, true); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
+	open := func() int {
+		n := 0
+		for _, f := range files {
+			if f.f != nil {
+				n++
+			}
+		}
+		return n
+	}
+	// Descend: the first frame of every file, as a deep path would.
+	for i, f := range files {
+		rows, err := s.next(f)
+		if err != nil || len(rows) != 1 || rows[0].Key != fmt.Sprintf("%02d-0", i) {
+			t.Fatalf("file %d: %v %v", i, rows, err)
+		}
+		if n := open(); n > maxReaders {
+			t.Fatalf("%d readers open, cap %d", n, maxReaders)
+		}
+	}
+	// Climb back: the rest of each, deepest first.
+	for i := len(files) - 1; i >= 0; i-- {
+		for j := 1; j < 3; j++ {
+			rows, err := s.next(files[i])
+			if err != nil || len(rows) != 1 || rows[0].Key != fmt.Sprintf("%02d-%d", i, j) {
+				t.Fatalf("file %d frame %d: %v %v", i, j, rows, err)
+			}
+		}
+		if rows, err := s.next(files[i]); err != nil || rows != nil {
+			t.Fatalf("file %d trailer: %v %v", i, rows, err)
+		}
+		if n := open(); n > maxReaders {
+			t.Fatalf("%d readers open, cap %d", n, maxReaders)
+		}
+	}
+	if p := g.readers.peak.Load(); p != maxReaders || g.readers.n.Load() != 0 {
+		t.Fatalf("readers: peak %d, open %d", p, g.readers.n.Load())
+	}
+	if s.live.Load() != 0 || g.spill.n.Load() != 0 {
+		t.Fatalf("live spill bytes %d after every file was replayed", s.live.Load())
+	}
 }

@@ -36,6 +36,12 @@ const (
 	writeQuantum    = 64      // parquet-go's WriteRows batching, kept for identical pages
 )
 
+// EncoderBytes is the working set budgeted per encoder for admission: a
+// row group of groupBytes, page buffers per column and encoding scratch.
+// Measured at about 20 MiB of heap growth for one writer of the 10-column
+// test schema (400,000 rows); rounded up.
+const EncoderBytes = 24 << 20
+
 // Recipe identifies everything about the writer that decides a part's
 // bytes apart from the build: parquet-go v0.32.0, v2 pages of 1,024 rows,
 // 8 MiB row groups, 8 KiB dictionaries, 1,024-byte index bounds, delta keys

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/localfs"
 )
 
@@ -181,7 +182,7 @@ func TestConfigRejectsInvalid(t *testing.T) {
 	for name, cfg := range map[string]Config{
 		"no source":         {},
 		"negative workers":  {Source: SourceConfig{URI: src}, Limits: Limits{Workers: -1}},
-		"negative spill":    {Source: SourceConfig{URI: src}, Limits: Limits{Spill: SpillLimits{Max: -1}}},
+		"negative reserve":  {Source: SourceConfig{URI: src}, Limits: Limits{Spill: SpillLimits{Reserve: -1}}},
 		"tiny memory":       {Source: SourceConfig{URI: src}, Limits: Limits{Memory: 1}},
 		"resume no output":  {Source: SourceConfig{URI: src}, Output: OutputConfig{Resume: true}},
 		"resume replace":    {Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Resume: true, Replace: true}},
@@ -195,5 +196,39 @@ func TestConfigRejectsInvalid(t *testing.T) {
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Fatal("an invalid configuration touched the output")
+	}
+}
+
+// TestResourceAdmission: encoders are admitted against the writer memory
+// outside the row budget and the descriptor limit, never below one; the
+// default spill cap is half the free space after the reserve, a negative
+// one is none.
+func TestResourceAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		memory  int64
+		workers int
+		fds     int64
+		want    int
+	}{
+		{256 << 20, 4, 0, 5},                   // 128 MiB / 24 MiB
+		{1 << 30, 4, 0, 21},                    // 512 MiB / 24 MiB
+		{1 << 30, 64, 180, 180 - 8 - 128 - 32}, // 12: the descriptors
+		{1 << 30, 64, 100, 1},                  // the floor
+		{minMemory, 4, 0, 1},                   // the floor
+	} {
+		if got := admitEncoders(tc.memory, tc.workers, tc.fds); got != tc.want {
+			t.Errorf("admitEncoders(%d, %d, %d) = %d, want %d", tc.memory, tc.workers, tc.fds, got, tc.want)
+		}
+	}
+	dir := t.TempDir()
+	if got := spillMax(SpillLimits{Max: 5}, dir); got != 5 {
+		t.Errorf("explicit cap: %d", got)
+	}
+	if got := spillMax(SpillLimits{Max: -1}, dir); got != 0 {
+		t.Errorf("no cap: %d", got)
+	}
+	free := order.FreeBytes(dir)
+	if got := spillMax(SpillLimits{Reserve: 1 << 20}, filepath.Join(dir, "not", "yet")); free != order.Unlimited && got != (free-(1<<20))/2 && got > free/2 {
+		t.Errorf("derived cap %d, free %d", got, free)
 	}
 }

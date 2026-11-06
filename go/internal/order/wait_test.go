@@ -6,6 +6,7 @@ package order
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -301,13 +302,13 @@ func TestMarkerSaturationWakes(t *testing.T) {
 	opt := Options{Budget: 3 * mu, SpillDir: t.TempDir(), Shared: &Shared{}}
 	o := testRun(t, newCtl(), opt)
 	opt.Shared.n.Store(10 * mu) // the encoders hold the budget: it stays full
-	o.markers, o.buffered = 2*mu, 2*mu
+	o.meta, o.buffered = 2*mu, 2*mu
 	n := &node[string, tp]{r: "x", state: expanding}
 	f := o.sp.file()
 	done := publishing(o, n, []item[string, tp]{{spill: f, units: mu}}, 0)
 	expectWait(t, ws, waitPublish)
 	o.mu.Lock()
-	o.released, o.releasedMarkers = mu, mu // one marker replayed
+	o.released, o.releasedMeta = mu, mu // one marker replayed
 	o.release()
 	full := o.full()
 	o.mu.Unlock()
@@ -411,5 +412,52 @@ func TestChildOnlyPublishIsAdmitted(t *testing.T) {
 		if err := expect(t, done, "children"); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// leadP: the root emits a child, then many rows after it (a generic
+// provider; object-store splits return right after their children).
+type leadP struct{ batches int }
+
+func (leadP) Root() string { return "root" }
+func (l leadP) Expand(_ context.Context, r string, e source.Emitter[string, tp]) error {
+	if r == "c" {
+		return e.Rows([]schema.Row[tp]{{Key: "a"}})
+	}
+	if err := e.Child("c"); err != nil {
+		return err
+	}
+	for b := range l.batches {
+		rows := make([]schema.Row[tp], 1000)
+		for i := range rows {
+			rows[i].Key = fmt.Sprintf("b%03d-%04d", b, i)
+		}
+		if err := e.Rows(rows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TestDrainerExpandedLeadIsBounded: a range the drainer expands itself
+// cannot be drained until its Expand returns, so past a full budget its
+// published lead is capped (leadLimit) and its rows spill. Before, every
+// row after its first child was held in memory.
+func TestDrainerExpandedLeadIsBounded(t *testing.T) {
+	const budget = 1000
+	o, closeRun, err := newRun[string, tp](context.Background(), leadP{batches: 50}, &collect{}, &testSchema, Options{Workers: 1, Budget: budget, SpillDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeRun()
+	root := &node[string, tp]{r: "root"}
+	if _, err := o.drainTree(root, o.sink); err != nil { // no workers: the drainer expands everything
+		t.Fatal(err)
+	}
+	if limit := int64(budget) + o.leadLimit() + 2*publishRows; o.max > limit || o.sp.rows.Load() == 0 {
+		t.Fatalf("buffered peaked at %d rows (limit %d), %d spilled", o.max, limit, o.sp.rows.Load())
+	}
+	if o.rows != 50_001 {
+		t.Fatalf("%d rows", o.rows)
 	}
 }

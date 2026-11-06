@@ -141,6 +141,10 @@ type Resources struct {
 	// on; an off policy reports no counters, so a zero always means "on,
 	// never fired" (docs/internals/counters.md).
 	Features map[string]bool `json:"features"`
+	// Peaks of the order stage's metadata: outstanding range nodes and
+	// spill markers in memory (spill readers: Spill.PeakReaders).
+	PeakNodes   int64 `json:"peak_nodes"`
+	PeakMarkers int64 `json:"peak_markers"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").
