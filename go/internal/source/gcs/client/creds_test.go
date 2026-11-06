@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -274,6 +275,28 @@ func TestADCConfiguredButBroken(t *testing.T) {
 		}
 		if _, err := New(context.Background(), Config{CredentialsFile: filepath.Join(t.TempDir(), "absent.json")}); !errors.As(err, &ce) {
 			t.Fatalf("explicit file: err %v, want a credential error", err)
+		}
+	})
+	// A gcloud directory that cannot be examined may hold the operator's
+	// credentials: the client fails closed instead of going anonymous.
+	t.Run("gcloud directory not accessible", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("needs a non-root POSIX user for a permission-denied directory")
+		}
+		dir := t.TempDir()
+		t.Setenv("HOME", dir)
+		t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+		gcloud := filepath.Join(dir, ".config", "gcloud")
+		if err := os.MkdirAll(gcloud, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(gcloud, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(gcloud, 0o700) })
+		var ce *CredentialError
+		if _, err := New(context.Background(), Config{}); !errors.As(err, &ce) {
+			t.Fatalf("err %v, want a credential error", err)
 		}
 	})
 	t.Run("absent", func(t *testing.T) {

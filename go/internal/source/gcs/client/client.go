@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -241,7 +242,10 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 
 // adcConfigured reports whether Application Default Credentials are
 // configured in a place golang.org/x/oauth2/google reads: then a failure
-// to load them is an error, not anonymity.
+// to load them is an error, not anonymity. Only a well-known file that
+// does not exist means "not configured": one that cannot be examined (an
+// unreadable parent directory, an I/O error) fails closed, since it may
+// hold the credentials the operator meant.
 func adcConfigured() bool {
 	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
 		return true
@@ -255,7 +259,7 @@ func adcConfigured() bool {
 		dir = filepath.Join(home, ".config")
 	}
 	_, err := os.Stat(filepath.Join(dir, "gcloud", "application_default_credentials.json"))
-	return err == nil
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // gceProductFile names the machine's product (tests move it).
