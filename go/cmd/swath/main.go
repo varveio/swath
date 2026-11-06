@@ -504,7 +504,11 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	if err != nil {
 		return o, "", usageError{err}
 	}
-	if o.text = text; text != nil && text.Path == "" {
+	o.text = text
+	if err := checkSidePaths(o); err != nil {
+		return o, "", usageError{err}
+	}
+	if text != nil && text.Path == "" {
 		text.Stdout = stdout
 		if o.reportFormat == "json" {
 			return o, "", usageError{errors.New("--report-format json prints on stdout, which carries the rows: use --report FILE")}
