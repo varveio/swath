@@ -104,7 +104,8 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   - custom endpoints (`-endpoint`, S3-compatible stores).
 
   **Not supported:** access points and Multi-Region Access Points (ARNs), S3 Express One Zone directory
-  buckets, Outposts, the GovCloud-specific and ISO partitions beyond the plain regional host,
+  buckets (a bucket name ending in `--x-s3` is refused before any request, exit 2, class `refused`, as Java:
+  they do not list in lexicographic order; `TestDirectoryBucketRefused`), Outposts, the GovCloud-specific and ISO partitions beyond the plain regional host,
   `use_fips_endpoint` and `use_dualstack_endpoint` read from the shared config (use the flags), and
   automatic region redirects.
 - *Signing:* the SDK's SigV4 signer with `UNSIGNED-PAYLOAD` (`x-amz-content-sha256`), plus the session token

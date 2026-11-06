@@ -238,7 +238,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   tool and never anything inside the listed root.
 - **S3 modes.** The default is the parallel core; `--seed` tiles the scope from one delimiter page first;
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
-  dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` and `--path-style` select S3-compatible stores.
+  dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` and `--path-style` select S3-compatible stores. S3 directory buckets (Express One Zone, names ending in
+  `--x-s3`) are refused before any request (exit 2, class `refused`).
 - **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that
   starts at `--workers`, falls by 0.7 on each throttle answer and grows back by one per second after 10 s
   without one (Java swath's rules; [internals/providers.md](internals/providers.md)); `--limiter=false` keeps a
@@ -310,7 +311,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   |---|---|---|---|
   | 0 | `completed` | the dataset is committed (or a dry run finished), also by an earlier attempt: `swath resume` on a complete dataset | – |
   | 1 | `fatal`, `incomplete` | a run failure a resume will not fix (access denied, no such bucket, an invariant, another process owning the output; a protocol violation, `cause` `protocol`, which outranks a stop cause and which the journal records, so `swath resume` refuses the run), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
-  | 2 | `usage`, `refused` | `usage`: a malformed command line or an unknown scheme; `refused`: a refusal that is the caller's to fix, before anything ran: a non-empty `--output` without `--overwrite`, `--overwrite` on a directory that is not this tool's dataset, a new run over an interrupted one, an output that is the listed root (or inside it, replaced), a resume whose identity changed, a resume with nothing to resume | `usage`: no; `refused`: the output is as it was, so yes when it holds an interrupted run |
+  | 2 | `usage`, `refused` | `usage`: a malformed command line or an unknown scheme; `refused`: a refusal that is the caller's to fix, before anything ran: a non-empty `--output` without `--overwrite`, `--overwrite` on a directory that is not this tool's dataset, a new run over an interrupted one, an output that is the listed root (or inside it, replaced), a resume whose identity changed, a resume with nothing to resume, an S3 directory bucket | `usage`: no; `refused`: the output is as it was, so yes when it holds an interrupted run |
   | 74 | `disk_full` | a part, a journal record or the manifest could not be written: its filesystem is full (`cause` `no_space`; spill waits instead of failing) | yes, journal intact, once there is space |
   | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace); `cause` names what rose meanwhile: `stuck_throttle` (throttle answers), `stuck_timeouts` (attempts past the request timeout, no throttle) or `stuck_no_rows` (neither: failing or hung requests, or a stopped pipeline) | yes, journal intact |
   | 124 | `deadline` | `--max-duration` reached with the output unfinished (also after the 15 s shutdown grace) | yes |

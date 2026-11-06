@@ -540,3 +540,35 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 		t.Fatalf("show: %v %q", err, shown.String())
 	}
 }
+
+// TestDirectoryBucketRefused: an S3 directory bucket (Express One Zone,
+// a name ending in --x-s3) is refused before any request, as Java: exit 2,
+// class refused, a message naming it, and the output left uncreated.
+// Before, the run went to the service and failed there.
+func TestDirectoryBucketRefused(t *testing.T) {
+	captureStderr(t)
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "", 500)
+	}))
+	t.Cleanup(srv.Close)
+	out := filepath.Join(t.TempDir(), "ds")
+	report := filepath.Join(t.TempDir(), "report.json")
+	err := run(context.Background(), []string{"s3://orders--use1-az4--x-s3/prefix", "--endpoint", srv.URL, "--path-style", "--anonymous",
+		"-o", out, "--report", report}, io.Discard, false)
+	if c := exitCode(t, err); c != exitUsage || !strings.Contains(err.Error(), "directory bucket") {
+		t.Fatalf("exit %d: %v", c, err)
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	if rep.Outcome.Class != "refused" || rep.Outcome.ExitCode != exitUsage || rep.Outcome.Resumable {
+		t.Fatalf("report outcome %+v", rep.Outcome)
+	}
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("%d requests to the service", n)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("the output exists: %v", err)
+	}
+}

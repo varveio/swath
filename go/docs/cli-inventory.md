@@ -24,7 +24,7 @@ decision to add it later).
 | `--bearer-token-refresh-interval` (45 m) | none | removed | no decision recorded |
 | Credential-chain failure fails the run | a configured source that fails stops the run with cause `auth`; requests go unsigned only for an empty chain or `--anonymous` | kept | – |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also a local directory and `gs://bucket[/prefix]` | kept | – |
-| S3 directory buckets refused before the first request | not supported; no up-front refusal | removed | no decision recorded |
+| S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
 
 ## Listing scope and filters
 

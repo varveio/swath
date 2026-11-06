@@ -21,14 +21,26 @@ import (
 // the same service.
 var ErrProtocol = errors.New("protocol violation")
 
+// ErrUnsupported marks a source the tool refuses before any request (an
+// S3 directory bucket): the caller's to change.
+var ErrUnsupported = errors.New("unsupported source")
+
 // Violation marks err as a protocol violation (errors.Is ErrProtocol),
 // keeping its message and its own chain.
-func Violation(err error) error { return violation{err} }
+func Violation(err error) error { return marked{err, ErrProtocol} }
 
-type violation struct{ error }
+// Unsupported marks err as an unsupported source (errors.Is
+// ErrUnsupported), keeping its message.
+func Unsupported(err error) error { return marked{err, ErrUnsupported} }
 
-func (v violation) Unwrap() error        { return v.error }
-func (v violation) Is(target error) bool { return target == ErrProtocol }
+// marked is an error that is also its mark.
+type marked struct {
+	error
+	mark error
+}
+
+func (m marked) Unwrap() error        { return m.error }
+func (m marked) Is(target error) bool { return target == m.mark }
 
 // Emitter receives the content of one range in ascending key order.
 type Emitter[R, P any] interface {

@@ -158,10 +158,11 @@ func classify(err, cause error, dir string) outcome {
 // (its guarded refusals): an output that is not this tool's to write
 // without --overwrite (not empty, another tool's, an interrupted run) or
 // that overlaps the listed root, a resume whose identity changed, and a
-// resume with nothing to resume.
+// resume with nothing to resume; and a source refused before any request
+// (an S3 directory bucket).
 func refusal(err error) bool {
 	var mm *journal.MismatchError
-	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume} {
+	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume, source.ErrUnsupported} {
 		if errors.Is(err, r) {
 			return true
 		}

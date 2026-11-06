@@ -189,8 +189,9 @@ func (c *Client) url(in *ListInput) *url.URL {
 }
 
 // awsHost is the regional S3 endpoint host: FIPS and dual-stack variants,
-// and the amazonaws.com.cn partition for China regions. Access points,
-// S3 Express directory buckets and other partitions are not supported yet.
+// and the amazonaws.com.cn partition for China regions. Access points and
+// other partitions are not supported yet; S3 Express directory buckets are
+// refused before any request (s3.New).
 func awsHost(region string, fips, dualStack bool) string {
 	h := "s3"
 	if fips {

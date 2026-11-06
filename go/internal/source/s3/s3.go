@@ -147,6 +147,12 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.Bucket == "" {
 		return nil, errors.New("no bucket")
 	}
+	if strings.HasSuffix(opt.Bucket, "--x-s3") {
+		// Refused before any request, as Java: a directory bucket lists in
+		// no lexicographic order, which the range engine relies on.
+		return nil, source.Unsupported(fmt.Errorf("S3 directory bucket %q (Express One Zone) is not supported: swath requires the "+
+			"lexicographic listing order of a general-purpose S3 bucket; use a general-purpose bucket", opt.Bucket))
+	}
 	p := &Provider{opt: opt, client: opt.Client}
 	limited := opt.Policy.Limiter && p.client == nil
 	if p.client == nil {
