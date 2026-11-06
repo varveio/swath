@@ -1,0 +1,113 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package faulttest
+
+import (
+	"io"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestDecideIsDeterministicAndProportional(t *testing.T) {
+	p := Plan{Seed: 7, Windows: []Window{{From: 0, To: time.Second, Fraction: 0.3, Fault: Throttle}}}
+	q := p
+	hits := 0
+	for n := uint64(0); n < 20000; n++ {
+		a, _, _ := p.Decide(n, 0)
+		b, _, _ := q.Decide(n, 0)
+		if a != b {
+			t.Fatalf("request %d: same plan, different decision", n)
+		}
+		if a {
+			hits++
+		}
+		if c, _, _ := p.Decide(n, time.Second); c {
+			t.Fatalf("request %d throttled outside its window", n)
+		}
+	}
+	if f := float64(hits) / 20000; math.Abs(f-0.3) > 0.02 {
+		t.Fatalf("throttled share %.3f, want 0.3", f)
+	}
+	other := Plan{Seed: 8, Windows: p.Windows}
+	same := 0
+	for n := uint64(0); n < 1000; n++ {
+		a, _, _ := p.Decide(n, 0)
+		b, _, _ := other.Decide(n, 0)
+		if a == b {
+			same++
+		}
+	}
+	if same == 1000 {
+		t.Fatal("a different seed made the same decisions")
+	}
+}
+
+func TestProxyFaults(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer up.Close()
+	get := func(p *Proxy) (int, string, error) {
+		srv := httptest.NewServer(p)
+		defer srv.Close()
+		resp, err := http.Get(srv.URL + "/b?list-type=2")
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b), err
+	}
+	mk := func(plan Plan) *Proxy {
+		p, err := New(up.URL, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if code, body, err := get(mk(Plan{})); err != nil || code != 200 || body != "ok" {
+		t.Fatalf("forward: %d %q %v", code, body, err)
+	}
+	all := func(f Fault, d time.Duration) []Window { return []Window{{Fraction: 1, Fault: f, Delay: d}} }
+	if code, body, _ := get(mk(Plan{Windows: all(Throttle, 0)})); code != 503 || !strings.Contains(body, "<Code>SlowDown</Code>") {
+		t.Fatalf("s3 throttle: %d %q", code, body)
+	}
+	if code, body, _ := get(mk(Plan{Dialect: "gcs", Windows: all(Throttle, 0)})); code != 429 || !strings.Contains(body, "rateLimitExceeded") {
+		t.Fatalf("gcs throttle: %d %q", code, body)
+	}
+	if _, _, err := get(mk(Plan{Windows: all(Reset, 0)})); err == nil {
+		t.Fatal("reset: the request succeeded")
+	}
+	p := mk(Plan{Windows: all(Latency, 150*time.Millisecond)})
+	t0 := time.Now()
+	if code, _, err := get(p); err != nil || code != 200 || time.Since(t0) < 150*time.Millisecond {
+		t.Fatalf("latency: %d %v after %s", code, err, time.Since(t0))
+	}
+	if s := p.Stats(); s.Delayed != 1 || s.Forwarded != 1 || len(p.Timeline()) == 0 {
+		t.Fatalf("stats %+v", s)
+	}
+	capped := mk(Plan{RateCap: 2})
+	codes := map[int]int{}
+	for range 5 {
+		c, _, _ := get(capped)
+		codes[c]++
+	}
+	if codes[200] != 2 || codes[503] != 3 {
+		t.Fatalf("rate cap 2/s: %v", codes)
+	}
+}
+
+func TestParseWindow(t *testing.T) {
+	w, err := ParseWindow("latency:5s-:0.5:200ms")
+	if err != nil || w != (Window{From: 5 * time.Second, Fraction: 0.5, Fault: Latency, Delay: 200 * time.Millisecond}) {
+		t.Fatalf("%+v %v", w, err)
+	}
+	for _, bad := range []string{"throttle:1s:1", "storm:0s-1s:1", "throttle:0s-1s:2", "latency:0s-1s:1"} {
+		if _, err := ParseWindow(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

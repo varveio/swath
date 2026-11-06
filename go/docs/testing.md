@@ -142,6 +142,22 @@ go run ./bench/s3fake -keys keys.tsv -bucket bench -addr 127.0.0.1:9000 &   # TS
 `bench/s3_parallel.sh` runs the sequential and parallel wall table on it. Fake-bucket numbers are synthetic:
 they measure client CPU and coordination, not S3 latency.
 
+## Fault injection
+
+`internal/source/objhttp/faulttest` is a fault-injecting HTTP proxy for tests and benchmarks (never linked
+into the binary). In front of swath-replay or a fake bucket it answers a share of the requests in a time
+window with the throttle answer (503 `SlowDown` for S3, 429 `rateLimitExceeded` for GCS), delays them, or
+resets their connection; a rate cap throttles requests beyond N per trailing second. Request n of a run gets
+the same faults for the same seed and plan. It records a timeline (100 ms buckets: arrivals, faults, most
+requests in flight). `bench/faultproxy` serves it:
+
+```bash
+go run ./bench/faultproxy -target http://127.0.0.1:19090 -listen 127.0.0.1:19091 \
+  -window throttle:10s-25s:0.5 -window latency:0s-:0.2:300ms -timeline storm.tsv &
+./swath list s3://BUCKET -endpoint http://127.0.0.1:19091 -path-style -anonymous -o /tmp/ds
+kill %1   # writes storm.tsv and prints the totals
+```
+
 ## verify.py
 
 `python3 verify.py OUT` checks a format-2 dataset with DuckDB, independently of the Go code: the manifest's
