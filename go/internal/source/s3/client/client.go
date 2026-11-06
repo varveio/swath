@@ -71,7 +71,7 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: anonymousNote(cfg),
+	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: joinNotes(anonymousNote(cfg), a.note),
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter}}
 	c.retry.Defaults()
 	if cfg.Endpoint != "" {
@@ -327,4 +327,11 @@ func queryEscape(s string) string {
 
 func unreserved(c byte) bool {
 	return 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~'
+}
+
+func joinNotes(a, b string) string {
+	if a == "" || b == "" {
+		return a + b
+	}
+	return a + "; " + b
 }

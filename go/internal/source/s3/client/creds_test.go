@@ -197,3 +197,146 @@ func TestCredentialOutageRecovers(t *testing.T) {
 		t.Fatalf("refused token: %v (class %s), want auth, not retried", err, Classify(err))
 	}
 }
+
+// webIdentitySTS answers AssumeRoleWithWebIdentity after delay with key
+// AKWEB, or with status and code when status is set.
+func webIdentitySTS(t *testing.T, delay time.Duration, status int, code string) {
+	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(delay)
+		if status != 0 {
+			w.WriteHeader(status)
+			fmt.Fprintf(w, `<ErrorResponse><Error><Type>Sender</Type><Code>%s</Code><Message>no</Message></Error></ErrorResponse>`, code)
+			return
+		}
+		exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+		fmt.Fprintf(w, `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>
+<AccessKeyId>AKWEB</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>t</SessionToken><Expiration>%s</Expiration>
+</Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`, exp)
+	}))
+	t.Cleanup(sts.Close)
+	t.Setenv("AWS_ENDPOINT_URL_STS", sts.URL)
+}
+
+// TestCredentialsFailClosed: only an empty chain goes anonymous. A source
+// the environment configures (here web identity, as on a hosted runner)
+// that is slow, mounted late, refused or down never becomes unsigned
+// requests: a slow STS (5 s, past the empty chain's 3 s probe) and a token
+// file mounted a second after start sign; a refused token is an auth
+// failure at start; an STS outage keeps the source and the requests retry
+// it; --anonymous never signs, even with keys in the environment.
+func TestCredentialsFailClosed(t *testing.T) {
+	setup := func(t *testing.T) (dir, token string) {
+		dir = t.TempDir()
+		isolate(t, dir)
+		token = filepath.Join(dir, "token")
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", token)
+		t.Setenv("AWS_ROLE_ARN", "arn:aws:iam::111111111111:role/runner")
+		return dir, token
+	}
+	var auth atomic.Value
+	h := func(w http.ResponseWriter, r *http.Request) {
+		auth.Store(r.Header.Get("Authorization"))
+		w.Write([]byte(okPage))
+	}
+	signedWith := func(t *testing.T, c *Client, key string) {
+		t.Helper()
+		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+			t.Fatal(err)
+		}
+		if a := auth.Load().(string); !strings.Contains(a, "Credential="+key+"/") {
+			t.Fatalf("authorization %q (source %q), want key %s", a, c.auth.source, key)
+		}
+	}
+	t.Run("slow STS", func(t *testing.T) {
+		_, token := setup(t)
+		os.WriteFile(token, []byte("jwt"), 0o600)
+		webIdentitySTS(t, 5*time.Second, 0, "")
+		c, _ := testClient(t, h, Config{Region: "us-east-1"})
+		signedWith(t, c, "AKWEB")
+	})
+	t.Run("late token", func(t *testing.T) {
+		_, token := setup(t)
+		webIdentitySTS(t, 0, 0, "")
+		go func() { time.Sleep(time.Second); os.WriteFile(token, []byte("jwt"), 0o600) }()
+		c, _ := testClient(t, h, Config{Region: "us-east-1"})
+		signedWith(t, c, "AKWEB")
+	})
+	t.Run("refused", func(t *testing.T) {
+		_, token := setup(t)
+		os.WriteFile(token, []byte("jwt"), 0o600)
+		webIdentitySTS(t, 0, 400, "InvalidIdentityToken")
+		_, err := New(Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:1", PathStyle: true})
+		var ce *objhttp.CredentialError
+		if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || !strings.Contains(err.Error(), "web identity") {
+			t.Fatalf("refused token: %v (class %s), want an auth failure naming web identity", err, Classify(err))
+		}
+	})
+	t.Run("STS down", func(t *testing.T) {
+		_, token := setup(t)
+		os.WriteFile(token, []byte("jwt"), 0o600)
+		webIdentitySTS(t, 0, 503, "ServiceUnavailable")
+		srv := httptest.NewServer(http.HandlerFunc(h))
+		t.Cleanup(srv.Close)
+		c, err := New(Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true, MaxAttempts: 2,
+			BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.auth.anonymous || !strings.Contains(c.Note(), "not available yet") {
+			t.Fatalf("anonymous %v, note %q", c.auth.anonymous, c.Note())
+		}
+		_, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
+		var ex *ExhaustedError
+		if !errors.As(err, &ex) || !Classify(err).Transient() {
+			t.Fatalf("STS down: %v (class %s), want a retried transient credential failure", err, Classify(err))
+		}
+	})
+	t.Run("empty chain", func(t *testing.T) {
+		isolate(t, t.TempDir())
+		c, _ := testClient(t, h, Config{Region: "us-east-1"})
+		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+			t.Fatal(err)
+		}
+		if a := auth.Load().(string); a != "" || c.auth.source != "anonymous (no credentials found)" {
+			t.Fatalf("empty chain: authorization %q, source %q", a, c.auth.source)
+		}
+	})
+	t.Run("anonymous", func(t *testing.T) {
+		isolate(t, t.TempDir())
+		t.Setenv("AWS_ACCESS_KEY_ID", "AKENV")
+		t.Setenv("AWS_SECRET_ACCESS_KEY", "s")
+		c, _ := testClient(t, h, Config{Region: "us-east-1", Anonymous: true})
+		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+			t.Fatal(err)
+		}
+		if a := auth.Load().(string); a != "" || !c.auth.anonymous {
+			t.Fatalf("--anonymous signed: %q", a)
+		}
+	})
+}
+
+// TestOnEC2 reads the instance signs from the DMI files.
+func TestOnEC2(t *testing.T) {
+	old := dmiRoot
+	t.Cleanup(func() { dmiRoot = old })
+	for _, c := range []struct {
+		file, value string
+		want        bool
+	}{
+		{"", "", false},
+		{"devices/virtual/dmi/id/sys_vendor", "Amazon EC2\n", true},
+		{"devices/virtual/dmi/id/board_asset_tag", "i-0123456789abcdef0\n", true},
+		{"hypervisor/uuid", "EC2E1916-9099-7CAF-FD21-012345ABCDEF\n", true},
+		{"devices/virtual/dmi/id/sys_vendor", "QEMU\n", false},
+	} {
+		dmiRoot = t.TempDir()
+		if c.file != "" {
+			p := filepath.Join(dmiRoot, c.file)
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			os.WriteFile(p, []byte(c.value), 0o600)
+		}
+		if got := onEC2(); got != c.want {
+			t.Errorf("%s=%q: onEC2 %v, want %v", c.file, c.value, got, c.want)
+		}
+	}
+}

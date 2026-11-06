@@ -129,8 +129,15 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   SDK's own providers, not exercised here. **STS region:** the bucket's `--region` is the signing region for
   S3 only; the credential chain's STS calls use the environment's or the profile's region, else `us-east-1`
   (`TestCredentialSources` lists buckets in eu-west-2 and ap-southeast-2 and sees STS signed for us-east-1).
-  Credentials are cached by the SDK and refreshed before they expire. The first lookup is bounded at 3 s. If the chain finds
-  nothing and no profile was named, requests go unsigned; a named profile that fails is an error.
+  Credentials are cached by the SDK and refreshed before they expire. **Fail closed** (`TestCredentialsFailClosed`):
+  requests go unsigned only for an empty chain, one where no source is configured anywhere (no environment
+  keys, `AWS_PROFILE`, web-identity token, container endpoint, metadata endpoint; no profile with keys, a role,
+  a credential process, SSO or a login session; no EC2 sign in the DMI vendor, asset tag or hypervisor id, or
+  IMDS disabled) and the lookup, bounded at 3 s, finds nothing. A configured source (or `--profile`) is waited
+  for up to 30 s (a web-identity token file not yet mounted is polled for); a lookup that fails for good is a
+  `CredentialError` (class `auth`, exit 1); one that fails transiently (an STS 5xx or throttle, a cut
+  connection, past the wait) keeps the source with a note on stderr, and each request's signing retries it
+  (then the range is requeued, ending in 75 if it never answers), as a refresh failure mid-run does.
 - *Region:* `-region`, else the SDK's resolution (`AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's
   `region`), else `us-east-1`. A 301 or `AuthorizationHeaderMalformed` answer names the bucket's region in
   the error.
@@ -201,7 +208,9 @@ error. Credentials: `--gcs-anonymous` sends none; `--gcs-credentials FILE` reads
 authorized-user JSON; otherwise Application Default Credentials, and without any (no
 `GOOGLE_APPLICATION_CREDENTIALS`, no gcloud file, not on Google Cloud) the requests go unauthenticated (public
 buckets allow it). Credentials that are configured but do not load refuse the run (`client.CredentialError`,
-class `auth`), never anonymity. The token source lives as long as the client: it is built on a context that is
+class `auth`), never anonymity; on a Google Cloud machine (DMI product name `Google`/`Google Compute Engine`,
+or `GCE_METADATA_HOST`) whose metadata server the client library did not detect in time, the compute metadata
+token source is used anyway and its failures are retried per attempt (S3 follows the same rule). The token source lives as long as the client: it is built on a context that is
 never cancelled, whose HTTP client bounds each token exchange by `--gcs-request-timeout`, and each attempt
 waits for its token under its own deadline, all waiters sharing one outstanding token call (one goroutine at a
 time, `TestTokenWaitersCoalesce`); a token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429,

@@ -117,10 +117,13 @@ func TestCancelStopsBackoff(t *testing.T) {
 
 // isolate clears the AWS environment and points the shared files at dir.
 func isolate(t *testing.T, dir string) {
-	for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI"} {
+	for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_ROLE_ARN", "AWS_EC2_METADATA_SERVICE_ENDPOINT"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	old := dmiRoot
+	dmiRoot = filepath.Join(dir, "sys") // not EC2, whatever the host is
+	t.Cleanup(func() { dmiRoot = old })
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
 }

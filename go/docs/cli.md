@@ -226,8 +226,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   a requester-pays bucket can be listed at the caller's charge.
 - **S3 credentials:** `--anonymous` sends unsigned requests whatever the environment holds. Otherwise the AWS
   SDK's default credential chain applies: environment, shared files and profiles (`--profile`), SSO, web
-  identity, credential processes, AssumeRole, container and instance roles. With nothing found, requests go
-  unsigned. Secrets are never taken from flags (they would show in `ps`). Details:
+  identity, credential processes, AssumeRole, container and instance roles. Requests go unsigned only when
+  the chain is empty (the environment and the shared files name no source, and the machine shows no sign of
+  EC2) and the lookup finds nothing; a configured source that fails stops the run with cause `auth`, and one
+  that is slow or failing transiently is waited for and retried, never replaced by anonymity. Secrets are never taken from flags (they would show in `ps`). Details:
   [internals/providers.md](internals/providers.md).
 - **Spill:** when the reorder budget is full, rows of ranges ahead of the frontier go to disposable files
   under `DIR/.swath/spill/` instead of stalling the workers; `swath diag list --no-spill` turns it off,

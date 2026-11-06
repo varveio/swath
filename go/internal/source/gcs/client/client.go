@@ -223,6 +223,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 			c.ts, c.source = creds.TokenSource, "application default credentials"
 		case adcConfigured():
 			return nil, &CredentialError{Source: "application default credentials", Err: err}
+		case onGCEMachine():
+			// A Google Cloud machine whose metadata server did not answer the
+			// client library's detection in time: its service account is the
+			// configured source, never anonymity; token failures are retried
+			// per attempt like any refresh.
+			c.ts = google.ComputeTokenSource("", readScope)
+			c.source = "compute metadata (detection failed: " + err.Error() + ")"
 		default:
 			c.source = "anonymous (no application default credentials)"
 		}
@@ -247,6 +254,20 @@ func adcConfigured() bool {
 	}
 	_, err := os.Stat(filepath.Join(dir, "gcloud", "application_default_credentials.json"))
 	return err == nil
+}
+
+// gceProductFile names the machine's product (tests move it).
+var gceProductFile = "/sys/class/dmi/id/product_name"
+
+// onGCEMachine reports a Google Cloud machine by its DMI product name (the
+// sign the metadata library itself trusts) or a configured metadata host.
+func onGCEMachine() bool {
+	if os.Getenv("GCE_METADATA_HOST") != "" {
+		return true
+	}
+	b, _ := os.ReadFile(gceProductFile)
+	n := strings.TrimSpace(string(b))
+	return n == "Google" || n == "Google Compute Engine"
 }
 
 // tokenCall is one token source call that every concurrent waiter shares.

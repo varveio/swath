@@ -7,13 +7,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/logging"
 
@@ -28,10 +32,15 @@ import (
 
 const unsignedPayload = "UNSIGNED-PAYLOAD"
 
-// credentialProbe bounds the first credential lookup, so a host without
-// credentials (no instance metadata service) falls back to anonymous
-// quickly.
-const credentialProbe = 3 * time.Second
+// credentialProbe bounds the first credential lookup of an empty chain
+// (the environment names no source, so only the instance metadata service
+// is left), so a host without credentials falls back to anonymous quickly.
+// credentialWait bounds the first lookup of a configured source: a slow
+// token exchange is waited for, never taken for absence.
+const (
+	credentialProbe = 3 * time.Second
+	credentialWait  = 30 * time.Second
+)
 
 type auth struct {
 	creds     aws.CredentialsProvider // nil: anonymous
@@ -39,11 +48,19 @@ type auth struct {
 	region    string
 	signer    *v4.Signer
 	anonymous bool
+	note      string // a configured source not yet available at start
 }
 
 // loadAuth resolves the region and credentials. With -anonymous no
-// credentials are looked up. Otherwise the default chain runs once; if it
-// finds nothing (and no profile was named) requests go unsigned.
+// credentials are looked up. Otherwise the default chain runs once. Only an
+// empty chain (no source configured anywhere: no environment keys, profile,
+// web identity, credential process, SSO, role or container endpoint, and no
+// sign of an instance metadata service) whose lookup finds nothing goes
+// unsigned. A configured source fails closed: a lookup that fails for good
+// is a *objhttp.CredentialError (class auth); one that fails transiently (a
+// token service's 5xx or throttle, a cut connection, past its wait) keeps
+// the source, and each request's signing retries it (then the range is
+// requeued), as a refresh failure mid-run would.
 func loadAuth(cfg Config) (*auth, error) {
 	// The SDK's own log lines (an IMDS fallback warning on every host
 	// without instance metadata) are not for swath's users.
@@ -71,18 +88,120 @@ func loadAuth(cfg Config) (*auth, error) {
 		a.anonymous, a.source = true, "anonymous"
 		return a, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), credentialProbe)
-	defer cancel()
-	c, err := ac.Credentials.Retrieve(ctx)
-	switch {
-	case err != nil && cfg.Profile != "":
-		return nil, fmt.Errorf("credentials for profile %q: %w", cfg.Profile, err)
-	case err != nil:
-		a.anonymous, a.source = true, "anonymous (no credentials found)"
-		return a, nil
+	src, tokenFile := configuredSource(ac)
+	if src == "" && cfg.Profile != "" {
+		src = "profile " + cfg.Profile
 	}
-	a.creds, a.source = ac.Credentials, c.Source
+	wait := credentialProbe
+	if src != "" {
+		wait = credentialWait
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	c, err := retrieve(ctx, ac.Credentials, tokenFile)
+	switch {
+	case err == nil:
+		a.creds, a.source = ac.Credentials, c.Source
+	case src == "":
+		a.anonymous, a.source = true, "anonymous (no credentials found)"
+	case transientRefresh(err):
+		a.creds, a.source = ac.Credentials, src
+		a.note = fmt.Sprintf("credentials (%s) not available yet: %v; requests retry them", src, err)
+	default:
+		return nil, &objhttp.CredentialError{Source: src, Err: err}
+	}
 	return a, nil
+}
+
+// retrieve is the first lookup. A web-identity token file that is not
+// there yet (mounted after the process started) is waited for until ctx
+// ends, then looked up once more.
+func retrieve(ctx context.Context, p aws.CredentialsProvider, tokenFile string) (aws.Credentials, error) {
+	for {
+		c, err := p.Retrieve(ctx)
+		if err == nil || tokenFile == "" {
+			return c, err
+		}
+		if _, serr := os.Stat(tokenFile); !errors.Is(serr, fs.ErrNotExist) {
+			return c, err
+		}
+		select {
+		case <-ctx.Done():
+			return c, err
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// configuredSource names the credential source the environment or the
+// shared files configure ("" for an empty chain), and the web-identity
+// token file if one is named.
+func configuredSource(ac aws.Config) (src, tokenFile string) {
+	imdsOn := true
+	for _, s := range ac.ConfigSources {
+		var e *config.EnvConfig
+		var sc *config.SharedConfig
+		switch v := s.(type) {
+		case config.EnvConfig:
+			e = &v
+		case *config.EnvConfig:
+			e = v
+		case config.SharedConfig:
+			sc = &v
+		case *config.SharedConfig:
+			sc = v
+		}
+		switch {
+		case e != nil:
+			if e.EC2IMDSClientEnableState == imds.ClientDisabled {
+				imdsOn = false
+			}
+			if e.EC2IMDSEndpoint != "" && src == "" {
+				src = "instance metadata (AWS_EC2_METADATA_SERVICE_ENDPOINT)"
+			}
+			switch {
+			case e.Credentials.AccessKeyID != "":
+				return "environment keys", ""
+			case e.WebIdentityTokenFilePath != "":
+				return "web identity (AWS_WEB_IDENTITY_TOKEN_FILE)", e.WebIdentityTokenFilePath
+			case e.ContainerCredentialsEndpoint != "" || e.ContainerCredentialsRelativePath != "":
+				return "container credentials", ""
+			case e.SharedConfigProfile != "":
+				src = "profile " + e.SharedConfigProfile
+			}
+		case sc != nil:
+			switch {
+			case sc.WebIdentityTokenFile != "":
+				return "profile " + sc.Profile + " (web identity)", sc.WebIdentityTokenFile
+			case sc.Credentials.AccessKeyID != "", sc.RoleARN != "", sc.CredentialProcess != "",
+				sc.CredentialSource != "", sc.SSOSession != nil, sc.SSOStartURL != "", sc.LoginSession != "":
+				return "profile " + sc.Profile, ""
+			}
+			if sc.EC2IMDSEndpoint != "" && src == "" {
+				src = "instance metadata (profile " + sc.Profile + ")"
+			}
+		}
+	}
+	if src == "" && imdsOn && onEC2() {
+		src = "instance metadata"
+	}
+	return src, ""
+}
+
+// dmiRoot is where onEC2 reads the machine's identity (tests move it).
+var dmiRoot = "/sys"
+
+// onEC2 reports the signs Linux gives of an EC2 instance (where the
+// instance metadata service holds a role's credentials): the DMI vendor
+// or asset tag, or a Xen hypervisor id. Elsewhere it is false.
+func onEC2() bool {
+	read := func(p string) string {
+		b, _ := os.ReadFile(filepath.Join(dmiRoot, p))
+		return strings.TrimSpace(string(b))
+	}
+	return strings.Contains(read("devices/virtual/dmi/id/sys_vendor"), "Amazon") ||
+		strings.HasPrefix(read("devices/virtual/dmi/id/board_asset_tag"), "i-") ||
+		strings.HasPrefix(strings.ToLower(read("hypervisor/uuid")), "ec2")
 }
 
 // anonymousNote warns once when -anonymous hides credentials the

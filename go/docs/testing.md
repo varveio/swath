@@ -45,7 +45,8 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
   byte-identical datasets (SDK sequential vs client sequential, parallel and seeded, and SDK parallel) on a
   bucket with spaces, `+`, `%`, XML metacharacters, non-ASCII and 900-byte keys. Credentials and signing
   are the SDK's own modules; `TestCredentialChain` checks the chain's use (environment, profile,
-  anonymous, a missing profile).
+  anonymous, a missing profile); `TestCredentialsFailClosed` that a configured source that is slow, mounted
+  late, refused or down never becomes anonymous.
 - **Page parser vs encoding/xml:** `FuzzParseList` (arbitrary documents) and `FuzzParseFields` (valid
   documents from fuzzed values) require that whenever encoding/xml accepts a document, the scanner returns the
   same page. `TestEveryTruncationFails` holds that no proper prefix of a page parses, so a cut body is never

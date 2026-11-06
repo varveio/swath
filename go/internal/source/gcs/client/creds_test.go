@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -289,6 +290,29 @@ func TestADCConfiguredButBroken(t *testing.T) {
 		}
 		if _, anon := c.Credentials(); !anon {
 			t.Skip("running on Google Cloud: the metadata server supplies credentials")
+		}
+	})
+	// A Google Cloud machine whose metadata server is not detected in time
+	// keeps its service account as the source (token failures retried per
+	// attempt), never anonymity.
+	t.Run("GCE detection failed", func(t *testing.T) {
+		if os.Getenv("GCE_METADATA_HOST") != "" {
+			t.Skip("a metadata server is configured")
+		}
+		dir := t.TempDir()
+		t.Setenv("HOME", dir)
+		t.Setenv("APPDATA", dir)
+		t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+		old := gceProductFile
+		gceProductFile = filepath.Join(dir, "product_name")
+		t.Cleanup(func() { gceProductFile = old })
+		os.WriteFile(gceProductFile, []byte("Google Compute Engine\n"), 0o600)
+		c, err := New(context.Background(), Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if src, anon := c.Credentials(); anon || !strings.Contains(src, "compute metadata") {
+			t.Fatalf("source %q, anonymous %v: want the compute metadata source", src, anon)
 		}
 	})
 }
