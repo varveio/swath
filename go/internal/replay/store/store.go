@@ -100,6 +100,11 @@ type Options struct {
 	// Readers bounds concurrent page decodes across all requests. Zero
 	// selects DefaultReaders().
 	Readers int
+	// MaxOpenFiles bounds the descriptors the fixture's parts hold open,
+	// whatever their number: an evicted part is reopened when next read.
+	// Zero selects sortedparquet.DefaultMaxOpenFiles(), half the soft
+	// descriptor limit within 64..4,096.
+	MaxOpenFiles int
 }
 
 // Metadata describes an opened fixture for the startup line and metrics.
@@ -114,6 +119,10 @@ type Metadata struct {
 	Identity string
 	// Ordering is always OrderingProfile.
 	Ordering string
+	// SchemaID is the declared schema id: the manifest's for a format-2
+	// dataset, "swath/canonical" for a Java-era fixture. Projections are
+	// chosen by it, never by the columns present.
+	SchemaID string
 }
 
 // DefaultReaders is the default concurrent page-decode bound:
