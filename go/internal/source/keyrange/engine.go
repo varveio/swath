@@ -247,7 +247,7 @@ func (p *Engine[P]) Stats() Stats {
 
 // list fetches one page that holds an entry, or the chain's last page.
 // A provider with an inclusive start bound gets After as is; a key equal to
-// it is dropped here. A continuing page with no entry (object stores may return them;
+// it, and a common prefix at or below it, are dropped here. A continuing page with no entry (object stores may return them;
 // also the page that held only the key at an inclusive bound) is followed
 // by its token here, for every path (ranges, the sequential chain, the
 // probes): each token of such a run must be new, or the page is invalid.
@@ -264,11 +264,25 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 	for {
 		out, err := p.fetch(ctx, in)
 		if err == nil {
-			if p.d.StartInclusive && chainStart && in.After != "" && len(out.Rows) > 0 && out.Rows[0].Key == in.After {
-				out.Rows = out.Rows[1:]
-				p.mu.Lock()
-				p.c.Inc(cBoundDrops)
-				p.mu.Unlock()
+			if p.d.StartInclusive && chainStart && in.After != "" {
+				dropped := 0
+				if len(out.Rows) > 0 && out.Rows[0].Key == in.After {
+					out.Rows, dropped = out.Rows[1:], 1
+				}
+				// A delimiter page from an inclusive start also rolls the
+				// keys at or after the bound up into a common prefix at or
+				// below it (GCS returns "a/" for startOffset "a/" or
+				// "a/b"); S3's StartAfter returns neither (both measured
+				// on the live services), and the engine's bound is S3's.
+				if n := len(out.Prefixes); n > 0 {
+					out.Prefixes = slices.DeleteFunc(out.Prefixes, func(cp string) bool { return cp <= in.After })
+					dropped += n - len(out.Prefixes)
+				}
+				if dropped > 0 {
+					p.mu.Lock()
+					p.c.Add(cBoundDrops, int64(dropped))
+					p.mu.Unlock()
+				}
 			}
 			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 {
 				if !strictlyAscending(out.Prefixes) {

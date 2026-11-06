@@ -217,7 +217,9 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
 - a `Description[P]`:
   - *bound inclusivity:* the engine's ranges are `(lo, hi]`. `After` means keys strictly above it; a
     provider whose start bound is inclusive sends it as is and sets `StartInclusive`, and the engine drops
-    a key equal to `After` from the first page of a request chain. `Through` is the inclusive end; a
+    a key equal to `After` from the first page of a request chain, and with a delimiter every common prefix
+    at or below `After`: GCS returns `a/` for `startOffset` `a/` or `a/b`, S3's `start-after` returns
+    neither (both measured on the live services; `TestInclusiveBoundDropsCoveredPrefixes`). `Through` is the inclusive end; a
     provider may ignore it (the engine trims) or bound the request with `ExclusiveEnd(Through, accept)`,
     the immediate successor (`Through` + NUL), when its own predicate accepts that string (a service may
     refuse NUL, or 1,025 bytes); otherwise it sends no end bound and the engine trims;

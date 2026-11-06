@@ -33,7 +33,7 @@ func (s *script) fetch(_ context.Context, q *Query) (*Page[Object], error) {
 		}
 	}
 	out := s.pages[i]
-	out.Rows = slices.Clone(out.Rows)
+	out.Rows, out.Prefixes = slices.Clone(out.Rows), slices.Clone(out.Prefixes)
 	switch {
 	case out.Token == noToken:
 		out.Token = ""
@@ -272,6 +272,42 @@ func TestPrefixesNormalized(t *testing.T) {
 		slices.Sort(tiles[1])
 		if !slices.Equal(tiles[0], tiles[1]) {
 			t.Fatalf("%+v: tiles differ:\n%q\n%q", opt, tiles[0], tiles[1])
+		}
+	}
+}
+
+// TestInclusiveBoundDropsCoveredPrefixes: a delimiter page from an
+// inclusive start bound holds the common prefix equal to the bound, and the
+// one the bound lies in (GCS answers "LC08/" for startOffset "LC08/" and
+// "LC08/01", measured on gcp-public-data-landsat); S3's StartAfter returns
+// neither (measured on noaa-hrrr-bdp-pds). The engine's bound is S3's, so
+// both are dropped at an inclusive bound, as an equal key is, and counted;
+// with an exclusive bound the page is left as the provider gave it.
+func TestInclusiveBoundDropsCoveredPrefixes(t *testing.T) {
+	page := Page[Object]{Prefixes: []string{"f05/", "f06/", "f07/", "f08/"}, Truncated: true}
+	for _, c := range []struct {
+		inclusive bool
+		after     string
+		want      []string
+		drops     int64
+	}{
+		{true, "f06/", []string{"f07/", "f08/"}, 2},  // f05/ and the equal f06/
+		{true, "f06/x", []string{"f07/", "f08/"}, 2}, // f05/ and f06/, which the bound lies in
+		{false, "f06/", []string{"f05/", "f06/", "f07/", "f08/"}, 0},
+	} {
+		s := &script{pages: []Page[Object]{page}}
+		p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing, StartInclusive: c.inclusive}, s.fetch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in := p.query()
+		in.After, in.Delimiter, in.Probe = c.after, "/", true
+		out, err := p.list(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := p.Stats(); !slices.Equal(out.Prefixes, c.want) || st.Get(cBoundDrops) != c.drops {
+			t.Fatalf("inclusive=%v after=%q: prefixes %q, bound_drops %d; want %q, %d", c.inclusive, c.after, out.Prefixes, st.Get(cBoundDrops), c.want, c.drops)
 		}
 	}
 }
