@@ -21,6 +21,7 @@ import (
 	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
@@ -170,10 +171,7 @@ func AcceptBound(s string) bool { return keyrange.Safe(s) }
 
 // requeue: a transient failure whose client retries were exhausted is
 // asked again (keyrange.Description.Requeue).
-func requeue(err error) bool {
-	var ex *client.ExhaustedError
-	return errors.As(err, &ex) && client.Classify(err).Transient()
-}
+var requeue = objhttp.Requeue(client.Classify)
 
 // Restart continues after the last published key.
 func (p *Provider) Restart(after string) {
@@ -184,12 +182,7 @@ func (p *Provider) Restart(after string) {
 // Stats returns the counters so far.
 func (p *Provider) Stats() Stats {
 	if c, ok := p.client.(counted); ok {
-		n, set := c.Counters(), p.Set()
-		set.Set(p.ID(cAttempts), n.Attempts)
-		set.Set(p.ID(cRetries), n.Retries)
-		set.Set(p.ID(cThrottles), n.Throttles)
-		set.Set(p.ID(cTimeouts), n.Timeouts)
-		set.Set(p.ID(cParseFailures), n.ParseFailures)
+		c.Counters().Store(p.Set(), p.ID(0))
 	}
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, MeanActive: e.MeanActive, Counters: e.Counters}

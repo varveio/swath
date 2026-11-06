@@ -14,13 +14,10 @@ package client
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,13 +25,13 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // DefaultEndpoint is the JSON API base.
@@ -128,42 +125,19 @@ func (e *Error) Throttle() bool {
 // Retryable reports an answer worth repeating.
 func (e *Error) Retryable() bool { return e.Throttle() || e.Status >= 500 || e.Status == 408 }
 
-// ExhaustedError is a retryable failure that outlived its attempts.
-type ExhaustedError struct {
-	Attempts int
-	Err      error
-}
-
-func (e *ExhaustedError) Error() string {
-	return fmt.Sprintf("after %d attempts: %v", e.Attempts, e.Err)
-}
-func (e *ExhaustedError) Unwrap() error { return e.Err }
-
-// ErrSyntax marks a 200 whose body did not parse.
-var ErrSyntax = errors.New("malformed objects.list response")
-
-// CredentialError is a credential failure: configured credentials that do
-// not load, or a token the token endpoint would not issue. Transient
-// failures (the endpoint's 5xx, 408 or 429, a cut connection, an attempt
-// past the request timeout) are retried; the others stop the request.
-type CredentialError struct {
-	Source    string // where the credentials came from (never the secret)
-	Transient bool
-	Timeout   bool // the token did not arrive within the request timeout
-	Err       error
-}
-
-func (e *CredentialError) Error() string {
-	return "GCS credentials (" + e.Source + "): " + e.Err.Error()
-}
-func (e *CredentialError) Unwrap() error { return e.Err }
-
-var errTimeout = errors.New("request timed out")
-
 // Counters are what the client did.
-type Counters struct {
-	Attempts, Retries, Throttles, Timeouts, ParseFailures int64
-}
+type Counters = objhttp.Counts
+
+// CredentialError is a credential failure (objhttp.CredentialError):
+// configured credentials that do not load, or a token the token endpoint
+// would not issue; transient ones are retried.
+type CredentialError = objhttp.CredentialError
+
+// ExhaustedError is a transient failure that outlived its attempts.
+type ExhaustedError = objhttp.ExhaustedError
+
+// ErrSyntax marks a 200 whose body did not parse (objhttp.ErrSyntax).
+var ErrSyntax = objhttp.ErrSyntax
 
 // Client lists Cloud Storage buckets; safe for concurrent use.
 type Client struct {
@@ -173,7 +147,8 @@ type Client struct {
 	ts     oauth2.TokenSource // nil: anonymous
 	source string
 
-	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
+	retry  objhttp.Retry
+	counts objhttp.Counters
 }
 
 // New resolves credentials and builds the client. Without Application
@@ -183,15 +158,6 @@ type Client struct {
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
-	}
-	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = 9
-	}
-	if cfg.BaseBackoff <= 0 {
-		cfg.BaseBackoff = 100 * time.Millisecond
-	}
-	if cfg.MaxBackoff <= 0 {
-		cfg.MaxBackoff = 5 * time.Second
 	}
 	ep := cfg.Endpoint
 	if ep == "" {
@@ -204,7 +170,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if !strings.HasSuffix(u.Path, "/") {
 		u.Path += "/"
 	}
-	c := &Client{cfg: cfg, base: u, http: cfg.HTTPClient, source: "anonymous"}
+	c := &Client{cfg: cfg, base: u, http: cfg.HTTPClient, source: "anonymous",
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff}}
+	c.retry.Defaults()
 	if c.http == nil {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
@@ -284,7 +252,7 @@ func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
 		return r.t, nil
 	case <-ctx.Done():
 		return nil, &CredentialError{Source: c.source, Transient: true, Timeout: true,
-			Err: fmt.Errorf("no token within %s: %w", c.cfg.RequestTimeout, ctx.Err())}
+			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
 	}
 }
 
@@ -299,7 +267,7 @@ func transientToken(err error) bool {
 		s := re.Response.StatusCode
 		return s >= 500 || s == 408 || s == 429
 	}
-	return transport(err)
+	return objhttp.Transport(err)
 }
 
 // Credentials names where the credentials came from (never the secret).
@@ -307,7 +275,7 @@ func (c *Client) Credentials() (source string, anonymous bool) { return c.source
 
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
-	return Counters{c.attempts.Load(), c.retries.Load(), c.throttles.Load(), c.timeouts.Load(), c.parseFailures.Load()}
+	return c.counts.Load()
 }
 
 // route is the URL of a bucket's objects collection.
@@ -362,69 +330,11 @@ func (c *Client) URL(in *ListInput) string {
 	return u.String()
 }
 
-// List sends one objects.list request, retrying retryable failures.
+// List sends one objects.list request, retrying retryable failures
+// (objhttp.Do).
 func (c *Client) List(ctx context.Context, in *ListInput) (*Page, error) {
 	u := c.URL(in)
-	for attempt := 1; ; attempt++ {
-		page, err := c.attempt(ctx, u)
-		if err == nil {
-			return page, nil
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		retry, throttle, timeout := retryable(err)
-		if !retry || attempt >= c.cfg.MaxAttempts {
-			if retry {
-				err = &ExhaustedError{Attempts: attempt, Err: err}
-			}
-			return nil, err
-		}
-		c.retries.Add(1)
-		if throttle {
-			c.throttles.Add(1)
-		}
-		if timeout {
-			c.timeouts.Add(1)
-		}
-		d := min(c.cfg.MaxBackoff, c.cfg.BaseBackoff<<min(attempt-1, 30))
-		t := time.NewTimer(rand.N(d) + 1)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return nil, ctx.Err()
-		case <-t.C:
-		}
-	}
-}
-
-func retryable(err error) (retry, throttle, timeout bool) {
-	var se *Error
-	switch {
-	case errors.As(err, &se):
-		return se.Retryable(), se.Throttle(), false
-	case errors.Is(err, errTimeout):
-		return true, false, true
-	case errors.Is(err, ErrSyntax):
-		return true, false, false
-	}
-	var ce *CredentialError
-	if errors.As(err, &ce) {
-		return ce.Transient, false, ce.Timeout
-	}
-	return transport(err), false, false
-}
-
-// transport reports a connection failure worth repeating (not a
-// certificate refusal).
-func transport(err error) bool {
-	var cert *tls.CertificateVerificationError
-	if errors.As(err, &cert) {
-		return false
-	}
-	var ne net.Error
-	return errors.As(err, &ne) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) ||
-		errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "connection reset")
+	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) { return c.attempt(ctx, u) })
 }
 
 // maxResponse bounds a page body: 1,000 items of 1,024-byte names with
@@ -446,15 +356,15 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 		}
 		tok.SetAuthHeader(req)
 	}
-	c.attempts.Add(1)
+	c.counts.Attempt()
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, c.wrap(actx, ctx, err)
+		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if err != nil {
-		return nil, c.wrap(actx, ctx, err)
+		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		e := responseError(resp.StatusCode, body)
@@ -471,17 +381,10 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	}
 	p, err := parse(body)
 	if err != nil {
-		c.parseFailures.Add(1)
+		c.counts.ParseFailure()
 		return nil, err
 	}
 	return p, nil
-}
-
-func (c *Client) wrap(actx, ctx context.Context, err error) error {
-	if ctx.Err() == nil && errors.Is(actx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w after %s: %v", errTimeout, c.cfg.RequestTimeout, err)
-	}
-	return err
 }
 
 func responseError(status int, body []byte) *Error {

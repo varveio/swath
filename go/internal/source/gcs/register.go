@@ -7,13 +7,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 func init() {
@@ -94,7 +94,7 @@ func (o *opened) Identity() source.Identity {
 	opt := o.p.opt
 	return source.Identity{Provider: "gcs", Fields: []source.IdentityField{
 		{Name: "source", Value: "gs://" + opt.Bucket + "/" + opt.Prefix},
-		{Name: "route", Value: o.p.route, Canonical: canonicalRoute(o.p.route)},
+		{Name: "route", Value: o.p.route, Canonical: objhttp.CanonicalRoute(o.p.route)},
 		{Name: "user project", Value: o.p.project},
 	}}
 }
@@ -104,11 +104,7 @@ func (o *opened) Identity() source.Identity {
 // with an object-count cap, or through a supplied client that does not
 // name its route, cannot resume (as for S3).
 func (o *opened) Capabilities() source.Capabilities {
-	c := source.Capabilities{Resume: o.p.opt.MaxKeys == 0 && o.p.route != "", Seek: source.SeekFabricable, Order: source.OrderBytes}
-	if o.p.opt.Sequential {
-		c.Seek = source.SeekTokenOnly
-	}
-	return c
+	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
 }
 
 func (o *opened) Restart(after string) error {
@@ -118,18 +114,7 @@ func (o *opened) Restart(after string) error {
 
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
-	v := st.Counters.Value
-	truncated := v("truncated_at_max_keys") != 0
-	r := source.Report{Name: "gcs", Stats: &st,
-		Brief: fmt.Sprintf("objects=%d bytes=%d pages=%d requests=%d retries=%d splits=%d child_empty=%d max_active=%d truncated=%v",
-			v("objects"), v("bytes"), v("pages"), v("requests"), v("retries"), v("split.accepted_bounded")+v("split.accepted_frontier"),
-			v("child_empty.lower")+v("child_empty.upper"), v("max_active"), truncated),
-		Coverage: source.Coverage{Target: o.target(), Prefix: o.p.opt.Prefix, Complete: !truncated, StopReason: "completed"},
-	}
-	if truncated {
-		r.Coverage.StopReason = "max_keys"
-	}
-	return r
+	return keyrange.Report("gcs", o.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
 var (
@@ -143,24 +128,9 @@ var (
 // run's outcome.
 func classify(err error) string {
 	switch c := client.Classify(err); c {
-	case client.ClassOther, client.ClassCanceled:
+	case objhttp.ClassOther, objhttp.ClassCanceled:
 		return ""
 	default:
 		return string(c)
 	}
-}
-
-// canonicalRoute: the scheme and host are case-insensitive; the path is
-// kept byte for byte (the client already added the base's trailing slash).
-func canonicalRoute(r string) string {
-	i := strings.Index(r, "://")
-	if i < 0 {
-		return r
-	}
-	host, path, cut := strings.Cut(r[i+3:], "/")
-	r = strings.ToLower(r[:i]) + "://" + strings.ToLower(host)
-	if cut {
-		r += "/" + path
-	}
-	return r
 }

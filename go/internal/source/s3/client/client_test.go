@@ -107,7 +107,7 @@ func TestAttemptsAreBounded(t *testing.T) {
 
 func TestCancelStopsBackoff(t *testing.T) {
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }, Config{Anonymous: true})
-	c.cfg.BaseBackoff, c.cfg.MaxBackoff = time.Hour, time.Hour
+	c.retry.BaseBackoff, c.retry.MaxBackoff = time.Hour, time.Hour
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := c.ListObjectsV2(ctx, &ListInput{Bucket: "b"}); !errors.Is(err, context.DeadlineExceeded) {

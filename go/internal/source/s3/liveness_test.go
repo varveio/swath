@@ -12,6 +12,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
@@ -49,7 +50,7 @@ func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
-	if client.Classify(err) != client.ClassAccessDenied {
+	if client.Classify(err) != objhttp.ClassAccessDenied {
 		t.Fatalf("access denied: %v (%s)", err, client.Classify(err))
 	}
 }
@@ -57,25 +58,25 @@ func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 // TestClassify covers every class.
 func TestClassify(t *testing.T) {
 	se := func(status int, code string) error { return &client.Error{Status: status, Code: code} }
-	for want, err := range map[client.Class]error{
-		client.ClassAuth:         se(403, "InvalidAccessKeyId"),
-		client.ClassAccessDenied: se(403, "AccessDenied"),
-		client.ClassNoSuchBucket: se(404, "NoSuchBucket"),
-		client.ClassRedirect:     se(301, "PermanentRedirect"),
-		client.ClassThrottle:     &client.ExhaustedError{Attempts: 9, Err: se(503, "SlowDown")},
-		client.ClassTimeout:      se(400, "RequestTimeout"),
-		client.ClassServer:       se(500, "InternalError"),
-		client.ClassTransport:    &client.ExhaustedError{Attempts: 9, Err: errors.Join(errors.New("read: connection reset by peer"))},
-		client.ClassParse:        client.ErrSyntax,
-		client.ClassInvalidPage:  client.ErrInvalidPage,
-		client.ClassCanceled:     context.Canceled,
-		client.ClassOther:        errors.New("something else"),
+	for want, err := range map[objhttp.Class]error{
+		objhttp.ClassAuth:         se(403, "InvalidAccessKeyId"),
+		objhttp.ClassAccessDenied: se(403, "AccessDenied"),
+		objhttp.ClassNoSuchBucket: se(404, "NoSuchBucket"),
+		objhttp.ClassRedirect:     se(301, "PermanentRedirect"),
+		objhttp.ClassThrottle:     &client.ExhaustedError{Attempts: 9, Err: se(503, "SlowDown")},
+		objhttp.ClassTimeout:      se(400, "RequestTimeout"),
+		objhttp.ClassServer:       se(500, "InternalError"),
+		objhttp.ClassTransport:    &client.ExhaustedError{Attempts: 9, Err: errors.Join(errors.New("read: connection reset by peer"))},
+		objhttp.ClassParse:        client.ErrSyntax,
+		objhttp.ClassInvalidPage:  client.ErrInvalidPage,
+		objhttp.ClassCanceled:     context.Canceled,
+		objhttp.ClassOther:        errors.New("something else"),
 	} {
 		if got := client.Classify(err); got != want {
 			t.Errorf("%v: %s, want %s", err, got, want)
 		}
-		if transient := want == client.ClassThrottle || want == client.ClassTimeout || want == client.ClassServer ||
-			want == client.ClassTransport || want == client.ClassParse; want.Transient() != transient {
+		if transient := want == objhttp.ClassThrottle || want == objhttp.ClassTimeout || want == objhttp.ClassServer ||
+			want == objhttp.ClassTransport || want == objhttp.ClassParse; want.Transient() != transient {
 			t.Errorf("%s: transient %v", want, want.Transient())
 		}
 	}

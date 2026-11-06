@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"golang.org/x/oauth2"
 )
 
@@ -69,21 +70,21 @@ func TestClassify(t *testing.T) {
 	}
 	for _, x := range []struct {
 		prefix    string
-		want      Class
+		want      objhttp.Class
 		exhausted bool
 	}{
-		{"throttle", ClassThrottle, true},
-		{"user-throttle", ClassThrottle, true},
-		{"server", ClassServer, true},
-		{"request-timeout", ClassTimeout, true},
-		{"auth", ClassAuth, false},
-		{"denied", ClassAccessDenied, false},
-		{"missing", ClassNoSuchBucket, false},
-		{"bad-request", ClassOther, false},
-		{"parse", ClassParse, true},
-		{"garbled", ClassParse, true},
-		{"slow", ClassTimeout, true},
-		{"cut", ClassTransport, true},
+		{"throttle", objhttp.ClassThrottle, true},
+		{"user-throttle", objhttp.ClassThrottle, true},
+		{"server", objhttp.ClassServer, true},
+		{"request-timeout", objhttp.ClassTimeout, true},
+		{"auth", objhttp.ClassAuth, false},
+		{"denied", objhttp.ClassAccessDenied, false},
+		{"missing", objhttp.ClassNoSuchBucket, false},
+		{"bad-request", objhttp.ClassOther, false},
+		{"parse", objhttp.ClassParse, true},
+		{"garbled", objhttp.ClassParse, true},
+		{"slow", objhttp.ClassTimeout, true},
+		{"cut", objhttp.ClassTransport, true},
 	} {
 		_, err := c.List(context.Background(), &ListInput{Bucket: "b", Prefix: x.prefix})
 		var ex *ExhaustedError
@@ -96,7 +97,7 @@ func TestClassify(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close()
 	d, _ := New(context.Background(), Config{Endpoint: "http://" + addr + "/storage/v1/", Anonymous: true, MaxAttempts: 1})
-	if _, err := d.List(context.Background(), &ListInput{Bucket: "b"}); Classify(err) != ClassTransport {
+	if _, err := d.List(context.Background(), &ListInput{Bucket: "b"}); Classify(err) != objhttp.ClassTransport {
 		t.Errorf("refused connection: class %q (%v)", Classify(err), err)
 	}
 	// Credentials: a refused grant, and a token source that fails in transit.
@@ -112,17 +113,22 @@ func TestClassify(t *testing.T) {
 		e, _ := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: failingTokens{x.err}, MaxAttempts: 1})
 		_, err := e.List(context.Background(), &ListInput{Bucket: "b"})
 		var ex *ExhaustedError
-		if Classify(err) != ClassAuth || errors.As(err, &ex) != x.exhausted {
+		want := objhttp.ClassAuth // a refusal stops the run; an outage of the token endpoint is transient
+		if x.exhausted {
+			want = objhttp.ClassTransport
+		}
+		var ce *CredentialError
+		if Classify(err) != want || errors.As(err, &ex) != x.exhausted || !errors.As(err, &ce) {
 			t.Errorf("%s: class %q exhausted=%v (%v)", x.name, Classify(err), errors.As(err, &ex), err)
 		}
 	}
 	// The caller's cancellation, and contract breaks the engine reports.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.List(ctx, &ListInput{Bucket: "b", Prefix: "slow"}); Classify(err) != ClassCanceled {
+	if _, err := c.List(ctx, &ListInput{Bucket: "b", Prefix: "slow"}); Classify(err) != objhttp.ClassCanceled {
 		t.Errorf("canceled: class %q (%v)", Classify(err), err)
 	}
-	if got := Classify(fmt.Errorf("%w: out of order", ErrInvalidPage)); got != ClassInvalidPage {
+	if got := Classify(fmt.Errorf("%w: out of order", ErrInvalidPage)); got != objhttp.ClassInvalidPage {
 		t.Errorf("invalid page: class %q", got)
 	}
 	if got := Classify(nil); got != "" {

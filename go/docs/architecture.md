@@ -31,8 +31,9 @@ There is no external sort, no staging and no merge.
 | `internal/source/keyrange/keyrangetest` | test fixtures: a fake listing API over sorted keys, the fixture and hostile keyspaces; imported by tests only | – |
 | `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://` | source, schema, registry, keyrange, s3/client |
 | `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payload `Object` and schema `swath/gcs-objects/v1`; registers `gs://` | source, schema, registry, keyrange, gcs/client |
-| `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, retries, the page parser | – |
-| `internal/source/gcs/client` | objects.list: OAuth2 credentials, retries, the page parser | – |
+| `internal/source/objhttp` | what both object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client counters, route canonicalization; `objhttptest` holds the retry contract both clients pass | counters |
+| `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
+| `internal/source/gcs/client` | objects.list: OAuth2 credentials, the JSON API's answers and their classes, the page parser | objhttp |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]`), `Info` | – |

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // TestCountersDoc keeps the S3 table in docs/internals/counters.md generated
@@ -40,8 +41,8 @@ func TestCountersDoc(t *testing.T) {
 // TestCountersMatchIDs: one client counter definition per ID; keys unique
 // across the engine's and the client's.
 func TestCountersMatchIDs(t *testing.T) {
-	if len(clientCounters) != cParseFailures+1 {
-		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), cParseFailures+1)
+	if len(clientCounters) != objhttp.NumCounters {
+		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), objhttp.NumCounters)
 	}
 	seen := map[string]bool{}
 	for _, d := range Counters {

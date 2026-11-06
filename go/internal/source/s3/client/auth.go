@@ -5,7 +5,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,6 +14,8 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/smithy-go/logging"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // Credentials and signing come from the AWS SDK's auth modules, not from
@@ -91,9 +92,6 @@ func anonymousNote(cfg Config) string {
 	return ""
 }
 
-// errCredentials marks a failed credential refresh (not retried).
-var errCredentials = errors.New("credentials")
-
 // sign signs a GET with SigV4 and an unsigned payload.
 func (a *auth) sign(ctx context.Context, req *http.Request, now time.Time) error {
 	if a.anonymous {
@@ -101,7 +99,7 @@ func (a *auth) sign(ctx context.Context, req *http.Request, now time.Time) error
 	}
 	c, err := a.creds.Retrieve(ctx) // cached by the SDK until expiry
 	if err != nil {
-		return fmt.Errorf("%w: %w", errCredentials, err)
+		return &objhttp.CredentialError{Source: a.source, Err: err} // not retried
 	}
 	req.Header.Set("X-Amz-Content-Sha256", unsignedPayload)
 	return a.signer.SignHTTP(ctx, c, req, unsignedPayload, "s3", a.region, now)

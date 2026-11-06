@@ -13,6 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // The ListObjectsV2 parser is a hand-rolled scanner over the whole response
@@ -29,8 +31,8 @@ import (
 // encoding/xml accepts a document this parser returns the same page. It is
 // more lenient on malformed input (it does not validate UTF-8 or names).
 
-// ErrSyntax wraps every parse failure.
-var ErrSyntax = errors.New("malformed XML")
+// ErrSyntax wraps every parse failure (objhttp.ErrSyntax: retried).
+var ErrSyntax = objhttp.ErrSyntax
 
 type span struct{ off, n uint32 }
 

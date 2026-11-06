@@ -19,6 +19,7 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 func testKeys() []string {
@@ -480,7 +481,7 @@ func TestInvalidPageClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
-	if classify(err) != "invalid_page" || client.Classify(err) == client.ClassParse {
+	if classify(err) != "invalid_page" || client.Classify(err) == objhttp.ClassParse {
 		t.Fatalf("err %v class %q, want invalid_page", err, classify(err))
 	}
 }

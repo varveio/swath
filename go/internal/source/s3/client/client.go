@@ -4,23 +4,20 @@
 package client
 
 import (
-	"github.com/varveio/swath/go/internal/faults"
-
 	"bytes"
 	"context"
-	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // Config configures a Client. Zero values take the defaults.
@@ -42,15 +39,7 @@ type Config struct {
 }
 
 // Counters are what the client did, for the run summary.
-type Counters struct {
-	Attempts  int64 `json:"attempts"`  // HTTP requests sent
-	Retries   int64 `json:"retries"`   // attempts repeated after a retryable failure
-	Throttles int64 `json:"throttles"` // of those, 429/503/SlowDown answers
-	Timeouts  int64 `json:"timeouts"`  // of those, attempts past the per-request timeout
-	// ParseFailures counts 200 responses whose body did not parse (a cut or
-	// garbled body); they are retried like transport faults, never dropped.
-	ParseFailures int64 `json:"parse_failures"`
-}
+type Counters = objhttp.Counts
 
 // Client lists S3 buckets. It is safe for concurrent use.
 type Client struct {
@@ -61,7 +50,8 @@ type Client struct {
 	http   *http.Client
 	note   string
 
-	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
+	retry  objhttp.Retry
+	counts objhttp.Counters
 
 	parsers sync.Pool // *parser
 	buffers sync.Pool // *bytes.Buffer
@@ -75,20 +65,13 @@ func New(cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
-	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = 9
-	}
-	if cfg.BaseBackoff <= 0 {
-		cfg.BaseBackoff = 100 * time.Millisecond
-	}
-	if cfg.MaxBackoff <= 0 {
-		cfg.MaxBackoff = 5 * time.Second
-	}
 	a, err := loadAuth(cfg)
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: anonymousNote(cfg)}
+	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: anonymousNote(cfg),
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff}}
+	c.retry.Defaults()
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -119,48 +102,15 @@ func (c *Client) Region() string { return c.region }
 
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
-	return Counters{c.attempts.Load(), c.retries.Load(), c.throttles.Load(), c.timeouts.Load(), c.parseFailures.Load()}
+	return c.counts.Load()
 }
 
 // ListObjectsV2 sends one ListObjectsV2 request, retrying retryable
-// failures with full-jitter exponential backoff.
+// failures with full-jitter exponential backoff (objhttp.Do).
 func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error) {
 	u := c.url(in)
-	for attempt := 1; ; attempt++ {
-		page, err := c.attempt(ctx, u)
-		if err == nil {
-			return page, nil
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		var timeout bool
-		retry, throttle := retryable(err, &timeout)
-		if !retry || attempt >= c.cfg.MaxAttempts {
-			if retry {
-				err = &ExhaustedError{Attempts: attempt, Err: err}
-			}
-			return nil, err
-		}
-		c.retries.Add(1)
-		if throttle {
-			c.throttles.Add(1)
-		}
-		if timeout {
-			c.timeouts.Add(1)
-		}
-		d := min(c.cfg.MaxBackoff, c.cfg.BaseBackoff<<min(attempt-1, 30))
-		t := time.NewTimer(rand.N(d) + 1)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return nil, ctx.Err()
-		case <-t.C:
-		}
-	}
+	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) { return c.attempt(ctx, u) })
 }
-
-var errTimeout = errors.New("request timed out")
 
 // A ListObjectsV2 page of 1,000 keys of 1,024 bytes with owners and
 // checksums stays under 4 MiB; a larger body is refused, not buffered.
@@ -168,31 +118,6 @@ const (
 	maxResponse = 16 << 20
 	maxPooled   = 4 << 20
 )
-
-// retryable classifies a failed attempt.
-func retryable(err error, timeout *bool) (retry, throttle bool) {
-	var se *Error
-	switch {
-	case errors.As(err, &se):
-		return se.Retryable(), se.Throttle()
-	case errors.Is(err, errTimeout):
-		*timeout = true
-		return true, false
-	case errors.Is(err, errCredentials):
-		return false, false
-	case errors.Is(err, ErrSyntax):
-		// A 200 whose body does not parse is a transport fault (a cut or
-		// garbled body): retry it. A page is never skipped.
-		return true, false
-	}
-	var cert *tls.CertificateVerificationError
-	if errors.As(err, &cert) {
-		return false, false
-	}
-	var ne net.Error
-	return errors.As(err, &ne) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) ||
-		errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "connection reset"), false
-}
 
 // route is the URL a bucket's requests go to, before the query: the bucket
 // in the path (path-style, a bucket that is not virtual-hostable, an IP
@@ -307,10 +232,10 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 	if err := c.auth.sign(actx, req, c.cfg.Now()); err != nil {
 		return nil, err
 	}
-	c.attempts.Add(1)
+	c.counts.Attempt()
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, c.wrap(actx, ctx, err)
+		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}
 	defer resp.Body.Close()
 	buf, _ := c.buffers.Get().(*bytes.Buffer)
@@ -329,7 +254,7 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 		return nil, responseError(resp, buf.Bytes())
 	}
 	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxResponse+1)); err != nil {
-		return nil, c.wrap(actx, ctx, err)
+		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}
 	if buf.Len() > maxResponse {
 		return nil, fmt.Errorf("ListObjectsV2 response larger than %d bytes", maxResponse)
@@ -344,18 +269,10 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 	defer c.parsers.Put(p)
 	page, err := p.parseList(buf.Bytes())
 	if err != nil {
-		c.parseFailures.Add(1)
+		c.counts.ParseFailure()
 		return nil, fmt.Errorf("ListObjectsV2 response (%d bytes): %w", buf.Len(), err)
 	}
 	return page, nil
-}
-
-// wrap marks an attempt that ran out of its own time (not the caller's).
-func (c *Client) wrap(actx, ctx context.Context, err error) error {
-	if ctx.Err() == nil && errors.Is(actx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w after %s: %v", errTimeout, c.cfg.RequestTimeout, err)
-	}
-	return err
 }
 
 func responseError(resp *http.Response, body []byte) *Error {

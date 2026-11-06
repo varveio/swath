@@ -17,6 +17,7 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // API is the one call the provider makes.
@@ -148,10 +149,7 @@ func acceptEnd(s string) bool { return AcceptBound(s) }
 // maxName is the longest object name, in bytes.
 const maxName = 1024
 
-func requeue(err error) bool {
-	var ex *client.ExhaustedError
-	return errors.As(err, &ex)
-}
+var requeue = objhttp.Requeue(client.Classify)
 
 // Restart continues after a journaled run's last published key.
 func (p *Provider) Restart(after string) {
@@ -162,12 +160,7 @@ func (p *Provider) Restart(after string) {
 // Stats snapshots the counters.
 func (p *Provider) Stats() Stats {
 	if c, ok := p.client.(counted); ok {
-		n, set := c.Counters(), p.Set()
-		set.Set(p.ID(cAttempts), n.Attempts)
-		set.Set(p.ID(cRetries), n.Retries)
-		set.Set(p.ID(cThrottles), n.Throttles)
-		set.Set(p.ID(cTimeouts), n.Timeouts)
-		set.Set(p.ID(cParseFailures), n.ParseFailures)
+		c.Counters().Store(p.Set(), p.ID(0))
 	}
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}

@@ -85,7 +85,7 @@ that is the commit. The run reports follow it.
    regional AWS host with its partition, FIPS and dual-stack variant; the endpoint's path bytes; path-style or
    virtual-host addressing) and the signing region, so a resume in an environment or profile that resolves
    another region is refused even when neither flag was given. A field added, dropped or changed is a typed
-   `*journal.MismatchError`. The route's canonical form is `s3.CanonicalRoute` (scheme and host case), the only
+   `*journal.MismatchError`. The route's canonical form is `objhttp.CanonicalRoute` (shared with GCS) (scheme and host case), the only
    equivalence allowed beyond the client's own folding of one trailing endpoint slash: another endpoint, path
    or addressing style may serve another bucket of the same name. A library caller's supplied
    `s3.Options.Client` must name its route (`s3.Routed`), or the run declines resume. Workers, encoders,

@@ -115,6 +115,12 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   the run lives, and counts `requeues`. Only the command's watchdog decides that a run cannot go on (no
   progress for `--stall-timeout`: exit 75, resumable). Every request, including probes and the seed page,
   goes through the same path.
+- *Shared with GCS* (`internal/source/objhttp`): the retry loop (`objhttp.Do`: attempts, backoff, exhaustion),
+  the class vocabulary, transport classification, `CredentialError` (an S3 credential refresh that fails is one,
+  not retried), the client counters and route canonicalization; `objhttptest.Contract` is the retry and
+  classification contract both clients' tests run with their own wire answers (`TestRetryContract`). The
+  report brief, coverage and capabilities come from `keyrange.Report` and `keyrange.Capabilities`. Each client
+  keeps its answers' meaning (status, codes, reasons), its parser and its authentication.
 - *Error classes* (`client.Classify`, one table test covers each): `auth`, `access_denied`, `no_such_bucket`,
   `redirect`, `throttle`, `timeout`, `server`, `transport`, `parse` (a body that does not parse),
   `invalid_page` (a page that breaks the listing contract: out of order, truncated without a token or a key
@@ -158,7 +164,7 @@ local token endpoint). The scope is `devstorage.read_only`. The binary links
 `google.golang.org/api/storage/v1` is a test dependency only (`TestClientPagesMatchGoogleClient` compares
 pages against it). Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
 (100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Classification* (`client.Classify`, S3's
-vocabulary): `auth` (401, a `CredentialError`), `access_denied` (403), `no_such_bucket` (404), `throttle` (429,
+vocabulary): `auth` (401, a `CredentialError` that will not pass; a token endpoint outage or timeout is `transport` or `timeout`, so its exhaustion is requeued), `access_denied` (403), `no_such_bucket` (404), `throttle` (429,
 `rateLimitExceeded`, `userRateLimitExceeded`), `timeout` (an attempt past the request timeout, 408), `server`
 (another 5xx), `transport`, `parse` (a 200 that does not parse), `invalid_page` (a parsed page that breaks the
 contract: `client.ErrInvalidPage`, which the engine wraps), `canceled`, `other`; the class is the run

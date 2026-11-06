@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // tokenServer is a local OAuth2 token endpoint: each refresh issues
@@ -190,6 +192,9 @@ func TestSlowRefreshBounded(t *testing.T) {
 	if !errors.As(err, &ex) || ex.Attempts != 2 || !errors.As(err, &ce) || !ce.Timeout {
 		t.Fatalf("err %v, want two attempts exhausted on a credential timeout", err)
 	}
+	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(Classify)(err) {
+		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout, not a stop", Classify(err))
+	}
 	if n := c.Counters(); n.Timeouts != 1 || n.Retries != 1 || n.Attempts != 0 {
 		t.Fatalf("counters %+v, want one timeout retried and no HTTP attempt", n)
 	}
@@ -214,6 +219,9 @@ func TestRefusedGrant(t *testing.T) {
 	var ex *ExhaustedError
 	if !errors.As(err, &ce) || ce.Transient || errors.As(err, &ex) {
 		t.Fatalf("err %v, want a non-transient credential error", err)
+	}
+	if Classify(err) != objhttp.ClassAuth {
+		t.Fatalf("class %q, want auth", Classify(err))
 	}
 	if n := tok.refreshes.Load(); n != 1 || len(ls.seen()) != 0 {
 		t.Fatalf("%d refreshes, %d listing requests; want 1 and 0", n, len(ls.seen()))
