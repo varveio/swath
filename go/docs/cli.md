@@ -42,6 +42,12 @@ usage: swath list SOURCE --output DIR [flags]
 
   -anonymous
     	S3: send unsigned requests, ignoring any credentials
+  -bearer-token-command command
+    	S3: shell command whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again
+  -bearer-token-refresh-interval duration
+    	S3: run --bearer-token-command again after this duration (default 45m)
+  -color string
+    	colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default "auto")
   -count-only
     	walk and count without writing a dataset
   -dualstack
@@ -49,7 +55,9 @@ usage: swath list SOURCE --output DIR [flags]
   -encoders int
     	Parquet encoder goroutines (default GOMAXPROCS, lowered to what --memory and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
   -endpoint URL
-    	S3: endpoint URL of an S3-compatible store
+    	S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
+  -endpoint-url string
+    	S3: Java swath's name for --endpoint
   -fetch-owner
     	S3: fill owner_id and owner_display_name
   -fips
@@ -78,6 +86,10 @@ usage: swath list SOURCE --output DIR [flags]
     	local: omit kind=DIR rows
   -no-link-target
     	local: do not read symlink targets
+  -no-progress
+    	no live progress on stderr
+  -no-stats
+    	no end-of-run statistics on stderr
   -o string
     	short for --output
   -output directory
@@ -89,9 +101,18 @@ usage: swath list SOURCE --output DIR [flags]
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
-    	S3: path-style addressing
+    	S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   -profile profile
     	S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
+  -progress
+    	print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)
+  -progress-interval interval
+    	progress interval (default 1s while the line redraws on a terminal, 30s for appended records; at least 1s)
+  -q	quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
+  -qq
+    	short for -q -q
+  -quiet
+    	short for -q
   -region string
     	S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   -report file
@@ -114,12 +135,19 @@ usage: swath list SOURCE --output DIR [flags]
     	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
   -stall-timeout duration
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
+  -stats
+    	print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
+  -v	verbose: a start line, and progress as appended records (-vv, -vvv: the same)
+  -vv
+    	short for -v -v
+  -vvv
+    	short for -v -v -v
   -workers int
     	listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate (operational) may change.
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -129,6 +157,12 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
 
   -anonymous
     	S3: send unsigned requests, ignoring any credentials
+  -bearer-token-command command
+    	S3: shell command whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again
+  -bearer-token-refresh-interval duration
+    	S3: run --bearer-token-command again after this duration (default 45m)
+  -color string
+    	colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default "auto")
   -count-only
     	walk and count without writing a dataset
   -dualstack
@@ -136,7 +170,9 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -encoders int
     	Parquet encoder goroutines (default GOMAXPROCS, lowered to what --memory and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
   -endpoint URL
-    	S3: endpoint URL of an S3-compatible store
+    	S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
+  -endpoint-url string
+    	S3: Java swath's name for --endpoint
   -fetch-owner
     	S3: fill owner_id and owner_display_name
   -fips
@@ -171,8 +207,12 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	diagnostic: publish parts only at the end, without the journal that swath resume needs
   -no-link-target
     	local: do not read symlink targets
+  -no-progress
+    	no live progress on stderr
   -no-spill
     	diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk
+  -no-stats
+    	no end-of-run statistics on stderr
   -o string
     	short for --output
   -output directory
@@ -184,11 +224,20 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
-    	S3: path-style addressing
+    	S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   -probe
     	ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)
   -profile profile
     	S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
+  -progress
+    	print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)
+  -progress-interval interval
+    	progress interval (default 1s while the line redraws on a terminal, 30s for appended records; at least 1s)
+  -q	quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
+  -qq
+    	short for -q -q
+  -quiet
+    	short for -q
   -region string
     	S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   -report file
@@ -215,14 +264,21 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
   -stall-timeout duration
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
+  -stats
+    	print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
   -structure
     	ranges: structure probes: pivot on folder boundaries listed alongside a range's pages
+  -v	verbose: a start line, and progress as appended records (-vv, -vvv: the same)
+  -vv
+    	short for -v -v
+  -vvv
+    	short for -v -v -v
   -workers int
     	listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate (operational) may change.
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -353,6 +409,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   separate budget (a count of attempts or a total time), and past that budget it needs a person: a source that
   keeps the run alive without rows hits 124 on every attempt.
 - **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename
+  (the terminal display, `--progress`, samples the same snapshot, every second while it redraws)
   (while the run holds the output). This is its one schema (`listing.ProgressSnapshot`; `TestProgressSchemaDoc`
   keeps the two in step):
 
@@ -367,6 +424,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | `throttles`, `timeouts` | throttle answers; attempts past the request timeout |
   | `part_age_ms` | time since the last part was published (or since the start): the recovery point's age |
   | `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |
+  | `rows_retained` | rows a resume kept from the interrupted run (not in `objects`) |
+  | `requests`, `retries` | HTTP attempts sent (pages, probes, client retries, engine requeues); attempts repeated (S3, GCS) |
+  | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
+  | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent on a custom endpoint) |
   | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes) |
   | `started_at`, `as_of`, `duration_ms` | timing |
 

@@ -4,12 +4,14 @@
 package listing
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // Progress is a run's live progress, read while it runs: by the command's
@@ -26,12 +28,17 @@ type Progress struct {
 	faults   atomic.Pointer[func() (int64, int64)]
 	// contention reads the engine's decision mutex (source.Contended).
 	contention atomic.Pointer[func() (time.Duration, time.Duration)]
-	ordered    atomic.Int64
-	encoded    atomic.Int64
-	parts      atomic.Int64
-	lastPart   atomic.Int64 // unix nanoseconds of the last part published
-	verified   atomic.Int64 // bytes of retained parts read by a resume's verification
-	gauges     atomic.Pointer[order.Gauges]
+	// requests reads the source's live request account (source.Requested);
+	// tariff its reference rate per 1,000 requests (0: none known).
+	requests atomic.Pointer[func() source.Requests]
+	tariff   atomic.Uint64 // math.Float64bits
+	retained atomic.Int64  // rows kept from the interrupted run (resume)
+	ordered  atomic.Int64
+	encoded  atomic.Int64
+	parts    atomic.Int64
+	lastPart atomic.Int64 // unix nanoseconds of the last part published
+	verified atomic.Int64 // bytes of retained parts read by a resume's verification
+	gauges   atomic.Pointer[order.Gauges]
 
 	mu    sync.Mutex    // held across an owned write and across a change of ownership
 	owner *journal.Lock // the output's lock while the run holds it, else nil
@@ -84,6 +91,21 @@ type ProgressSnapshot struct {
 	// attempts past the request timeout (source.Faulted; 0 otherwise).
 	Throttles int64 `json:"throttles"`
 	Timeouts  int64 `json:"timeouts"`
+	// Retained is the rows a resume kept from the interrupted run (not
+	// listed by this attempt, so not in Objects).
+	Retained int64 `json:"rows_retained"`
+	// Requests, Retries, Inflight and Limit are the source's HTTP account
+	// (source.Requested; 0 otherwise): attempts sent (pages, probes,
+	// retries, requeues), attempts repeated, attempts in flight now, and
+	// the adaptive limiter's current limit (0 without one). CostUSD is
+	// Requests at the source's reference tariff (absent without one).
+	Requests int64    `json:"requests"`
+	Retries  int64    `json:"retries"`
+	Inflight int64    `json:"inflight"`
+	Limit    int64    `json:"limit"`
+	CostUSD  *float64 `json:"cost_usd,omitempty"`
+	// CostRatePer1kUSD is the reference rate CostUSD is derived from.
+	CostRatePer1kUSD float64 `json:"cost_rate_per_1k_usd,omitempty"`
 	// MutexWaitMs and MutexMaxHoldMs are the range engine's decision
 	// mutex: the goroutines' total wait for it and its longest hold
 	// (source.Contended; 0 otherwise).
@@ -122,6 +144,15 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 		w, h := (*f)()
 		s.MutexWaitMs, s.MutexMaxHoldMs = float64(w)/1e6, float64(h)/1e6
 	}
+	if f := p.requests.Load(); f != nil {
+		r := (*f)()
+		s.Requests, s.Retries, s.Inflight, s.Limit = r.Attempts, r.Retries, r.Inflight, r.Limit
+		if rate := math.Float64frombits(p.tariff.Load()); rate > 0 {
+			usd := float64(r.Attempts) / 1000 * rate
+			s.CostUSD, s.CostRatePer1kUSD = &usd, rate
+		}
+	}
+	s.Retained = p.retained.Load()
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Verified = p.verified.Load()
 	s.Advance = s.Objects + s.Ordered + s.Encoded + s.Parts + s.Verified

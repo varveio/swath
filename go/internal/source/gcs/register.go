@@ -84,6 +84,19 @@ func (o *opened) Listed() int64 { return o.p.Listed() }
 
 func (o *opened) Answered() int64 { return o.p.Answered() }
 
+// Requests is the live request account (source.Requested).
+func (o *opened) Requests() source.Requests { return o.p.Requests() }
+
+// Tariff is the reference list rate the report labels its estimate with
+// (source.Priced): only on the provider's own service; a custom endpoint
+// has no known tariff, and the report then gives no figure.
+func (o *opened) Tariff() (usdPer1k float64, basis string) {
+	if (o.p.opt.Endpoint == "" || o.p.opt.Endpoint == client.DefaultEndpoint) && o.p.opt.Client == nil {
+		return 0.005, "gcs-class-a-reference-rate"
+	}
+	return 0, ""
+}
+
 func (o *opened) Faults() (throttles, timeouts int64) { return o.p.Faults() }
 
 // Contention is the engine's decision-mutex wait and longest hold

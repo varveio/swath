@@ -22,6 +22,7 @@ import (
 	"github.com/aws/smithy-go/logging"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/go/internal/source/tokensource"
 )
 
 // Credentials and signing come from the AWS SDK's auth modules, not from
@@ -48,7 +49,8 @@ type auth struct {
 	region    string
 	signer    *v4.Signer
 	anonymous bool
-	note      string // a configured source not yet available at start
+	bearer    *tokensource.Shared // --bearer-token-command: sent instead of a signature
+	note      string              // a configured source not yet available at start
 }
 
 // loadAuth resolves the region and credentials. With -anonymous no
@@ -73,10 +75,10 @@ func loadAuth(cfg Config) (*auth, error) {
 	// environment's or the profile's region, else us-east-1, so a bucket in
 	// another region never moves the STS endpoint.
 	opts = append(opts, config.WithDefaultRegion("us-east-1"))
-	if cfg.Anonymous {
+	if cfg.Anonymous || cfg.Bearer != nil {
 		opts = append(opts, config.WithCredentialsProvider(aws.AnonymousCredentials{}))
 	}
-	if !cfg.Anonymous {
+	if !cfg.Anonymous && cfg.Bearer == nil {
 		// Credential intent the SDK drops without a word (one key of a
 		// pair, a role without its token) would read as an empty chain
 		// and list unsigned: it is configured, and broken.
@@ -93,6 +95,11 @@ func loadAuth(cfg Config) (*auth, error) {
 	a := &auth{region: cfg.Region, signer: v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true })}
 	if a.region == "" {
 		a.region = ac.Region // the environment's or the profile's, else us-east-1
+	}
+	if cfg.Bearer != nil {
+		// The token replaces the credential chain: nothing else is looked up.
+		a.bearer, a.source = cfg.Bearer, "bearer token command"
+		return a, nil
 	}
 	if cfg.Anonymous || ac.Credentials == nil {
 		a.anonymous, a.source = true, "anonymous"
@@ -254,6 +261,15 @@ func anonymousNote(cfg Config) string {
 
 // sign signs a GET with SigV4 and an unsigned payload.
 func (a *auth) sign(ctx context.Context, req *http.Request, now time.Time) error {
+	if a.bearer != nil {
+		tok, err := a.bearer.Token(ctx)
+		if err != nil {
+			// Fail closed: a request is never sent without its token.
+			return &objhttp.CredentialError{Source: "--bearer-token-command", Err: err}
+		}
+		req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+		return nil
+	}
 	if a.anonymous {
 		return nil
 	}

@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"runtime"
@@ -48,6 +49,9 @@ const shutdownGrace = 15 * time.Second
 // watch its context cannot outlive a signal, --max-duration or the stall
 // timeout. main sets it; tests run the command in process and leave it nil.
 var exitAfterGrace func(code int, why string)
+
+// silentErrors is -qq: main does not print the command's error.
+var silentErrors atomic.Bool
 
 // forensics is the running attempt, for the goroutine dump and the
 // outcome written at a forced exit.
@@ -111,7 +115,9 @@ func main() {
 	if err == nil || errors.Is(err, flag.ErrHelp) {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "swath:", err)
+	if !silentErrors.Load() { // -qq: the exit code and the reports stand alone
+		fmt.Fprintln(os.Stderr, "swath:", err)
+	}
 	var u usageError
 	var ee *exitError
 	switch {
@@ -279,17 +285,47 @@ type options struct {
 	resume, noJournal      bool
 	noSpill, spillCompress bool
 	sources                map[string]any // each provider's options value, by scheme
+	term                   termOptions
 }
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}
+var runtimeFlags = append([]string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
 // route, the scope, the schema) is checked on resume and refuses a change,
 // such as another region resolved from a new profile.
-var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate"}
+var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate",
+	"bearer-token-command", "bearer-token-refresh-interval"}
+
+// secretFlags hold a secret, or a command that prints one: their value is
+// never recorded (journal, reports, the goroutine dump's outcome), and a
+// resume must be given it again.
+var secretFlags = []string{"bearer-token-command"}
+
+// redacted replaces a secret flag's value in a recorded command line.
+const redacted = "[redacted]"
+
+// redactArgv is argv with every secret flag's value replaced by redacted,
+// in both spellings (--flag VALUE and --flag=VALUE).
+func redactArgv(argv []string) []string {
+	out := make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		name, _, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if a == "--" || !strings.HasPrefix(a, "-") || !slices.Contains(secretFlags, name) {
+			out = append(out, a)
+			continue
+		}
+		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
+		out = append(out, dashes+name+"="+redacted)
+		if !eq && i+1 < len(argv) {
+			i++ // the value
+		}
+	}
+	return out
+}
 
 // resumeFlags are the flags swath resume accepts.
 var resumeFlags = append(slices.Clone(runtimeFlags), operationalFlags...)
@@ -315,6 +351,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f.StringVar(&o.report, "report", "", "also write the run report (JSON, with the outcome and the attempt id) to this `file` when the attempt ends, on failure too")
 	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
 	f.DurationVar(&o.stall, "stall-timeout", 10*time.Minute, "stop the run as stuck after this long without progress (exit 75; resumable); 0: never")
+	o.term.register(f)
 	if diag {
 		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
 		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
@@ -413,6 +450,9 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	if err := rateFitsStall(f, o.stall); err != nil {
 		return o, "", usageError{err}
 	}
+	if err := o.term.validate(); err != nil {
+		return o, "", usageError{err}
+	}
 	return o, root, nil
 }
 
@@ -426,12 +466,14 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	if err != nil {
 		return err
 	}
+	silentErrors.Store(o.term.quiet >= 2)
 	argv := recorded
 	if argv == nil {
 		argv = append([]string{"list"}, args...)
 		if diag {
 			argv = append([]string{"diag", "list"}, args...)
 		}
+		argv = redactArgv(argv)
 	}
 	pf, err := registry.Lookup(root)
 	if err != nil {
@@ -445,6 +487,9 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		Argv:    argv,
 		Attempt: att,
 		Warn:    func(m string) { note(errOut, "swath: warning: "+m+"\n") },
+	}
+	if o.term.quiet > 0 {
+		cfg.Warn = func(string) {}
 	}
 	if !o.countOnly {
 		cfg.Output.Dir = o.out
@@ -490,20 +535,23 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 			settled = true
 		}
 	}
-	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn)
+	tt := startTerminal(o.term, att, root, cfg.Output.Dir)
+	defer tt.close()
+	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
+	tt.disp.stop()
 	stopProfile()
 	err, out := term.classify(sum, err)
-	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, settled, unrecorded)
+	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, settled, unrecorded, tt)
 }
 
 // finishList is a list command's terminal settlement after its run: the
 // accounts derived from the frozen outcome out (the report, -json, the
 // outcome on stderr when error.json does not hold it) and the error main
 // exits with. settled says error.json holds it; unrecorded why not.
-func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err error, out outcome, settled bool, unrecorded string) error {
+func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err error, out outcome, settled bool, unrecorded string, tt *termUI) error {
 	if err != nil && out.ExitCode == exitCompleted {
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
@@ -535,6 +583,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	}
 	sum.Outcome.Unrecorded = unrecorded
 	writeReport(o.report, sum)
+	tt.stats(&sum, false)
 	if o.reportFormat == "json" {
 		// The report goes out on failure too: its outcome names the error.
 		enc := json.NewEncoder(stdout)
@@ -640,6 +689,9 @@ func (s *size) Set(v string) error {
 	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 	if err != nil || n <= 0 {
 		return fmt.Errorf("invalid size %q", v)
+	}
+	if n > math.MaxInt64/mult {
+		return fmt.Errorf("invalid size %q: too large", v)
 	}
 	*s = size(n * mult)
 	return nil

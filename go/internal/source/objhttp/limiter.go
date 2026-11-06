@@ -110,8 +110,11 @@ func (l *Limiter) endRamp(now time.Time) {
 	l.c.rampEnd.Store(int64(l.limit))
 }
 
-// Limit is the current limit.
+// Limit is the current limit (0 for a nil limiter).
 func (l *Limiter) Limit() int {
+	if l == nil {
+		return 0
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.limit

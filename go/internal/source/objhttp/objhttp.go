@@ -380,6 +380,21 @@ func (c *Counters) Attempt() (done func()) {
 // part of Counts.
 func (c *Counters) Answered() int64 { return c.answered.Load() }
 
+// Live is a client's request account now, for the progress sampler and
+// the end-of-run summary: atomics only, nothing on the request path.
+type Live struct {
+	Attempts, Retries, Throttles int64
+	Inflight                     int64 // attempts in flight now
+	InflightMax, InflightNs      int64 // as Counts
+	Limit                        int   // the limiter's current limit (0 without one)
+}
+
+// Live reads the counters (Limit is the client's to fill).
+func (c *Counters) Live() Live {
+	return Live{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(), Inflight: c.inflight.Load(),
+		InflightMax: c.inflightMax.Load(), InflightNs: c.inflightNs.Load()}
+}
+
 // ParseFailure counts a 200 whose body did not parse.
 func (c *Counters) ParseFailure() { c.parseFailures.Add(1) }
 

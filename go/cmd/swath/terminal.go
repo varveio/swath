@@ -90,5 +90,5 @@ func (t *terminal) report() (listing.Report, bool) {
 // cause, message and attempt.
 func outcomeOf(r listing.Report) outcome {
 	return outcome{Class: r.Outcome.Class, ExitCode: r.Outcome.ExitCode, Message: r.Outcome.Error,
-		Resumable: r.Outcome.Resumable, Cause: r.Outcome.Cause, Attempt: r.Attempt}
+		Resumable: r.Outcome.Resumable, Cause: r.Outcome.Cause, StopSource: r.Outcome.StopSource, Attempt: r.Attempt}
 }

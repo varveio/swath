@@ -40,6 +40,10 @@ type Routed interface{ Route(bucket string) string }
 // counted is implemented by clients that count their requests.
 type counted interface{ Counters() client.Counters }
 
+// live is implemented by clients that count their attempts live
+// (source.Requested).
+type live interface{ Live() objhttp.Live }
+
 // answering is implemented by clients that count the requests their
 // service answered (source.Live).
 type answering interface{ Answered() int64 }
@@ -55,6 +59,11 @@ type Options struct {
 	DualStack bool   // dual-stack (IPv6) endpoint
 	Profile   string // shared-file profile
 	Anonymous bool   // never sign, whatever the environment holds
+	// BearerCommand, if set, is a shell command printing a bearer token,
+	// sent instead of a SigV4 signature (client.BearerToken), fetched again
+	// every BearerRefresh (0: 45 minutes). Never recorded.
+	BearerCommand string
+	BearerRefresh time.Duration
 	// RequestPayer accepts the request charges of a requester-pays bucket.
 	RequestPayer bool
 	Timeout      time.Duration // per request; default 30 s
@@ -101,6 +110,17 @@ func (p *Provider) Faults() (throttles, timeouts int64) {
 		return n.Throttles, n.Timeouts
 	}
 	return 0, 0
+}
+
+// Requests is the client's live request account (source.Requested); zero
+// for a supplied client that does not count it.
+func (p *Provider) Requests() source.Requests {
+	if c, ok := p.client.(live); ok {
+		l := c.Live()
+		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Inflight: l.Inflight,
+			InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
+	}
+	return source.Requests{}
 }
 
 // Answered is the requests the service answered usably (source.Live); 0
@@ -160,10 +180,14 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
-		c, err := client.New(client.Config{Limiter: lim, Rate: rate,
+		cc := client.Config{Limiter: lim, Rate: rate,
 			Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
 			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
-		})
+		}
+		if opt.BearerCommand != "" {
+			cc.Bearer = client.NewBearerToken(opt.BearerCommand, opt.BearerRefresh)
+		}
+		c, err := client.New(cc)
 		if err != nil {
 			return nil, fmt.Errorf("S3 client: %w", err)
 		}

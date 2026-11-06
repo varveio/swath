@@ -83,6 +83,8 @@ type outcome struct {
 	// Cause is the provider's error class when one is known (S3: auth,
 	// access_denied, throttle, ...).
 	Cause string `json:"cause,omitempty"`
+	// StopSource is what stopped the run, when something did (stopSource).
+	StopSource string `json:"stop_source,omitempty"`
 	// Attempt is the invocation this outcome belongs to; the report
 	// (--report) carries the same one.
 	Attempt *listing.Attempt `json:"attempt,omitempty"`
@@ -95,7 +97,7 @@ func classify(err, cause error, dir string) outcome {
 		return outcome{Class: listing.ClassCompleted, ExitCode: exitCompleted}
 	}
 	resumable := dir != "" && !dataset.Committed(dir) && hasJournal(dir)
-	o := outcome{Message: err.Error(), Resumable: resumable}
+	o := outcome{Message: err.Error(), Resumable: resumable, StopSource: stopSource(cause)}
 	var u usageError
 	var se *signalError
 	var ue *journal.UnresumableError
@@ -153,6 +155,26 @@ func classify(err, cause error, dir string) outcome {
 	return o
 }
 
+// stopSource names what cancelled a run (Java's stop_source tags): a
+// signal, the liveness watchdog (--stall-timeout) or the timebox
+// (--max-duration); "" when nothing did.
+func stopSource(cause error) string {
+	var se *signalError
+	switch {
+	case cause == nil:
+		return ""
+	case errors.Is(cause, errStuck):
+		return "liveness_watchdog"
+	case errors.Is(cause, errDeadline):
+		return "timebox"
+	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
+		return "sigterm"
+	case errors.As(cause, &se):
+		return "sigint"
+	}
+	return ""
+}
+
 // refusal tells a refusal that is the caller's fault, as Java's exit 2
 // (its guarded refusals): an output that is not this tool's to write
 // without --overwrite (not empty, another tool's, an interrupted run) or
@@ -188,7 +210,7 @@ func committedCoverage(dir string) (dataset.Coverage, bool) {
 // loop ends, also after a failure); a committed run keeps the source's,
 // which the manifest's coverage holds too (an incomplete one included).
 func account(r *listing.Outcome, o outcome) {
-	r.Class, r.ExitCode, r.Resumable, r.Cause = o.Class, o.ExitCode, o.Resumable, o.Cause
+	r.Class, r.ExitCode, r.Resumable, r.Cause, r.StopSource = o.Class, o.ExitCode, o.Resumable, o.Cause, o.StopSource
 	if o.ExitCode != exitCompleted && o.Message != "" {
 		r.Error = o.Message
 	}
@@ -395,6 +417,13 @@ func forcedAccount(f *forensicTarget, code int, why string) {
 		if !ok {
 			r = listing.Unstarted(f.argv, f.dir, f.att, err)
 		}
+		// The escalation is part of the provenance: the stop that began
+		// it, and the forced exit that ended it.
+		if o.StopSource != "" {
+			o.StopSource += "+forced_exit"
+		} else {
+			o.StopSource = "forced_exit"
+		}
 		o.ExitCode, o.Attempt = code, f.att
 		account(&r.Outcome, o)
 		if f.dir != "" {
@@ -424,13 +453,21 @@ const progressEvery = 2 * time.Second
 // or one that never returns, does not, so a total outage or a hung source
 // still stops as stuck. It is the only place that decides a run cannot go
 // on; nothing in the pipeline gives up on a slow source.
-func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, warn func(string)) (stop func()) {
+func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, warn func(string), d *display) (stop func()) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		t := time.NewTicker(min(progressEvery, max(stall/4, 10*time.Millisecond)))
+		// The file's cadence; the terminal display (Java's 1 s redraw) may
+		// sample more often, from the same snapshot.
+		every := min(progressEvery, max(stall/4, 10*time.Millisecond))
+		tick := every
+		if d != nil {
+			tick = min(tick, d.interval)
+		}
+		t := time.NewTicker(tick)
 		defer t.Stop()
+		var written time.Time
 		last, since, warned := int64(-1), time.Now(), false
 		var at listing.ProgressSnapshot // the counts at the last progress
 		for {
@@ -441,9 +478,11 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 				return
 			case now := <-t.C:
 				s := pr.Snapshot()
-				if dir != "" {
+				d.offer(s)
+				if dir != "" && now.Sub(written) >= every-tick/2 {
 					// Only while the run owns the output: a refused run
 					// never overwrites its owner's progress.
+					written = now
 					pr.Owned(func() { _ = writeFileAtomic(filepath.Join(dir, progressName), s) })
 				}
 				if live := s.Advance + s.Answered; live != last {

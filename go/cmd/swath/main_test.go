@@ -69,7 +69,7 @@ func TestSize(t *testing.T) {
 		}
 	}
 	var s size
-	if s.Set("0") == nil || s.Set("x") == nil {
+	if s.Set("0") == nil || s.Set("x") == nil || s.Set("9223372036854775807GiB") == nil || s.Set("8589934592GiB") == nil {
 		t.Error("invalid sizes accepted")
 	}
 }

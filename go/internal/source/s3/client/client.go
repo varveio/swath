@@ -18,6 +18,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/go/internal/source/tokensource"
 )
 
 // Config configures a Client. Zero values take the defaults.
@@ -40,6 +41,9 @@ type Config struct {
 	Limiter *objhttp.Limiter
 	// Rate, if set, caps attempts per second (objhttp.Rate).
 	Rate *objhttp.Rate
+	// Bearer, if set, authenticates every request with its token
+	// ("Authorization: Bearer") instead of SigV4; no credential is looked up.
+	Bearer *tokensource.Shared
 }
 
 // Counters are what the client did, for the run summary.
@@ -107,6 +111,14 @@ func (c *Client) Region() string { return c.region }
 // Answered is the number of requests the service answered usably
 // (objhttp.Counters.Answered).
 func (c *Client) Answered() int64 { return c.counts.Answered() }
+
+// Live is the request account now with the limiter's current limit, for
+// the progress sampler (objhttp.Live).
+func (c *Client) Live() objhttp.Live {
+	l := c.counts.Live()
+	l.Limit = c.retry.Limiter.Limit()
+	return l
+}
 
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {

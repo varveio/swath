@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -279,7 +280,9 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	s, loc := src.Schema(), src.Locator()
 	sum.Invocation.Source, sum.Invocation.SchemaID = loc.Root, s.ID
-	jr, err := openJournal(ctx, cfg, src, identity(src, s, cfg))
+	id := identity(src, s, cfg)
+	sum.ArgsHash, sum.src = id.Hash(), src
+	jr, err := openJournal(ctx, cfg, src, id)
 	if err != nil {
 		// A refusal before the lock leaves the output as it was (jr nil);
 		// a failure under it (a damaged journal, an identity mismatch, a
@@ -384,6 +387,16 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 			contention := c.Contention
 			pr.contention.Store(&contention)
 		}
+		if r, ok := src.(source.Requested); ok {
+			requests := r.Requests
+			pr.requests.Store(&requests)
+			if p, ok := src.(source.Priced); ok {
+				if rate, basis := p.Tariff(); basis != "" {
+					pr.tariff.Store(math.Float64bits(rate))
+				}
+			}
+		}
+		pr.retained.Store(sum.Output.RowsRetained)
 		env.Ordered = &pr.ordered
 	}
 	if cfg.Output.Dir != "" {

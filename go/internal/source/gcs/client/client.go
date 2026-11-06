@@ -343,6 +343,14 @@ func (c *Client) Credentials() (source string, anonymous bool) { return c.source
 // (objhttp.Counters.Answered).
 func (c *Client) Answered() int64 { return c.counts.Answered() }
 
+// Live is the request account now with the limiter's current limit, for
+// the progress sampler (objhttp.Live).
+func (c *Client) Live() objhttp.Live {
+	l := c.counts.Live()
+	l.Limit = c.retry.Limiter.Limit()
+	return l
+}
+
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
 	n := c.counts.Load()

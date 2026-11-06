@@ -64,7 +64,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	seen := journal.Witness(dir)
 	att := newAttempt()
 	stop := func(err error) error {
-		return refuse(stdout, dir, seen, err, att, o.report, o.reportFormat, append([]string{"resume"}, args...))
+		return refuse(stdout, dir, seen, err, att, o.report, o.reportFormat, redactArgv(append([]string{"resume"}, args...)))
 	}
 	if dataset.Committed(dir) {
 		return stop(listing.ErrComplete)
@@ -99,11 +99,24 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	// replaced), then the overrides, then the directory as given (it may
 	// have moved).
 	var cmd []string
+	var secrets []string // secret flags the run had, whose values were not recorded
 	for _, a := range base {
-		if n := strings.TrimLeft(a, "-"); a != n && (n == "overwrite" || n == "overwrite=true") {
+		n := strings.TrimLeft(a, "-")
+		if a != n && (n == "overwrite" || n == "overwrite=true") {
+			continue
+		}
+		if name, v, ok := strings.Cut(n, "="); a != n && ok && v == redacted && slices.Contains(secretFlags, name) {
+			secrets = append(secrets, name)
 			continue
 		}
 		cmd = append(cmd, a)
+	}
+	for _, name := range secrets {
+		given := false
+		f.Visit(func(fl *flag.Flag) { given = given || fl.Name == name })
+		if !given {
+			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)", dir, name, dir, name)})
+		}
 	}
 	cmd = append(append(cmd, overrides...), "--output", dir)
 	return runWith(ctx, cmd, stdout, diag, argv, true, att)

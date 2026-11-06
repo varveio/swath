@@ -27,6 +27,10 @@ type API interface {
 
 type counted interface{ Counters() client.Counters }
 
+// live is implemented by clients that count their attempts live
+// (source.Requested).
+type live interface{ Live() objhttp.Live }
+
 // answering is implemented by clients that count the requests their
 // service answered (source.Live).
 type answering interface{ Answered() int64 }
@@ -83,6 +87,17 @@ func (p *Provider) Faults() (throttles, timeouts int64) {
 		return n.Throttles, n.Timeouts
 	}
 	return 0, 0
+}
+
+// Requests is the client's live request account (source.Requested); zero
+// for a supplied client that does not count it.
+func (p *Provider) Requests() source.Requests {
+	if c, ok := p.client.(live); ok {
+		l := c.Live()
+		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Inflight: l.Inflight,
+			InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
+	}
+	return source.Requests{}
 }
 
 // Answered is the requests the service answered usably (source.Live); 0

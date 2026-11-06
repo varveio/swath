@@ -3,7 +3,12 @@
 
 package journal
 
-import "fmt"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"strconv"
+)
 
 // Identity is what must not change between a run and its resume: anything
 // that changes which rows are listed or how they are written. The pipeline
@@ -88,4 +93,31 @@ func Check(stored, requested Identity) error {
 		return &MismatchError{"part size", stored.PartSize, requested.PartSize}
 	}
 	return nil
+}
+
+// Hash is the identity's digest, the run report's args_hash: SHA-256 over
+// a versioned, label-tagged encoding of every frozen input (the source's
+// fields in their canonical form), each followed by a zero byte. Two runs
+// with the same Hash list the same rows into the same parts; a resume keeps
+// it. It is not Java swath's args_hash (that one covers the listing scope
+// only), and holds no credential.
+func (id Identity) Hash() string {
+	h := sha256.New()
+	put := func(label, v string) {
+		h.Write([]byte(label))
+		h.Write([]byte(v))
+		h.Write([]byte{0})
+	}
+	put("v=", "swath-go/args/1")
+	put("tool=", id.Tool)
+	put("format=", strconv.Itoa(id.Format))
+	put("schema=", id.SchemaID)
+	put("key_cap=", strconv.Itoa(id.KeyCap))
+	put("writer=", id.Writer)
+	put("part_size=", strconv.FormatInt(id.PartSize, 10))
+	put("provider=", id.Provider)
+	for _, f := range id.Source {
+		put("source."+f.Name+"=", f.canon())
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

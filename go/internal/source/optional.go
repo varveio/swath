@@ -129,6 +129,32 @@ type Contended interface {
 	Contention() (wait, maxHold time.Duration)
 }
 
+// Requested sources count their HTTP attempts live: the progress file, the
+// terminal display and the report's cost read them (atomics, and the
+// limiter's current limit once per sample).
+type Requested interface {
+	Requests() Requests
+}
+
+// Requests is a source's request account at one moment.
+type Requests struct {
+	Attempts  int64 // HTTP attempts sent: pages, probes, client retries, engine requeues
+	Retries   int64 // attempts repeated after a retryable failure
+	Throttles int64 // attempts answered with a throttle
+	Inflight  int64 // attempts in flight now
+	// InflightMax is the most attempts in flight at once; InflightNs sums
+	// their time in flight (over a wall time: the mean in flight).
+	InflightMax, InflightNs int64
+	Limit                   int64 // the adaptive limiter's current limit; 0 without a limiter
+}
+
+// Priced sources name the reference tariff of their list requests, so the
+// report can label an estimate; a source on an unknown endpoint (an
+// S3-compatible store) is not Priced, and the report gives no figure.
+type Priced interface {
+	Tariff() (usdPer1k float64, basis string)
+}
+
 // Reporter sources describe the listing for the run summary.
 type Reporter interface {
 	Report() Report
@@ -150,7 +176,7 @@ type Report struct {
 type Coverage struct {
 	Target     string   // the canonical listed target (s3://bucket[/prefix], or the root path)
 	Prefix     string   // the scope: "" for the whole source, else the listed prefix
-	Filters    []string // none today
+	Filters    []string // the row filters applied (listing.Config.Filter), as descriptions
 	Exclusions []string // left out by design (an output directory inside a listed tree)
 	Skipped    int64    // entries not listed (unreadable, invalid names)
 	Complete   bool     // false if the listing stopped early (a key limit)
