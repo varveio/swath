@@ -32,7 +32,8 @@ type Report struct {
 	// Source is the provider's account of the listing, under its name.
 	Source *SourceStats `json:"source,omitempty"`
 
-	report *source.Report
+	report    *source.Report
+	finalized bool // Config.Finalize has accounted it
 }
 
 // Attempt identifies one invocation: its report and the outcome the command

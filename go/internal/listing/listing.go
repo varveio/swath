@@ -52,11 +52,22 @@ type Config struct {
 	// Finalize, if set, applies the caller's terminal account of the run
 	// (the outcome's class, exit code, resumable, cause) to its report
 	// before any account of it is written: run.json, Settle (the outcome
-	// file) and the report Run returns, so all of them agree.
+	// file) and the report Run returns, so all of them agree. It is called
+	// exactly once per run, on its terminal report: at the commit (before
+	// run.json), at a failure (before Settle), or as Run returns for a run
+	// that stopped before either.
 	Finalize func(*Report, error)
 }
 
+// finalize applies Finalize to r once: the first call on a terminal report
+// accounts it, and later ones on the same report (its copies included) are
+// no-ops, so every path may finalize before its first write without
+// counting on the caller's idempotence.
 func (cfg *Config) finalize(r *Report, err error) {
+	if r.finalized {
+		return
+	}
+	r.finalized = true
 	if cfg.Finalize != nil {
 		cfg.Finalize(r, err)
 	}

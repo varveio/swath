@@ -391,42 +391,49 @@ func run(ctx context.Context, args []string, stdout io.Writer, diag bool) error 
 	return runWith(ctx, args, stdout, diag, nil, false, nil)
 }
 
+// parseList resolves a list command line: its options and SOURCE, with
+// the usage refusals (a help request prints the usage to stdout).
+func parseList(args []string, stdout io.Writer, diag bool) (o options, root string, err error) {
+	f := newFlags(&o, diag)
+	for rest := args; ; {
+		if err := f.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				usage(stdout, f, diag)
+				return o, "", err
+			}
+			return o, "", usageError{err}
+		}
+		if f.NArg() == 0 {
+			break
+		}
+		if root != "" {
+			return o, "", usageError{fmt.Errorf("unexpected argument %q", f.Arg(0))}
+		}
+		root, rest = f.Arg(0), f.Args()[1:]
+	}
+	switch {
+	case root == "":
+		return o, "", usageError{errors.New("missing SOURCE")}
+	case !o.countOnly && o.out == "":
+		return o, "", usageError{errors.New("--output is required unless --count-only")}
+	case o.reportFormat != "text" && o.reportFormat != "json":
+		return o, "", usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
+	}
+	if err := rateFitsStall(f, o.stall); err != nil {
+		return o, "", usageError{err}
+	}
+	return o, root, nil
+}
+
 // runWith lists; argv0 is the recorded command, resumed tells a resume, att
 // is the attempt (nil: a new one).
 func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, recorded []string, resumed bool, att *listing.Attempt) error {
 	if att == nil {
 		att = newAttempt()
 	}
-	var o options
-	f := newFlags(&o, diag)
-	var root string
-	for rest := args; ; {
-		if err := f.Parse(rest); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				usage(stdout, f, diag)
-				return err
-			}
-			return usageError{err}
-		}
-		if f.NArg() == 0 {
-			break
-		}
-		if root != "" {
-			return usageError{fmt.Errorf("unexpected argument %q", f.Arg(0))}
-		}
-		root, rest = f.Arg(0), f.Args()[1:]
-	}
-	if root == "" {
-		return usageError{errors.New("missing SOURCE")}
-	}
-	if !o.countOnly && o.out == "" {
-		return usageError{errors.New("--output is required unless --count-only")}
-	}
-	if err := rateFitsStall(f, o.stall); err != nil {
-		return usageError{err}
-	}
-	if o.reportFormat != "text" && o.reportFormat != "json" {
-		return usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
+	o, root, err := parseList(args, stdout, diag)
+	if err != nil {
+		return err
 	}
 	argv := recorded
 	if argv == nil {
@@ -498,11 +505,19 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	stopWatch()
 	stopProfile()
 	err, out := term.classify(sum, err)
+	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, settled, unrecorded)
+}
+
+// finishList is a list command's terminal settlement after its run: the
+// accounts derived from the frozen outcome out (the report, -json, the
+// outcome on stderr when error.json does not hold it) and the error main
+// exits with. settled says error.json holds it; unrecorded why not.
+func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err error, out outcome, settled bool, unrecorded string) error {
 	if err != nil && out.ExitCode == exitCompleted {
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
 		account(&sum.Outcome, out)
-		alreadyComplete(stdout, o.reportFormat, cfg.Output.Dir, &sum)
+		alreadyComplete(stdout, o.reportFormat, dir, &sum)
 		writeReport(o.report, sum)
 		if o.reportFormat == "json" {
 			enc := json.NewEncoder(stdout)
@@ -511,7 +526,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		}
 		return nil
 	}
-	if cfg.Output.Dir != "" && !settled && (err != nil || unrecorded != "") {
+	if dir != "" && !settled && (err != nil || unrecorded != "") {
 		// Refused before ownership (another owner's outcome stands, the
 		// run changed meanwhile, or there is none to settle), or the write
 		// failed: the outcome goes to stderr instead, with the reason.
@@ -521,11 +536,11 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		if unrecorded == "" {
 			unrecorded = "stopped before owning the output"
 		}
-		reportUnrecorded(cfg.Output.Dir, out, unrecorded)
+		reportUnrecorded(dir, out, unrecorded)
 	}
 	account(&sum.Outcome, out)
 	if errors.Is(err, listing.ErrComplete) {
-		committedAccount(cfg.Output.Dir, &sum)
+		committedAccount(dir, &sum)
 	}
 	sum.Outcome.Unrecorded = unrecorded
 	writeReport(o.report, sum)
