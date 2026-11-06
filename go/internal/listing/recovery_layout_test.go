@@ -311,21 +311,69 @@ func TestReadRefusesLinkedWorkspace(t *testing.T) {
 	}
 }
 
-// TestRestartRefusesLinkedParts: a journal whose header never became
-// durable restarts the run, which empties the workspace; a linked parts
-// directory is refused first, as recovery would.
+// restartRun is an interrupted output whose journal header never became
+// durable (an empty journal) and nothing in data/ or the temporary parts
+// directory, which a resume starts over: the preparation removes the
+// workspace's entries. link puts a link, the returned path, at rel.
+func restartRun(t *testing.T, rel, target string) (lr *layoutRun, link string) {
+	t.Helper()
+	lr = newLayoutRun(t, 0)
+	if err := os.WriteFile(journal.Path(lr.out), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link = filepath.Join(lr.out, rel)
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(link)
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	return lr, link
+}
+
+// requireRestartRefused: the restart was refused before the preparation
+// removed anything: the link and the journal are still there.
+func requireRestartRefused(t *testing.T, lr *layoutRun, link string, err error) {
+	t.Helper()
+	if fi, serr := os.Lstat(link); serr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the restart removed or replaced %s: %v", link, serr)
+	}
+	if _, serr := os.Lstat(journal.Path(lr.out)); serr != nil {
+		t.Errorf("the restart removed the journal: %v", serr)
+	}
+	if !errors.Is(err, ErrUnsafeLayout) {
+		t.Fatalf("restart error %v, want a refusal with ErrUnsafeLayout", err)
+	}
+}
+
+// TestRestartRefusesLinkedParts: a linked parts directory, to an empty
+// directory elsewhere (so nothing counts as a part and the run would start
+// over), is refused before the preparation removes the workspace's
+// entries.
 func TestRestartRefusesLinkedParts(t *testing.T) {
-	lr := newLayoutRun(t, 0)
-	if err := os.WriteFile(journal.Path(lr.out), nil, 0o644); err != nil { // the header never durable
+	foreign := t.TempDir()
+	lr, link := restartRun(t, partsRel, foreign)
+	requireRestartRefused(t, lr, link, lr.resume(t))
+	if ents, _ := os.ReadDir(foreign); len(ents) != 0 {
+		t.Errorf("the restart wrote %v outside the output", ents)
+	}
+}
+
+// TestRestartRefusesLinkedSuspect: a suspect that is a link to a file
+// elsewhere is refused before the restart's preparation removes the
+// suspect directory (eleventh durability review: the restart returned
+// before the suspect entries were checked).
+func TestRestartRefusesLinkedSuspect(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "suspect.parquet")
+	if err := os.WriteFile(outside, []byte("not dataset data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	keep := lr.sentinel(t, "keep-me.txt")
-	parts := filepath.Join(lr.out, dataset.Workspace, dataset.PartsDir)
-	os.RemoveAll(parts)
-	if err := os.Symlink(lr.foreign, parts); err != nil {
-		t.Fatal(err)
+	lr, link := restartRun(t, filepath.Join(suspectRel, dataset.PartName(0)), outside)
+	requireRestartRefused(t, lr, link, lr.resume(t))
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("the restart removed %s outside the output: %v", outside, err)
 	}
-	requireRefusedAndKept(t, lr.resume(t), keep)
 }
 
 // TestRecoveryRefusesLinkedSuspectUnchanged: a current suspect that is a

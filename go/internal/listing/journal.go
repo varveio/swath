@@ -340,6 +340,13 @@ func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Ident
 		if !dataset.Resumable(cfg.Output.Dir) {
 			return nil, ErrNothingToResume
 		}
+		// The restart's preparation removes the workspace's entries: the
+		// suspect and temporary parts in it are regular files first.
+		for _, d := range []string{suspectRel, partsRel} {
+			if err := checkEntries(r, d); err != nil {
+				return nil, err
+			}
+		}
 		return nil, nil
 	}
 	if err != nil {
@@ -455,7 +462,13 @@ func checkLayout(r *os.Root, st *journal.State) error {
 	// Every entry of the suspect directory: the current suspect is read and
 	// kept, the others removed (keepSuspect), after parts were published
 	// and data/ cleaned, so each must be a regular file now.
-	d, err := r.Open(suspectRel)
+	return checkEntries(r, suspectRel)
+}
+
+// checkEntries requires every entry of directory rel (absent is nil) to be
+// a regular file, by lstat.
+func checkEntries(r *os.Root, rel string) error {
+	d, err := r.Open(rel)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -468,7 +481,7 @@ func checkLayout(r *os.Root, st *journal.State) error {
 		return fmt.Errorf("resume: %w", err)
 	}
 	for _, e := range ents {
-		if _, err := need(r, filepath.Join(suspectRel, e.Name()), false, false); err != nil {
+		if _, err := need(r, filepath.Join(rel, e.Name()), false, false); err != nil {
 			return err
 		}
 	}
