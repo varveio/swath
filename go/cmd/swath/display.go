@@ -496,7 +496,7 @@ func showStats(t termOptions, r *listing.Report, brokenPipe bool) bool {
 		return false
 	}
 	return time.Duration(r.Timings.SessionMs)*time.Millisecond > autoStatsMin ||
-		r.Output.PartsWritten+r.Output.PartsRetained > 0 ||
+		r.Output.PartsWritten+r.Output.PartsRetained > 0 || (r.Output.Text != nil && r.Output.Text.Destination != "-" && r.Output.Text.Bytes > 0) ||
 		r.Outcome.ExitCode != exitCompleted
 }
 
@@ -560,6 +560,9 @@ func statsLines(r *listing.Report, brokenPipe bool) []string {
 	var out []string
 	files := int64(r.Output.PartsWritten + r.Output.PartsRetained)
 	written := r.Output.Bytes
+	if t := r.Output.Text; t != nil && t.Destination != "-" {
+		files, written = 1, t.Bytes
+	}
 	if files > 0 {
 		f := " files"
 		if files == 1 {

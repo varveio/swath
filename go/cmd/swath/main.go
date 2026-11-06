@@ -665,8 +665,12 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
 	}
+	parts, outBytes := sum.Output.PartsWritten+sum.Output.PartsRetained, sum.Output.Bytes
+	if t := sum.Output.Text; t != nil {
+		parts, outBytes = 1, t.Bytes // one text file
+	}
 	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d wall=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
-		sum.Output.RowsListed, sum.Output.PartsWritten+sum.Output.PartsRetained, sum.Output.Bytes, float64(sum.Timings.WallMs)/1000,
+		sum.Output.RowsListed, parts, outBytes, float64(sum.Timings.WallMs)/1000,
 		float64(sum.Timings.UserCPUMs)/1000, float64(sum.Timings.SysCPUMs)/1000, float64(sum.Resources.PeakRSSBytes)/(1<<20), sum.Resources.MaxBufferedBytes)
 	return nil
 }
