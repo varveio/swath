@@ -27,6 +27,10 @@ type API interface {
 
 type counted interface{ Counters() client.Counters }
 
+// answering is implemented by clients that count the requests their
+// service answered (source.Live).
+type answering interface{ Answered() int64 }
+
 // Routed is implemented by clients that can name what their requests
 // carry that resume identity freezes: the route a bucket's requests go to
 // and the billed project (client.Client). A supplied client that cannot is
@@ -66,6 +70,15 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 		return "", "", fmt.Errorf("no bucket in %q", u)
 	}
 	return bucket, prefix, nil
+}
+
+// Answered is the requests the service answered usably (source.Live); 0
+// for a supplied client that does not count them.
+func (p *Provider) Answered() int64 {
+	if c, ok := p.client.(answering); ok {
+		return c.Answered()
+	}
+	return 0
 }
 
 // Stats are the provider's part of the run report.

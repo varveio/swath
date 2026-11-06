@@ -102,6 +102,10 @@ func (c *Client) Note() string { return c.note }
 // Region is the signing region.
 func (c *Client) Region() string { return c.region }
 
+// Answered is the number of requests the service answered usably
+// (objhttp.Counters.Answered).
+func (c *Client) Answered() int64 { return c.counts.Answered() }
+
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
 	n := c.counts.Load()

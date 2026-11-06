@@ -209,10 +209,14 @@ var progressName = filepath.Join(dataset.Workspace, "progress.json")
 const progressEvery = 2 * time.Second
 
 // supervise runs list with the run's liveness owner: it rewrites the
-// progress file, and cancels the run as stuck when Progress.Advance has not
-// risen for stall (half of it earns a warning first). It is the only place
-// that decides a run cannot go on; nothing in the pipeline gives up on a
-// slow source.
+// progress file, and cancels the run as stuck when neither Progress.Advance
+// (rows in any phase, parts) nor Progress.Answered (requests the service
+// answered usably) has risen for stall (half of it earns a warning first).
+// An answered request keeps the clock alive although no row moved (queued
+// work at a low limit, empty continuing pages); a failed or throttled one,
+// or one that never returns, does not, so a total outage or a hung source
+// still stops as stuck. It is the only place that decides a run cannot go
+// on; nothing in the pipeline gives up on a slow source.
 func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, warn func(string)) (stop func()) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
@@ -234,8 +238,8 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 					// never overwrites its owner's progress.
 					pr.Owned(func() { _ = writeFileAtomic(filepath.Join(dir, progressName), s) })
 				}
-				if s.Advance != last {
-					last, since, warned = s.Advance, now, false
+				if live := s.Advance + s.Answered; live != last {
+					last, since, warned = live, now, false
 					continue
 				}
 				if stall <= 0 {

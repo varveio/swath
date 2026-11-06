@@ -14,12 +14,15 @@ import (
 // file a supervising process watches. Every phase advances it: listing
 // (rows the provider emitted), ordering (rows handed to the router),
 // encoding (rows written into parts) and publication (parts published).
+// Requests the source's service answered are counted beside it: liveness,
+// not progress.
 type Progress struct {
-	started atomic.Int64 // unix nanoseconds
-	listed  atomic.Pointer[func() int64]
-	ordered atomic.Int64
-	encoded atomic.Int64
-	parts   atomic.Int64
+	started  atomic.Int64 // unix nanoseconds
+	listed   atomic.Pointer[func() int64]
+	answered atomic.Pointer[func() int64]
+	ordered  atomic.Int64
+	encoded  atomic.Int64
+	parts    atomic.Int64
 
 	mu    sync.Mutex // held across an owned write and across a change of ownership
 	owner bool       // the run holds the output's lock
@@ -51,11 +54,14 @@ func (p *Progress) own(v bool) {
 
 // ProgressSnapshot is Progress at one moment.
 type ProgressSnapshot struct {
-	Objects    int64     `json:"objects"`     // rows listed so far
-	Ordered    int64     `json:"ordered"`     // rows handed to the encoders
-	Encoded    int64     `json:"encoded"`     // rows written into parts
-	Parts      int64     `json:"parts"`       // parts published
-	Advance    int64     `json:"advance"`     // the sum: it rises in every phase while the run progresses
+	Objects int64 `json:"objects"` // rows listed so far
+	Ordered int64 `json:"ordered"` // rows handed to the encoders
+	Encoded int64 `json:"encoded"` // rows written into parts
+	Parts   int64 `json:"parts"`   // parts published
+	Advance int64 `json:"advance"` // the sum: it rises in every phase while the run progresses
+	// Answered counts requests the source's service answered usably (pages
+	// without rows included): it shows the run is alive while no row moves.
+	Answered   int64     `json:"answered"`
 	StartedAt  time.Time `json:"started_at"`  // zero before the run starts
 	AsOf       time.Time `json:"as_of"`       //
 	DurationMs int64     `json:"duration_ms"` // since StartedAt
@@ -70,6 +76,9 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	}
 	if f := p.listed.Load(); f != nil {
 		s.Objects = (*f)()
+	}
+	if f := p.answered.Load(); f != nil {
+		s.Answered = (*f)()
 	}
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Advance = s.Objects + s.Ordered + s.Encoded + s.Parts

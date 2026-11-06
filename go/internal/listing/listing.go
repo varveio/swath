@@ -277,6 +277,10 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		pr.started.Store(sum.Timings.StartedAt.UnixNano())
 		listed := src.Listed
 		pr.listed.Store(&listed)
+		if l, ok := src.(source.Live); ok {
+			answered := l.Answered
+			pr.answered.Store(&answered)
+		}
 		env.Ordered = &pr.ordered
 	}
 	if cfg.Output.Dir != "" {

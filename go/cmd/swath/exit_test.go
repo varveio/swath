@@ -15,6 +15,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -246,6 +248,91 @@ func sameParts(t *testing.T, at, ref, out string) {
 		g, _ := os.ReadFile(filepath.Join(out, "data", filepath.Base(p)))
 		if !bytes.Equal(a, g) {
 			t.Fatalf("%s: %s differs", at, filepath.Base(p))
+		}
+	}
+}
+
+// TestQueuedHealthyWorkIsNotStuck: requests the service answers keep the
+// stall clock alive although no row moves; requests that fail or never
+// return do not. With the limiter at one permit (four workers, three
+// throttle answers first) the root range's first pages come back empty
+// with a continuation for longer than twice the stall timeout before any
+// row: the run completes (before, it stopped as stuck with 75 while the
+// service answered every request). A source that hangs, or answers only
+// 503, still stops as stuck (Sol, fifth review, Part 2).
+func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
+	const stall = time.Second
+	h := gcstest.Handler(gcstest.Keys(2000), 0)
+	var mode atomic.Value // "healthy", "hung" or "503"
+	var served atomic.Int64
+	var firstEmpty, lastEmpty atomic.Int64 // unix nanoseconds
+	const empties = 50
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := served.Add(1)
+		m := mode.Load().(string)
+		if m == "hung" {
+			<-r.Context().Done()
+			return
+		}
+		if m == "503" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(503)
+			fmt.Fprint(w, `{"error":{"code":503,"message":"Backend Error"}}`)
+			return
+		}
+		if n <= 3 { // three throttles: the limit falls 4 -> 2 -> 1 -> 1
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(429)
+			fmt.Fprint(w, `{"error":{"code":429,"message":"rate limit exceeded"}}`)
+			return
+		}
+		q := r.URL.Query()
+		tok, k := q.Get("pageToken"), 0
+		if rest, ok := strings.CutPrefix(tok, "empty-"); ok {
+			k, _ = strconv.Atoi(rest)
+		} else if tok == "" && firstEmpty.Load() == 0 {
+			firstEmpty.Store(time.Now().UnixNano())
+		} else {
+			h.ServeHTTP(w, r)
+			return
+		}
+		if k > 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if k < empties {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"kind":"storage#objects","nextPageToken":"empty-%d"}`, k+1)
+			return
+		}
+		lastEmpty.Store(time.Now().UnixNano())
+		q.Del("pageToken") // the chain's real first page
+		r.URL.RawQuery = q.Encode()
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	for _, m := range []string{"healthy", "hung", "503"} {
+		mode.Store(m)
+		served.Store(0)
+		dir := filepath.Join(t.TempDir(), "ds")
+		var out bytes.Buffer
+		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--limiter", "--workers", "4",
+			"--stall-timeout", stall.String(), "--report-format", "json", "-o", dir}, &out, true)
+		if m == "healthy" {
+			if err != nil {
+				t.Fatalf("healthy work at one permit: %v", err)
+			}
+			if !strings.Contains(out.String(), `"limiter.decreases": 2`) {
+				t.Fatalf("the limit did not fall to one: %s", out.String())
+			}
+			if d := time.Duration(lastEmpty.Load() - firstEmpty.Load()); d < 2*stall {
+				t.Fatalf("the rowless stretch lasted %s, not over twice the stall timeout", d)
+			}
+			continue
+		}
+		var ee *exitError
+		if !errors.As(err, &ee) || ee.code != exitStuck {
+			t.Fatalf("%s source: %v, want exit %d", m, err, exitStuck)
 		}
 	}
 }

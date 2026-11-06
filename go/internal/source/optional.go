@@ -106,6 +106,14 @@ type Excluder interface {
 	Exclude(out string) error
 }
 
+// Live sources count the requests their service answered usably, pages
+// without rows included: the watchdog's evidence that a run is alive while
+// no row moves (admission waits at a low limit, empty continuing pages). It
+// is liveness, not progress; rows stay the progress measure.
+type Live interface {
+	Answered() int64
+}
+
 // Reporter sources describe the listing for the run summary.
 type Reporter interface {
 	Report() Report

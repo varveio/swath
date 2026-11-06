@@ -257,7 +257,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | 0 | `completed` | the dataset is committed (or a dry run finished) | – |
   | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0; a full disk (`cause` `no_space`) is `fatal` too | no; `no_space`: yes, journal intact, once there is space |
   | 2 | `usage` | a malformed command line | no |
-  | 75 | `stuck` | no progress for `--stall-timeout` (default 10 min; a warning at half) | yes, journal intact |
+  | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half) | yes, journal intact |
   | 124 | `deadline` | `--max-duration` reached with the output unfinished | yes |
   | 130 | `interrupted` | SIGINT (also after the 15 s shutdown grace) | yes |
   | 143 | `terminated` | SIGTERM, a graceful stop | yes |
@@ -265,11 +265,16 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   "Resumable" holds when the output has an intact journal (S3); a filesystem run starts over. A source that
   stops early (a key limit) never exits 0 with a partial manifest unless its coverage says so.
 - **Liveness.** The command alone decides that a run cannot go on: its watchdog watches the run's progress
-  (rows listed, ordered, encoded, parts published; any rise counts) and stops it as stuck after
-  `--stall-timeout`. Nothing in the pipeline gives up on a slow source (S3 requeues a page after its retries).
+  (rows listed, ordered, encoded, parts published) and the requests the service answered usably (pages without
+  rows and probes included); a rise in either counts, and it stops the run as stuck after `--stall-timeout`
+  without one. So work queued behind a low request limit, or a stretch of empty continuing pages, is alive while
+  the service answers; a source that hangs, or only fails or throttles, is stuck. Nothing in the pipeline gives
+  up on a slow source (S3 requeues a page after its retries). As with Java swath, a service that answers forever
+  without rows keeps a run alive; `--max-duration` bounds it.
 - **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename:
   `objects` (rows listed so far), `ordered`, `encoded`, `parts`, `advance` (their sum, which rises in every
-  phase), `started_at`, `as_of`, `duration_ms`. A supervisor watches that file; `DIR/run.json` follows the
+  phase), `answered` (requests the service answered usably: liveness, not progress), `started_at`, `as_of`,
+  `duration_ms`. A supervisor watches that file; `DIR/run.json` follows the
   commit. `--max-duration` and `--stall-timeout` are runtime flags: `swath resume` replays the recorded
   values unless given again.
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;

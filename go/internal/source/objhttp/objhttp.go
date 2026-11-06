@@ -223,6 +223,7 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 	for n := 1; ; n++ {
 		v, admitted, err := admit(ctx, r.Limiter, attempt)
 		if err == nil {
+			c.answered.Add(1)
 			return v, nil
 		}
 		if ctx.Err() != nil || !admitted {
@@ -298,7 +299,13 @@ type Counts struct {
 // Counters accumulate Counts; safe for concurrent use.
 type Counters struct {
 	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
+	answered                                              atomic.Int64
 }
+
+// Answered is the number of requests the service answered usably (an
+// attempt that returned no error): the run's liveness between rows, not
+// part of Counts.
+func (c *Counters) Answered() int64 { return c.answered.Load() }
 
 // Attempt counts an HTTP request sent.
 func (c *Counters) Attempt() { c.attempts.Add(1) }
