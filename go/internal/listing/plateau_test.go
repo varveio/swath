@@ -98,7 +98,7 @@ func init() {
 
 // TestDelayedFrontierPlateaus (synthetic, labelled: generator
 // frontierTree{siblings: 200, fanout: 10, rows: 100, delay: 1 s}, 2,201
-// ranges and 220,000 rows; the smallest --memory, so a 128 KiB row budget;
+// ranges and 220,000 rows; the smallest row budget, 128 KiB;
 // one real encoder; spill on; byte accounting as in the command): hundreds
 // of fast siblings finish while the first range sleeps. The order stage's
 // metadata stays bounded: outstanding nodes plateau below the tree's size
@@ -139,7 +139,7 @@ func TestDelayedFrontierPlateaus(t *testing.T) {
 		}
 	}()
 	sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "frontier://x"}, Output: OutputConfig{Dir: out},
-		Limits: Limits{Memory: minMemory, Encoders: 1, Workers: 16, PartSize: 256 << 10, Spill: SpillLimits{Max: -1}}, Progress: pr})
+		Limits: Limits{RowBudget: minRowBudget, Encoders: 1, Workers: 16, PartSize: 256 << 10, Spill: SpillLimits{Max: -1}}, Progress: pr})
 	close(stop)
 	<-sampled
 	if err != nil {

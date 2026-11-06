@@ -75,7 +75,7 @@ func (s *rowlessService) set(m string) {
 
 func (s *rowlessService) args(dir string, extra ...string) []string {
 	return append([]string{"gs://bkt", "--gcs-endpoint", s.url, "--gcs-anonymous", "--workers", "1", "--part-size", "4KiB",
-		"--memory", "1MiB", "-o", dir}, extra...)
+		"--row-budget", "512KiB", "-o", dir}, extra...)
 }
 
 func readJSON(t *testing.T, path string, v any) []byte {

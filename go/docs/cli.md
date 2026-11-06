@@ -14,7 +14,7 @@ SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `
 below), or with `--count-only` only lists. It prints one
 line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. `swath resume DIR` replays the command the journal recorded; only
-the runtime flags (`--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
+the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
 `--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and the terminal flags
 `--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
 operational ones, how requests are
@@ -58,7 +58,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
   -dualstack
     	S3: use the dual-stack (IPv6) endpoint
   -encoders int
-    	Parquet encoder goroutines (default GOMAXPROCS, lowered to what --memory and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
+    	Parquet encoder goroutines (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
   -endpoint URL
     	S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   -endpoint-url string
@@ -93,8 +93,6 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -max-size size
     	keep objects of at most this size
-  -memory bytes
-    	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -metadata tier
     	local: metadata tier per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)
   -min-size size
@@ -148,6 +146,8 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
     	requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
+  -row-budget bytes
+    	bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
     	ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting
   -spill-compress
@@ -171,7 +171,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
     	listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
@@ -193,7 +193,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -dualstack
     	S3: use the dual-stack (IPv6) endpoint
   -encoders int
-    	Parquet encoder goroutines (default GOMAXPROCS, lowered to what --memory and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
+    	Parquet encoder goroutines (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
   -endpoint URL
     	S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   -endpoint-url string
@@ -232,8 +232,6 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
   -max-size size
     	keep objects of at most this size
-  -memory bytes
-    	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -metadata tier
     	local: metadata tier per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)
   -min-size size
@@ -291,6 +289,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
+  -row-budget bytes
+    	bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
     	ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting
   -sequential
@@ -318,7 +318,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
@@ -329,9 +329,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 ## Semantics worth stating
 
 - **Sizes** accept `KiB`, `MiB`, `GiB` and `KB`, `MB`, `GB` suffixes.
-- **`--memory`** is one budget: half of it bounds the bytes of rows in flight (reorder storage and encoder
-  queues); see
-  [internals/ordering.md](internals/ordering.md).
+- **`--row-budget`** bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder
+  queues); it is not a cap on resident memory. See [internals/ordering.md](internals/ordering.md).
 - **`--output`** is refused when non-empty unless `--overwrite` (or Java's alias `--force`), which replaces only
   a previous dataset of this tool and never anything inside the listed root.
 - **Text output** (S3 and GCS sources; a local tree's keys are bytes, which JSON cannot carry, so it needs the
@@ -442,7 +441,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   filesystem would drop below `--spill-reserve` free bytes (default 1 GiB)
   ([internals/ordering.md](internals/ordering.md)).
 - **Encoders:** the default count is GOMAXPROCS lowered to what the resources carry: one writer's working set
-  each from the half of `--memory` outside the row budget, and the descriptor limit (after the spill readers,
+  (24 MiB) each from an allowance equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,
   the workers' connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given;
   when the resources cannot carry it, a warning names the shortfall.
 - **Row bound per part:** `--part-rotation-max-rows N` (default 0: off; Java's default was 2,000,000 with

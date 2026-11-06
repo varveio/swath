@@ -23,7 +23,8 @@ import (
 )
 
 // TestResumeRefusesRemovedFlag: a journal whose recorded command names a
-// flag this build no longer has (an earlier build's) is refused on resume
+// flag this build no longer has (an earlier build's: --probe,
+// --seed-descent, --memory before --row-budget) is refused on resume
 // as a usage error, and the interrupted run is left resumable by the build
 // that started it: before the first release no build promises to resume
 // another's runs.
@@ -42,7 +43,7 @@ func TestResumeRefusesRemovedFlag(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
-	for _, removed := range []string{"--probe", "--seed-descent=false"} {
+	for _, removed := range []string{"--probe", "--seed-descent=false", "--memory=1MiB"} {
 		t.Run(removed, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
 			args := []string{"s3://bkt", "--endpoint", srv.URL, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}

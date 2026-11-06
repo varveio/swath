@@ -80,7 +80,7 @@ func init() {
 // Limits are the execution limits both arms share.
 type Limits struct {
 	Workers  int   `json:"workers"`
-	Memory   int64 `json:"memory"`    // --memory: the row budget is half
+	Memory   int64 `json:"memory"`    // arm A runs at --row-budget memory/2; arm B sorts within memory/4
 	Encoders int   `json:"encoders"`  // Parquet encoders
 	PartSize int64 `json:"part_size"` // target bytes per part
 	// SpillMax caps A's live spill bytes (negative: none). B's sorted runs
@@ -99,7 +99,7 @@ func runA(ctx context.Context, p *Provider, out string, lim Limits, resume bool,
 	armNext = p
 	armMu.Unlock()
 	cfg := listing.Config{Source: listing.SourceConfig{URI: "sortab://" + p.l.Name}, Output: listing.OutputConfig{Dir: out, Resume: resume},
-		Limits: listing.Limits{Workers: lim.Workers, Memory: lim.Memory, Encoders: lim.Encoders, PartSize: lim.PartSize,
+		Limits: listing.Limits{Workers: lim.Workers, RowBudget: lim.Memory / 2, Encoders: lim.Encoders, PartSize: lim.PartSize,
 			Spill: listing.SpillLimits{Max: lim.SpillMax, Reserve: lim.SpillReserve}},
 		Argv: []string{"sortab", "A", strconv.FormatBool(resume)}, Progress: pr}
 	switch {

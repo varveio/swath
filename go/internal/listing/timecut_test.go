@@ -56,7 +56,7 @@ func TestTimeCutClaimResumes(t *testing.T) {
 		scriptNext = &scripted{keys: ks, chunk: 1, slow: slow}
 		scriptMu.Unlock()
 		return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
-			Limits: Limits{PartSize: 2 << 10, Workers: 1, Memory: 256 << 10, PartInterval: interval}})
+			Limits: Limits{PartSize: 2 << 10, Workers: 1, RowBudget: 128 << 10, PartInterval: interval}})
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := run(ref, false, keys, 0, -1); err != nil {
@@ -170,7 +170,7 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 		scriptNext = p
 		scriptMu.Unlock()
 		return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
-			Limits: Limits{PartSize: 2 << 10, Workers: 1, Memory: 256 << 10, PartInterval: interval}})
+			Limits: Limits{PartSize: 2 << 10, Workers: 1, RowBudget: 128 << 10, PartInterval: interval}})
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	refRep, err := run(ref, false, false, -1, nil)

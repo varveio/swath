@@ -66,7 +66,7 @@ func crashBackend(t *testing.T) (string, *s3mem.Backend) {
 func crashConfig(url, out string, resume bool) Config {
 	// A small reorder budget (512 rows) keeps listing and publication
 	// interleaved, so crashes during listing find published parts.
-	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, Memory: 256 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
+	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
 }
 
 // TestCrashMatrix kills the run (an injected crash that skips all cleanup,
@@ -102,7 +102,7 @@ func TestCrashMatrix(t *testing.T) {
 			scriptNext = &scripted{keys: trickle, chunk: 1, slow: time.Millisecond}
 			scriptMu.Unlock()
 			return Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
-				Limits: Limits{PartSize: 2 << 10, Workers: 2, Memory: 256 << 10, Spill: SpillLimits{Off: true}, PartInterval: off}}
+				Limits: Limits{PartSize: 2 << 10, Workers: 2, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: off}}
 		}, []bool{false}, []time.Duration{4 * time.Millisecond}, []int64{1, 4, 12}},
 	} {
 		ref := filepath.Join(t.TempDir(), "ref")

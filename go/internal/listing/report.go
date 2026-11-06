@@ -116,16 +116,16 @@ type Build struct {
 
 // Invocation is what was asked.
 type Invocation struct {
-	Argv          []string `json:"argv"`
-	Source        string   `json:"source"`           // the root as recorded
-	Out           string   `json:"out,omitempty"`    // the dataset directory; empty for a dry run
-	Resume        bool     `json:"resume,omitempty"` // continued an interrupted run
-	SchemaID      string   `json:"schema_id"`
-	Fields        string   `json:"fields,omitempty"` // the metadata tier, for providers with tiers
-	Workers       int      `json:"workers"`
-	Encoders      int      `json:"encoders"`
-	MemoryBytes   int64    `json:"memory_bytes"`
-	PartSizeBytes int64    `json:"part_size_bytes"`
+	Argv           []string `json:"argv"`
+	Source         string   `json:"source"`           // the root as recorded
+	Out            string   `json:"out,omitempty"`    // the dataset directory; empty for a dry run
+	Resume         bool     `json:"resume,omitempty"` // continued an interrupted run
+	SchemaID       string   `json:"schema_id"`
+	Fields         string   `json:"fields,omitempty"` // the metadata tier, for providers with tiers
+	Workers        int      `json:"workers"`
+	Encoders       int      `json:"encoders"`
+	RowBudgetBytes int64    `json:"row_budget_bytes"`
+	PartSizeBytes  int64    `json:"part_size_bytes"`
 }
 
 // The outcome vocabulary, in one place. Three separate dimensions:

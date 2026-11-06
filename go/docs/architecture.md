@@ -108,9 +108,9 @@ only; `listing` does the rest.
 
 ## Memory
 
-One `-memory` budget: half of it is a byte budget for rows in flight, shared by the order stage's buffers
-and the encoders' queues. The other half is headroom for pages being parsed, codecs and the garbage
-collector. See [internals/ordering.md](internals/ordering.md) for what may exceed the budget.
+One `--row-budget`: a byte budget for rows in flight, shared by the order stage's buffers and the encoders'
+queues. Pages being parsed, the encoders' writers (admitted separately), codecs and the garbage collector are
+outside it. See [internals/ordering.md](internals/ordering.md) for what may exceed the budget.
 
 ## Further reading
 

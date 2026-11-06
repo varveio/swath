@@ -102,10 +102,13 @@ type OutputConfig struct {
 
 // Limits are the execution limits; none changes the dataset's content.
 type Limits struct {
-	Workers  int   // listing goroutines; default DefaultWorkers
-	Encoders int   // Parquet encoders; default GOMAXPROCS, admitted against memory and descriptors (admitEncoders)
-	Memory   int64 // budget in bytes for rows held between listing and encoding; default 256 MiB
-	PartSize int64 // target bytes per part; default 64 MiB (frozen for a resume)
+	Workers  int // listing goroutines; default DefaultWorkers
+	Encoders int // Parquet encoders; default GOMAXPROCS, admitted against the row budget and descriptors (admitEncoders)
+	// RowBudget bounds the bytes of rows and scheduler metadata held
+	// between listing and encoding (reorder storage and the encoders'
+	// queues); default DefaultRowBudget. It is not a cap on resident memory.
+	RowBudget int64
+	PartSize  int64 // target bytes per part; default 64 MiB (frozen for a resume)
 	// PartInterval bounds the open part's age: a part open that long with
 	// rows is closed although not full, so durable progress advances on a
 	// slow frontier. Zero or negative: by size only, which keeps part
@@ -168,7 +171,10 @@ func spillMax(l SpillLimits, dir string) int64 {
 
 // Defaults.
 const (
-	DefaultMemory = 256 << 20
+	// DefaultRowBudget bounds rows in flight at 128 MiB: enough for every
+	// worker's pages at the default 64 workers to queue behind a slow
+	// frontier, and the allowance that admits 5 encoders (admitEncoders).
+	DefaultRowBudget = 128 << 20
 	// DefaultWorkers is the default listing concurrency, whatever the CPU
 	// count: Java's proven default (--concurrency 64). Listing waits on
 	// the service, not the CPU.
@@ -177,8 +183,9 @@ const (
 	// DefaultPartInterval is the default part age bound: Java's rotation
 	// interval (30 s), its proven value.
 	DefaultPartInterval = 30 * time.Second
-	// minMemory is the smallest budget accepted.
-	minMemory = 256 << 10
+	// minRowBudget is the smallest row budget accepted: below it a publish
+	// batch alone would fill the budget.
+	minRowBudget = 128 << 10
 )
 
 // resolve validates c and fills its defaults, once.
@@ -188,7 +195,7 @@ func (c *Config) resolve() error {
 	switch {
 	case c.Source.URI == "":
 		return bad("no source")
-	case l.Workers < 0 || l.Encoders < 0 || l.Memory < 0 || l.PartSize < 0 || l.Spill.Reserve < 0:
+	case l.Workers < 0 || l.Encoders < 0 || l.RowBudget < 0 || l.PartSize < 0 || l.Spill.Reserve < 0:
 		return bad("negative limit: %+v", *l)
 	case o.Resume && o.Dir == "":
 		return bad("resume needs an output directory")
@@ -204,28 +211,30 @@ func (c *Config) resolve() error {
 	if l.Workers == 0 {
 		l.Workers = DefaultWorkers
 	}
-	if l.Memory == 0 {
-		l.Memory = DefaultMemory
+	if l.RowBudget == 0 {
+		l.RowBudget = DefaultRowBudget
 	}
 	if l.Encoders == 0 {
-		l.Encoders = min(runtime.GOMAXPROCS(0), admitEncoders(l.Memory, l.Workers, fdLimit()))
+		l.Encoders = min(runtime.GOMAXPROCS(0), admitEncoders(l.RowBudget, l.Workers, fdLimit()))
 	}
 	if l.PartSize == 0 {
 		l.PartSize = DefaultPartSize
 	}
-	if l.Memory < minMemory {
-		return bad("memory budget %d is below %d bytes", l.Memory, minMemory)
+	if l.RowBudget < minRowBudget {
+		return bad("row budget %d is below %d bytes", l.RowBudget, minRowBudget)
 	}
 	return nil
 }
 
 // admitEncoders is how many Parquet encoders the run's resources carry,
-// never fewer than one: each holds a writer's working set
-// (parquetout.EncoderBytes) in the half of memory outside the row budget,
-// and one descriptor beside the spill readers, the workers' connections
-// and spill writes, and a reserve (fds 0 when the limit is unknown).
-func admitEncoders(memory int64, workers int, fds int64) int {
-	n := (memory - memory/2) / parquetout.EncoderBytes
+// never fewer than one. Encoder memory is admitted apart from the row
+// budget but sized by it: a writer's working set (parquetout.EncoderBytes)
+// each within an allowance equal to the row budget, so a host given a
+// larger budget for rows also runs more writers to drain them; and one
+// descriptor each beside the spill readers, the workers' connections and
+// spill writes, and a reserve (fds 0 when the limit is unknown).
+func admitEncoders(rowBudget int64, workers int, fds int64) int {
+	n := rowBudget / parquetout.EncoderBytes
 	if fds > 0 {
 		n = min(n, fds-int64(order.MaxSpillReaders)-2*int64(workers)-fdReserve)
 	}
@@ -254,17 +263,17 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if err := cfg.resolve(); err != nil {
 		return sum.failed(err)
 	}
-	if n := admitEncoders(cfg.Limits.Memory, cfg.Limits.Workers, fdLimit()); asked > n && cfg.Warn != nil {
-		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory outside the row budget and %d descriptors; --memory %d MiB and the descriptor limit carry %d",
-			asked, int64(asked)*parquetout.EncoderBytes>>20, asked, cfg.Limits.Memory>>20, n))
+	if n := admitEncoders(cfg.Limits.RowBudget, cfg.Limits.Workers, fdLimit()); asked > n && cfg.Warn != nil {
+		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the row budget and %d descriptors; --row-budget %d MiB and the descriptor limit carry %d",
+			asked, int64(asked)*parquetout.EncoderBytes>>20, asked, cfg.Limits.RowBudget>>20, n))
 	}
 	argv := cfg.Argv
 	if argv == nil {
 		argv = []string{}
 	}
 	sum.Invocation = Invocation{Argv: argv, Source: cfg.Source.URI, Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
-		Encoders: cfg.Limits.Encoders, MemoryBytes: cfg.Limits.Memory, PartSizeBytes: cfg.Limits.PartSize}
-	sum.Resources.RowBudgetBytes = cfg.Limits.Memory / 2
+		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, PartSizeBytes: cfg.Limits.PartSize}
+	sum.Resources.RowBudgetBytes = cfg.Limits.RowBudget
 	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {
 		return sum.failed(err)
@@ -380,8 +389,8 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	// One byte budget for rows in flight, shared by the order stage and the
-	// encoders' queues (half of -memory; the rest is headroom for pages
-	// being parsed, codecs and the garbage collector).
+	// encoders' queues (--row-budget; pages being parsed, codecs and the
+	// garbage collector are outside it).
 	shared := &order.Shared{}
 	// The final part is durable: listing again could only add a second
 	// final part on a changed source. Publish what is recorded.

@@ -194,6 +194,10 @@ longer has is refused (exit 2); finish such a run with the build that started it
   The `seed.probes`, `seed.levels.*` and other descent counters are gone.
 - `swath diag list --probe` was removed with the 1-key probe; the `probe.*` counters and
   `split.rejected.probe_empty` are gone.
+- `--memory N` is `--row-budget N/2`: the flag names the bytes of rows in flight it bounds, which were half of
+  `--memory`; the default (128 MiB, from 256 MiB of `--memory`) and the encoders it admits are unchanged.
+  The run report's `invocation.memory_bytes` is `invocation.row_budget_bytes` (equal to
+  `resources.row_budget_bytes`). A journal that recorded `--memory` is refused on resume.
 
 ## The downstream reader: dispatch on schema id
 

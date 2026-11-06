@@ -64,7 +64,7 @@ func TestRecoveryVerificationIsCancellableAndReported(t *testing.T) {
 	scriptNext = &scripted{keys: keys, chunk: 1000}
 	scriptMu.Unlock()
 	_, err = Run(ctx, Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: true},
-		Limits: Limits{PartSize: 2 << 10, Workers: 4, Memory: 256 << 10, PartInterval: -1}})
+		Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}})
 	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "verifying") {
 		t.Fatalf("a stopped verification: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestRecoveryVerificationIsCancellableAndReported(t *testing.T) {
 	scriptMu.Unlock()
 	start := time.Now()
 	if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: true},
-		Limits: Limits{PartSize: 2 << 10, Workers: 4, Memory: 256 << 10, PartInterval: -1}, Progress: pr}); err != nil {
+		Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}, Progress: pr}); err != nil {
 		t.Fatal(err)
 	}
 	s := pr.Snapshot()

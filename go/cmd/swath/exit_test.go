@@ -197,7 +197,7 @@ func TestGCSOutageThenResume(t *testing.T) {
 	t.Cleanup(srv.Close)
 	args := func(out string) []string {
 		return []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "4",
-			"--part-size", "4KiB", "--memory", "1MiB", "--stall-timeout", "1s", "-o", out}
+			"--part-size", "4KiB", "--row-budget", "512KiB", "--stall-timeout", "1s", "-o", out}
 	}
 	ctx := context.Background()
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -250,7 +250,7 @@ func TestDiskFullExits74(t *testing.T) {
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
 		return append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "4",
-			"--part-size", "4KiB", "--memory", "1MiB", "--part-interval", "0", "-o", out}, extra...)
+			"--part-size", "4KiB", "--row-budget", "512KiB", "--part-interval", "0", "-o", out}, extra...)
 	}
 	ctx := context.Background()
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -470,7 +470,7 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
 		return append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "4",
-			"--part-size", "4KiB", "--memory", "1MiB", "--part-interval", "0", "-o", out}, extra...)
+			"--part-size", "4KiB", "--row-budget", "512KiB", "--part-interval", "0", "-o", out}, extra...)
 	}
 	ctx := context.Background()
 	// The number of requests a run makes, to place the invalid pages.

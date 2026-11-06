@@ -183,7 +183,7 @@ func TestConfigRejectsInvalid(t *testing.T) {
 		"no source":         {},
 		"negative workers":  {Source: SourceConfig{URI: src}, Limits: Limits{Workers: -1}},
 		"negative reserve":  {Source: SourceConfig{URI: src}, Limits: Limits{Spill: SpillLimits{Reserve: -1}}},
-		"tiny memory":       {Source: SourceConfig{URI: src}, Limits: Limits{Memory: 1}},
+		"tiny row budget":   {Source: SourceConfig{URI: src}, Limits: Limits{RowBudget: 1}},
 		"resume no output":  {Source: SourceConfig{URI: src}, Output: OutputConfig{Resume: true}},
 		"resume replace":    {Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Resume: true, Replace: true}},
 		"resume no journal": {Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Resume: true, NoJournal: true}},
@@ -199,25 +199,25 @@ func TestConfigRejectsInvalid(t *testing.T) {
 	}
 }
 
-// TestResourceAdmission: encoders are admitted against the writer memory
-// outside the row budget and the descriptor limit, never below one; the
+// TestResourceAdmission: encoders are admitted against a writer
+// allowance equal to the row budget and the descriptor limit, never below one; the
 // default spill cap is half the free space after the reserve, a negative
 // one is none.
 func TestResourceAdmission(t *testing.T) {
 	for _, tc := range []struct {
-		memory  int64
+		budget  int64
 		workers int
 		fds     int64
 		want    int
 	}{
-		{256 << 20, 4, 0, 5},                   // 128 MiB / 24 MiB
-		{1 << 30, 4, 0, 21},                    // 512 MiB / 24 MiB
-		{1 << 30, 64, 180, 180 - 8 - 128 - 32}, // 12: the descriptors
-		{1 << 30, 64, 100, 1},                  // the floor
-		{minMemory, 4, 0, 1},                   // the floor
+		{128 << 20, 4, 0, 5},                     // 128 MiB / 24 MiB
+		{512 << 20, 4, 0, 21},                    // 512 MiB / 24 MiB
+		{512 << 20, 64, 180, 180 - 8 - 128 - 32}, // 12: the descriptors
+		{512 << 20, 64, 100, 1},                  // the floor
+		{minRowBudget, 4, 0, 1},                  // the floor
 	} {
-		if got := admitEncoders(tc.memory, tc.workers, tc.fds); got != tc.want {
-			t.Errorf("admitEncoders(%d, %d, %d) = %d, want %d", tc.memory, tc.workers, tc.fds, got, tc.want)
+		if got := admitEncoders(tc.budget, tc.workers, tc.fds); got != tc.want {
+			t.Errorf("admitEncoders(%d, %d, %d) = %d, want %d", tc.budget, tc.workers, tc.fds, got, tc.want)
 		}
 	}
 	dir := t.TempDir()

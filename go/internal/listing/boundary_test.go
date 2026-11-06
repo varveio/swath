@@ -109,7 +109,7 @@ func runScripted(t *testing.T, p *scripted, out string, resume bool) (Report, er
 	scriptNext = p
 	scriptMu.Unlock()
 	return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
-		Limits: Limits{PartSize: 2 << 10, Workers: 4, Memory: 256 << 10, PartInterval: -1}})
+		Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}})
 }
 
 // TestBoundaryDefectNeverReachesTheJournal: a provider whose ranges are

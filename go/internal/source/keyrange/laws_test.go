@@ -29,7 +29,7 @@ func TestHostileFixturesMatchSequential(t *testing.T) {
 
 // TestMetamorphicLaws: the listing is invariant to the page size, to the
 // range decomposition (seed on and off, 1, 4 and 64 workers, forced random
-// splits), to the memory budget and to the policy toggles (the probe, the
+// splits), to the memory budget and to the policy toggles (the
 // floors, the seed, structure probes). One
 // table, over the fixture keyspaces and the hostile ones; the reference is
 // the sorted keyspace itself.

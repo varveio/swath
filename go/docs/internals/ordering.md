@@ -28,13 +28,12 @@ counts with the provider's and the router's.
 
 ## The budget
 
-`Options.Budget` is a byte budget: half of `-memory`, for rows in flight. A row counts its value (`schema.Row[P]`, the
+`Options.Budget` is a byte budget, `--row-budget`, for rows in flight. A row counts its value (`schema.Row[P]`, the
 key and the payload), its key bytes and the payload's strings (`Schema.RowBytes`, with the producer's `Heap`). The strings are views of the page arena they came from, so
 counting them approximates the arena they keep alive. The encoders' queues add the bytes of every queued
 batch to the same budget (`order.Shared`, fed by the router's `Account` hook) and release them once
-written. A slow encoder therefore slows producers instead of growing a second, unaccounted buffer. The other
-half of `-memory` is headroom for pages being parsed (each capped at 16 MiB), codecs and the garbage
-collector.
+written. A slow encoder therefore slows producers instead of growing a second, unaccounted buffer. Pages being
+parsed (each capped at 16 MiB), codecs and the garbage collector are outside it.
 
 The budget bounds the bytes of rows read but not yet drained. A worker waits before claiming a range, and before
 publishing rows, while the budget is used up. Two exceptions keep the walk live and both were forced by S3,
@@ -64,16 +63,16 @@ after their children, so they never take it.
 Beyond the budget the walk holds the rows pending on the root-to-frontier path (the O(depth × fan-out) of any
 depth-first walk, the awaited root's children included) and one publish batch per worker.
 
-**What `--memory` is not.** It is not a cap on the process's resident memory. Half of it bounds rows and
+**What `--row-budget` is not.** It is not a cap on the process's resident memory. It bounds rows and
 metadata in flight; outside it are response bodies being parsed (up to 16 MiB each, one per worker in the
 worst case), arena slack (a surviving string keeps its page's allocation alive, which the row count only
 approximates), compression scratch, open spill readers (at most 8 × 64 KiB), the encoders' writers (budgeted
-at `parquetout.EncoderBytes`, 24 MiB each, against the other half: below) and the garbage collector's
+at `parquetout.EncoderBytes`, 24 MiB each, apart from it: below) and the garbage collector's
 headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (synthetic, above) grows the heap
-by about 15 MiB at the smallest `--memory`; RSS at 512 workers with 1 KiB keys has not been measured.
+by about 15 MiB at the smallest `--row-budget`; RSS at 512 workers with 1 KiB keys has not been measured.
 
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
-a floor of one: as many writers as fit in the half of `--memory` outside the row budget (24 MiB each,
+a floor of one: as many writers as fit in an allowance equal to the row budget, kept apart from it (24 MiB each,
 measured at about 20 MiB of heap for one writer) and as many descriptors as the soft limit leaves after 8
 spill readers, two per worker and a reserve of 32 (`listing.admitEncoders`; the default 256 MiB admits 5). An
 explicit `--encoders` above that is honoured with a warning.

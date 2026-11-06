@@ -77,8 +77,8 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 | Resource | Flag | Default | What to know |
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
-| Row memory | `--memory` | 256 MiB | half bounds rows in flight (reorder storage and encoder queues); the other half is headroom for encoders and parsing. Not a cap on resident memory |
-| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of the non-row half of `--memory` and the descriptor limit; the default 256 MiB admits 5. A warning names a shortfall |
+| Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder queues). Not a cap on resident memory |
+| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. A warning names a shortfall |
 | Spill disk | `--spill-max` | 0: half the free space on the output filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; past the cap listing waits instead of failing |
 | Disk reserve | `--spill-reserve` | 1 GiB | free space spill leaves for the parts still to be written |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
@@ -88,9 +88,9 @@ filesystem (spill lives under the output directory). Estimate the dataset from a
 report's `output.bytes` over `output.rows_committed`. If the dataset outgrows the disk the run stops with exit
 74 and resumes once there is space; spill alone never fails a run.
 
-**Memory.** Outside `--memory` are response bodies being parsed (up to 16 MiB each, one per worker in the worst
-case), compression scratch and the garbage collector's headroom. Read the actual figure from the report's
-`resources.peak_rss_bytes` on a representative run, and size the host from that, not from `--memory`.
+**Memory.** Outside `--row-budget` are the encoders' writers (24 MiB each), response bodies being parsed (up to
+16 MiB each, one per worker in the worst case), compression scratch and the garbage collector's headroom. Read the actual figure from the report's
+`resources.peak_rss_bytes` on a representative run, and size the host from that, not from `--row-budget`.
 
 ## Running
 
@@ -201,7 +201,7 @@ again in a new or empty directory (`--overwrite` refuses an interrupted filesyst
 OOM kill loses nothing durable: the journal is crash-safe and the resume reconciles.
 
 **`swath resume DIR`** replays the command recorded in the journal. Only these may be given again (the last
-value wins): `--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
+value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
 `--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and `--profile`,
 `--anonymous`, `--request-timeout`, `--gcs-anonymous`, `--gcs-credentials`, `--gcs-request-timeout`,
 `--limiter`, `--limiter-slow-start`, `--request-rate`. Any other flag is a usage error. `--max-duration` and the
@@ -279,7 +279,7 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
   (ext4, XFS, APFS do). Process crashes are tested at every crash point; power loss is not.
 - **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
   committed dataset is the complete result of a live listing, exactly once per key, not a point-in-time view.
-- **Memory:** `--memory` bounds rows in flight, not resident memory (see Sizing).
+- **Memory:** `--row-budget` bounds rows in flight, not resident memory (see Sizing).
 - **Scale:** billions of keys, runs of hours and 256 or more workers are unmeasured ([REPORT.md](../REPORT.md),
   "Known gaps").
 

@@ -292,7 +292,7 @@ type options struct {
 	maxDuration, stall     time.Duration
 	partInterval           time.Duration
 	workers, encoders      int
-	partSize, memory       size
+	partSize, rowBudget    size
 	spillMax, spillReserve zsize
 	resume, noJournal      bool
 	noSpill, spillCompress bool
@@ -306,7 +306,7 @@ type options struct {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}, termFlags...)
+var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-max", "spill-reserve", "spill-compress", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -355,10 +355,10 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f.BoolVar(&o.overwrite, "force", false, "Java swath's name for --overwrite")
 	o.partSize = listing.DefaultPartSize
 	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB)")
-	o.memory = listing.DefaultMemory
-	f.Var(&o.memory, "memory", "`bytes` of rows held between listing and encoding; sets the reorder bound")
+	o.rowBudget = listing.DefaultRowBudget
+	f.Var(&o.rowBudget, "row-budget", "`bytes` of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory")
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default 64, whatever the CPU count)")
-	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS, lowered to what --memory and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
+	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
 	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full, bounding the age of the durable progress; 0: parts close by size only")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
 	f.BoolVar(&o.spillCompress, "spill-compress", false, "compress spill files (zstd level 1)")
@@ -534,7 +534,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
-		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
+		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
 			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,

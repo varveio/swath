@@ -56,7 +56,7 @@ func TestSIGKILLResume(t *testing.T) {
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
 		return append([]string{"list", "s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous", "-workers", "8",
-			"-part-size", "4KiB", "-memory", "1MiB", "-o", out}, extra...)
+			"-part-size", "4KiB", "-row-budget", "512KiB", "-o", out}, extra...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
@@ -144,7 +144,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	}))
 	t.Cleanup(slow.Close)
 	gcs := gcstest.Bucket(t, gcstest.Keys(4000), 0)
-	common := []string{"-workers", "8", "-part-size", "4KiB", "-memory", "1MiB"}
+	common := []string{"-workers", "8", "-part-size", "4KiB", "-row-budget", "512KiB"}
 	for _, prov := range []struct {
 		name    string
 		src     []string

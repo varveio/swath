@@ -261,7 +261,7 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 	stderr := captureStderr(t)
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
 	args := func(dir string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--gcs-endpoint", ep, "--part-size", "4KiB", "--memory", "1MiB", "-o", dir}, extra...)
+		return append([]string{"gs://bkt", "--gcs-endpoint", ep, "--part-size", "4KiB", "--row-budget", "512KiB", "-o", dir}, extra...)
 	}
 	ctx := context.Background()
 	for _, failing := range []string{"damaged journal", "source does not open"} {
@@ -547,7 +547,7 @@ func TestRefusalsExit2(t *testing.T) {
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
 	gcs := func(dir string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--memory", "1MiB", "-o", dir}, extra...)
+		return append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--row-budget", "512KiB", "-o", dir}, extra...)
 	}
 	foreign := t.TempDir()
 	os.WriteFile(filepath.Join(foreign, "notes.txt"), []byte("mine"), 0o644)
@@ -620,7 +620,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		report := filepath.Join(t.TempDir(), "report.json")
 		var out bytes.Buffer
 		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
-			"--part-size", "4KiB", "--memory", "1MiB", "--report", report, "--report-format", "json", "-o", dir}, &out, false)
+			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, &out, false)
 		srv.Close()
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("%d: exit %d (%v)", status, c, err)

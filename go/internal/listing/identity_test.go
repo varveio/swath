@@ -80,7 +80,7 @@ func TestReplacedOutputIsNeverTouched(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out},
-			Limits: Limits{PartSize: 2 << 10, Workers: 4, Memory: 256 << 10, PartInterval: -1}, Progress: pr})
+			Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}, Progress: pr})
 		done <- err
 	}()
 	deadline := time.Now().Add(10 * time.Second)
@@ -185,7 +185,7 @@ func TestReplacedOutputWithLiveWriters(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out},
-			Limits: Limits{PartSize: 2 << 10, Workers: 4, Memory: 256 << 10, PartInterval: -1}, Progress: pr})
+			Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}, Progress: pr})
 		done <- err
 	}()
 	stop, stopped := make(chan struct{}), make(chan struct{})
@@ -295,7 +295,7 @@ func TestReplacedAfterCheckGetsNoPart(t *testing.T) {
 	scriptNext = &scripted{keys: keys, chunk: 1000}
 	scriptMu.Unlock()
 	_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out},
-		Limits: Limits{PartSize: 2 << 10, Workers: 4, Encoders: 1, Memory: 256 << 10, PartInterval: -1}})
+		Limits: Limits{PartSize: 2 << 10, Workers: 4, Encoders: 1, RowBudget: 128 << 10, PartInterval: -1}})
 	if n.Load() < 3 {
 		t.Fatalf("part-create reached %d times", n.Load())
 	}
