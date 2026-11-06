@@ -27,20 +27,31 @@ func proxied(t *testing.T, keys []string, plan faulttest.Plan) (*faulttest.Proxy
 	return p, srv.URL
 }
 
-// TestThrottleStormLowersConcurrency: a window in which every request is
+// TestThrottleStormLowersConcurrency: a storm in which every request is
 // answered 503 SlowDown neither fails the run nor changes its output; the
 // limiter cuts the requests in flight during the storm and keeps them cut
 // through the throttle-free window that follows. Without the limiter the
 // same storm leaves concurrency at the worker count.
+//
+// The storm is requests 24 to 55 by arrival, not a span of time: on a
+// loaded host a time span can hold no request at all. The limiter is at
+// its floor after 5 throttles (16, 11, 7, 4, 2, 1), and the rest of the
+// storm drains the requests it admitted before then. "After the storm"
+// starts 200 ms after the last throttle and ends 10 s (the limiter's clean
+// window) after the first: growth comes back only that long after the
+// last real decrease, which no throttle precedes. Past it the limiter may
+// grow, as it should, so increases are checked only for a run that ended
+// inside it.
 func TestThrottleStormLowersConcurrency(t *testing.T) {
 	keys := testKeys()
 	for i := range 8000 {
 		keys = append(keys, fmt.Sprintf("logs/%03d/%05d", i%200, i))
 	}
 	slices.Sort(keys)
-	storm := faulttest.Window{From: 300 * time.Millisecond, To: 800 * time.Millisecond, Fraction: 1, Fault: faulttest.Throttle}
+	storm := faulttest.Window{N0: 24, N1: 56, Fraction: 1, Fault: faulttest.Throttle}
 	slow := faulttest.Window{Fraction: 1, Fault: faulttest.Latency, Delay: 60 * time.Millisecond}
 	const workers = 16
+	const cleanWindow = 10 * time.Second // objhttp's throttle-free time before any growth
 	for _, on := range []bool{true, false} {
 		px, ep := proxied(t, keys, faulttest.Plan{Seed: 1, Windows: []faulttest.Window{slow, storm}})
 		rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Workers: workers,
@@ -49,27 +60,43 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 			t.Fatalf("limiter %v: %d keys, want %d", on, len(rows), len(keys))
 		}
 		tl, s := px.Timeline(), px.Stats()
-		if s.Throttled == 0 {
-			t.Fatalf("limiter %v: the storm throttled nothing (%+v)", on, s)
+		if s.Throttled != int64(storm.N1-storm.N0) {
+			t.Fatalf("limiter %v: the storm throttled %d requests, want %d (%+v)", on, s.Throttled, storm.N1-storm.N0, s)
 		}
-		after := int64(0) // most in flight from 200 ms after the storm to the end
-		for i := int((storm.To + 200*time.Millisecond) / faulttest.Step); i < len(tl); i++ {
-			after = max(after, tl[i].MaxActive)
+		first, last := -1, 0 // the buckets of the storm's first and last throttles
+		for i, b := range tl {
+			if b.Throttled > 0 && first < 0 {
+				first = i
+			}
+			if b.Throttled > 0 {
+				last = i
+			}
+		}
+		from := last + int(200*time.Millisecond/faulttest.Step)
+		to := min(len(tl), first+int(cleanWindow/faulttest.Step))
+		after, arrived := int64(0), int64(0) // most in flight after the storm, and the requests then
+		for i := from; i < to; i++ {
+			after, arrived = max(after, tl[i].MaxActive), arrived+tl[i].Arrived
 		}
 		v := st.Counters.Value
-		t.Logf("limiter %v: %+v, in flight after the storm %d, decreases %d depth %d waits %d", on, s, after,
-			v("limiter.decreases"), v("limiter.depth"), v("limiter.waits"))
+		t.Logf("limiter %v: %+v, storm %d-%d ms, in flight after it %d (%d requests), decreases %d depth %d increases %d waits %d",
+			on, s, first*int(faulttest.Step/time.Millisecond), last*int(faulttest.Step/time.Millisecond), after, arrived,
+			v("limiter.decreases"), v("limiter.depth"), v("limiter.increases"), v("limiter.waits"))
 		if !on {
 			if st.Counters.On("limiter") || s.MaxActive < workers/2 {
 				t.Fatalf("limiter off: feature %v, max in flight %d", st.Counters.On("limiter"), s.MaxActive)
 			}
 			continue
 		}
-		if !st.Counters.On("limiter") || v("limiter.decreases") == 0 || v("limiter.depth") < workers/2 || v("limiter.increases") != 0 {
+		if arrived == 0 {
+			t.Fatalf("no request arrived after the storm and inside the clean window:\n%s", faulttest.TSV(tl))
+		}
+		grew := v("limiter.increases") != 0 && len(tl) <= first+int(cleanWindow/faulttest.Step)
+		if !st.Counters.On("limiter") || v("limiter.decreases") == 0 || v("limiter.depth") < workers/2 || grew {
 			t.Fatalf("limiter counters: decreases %d depth %d increases %d", v("limiter.decreases"), v("limiter.depth"), v("limiter.increases"))
 		}
 		if after > workers-v("limiter.depth") {
-			t.Fatalf("%d in flight after the storm, above the lowered limit %d", after, workers-v("limiter.depth"))
+			t.Fatalf("%d in flight after the storm, above the lowered limit %d:\n%s", after, workers-v("limiter.depth"), faulttest.TSV(tl))
 		}
 	}
 }

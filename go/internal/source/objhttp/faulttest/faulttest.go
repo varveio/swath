@@ -43,12 +43,20 @@ func (f Fault) String() string { return [...]string{"throttle", "latency", "rese
 // Window applies a fault to a share of the requests that arrive in it.
 type Window struct {
 	From, To time.Duration // since the run's first request; To 0 = until the end
-	Fraction float64       // share of the window's requests that get the fault (1 = all)
+	// N0 and N1 bound the window by request number instead, [N0, N1) in
+	// arrival order from 0, N1 0 = no bound; with From and To, both
+	// apply. A test that must see its faults whatever the host's load
+	// uses them: how many requests arrive in a time span is up to the
+	// scheduler.
+	N0, N1   uint64
+	Fraction float64 // share of the window's requests that get the fault (1 = all)
 	Fault    Fault
 	Delay    time.Duration // Latency: added before the request is forwarded
 }
 
-func (w Window) holds(t time.Duration) bool { return t >= w.From && (w.To == 0 || t < w.To) }
+func (w Window) holds(n uint64, t time.Duration) bool {
+	return t >= w.From && (w.To == 0 || t < w.To) && n >= w.N0 && (w.N1 == 0 || n < w.N1)
+}
 
 // Plan is a run's faults.
 type Plan struct {
@@ -132,7 +140,7 @@ func Draw(seed, n uint64, i int) float64 {
 // or reset ends the request, so the first of those wins).
 func (p *Plan) Decide(n uint64, t time.Duration) (throttle, reset bool, delay time.Duration) {
 	for i, w := range p.Windows {
-		if !w.holds(t) || Draw(p.Seed, n, i) >= w.Fraction {
+		if !w.holds(n, t) || Draw(p.Seed, n, i) >= w.Fraction {
 			continue
 		}
 		switch w.Fault {

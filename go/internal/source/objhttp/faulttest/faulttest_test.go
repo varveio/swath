@@ -45,6 +45,12 @@ func TestDecideIsDeterministicAndProportional(t *testing.T) {
 	if same == 1000 {
 		t.Fatal("a different seed made the same decisions")
 	}
+	byN := Plan{Windows: []Window{{N0: 5, N1: 8, Fraction: 1, Fault: Throttle}}}
+	for n := uint64(0); n < 12; n++ {
+		if a, _, _ := byN.Decide(n, time.Hour); a != (n >= 5 && n < 8) {
+			t.Fatalf("request %d: throttled %v by a [5, 8) window", n, a)
+		}
+	}
 }
 
 func TestProxyFaults(t *testing.T) {

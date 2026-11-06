@@ -147,7 +147,7 @@ they measure client CPU and coordination, not S3 latency.
 
 `internal/source/objhttp/faulttest` is a fault-injecting HTTP proxy for tests and benchmarks (never linked
 into the binary). In front of swath-replay or a fake bucket it answers a share of the requests in a time
-window with the throttle answer (503 `SlowDown` for S3, 429 `rateLimitExceeded` for GCS), delays them, or
+window, or a range of request numbers (what a test that must see its faults on a loaded host uses), with the throttle answer (503 `SlowDown` for S3, 429 `rateLimitExceeded` for GCS), delays them, or
 resets their connection; a rate cap throttles requests beyond N per trailing second. Request n of a run gets
 the same faults for the same seed and plan. It records a timeline (100 ms buckets: arrivals, faults, most
 requests in flight). A request counts as in flight from its arrival until the proxy releases its answer, so a
