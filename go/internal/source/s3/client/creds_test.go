@@ -340,3 +340,48 @@ func TestOnEC2(t *testing.T) {
 		}
 	}
 }
+
+// TestPartialCredentialsRefuse (Sol, seventh review, Part 3 item 4):
+// credential intent the SDK drops (one access key without the other, a
+// session token without keys, a role without its web-identity token or
+// the reverse, a profile that does not exist) is configured but broken:
+// the client refuses with an auth failure and sends nothing. Before, the
+// SDK kept no environment credentials, the chain read as empty and the
+// run listed a public bucket unsigned.
+func TestPartialCredentialsRefuse(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"access key only":      {"AWS_ACCESS_KEY_ID": "AKONLY"},
+		"secret key only":      {"AWS_SECRET_ACCESS_KEY": "s"},
+		"session token only":   {"AWS_SESSION_TOKEN": "tok"},
+		"token file, no role":  {"AWS_WEB_IDENTITY_TOKEN_FILE": "/nonexistent/token"},
+		"role, no token file":  {"AWS_ROLE_ARN": "arn:aws:iam::111111111111:role/runner"},
+		"missing profile":      {"AWS_PROFILE": "nosuch"},
+		"access key, old name": {"AWS_ACCESS_KEY": "AKONLY"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			isolate(t, t.TempDir())
+			t.Setenv("AWS_ACCESS_KEY", "")
+			t.Setenv("AWS_SECRET_KEY", "")
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			var requests atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.Write([]byte(okPage)) // a public bucket
+			}))
+			t.Cleanup(srv.Close)
+			c, err := New(Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
+			if err == nil {
+				_, lerr := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
+				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.source, lerr, requests.Load())
+			}
+			if Classify(err) != objhttp.ClassAuth {
+				t.Fatalf("%v: class %s, want auth", err, Classify(err))
+			}
+			if n := requests.Load(); n != 0 {
+				t.Fatalf("%d requests sent", n)
+			}
+		})
+	}
+}

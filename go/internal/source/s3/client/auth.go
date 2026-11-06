@@ -76,9 +76,19 @@ func loadAuth(cfg Config) (*auth, error) {
 	if cfg.Anonymous {
 		opts = append(opts, config.WithCredentialsProvider(aws.AnonymousCredentials{}))
 	}
+	if !cfg.Anonymous {
+		// Credential intent the SDK drops without a word (one key of a
+		// pair, a role without its token) would read as an empty chain
+		// and list unsigned: it is configured, and broken.
+		if why := partialEnvCredentials(); why != "" {
+			return nil, &objhttp.CredentialError{Source: "environment", Err: errors.New(why)}
+		}
+	}
 	ac, err := config.LoadDefaultConfig(context.Background(), opts...)
 	if err != nil {
-		return nil, fmt.Errorf("AWS configuration: %w", err)
+		// A profile that does not exist, a role without its token: the
+		// configuration names credentials it cannot give (class auth).
+		return nil, &objhttp.CredentialError{Source: "AWS configuration", Err: err}
 	}
 	a := &auth{region: cfg.Region, signer: v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true })}
 	if a.region == "" {
@@ -202,6 +212,35 @@ func onEC2() bool {
 	return strings.Contains(read("devices/virtual/dmi/id/sys_vendor"), "Amazon") ||
 		strings.HasPrefix(read("devices/virtual/dmi/id/board_asset_tag"), "i-") ||
 		strings.HasPrefix(strings.ToLower(read("hypervisor/uuid")), "ec2")
+}
+
+// partialEnvCredentials names credential intent in the environment that
+// the SDK's chain ignores ("" when there is none): an access key without
+// its secret or the reverse (either spelling), a session token without
+// both keys, a role ARN without a web-identity token file. The SDK keeps
+// environment keys only as a pair, and builds web identity only from both
+// variables; the rest of the chain then sees nothing.
+func partialEnvCredentials() string {
+	get := func(names ...string) string {
+		for _, n := range names {
+			if v := os.Getenv(n); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	id, secret := get("AWS_ACCESS_KEY_ID", "AWS_ACCESS_KEY"), get("AWS_SECRET_ACCESS_KEY", "AWS_SECRET_KEY")
+	switch {
+	case id != "" && secret == "":
+		return "AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY"
+	case id == "" && secret != "":
+		return "AWS_SECRET_ACCESS_KEY is set without AWS_ACCESS_KEY_ID"
+	case id == "" && os.Getenv("AWS_SESSION_TOKEN") != "":
+		return "AWS_SESSION_TOKEN is set without AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+	case os.Getenv("AWS_ROLE_ARN") != "" && os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE") == "":
+		return "AWS_ROLE_ARN is set without AWS_WEB_IDENTITY_TOKEN_FILE"
+	}
+	return ""
 }
 
 // anonymousNote warns once when -anonymous hides credentials the

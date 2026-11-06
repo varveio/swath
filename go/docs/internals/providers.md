@@ -138,6 +138,12 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   `CredentialError` (class `auth`, exit 1); one that fails transiently (an STS 5xx or throttle, a cut
   connection, past the wait) keeps the source with a note on stderr, and each request's signing retries it
   (then the range is requeued, ending in 75 if it never answers), as a refresh failure mid-run does.
+  Credential intent the SDK drops silently is refused before any request, as configured but broken
+  (`CredentialError`, class `auth`; `TestPartialCredentialsRefuse`): an access key without its secret or the
+  reverse (`AWS_ACCESS_KEY_ID`/`AWS_ACCESS_KEY`, `AWS_SECRET_ACCESS_KEY`/`AWS_SECRET_KEY`), a session token
+  without both keys, `AWS_ROLE_ARN` without `AWS_WEB_IDENTITY_TOKEN_FILE`; a configuration the SDK cannot load
+  (a profile that does not exist, a token file without a role) is class `auth` too. GCS has no such gap: a
+  `GOOGLE_APPLICATION_CREDENTIALS` naming a missing file is refused already (`TestADCConfiguredButBroken`).
 - *Region:* `-region`, else the SDK's resolution (`AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's
   `region`), else `us-east-1`. A 301 or `AuthorizationHeaderMalformed` answer names the bucket's region in
   the error.
