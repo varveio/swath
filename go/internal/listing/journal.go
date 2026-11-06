@@ -109,6 +109,7 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 	var jr *runJournal
 	if resumable {
 		jr, err = openLocked(cfg, path, id, lock)
+	} else if err = lock.Verify(); err != nil {
 	} else if err = dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
 		err = prepareError(cfg.Output.Dir, err)
 	} else {
@@ -196,6 +197,9 @@ func prepareError(out string, err error) error {
 
 // openLocked does openJournal's work with the lock held.
 func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock) (*runJournal, error) {
+	if err := lock.Verify(); err != nil {
+		return nil, err
+	}
 	if !cfg.Output.Resume {
 		if err := dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
 			return nil, prepareError(cfg.Output.Dir, err)
@@ -229,7 +233,7 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
-	sus, err := recoverParts(cfg.Output.Dir, st)
+	sus, err := recoverParts(cfg.Output.Dir, st, lock)
 	if err != nil {
 		return nil, err
 	}
@@ -245,12 +249,18 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 // temporary file was synced before the record); every other file in data/
 // (unrecorded temporary parts) is removed. The temporary part of a record
 // that read as torn is set aside as the suspect, returned.
-func recoverParts(out string, st *journal.State) (*suspect, error) {
-	if err := checkParts(out, st); err != nil {
+func recoverParts(out string, st *journal.State, lock *journal.Lock) (*suspect, error) {
+	if err := checkParts(out, st, lock); err != nil {
+		return nil, err
+	}
+	if err := lock.Verify(); err != nil {
 		return nil, err
 	}
 	sus, err := keepSuspect(out, st)
 	if err != nil {
+		return nil, err
+	}
+	if err := lock.Verify(); err != nil {
 		return nil, err
 	}
 	// Unrecorded parts: the resume writes them again.
@@ -327,7 +337,7 @@ func keepSuspect(out string, st *journal.State) (*suspect, error) {
 }
 
 // checkParts is recoverParts up to the removal of the temporary parts.
-func checkParts(out string, st *journal.State) error {
+func checkParts(out string, st *journal.State, lock *journal.Lock) error {
 	data := filepath.Join(out, dataset.DataDir)
 	// Refuse ambiguous damage before deleting anything: a part published
 	// under its final name beyond the recorded ones means an acknowledged
@@ -363,6 +373,9 @@ func checkParts(out string, st *journal.State) error {
 			return fmt.Errorf("resume: part %d: %w", i, err)
 		}
 		if path != final {
+			if err := lock.Verify(); err != nil {
+				return err
+			}
 			if _, err := dataset.PublishPart(out, i, dataset.Part{Path: path, PartInfo: rec.Part}); err != nil {
 				return fmt.Errorf("resume: %w", err)
 			}
@@ -371,6 +384,9 @@ func checkParts(out string, st *journal.State) error {
 	ents, err := os.ReadDir(data)
 	if err != nil {
 		return fmt.Errorf("resume: %w", err)
+	}
+	if err := lock.Verify(); err != nil {
+		return err
 	}
 	for _, e := range ents {
 		if !keep[e.Name()] {
@@ -469,6 +485,14 @@ func (jr *runJournal) routerOptions(o *parquetout.Options) {
 	o.Publish = jr.publish
 }
 
+// verifyOption makes the router check the output's identity before it
+// creates each part file.
+func (jr *runJournal) verifyOption(o *parquetout.Options) {
+	if jr != nil && jr.lock != nil {
+		o.Verify = jr.lock.Verify
+	}
+}
+
 // publish is commit-before-emit at part granularity: the record (the part
 // and the writer state) is synced before the part is renamed into the
 // dataset. The router calls it for one part at a time, in ordinal order: it
@@ -486,6 +510,9 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	// named by an acknowledged record, and recovery keeps it (keepSuspect).
 	// Its name must be durable before the record names it.
 	claim := dataset.ClaimPath(jr.out, ordinal)
+	if err := jr.verify(); err != nil {
+		return p, err
+	}
 	if err := os.Rename(p.Path, claim); err != nil {
 		return p, fmt.Errorf("claim part %d: %w", ordinal, err)
 	}
@@ -503,6 +530,9 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 		jr.suspect = nil
 	}
 	if err := faults.At("recorded"); err != nil {
+		return p, err
+	}
+	if err := jr.verify(); err != nil {
 		return p, err
 	}
 	p, err := dataset.PublishPart(jr.out, ordinal, p)
@@ -523,10 +553,20 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 		_ = jr.j.Close()
 		jr.j = nil
 	}
-	if cfg.Settle != nil {
+	// The outcome goes into the output only while its pathname is still
+	// the directory this process locked.
+	if cfg.Settle != nil && jr.verify() == nil {
 		cfg.Settle(rep, err)
 	}
 	jr.release(cfg)
+}
+
+// verify is journal.Lock.Verify for the run's output (nil without one).
+func (jr *runJournal) verify() error {
+	if jr == nil {
+		return nil
+	}
+	return jr.lock.Verify()
 }
 
 // release gives up the output without settling: nothing found under the

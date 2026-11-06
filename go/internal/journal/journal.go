@@ -188,7 +188,38 @@ var LockName = filepath.Join(dataset.Workspace, dataset.LockName)
 
 // Lock is exclusive ownership of an output directory: taken before the
 // directory is prepared, recovered or written, held until the run ends.
-type Lock struct{ f *os.File }
+type Lock struct {
+	f   *os.File
+	out string
+	// The identities taken with the lock: the output directory and the
+	// lock file. A lock on an inode does not prove the pathname still
+	// names the same directory: Verify checks both before every
+	// destructive action.
+	dir, file os.FileInfo
+}
+
+// ErrOutputReplaced: the output directory's pathname no longer names the
+// directory (or the lock file) this process locked: it was moved, removed
+// or replaced during the run. Nothing more is written, removed or renamed
+// there.
+var ErrOutputReplaced = errors.New("the output directory was moved or replaced while the run owned it")
+
+// Verify reports ErrOutputReplaced unless out and its lock file are still
+// the ones locked. Callers check it immediately before each deletion,
+// rename and publication; a replacement between the check and the action
+// is not excluded (no portable directory-relative rename exists).
+func (l *Lock) Verify() error {
+	if l == nil || l.dir == nil {
+		return nil
+	}
+	if fi, err := os.Stat(l.out); err != nil || !os.SameFile(fi, l.dir) {
+		return fmt.Errorf("%w (%s)", ErrOutputReplaced, l.out)
+	}
+	if fi, err := os.Stat(filepath.Join(l.out, LockName)); err != nil || !os.SameFile(fi, l.file) {
+		return fmt.Errorf("%w (%s: its lock file changed)", ErrOutputReplaced, l.out)
+	}
+	return nil
+}
 
 // TakeLock creates out if needed and takes its lock (non-blocking).
 func TakeLock(out string) (*Lock, error) {
@@ -203,7 +234,20 @@ func TakeLock(out string) (*Lock, error) {
 		f.Close()
 		return nil, fmt.Errorf("%w (%s): %v", ErrLocked, out, err)
 	}
-	return &Lock{f}, nil
+	l := &Lock{f: f, out: out}
+	// The identities after the lock is held: what this process owns.
+	if l.file, err = f.Stat(); err == nil {
+		l.dir, err = os.Stat(out)
+	}
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("output lock: %w", err)
+	}
+	if err := l.Verify(); err != nil { // the lock file was replaced before the lock was taken
+		f.Close()
+		return nil, err
+	}
+	return l, nil
 }
 
 // Release releases the lock.

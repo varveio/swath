@@ -378,6 +378,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add,
 			Interval: max(0, cfg.Limits.PartInterval)}
 		jr.routerOptions(&ropt)
+		jr.verifyOption(&ropt)
 		if pr := cfg.Progress; pr != nil {
 			ropt.Encoded = &pr.encoded
 		}
@@ -421,12 +422,17 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		}
 	}
 	fail := func(err error) (Report, error) {
+		if verr := jr.verify(); verr != nil && !errors.Is(err, journal.ErrOutputReplaced) {
+			// A failure by pathname (a part or spill file not found) is the
+			// replacement's consequence: name the cause.
+			err = fmt.Errorf("%w: %w", verr, err)
+		}
 		if router != nil {
 			router.Abort()
 			// A crash leaves the output as a kill would; a journaled run
 			// keeps its temporary parts too: one may be recorded already
 			// (its rename failed), and -resume decides which are.
-			if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
+			if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 				dataset.Cleanup(cfg.Output.Dir)
 			}
 		}
@@ -444,6 +450,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		spill := filepath.Join(cfg.Output.Dir, dataset.JournalDir, "spill")
 		// Reclaim a crashed run's orphans (the output lock is held), with
 		// spill on or off.
+		if err := jr.verify(); err != nil {
+			return sum.failed(err)
+		}
 		if err := os.RemoveAll(spill); err != nil && cfg.Warn != nil {
 			cfg.Warn(fmt.Sprintf("a previous run's spill files could not be removed: %v", err))
 		}
@@ -461,7 +470,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if router == nil && cfg.Output.Dir != "" && err != nil {
 		return sum.failed(err) // the router could not start: nothing was written
 	}
-	if cfg.Output.Dir != "" && oopt.SpillDir != "" {
+	if cfg.Output.Dir != "" && oopt.SpillDir != "" && jr.verify() == nil {
 		_ = os.Remove(oopt.SpillDir) // only if empty; order.Run removed its own files
 		_ = os.Remove(filepath.Dir(oopt.SpillDir))
 	}
@@ -517,8 +526,11 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	for _, part := range parts {
 		sum.Output.Bytes += part.Bytes
 	}
+	if err := jr.verify(); err != nil {
+		return fail(err)
+	}
 	if err := dataset.Publish(cfg.Output.Dir, manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed), parts); err != nil {
-		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
+		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 			dataset.Cleanup(cfg.Output.Dir)
 		}
 		durable()
@@ -533,7 +545,11 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	sum.Output.RowsDurable = sum.Output.RowsCommitted
 	sum.finish()
 	cfg.finalize(&sum, nil)
-	if err := dataset.WriteReport(cfg.Output.Dir, sum); err != nil && cfg.Warn != nil {
+	if err := jr.verify(); err != nil {
+		if cfg.Warn != nil {
+			cfg.Warn("run report not written: " + err.Error())
+		}
+	} else if err := dataset.WriteReport(cfg.Output.Dir, sum); err != nil && cfg.Warn != nil {
 		cfg.Warn(err.Error())
 	}
 	return sum, nil

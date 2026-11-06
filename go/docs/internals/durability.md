@@ -97,6 +97,14 @@ that is the commit. The run reports follow it.
    nothing to resume and is left untouched, without a lock (`TestNothingToResumeLeavesDirectoryUntouched`). Every run with an
    output takes it: fresh runs, overwrites and filesystem runs, which keep no journal.
    Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
+   A lock on an inode does not prove the pathname still names that directory: the lock records the output
+   directory's and the lock file's identity (device and inode, `os.SameFile`) and `Lock.Verify` checks both
+   immediately before every destructive or publishing step (each part file created, the claim and the rename
+   into `data/`, recovery's renames and removals, cleanup of temporary parts and spill, the manifest, the
+   report and the outcome file). A directory moved or replaced during the run stops it with
+   `journal.ErrOutputReplaced` and is never written into; the moved directory resumes at its new path
+   (`TestReplacedOutputIsNeverTouched`). A replacement between a check and its action is not excluded: no
+   portable directory-relative rename exists.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
    pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that

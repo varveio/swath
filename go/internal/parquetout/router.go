@@ -56,6 +56,9 @@ type Options struct {
 	// slow frontier. Boundaries then depend on timing whenever such a cut
 	// happens; 0 cuts by size only.
 	Interval time.Duration
+	// Verify, if set, is called before each part file is created: the
+	// output's pathname must still name the directory the run owns.
+	Verify func() error
 }
 
 // Resume is the router state recovered from a journal.
@@ -302,7 +305,14 @@ func (r *Router[P]) encode(p *part[P]) {
 	}()
 	defer close(p.published)
 	columns := func() int { return max(1, r.opt.Encoders/max(1, int(r.active.Load()))) }
-	w, err := create(dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.Encoders, columns)
+	var err error
+	if r.opt.Verify != nil {
+		err = r.opt.Verify()
+	}
+	var w *writer[P]
+	if err == nil {
+		w, err = create(dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.Encoders, columns)
+	}
 	if err != nil {
 		p.err = err
 		r.fail(p.err)
