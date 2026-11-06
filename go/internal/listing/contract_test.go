@@ -17,6 +17,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
 // checkContract reads a committed dataset the way a reader does, from the
@@ -118,7 +119,7 @@ func checkContract(t *testing.T, out string) []string {
 func TestDatasetContract(t *testing.T) {
 	url := fakeS3(t, 3000)
 	var ref []string
-	for i, o := range []S3Config{{Sequential: true}, {}, {Seed: true}} {
+	for i, o := range []S3Config{{Policy: keyrange.Policy{Sequential: true}}, {}, {Policy: keyrange.Policy{Seed: true}}} {
 		o.Endpoint, o.PathStyle = url, true
 		out := filepath.Join(t.TempDir(), "ds")
 		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &o}, Output: OutputConfig{Dir: out},

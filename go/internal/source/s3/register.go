@@ -13,18 +13,27 @@ import (
 
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 func init() {
-	registry.Register(registry.Factory{Classify: classify, Scheme: "s3", Flags: flags, Defaults: func() any { return &Options{} }, Open: open})
+	registry.Register(registry.Factory{Classify: classify, Scheme: "s3", Flags: flags, Defaults: defaults, Open: open})
 }
 
-// flags registers the S3 flag group; the returned *Options is filled when
-// the flag set is parsed. The comparison modes and policy toggles are
-// diagnostic (swath diag list).
+// flagged is the S3 flag group's value: the S3 options and the range
+// engine's policy, whose flags every engine provider shares.
+type flagged struct {
+	Options
+	policy *keyrange.Policy
+}
+
+func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{SeedDescent: true}}} }
+
+// flags registers the S3 flag group and the shared engine flags; the
+// returned value is filled when the flag set is parsed.
 func flags(f *flag.FlagSet, diag bool) any {
-	o := &Options{}
+	o := &flagged{policy: keyrange.Flags(f, diag)}
 	f.StringVar(&o.Endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store")
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
@@ -35,16 +44,6 @@ func flags(f *flag.FlagSet, diag bool) any {
 	f.BoolVar(&o.FIPS, "fips", false, "S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)")
 	f.BoolVar(&o.DualStack, "dualstack", false, "S3: use the dual-stack (IPv6) endpoint")
 	f.BoolVar(&o.FetchOwner, "fetch-owner", false, "S3: fill owner_id and owner_display_name")
-	f.BoolVar(&o.Seed, "seed", false, "S3: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
-	o.SeedDescent = true
-	if diag {
-		f.BoolVar(&o.Structure, "structure", false, "S3: structure probes: pivot on folder boundaries listed alongside a range's pages")
-		f.BoolVar(&o.SeedDescent, "seed-descent", true, "S3: with -seed, walk the folder hierarchy (false: one delimiter page)")
-		f.BoolVar(&o.Floors, "floors", false, "S3: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
-		f.BoolVar(&o.Sequential, "sequential", false, "S3: list with one continuation-token chain (no ranges; the reference)")
-		f.BoolVar(&o.Probe, "probe", false, "S3: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")
-		f.Int64Var(&o.MaxKeys, "max-keys", 0, "S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)")
-	}
 	return o
 }
 
@@ -53,11 +52,18 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	o, ok := req.Options.(*Options)
-	if !ok {
+	var opt Options
+	switch o := req.Options.(type) {
+	case *flagged: // the command line
+		opt = o.Options
+		if o.policy != nil {
+			opt.Policy = *o.policy
+		}
+	case *Options: // a library caller
+		opt = *o
+	default:
 		return nil, fmt.Errorf("s3: options are %T, not *s3.Options", req.Options)
 	}
-	opt := *o
 	opt.Bucket, opt.Prefix, opt.Workers, opt.Warn = bucket, prefix, req.Workers, req.Warn
 	p, err := New(ctx, opt)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/sdkoracle"
 )
 
@@ -69,14 +70,14 @@ func TestDatasetsMatchSDK(t *testing.T) {
 		return out
 	}
 	sdk := sdkoracle.New(srv.URL, "us-east-1", true)
-	ref := build(S3Config{Sequential: true, Client: sdk}, 1)
+	ref := build(S3Config{Client: sdk, Policy: keyrange.Policy{Sequential: true}}, 1)
 	for name, tc := range map[string]struct {
 		cfg     S3Config
 		workers int
 	}{
-		"client sequential":    {S3Config{Sequential: true}, 1},
+		"client sequential":    {S3Config{Policy: keyrange.Policy{Sequential: true}}, 1},
 		"client parallel 4":    {S3Config{}, 4},
-		"client parallel seed": {S3Config{Seed: true}, 8},
+		"client parallel seed": {S3Config{Policy: keyrange.Policy{Seed: true}}, 8},
 		"sdk parallel 4":       {S3Config{Client: sdk}, 4},
 	} {
 		sameDataset(t, name, ref, build(tc.cfg, tc.workers))

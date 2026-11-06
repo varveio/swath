@@ -292,7 +292,10 @@ then marked incomplete).
 
 A provider registers a `registry.Factory` from `init`: its URL scheme (`s3`; the empty scheme takes local
 paths), its flag group (`Flags(*flag.FlagSet) any` returns the provider's options value, filled by the
-parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. The command imports providers only for that
+parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. A provider on the range engine registers the
+engine's policy flags (`--seed`, `--seed-descent`, `--structure`, `--floors`, `--probe`, `--sequential`,
+`--max-keys`) through `keyrange.Flags` from its flag group: the group is registered once per flag set and
+every such provider gets the same `keyrange.Policy`. The command imports providers only for that
 registration and passes the options value for the root's scheme as `listing.Config.Source.Options`, opaque to the
 pipeline. `Open` validates the root without touching the output.
 

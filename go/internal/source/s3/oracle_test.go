@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/sdkoracle"
 )
@@ -59,8 +60,8 @@ func TestRowsMatchSDK(t *testing.T) {
 	url := fakeBucket(t, keys, 0)
 	sdk := sdkoracle.New(url, "us-east-1", true)
 	for _, seq := range []bool{true, false} {
-		want, _ := list(t, Options{Bucket: "bkt", Client: sdk, Sequential: seq, FetchOwner: true, Workers: 4}, 4)
-		got, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Sequential: seq, FetchOwner: true, Workers: 4}, 4)
+		want, _ := list(t, Options{Bucket: "bkt", Client: sdk, FetchOwner: true, Workers: 4, Policy: keyrange.Policy{Sequential: seq}}, 4)
+		got, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, FetchOwner: true, Workers: 4, Policy: keyrange.Policy{Sequential: seq}}, 4)
 		if len(got) != len(keys) || len(got) != len(want) {
 			t.Fatalf("rows %d, sdk %d, keys %d", len(got), len(want), len(keys))
 		}

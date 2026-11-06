@@ -49,16 +49,11 @@ type Options struct {
 	Timeout      time.Duration // per request; default 30 s
 	Warn         func(string)  // one-time warnings for the user; may be nil
 	FetchOwner   bool
-	Sequential   bool    // one continuation-token chain, no ranges (the oracle)
-	Seed         bool    // parallel: tile the scope from delimiter probes first
-	SeedDescent  bool    // the seed walks the folder hierarchy (seedplan.go); else one delimiter page
-	Structure    bool    // pivot on folder boundaries from structure probes sent alongside pages
 	Workers      int     // parallel: the order stage's worker count (split demand)
-	MaxKeys      int64   // stop after this many objects (sequential only; 0 = all)
 	Client       API     // optional; built from the options above when nil
 	Resume       *Resume // continue after a journaled run's last published key
-	Probe        bool    // check each split's upper child with a 1-key request first (off by default)
-	Floors       bool    // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
+	// Policy is the range engine's (the shared engine flags).
+	keyrange.Policy
 
 	// Test hooks: splitCoin replaces the demand gate; trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].
@@ -141,11 +136,9 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.Resume != nil {
 		resume = &keyrange.Resume{After: opt.Resume.After}
 	}
-	e, err := keyrange.New(keyrange.Options{
-		Prefix: opt.Prefix, Sequential: opt.Sequential, Seed: opt.Seed, SeedDescent: opt.SeedDescent,
-		Structure: opt.Structure, Workers: opt.Workers, MaxKeys: opt.MaxKeys, Resume: resume, Probe: opt.Probe,
-		Floors: opt.Floors, SplitCoin: opt.splitCoin, Trace: opt.trace,
-	}, keyrange.Description[Object]{
+	eo := opt.Policy.Options()
+	eo.Prefix, eo.Workers, eo.Resume, eo.SplitCoin, eo.Trace = opt.Prefix, opt.Workers, resume, opt.splitCoin, opt.trace
+	e, err := keyrange.New(eo, keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,

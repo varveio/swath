@@ -16,7 +16,7 @@ journal recorded; only the runtime flags (`--workers`, `--encoders`, `--memory`,
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
-`list` flag plus the diagnostic ones: `--sequential`, `--probe`, `--floors`, `--max-keys` (S3), `--no-journal` and
+`list` flag plus the diagnostic ones: `--sequential`, `--probe`, `--floors`, `--max-keys` (range-engine sources), `--no-journal` and
 `--no-spill`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 
@@ -75,7 +75,7 @@ usage: swath list SOURCE --output DIR [flags]
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
-    	S3: tile the keyspace from delimiter probes of the folder hierarchy before splitting
+    	ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting
   -spill-compress
     	compress spill files (zstd level 1)
   -spill-max bytes
@@ -111,11 +111,11 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
   -floors
-    	S3: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
+    	ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
-  -max-keys int
-    	S3: with -sequential, stop after this many objects (experiments; the dataset is marked incomplete)
+  -max-keys N
+    	ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
   -memory bytes
     	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -metadata tier
@@ -139,7 +139,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -path-style
     	S3: path-style addressing
   -probe
-    	S3: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)
+    	ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)
   -profile profile
     	S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
   -region string
@@ -151,11 +151,11 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
-    	S3: tile the keyspace from delimiter probes of the folder hierarchy before splitting
+    	ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting
   -seed-descent
-    	S3: with -seed, walk the folder hierarchy (false: one delimiter page) (default true)
+    	ranges: with -seed, walk the folder hierarchy (false: one delimiter page) (default true)
   -sequential
-    	S3: list with one continuation-token chain (no ranges; the reference)
+    	ranges: list with one continuation-token chain (no ranges; the reference)
   -spill-compress
     	compress spill files (zstd level 1)
   -spill-max bytes
@@ -165,7 +165,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -stall-timeout duration
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
   -structure
-    	S3: structure probes: pivot on folder boundaries listed alongside a range's pages
+    	ranges: structure probes: pivot on folder boundaries listed alongside a range's pages
   -workers int
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 

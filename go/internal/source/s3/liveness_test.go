@@ -38,13 +38,13 @@ func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 	exhausted := &client.ExhaustedError{Attempts: 9, Err: &client.Error{Status: 503, Code: "SlowDown"}}
 	f := &flaky{stub: stub{pages: []*client.Page{page}}, err: exhausted}
 	f.n.Store(5)
-	rows, st := list(t, Options{Bucket: "b", Client: f, Sequential: true}, 1)
+	rows, st := list(t, Options{Bucket: "b", Client: f, Policy: keyrange.Policy{Sequential: true}}, 1)
 	if len(rows) != 2 || st.Counters.Value("requeues") != 5 {
 		t.Fatalf("%d rows, %d requeues", len(rows), st.Counters.Value("requeues"))
 	}
 	denied := &flaky{stub: stub{pages: []*client.Page{page}}, err: &client.Error{Status: 403, Code: "AccessDenied"}}
 	denied.n.Store(1)
-	p, err := New(context.Background(), Options{Bucket: "b", Client: denied, Sequential: true})
+	p, err := New(context.Background(), Options{Bucket: "b", Client: denied, Policy: keyrange.Policy{Sequential: true}})
 	if err != nil {
 		t.Fatal(err)
 	}

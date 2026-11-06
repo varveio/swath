@@ -5,10 +5,12 @@ package s3
 
 import (
 	"context"
+	"flag"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
 // TestIdentityFreezesEffectiveRoute: with neither an endpoint nor a region
@@ -57,11 +59,37 @@ func TestIdentityFreezesEffectiveRoute(t *testing.T) {
 // TestCappedRunCannotResume: an object-count cap counts what one process
 // listed, so a capped run declares no resume (it keeps no journal).
 func TestCappedRunCannotResume(t *testing.T) {
-	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: &Options{Anonymous: true, Endpoint: "http://127.0.0.1:1", Sequential: true, MaxKeys: 5}, Workers: 1})
+	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: &Options{Anonymous: true, Endpoint: "http://127.0.0.1:1", Policy: keyrange.Policy{Sequential: true, MaxKeys: 5}}, Workers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if src.(source.Capable).Capabilities().Resume {
 		t.Fatal("a capped run declares resume")
+	}
+}
+
+// TestEngineFlagsShared: S3 registers the range engine's flags through the
+// shared group, so a second engine provider registering it on the same
+// flag set (here the engine's own Flags, before S3's group) neither panics
+// nor splits the policy: S3 opens with the parsed policy.
+func TestEngineFlagsShared(t *testing.T) {
+	f := flag.NewFlagSet("t", flag.ContinueOnError)
+	other := keyrange.Flags(f, true)
+	v := flags(f, true)
+	if err := f.Parse([]string{"-seed", "-floors", "-anonymous", "-endpoint", "http://127.0.0.1:1"}); err != nil {
+		t.Fatal(err)
+	}
+	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: v, Workers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := src.(*opened).p
+	if !other.Seed || !p.opt.Seed || !p.opt.Floors || !p.opt.SeedDescent || !p.opt.Anonymous || !p.Options().Floors {
+		t.Fatalf("policy not shared: %+v", p.opt.Policy)
+	}
+	// Defaults (no flags parsed) hold the engine's defaults.
+	src, err = open(context.Background(), registry.Request{Root: "s3://bkt", Options: defaults(), Workers: 2})
+	if err != nil || src.(*opened).p.opt.Seed || !src.(*opened).p.opt.SeedDescent {
+		t.Fatalf("defaults: %v", err)
 	}
 }
