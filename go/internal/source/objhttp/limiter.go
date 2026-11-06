@@ -312,7 +312,8 @@ func (l *Limiter) Counts() LimiterCounts {
 		return LimiterCounts{}
 	}
 	c := &l.c
-	return LimiterCounts{c.decreases.Load(), c.floor.Load(), c.increases.Load(), c.cooldown.Load(), c.latencyFrozen.Load(),
-		c.timeoutFrozen.Load(), c.valve.Load(), c.waits.Load(), c.waitNs.Load(), c.depth.Load(),
-		c.doubles.Load(), c.rampNs.Load(), c.rampEnd.Load()}
+	return LimiterCounts{Decreases: c.decreases.Load(), FloorThrottles: c.floor.Load(), Increases: c.increases.Load(),
+		Cooldown: c.cooldown.Load(), LatencyFrozen: c.latencyFrozen.Load(), TimeoutFrozen: c.timeoutFrozen.Load(),
+		Valve: c.valve.Load(), Waits: c.waits.Load(), WaitNs: c.waitNs.Load(), Depth: c.depth.Load(),
+		SlowStartDoubles: c.doubles.Load(), SlowStartNs: c.rampNs.Load(), SlowStartEnd: c.rampEnd.Load()}
 }

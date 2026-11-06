@@ -90,5 +90,5 @@ func (r *Rate) Counts() RateCounts {
 	if r == nil {
 		return RateCounts{}
 	}
-	return RateCounts{r.waits.Load(), r.waitNs.Load()}
+	return RateCounts{Waits: r.waits.Load(), WaitNs: r.waitNs.Load()}
 }

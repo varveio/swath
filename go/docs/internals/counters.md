@@ -2,11 +2,15 @@
 
 Every algorithm path counts its engagements. A provider declares its counters once, as a table of
 `counters.Def{Key, Kind, Unit, Help, Feature}` indexed by a typed `counters.ID` and backed by one
-`atomic.Int64` each (package `internal/counters`). That table is the one representation: the provider reads
-it out as one immutable `counters.Snapshot` (code reads `Get(id)`; there is no parallel struct of fields),
-and the run report renders the snapshot by iterating the table (`run.json` →
+`atomic.Int64` each (package `internal/counters`). That table is the one definition of every name, kind and
+meaning: the provider reads it out as one immutable `counters.Snapshot` (code reads `Get(id)`), and the run
+report renders the snapshot by iterating the table (`run.json` →
 `source.stats.counters`: `features` and `values`, flat stable names), and the table below is
-generated from the same definitions (`UPDATE=1 go test ./internal/source/s3 -run TestCountersDoc`). A new
+generated from the same definitions (`UPDATE=1 go test ./internal/source/s3 -run TestCountersDoc`). One
+adapter sits beside it: the HTTP client's counters (`objhttp.Counters`, the limiter's and the rate cap's) are
+kept in the client, which a provider may share or replace, and copied into the table when the provider
+snapshots, each by its named ID (`objhttp.ClientCounter`, end sentinel `NumCounters`; `Counts.Store`), so
+no position carries a meaning and `TestCounterTable` refuses an unfilled or doubly filled entry. A new
 path costs one row and its increment. Kinds: `count` is a monotonic sum, `max` a high-water mark, `flag`
 a boolean.
 

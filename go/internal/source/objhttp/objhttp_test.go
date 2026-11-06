@@ -6,7 +6,10 @@ package objhttp
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/counters"
 )
 
 func TestCanonicalRoute(t *testing.T) {
@@ -43,5 +46,46 @@ func TestCredentialDeadlineIsRequeued(t *testing.T) {
 		if got := class(ex); got != c.want || Requeue(class)(ex) != c.want.Transient() {
 			t.Errorf("%v: class %q requeue %v, want %q", c.err, got, Requeue(class)(ex), c.want)
 		}
+	}
+}
+
+// TestCounterTable: every ClientCounter before the sentinel has a
+// definition with a distinct key, and Store writes each from its own
+// field: Counts filled with distinct values land at distinct IDs.
+func TestCounterTable(t *testing.T) {
+	defs := CounterDefs("throttle", "-timeout")
+	seen := map[string]bool{}
+	for id, d := range defs {
+		if d.Key == "" || seen[d.Key] {
+			t.Fatalf("counter %d: key %q missing or repeated", id, d.Key)
+		}
+		seen[d.Key] = true
+	}
+	var n Counts
+	v := int64(1)
+	fill := func(rv reflect.Value) {
+		for i := 0; i < rv.NumField(); i++ {
+			if f := rv.Field(i); f.Kind() == reflect.Int64 {
+				f.SetInt(v)
+				v++
+			}
+		}
+	}
+	rv := reflect.ValueOf(&n).Elem()
+	fill(rv)
+	fill(rv.FieldByName("Limiter"))
+	fill(rv.FieldByName("Rate"))
+	if int(v-1) != int(NumCounters) {
+		t.Fatalf("Counts has %d values, the table %d", v-1, NumCounters)
+	}
+	set := counters.New(defs)
+	n.Store(set, 0)
+	got := map[int64]bool{}
+	for id := range defs {
+		x := set.Load(counters.ID(id))
+		if x == 0 || got[x] {
+			t.Fatalf("counter %s: value %d unset or stored twice", defs[id].Key, x)
+		}
+		got[x] = true
 	}
 }

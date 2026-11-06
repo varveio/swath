@@ -10,7 +10,7 @@ import (
 )
 
 // cEndOmitted is the adapter's counter, after the client's.
-const cEndOmitted = objhttp.NumCounters
+const cEndOmitted = int(objhttp.NumCounters)
 
 // clientCounters are the GCS client's counters (its Counts.Store fills
 // them) and the adapter's, after the engine's.

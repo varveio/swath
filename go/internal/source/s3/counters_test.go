@@ -41,7 +41,7 @@ func TestCountersDoc(t *testing.T) {
 // TestCountersMatchIDs: one client counter definition per ID; keys unique
 // across the engine's and the client's.
 func TestCountersMatchIDs(t *testing.T) {
-	if len(clientCounters) != objhttp.NumCounters {
+	if len(clientCounters) != int(objhttp.NumCounters) {
 		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), objhttp.NumCounters)
 	}
 	seen := map[string]bool{}

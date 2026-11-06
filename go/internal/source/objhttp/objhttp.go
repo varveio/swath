@@ -351,50 +351,96 @@ func (c *Counters) Load() Counts {
 		InflightNs: c.inflightNs.Load()}
 }
 
-// CounterDefs are the client counters' definitions, after the engine's in a
-// provider's tally (Store fills them in this order); throttles and
+// ClientCounter names a client counter: its offset in CounterDefs and in
+// a provider's tally after the engine's (Store). NumCounters, the end
+// sentinel, is the count: a new counter is one constant before it, one
+// definition and one Store line, and TestCounterTable refuses a gap.
+type ClientCounter int
+
+const (
+	CAttempts ClientCounter = iota
+	CRetries
+	CThrottles
+	CTimeouts
+	CParseFailures
+	CInflightMax
+	CInflightNs
+	CLimiterDecreases
+	CLimiterFloorThrottles
+	CLimiterIncreases
+	CLimiterCooldown
+	CLimiterLatencyFrozen
+	CLimiterTimeoutFrozen
+	CLimiterValve
+	CLimiterWaits
+	CLimiterWaitNs
+	CLimiterDepth
+	CSlowStartDoubles
+	CSlowStartNs
+	CSlowStartEnd
+	CRateWaits
+	CRateWaitNs
+	NumCounters // the end sentinel: the number of client counters
+)
+
+// CounterDefs are the client counters' definitions, by ClientCounter, after
+// the engine's in a provider's tally (Store fills them); throttles and
 // timeouts name the provider's own answers and flag. The limiter's carry
 // the feature "limiter".
 func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 	const f = "limiter"
-	return []counters.Def{
-		{Key: "attempts", Kind: counters.Count, Unit: "requests", Help: "HTTP requests sent: every attempt, client retries and engine requeues included (the request economics)"},
-		{Key: "retries", Kind: counters.Count, Unit: "requests", Help: "attempts repeated after a retryable failure"},
-		{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "attempts answered " + throttles + ", retried or not (the last of an exhausted call included)"},
-		{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past " + timeoutFlag + ", retried or not"},
-		{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"},
-		{Key: "inflight.max", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"},
-		{Key: "inflight.ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"},
-		{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit multiplied by 0.7 on a " + throttles + " answer"},
-		{Key: "limiter.floor_throttles", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers at a limit of 1: no decrease and no fresh 10 s cool-down"},
-		{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one (at most one per second, after 10 s without a throttle)"},
-		{Key: "limiter.growth_cooldown", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: a throttle answer in the last 10 s"},
-		{Key: "limiter.growth_latency_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: successful attempts' latency EWMA above twice the baseline"},
-		{Key: "limiter.growth_timeout_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: 3 or more attempt timeouts in the last 10 s"},
-		{Key: "limiter.valve", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one through the latency freeze (at most one per 30 s, with progress)"},
-		{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"},
-		{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"},
-		{Key: "limiter.depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"},
-		{Key: "limiter.slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: f, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout)"},
-		{Key: "limiter.slow_start.ns", Kind: counters.Max, Unit: "ns", Feature: f, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout)"},
-		{Key: "limiter.slow_start.end", Kind: counters.Max, Unit: "permits", Feature: f, Help: "--limiter-slow-start: the limit the ramp ended at (0: still ramping)"},
-		{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: "request_rate", Help: "attempts that waited for a --request-rate token"},
-		{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: "request_rate", Help: "time those attempts waited, summed"},
-	}
+	d := make([]counters.Def, NumCounters)
+	d[CAttempts] = counters.Def{Key: "attempts", Kind: counters.Count, Unit: "requests", Help: "HTTP requests sent: every attempt, client retries and engine requeues included (the request economics)"}
+	d[CRetries] = counters.Def{Key: "retries", Kind: counters.Count, Unit: "requests", Help: "attempts repeated after a retryable failure"}
+	d[CThrottles] = counters.Def{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "attempts answered " + throttles + ", retried or not (the last of an exhausted call included)"}
+	d[CTimeouts] = counters.Def{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past " + timeoutFlag + ", retried or not"}
+	d[CParseFailures] = counters.Def{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"}
+	d[CInflightMax] = counters.Def{Key: "inflight.max", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
+	d[CInflightNs] = counters.Def{Key: "inflight.ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}
+	d[CLimiterDecreases] = counters.Def{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit multiplied by 0.7 on a " + throttles + " answer"}
+	d[CLimiterFloorThrottles] = counters.Def{Key: "limiter.floor_throttles", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers at a limit of 1: no decrease and no fresh 10 s cool-down"}
+	d[CLimiterIncreases] = counters.Def{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one (at most one per second, after 10 s without a throttle)"}
+	d[CLimiterCooldown] = counters.Def{Key: "limiter.growth_cooldown", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: a throttle answer in the last 10 s"}
+	d[CLimiterLatencyFrozen] = counters.Def{Key: "limiter.growth_latency_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: successful attempts' latency EWMA above twice the baseline"}
+	d[CLimiterTimeoutFrozen] = counters.Def{Key: "limiter.growth_timeout_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: 3 or more attempt timeouts in the last 10 s"}
+	d[CLimiterValve] = counters.Def{Key: "limiter.valve", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one through the latency freeze (at most one per 30 s, with progress)"}
+	d[CLimiterWaits] = counters.Def{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"}
+	d[CLimiterWaitNs] = counters.Def{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"}
+	d[CLimiterDepth] = counters.Def{Key: "limiter.depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"}
+	d[CSlowStartDoubles] = counters.Def{Key: "limiter.slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: f, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout)"}
+	d[CSlowStartNs] = counters.Def{Key: "limiter.slow_start.ns", Kind: counters.Max, Unit: "ns", Feature: f, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout)"}
+	d[CSlowStartEnd] = counters.Def{Key: "limiter.slow_start.end", Kind: counters.Max, Unit: "permits", Feature: f, Help: "--limiter-slow-start: the limit the ramp ended at (0: still ramping)"}
+	d[CRateWaits] = counters.Def{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: "request_rate", Help: "attempts that waited for a --request-rate token"}
+	d[CRateWaitNs] = counters.Def{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: "request_rate", Help: "time those attempts waited, summed"}
+	return d
 }
 
-// NumCounters is len(CounterDefs(...)).
-const NumCounters = 22
-
-// Store writes n into set at the IDs of CounterDefs, the first at first.
+// Store writes n into set at the IDs of CounterDefs, offset by first.
 func (n Counts) Store(set *counters.Set, first counters.ID) {
+	put := func(id ClientCounter, v int64) { set.Set(first+counters.ID(id), v) }
 	l := n.Limiter
-	for i, v := range [NumCounters]int64{n.Attempts, n.Retries, n.Throttles, n.Timeouts, n.ParseFailures, n.InflightMax, n.InflightNs,
-		l.Decreases, l.FloorThrottles, l.Increases, l.Cooldown, l.LatencyFrozen, l.TimeoutFrozen, l.Valve, l.Waits, l.WaitNs, l.Depth,
-		l.SlowStartDoubles, l.SlowStartNs, l.SlowStartEnd,
-		n.Rate.Waits, n.Rate.WaitNs} {
-		set.Set(first+counters.ID(i), v)
-	}
+	put(CAttempts, n.Attempts)
+	put(CRetries, n.Retries)
+	put(CThrottles, n.Throttles)
+	put(CTimeouts, n.Timeouts)
+	put(CParseFailures, n.ParseFailures)
+	put(CInflightMax, n.InflightMax)
+	put(CInflightNs, n.InflightNs)
+	put(CLimiterDecreases, l.Decreases)
+	put(CLimiterFloorThrottles, l.FloorThrottles)
+	put(CLimiterIncreases, l.Increases)
+	put(CLimiterCooldown, l.Cooldown)
+	put(CLimiterLatencyFrozen, l.LatencyFrozen)
+	put(CLimiterTimeoutFrozen, l.TimeoutFrozen)
+	put(CLimiterValve, l.Valve)
+	put(CLimiterWaits, l.Waits)
+	put(CLimiterWaitNs, l.WaitNs)
+	put(CLimiterDepth, l.Depth)
+	put(CSlowStartDoubles, l.SlowStartDoubles)
+	put(CSlowStartNs, l.SlowStartNs)
+	put(CSlowStartEnd, l.SlowStartEnd)
+	put(CRateWaits, n.Rate.Waits)
+	put(CRateWaitNs, n.Rate.WaitNs)
 }
 
 // CanonicalRoute is the allowlist of equivalent route spellings for
