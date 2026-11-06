@@ -105,11 +105,13 @@ var Listing = source.Capabilities{Seek: source.SeekFabricable, Order: source.Ord
 // ErrInvalidPage: a page broke the listing contract.
 var ErrInvalidPage = errors.New("invalid listing page")
 
+// invalid is the error an invalid page wraps: a protocol violation
+// (source.ErrProtocol) carrying the provider's InvalidPage.
 func (d *Description[P]) invalid() error {
 	if d.InvalidPage != nil {
-		return d.InvalidPage
+		return source.Violation(d.InvalidPage)
 	}
-	return ErrInvalidPage
+	return source.Violation(ErrInvalidPage)
 }
 
 // safe: s is valid UTF-8 and the provider accepts it as a bound

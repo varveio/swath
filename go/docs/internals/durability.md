@@ -211,6 +211,16 @@ record's max key, a running row total that adds up): `Append` refuses one that d
 anything (`*dataset.InvariantError`), and `Read` treats a journal whose records do not chain as
 `ErrCorrupt`, so a resume never continues after overlapping parts. The router checks the same adjacency
 before it calls the committer ([parquet-output.md](parquet-output.md#publication-gate-and-order)).
+A run that fails on a protocol violation (`source.ErrProtocol`: an invalid page the range engine cannot
+recover from, keys out of order or repeated, a repeated continuation token, a truncated page without a token
+or without a key in its range) ends its journal with a terminal `unresumable` frame (cause `protocol`, the
+reason, the time), synced, as Java's `markRunUnresumable`: a resume would walk back into the same service.
+No frame may follow it (`Append` refuses, `Read` treats one as `ErrCorrupt`), and `swath resume` and a resumed
+run refuse the run with a `journal.UnresumableError` (exit 1, `cause` `protocol`), the parts and journal left
+as they are; `swath list --overwrite` starts over (`TestProtocolViolationIsUnresumable`, `TestUnresumableMark`).
+The frame is a later type within version 7: a build without it reads a marked journal as corrupt, which
+refuses the resume too. Transient oddities are not violations and keep their handling: an unparsed body is
+retried, unsorted common prefixes are normalized, empty continuing pages are followed.
 
 Only an append that never completed is a torn tail, and only at the end: fewer bytes than the last frame's
 length says, or a whole last frame with a bad checksum whose payload ends in a zero byte (bytes that never

@@ -196,7 +196,9 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   `redirect`, `throttle`, `timeout`, `server`, `transport`, `parse` (a body that does not parse),
   `invalid_page` (a page that breaks the listing contract: out of order, truncated without a token or a key
   in range), `canceled`, `other`. `throttle`, `timeout`, `server`, `transport` and `parse` are transient
-  (retried, then requeued); the rest stop the run, and the class is the run outcome's `cause`.
+  (retried, then requeued); the rest stop the run, and the class is the run outcome's `cause`, except an
+  invalid page, a protocol violation: `cause` `protocol`, the run marked unresumable
+  ([durability.md](durability.md)).
 - *Parsing:* a hand-rolled scanner over the whole body (read into a pooled buffer) with encoding/xml's
   semantics for what S3 sends: entities and character references, CDATA, comments, namespaces, `\r\n`
   normalisation, last occurrence wins, unknown elements (`RestoreStatus`, newer fields) skipped. It allocates
@@ -244,7 +246,8 @@ vocabulary): `auth` (401, a `CredentialError` that will not pass; a token endpoi
 (another 5xx), `transport`, `parse` (a 200 that does not parse, or whose body is not an objects.list envelope: `null`, another JSON value or
 an error envelope, which would otherwise read as an empty final page; `TestInvalidSuccessEnvelopeIsRetried`,
 `TestGCSInvalidEnvelopeNeverCommits`), `invalid_page` (a parsed page that breaks the
-contract: `client.ErrInvalidPage`, which the engine wraps), `canceled`, `other`; the class is the run
+contract: `client.ErrInvalidPage`, which the engine wraps as a protocol violation: the outcome's `cause` is
+`protocol` and the run is marked unresumable), `canceled`, `other`; the class is the run
 outcome's `cause` (`TestClassify` drives each through the client, `TestInvalidPageClass` through the engine).
 
 **On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,

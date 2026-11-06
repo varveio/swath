@@ -9,9 +9,26 @@ package source
 
 import (
 	"context"
+	"errors"
 
 	"github.com/varveio/swath/go/internal/schema"
 )
+
+// ErrProtocol marks a service answer that breaks the listing contract in a
+// way the engine cannot recover from (keys out of order or repeated, a
+// repeated continuation token, a page outside its range): the run fails,
+// and its journal marks it unresumable, since a resume would walk back into
+// the same service.
+var ErrProtocol = errors.New("protocol violation")
+
+// Violation marks err as a protocol violation (errors.Is ErrProtocol),
+// keeping its message and its own chain.
+func Violation(err error) error { return violation{err} }
+
+type violation struct{ error }
+
+func (v violation) Unwrap() error        { return v.error }
+func (v violation) Is(target error) bool { return target == ErrProtocol }
 
 // Emitter receives the content of one range in ascending key order.
 type Emitter[R, P any] interface {

@@ -20,6 +20,7 @@ import (
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // Exit codes: the outcome a supervising process acts on without reading
@@ -98,6 +99,7 @@ func classify(err, cause error, dir string) outcome {
 	o := outcome{Message: err.Error(), Resumable: resumable}
 	var u usageError
 	var se *signalError
+	var ue *journal.UnresumableError
 	switch {
 	case errors.As(err, &u), errors.Is(err, flag.ErrHelp):
 		o.Class, o.ExitCode, o.Resumable = "usage", exitUsage, false
@@ -107,6 +109,11 @@ func classify(err, cause error, dir string) outcome {
 		// Resumable still says whether swath resume can continue a run
 		// there.
 		o.Class, o.ExitCode = "refused", exitUsage
+	case errors.Is(err, source.ErrProtocol), errors.As(err, &ue):
+		// The service broke the listing contract: never resumable, and
+		// it outranks a stop cause (a resumable 75, 124, 130 or 143), as
+		// Java's; the journal marks the run unresumable.
+		o.Class, o.ExitCode, o.Resumable, o.Cause = "fatal", exitFatal, false, "protocol"
 	case errors.Is(err, errIncomplete):
 		o.Class, o.ExitCode, o.Resumable = "incomplete", exitFatal, false
 	case errors.Is(cause, errStuck):

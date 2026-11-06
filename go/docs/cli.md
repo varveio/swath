@@ -309,7 +309,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
   | 0 | `completed` | the dataset is committed (or a dry run finished), also by an earlier attempt: `swath resume` on a complete dataset | – |
-  | 1 | `fatal`, `incomplete` | a run failure a resume will not fix (access denied, no such bucket, an invariant, another process owning the output), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
+  | 1 | `fatal`, `incomplete` | a run failure a resume will not fix (access denied, no such bucket, an invariant, another process owning the output; a protocol violation, `cause` `protocol`, which outranks a stop cause and which the journal records, so `swath resume` refuses the run), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
   | 2 | `usage`, `refused` | `usage`: a malformed command line or an unknown scheme; `refused`: a refusal that is the caller's to fix, before anything ran: a non-empty `--output` without `--overwrite`, `--overwrite` on a directory that is not this tool's dataset, a new run over an interrupted one, an output that is the listed root (or inside it, replaced), a resume whose identity changed, a resume with nothing to resume | `usage`: no; `refused`: the output is as it was, so yes when it holds an interrupted run |
   | 74 | `disk_full` | a part, a journal record or the manifest could not be written: its filesystem is full (`cause` `no_space`; spill waits instead of failing) | yes, journal intact, once there is space |
   | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace); `cause` names what rose meanwhile: `stuck_throttle` (throttle answers), `stuck_timeouts` (attempts past the request timeout, no throttle) or `stuck_no_rows` (neither: failing or hung requests, or a stopped pipeline) | yes, journal intact |
@@ -326,7 +326,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   the service answers; a source that hangs, or only fails or throttles, is stuck. Nothing in the pipeline gives
   up on a slow source (S3 requeues a page after its retries). As with Java swath, a service that answers forever
   without rows keeps a run alive; `--max-duration` bounds it. A run of empty continuing pages must not repeat
-  any of its last 1,024 tokens (an invalid page, exit 1); a chain of ever fresh tokens is followed in bounded
+  any of its last 1,024 tokens (an invalid page: exit 1, `cause` `protocol`, the run marked unresumable); a chain of ever fresh tokens is followed in bounded
   memory until the deadline. A stop (a signal, `--max-duration`, `--stall-timeout`) is graceful, and the process
   exits with its code 15 s later if the run has not stopped by then (I/O that does not return, say), first
   writing (bounded at 2 s, as the dump below) the same outcome the graceful stop would have to `error.json` and a

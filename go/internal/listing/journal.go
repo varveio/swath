@@ -253,6 +253,9 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 	if err != nil {
 		return nil, err
 	}
+	if err := st.Resumable(); err != nil {
+		return nil, err
+	}
 	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
@@ -611,6 +614,13 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 		return
 	}
 	if jr.j != nil {
+		if errors.Is(err, source.ErrProtocol) {
+			// The service broke the listing contract: a resume would walk
+			// back into it, so the journal marks the run unresumable.
+			if merr := jr.j.MarkUnresumable("protocol", err.Error()); merr != nil && cfg.Warn != nil {
+				cfg.Warn("the run is not marked unresumable: " + merr.Error())
+			}
+		}
 		_ = jr.j.Close()
 		jr.j = nil
 	}

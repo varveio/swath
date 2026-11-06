@@ -156,7 +156,7 @@ decision to add it later).
 | 124: `--max-duration` elapsed | 124 `deadline` | kept | – |
 | 130: SIGINT | 130 `interrupted` | kept | – |
 | 143: SIGTERM | 143 `terminated` | kept | – |
-| Protocol violation outranks a resumable code and marks the run unresumable | exit 1, `resumable: false`; nothing recorded in the journal | kept (not journaled) | no decision recorded |
+| Protocol violation outranks a resumable code and marks the run unresumable | exit 1, `cause` `protocol`, `resumable: false`; the journal's terminal `unresumable` frame; `swath resume` refuses | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
 
 ## Diagnostics
 

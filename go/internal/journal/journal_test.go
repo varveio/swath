@@ -268,3 +268,45 @@ func TestAppendRefusesNonAdjacentRecord(t *testing.T) {
 		t.Fatalf("overlapping records read back: %v", err)
 	}
 }
+
+// TestUnresumableMark: the terminal mark reads back after the records,
+// refuses the resume (State.Resumable), refuses a later Append, and a
+// frame after it is corruption.
+func TestUnresumableMark(t *testing.T) {
+	out := t.TempDir()
+	j, err := Create(out, Identity{Tool: "swath-go"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 {
+		if err := j.Append(rec(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := j.MarkUnresumable("protocol", "invalid page: out of order"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Append(rec(2)); err == nil {
+		t.Fatal("a record appended after the unresumable mark")
+	}
+	j.Close()
+	st, err := Read(out)
+	if err != nil || len(st.Records) != 2 || st.Unresumable == nil || st.Unresumable.Cause != "protocol" {
+		t.Fatalf("%+v %v", st, err)
+	}
+	var ue *UnresumableError
+	if err := st.Resumable(); !errors.As(err, &ue) || ue.Mark.Reason != "invalid page: out of order" {
+		t.Fatalf("Resumable: %v", err)
+	}
+	j, err = Reopen(out, &State{Header: st.Header, Records: st.Records})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.append(rec(2)); err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	if _, err := Read(out); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("a frame after the mark: %v", err)
+	}
+}

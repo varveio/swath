@@ -78,6 +78,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		return stop(listing.ErrNothingToResume)
 	}
+	if err == nil {
+		err = st.Resumable()
+	}
 	if err != nil {
 		return stop(err)
 	}
@@ -197,6 +200,9 @@ func show(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, ", %s %s", f.Name, f.Value)
 	}
 	fmt.Fprintln(stdout)
+	if u := st.Unresumable; u != nil {
+		fmt.Fprintf(stdout, "marked unresumable (%s) at %s: %s; swath resume refuses it, swath list --overwrite starts over\n", u.Cause, u.At.Format("2006-01-02T15:04:05Z"), u.Reason)
+	}
 	if last := st.Last(); last != nil {
 		fmt.Fprintf(stdout, "%d parts committed, %d rows; swath resume lists after %q", len(st.Records), last.RowsTotal, string(last.Part.MaxKey))
 		if last.Final {

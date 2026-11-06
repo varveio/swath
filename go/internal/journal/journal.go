@@ -97,11 +97,38 @@ type Record struct {
 	Final     bool             `json:"final,omitempty"` // the last part: the listing is complete
 }
 
+// Unresumable is a run's terminal frame, after its last record: the run
+// failed in a way a resume must not retry (a protocol violation by the
+// service, as Java's markRunUnresumable), so swath resume refuses it.
+type Unresumable struct {
+	Type   string    `json:"type"`  // "unresumable"
+	Cause  string    `json:"cause"` // "protocol"
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// UnresumableError refuses to resume a run its journal marks unresumable.
+type UnresumableError struct{ Mark Unresumable }
+
+func (e *UnresumableError) Error() string {
+	return fmt.Sprintf("the run in the output directory cannot be resumed: it was marked unresumable (%s) at %s: %s",
+		e.Mark.Cause, e.Mark.At.Format(time.RFC3339), e.Mark.Reason)
+}
+
 // State is what a journal says about a run.
 type State struct {
-	Header    Header
-	Records   []Record
-	TornBytes int64 // bytes after the last whole frame (ignored)
+	Header      Header
+	Records     []Record
+	Unresumable *Unresumable // the terminal mark, if the run has one
+	TornBytes   int64        // bytes after the last whole frame (ignored)
+}
+
+// Resumable refuses a run marked unresumable (an *UnresumableError).
+func (s *State) Resumable() error {
+	if s.Unresumable != nil {
+		return &UnresumableError{*s.Unresumable}
+	}
+	return nil
 }
 
 // Last is the last record, or nil.
@@ -117,10 +144,11 @@ func (s *State) Last() *Record {
 // ordinal order, one at a time); the mutex only makes misuse safe. The
 // caller holds the output's Lock.
 type Journal struct {
-	mu   sync.Mutex
-	f    *os.File
-	n    int     // records in the journal
-	last *Record // the last of them, nil for none
+	mu     sync.Mutex
+	f      *os.File
+	n      int     // records in the journal
+	last   *Record // the last of them, nil for none
+	sealed bool    // marked unresumable: no record follows
 }
 
 // Create starts a new journal at Path(out), replacing any old one, with
@@ -267,8 +295,11 @@ func start(f *os.File) *Journal { return &Journal{f: f} }
 func (j *Journal) Append(rec Record) error {
 	rec.Type = "part"
 	j.mu.Lock()
-	n, last := j.n, j.last
+	n, last, sealed := j.n, j.last, j.sealed
 	j.mu.Unlock()
+	if sealed {
+		return errors.New("journal: the run is marked unresumable")
+	}
 	if err := Follows(last, n, rec); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
@@ -337,6 +368,18 @@ func (j *Journal) append(v any) error {
 	return nil
 }
 
+// MarkUnresumable appends the run's terminal frame (Unresumable) and
+// returns once it is synced; no record follows it.
+func (j *Journal) MarkUnresumable(cause, reason string) error {
+	if err := j.append(Unresumable{Type: "unresumable", Cause: cause, Reason: reason, At: time.Now().UTC()}); err != nil {
+		return err
+	}
+	j.mu.Lock()
+	j.sealed = true
+	j.mu.Unlock()
+	return nil
+}
+
 // Close closes the file.
 func (j *Journal) Close() error {
 	j.mu.Lock()
@@ -349,7 +392,9 @@ func (j *Journal) Close() error {
 // dataset.ClaimPath, and recovery protects only that name. A version 6
 // journal's acknowledged part may still be at dataset.TempPath, which
 // version 7 recovery would remove as unrecorded, so it is refused before
-// recovery touches anything (see durability.md).
+// recovery touches anything (see durability.md). The unresumable mark
+// (Unresumable) is a later frame type within version 7: a build without
+// it reads a marked journal as corrupt, which refuses the resume too.
 const Version = 7
 
 // frameCRC covers the length field and the payload, so a damaged length
@@ -482,8 +527,19 @@ func decode(r io.Reader) (*State, error) {
 			first = false
 			continue
 		}
+		if st.Unresumable != nil {
+			return nil, fmt.Errorf("%w: a frame after the unresumable mark", ErrCorrupt)
+		}
 		var rec Record
-		if err := json.Unmarshal(payload, &rec); err != nil || rec.Type != "part" {
+		if err := json.Unmarshal(payload, &rec); err == nil && rec.Type == "unresumable" {
+			var u Unresumable
+			if err := json.Unmarshal(payload, &u); err != nil {
+				return nil, fmt.Errorf("%w: bad unresumable mark", ErrCorrupt)
+			}
+			st.Unresumable = &u
+			continue
+		}
+		if err != nil || rec.Type != "part" {
 			return nil, fmt.Errorf("%w: bad record %d", ErrCorrupt, len(st.Records))
 		}
 		if rec.Ordinal != len(st.Records) {
@@ -543,6 +599,11 @@ func Dump(w io.Writer, out string) error {
 	}
 	for _, r := range st.Records {
 		if err := enc.Encode(r); err != nil {
+			return err
+		}
+	}
+	if st.Unresumable != nil {
+		if err := enc.Encode(st.Unresumable); err != nil {
 			return err
 		}
 	}

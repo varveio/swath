@@ -436,3 +436,107 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 		t.Fatalf("resume changed the capped dataset:\nbefore %v\nafter  %v", want, got)
 	}
 }
+
+// TestProtocolViolationIsUnresumable: a GCS service that answers, three
+// quarters through a run, with pages whose first two keys are swapped (out
+// of order: the engine cannot recover) fails the run with exit 1, cause
+// protocol, not resumable, after parts were published; the journal holds
+// the terminal unresumable mark (Java's markRunUnresumable), and swath
+// resume refuses with the same cause, the parts and journal unchanged, as
+// does a resumed run and swath show names the mark. Before, nothing in the
+// journal marked the run and the resume continued.
+func TestProtocolViolationIsUnresumable(t *testing.T) {
+	captureStderr(t)
+	h := gcstest.Handler(gcstest.Keys(20000), 0)
+	var served, after, swapped atomic.Int64 // after: invalid pages come after this many requests (0: never)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n := served.Add(1); after.Load() == 0 || n <= after.Load() {
+			h.ServeHTTP(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		var page map[string]any
+		if json.Unmarshal(rec.Body.Bytes(), &page) == nil {
+			if items, _ := page["items"].([]any); len(items) >= 2 {
+				items[0], items[1] = items[1], items[0]
+				swapped.Add(1)
+			}
+		}
+		b, _ := json.Marshal(page)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	args := func(out string, extra ...string) []string {
+		return append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "4",
+			"--part-size", "4KiB", "--memory", "1MiB", "--part-interval", "0", "-o", out}, extra...)
+	}
+	ctx := context.Background()
+	// The number of requests a run makes, to place the invalid pages.
+	if err := run(ctx, args(filepath.Join(t.TempDir(), "count")), io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	total := served.Load()
+	served.Store(0)
+	after.Store(total * 3 / 4)
+	out := filepath.Join(t.TempDir(), "ds")
+	report := filepath.Join(t.TempDir(), "report.json")
+	err := run(ctx, args(out, "--report", report), io.Discard, false)
+	if swapped.Load() == 0 {
+		t.Fatal("no invalid page was served")
+	}
+	if c := exitCode(t, err); c != exitFatal {
+		t.Fatalf("invalid page: exit %d (%v)", c, err)
+	}
+	check := func(how string, class string, code int, cause string, resumable bool) {
+		t.Helper()
+		if class != "fatal" || code != exitFatal || cause != "protocol" || resumable {
+			t.Fatalf("%s: class %s exit %d cause %q resumable %v", how, class, code, cause, resumable)
+		}
+	}
+	var o outcome
+	readJSON(t, filepath.Join(out, errorName), &o)
+	check("error.json", o.Class, o.ExitCode, o.Cause, o.Resumable)
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	check("report", rep.Outcome.Class, rep.Outcome.ExitCode, rep.Outcome.Cause, rep.Outcome.Resumable)
+	if retained, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet")); len(retained) == 0 {
+		t.Fatal("no part was published before the invalid page")
+	}
+	st, err := journal.Read(out)
+	if err != nil || st.Unresumable == nil || st.Unresumable.Cause != "protocol" || !strings.Contains(st.Unresumable.Reason, "out of order") {
+		t.Fatalf("journal: %+v %v", st, err)
+	}
+	// The service is healthy again: the resume still refuses.
+	after.Store(0)
+	tree := func() map[string]string {
+		m := dirTree(t, out)
+		delete(m, errorName) // the refusal records its own outcome
+		return m
+	}
+	before := tree()
+	report = filepath.Join(t.TempDir(), "report.json")
+	err = resume(ctx, []string{"--report", report, out}, io.Discard)
+	var ue *journal.UnresumableError
+	if c := exitCode(t, err); c != exitFatal || !errors.As(err, &ue) {
+		t.Fatalf("resume: exit %d (%v)", c, err)
+	}
+	readJSON(t, filepath.Join(out, errorName), &o)
+	check("resume error.json", o.Class, o.ExitCode, o.Cause, o.Resumable)
+	rep = listing.Report{}
+	readJSON(t, report, &rep)
+	check("resume report", rep.Outcome.Class, rep.Outcome.ExitCode, rep.Outcome.Cause, rep.Outcome.Resumable)
+	// A resumed run (the race the command's early check cannot close)
+	// refuses under the lock.
+	if err := runWith(ctx, args(out), io.Discard, false, nil, true, nil); !errors.As(err, &ue) {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if got := tree(); !maps.Equal(before, got) {
+		t.Fatalf("the refused resumes changed the output:\nbefore %v\nafter  %v", before, got)
+	}
+	var shown bytes.Buffer
+	if err := show([]string{out}, &shown); err != nil || !strings.Contains(shown.String(), "marked unresumable (protocol)") {
+		t.Fatalf("show: %v %q", err, shown.String())
+	}
+}
