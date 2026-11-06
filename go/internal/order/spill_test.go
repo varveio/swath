@@ -5,9 +5,11 @@ package order
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -235,6 +237,32 @@ func TestSpillReadFailures(t *testing.T) {
 	}
 	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.f != nil {
 		t.Fatalf("decoded past the limit: %v (reader open %v)", err, f.f != nil)
+	}
+	s.close()
+
+	// A checksum-valid frame that claims more rows than any frame its file
+	// was given (here 2; the frame claims 2,000,000 over 2 MB) is refused
+	// before the rows are allocated (they would take about 80 MB).
+	s = newSp(false)
+	f = s.file()
+	if err := s.write(f, []schema.Row[tp]{{Key: "a"}, {Key: "b"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.next(f); err != nil {
+		t.Fatal(err)
+	}
+	inflated := append(binary.AppendUvarint(nil, 2_000_000), make([]byte, 2_000_000)...)
+	if err := os.WriteFile(f.path, s.frame('R', inflated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.close()
+	f.r = nil
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err := s.next(f)
+	runtime.ReadMemStats(&after)
+	if alloc := after.TotalAlloc - before.TotalAlloc; !errors.Is(err, schema.ErrCodec) || alloc > 16<<20 {
+		t.Fatalf("an inflated row count: %v, %d bytes allocated", err, alloc)
 	}
 	s.close()
 

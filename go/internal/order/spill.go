@@ -118,6 +118,9 @@ type spillFile struct {
 	r       *bufio.Reader
 	f       *os.File
 	read    int64 // rows replayed (drainer only)
+	// most is the row count of the largest frame written: a frame read
+	// back that claims more is malformed, refused before any allocation.
+	most atomic.Int64
 }
 
 func (s *spiller[P]) file() *spillFile {
@@ -138,6 +141,9 @@ func (s *spiller[P]) frame(typ byte, body []byte) []byte {
 func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error {
 	var buf []byte
 	if len(rows) > 0 {
+		if int64(len(rows)) > f.most.Load() {
+			f.most.Store(int64(len(rows))) // the owner is the only writer
+		}
 		body := appendRows(nil, rows, s.codec)
 		typ := byte('R')
 		if s.compress {
@@ -292,7 +298,7 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		s.closeFile(f)
 		return nil, errSpillFrame
 	}
-	rows, err := decodeRows(body, s.codec)
+	rows, err := decodeRows(body, s.codec, uint64(f.most.Load()))
 	if err != nil {
 		s.closeFile(f)
 		return nil, err
@@ -312,12 +318,15 @@ func appendRows[P any](dst []byte, rows []schema.Row[P], c schema.Codec[P]) []by
 	return dst
 }
 
-// decodeRows decodes a frame written by appendRows. The rows' strings view
-// src, which the caller hands over (it must not be modified afterwards).
-func decodeRows[P any](src []byte, c schema.Codec[P]) ([]schema.Row[P], error) {
+// decodeRows decodes a frame written by appendRows, of at most most rows
+// (the largest frame its file was given): the claimed count is checked
+// before the rows are allocated, so a malformed frame cannot allocate past
+// what was spilled. The rows' strings view src, which the caller hands
+// over (it must not be modified afterwards).
+func decodeRows[P any](src []byte, c schema.Codec[P], most uint64) ([]schema.Row[P], error) {
 	d := schema.NewDecoder(src)
 	n := d.Uvarint()
-	if d.Err() != nil || n > uint64(len(src)) {
+	if d.Err() != nil || n > uint64(len(src)) || n > most {
 		return nil, schema.ErrCodec
 	}
 	rows := make([]schema.Row[P], n)
