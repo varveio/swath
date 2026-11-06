@@ -268,7 +268,7 @@ func hasJournal(dir string) bool {
 const errorName = dataset.ErrorName
 
 // writeOutcome records a failed run's outcome (an incomplete committed
-// dataset included) in DIR/error.json (atomic replace), so a supervisor
+// dataset included) in DIR/error.json (durable replace), so a supervisor
 // never parses stderr; a completed run removes a stale one. The caller
 // owns the output (listing.Config.Settle, settleOutside).
 func writeOutcome(dir string, o outcome) error {
@@ -277,23 +277,18 @@ func writeOutcome(dir string, o outcome) error {
 	}
 	path := filepath.Join(dir, errorName)
 	if o.ExitCode == exitCompleted {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		err := os.Remove(path)
+		switch {
+		case os.IsNotExist(err):
+			return nil
+		case err != nil:
 			return err
 		}
-		return nil
+		// A removal that a power loss undid would leave a stale failure
+		// beside the committed dataset.
+		return dataset.SyncDir(dir)
 	}
-	return writeFileAtomic(path, o)
-}
-
-// writeFileAtomic replaces path with v as indented JSON (dataset.Replace,
-// atomic, not synced: these are operational files read by this
-// invocation's supervisor, rewritten by the next attempt).
-func writeFileAtomic(path string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return dataset.Replace(path, append(b, '\n'), dataset.Atomic)
+	return dataset.ReplaceJSON(path, o, dataset.Durable)
 }
 
 // errOut is where the command reports an outcome its output does not hold.
@@ -489,7 +484,7 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 					// Only while the run owns the output: a refused run
 					// never overwrites its owner's progress.
 					written = now
-					pr.Owned(func() { _ = writeFileAtomic(filepath.Join(dir, progressName), s) })
+					pr.Owned(func() { _ = dataset.ReplaceJSON(filepath.Join(dir, progressName), s, dataset.Atomic) })
 				}
 				if live := s.Advance + s.Answered; live != last {
 					last, since, warned, at = live, now, false, s

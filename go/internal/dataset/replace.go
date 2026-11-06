@@ -21,12 +21,12 @@ type Durability int
 const (
 	// Atomic: a reader sees the old file or the new one, never a torn one;
 	// a power loss may still lose the replacement (no sync). For files
-	// rewritten as they go or read only by this invocation's supervisor:
-	// progress, the outcome file, the report.
+	// rewritten as they go: progress.json.
 	Atomic Durability = iota
 	// Durable: Atomic, and once Replace returns the new file survives a
 	// power loss (the file is synced before the rename, its directory
-	// after). For commits and checkpoints: the manifest, run.json.
+	// after). For commits, checkpoints and outcomes: the manifest,
+	// run.json, error.json (read by journal.Witness), the run report.
 	Durable
 )
 

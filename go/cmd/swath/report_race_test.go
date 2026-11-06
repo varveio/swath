@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 )
 
@@ -31,7 +33,7 @@ func TestConcurrentReportWriters(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				v := map[string]string{"writer": strings.Repeat(string(rune('a'+w)), 64<<10)}
-				errs <- writeFileAtomic(path, v)
+				errs <- dataset.ReplaceJSON(path, v, dataset.Durable)
 			}()
 		}
 		wg.Wait()
@@ -67,5 +69,38 @@ func TestOneTerminalReport(t *testing.T) {
 	readJSON(t, path, &r)
 	if r.Outcome.Status != "committed" {
 		t.Fatalf("the second writer replaced the attempt's report: %+v", r.Outcome)
+	}
+}
+
+// TestOutcomeFilesDurable: error.json and the report are replaced at the
+// Durable level (the temporary file synced before its rename), so a power
+// loss after the command returns cannot lose the outcome a supervisor or
+// journal.Witness reads; a completed run's removal of error.json is
+// followed by a directory sync. SIGKILL (the crash matrix) cannot show
+// this; the sync is observed through the faults hook.
+func TestOutcomeFilesDurable(t *testing.T) {
+	var mu sync.Mutex
+	synced := map[string]bool{}
+	defer faults.SetIO(func(op, name string, _ []byte) (int, error) {
+		if op == "sync" {
+			mu.Lock()
+			synced[strings.SplitN(filepath.Base(name), ".", 3)[1]] = true
+			mu.Unlock()
+		}
+		return 0, nil
+	})()
+	dir := t.TempDir()
+	if err := writeOutcome(dir, outcome{ExitCode: exitStuck, Class: "stuck"}); err != nil {
+		t.Fatal(err)
+	}
+	writeReport(filepath.Join(dir, "report.json"), listing.Report{})
+	if !synced["error"] || !synced["report"] {
+		t.Fatalf("synced before rename: %v, want error.json and report.json", synced)
+	}
+	if err := writeOutcome(dir, outcome{ExitCode: exitCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
+		t.Fatalf("a completed run left error.json: %v", err)
 	}
 }

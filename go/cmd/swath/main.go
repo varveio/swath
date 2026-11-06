@@ -185,7 +185,7 @@ func writeReport(path string, r listing.Report) {
 			return
 		}
 	}
-	if err := writeFileAtomic(path, r); err != nil {
+	if err := dataset.ReplaceJSON(path, r, dataset.Durable); err != nil {
 		// The attempt is named, so a supervisor never takes an older
 		// error.json (another attempt's) for this one's outcome.
 		id := ""
