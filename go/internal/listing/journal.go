@@ -4,6 +4,7 @@
 package listing
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -71,7 +72,7 @@ type suspect struct {
 // owned through its lock, journaled or not; refusals that need no lock
 // (an output that may not be used, nothing to resume) come first, so a
 // refused output is left as it was.
-func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJournal, error) {
+func openJournal(ctx context.Context, cfg Config, src registry.Source, id journal.Identity) (*runJournal, error) {
 	if cfg.Output.Dir == "" {
 		if cfg.Output.Resume {
 			return nil, errors.New("resume needs an output directory")
@@ -114,7 +115,7 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 	cfg.Progress.own(true)
 	var jr *runJournal
 	if resumable {
-		jr, err = openLocked(cfg, path, id, lock)
+		jr, err = openLocked(ctx, cfg, path, id, lock)
 	} else if err = lock.Verify(); err != nil {
 	} else if err = dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
 		err = prepareError(cfg.Output.Dir, err)
@@ -202,7 +203,7 @@ func prepareError(out string, err error) error {
 }
 
 // openLocked does openJournal's work with the lock held.
-func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock) (*runJournal, error) {
+func openLocked(ctx context.Context, cfg Config, path string, id journal.Identity, lock *journal.Lock) (*runJournal, error) {
 	if err := lock.Verify(); err != nil {
 		return nil, err
 	}
@@ -231,7 +232,7 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 		// published nothing, so it starts over.
 		fresh := cfg
 		fresh.Output.Resume, fresh.Output.Replace = false, true
-		return openLocked(fresh, path, id, lock)
+		return openLocked(ctx, fresh, path, id, lock)
 	}
 	if err != nil {
 		return nil, err
@@ -239,7 +240,7 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
-	sus, err := recoverParts(cfg.Output.Dir, st, lock)
+	sus, err := recoverParts(verifier{ctx, cfg.Progress}, cfg.Output.Dir, st, lock)
 	if err != nil {
 		return nil, err
 	}
@@ -255,14 +256,14 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 // temporary file was synced before the record); every other file in data/
 // (unrecorded temporary parts) is removed. The temporary part of a record
 // that read as torn is set aside as the suspect, returned.
-func recoverParts(out string, st *journal.State, lock *journal.Lock) (*suspect, error) {
-	if err := checkParts(out, st, lock); err != nil {
+func recoverParts(v verifier, out string, st *journal.State, lock *journal.Lock) (*suspect, error) {
+	if err := checkParts(v, out, st, lock); err != nil {
 		return nil, err
 	}
 	if err := lock.Verify(); err != nil {
 		return nil, err
 	}
-	sus, err := keepSuspect(out, st)
+	sus, err := keepSuspect(v, out, st)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +291,7 @@ func recoverParts(out string, st *journal.State, lock *journal.Lock) (*suspect, 
 // began. Parts not claimed were never named by a record and are removed
 // with the rest. A suspect whose ordinal was recorded since was reproduced
 // (the record follows the check) and is removed.
-func keepSuspect(out string, st *journal.State) (*suspect, error) {
+func keepSuspect(v verifier, out string, st *journal.State) (*suspect, error) {
 	dir := filepath.Join(out, dataset.Workspace, dataset.SuspectDir)
 	n := len(st.Records)
 	name := dataset.PartName(n)
@@ -330,7 +331,7 @@ func keepSuspect(out string, st *journal.State) (*suspect, error) {
 				return nil, fmt.Errorf("resume: %w", err)
 			}
 		case e.Name() == name && !(n > 0 && st.Records[n-1].Final):
-			info, err := measure(path)
+			info, err := v.measure(path)
 			if err != nil {
 				return nil, fmt.Errorf("resume: suspect part: %w", err)
 			}
@@ -343,7 +344,7 @@ func keepSuspect(out string, st *journal.State) (*suspect, error) {
 }
 
 // checkParts is recoverParts up to the removal of the temporary parts.
-func checkParts(out string, st *journal.State, lock *journal.Lock) error {
+func checkParts(v verifier, out string, st *journal.State, lock *journal.Lock) error {
 	data := filepath.Join(out, dataset.DataDir)
 	// Refuse ambiguous damage before deleting anything: a part published
 	// under its final name beyond the recorded ones means an acknowledged
@@ -375,7 +376,7 @@ func checkParts(out string, st *journal.State, lock *journal.Lock) error {
 		}
 		// Trust no retained part by existence: its size and digest must be
 		// the journal's before the frontier moves past it.
-		if err := verifyPart(path, rec.Part); err != nil {
+		if err := v.verifyPart(path, rec.Part); err != nil {
 			return fmt.Errorf("resume: part %d: %w", i, err)
 		}
 		if path != final {
@@ -412,8 +413,8 @@ func checkParts(out string, st *journal.State, lock *journal.Lock) error {
 // ErrPartAltered reports a retained part that does not match its record.
 var ErrPartAltered = errors.New("retained part does not match its journal record")
 
-func verifyPart(path string, want dataset.PartInfo) error {
-	got, err := measure(path)
+func (v verifier) verifyPart(path string, want dataset.PartInfo) error {
+	got, err := v.measure(path)
 	if err != nil {
 		return err
 	}
@@ -425,15 +426,46 @@ func verifyPart(path string, want dataset.PartInfo) error {
 
 // measure is a file's size and MD5 (hex), as a PartInfo records them.
 func measure(path string) (dataset.PartInfo, error) {
+	return verifier{ctx: context.Background()}.measure(path)
+}
+
+// verifier reads retained parts for recovery: it stops when ctx is done
+// (a signal, --max-duration) and reports the bytes read as progress, so a
+// long verification of a large dataset is neither unstoppable nor taken
+// for a stall.
+type verifier struct {
+	ctx context.Context
+	pr  *Progress
+}
+
+// verifyChunk is the read size between cancellation checks and progress.
+const verifyChunk = 4 << 20
+
+func (v verifier) measure(path string) (dataset.PartInfo, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return dataset.PartInfo{}, err
 	}
 	defer f.Close()
 	h := md5.New()
-	n, err := io.Copy(h, f)
-	if err != nil {
-		return dataset.PartInfo{}, err
+	buf := make([]byte, verifyChunk)
+	var n int64
+	for {
+		if err := v.ctx.Err(); err != nil {
+			return dataset.PartInfo{}, fmt.Errorf("resume: verifying %s: %w", path, context.Cause(v.ctx))
+		}
+		k, err := f.Read(buf)
+		h.Write(buf[:k])
+		n += int64(k)
+		if v.pr != nil {
+			v.pr.verified.Add(int64(k))
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return dataset.PartInfo{}, err
+		}
 	}
 	return dataset.PartInfo{Bytes: n, MD5: hex.EncodeToString(h.Sum(nil))}, nil
 }

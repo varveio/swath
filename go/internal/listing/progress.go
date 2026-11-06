@@ -27,6 +27,7 @@ type Progress struct {
 	encoded  atomic.Int64
 	parts    atomic.Int64
 	lastPart atomic.Int64 // unix nanoseconds of the last part published
+	verified atomic.Int64 // bytes of retained parts read by a resume's verification
 	gauges   atomic.Pointer[order.Gauges]
 
 	mu    sync.Mutex // held across an owned write and across a change of ownership
@@ -63,7 +64,10 @@ type ProgressSnapshot struct {
 	Ordered int64 `json:"ordered"` // rows handed to the encoders
 	Encoded int64 `json:"encoded"` // rows written into parts
 	Parts   int64 `json:"parts"`   // parts published
-	Advance int64 `json:"advance"` // the sum: it rises in every phase while the run progresses
+	// Verified is the bytes of retained parts a resume has read to check
+	// them against the journal (size and MD5), before it lists.
+	Verified int64 `json:"verified_bytes"`
+	Advance  int64 `json:"advance"` // the sum: it rises in every phase (verification included) while the run progresses
 	// Answered counts requests the source's service answered usably (pages
 	// without rows included): it shows the run is alive while no row moves.
 	Answered int64 `json:"answered"`
@@ -101,7 +105,8 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 		s.Throttles, s.Timeouts = (*f)()
 	}
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
-	s.Advance = s.Objects + s.Ordered + s.Encoded + s.Parts
+	s.Verified = p.verified.Load()
+	s.Advance = s.Objects + s.Ordered + s.Encoded + s.Parts + s.Verified
 	if g := p.gauges.Load(); g != nil {
 		o := g.Snapshot()
 		s.Order = &o

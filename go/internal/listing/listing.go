@@ -268,7 +268,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	s, loc := src.Schema(), src.Locator()
 	sum.Invocation.Source, sum.Invocation.SchemaID = loc.Root, s.ID
-	jr, err := openJournal(cfg, src, identity(src, s, cfg))
+	jr, err := openJournal(ctx, cfg, src, identity(src, s, cfg))
 	if err != nil {
 		// A refusal before the lock leaves the output as it was (jr nil);
 		// a failure under it (a damaged journal, an identity mismatch, a

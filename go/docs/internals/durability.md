@@ -124,6 +124,14 @@ that is the commit. The run reports follow it.
    must match its record's size and MD5 (`ErrPartAltered` otherwise). A part whose record is durable but whose
    rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, the
    part of a torn last record is set aside (the journal, below), and only then are the temporary parts removed.
+   Verification reads every retained part in full, so it costs O(dataset bytes): measured once (2026-11-06,
+   a 16 GiB, 4-vCPU VM, virtio disk, 1 GiB in 16 files of 64 MiB, `TestVerifyThroughput`): 247, 306 and
+   376 MiB/s with the page cache dropped before each of three reps (the host's own cache likely warms), 511
+   MiB/s warm, where MD5 on one core is the limit. At the default part size, 10,000 retained parts (640 GB)
+   take roughly 30 to 45 minutes. The read stops when the run is stopped (a signal, `--max-duration`) and
+   before recovery renames or removes anything, and its bytes count as progress (`progress.json`
+   `verified_bytes`, included in `advance`), so the stall watchdog does not stop a long verification
+   (`TestRecoveryVerificationIsCancellableAndReported`).
 4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
    normal start-up. S3 lists one range `(K, ⊤]` and splits it as on a fresh run. If K is not a bound
    the provider accepts, the range starts at K's longest accepted prefix and drops keys up to K.
