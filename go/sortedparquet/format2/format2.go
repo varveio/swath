@@ -97,8 +97,9 @@ type Dataset struct {
 // type expectations expect. Any schema ID is accepted as long as the parts have a required
 // key column. It refuses, with the first failing reason:
 //
-//   - invalid_manifest: no readable manifest of this format, or a part path
-//     outside the dataset;
+//   - invalid_manifest: no readable manifest of this format, a part with
+//     rows but without both exact key bounds, or a part path outside the
+//     dataset;
 //   - unknown_format_version: a manifest or footer of another version;
 //   - incomplete_multifile: a listed part that is missing or whose size or
 //     row count differs from its entry;
@@ -137,6 +138,12 @@ func Open(ctx context.Context, dir string, expect []sortedparquet.Column) (*Data
 		return nil, sortedparquet.Refuse(sortedparquet.ReasonInvalidManifest, "%s names no schema_id", ManifestName)
 	}
 	for i, part := range manifest.Parts {
+		// The bounds route reads between parts and are checked against the
+		// decoded keys: a part without them could overlap its neighbours
+		// unseen, and a read routed past it would skip its rows.
+		if part.Rows > 0 && (len(part.MinKey) == 0 || len(part.MaxKey) == 0) {
+			return nil, sortedparquet.Refuse(sortedparquet.ReasonInvalidManifest, "%s: part %d has rows but no exact key bounds", ManifestName, i)
+		}
 		if part.Rows < 0 || part.Rows > 0 && bytes.Compare(part.MinKey, part.MaxKey) > 0 {
 			return nil, sortedparquet.Refuse(sortedparquet.ReasonInvalidManifest, "%s: part %d has invalid rows or bounds", ManifestName, i)
 		}

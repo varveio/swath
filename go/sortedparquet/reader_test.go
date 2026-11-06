@@ -204,3 +204,45 @@ func writeDataset(t *testing.T) string {
 	}
 	return dir
 }
+
+// TestFormat2RequiresBounds refuses a manifest whose non-empty part lacks
+// an exact key bound. Without the check, a first part holding a..z with no
+// bounds and a second holding m opened, and a read from n routed to the
+// second part and lost z.
+func TestFormat2RequiresBounds(t *testing.T) {
+	cases := map[string]func(m map[string]any){
+		"no minimum": func(m map[string]any) { delete(part(m, 0), "min_key_base64") },
+		"no maximum": func(m map[string]any) { delete(part(m, 0), "max_key_base64") },
+		"neither":    func(m map[string]any) { delete(part(m, 0), "min_key_base64"); delete(part(m, 0), "max_key_base64") },
+		"null":       func(m map[string]any) { part(m, 0)["max_key_base64"] = nil },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if _, err := sortedparquettest.WriteFormat2(dir, sortedparquettest.Dataset{Parts: []sortedparquettest.Part{
+				{Rows: rowsOf([]string{"a", "z"})}, {Rows: rowsOf([]string{"m"})},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := os.ReadFile(filepath.Join(dir, format2.ManifestName))
+			var m map[string]any
+			if err := json.Unmarshal(raw, &m); err != nil {
+				t.Fatal(err)
+			}
+			mutate(m)
+			raw, _ = json.Marshal(m)
+			if err := os.WriteFile(filepath.Join(dir, format2.ManifestName), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			dataset, err := format2.Open(context.Background(), dir, nil)
+			if got := sortedparquet.ReasonOf(err); got != sortedparquet.ReasonInvalidManifest {
+				if err == nil {
+					rows, _ := dataset.Reader.Read(context.Background(), sortedparquet.Range{From: []byte("n"), FromInclusive: true, Limit: 1}, nil)
+					_ = dataset.Reader.Close()
+					t.Fatalf("opened; a read from n returned %d rows", len(rows))
+				}
+				t.Fatalf("refusal %q (%v), want invalid_manifest", got, err)
+			}
+		})
+	}
+}
