@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 
+	"github.com/varveio/swath/go/internal/source/gcs"
 	"github.com/varveio/swath/go/internal/source/localfs"
 	"github.com/varveio/swath/go/internal/source/s3"
 )
@@ -16,6 +17,9 @@ import (
 
 // S3Config is the S3 provider's options value (Config.Source).
 type S3Config = s3.Options
+
+// GCSConfig is the GCS provider's options value.
+type GCSConfig = gcs.Options
 
 func s3Stats(sum Report) *s3.Stats {
 	if r := sum.SourceReport(); r != nil {

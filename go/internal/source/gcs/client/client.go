@@ -33,6 +33,8 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
+	"github.com/varveio/swath/go/internal/faults"
 )
 
 // DefaultEndpoint is the JSON API base.
@@ -463,6 +465,9 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	}
 	if len(body) > maxResponse {
 		return nil, fmt.Errorf("objects.list response larger than %d bytes", maxResponse)
+	}
+	if err := faults.At("response-read"); err != nil {
+		return nil, err
 	}
 	p, err := parse(body)
 	if err != nil {
