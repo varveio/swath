@@ -442,6 +442,17 @@ func (e *emitter[R, P]) maybePublish() error {
 // is on the drain path, it first waits while the budget is used up.
 func (e *emitter[R, P]) publish() error {
 	o := e.o
+	if len(e.items) == 0 {
+		// Nothing to publish (a range that ends right after a batch): a
+		// wait would free nothing and only keep the node from being done,
+		// so a worker never waits here. Waiting at every range end while
+		// rows far ahead of the frontier fill the budget left the drainer
+		// listing the frontier alone.
+		if o.stopped.Load() {
+			return context.Cause(o.ctx)
+		}
+		return nil
+	}
 	refused := false // the disk budget refused the last spill: wait before retrying
 	for !e.n.awaited.Load() && o.full() && !o.stopped.Load() {
 		if o.sp != nil && e.rows > 0 && !refused {

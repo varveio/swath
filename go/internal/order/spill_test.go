@@ -81,7 +81,9 @@ func (f *frontier) keys() []string {
 // time instead of frontier + siblings; the output is identical, and rows in
 // memory stay within the budget plus one batch per worker.
 func TestSpillKeepsWorkersBusy(t *testing.T) {
-	f := &frontier{slowPages: 40, siblings: 56, sibPages: 10, rows: 100, slowDelay: 10 * time.Millisecond, sibDelay: 5 * time.Millisecond}
+	// A sibling's last page fills a publish batch (11 × 100 ≥ publishRows),
+	// so it ends with nothing left to publish.
+	f := &frontier{slowPages: 40, siblings: 56, sibPages: 11, rows: 100, slowDelay: 10 * time.Millisecond, sibDelay: 5 * time.Millisecond}
 	want := f.keys()
 	const workers, budget = 8, 500
 	run := func(opt Options) (time.Duration, Stats) {
@@ -110,6 +112,12 @@ func TestSpillKeepsWorkersBusy(t *testing.T) {
 			compress, plain, pst.MaxBuffered, spilled, st.MaxBuffered, st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles)
 		if st.SpillRows == 0 {
 			t.Fatal("nothing spilled")
+		}
+		// With spill and no disk refusal nothing waits on the budget: not
+		// an emitter with rows (it spills), nor a range that ends with
+		// nothing to publish.
+		if st.BudgetWait != 0 {
+			t.Fatalf("compress=%v: budget wait %v with spill", compress, st.BudgetWait)
 		}
 		if !raceEnabled && spilled > plain*85/100 { // timing only without the race detector
 			t.Fatalf("spill did not keep workers busy: %v vs %v without spill", spilled, plain)

@@ -47,7 +47,11 @@ returns the first error.
 
 When the budget is used up, a range that is not the one being drained spills instead of waiting. Its
 emitter writes the rows it would have published to the range's spill file and publishes markers in their
-place, so the range keeps listing while a slow frontier holds the output back:
+place, so the range keeps listing while a slow frontier holds the output back. A range that ends with
+nothing left to publish (its last batch went out with its last page) never waits either: with spill on and
+no disk refusal, no worker waits on the budget at all (`TestSpillKeepsWorkersBusy`). Waiting at a range's end
+freed nothing and kept the node from being done; on a deep bucket, where rows far ahead of the frontier keep
+the budget full, it left the drainer listing the frontier alone (one range in flight of 64):
 - **Order.** The rows of one range are already in key order, so the drainer replays a range's frames front to
   back when it reaches the markers: no index, no merge, no dictionaries. Frames are written before their
   markers are published, so the drainer never reads ahead of the writer.
