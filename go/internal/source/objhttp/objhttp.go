@@ -332,6 +332,7 @@ func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 		{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "of the retries, attempts past " + timeoutFlag},
 		{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"},
 		{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit multiplied by 0.7 on a " + throttles + " answer"},
+		{Key: "limiter.floor_throttles", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers at a limit of 1: no decrease and no fresh 10 s cool-down"},
 		{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one (at most one per second, after 10 s without a throttle)"},
 		{Key: "limiter.growth_cooldown", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: a throttle answer in the last 10 s"},
 		{Key: "limiter.growth_latency_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: successful attempts' latency EWMA above twice the baseline"},
@@ -344,13 +345,13 @@ func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 }
 
 // NumCounters is len(CounterDefs(...)).
-const NumCounters = 14
+const NumCounters = 15
 
 // Store writes n into set at the IDs of CounterDefs, the first at first.
 func (n Counts) Store(set *counters.Set, first counters.ID) {
 	l := n.Limiter
 	for i, v := range [NumCounters]int64{n.Attempts, n.Retries, n.Throttles, n.Timeouts, n.ParseFailures,
-		l.Decreases, l.Increases, l.Cooldown, l.LatencyFrozen, l.TimeoutFrozen, l.Valve, l.Waits, l.WaitNs, l.Depth} {
+		l.Decreases, l.FloorThrottles, l.Increases, l.Cooldown, l.LatencyFrozen, l.TimeoutFrozen, l.Valve, l.Waits, l.WaitNs, l.Depth} {
 		set.Set(first+counters.ID(i), v)
 	}
 }

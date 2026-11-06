@@ -124,6 +124,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `timeouts` | count | requests |  | of the retries, attempts past -request-timeout |
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
 | `limiter.decreases` | count | steps | limiter | limit multiplied by 0.7 on a 429/503/SlowDown answer |
+| `limiter.floor_throttles` | count | answers | limiter | 429/503/SlowDown answers at a limit of 1: no decrease and no fresh 10 s cool-down |
 | `limiter.increases` | count | steps | limiter | limit raised by one (at most one per second, after 10 s without a throttle) |
 | `limiter.growth_cooldown` | count | steps | limiter | due growth steps held back: a throttle answer in the last 10 s |
 | `limiter.growth_latency_frozen` | count | steps | limiter | due growth steps held back: successful attempts' latency EWMA above twice the baseline |

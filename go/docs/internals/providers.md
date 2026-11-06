@@ -159,8 +159,9 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   library caller's zero `Policy` leaves it off): every HTTP attempt (pages, seed,
   structure and split probes, client retries, engine requeues) takes a permit before it is sent and returns it
   when its answer is read, so in-flight requests never exceed the limit. The limit starts at the worker count;
-  each throttle answer (S3 429/503/`SlowDown`; GCS 429 and rate-limit reasons) multiplies it by 0.7 (floor 1);
-  after 10 s without a throttle it grows by one per second back to the worker count. Growth (never the limit)
+  each throttle answer (S3 429/503/`SlowDown`; GCS 429 and rate-limit reasons) multiplies it by 0.7 (floor 1;
+  an answer at the floor removes nothing and does not restart the window, `limiter.floor_throttles`);
+  after 10 s without a decrease it grows by one per second back to the worker count. Growth (never the limit)
   is held while three or more attempt timeouts fell in the last 10 s, or while the EWMA of successful attempts'
   latency exceeds twice its baseline (a rolling minimum re-floored every minute), with one step per 30 s let
   through when there is progress. Its only inputs are the attempts' own latency and answers; no permit is held

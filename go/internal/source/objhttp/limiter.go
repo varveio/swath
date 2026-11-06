@@ -55,7 +55,7 @@ type Limiter struct {
 }
 
 type limiterCounts struct {
-	decreases, increases, cooldown, latencyFrozen, timeoutFrozen, valve, waits, waitNs, depth atomic.Int64
+	decreases, floor, increases, cooldown, latencyFrozen, timeoutFrozen, valve, waits, waitNs, depth atomic.Int64
 }
 
 // NewLimiter returns a limiter of at most n permits (at least 1).
@@ -149,11 +149,20 @@ func (l *Limiter) Release(o Outcome, latency time.Duration) {
 	l.grant()
 }
 
+// decrease multiplies the limit down on a throttle answer. Only a real
+// reduction re-arms the clean window, as in Java's gauge: a throttle at
+// the floor removes no concurrency and buys no fresh cool-down (else every
+// floor answer under sustained throttling postpones growth by another
+// 10 s); it is counted under FloorThrottles. The re-arm never moves the
+// window back (now is read before the lock).
 func (l *Limiter) decrease(now time.Time) {
-	l.lastThrottle = now
 	next := max(1, int(float64(l.limit)*decreaseFactor))
 	if next >= l.limit {
-		return // at the floor
+		l.c.floor.Add(1)
+		return
+	}
+	if now.After(l.lastThrottle) {
+		l.lastThrottle = now
 	}
 	l.limit = next
 	l.c.decreases.Add(1)
@@ -227,15 +236,16 @@ func (l *Limiter) grow(now time.Time) {
 
 // LimiterCounts are a limiter's engagements, for the run summary.
 type LimiterCounts struct {
-	Decreases     int64 // multiplicative decreases on throttle answers
-	Increases     int64 // paced +1 steps
-	Cooldown      int64 // growth steps held back by the throttle-free window
-	LatencyFrozen int64 // growth steps held back by latency inflation
-	TimeoutFrozen int64 // growth steps held back by attempt timeouts
-	Valve         int64 // +1 steps let through the latency freeze
-	Waits         int64 // attempts that waited for a permit
-	WaitNs        int64 // their summed wait
-	Depth         int64 // most permits taken away below the maximum
+	Decreases      int64 // multiplicative decreases on throttle answers
+	FloorThrottles int64 // throttle answers at the floor: no decrease, no cool-down re-arm
+	Increases      int64 // paced +1 steps
+	Cooldown       int64 // growth steps held back by the throttle-free window
+	LatencyFrozen  int64 // growth steps held back by latency inflation
+	TimeoutFrozen  int64 // growth steps held back by attempt timeouts
+	Valve          int64 // +1 steps let through the latency freeze
+	Waits          int64 // attempts that waited for a permit
+	WaitNs         int64 // their summed wait
+	Depth          int64 // most permits taken away below the maximum
 }
 
 // Counts returns the engagements so far (zero for a nil limiter).
@@ -244,6 +254,6 @@ func (l *Limiter) Counts() LimiterCounts {
 		return LimiterCounts{}
 	}
 	c := &l.c
-	return LimiterCounts{c.decreases.Load(), c.increases.Load(), c.cooldown.Load(), c.latencyFrozen.Load(),
+	return LimiterCounts{c.decreases.Load(), c.floor.Load(), c.increases.Load(), c.cooldown.Load(), c.latencyFrozen.Load(),
 		c.timeoutFrozen.Load(), c.valve.Load(), c.waits.Load(), c.waitNs.Load(), c.depth.Load()}
 }

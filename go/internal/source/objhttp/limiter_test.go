@@ -223,3 +223,61 @@ func TestLimiterGrantCancelRace(t *testing.T) {
 		t.Fatalf("one side of the race never ran: granted %d, cancelled %d", granted, cancelled)
 	}
 }
+
+// TestFloorThrottleDoesNotRearm is Java's ConcurrencyGaugeFloorRearmSuppressionTest
+// on the fake clock: a throttle answer at a limit of 1 removes no
+// concurrency and must not re-arm the 10 s clean window, else sustained
+// throttling at the floor postpones growth forever; a real decrease (2 ->
+// 1) still re-arms, and floor answers neither extend nor shorten its
+// window.
+func TestFloorThrottleDoesNotRearm(t *testing.T) {
+	c := &fakeClock{t: time.Unix(1e9, 0)}
+	l := newLimiter(64, c.now)
+	for l.Limit() > 1 {
+		l.cycle(Throttled, 0) // the last real decrease (2 -> 1) arms the window at t0
+	}
+	t0 := c.t
+	for range 4 { // a floor answer every 2 s inside the window: no re-arm
+		c.add(2 * time.Second)
+		l.cycle(Throttled, 0)
+	}
+	if n := l.Counts(); n.FloorThrottles != 4 || n.Decreases != 9 {
+		t.Fatalf("counts %+v", n)
+	}
+	c.t = t0.Add(cleanWindow - time.Millisecond)
+	l.cycle(Success, 100*time.Millisecond)
+	if l.Limit() != 1 {
+		t.Fatalf("grew inside the window armed by the real decrease: limit %d", l.Limit())
+	}
+	c.t = t0.Add(cleanWindow + growthPace + time.Millisecond)
+	l.cycle(Success, 100*time.Millisecond)
+	if l.Limit() != 2 {
+		t.Fatalf("floor throttles re-armed the clean window: limit %d 11 s after the last real decrease, want 2", l.Limit())
+	}
+
+	// Sustained throttling at the floor: one answer every 2 s, successes
+	// between. The limit still leaves 1 once a window passes; each real
+	// decrease back to 1 re-arms it.
+	c2 := &fakeClock{t: time.Unix(2e9, 0)}
+	l2 := newLimiter(64, c2.now)
+	for l2.Limit() > 1 {
+		l2.cycle(Throttled, 0)
+	}
+	grew := 0
+	for range 60 { // 120 s
+		c2.add(time.Second)
+		l2.cycle(Success, 100*time.Millisecond)
+		c2.add(time.Second)
+		before := l2.Limit()
+		l2.cycle(Throttled, 0)
+		if before > 1 {
+			grew++
+		}
+	}
+	if grew == 0 {
+		t.Fatal("sustained floor throttling pinned the limit at 1 for 120 s")
+	}
+	if n := l2.Counts(); n.Decreases != 9+int64(grew) || n.FloorThrottles != 60-int64(grew) {
+		t.Fatalf("counts %+v, grew %d", n, grew)
+	}
+}
