@@ -368,8 +368,8 @@ func (c *Client) Route(bucket string) string {
 // UserProject is the billed project every request names (userProject).
 func (c *Client) UserProject() string { return c.cfg.UserProject }
 
-// URL is the request URL for in (exported for the oracle test).
-func (c *Client) URL(in *ListInput) string {
+// requestURL is the request URL for in.
+func (c *Client) requestURL(in *ListInput) string {
 	u := c.route(in.Bucket)
 	q := url.Values{}
 	if c.base.String() == DefaultEndpoint {
@@ -406,7 +406,7 @@ func (c *Client) URL(in *ListInput) string {
 // List sends one objects.list request, retrying retryable failures
 // (objhttp.Do).
 func (c *Client) List(ctx context.Context, in *ListInput) (*Page, error) {
-	u := c.URL(in)
+	u := c.requestURL(in)
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) { return c.attempt(ctx, u) })
 }
 
