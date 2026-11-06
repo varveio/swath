@@ -25,6 +25,7 @@ rows, key range) or an interrupted run's recorded command, frozen identity, comm
 `list` flag plus the diagnostic ones: `--sequential`, `--probe`, `--floors`, `--max-keys` (range-engine sources), `--no-journal` and
 `--no-spill`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
+Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
 
 ## Flags
 

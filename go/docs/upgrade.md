@@ -162,6 +162,7 @@ rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath 
 `--report-format json`; `-fields` → `--metadata`; `-sequential`, `-probe`, `-max-keys`, `-no-journal`,
 `-no-spill` → `swath diag list …`; `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`.
+The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
 ## Gates
 
