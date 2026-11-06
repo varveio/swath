@@ -37,6 +37,10 @@ const (
 	LockName = "lock"
 	// PartsDir holds parts until they are published into data/.
 	PartsDir = "parts"
+	// SuspectDir, inside the workspace, keeps the temporary part of a
+	// journal record that reads as torn: the record may have been
+	// acknowledged and damaged since (see listing's recovery).
+	SuspectDir = "suspect"
 )
 
 // Footer key/value stamps on every part. Order within a part is the

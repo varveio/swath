@@ -179,7 +179,10 @@ func show(args []string, stdout io.Writer) error {
 		fmt.Fprintln(stdout, "no part committed; swath resume lists from the start")
 	}
 	if st.TornBytes > 0 {
-		fmt.Fprintf(stdout, "torn tail: %d bytes (ignored)\n", st.TornBytes)
+		fmt.Fprintf(stdout, "torn tail: %d bytes (dropped by swath resume; its part, if written, must be reproduced exactly)\n", st.TornBytes)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(dir, dataset.Workspace, dataset.SuspectDir)); len(ents) > 0 {
+		fmt.Fprintf(stdout, "set aside: %s (a part whose record read as torn; swath resume must reproduce it exactly)\n", ents[0].Name())
 	}
 	return nil
 }

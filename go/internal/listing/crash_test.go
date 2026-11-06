@@ -32,6 +32,13 @@ import (
 // parts and parallel splits.
 func crashBucket(t *testing.T) string {
 	t.Helper()
+	url, _ := crashBackend(t)
+	return url
+}
+
+// crashBackend is crashBucket with its backend, to change the source.
+func crashBackend(t *testing.T) (string, *s3mem.Backend) {
+	t.Helper()
 	for _, k := range []string{"AWS_PROFILE", "AWS_SESSION_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_DEFAULT_REGION"} {
 		t.Setenv(k, "")
 	}
@@ -53,7 +60,7 @@ func crashBucket(t *testing.T) string {
 		h.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	return srv.URL
+	return srv.URL, b
 }
 
 func crashConfig(url, out string, resume bool) Config {
@@ -536,6 +543,9 @@ func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 				t.Fatalf("torn: %v", err)
 			}
 			sameDataset(t, damage, ref, out)
+			if ents, _ := os.ReadDir(filepath.Join(out, dataset.Workspace, dataset.SuspectDir)); len(ents) != 0 {
+				t.Fatalf("%s: the reproduced suspect part was kept", damage)
+			}
 			continue
 		}
 		if !errors.Is(err, journal.ErrCorrupt) {
@@ -543,6 +553,64 @@ func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 		}
 		if _, err := os.Stat(dataset.TempPath(out, 2)); err != nil {
 			t.Fatalf("%s: the acknowledged temporary part is gone: %v", damage, err)
+		}
+	}
+}
+
+// TestAmbiguousTailRefusesOnChangedSource: a record that reads as torn
+// while its part was not yet renamed may have been acknowledged and
+// truncated or zeroed since: nothing on disk tells. With the source
+// changed inside that part's range, relisting would silently replace what
+// the run committed; the resume refuses instead, with the part kept, and
+// keeps refusing (Sol, fourth review, minimum change 5; the static-source
+// cases above cannot see the loss).
+func TestAmbiguousTailRefusesOnChangedSource(t *testing.T) {
+	for _, damage := range []string{"truncated", "zero tail", "truncated, rest deleted"} {
+		url, b := crashBackend(t)
+		out := filepath.Join(t.TempDir(), "ds")
+		crashAtRecorded(t, url, out)
+		st, err := journal.Read(out)
+		if err != nil || len(st.Records) != 3 {
+			t.Fatalf("%s: %v (%d records)", damage, err, len(st.Records))
+		}
+		acked := st.Records[2].Part
+		// The first key of part 2 is deleted from the source.
+		if _, err := b.DeleteObject("bkt", string(acked.MinKey)); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(damage, "rest deleted") {
+			// Nothing is left after the last intact record: the resume
+			// lists no part 2 at all.
+			for i := range 8000 {
+				if k := fmt.Sprintf("d%02d/sub%d/obj+%06d", i%9, i%4, i); k > string(st.Records[1].Part.MaxKey) {
+					b.DeleteObject("bkt", k)
+				}
+			}
+		}
+		path := journal.Path(out)
+		jb, _ := os.ReadFile(path)
+		if strings.HasPrefix(damage, "truncated") {
+			jb = jb[:len(jb)-5]
+		} else {
+			clear(jb[len(jb)-5:])
+		}
+		os.WriteFile(path, jb, 0o644)
+		kept := filepath.Join(out, dataset.Workspace, dataset.SuspectDir, dataset.PartName(2))
+		for attempt := range 2 {
+			_, err := Run(context.Background(), crashConfig(url, out, true))
+			if !errors.Is(err, ErrAmbiguousTail) {
+				t.Fatalf("%s, attempt %d: resume did not refuse: %v", damage, attempt, err)
+			}
+			got, err := measure(kept)
+			if err != nil || got.MD5 != acked.MD5 || got.Bytes != acked.Bytes {
+				t.Fatalf("%s, attempt %d: the acknowledged part is not kept: %v %+v", damage, attempt, err, got)
+			}
+			if _, err := os.Stat(filepath.Join(out, dataset.DataDir, dataset.PartName(2))); err == nil {
+				t.Fatalf("%s: a replacement part 2 was published", damage)
+			}
+			if st, err := journal.Read(out); err != nil || len(st.Records) != 2 {
+				t.Fatalf("%s: a replacement record 2 was written: %v", damage, err)
+			}
 		}
 	}
 }

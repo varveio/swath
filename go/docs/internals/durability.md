@@ -28,8 +28,9 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | split decided, children partly queued (`split`) | in memory only: the resume starts from K; the split is lost harmlessly |
 | rows buffered or queued to an encoder (`range-done`, `encoding`) | relisted from K |
 | part closed and synced, no record (`part-closed`, `journal-append`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
-| record written, not synced (`journal-sync`) | a torn tail is ignored; a whole unsynced frame that survived is a valid record of a synced part, and recovery syncs the journal before acting on it |
+| record written, not synced (`journal-sync`) | a whole unsynced frame that survived is a valid record of a synced part, and recovery syncs the journal before acting on it; a torn tail (power loss) is dropped, and its part, if in `.swath/parts/`, is set aside and must be reproduced exactly (below) |
 | record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, MD5), then renamed into `data/` |
+| record durable, rename absent, the record truncated or zeroed since (damage, not a crash) | reads as a torn tail: the part is set aside in `.swath/suspect/`; the resume records that ordinal again only if it reproduces the part byte for byte, and otherwise refuses (`ErrAmbiguousTail`) with the part kept (`TestAmbiguousTailRefusesOnChangedSource`) |
 | rename done, directory sync absent (`renamed-unsynced`) | the same check: the part is either at its final name or still in `.swath/parts/`; recovery syncs `data/` before it removes the temporary parts |
 | recovery itself interrupted after its renames (`recovered`, a resume-only point) | the next resume recovers again from the same journal (`TestRepeatedRecovery`) |
 | several parts closed out of order | only the contiguous ordinal prefix was published; later parts are reproduced |
@@ -97,8 +98,8 @@ that is the commit. The run reports follow it.
    one process listed.
 3. Recovers `data/`. The journal is synced first (its accepted frames are acted on). Every retained part
    must match its record's size and MD5 (`ErrPartAltered` otherwise). A part whose record is durable but whose
-   rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, and
-   only then are the temporary parts removed.
+   rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, the
+   part of a torn last record is set aside (the journal, below), and only then are the temporary parts removed.
 4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
    normal start-up. S3 lists one range `(K, ⊤]` and splits it as on a fresh run. If K is not a bound
    the provider accepts, the range starts at K's longest accepted prefix and drops keys up to K.
@@ -140,10 +141,15 @@ Every later frame is a part record, with the ordinals dense from 0. `Append` wri
 
 Only an append that never completed is a torn tail, and only at the end: fewer bytes than the last frame's
 length says, or a whole last frame with a bad checksum whose payload ends in a zero byte (bytes that never
-reached the disk read as zeros; a payload is JSON and ends in `}`). It was never acknowledged, so nothing
-depends on it, and a reopen truncates it. A record cut short this way after its sync is indistinguishable from
-a torn append unless its part was renamed (below); its part, then only in `.swath/parts/`, is written again from
-the source. Everything else is corruption (`ErrCorrupt`), and the resume refuses before deleting or renaming
+reached the disk read as zeros; a payload is JSON and ends in `}`). A reopen truncates it. A record cut short
+this way after its sync is indistinguishable from a torn append unless its part was renamed (below), so a torn
+tail is not taken as proof that nothing depends on it: its part, synced in `.swath/parts/` before the append
+began, is moved to `.swath/suspect/` before the temporary parts are removed, and the resume must reproduce it
+byte for byte (size and MD5) before it records that ordinal again. On a static source it does, and the resume
+continues as if the append had never happened; when the source changed in that part's range, or no longer
+yields a part there, the resume refuses with `ErrAmbiguousTail` and keeps the part, at every later attempt too.
+The operator decides: `--overwrite` starts over, and removing `.swath/suspect/` accepts the source as it is now.
+Everything else is corruption (`ErrCorrupt`), and the resume refuses before deleting or renaming
 anything: a bad checksum with data after it; a whole last frame with a bad checksum whose last byte is not
 zero, `}` or any other (an acknowledged record damaged since, its closing byte included: its part may be
 durable only in `.swath/parts/`, which nothing else names); a length over the frame limit; a length that

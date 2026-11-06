@@ -28,6 +28,11 @@ var (
 	ErrInterrupted     = errors.New("it holds an interrupted run")
 	ErrNothingToResume = errors.New("nothing to resume: no interrupted run in the output directory")
 	ErrComplete        = errors.New("the run in the output directory is already complete")
+	// ErrAmbiguousTail: the journal's last record reads as torn, so its
+	// part was set aside (DIR/.swath/suspect), and the source no longer
+	// reproduces that part. The record may have been acknowledged and
+	// damaged since; relisting would replace output the run committed.
+	ErrAmbiguousTail = errors.New("the journal's last record is damaged or torn and the source no longer reproduces its part")
 )
 
 // journal ties a run of a resumable source to its durable journal. A nil
@@ -39,6 +44,21 @@ type runJournal struct {
 	j     *journal.Journal // nil with -no-journal
 	state *journal.State   // the recovered journal on resume
 	src   source.Resumable
+	// suspect is the part of a record that read as torn, kept until the
+	// resume reproduces it byte for byte (nil when there is none).
+	suspect *suspect
+}
+
+// suspect is a temporary part set aside by recovery because its record
+// read as torn: an append that never completed reads the same as an
+// acknowledged record truncated or zeroed since, when the part was not yet
+// renamed. Nothing on disk tells them apart, so the resume must reproduce
+// the part exactly before it records the ordinal again; any difference
+// (or no part at that ordinal) refuses with the part kept.
+type suspect struct {
+	ordinal int
+	path    string
+	info    dataset.PartInfo // bytes and MD5 only
 }
 
 // openJournal takes ownership of the output and prepares it: a fresh
@@ -163,21 +183,97 @@ func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock
 	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
-	if err := recoverParts(cfg.Output.Dir, st); err != nil {
+	sus, err := recoverParts(cfg.Output.Dir, st)
+	if err != nil {
 		return nil, err
 	}
 	j, err := journal.Reopen(cfg.Output.Dir, st)
 	if err != nil {
 		return nil, err
 	}
-	return &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st}, nil
+	return &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st, suspect: sus}, nil
 }
 
 // recoverParts makes data/ hold exactly the journaled parts: a part whose
 // record is durable but whose rename did not happen is renamed now (its
 // temporary file was synced before the record); every other file in data/
-// (unrecorded temporary parts) is removed.
-func recoverParts(out string, st *journal.State) error {
+// (unrecorded temporary parts) is removed. The temporary part of a record
+// that read as torn is set aside as the suspect, returned.
+func recoverParts(out string, st *journal.State) (*suspect, error) {
+	if err := checkParts(out, st); err != nil {
+		return nil, err
+	}
+	sus, err := keepSuspect(out, st)
+	if err != nil {
+		return nil, err
+	}
+	// Unrecorded parts: the resume writes them again.
+	parts := filepath.Join(out, dataset.Workspace, dataset.PartsDir)
+	if err := os.RemoveAll(parts); err != nil {
+		return nil, fmt.Errorf("resume: %w", err)
+	}
+	if err := os.MkdirAll(parts, 0o755); err != nil {
+		return nil, fmt.Errorf("resume: %w", err)
+	}
+	return sus, dataset.SyncDir(filepath.Join(out, dataset.Workspace))
+}
+
+// keepSuspect sets aside the temporary part of a last record that read as
+// torn (moved into the suspect directory before the temporary parts are
+// removed), and returns the suspect a resume must reproduce: that one, or
+// one an earlier resume set aside and has not reproduced yet. A suspect
+// whose ordinal was recorded since was reproduced (the record follows the
+// check) and is removed.
+func keepSuspect(out string, st *journal.State) (*suspect, error) {
+	dir := filepath.Join(out, dataset.Workspace, dataset.SuspectDir)
+	n := len(st.Records)
+	name := dataset.PartName(n)
+	if tmp := dataset.TempPath(out, n); st.TornBytes > 0 {
+		if _, err := os.Stat(tmp); err == nil {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return nil, fmt.Errorf("resume: %w", err)
+			}
+			if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
+				return nil, fmt.Errorf("resume: %w", err)
+			}
+			if err := dataset.SyncDir(dir); err != nil {
+				return nil, fmt.Errorf("resume: %w", err)
+			}
+			if err := dataset.SyncDir(filepath.Join(out, dataset.Workspace)); err != nil {
+				return nil, fmt.Errorf("resume: %w", err)
+			}
+		}
+	}
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resume: %w", err)
+	}
+	var sus *suspect
+	for _, e := range ents {
+		path := filepath.Join(dir, e.Name())
+		switch {
+		case e.Name() < name: // recorded since: reproduced
+			if err := os.Remove(path); err != nil {
+				return nil, fmt.Errorf("resume: %w", err)
+			}
+		case e.Name() == name && !(n > 0 && st.Records[n-1].Final):
+			info, err := measure(path)
+			if err != nil {
+				return nil, fmt.Errorf("resume: suspect part: %w", err)
+			}
+			sus = &suspect{ordinal: n, path: path, info: info}
+		default:
+			return nil, fmt.Errorf("%w: %s holds %s but the journal holds %d records", journal.ErrCorrupt, dir, e.Name(), n)
+		}
+	}
+	return sus, nil
+}
+
+// checkParts is recoverParts up to the removal of the temporary parts.
+func checkParts(out string, st *journal.State) error {
 	data := filepath.Join(out, dataset.DataDir)
 	// Refuse ambiguous damage before deleting anything: a part published
 	// under its final name beyond the recorded ones means an acknowledged
@@ -234,38 +330,36 @@ func recoverParts(out string, st *journal.State) error {
 	if err := dataset.SyncDir(data); err != nil {
 		return fmt.Errorf("resume: %w", err)
 	}
-	if err := faults.At("recovered"); err != nil {
-		return err
-	}
-	// Unrecorded parts: the resume writes them again.
-	parts := filepath.Join(out, dataset.Workspace, dataset.PartsDir)
-	if err := os.RemoveAll(parts); err != nil {
-		return fmt.Errorf("resume: %w", err)
-	}
-	if err := os.MkdirAll(parts, 0o755); err != nil {
-		return fmt.Errorf("resume: %w", err)
-	}
-	return dataset.SyncDir(filepath.Join(out, dataset.Workspace))
+	return faults.At("recovered")
 }
 
 // ErrPartAltered reports a retained part that does not match its record.
 var ErrPartAltered = errors.New("retained part does not match its journal record")
 
 func verifyPart(path string, want dataset.PartInfo) error {
-	f, err := os.Open(path)
+	got, err := measure(path)
 	if err != nil {
 		return err
+	}
+	if got.Bytes != want.Bytes || got.MD5 != want.MD5 {
+		return fmt.Errorf("%w: %s is %d bytes, md5 %s; the journal says %d bytes, md5 %s", ErrPartAltered, path, got.Bytes, got.MD5, want.Bytes, want.MD5)
+	}
+	return nil
+}
+
+// measure is a file's size and MD5 (hex), as a PartInfo records them.
+func measure(path string) (dataset.PartInfo, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return dataset.PartInfo{}, err
 	}
 	defer f.Close()
 	h := md5.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
-		return err
+		return dataset.PartInfo{}, err
 	}
-	if n != want.Bytes || hex.EncodeToString(h.Sum(nil)) != want.MD5 {
-		return fmt.Errorf("%w: %s is %d bytes, md5 %x; the journal says %d bytes, md5 %s", ErrPartAltered, path, n, h.Sum(nil), want.Bytes, want.MD5)
-	}
-	return nil
+	return dataset.PartInfo{Bytes: n, MD5: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
 func (jr *runJournal) last() *journal.Record {
@@ -329,8 +423,19 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	if err := faults.At("part-closed"); err != nil {
 		return p, err
 	}
+	sus := jr.suspect
+	if sus != nil && ordinal == sus.ordinal && (p.Bytes != sus.info.Bytes || p.MD5 != sus.info.MD5) {
+		return p, fmt.Errorf("%w: part %d is %d bytes, md5 %s now; the part set aside (%s) is %d bytes, md5 %s",
+			ErrAmbiguousTail, ordinal, p.Bytes, p.MD5, sus.path, sus.info.Bytes, sus.info.MD5)
+	}
 	if err := jr.j.Append(journal.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final}); err != nil {
 		return p, err
+	}
+	if sus != nil && ordinal == sus.ordinal {
+		// Reproduced and recorded: the copy set aside is redundant (a
+		// later recovery removes it if this does not).
+		_ = os.Remove(sus.path)
+		jr.suspect = nil
 	}
 	if err := faults.At("recorded"); err != nil {
 		return p, err
@@ -358,6 +463,15 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 	}
 	cfg.Progress.own(false)
 	jr.lock.Release()
+}
+
+// unresolved refuses a finished resume that never reproduced its suspect
+// part: the source no longer holds a part at that ordinal.
+func (jr *runJournal) unresolved() error {
+	if jr == nil || jr.suspect == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: the listing ended before part %d (set aside at %s)", ErrAmbiguousTail, jr.suspect.ordinal, jr.suspect.path)
 }
 
 // after is the resume's last published key: every row must sort after it

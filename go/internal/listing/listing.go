@@ -351,6 +351,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if err != nil {
 		return fail(fmt.Errorf("encode: %w", err))
 	}
+	if err := jr.unresolved(); err != nil {
+		return fail(err)
+	}
 	sum.Output.PartsWritten = len(parts) - sum.Output.PartsRetained
 	for _, part := range parts {
 		sum.Output.Bytes += part.Bytes

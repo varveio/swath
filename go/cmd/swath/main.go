@@ -344,6 +344,8 @@ func explain(err error) error {
 	var mm *journal.MismatchError
 	var ve *journal.VersionError
 	switch {
+	case errors.Is(err, listing.ErrAmbiguousTail):
+		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
 	case errors.Is(err, listing.ErrInterrupted):
 		return fmt.Errorf("%w (swath resume DIR continues it; --overwrite starts over)", err)
 	case errors.Is(err, dataset.ErrNotEmpty):
