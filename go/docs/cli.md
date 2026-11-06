@@ -8,7 +8,7 @@ swath diag list SOURCE [flags]           list with diagnostic flags (comparisons
 swath --version                          print the build (tool, module version, VCS revision)
 ```
 
-SOURCE is a local directory or `s3://bucket[/prefix]`. `swath list` writes a dataset to `--output` (`-o`)
+SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `swath list` writes a dataset to `--output` (`-o`)
 ([internals/parquet-output.md](internals/parquet-output.md)), or with `--count-only` only lists. It prints one
 line, or the run report (`run.json`) with `--report-format json`. `swath resume DIR` replays the command the
 journal recorded; only the runtime flags (`--workers`, `--encoders`, `--memory`, `--spill-max`,
@@ -28,7 +28,7 @@ rewrites it):
 <!-- flags:begin -->
 ```text
 usage: swath list SOURCE --output DIR [flags]
-  SOURCE is a local directory or s3://bucket[/prefix]
+  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
 
   -anonymous
     	S3: send unsigned requests, ignoring any credentials
@@ -44,6 +44,16 @@ usage: swath list SOURCE --output DIR [flags]
     	S3: fill owner_id and owner_display_name
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  -gcs-anonymous
+    	GCS: send no credentials, ignoring any in the environment
+  -gcs-credentials file
+    	GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
+  -gcs-endpoint URL
+    	GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
+  -gcs-request-timeout duration
+    	GCS: per-request timeout; a request that exceeds it is retried (default 30s)
+  -gcs-user-project project
+    	GCS: bill a requester-pays bucket's requests to this project
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -memory bytes
@@ -94,7 +104,7 @@ swath show [--journal] DIR shows a dataset or an interrupted run.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
-  SOURCE is a local directory or s3://bucket[/prefix]
+  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
 
   -anonymous
     	S3: send unsigned requests, ignoring any credentials
@@ -112,6 +122,16 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
   -floors
     	ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
+  -gcs-anonymous
+    	GCS: send no credentials, ignoring any in the environment
+  -gcs-credentials file
+    	GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
+  -gcs-endpoint URL
+    	GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
+  -gcs-request-timeout duration
+    	GCS: per-request timeout; a request that exceeds it is retried (default 30s)
+  -gcs-user-project project
+    	GCS: bill a requester-pays bucket's requests to this project
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -max-keys N

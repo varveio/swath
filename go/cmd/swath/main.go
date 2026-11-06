@@ -30,6 +30,7 @@ import (
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
+	_ "github.com/varveio/swath/go/internal/source/gcs"
 	_ "github.com/varveio/swath/go/internal/source/localfs"
 	_ "github.com/varveio/swath/go/internal/source/s3"
 )
@@ -119,7 +120,7 @@ func commands(w io.Writer) {
   swath show [--journal] DIR               show a dataset or an interrupted run
   swath diag list SOURCE [flags]           list with diagnostic flags (comparisons, policy toggles)
   swath --version                          print the build (tool, module version, VCS revision)
-SOURCE is a local directory or s3://bucket[/prefix]. swath list -h lists the flags.
+SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]. swath list -h lists the flags.
 `)
 }
 
@@ -199,7 +200,7 @@ func usage(w io.Writer, f *flag.FlagSet, diag bool) {
 	} else {
 		fmt.Fprintln(w, "usage: swath list SOURCE --output DIR [flags]")
 	}
-	fmt.Fprintln(w, "  SOURCE is a local directory or s3://bucket[/prefix]")
+	fmt.Fprintln(w, "  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]")
 	fmt.Fprintln(w)
 	f.SetOutput(w)
 	f.PrintDefaults()

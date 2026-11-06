@@ -1,6 +1,6 @@
 # Architecture
 
-`swath` lists a source (a local directory tree or an S3 bucket today) and writes a globally key-sorted
+`swath` lists a source (a local directory tree, an S3 bucket or a GCS bucket) and writes a globally key-sorted
 Parquet dataset in swath's sorted-dataset layout. It is one pure-Go (`CGO_ENABLED=0`) static binary.
 The language-neutral contracts in [`../../docs/internals/`](../../docs/internals/) bind it; the Go statement of
 them is [internals/contracts.md](internals/contracts.md).
@@ -30,7 +30,9 @@ There is no external sort, no staging and no merge.
 | `internal/source/keyrange` | the range engine: `(lo, hi]` ranges, seed, owner-side splits, safe pivots, guards, probes, requeue, counters; behind a page fetch and a provider description | source, schema, counters, faults |
 | `internal/source/keyrange/keyrangetest` | test fixtures: a fake listing API over sorted keys, the fixture and hostile keyspaces; imported by tests only | – |
 | `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://` | source, schema, registry, keyrange, s3/client |
+| `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payload `Object` and schema `swath/gcs-objects/v1`; registers `gs://` | source, schema, registry, keyrange, gcs/client |
 | `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, retries, the page parser | – |
+| `internal/source/gcs/client` | objects.list: OAuth2 credentials, retries, the page parser | – |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream | source, schema |
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]`), `Info` | – |
@@ -60,7 +62,7 @@ router for `P` (Go has no generic methods, so the binding happens where `P` is k
 - **One drainer** (the goroutine that called `order.Run`) walks the node tree depth-first and calls the sink
   (the router) with contiguous ascending segments. It expands a queued range itself when it needs it and no
   worker has claimed it, so a full buffer cannot deadlock the walk.
-- **Publication**: with a journal (S3 with an output directory), each encoder goroutine publishes its part when it closes,
+- **Publication**: with a journal (S3 or GCS with an output directory), each encoder goroutine publishes its part when it closes,
   after the previous part's publication (a channel per part keeps ordinal order): journal record, then
   rename. That chain is the one ordered committer; the journal's append is a synchronous call. See [internals/durability.md](internals/durability.md).
 - **Encoders**: the router starts one goroutine per open part, at most `Encoders` at a time (a semaphore

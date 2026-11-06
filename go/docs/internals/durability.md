@@ -1,6 +1,6 @@
 # Durability and resume
 
-An S3 run with an output directory keeps a journal so that `swath resume DIR` continues an interrupted run. A resume never
+An S3 or GCS run with an output directory keeps a journal so that `swath resume DIR` continues an interrupted run. A resume never
 publishes a key twice and never skips one, and the final dataset is byte-identical to an uninterrupted
 run's. Package `internal/journal` holds the journal; `internal/listing/journal.go` connects it to the router
 and the provider. Filesystem runs opt out: they are fast enough to restart.

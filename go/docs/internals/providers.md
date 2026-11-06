@@ -3,14 +3,14 @@
 **Does the range engine apply?** Dynamic range splitting (ranges, owner-side splits at synthesized pivots,
 seeding) applies to a source only when all three hold: it has **no rank oracle** (nothing can say how many
 keys precede a key, which would allow an exact partition instead), it has a **fabricable seek** (a listing can
-start after any key the caller makes up, as S3's `start-after`), and its pages are **byte-ordered** (every
+start after any key the caller makes up, as S3's `start-after` and GCS's `startOffset`), and its pages are **byte-ordered** (every
 page ascends in unsigned byte order and continues the last). A listing sorted in another order (UTF-16 code
 units put U+10000 before U+E000, the reverse of byte order, and the disorder can cross pages) or unsorted does
 not qualify, even if the provider sorts its output: it normalizes behind `source.Provider` instead. A source
 with a token-only seek is listed as one sequential chain per root; one with no seek reads each range whole and
 sorts it inside the provider. Each provider declares this in `source.Capabilities` (`Seek`: `fabricable`,
 `token_only`, `none`; `Order`: `bytes`, `other`, `none`; `RankOracle`; `RangeEngine()` is the test, and
-`keyrange.New` refuses a `Description.Listing` that fails it): S3 is fabricable and byte-ordered without a
+`keyrange.New` refuses a `Description.Listing` that fails it): S3 and GCS are fabricable and byte-ordered without a
 rank oracle (`token_only` with `--sequential`); the filesystem has no seek and no order (a directory is a
 range, read whole and sorted).
 
@@ -136,6 +136,38 @@ fetch owners), its description adds the client's counters (`attempts`, `retries`
 the S3 adapter: for every fixture and hostile keyspace and six deterministic configurations, a hash of the
 covered intervals, the requests sent, the output and the non-zero counters, against
 `testdata/decisions.golden`, which was generated before the engine left the S3 package.
+
+## GCS (`internal/source/gcs`)
+
+**Client** (`internal/source/gcs/client`). One `objects.list` GET of the JSON API per page:
+`DEFAULT/b/BUCKET/o` with `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`,
+`pageToken`, `maxResults` and `userProject`. On Google's endpoint the request asks for the listed fields only
+(`fields=nextPageToken,prefixes,items(name,size,updated,…)`); another endpoint (`--gcs-endpoint`, an emulator
+or the replay server) gets the full response. A response is read up to 16 MiB; a 400 names its query in the
+error. Credentials: `--gcs-anonymous` sends none; `--gcs-credentials FILE` reads a service-account or
+authorized-user JSON; otherwise Application Default Credentials, and without any the requests go
+unauthenticated (public buckets allow it). The scope is `devstorage.read_only`. The binary links
+`golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata`, not Google's storage client;
+`google.golang.org/api/storage/v1` is a test dependency only (`TestClientPagesMatchGoogleClient` compares
+pages against it). Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
+(100 ms to 5 s); exhaustion is requeued by the engine, as for S3.
+
+**On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,
+so `Description.Listing` is `keyrange.Listing`. `startOffset` is inclusive (`StartInclusive`); `endOffset`
+is exclusive and set to `ExclusiveEnd(Through, …)` when that bound is at most 1,024 bytes, else omitted
+(`end_offset_omitted`) and the engine trims. `AcceptBound` takes any valid UTF-8 name of at most 1,024 bytes
+without CR or LF: `%`, control characters and non-ASCII names are sent as start bounds (query-escaped).
+Every request of a token chain repeats its `startOffset`, `endOffset`, prefix and delimiter with the
+`pageToken`, and empty continuing pages are followed by the engine. The engine's policy flags are the shared
+ones (`keyrange.Flags`); the GCS flags are prefixed `--gcs-` because one flag set serves every provider.
+
+**Schema** `swath/gcs-objects/v1`: the key (the object name), `size`, `last_modified` (`updated`, µs),
+`etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed) and
+`content_type`. **Identity** for resume: the source, the route (the JSON API base and the bucket, as the
+client requests it; scheme and host case are the only equivalence) and `--gcs-user-project`. A run with
+`--max-keys`, or through a supplied client that does not name its route (`gcs.Routed`), cannot resume.
+Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `timeouts`,
+`parse_failures`) and `end_offset_omitted`.
 
 ## Range engine (`internal/source/keyrange`)
 

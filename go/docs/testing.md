@@ -51,6 +51,12 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
   same page. `TestEveryTruncationFails` holds that no proper prefix of a page parses, so a cut body is never
   taken for a shorter page; `TestParseFailuresAreRetried` that such a body is retried and counted. The
   scanner reads the whole body before parsing, so network chunk boundaries never fall inside a token.
+- **GCS client vs Google's JSON API client:** `TestClientPagesMatchGoogleClient` sends the same requests
+  through the hand-rolled `objects.list` call and `google.golang.org/api/storage/v1` (a test dependency;
+  the binary does not link it) to a fake JSON server and compares names, prefixes, tokens, sizes,
+  generations and update times across prefixes, delimiters, both offsets and keys that need escaping. The
+  fake binds each page token to its chain's parameters and can serve empty continuing pages
+  (`TestTokenChainsAndEmptyPages`).
 - **Java swath on replay** (the differential oracle): see "Replay oracle" below.
 
 ## Replay oracle
