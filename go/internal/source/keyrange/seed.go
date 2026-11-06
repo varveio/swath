@@ -22,7 +22,7 @@ const (
 // classified each truncated level, sampled ambiguous folders and cut dense
 // flat folders into radix bands) was ported and measured here and deleted:
 // it gained nothing on any recording and cost 30-60 % more requests on the
-// shallow ones (REPORT.md "Seed descent" and stage D). Git keeps it
+// shallow ones (docs/measurements.md, "Policy switches"). Git keeps it
 // (seedplan.go before its deletion).
 func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) error {
 	in := p.query()

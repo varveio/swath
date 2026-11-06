@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Copyright 2026 Varve Systems Ltd
 # SPDX-License-Identifier: Apache-2.0
-# Pass C: comparison with other listers (REPORT.md "Comparison with other listers").
+# Comparison with other listers (docs/measurements.md, "Local filesystem walker").
+# Drives the pre-restructure walker's flags (--fields, --order).
 # usage: BIN=swath OUT=dir bench/compare.sh [tree...]   warm, REPS interleaved
 # needs gdu (go install github.com/dundee/gdu/v5/cmd/gdu@latest), cargo-built diskus, dust (du-dust),
 # pdu (parallel-disk-usage), dua (dua-cli), and fdfind.

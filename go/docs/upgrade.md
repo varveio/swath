@@ -230,6 +230,6 @@ does, stated as the contract rather than as its code:
 - **DuckDB:** `bench/diffds.py` (row sets both ways with the projection above, strict ascending order within
   and across parts, min/max keys, counts).
 - **Downstream reader:** opens and streams format-2 datasets of every schema (section above);
-  the earlier probe is in REPORT.md, "Downstream reader compatibility".
+  the probe is in [measurements.md](measurements.md#downstream-reader-compatibility).
 - **Dropped:** "the Java reader opens Go output". Java stays the producer oracle (replay differential), not
   a reader.

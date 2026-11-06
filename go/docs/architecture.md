@@ -118,4 +118,4 @@ outside it. See [internals/ordering.md](internals/ordering.md) for what may exce
 [internals/durability.md](internals/durability.md) ·
 [internals/providers.md](internals/providers.md) · [internals/contracts.md](internals/contracts.md) ·
 [internals/dependencies.md](internals/dependencies.md) ·
-[testing.md](testing.md) · [cli.md](cli.md) · measurements: [../REPORT.md](../REPORT.md)
+[testing.md](testing.md) · [cli.md](cli.md) · [measurements.md](measurements.md)

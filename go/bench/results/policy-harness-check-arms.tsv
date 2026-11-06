@@ -1,9 +1,0 @@
-noaa-eri-pds	java-default	1	rc=0	wall=45.22	replay_http=1352
-noaa-eri-pds	java-off	1	rc=0	wall=41.62	replay_http=1339
-noaa-eri-pds	go-head	1	rc=0	wall=3.68	replay_http=1224
-noaa-eri-pds	java-default	2	rc=0	wall=44.06	replay_http=1353
-noaa-eri-pds	java-off	2	rc=0	wall=41.34	replay_http=1339
-noaa-eri-pds	go-head	2	rc=0	wall=3.64	replay_http=1232
-noaa-eri-pds	java-default	3	rc=0	wall=44.14	replay_http=1351
-noaa-eri-pds	java-off	3	rc=0	wall=41.23	replay_http=1339
-noaa-eri-pds	go-head	3	rc=0	wall=3.79	replay_http=1247

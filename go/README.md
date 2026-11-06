@@ -6,7 +6,7 @@ dataset in Swath's sorted-dataset layout (`data/part-NNNNN.parquet` and `manifes
 pure-Go (`CGO_ENABLED=0`) static binary. The Java distribution keeps its own `swath` launcher (`swath-cli`);
 the two are separate tools. Documentation:
 [docs/architecture.md](docs/architecture.md) (start here), [docs/cli.md](docs/cli.md),
-[docs/testing.md](docs/testing.md); running it in production: [docs/operating.md](docs/operating.md). Measurements and findings: [REPORT.md](REPORT.md).
+[docs/testing.md](docs/testing.md); running it in production: [docs/operating.md](docs/operating.md). Measurements: [docs/measurements.md](docs/measurements.md).
 
 ```bash
 ./build.sh -o swath                         # CGO_ENABLED=0, the revision stamped (docs/operating.md)

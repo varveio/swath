@@ -72,7 +72,7 @@ not a listing envelope is a `parse` failure and retried, never an empty final pa
 followed; and, shared through `internal/source/objhttp`, the retry loop, failure classification, client
 counters and the admission limiter.
 
-**Why.** CPU per listed object, measured on fake buckets (synthetic; [REPORT.md](../../REPORT.md)): S3, the
+**Why.** CPU per listed object, measured on fake buckets (synthetic; [measurements](../measurements.md#client-cpu-per-object-and-binary-size)): S3, the
 SDK's client 8.7 µs against ours 1.0 (70 % of the SDK's in its REST-XML deserializer), and a stripped binary
 36 % smaller; GCS, Google's generated JSON client 3.1 µs against ours 2.5, half the allocations per page (a
 small gain: both decode JSON with the standard library), and a binary 47 % larger with that client linked.
@@ -327,8 +327,7 @@ complete and ended with its greatest prefix `pk`. Unusable start-after values ar
 
 Swath's hybrid seed descent (`HybridSeedPlanner`: a walk of the folder hierarchy that classified truncated
 levels, sampled ambiguous folders and cut dense flat folders into radix bands) was ported, measured and
-deleted: no gain on any recording, 30-60 % more requests on the shallow ones (REPORT.md "Seed descent" and
-stage D). Git keeps it: `internal/source/keyrange/seedplan.go` and its tests, removed after `ba2abb2`.
+deleted: no gain on any recording, 30-60 % more requests on the shallow ones ([measurements](../measurements.md#policy-switches)). Git keeps it: `internal/source/keyrange/seedplan.go` and its tests, removed after `ba2abb2`.
 
 **Splits are owner-side.** A range's children become claimable only when its `Expand` returns, so there are
 no thieves. After each full page the owner takes the provider mutex and computes demand,
@@ -337,8 +336,8 @@ ranges (open frontier first, then keys listed, then age), it emits `Child((c, m]
 returns, where `c` is the last key emitted. `(lo, hi] = (lo, c] ∪ (c, m] ∪ (m, hi]`, disjoint and in order.
 Every split feeds an idle worker and no LIST is repeated.
 
-**Floors** (Swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on; REPORT.md
-"Gate-chain floors").
+**Floors** (Swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on;
+[measurements](../measurements.md#policy-switches)).
 Two gates on bounded ranges, read from a position estimate rather than a request (Swath's default
 rate-anchored sensor, `RateAnchoredEstimator`): the keys left are `max(keys listed, 1 page) × g`, where `g`,
 clamped to [1/4, 16], is the remaining span over the consumed span read as base-256 fractions (12 bytes) past
@@ -381,14 +380,14 @@ The split's demand slot is reserved in the same decision, so concurrent owners d
 worker. Every pivot is safe (I12).
 
 Java's 1-key pivot probe (one `max-keys=1` request after the pivot, moving an empty upper child's pivot
-toward the cursor) was ported behind `-probe` and deleted: on five replayed recordings (REPORT.md, "Step
-5a") it cost more than the empty children it saved, a serial round trip before each split that lowered
-concurrency, 1.4–2.2× slower than without it. Git keeps it (`probe` in `keyrange/parallel.go`, removed after
+toward the cursor) was ported behind `-probe` and deleted: on the deep replayed recordings
+([measurements](../measurements.md#policy-switches)) it cost more than the empty children it saved, a serial
+round trip before each split that lowered concurrency: 27–31 % more requests and 2.2–2.3× the wall. Git keeps it (`probe` in `keyrange/parallel.go`, removed after
 `ba2abb2`).
 
 **Why.** Before the probe, the density estimate was the first choice and could reach far past the data on
 skewed shapes. On a replay of noaa-nws-fourcastnetgfs-pds, 1,362 of 2,927 splits left an empty upper child,
-and the run used about 1 of 64 workers (REPORT.md "Step 5a").
+and the run used about 1 of 64 workers (an early build, before the pivot change).
 
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted

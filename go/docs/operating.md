@@ -27,7 +27,7 @@ checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI 
 git worktree may lack (`--version` then shows none).
 
 The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. Only Linux has been
-run. A stripped linux/amd64 binary is about 18 MB ([REPORT.md](../REPORT.md), "Step 1b revision": 17.7 MB
+run. A stripped linux/amd64 binary is about 18 MB ([measurements](measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
 with GCS).
 
 `--version` prints the tool name, the module version (`devel` for a source build) and the VCS revision when the
@@ -173,8 +173,8 @@ attempt latency is above twice its baseline or three or more timeouts fell in th
   again (2 s doubling to 60 s) for as long as the run lives. Retry exhaustion never fails a run; only the stall
   watchdog does.
 
-Measured on replay with injected faults (synthetic, [REPORT.md](../REPORT.md), "Throttle handling and adaptive
-concurrency"): a 5 s storm of 50 % SlowDown drops the limit from 64 to 1 in under 0.1 s, and full concurrency
+Measured on replay with injected faults (synthetic,
+[measurements](measurements.md#throttling-through-the-fault-proxy)): a 5 s storm of 50 % SlowDown drops the limit from 64 to 1 in under 0.1 s, and full concurrency
 returned about 68 s after the storm; the run sent 11-38 % fewer requests and took 1.5-3.5x the wall time of a
 fixed 64. Under a sustained 20 % throttle rate the limit stays at 1-2 for the whole run (about 23x the wall
 time of `--limiter=false` on replay). If a run crawls with `throttles` rising and the report's
@@ -279,8 +279,7 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
 - **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
   committed dataset is the complete result of a live listing, exactly once per key, not a point-in-time view.
 - **Memory:** `--row-budget` bounds rows in flight, not resident memory (see Sizing).
-- **Scale:** billions of keys, runs of hours and 256 or more workers are unmeasured ([REPORT.md](../REPORT.md),
-  "Known gaps").
+- **Scale:** billions of keys, runs of hours and 256 or more workers are unmeasured ([measurements](measurements.md#known-gaps)).
 
 ## When it goes wrong
 

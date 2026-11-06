@@ -15,7 +15,7 @@ dataset layout"); this page says how the Go writer meets it.
 | Key column index | one-page indexes stamped `BoundaryOrder = ASCENDING` (`ascendingKey` adapter); multi-page indexes untouched | older Java readers reject a one-page index with `UNORDERED`; the downstream reader and current Java accept both. Built through parquet-go's public indexer factory, not by rewriting footers. |
 | `etag` | `DELTA_BYTE_ARRAY` | ETags are unique hex: a dictionary never pays. parquet-mr (Java swath) tries a dictionary and falls back to `DELTA_BYTE_ARRAY`; writing delta directly matches its result and is 2–3 % smaller per dataset than dictionary-then-PLAIN. |
 | Other byte arrays | `RLE_DICTIONARY`, 8 KiB dictionary limit per chunk | storage class, owner and checksum columns repeat. |
-| Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap (REPORT.md "Step 4a"). |
+| Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap ([measurements](../measurements.md#output-identity-with-the-java-tool)). |
 | Booleans | `PLAIN` | |
 | Pages | v2, 1024 rows, page-header statistics off | served geometry: point lookups decode one 1024-row page. The column index carries page bounds (truncated to 1024 bytes); header statistics would duplicate them. |
 | Row groups | byte target 8 MiB on the writer's `Size()` estimate, checked at page boundaries; ceiling 1,000,000 rows | served geometry; the estimate is the encoded payload, not a heap bound. |
@@ -140,7 +140,7 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 
 - **The downstream reader** opens format-2 S3 datasets with the changes in [../upgrade.md](../upgrade.md): it
   dispatches on the manifest's format, accepts whole-bucket coverage from the manifest, reads the
-  current-object schema and the `swath.profile` stamp (REPORT.md, "Downstream reader compatibility").
+  current-object schema and the `swath.profile` stamp ([measurements](../measurements.md#downstream-reader-compatibility)).
 - **swath's Java reader** does not open format 2, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
 

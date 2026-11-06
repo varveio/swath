@@ -1,4 +1,0 @@
-cold --order none: wall/user/sys/maxrssKB 7.40 4.06 15.31 312708
-cold --order dfs-parallel --reorder-rows 100000: wall/user/sys/maxrssKB 7.86 4.72 17.09 105312
-cold --order dfs-parallel: wall/user/sys/maxrssKB 7.47 4.82 16.93 107788
-cold --order dfs-sequential: wall/user/sys/maxrssKB 18.62 4.03 11.98 55252

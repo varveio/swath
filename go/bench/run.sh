@@ -14,7 +14,7 @@ TREES=${*:-wide deep realistic}
 BIN=${BIN:?set BIN to the swath binary (go build ./cmd/swath)}
 BASE=${BASE:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}}
 REPS=${REPS:-3}
-OUT=${OUT:-$(dirname "$0")/results}
+OUT=${OUT:?set OUT to a results directory outside the tree}
 SCRATCH=${SCRATCH:-/tmp/swath-local-bench}
 FILTER=${FILTER:-.*}
 mkdir -p "$OUT" "$SCRATCH"
