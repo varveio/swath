@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"cloud.google.com/go/auth"
 	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
 
@@ -119,7 +118,6 @@ func TestClassify(t *testing.T) {
 		{"metadata server 503", &metadata.Error{Code: 503, Message: "unavailable"}, true, ""},
 		{"metadata server 429", fmt.Errorf("compute: %w", &metadata.Error{Code: 429}), true, ""},
 		{"metadata server 404", &metadata.Error{Code: 404, Message: "no service account"}, false, ""},
-		{"auth library 503", &auth.Error{Response: &http.Response{StatusCode: 503}}, true, ""},
 		{"token exchange timeout", fmt.Errorf("oauth2: %w", context.DeadlineExceeded), true, objhttp.ClassTimeout},
 	} {
 		e, _ := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: failingTokens{x.err}, MaxAttempts: 1})

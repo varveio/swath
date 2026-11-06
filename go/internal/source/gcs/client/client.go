@@ -31,7 +31,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"cloud.google.com/go/auth"
 	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -324,14 +323,11 @@ func transientToken(err error) bool {
 	status := func(s int) bool { return s >= 500 || s == 408 || s == 429 }
 	var re *oauth2.RetrieveError
 	var me *metadata.Error
-	var ae *auth.Error
 	switch {
 	case errors.As(err, &re):
 		return re.Response != nil && status(re.Response.StatusCode)
 	case errors.As(err, &me):
 		return status(me.Code)
-	case errors.As(err, &ae) && ae.Response != nil:
-		return status(ae.Response.StatusCode)
 	}
 	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
 }
