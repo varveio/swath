@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parquet-go/parquet-go"
+
 	"github.com/varveio/swath/go/sortedparquet"
 	"github.com/varveio/swath/go/sortedparquet/format2"
 	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
@@ -39,7 +41,7 @@ func obj(key string, i int) sortedparquettest.Row { return sortedparquettest.Obj
 // OBJECT rows with their nulls, and writes the replay-owned schema.
 func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	marker := obj("p/", 9)
-	marker.RowType, marker.Size = "PREFIX", nil
+	marker.RowType, marker.Size = "COMMON_PREFIX", nil
 	deleted := obj("x", 8)
 	deleted.RowType, deleted.IsDeleteMarker = "DELETE_MARKER", true
 	untimed := obj("m", 0)
@@ -144,5 +146,73 @@ func TestRefusesANonEmptyOutput(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(out, "keep")); err != nil {
 		t.Fatal("the output's contents must be left alone")
+	}
+}
+
+// TestRejectsUnknownRowType refuses a row_type outside the canonical three,
+// as spelled, and a null one; it accepted them before and dropped the
+// rows.
+func TestRejectsUnknownRowType(t *testing.T) {
+	for _, rowType := range []string{"PREFIX", "object", "", "OBJECT "} {
+		bad := obj("p/", 1)
+		bad.RowType = rowType
+		in := capture(t, []sortedparquettest.Row{obj("a", 0), bad})
+		out := filepath.Join(t.TempDir(), "o")
+		if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, ErrRowType) || !strings.Contains(err.Error(), "'p/'") {
+			t.Fatalf("row_type %q: %v", rowType, err)
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Fatalf("row_type %q: the output was created", rowType)
+		}
+	}
+	type nullable struct {
+		Key     string  `parquet:"key"`
+		RowType *string `parquet:"row_type,optional"`
+	}
+	dir := filepath.Join(t.TempDir(), "capture")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := parquet.WriteFile(filepath.Join(dir, "c.parquet"), []nullable{{Key: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), Options{Capture: dir, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrRowType) || !strings.Contains(err.Error(), "null") {
+		t.Fatalf("null row_type: %v", err)
+	}
+}
+
+// TestRejectsCaptureWithoutParts refuses a capture directory with no
+// *.parquet part (it wrote an empty dataset before), and still sorts a
+// capture whose one part holds no rows.
+func TestRejectsCaptureWithoutParts(t *testing.T) {
+	empty := t.TempDir()
+	if err := os.WriteFile(filepath.Join(empty, "notes.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), Options{Capture: empty, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrNoParts) {
+		t.Fatalf("no parts: %v", err)
+	}
+	stats, err := Run(context.Background(), Options{Capture: capture(t, nil), Output: filepath.Join(t.TempDir(), "o")}, nil)
+	if err != nil || stats.CaptureRows != 0 || stats.Objects != 0 {
+		t.Fatalf("an empty part: %+v %v", stats, err)
+	}
+}
+
+// TestDuplicateAndVersionedNonObjectRows applies the duplicate and version
+// rules to every row type: an OBJECT and a COMMON_PREFIX row with one key
+// in different parts, and a versioned DELETE_MARKER.
+func TestDuplicateAndVersionedNonObjectRows(t *testing.T) {
+	prefix := obj("d/", 5)
+	prefix.RowType, prefix.Size = "COMMON_PREFIX", nil
+	in := capture(t, []sortedparquettest.Row{obj("a", 0), obj("d/", 1)}, []sortedparquettest.Row{prefix})
+	if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrDuplicateKey) || !strings.Contains(err.Error(), "'d/'") {
+		t.Fatalf("an object and a prefix with one key: %v", err)
+	}
+	marker := obj("x", 2)
+	version := "v9"
+	marker.RowType, marker.IsDeleteMarker, marker.VersionID = "DELETE_MARKER", true, &version
+	in = capture(t, []sortedparquettest.Row{obj("a", 0), marker})
+	if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrVersioned) || !strings.Contains(err.Error(), "'x'") {
+		t.Fatalf("a versioned delete marker: %v", err)
 	}
 }

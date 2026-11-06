@@ -24,7 +24,6 @@
 package sortfixture
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -93,6 +92,22 @@ var ErrVersioned = errors.New("sort-fixture: versioned capture")
 // ErrKeyTooLong reports an object key over the allowed length.
 var ErrKeyTooLong = errors.New("sort-fixture: key too long")
 
+// ErrRowType reports a capture row whose row_type is null or not one of
+// rowTypes: the canonical schema's values, spelled as the Java tool writes
+// them and parses them back, strictly.
+var ErrRowType = errors.New("sort-fixture: invalid row_type")
+
+// ErrNoParts reports a capture directory without *.parquet parts. A part
+// that holds no rows is a capture of an empty listing; no part at all is a
+// wrong path.
+var ErrNoParts = errors.New("sort-fixture: no *.parquet parts")
+
+// rowTypes are the canonical row_type values; only objectRowType rows are
+// written.
+var rowTypes = [...]string{objectRowType, "COMMON_PREFIX", "DELETE_MARKER"}
+
+const objectRowType = "OBJECT"
+
 // row is one capture row kept for sorting: its key, whether it is a
 // current object, and the object's facts.
 type row struct {
@@ -100,9 +115,10 @@ type row struct {
 	schema.Row[Object]
 }
 
-// Run reads the capture, keeps its OBJECT rows, refuses a capture with a
-// versioned row (ErrVersioned) or two rows of any type with one key
-// (ErrDuplicateKey), sorts the objects by unsigned key bytes and writes
+// Run reads the capture, keeps its OBJECT rows, refuses a capture with no
+// parts (ErrNoParts), a row whose row_type is not OBJECT, COMMON_PREFIX or
+// DELETE_MARKER (ErrRowType), a versioned row (ErrVersioned) or two rows of
+// any type with one key (ErrDuplicateKey), sorts the objects by unsigned key bytes and writes
 // them as a format-2 dataset of SchemaID, nulls intact. It writes one
 // summary line to log.
 func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
@@ -117,6 +133,9 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	files, err := javaera.Resolve(opts.Capture)
 	if err != nil {
 		return stats, fmt.Errorf("sort-fixture: capture: %w", err)
+	}
+	if len(files) == 0 {
+		return stats, fmt.Errorf("%w in %s", ErrNoParts, opts.Capture)
 	}
 	var rows []row
 	for _, file := range files {
@@ -274,7 +293,11 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 			if !values[cVersion].IsNull() {
 				return rows, fmt.Errorf("%w: key '%s' carries version_id '%s'", ErrVersioned, key, values[cVersion].ByteArray())
 			}
-			kept := row{object: bytes.Equal(values[cRowType].ByteArray(), []byte("OBJECT"))}
+			rowType := values[cRowType]
+			if rowType.IsNull() || !slices.Contains(rowTypes[:], string(rowType.ByteArray())) {
+				return rows, fmt.Errorf("%w: key '%s' has row_type %s", ErrRowType, key, describeValue(rowType))
+			}
+			kept := row{object: string(rowType.ByteArray()) == objectRowType}
 			kept.Key = string(key)
 			if kept.object {
 				kept.Data = Object{
@@ -297,6 +320,14 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 			return rows, readErr
 		}
 	}
+}
+
+// describeValue spells a string value for an error: quoted, or null.
+func describeValue(v parquet.Value) string {
+	if v.IsNull() {
+		return "null"
+	}
+	return fmt.Sprintf("%q", v.ByteArray())
 }
 
 // number returns an integer column's value, nil when null.
