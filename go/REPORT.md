@@ -2280,31 +2280,27 @@ Total about 2.79M inodes. The trees stay in `/home/user/bench-data`. The retaine
 
 ## Known gaps
 
-- Names that are not valid UTF-8 are skipped and counted; for a directory the whole subtree is skipped. This
-  needs an escaping rule before it can match Swath's UTF-8 key contract. No 1024-byte key cap is enforced.
-- No `--one-file-system`: the walk crosses mount points. No checkpoint or resume.
-- `getdents64` and the names tier are serial within one directory; only the stat phase splits, and only in
-  `--order none`. The DFS modes read each directory whole on one worker, so a huge directory is serial there.
-  Its rows also count once against the reorder bound, which is exceeded by up to one in-flight directory per
-  worker.
-- `--encode-scheme part` sizes parts from a frozen part-0 ratio. On `realistic` the parts landed 15–19 % over
-  target, because the logical-size model is coarse. In streaming modes it retains up to (2N+1) parts of rows,
-  and that bound is not tied to `--reorder-rows`.
-- `dfs-parallel` reorder-bound waiting uses one mutex and condition variable. That is not a bottleneck at
-  4 CPUs (profile), but it is untested at high core counts.
-- Timestamps are truncated to microseconds. uid/gid ≥ 2^31 and inode/dev ≥ 2^63 read back negative (bit
-  patterns).
-- The run report `_swath_local_summary.json` uses swath-local's own schema. It was renamed from
-  `_swath_summary.json`, Swath's reserved name, which Varve parses and rejects. `.swath-state.json` has
-  `run_id: null`.
-- No cycle protection (bind mounts). Some error categories are coarse: a directory that vanishes before its open
-  counts as `open_errors` (review L4, L5; not fixed).
-- Encoding is one part at a time. Concurrent zstd inflated compression CPU, and parts are not encoded in parallel.
-- Interoperability was verified with DuckDB and parquet-go, not with Swath's Java reader or swath-replay. Varve's Go
-  reader does not accept it yet; see "Varve reader compatibility".
-- Cold-cache numbers are guest-cold in a VM and single runs. Windows and macOS builds were compiled, not run.
-- All trees are synthetic. Real trees (deep `node_modules`, large flat directories, network or overlay
-  filesystems) were not measured.
+As of this head (the local-walker gaps of the first pass that no longer hold were removed: names are written as
+bytes, not skipped; ids are unsigned; encoding is parallel; S3 and GCS runs resume).
+
+- **Local filesystem.** No `--one-file-system`: the walk crosses mount points. Symlinks are not followed, but a
+  bind-mount cycle is not detected. A directory is read whole and sorted on one worker, so a huge flat directory
+  is serial. Local keys have no length cap (S3 keys are capped at 1,024 bytes). Timestamps are microseconds. A
+  local run keeps no journal: an interrupted one starts over.
+- **Resume granularity.** S3 and GCS resume from the journal at part granularity: a resume lists again after
+  the last published key, so the rows of the open part (at most 64 MiB, or 60 s of a slow frontier with
+  `--part-interval`) are listed twice; Java resumed per range cursor.
+- **Throttling.** The limiter has no slow start (it starts at `--workers`); under sustained throttling (the
+  20 % arm in "Throttle handling") it holds the limit at 1-2 requests in flight for the whole run (Java's
+  gauge rules; Java was not run under that fault here).
+- **Not built:** versions mode, filters beyond a prefix, text output (TSV, JSONL, table, stdout), Azure.
+- **Platforms.** Windows runs have no output lock and no directory sync ([docs/internals/durability.md](docs/internals/durability.md));
+  Windows and macOS builds were compiled, not run.
+- **Scale.** Billions of keys, runs of hours and 256 or more workers are unmeasured; the replay recordings and
+  live buckets in this report are the largest runs.
+- **Interoperability.** Format 2 is read by a patched copy of Varve (see "Varve reader compatibility"), not by
+  Java swath's reader.
+- **Local benchmarks.** Cold-cache numbers are guest-cold in a VM and single runs; all trees are synthetic.
 
 ### Review fixes 2026-11-05
 
