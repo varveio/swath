@@ -1,8 +1,9 @@
 # Durability and resume
 
 An S3 or GCS run with an output directory keeps a journal so that `swath resume DIR` continues an interrupted run. A resume never
-publishes a key twice and never skips one, and the final dataset is byte-identical to an uninterrupted
-run's. Package `internal/journal` holds the journal; `internal/listing/journal.go` connects it to the router
+publishes a key twice and never skips one, and the final dataset holds an uninterrupted run's rows: byte-identical
+to it on a static source when no part was cut by time, the same rows with timing-dependent part boundaries when
+`--part-interval` cut one (the promise below). Package `internal/journal` holds the journal; `internal/listing/journal.go` connects it to the router
 and the provider. Filesystem runs opt out: they are fast enough to restart.
 
 ## Progress states
@@ -157,8 +158,8 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
 4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
    normal start-up. S3 lists one range `(K, ⊤]` and splits it as on a fresh run. If K is not a bound
    the provider accepts, the range starts at K's longest accepted prefix and drops keys up to K.
-5. Continues the router at the next ordinal with the recorded limit, so part boundaries fall exactly where
-   the uninterrupted run would have put them.
+5. Continues the router at the next ordinal with the recorded limit, so size cuts fall exactly where the
+   uninterrupted run would have put them (a cut by `--part-interval` depends on timing in either run).
 
 A record also carries whether its part is the final one. Once the final part is durable, a
 resume does not list again: it only publishes. On a changed bucket, listing again could add a second final

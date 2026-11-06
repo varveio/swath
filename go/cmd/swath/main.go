@@ -304,7 +304,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	o.memory = listing.DefaultMemory
 	f.Var(&o.memory, "memory", "`bytes` of rows held between listing and encoding; sets the reorder bound")
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default 64, whatever the CPU count)")
-	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS); fewer are admitted when --memory or the descriptor limit cannot carry them, never fewer than one")
+	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS, lowered to what --memory and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
 	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full, bounding the age of the durable progress; 0: parts close by size only")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
 	f.BoolVar(&o.spillCompress, "spill-compress", false, "compress spill files (zstd level 1)")

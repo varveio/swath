@@ -14,15 +14,18 @@ provider ──ranges──▶ order ──ascending row segments──▶ parqu
 
 Order comes from the ranges, not from a sort afterwards. A provider expands a *range* into rows that are
 already ascending and into child ranges that sort between them. The order stage walks that tree depth-first,
-which is global key order, and streams rows at the frontier with bounded memory. The router cuts deterministic
-part boundaries; per-part encoders write them in parallel; the dataset package publishes them in order.
-There is no external sort, no staging and no merge.
+which is global key order, and streams rows at the frontier with bounded memory. The router cuts part
+boundaries by size (deterministic for a given listing) and, with `--part-interval`, by age (timing-dependent);
+per-part encoders write them in parallel; the dataset package publishes them in order. There is no external
+sort: no sorted runs staged on disk and no merge pass. What does sit on disk before publication is ordinary
+pipeline state: closed Parquet parts in `.swath/parts/` (claimed while their journal record is written,
+then renamed into `data/`) and, with spill, rows ahead of the frontier, read back in key order.
 
 ## Packages
 
 | Package | Role | Imports |
 |---|---|---|
-| `cmd/swath` | the commands (`list`, `resume`, `show`, `diag list`); flags into `listing.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*listing.ConfigError` for a bad value or combination), with each provider's own flag group; `signal.NotifyContext`; usage generated from the flag set | listing, registry, journal, dataset; providers only to register them (`_` imports) |
+| `cmd/swath` | the commands (`list`, `resume`, `show`, `diag list`); flags into `listing.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*listing.ConfigError` for a bad value or combination), with each provider's own flag group; `signal.Notify` on a channel, the run cancelled through `context.WithCancelCause` with the signal as cause (so SIGINT exits 130 and SIGTERM 143), and a forced exit after the shutdown grace; usage generated from the flag set | listing, registry, journal, dataset; providers only to register them (`_` imports) |
 | `internal/listing` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
 | `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
 | `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`) | source, schema, order, parquetout |

@@ -47,7 +47,7 @@ usage: swath list SOURCE --output DIR [flags]
   -dualstack
     	S3: use the dual-stack (IPv6) endpoint
   -encoders int
-    	Parquet encoder goroutines (default GOMAXPROCS); fewer are admitted when --memory or the descriptor limit cannot carry them, never fewer than one
+    	Parquet encoder goroutines (default GOMAXPROCS, lowered to what --memory and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
   -endpoint URL
     	S3: endpoint URL of an S3-compatible store
   -fetch-owner
@@ -134,7 +134,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -dualstack
     	S3: use the dual-stack (IPv6) endpoint
   -encoders int
-    	Parquet encoder goroutines (default GOMAXPROCS); fewer are admitted when --memory or the descriptor limit cannot carry them, never fewer than one
+    	Parquet encoder goroutines (default GOMAXPROCS, lowered to what --memory and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
   -endpoint URL
     	S3: endpoint URL of an S3-compatible store
   -fetch-owner
@@ -270,9 +270,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   (default 0: half the space free on the spill filesystem when the run starts, after the reserve) or when the
   filesystem would drop below `--spill-reserve` free bytes (default 1 GiB)
   ([internals/ordering.md](internals/ordering.md)).
-- **Encoders:** `--encoders` (default GOMAXPROCS) is a ceiling: each encoder is admitted against the half of
-  `--memory` outside the row budget (one writer's working set each) and the descriptor limit (after the spill
-  readers, the workers' connections and a reserve), never fewer than one; a warning names the shortfall.
+- **Encoders:** the default count is GOMAXPROCS lowered to what the resources carry: one writer's working set
+  each from the half of `--memory` outside the row budget, and the descriptor limit (after the spill readers,
+  the workers' connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given;
+  when the resources cannot carry it, a warning names the shortfall.
 - **Durable-progress age:** `--part-interval` (default 30 s, Java's rotation interval; 0: off) closes an open part that holds rows once
   it is that old, although not full, so the journal's recovery point (what a resume keeps) is never older than
   about that on a slow frontier; with 0, parts close by `--part-size` only and their boundaries do not depend on
@@ -351,13 +352,25 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   bounded stop: the run is resumable but did not finish in the time given, so it is retried only under a
   separate budget (a count of attempts or a total time), and past that budget it needs a person: a source that
   keeps the run alive without rows hits 124 on every attempt.
-- **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename:
-  `objects` (rows listed so far), `ordered`, `encoded`, `parts`, `advance` (their sum, which rises in every
-  phase), `answered` (requests the service answered usably: liveness, not progress), `throttles` and
-  `timeouts` (throttle answers and attempts past the request timeout), `mutex_wait_ms` and `mutex_max_hold_ms`
-  (S3 and GCS: the range engine's decision mutex, the goroutines' summed wait for it and its longest hold;
-  also the counters `mutex.wait_ns` and `mutex.max_hold_ns`), `started_at`, `as_of`,
-  `duration_ms`. A supervisor watches that file; `DIR/run.json` follows the
+- **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename
+  (while the run holds the output). This is its one schema (`listing.ProgressSnapshot`; `TestProgressSchemaDoc`
+  keeps the two in step):
+
+  | Field | Meaning |
+  |---|---|
+  | `objects` | rows listed so far |
+  | `ordered`, `encoded` | rows handed to the encoders, rows written into parts |
+  | `parts` | parts published |
+  | `verified_bytes` | a resume's bytes of retained parts checked so far |
+  | `advance` | the sum of the above; rises in every phase |
+  | `answered` | requests the service answered usably (liveness, not progress) |
+  | `throttles`, `timeouts` | throttle answers; attempts past the request timeout |
+  | `part_age_ms` | time since the last part was published (or since the start): the recovery point's age |
+  | `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |
+  | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes) |
+  | `started_at`, `as_of`, `duration_ms` | timing |
+
+  A supervisor watches that file; `DIR/run.json` follows the
   commit. `--max-duration` and `--stall-timeout` are runtime flags: `swath resume` replays the recorded
   values unless given again.
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;

@@ -119,24 +119,12 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
 
 `DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output.
 
-| Field | Meaning |
-|---|---|
-| `objects` | rows listed so far |
-| `ordered`, `encoded` | rows handed to the encoders, rows written into parts |
-| `parts` | parts published |
-| `verified_bytes` | a resume's bytes of retained parts checked so far |
-| `advance` | the sum of the above; rises in every phase |
-| `answered` | requests the service answered usably (liveness, not progress) |
-| `throttles`, `timeouts` | throttle answers; attempts past the request timeout |
-| `part_age_ms` | time since the last part was published (or since the start): the recovery point's age |
-| `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |
-| `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes) |
-| `started_at`, `as_of`, `duration_ms` | timing |
+Its fields are listed once, under "Progress file" in [cli.md](cli.md).
 
 In-flight requests and the limiter's state are not in `progress.json`. They are in the report, under
-`source.stats.counters.values`: `attempts`, `requests`, `retries`, `throttles`, `timeouts`, `inflight.max`,
-`inflight.ns` (divided by the listing time, `timings.listing_ms`, it is the mean in flight), `limiter.decreases`,
-`limiter.increases`, `limiter.depth`, `limiter.waits`, and `source.stats.mean_active` (mean active ranges). The
+`source.stats.counters.values`: `attempts`, `requests`, `retries`, `throttles`, `timeouts`, `inflight.max_active`,
+`inflight.busy_ns` (divided by the listing time, `timings.listing_ms`, it is the mean in flight), `limiter.decreases`,
+`limiter.increases`, `limiter.max_depth`, `limiter.waits`, and `source.stats.mean_active` (mean active ranges). The
 report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `peak_nodes`, `peak_markers`,
 `part_time_cuts` and `spill.peak_bytes`, `spill.peak_readers`, `spill.max_bytes`.
 
@@ -173,7 +161,7 @@ concurrency"): a 5 s storm of 50 % SlowDown drops the limit from 64 to 1 in unde
 returned about 68 s after the storm; the run sent 11-38 % fewer requests and took 1.5-3.5x the wall time of a
 fixed 64. Under a sustained 20 % throttle rate the limit stays at 1-2 for the whole run (about 23x the wall
 time of `--limiter=false` on replay). If a run crawls with `throttles` rising and the report's
-`limiter.decreases` high (`limiter.depth` near `--workers`: the limit fell to about 1), that is this rule; `--limiter=false` with `--request-rate` is the fixed-rate alternative.
+`limiter.decreases` high (`limiter.max_depth` near `--workers`: the limit fell to about 1), that is this rule; `--limiter=false` with `--request-rate` is the fixed-rate alternative.
 
 ## Stopping and resuming
 
