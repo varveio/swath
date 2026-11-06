@@ -54,6 +54,37 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
   its exact bytes, like any other. Mount points are crossed; there is no `-one-file-system` yet.
 
+## The list clients: hand-rolled on the SDK's auth
+
+Each object-store provider makes one call, its list request, through a client of its own, and takes
+authentication from the vendor's SDK modules.
+
+**The SDK's.** S3: the credential chain (environment, shared config and profiles, SSO, web identity and STS,
+IMDS) and the SigV4 signer (`aws-sdk-go-v2/config`, `credentials`, `aws/signer/v4`). GCS: Google's
+credential loading (service-account and authorized-user files, Application Default Credentials, the metadata
+server) and token refresh (`golang.org/x/oauth2`, `cloud.google.com/go/compute/metadata`).
+
+**Ours.** The one list call per provider (ListObjectsV2; `objects.list`), built and sent by
+`internal/source/s3/client` and `internal/source/gcs/client`; S3's response parser, a hand-written scanner
+over the body that allocates per page, not per object; GCS's decoding of only the listed fields with
+`encoding/json` into a fixed envelope; bodies read up to 16 MiB; envelope and page validation (a 200 that is
+not a listing envelope is a `parse` failure and retried, never an empty final page); redirects never
+followed; and, shared through `internal/source/objhttp`, the retry loop, failure classification, client
+counters and the admission limiter.
+
+**Why.** CPU per listed object, measured on fake buckets (synthetic; [REPORT.md](../../REPORT.md)): S3, the
+SDK's client 8.7 µs against ours 1.0 (70 % of the SDK's in its REST-XML deserializer), and a stripped binary
+36 % smaller; GCS, Google's generated JSON client 3.1 µs against ours 2.5, half the allocations per page (a
+small gain: both decode JSON with the standard library), and a binary 47 % larger with that client linked.
+And control: the durability reviews rely on points the SDK clients do not expose, such as the attempt-level
+retry and requeue that never fail a run, one failure vocabulary across providers, liveness counted from
+answered requests, the refusal of redirects (the resume identity freezes the route), bounded bodies and the
+validation of every page.
+
+The SDK service clients (`service/s3`, `google.golang.org/api/storage/v1`) are test-only oracles
+(`internal/source/s3/sdkoracle`, `TestClientPagesMatchSDK`, `TestClientPagesMatchGoogleClient`); the binary
+links neither ([testing.md](../testing.md)).
+
 ## S3 (`internal/source/s3`)
 
 **Client** (`internal/source/s3/client`). The ListObjectsV2 request, the retry policy and the response parser

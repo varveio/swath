@@ -43,6 +43,9 @@ There is no external sort, no staging and no merge.
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
 | `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
 
+The list clients are hand-rolled on the SDKs' authentication; what is the SDK's, what is ours and why:
+[internals/providers.md](internals/providers.md#the-list-clients-hand-rolled-on-the-sdks-auth).
+
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
 `internal/source` and `internal/registry` import no provider: `internal/source` `TestImportBoundary` checks it,
