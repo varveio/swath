@@ -104,9 +104,9 @@ type BStats struct {
 	RunRowsResumed int64 `json:"run_rows_resumed"` // rows in them
 	RunBytesWrote  int64 `json:"run_bytes_written"`
 	RunBytesRead   int64 `json:"run_bytes_read"`
-	PeakStaging    int64 `json:"peak_staging_bytes"` // live run bytes
-	PeakBuffered   int64 `json:"peak_buffered_bytes"`
-	TailRows       int64 `json:"tail_rows"` // rows merged from memory
+	PeakStaging    int64 `json:"peak_staging_bytes"`  // live run bytes
+	PeakBuffered   int64 `json:"peak_buffered_bytes"` // the filling buffer plus the one being spilled
+	TailRows       int64 `json:"tail_rows"`           // rows merged from memory
 	PeakNodes      int64 `json:"peak_nodes"`
 	PeakReaders    int64 `json:"peak_readers"` // runs open in one merge (at most maxFanIn)
 	Cascades       int   `json:"cascades"`     // intermediate merges (fan-in above maxFanIn)
@@ -131,16 +131,20 @@ type sorter struct {
 	cond     *sync.Cond
 	buf      [][]row
 	bufBytes int64
-	bufLast  map[int]int64 // range → last index in buf
-	emitted  map[int]int64 // range → last index emitted
-	returned map[int]bool
-	spilling bool
-	err      error
-	ck       *checkpoint
-	next     int // next run number
-	live     int64
-	st       *BStats
-	wg       sync.WaitGroup
+	// spillBytes are the rows of the buffer being spilled: live until its
+	// run is written, beside the next filling buffer.
+	spillBytes int64
+	spillGate  chan struct{} // tests: a spill waits on it before it ends
+	bufLast    map[int]int64 // range → last index in buf
+	emitted    map[int]int64 // range → last index emitted
+	returned   map[int]bool
+	spilling   bool
+	err        error
+	ck         *checkpoint
+	next       int // next run number
+	live       int64
+	st         *BStats
+	wg         sync.WaitGroup
 }
 
 func (s *sorter) add(r int, rows []row) error {
@@ -156,7 +160,7 @@ func (s *sorter) add(r int, rows []row) error {
 	}
 	s.buf = append(s.buf, rows)
 	s.bufBytes += bytes
-	s.st.PeakBuffered = max(s.st.PeakBuffered, s.bufBytes)
+	s.st.PeakBuffered = max(s.st.PeakBuffered, s.bufBytes+s.spillBytes)
 	s.bufLast[r], s.emitted[r] = idx, idx
 	if s.bufBytes < s.limit {
 		return nil
@@ -170,6 +174,7 @@ func (s *sorter) add(r int, rows []row) error {
 		return s.err
 	}
 	full, last := s.buf, s.bufLast
+	s.spillBytes = s.bufBytes
 	s.buf, s.bufBytes, s.bufLast = nil, 0, map[int]int64{}
 	s.spilling = true
 	s.wg.Add(1)
@@ -217,10 +222,13 @@ func (s *sorter) spill(chunks [][]row, last map[int]int64) {
 		// run waits for this (spilling), so checkpoints never race.
 		err = saveCheckpoint(s.dir, ck)
 	}
+	if s.spillGate != nil {
+		<-s.spillGate
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer s.cond.Broadcast()
-	s.spilling = false
+	s.spilling, s.spillBytes = false, 0
 	if err != nil {
 		s.err = err
 		return
