@@ -74,7 +74,8 @@ type Config struct {
 	Log io.Writer
 }
 
-// Validate checks the bounds the server relies on.
+// Validate checks the bounds the server relies on (not the store, which is
+// opened after the flags are checked).
 func (c *Config) Validate() error {
 	switch {
 	case c.MaxConcurrentRequests < MinMaxConcurrentRequests:
@@ -85,8 +86,6 @@ func (c *Config) Validate() error {
 		return errors.New("invalid response buffer bounds")
 	case c.StopTimeout <= 0 || c.IdleTimeout <= 0 || c.WriteTimeout <= 0:
 		return errors.New("serve timeouts must be positive")
-	case c.Store == nil:
-		return errors.New("no store")
 	}
 	return nil
 }
@@ -121,6 +120,9 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	if cfg.Store == nil {
+		return nil, errors.New("no store")
 	}
 	if cfg.Log == nil {
 		cfg.Log = io.Discard
