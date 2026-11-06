@@ -237,9 +237,11 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   starts at `--workers`, falls by 0.7 on each throttle answer and grows back by one per second after 10 s
   without one (Java swath's rules; [internals/providers.md](internals/providers.md)); `--limiter=false` keeps a
   fixed `--workers` requests in flight. `--request-rate N` (S3 and GCS, default 0: none) also caps the run's
-  HTTP attempts at N per second, every attempt counted (pages, probes, client retries, engine requeues): a token
-  bucket of one token, taken after the limiter's permit, so k attempts take at least (k-1)/N seconds, as with
-  Java's `--request-rate`; a quota shared across a fleet is the use. Counters `rate.waits`, `rate.wait_ns`.
+  HTTP attempts at N per second (at least 0.001), every attempt counted (pages, probes, client retries, engine
+  requeues): a token bucket of one token, taken after the limiter's permit, so the k-th token of a burst is due
+  (k-1)/N seconds after the first, as with Java's `--request-rate`. Tokens are scheduled, not the sends: a caller
+  delayed after its token can send together with the next, so the cap holds over a window but sends are not
+  strictly spaced. A quota shared across a fleet is the use. Counters `rate.waits`, `rate.wait_ns`.
 - **Requester pays:** `--request-payer` sends `x-amz-request-payer: requester` (signed) on every request, so
   a requester-pays bucket can be listed at the caller's charge.
 - **S3 credentials:** `--anonymous` sends unsigned requests whatever the environment holds. Otherwise the AWS

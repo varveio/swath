@@ -12,10 +12,13 @@ import (
 
 // Rate caps a client's HTTP attempts per second (--request-rate, Java
 // swath's ApiRateLimiter): a token bucket of one token, refilled every
-// 1/rate, so attempts are spaced at least 1/rate apart and n attempts take
-// at least (n-1)/rate. Every attempt waits for its token after the
-// limiter's permit (Do), pages, probes, retries and requeues alike. Safe
-// for concurrent use.
+// 1/rate. Tokens are reserved in advance at times 1/rate apart, so the
+// k-th token of a burst is due (k-1)/rate after the first; the send
+// follows the token, and a caller delayed after its token (scheduling)
+// can send together with the next one: the cap holds over a window, the
+// sends are not strictly spaced. Every attempt waits for its token after
+// the limiter's permit (Do), pages, probes, retries and requeues alike.
+// Safe for concurrent use.
 type Rate struct {
 	every time.Duration
 
@@ -25,13 +28,19 @@ type Rate struct {
 	waits, waitNs atomic.Int64
 }
 
+// MinRate is the smallest cap (one attempt per 1,000 s): below it the
+// interval would overflow a time.Duration, and the conversion would wrap
+// to no cap at all.
+const MinRate = 1e-3
+
 // NewRate returns a cap of perSecond attempts per second; nil (no cap) for
-// perSecond <= 0.
+// perSecond <= 0. A positive cap below MinRate is MinRate (the flag
+// refuses it).
 func NewRate(perSecond float64) *Rate {
 	if perSecond <= 0 {
 		return nil
 	}
-	return &Rate{every: max(time.Duration(float64(time.Second)/perSecond), 1)}
+	return &Rate{every: max(time.Duration(float64(time.Second)/max(perSecond, MinRate)), 1)}
 }
 
 // Wait takes a token, waiting for it or for ctx to end (then the token is

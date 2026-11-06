@@ -42,4 +42,9 @@ func TestRequestRateFlag(t *testing.T) {
 	if err := run(context.Background(), s.args(filepath.Join(t.TempDir(), "x"), "--request-rate", "-1"), io.Discard, false); err == nil {
 		t.Fatal("a negative rate was accepted")
 	}
+	// A positive rate too small for a time.Duration interval (it wrapped
+	// to no cap at all) is refused.
+	if err := run(context.Background(), s.args(filepath.Join(t.TempDir(), "y"), "--request-rate", "1e-12"), io.Discard, false); err == nil {
+		t.Fatal("a rate below the minimum was accepted")
+	}
 }

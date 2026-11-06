@@ -6,6 +6,7 @@ package keyrange
 import (
 	"flag"
 	"fmt"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"math"
 	"strconv"
 )
@@ -99,8 +100,8 @@ func (r *rateFlag) String() string {
 }
 func (r *rateFlag) Set(s string) error {
 	v, err := strconv.ParseFloat(s, 64)
-	if err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
-		return fmt.Errorf("want a positive, finite number of requests per second, or 0 for no cap")
+	if err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) || (v > 0 && v < objhttp.MinRate) {
+		return fmt.Errorf("want a finite number of requests per second of at least %g, or 0 for no cap", objhttp.MinRate)
 	}
 	*r = rateFlag(v)
 	return nil

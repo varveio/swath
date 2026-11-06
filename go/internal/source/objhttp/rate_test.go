@@ -88,3 +88,18 @@ func TestRateWaitCancels(t *testing.T) {
 		t.Fatal("no cap waited")
 	}
 }
+
+// TestTinyRateStillCaps: a positive rate whose interval overflows a
+// time.Duration is the minimum cap, never no cap (the conversion wrapped
+// to a negative interval, clamped to 1 ns: every attempt went at once).
+func TestTinyRateStillCaps(t *testing.T) {
+	r := NewRate(1e-12)
+	if err := r.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := r.Wait(ctx); err == nil {
+		t.Fatal("the second attempt went at once")
+	}
+}
