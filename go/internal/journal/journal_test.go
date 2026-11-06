@@ -65,7 +65,7 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 3 {
-		if err := j.Append(Record{Ordinal: i, Part: dataset.PartInfo{Rows: 10, MaxKey: dataset.Key(string(rune('a' + i)))}, RowsTotal: int64(10 * (i + 1))}); err != nil {
+		if err := j.Append(rec(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -84,7 +84,7 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := j.Append(Record{Ordinal: 3}); err != nil {
+	if err := j.Append(rec(3)); err != nil {
 		t.Fatal(err)
 	}
 	j.Close()
@@ -131,7 +131,7 @@ func TestDamagedHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	j.Append(Record{Ordinal: 0, Part: dataset.PartInfo{MaxKey: "k"}})
+	j.Append(rec(0))
 	j.Close()
 	b, _ := os.ReadFile(Path(out))
 	hl := binary.LittleEndian.Uint32(b[:4])
@@ -177,7 +177,7 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	}
 	lock.Release()
 	for i := range 3 {
-		j.Append(Record{Ordinal: i, Part: dataset.PartInfo{MaxKey: "k"}})
+		j.Append(rec(i))
 	}
 	j.Close()
 	b, _ := os.ReadFile(Path(out))
@@ -202,5 +202,69 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 		if _, err := Read(out); !errors.As(err, &ve) || ve.Found != v {
 			t.Fatalf("version %d: %v", v, err)
 		}
+	}
+}
+
+// rec is a valid record i: 10 rows, keys "a"+i, chained after rec(i-1).
+func rec(i int) Record {
+	k := dataset.Key(string(rune('a' + i)))
+	return Record{Ordinal: i, Part: dataset.PartInfo{Rows: 10, MinKey: k, MaxKey: k}, RowsTotal: int64(10 * (i + 1))}
+}
+
+// TestAppendRefusesNonAdjacentRecord: a record that does not follow the
+// last one (a repeated or descending boundary key, a gap in the ordinals,
+// a wrong row total, anything after the final part) is refused before it
+// is written, also on a reopened journal (the resumed seam); a journal
+// that already holds such a record (an earlier build wrote it) is corrupt
+// to Read. Before, Append wrote any record and Read accepted it.
+func TestAppendRefusesNonAdjacentRecord(t *testing.T) {
+	out := t.TempDir()
+	j, err := Create(out, Identity{Tool: "swath-go"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 {
+		if err := j.Append(rec(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	j.Close()
+	st, err := Read(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, err = Reopen(out, st); err != nil {
+		t.Fatal(err)
+	}
+	repeat, descent, gap, total := rec(2), rec(2), rec(3), rec(2)
+	repeat.Part.MinKey = "b"  // rec(1)'s max key
+	descent.Part.MinKey = "a" // below it
+	total.RowsTotal = 25      // not 20 + 10
+	for name, r := range map[string]Record{"repeat": repeat, "descent": descent, "gap": gap, "total": total, "empty": {Ordinal: 2}} {
+		var ie *dataset.InvariantError
+		if err := j.Append(r); !errors.As(err, &ie) {
+			t.Fatalf("%s: err = %v, want an invariant error", name, err)
+		}
+	}
+	final := rec(2)
+	final.Final = true
+	if err := j.Append(final); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Append(rec(3)); err == nil {
+		t.Fatal("a record after the final part was accepted")
+	}
+	j.Close()
+	if st, err = Read(out); err != nil || len(st.Records) != 3 {
+		t.Fatalf("refused records reached the file: %+v %v", st, err)
+	}
+	// Written past the check (as an earlier build could): Read refuses.
+	out2 := t.TempDir()
+	j, _ = Create(out2, Identity{Tool: "swath-go"}, nil)
+	j.Append(rec(0))
+	j.append(Record{Type: "part", Ordinal: 1, Part: dataset.PartInfo{Rows: 10, MinKey: "a", MaxKey: "c"}, RowsTotal: 20})
+	j.Close()
+	if _, err := Read(out2); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("overlapping records read back: %v", err)
 	}
 }

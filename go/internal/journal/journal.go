@@ -117,8 +117,10 @@ func (s *State) Last() *Record {
 // ordinal order, one at a time); the mutex only makes misuse safe. The
 // caller holds the output's Lock.
 type Journal struct {
-	mu sync.Mutex
-	f  *os.File
+	mu   sync.Mutex
+	f    *os.File
+	n    int     // records in the journal
+	last *Record // the last of them, nil for none
 }
 
 // Create starts a new journal at Path(out), replacing any old one, with
@@ -174,7 +176,9 @@ func Reopen(out string, st *State) (*Journal, error) {
 			return nil, fmt.Errorf("journal: %w", err)
 		}
 	}
-	return start(f), nil
+	j := start(f)
+	j.n, j.last = len(st.Records), st.Last()
+	return j, nil
 }
 
 // LockName is the output directory's lock file, inside the workspace.
@@ -212,10 +216,52 @@ func (l *Lock) Release() {
 
 func start(f *os.File) *Journal { return &Journal{f: f} }
 
-// Append writes rec and returns after it is synced.
+// Append writes rec and returns after it is synced. A record that does not
+// follow the last one (Follows) is refused before anything is written: the
+// journal never names a part that overlaps the part before it, the resumed
+// seam included.
 func (j *Journal) Append(rec Record) error {
 	rec.Type = "part"
-	return j.append(rec)
+	j.mu.Lock()
+	n, last := j.n, j.last
+	j.mu.Unlock()
+	if err := Follows(last, n, rec); err != nil {
+		return fmt.Errorf("journal: %w", err)
+	}
+	if err := j.append(rec); err != nil {
+		return err
+	}
+	j.mu.Lock()
+	j.n, j.last = n+1, &rec
+	j.mu.Unlock()
+	return nil
+}
+
+// Follows checks that rec can be record n after last (nil when n is 0):
+// the next ordinal, after no final record, a nonempty part strictly after
+// the last one's keys, and a running row total that adds up.
+func Follows(last *Record, n int, rec Record) error {
+	bad := func(f string, a ...any) error {
+		return &dataset.InvariantError{Reason: fmt.Sprintf("record %d: ", n) + fmt.Sprintf(f, a...)}
+	}
+	p := rec.Part
+	switch {
+	case rec.Ordinal != n:
+		return bad("ordinal %d", rec.Ordinal)
+	case p.Rows <= 0 || p.MinKey > p.MaxKey:
+		return bad("empty or inverted key range")
+	case last == nil && rec.RowsTotal != p.Rows:
+		return bad("rows total %d for a first part of %d rows", rec.RowsTotal, p.Rows)
+	case last == nil:
+		return nil
+	case last.Final:
+		return bad("after the final part")
+	case !(last.Part.MaxKey < p.MinKey):
+		return bad("part overlaps the part before it: %q !< %q", last.Part.MaxKey, p.MinKey)
+	case rec.RowsTotal != last.RowsTotal+p.Rows:
+		return bad("rows total %d after %d plus %d rows", rec.RowsTotal, last.RowsTotal, p.Rows)
+	}
+	return nil
 }
 
 func (j *Journal) append(v any) error {
@@ -398,6 +444,11 @@ func decode(r io.Reader) (*State, error) {
 		}
 		if rec.Ordinal != len(st.Records) {
 			return nil, fmt.Errorf("%w: record for part %d after %d records", ErrCorrupt, rec.Ordinal, len(st.Records))
+		}
+		// The seam a resume continues from: recorded parts must chain (an
+		// earlier build journaled overlapping parts before checking them).
+		if err := Follows(st.Last(), len(st.Records), rec); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrCorrupt, err)
 		}
 		st.Records = append(st.Records, rec)
 	}

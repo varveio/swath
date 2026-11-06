@@ -169,7 +169,12 @@ An older or newer journal is refused with a `journal.VersionError` (exit 1, clas
 are left as they are: an interrupted run of an older build is finished with that build or started over with
 `--overwrite`. The first frame is the header (tool, format, identity, creation time).
 Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after
-`fsync`; its one caller is the ordered committer.
+`fsync`; its one caller is the ordered committer. A record must follow the one before it
+(`journal.Follows`: the next ordinal, no record after the final one, a nonempty part strictly after the last
+record's max key, a running row total that adds up): `Append` refuses one that does not before writing
+anything (`*dataset.InvariantError`), and `Read` treats a journal whose records do not chain as
+`ErrCorrupt`, so a resume never continues after overlapping parts. The router checks the same adjacency
+before it calls the committer ([parquet-output.md](parquet-output.md#publication-gate-and-order)).
 
 Only an append that never completed is a torn tail, and only at the end: fewer bytes than the last frame's
 length says, or a whole last frame with a bad checksum whose payload ends in a zero byte (bytes that never

@@ -66,8 +66,24 @@ written by its own goroutine and zstd encoder from a bounded channel; at most `E
 
 ## Publication gate and order
 
-Before anything is renamed, `dataset` checks dense ordinals, strictly ascending and disjoint part key ranges,
-and rows written equal to rows routed. Then: parts (written in `.swath/parts/`, fsynced on close) are renamed
+Order is checked at three places, each before the step it protects:
+
+- **Every row**, in the order stage (`order.Run`'s stream-wide guard): keys strictly ascending across the
+  whole run, and after the last published key on a resume. No sink, Parquet or other, receives a descending
+  or repeated key, even from a provider that breaks its ordering contract at a range boundary.
+- **Every part, before it is journaled.** A journaled run publishes parts early, so the router checks each
+  part against the part before it (the resumed seam included) before `Publish` claims, records or renames
+  it: nonempty, and its first key after the previous part's last. The journal's `Append` checks the same
+  (`journal.Follows`: the next ordinal, after no final record, strictly after the last record's keys, a row
+  total that adds up) and refuses before writing, and a resume refuses a journal whose records do not chain
+  (`TestRouterRefusesOverlapBeforePublish`, `TestAppendRefusesNonAdjacentRecord`,
+  `TestBoundaryDefectNeverReachesTheJournal`). Each part's rows are checked by its writer.
+- **The whole set, before the manifest.** `Router.Close` repeats dense ordinals, strictly ascending and
+  disjoint part key ranges, and rows written equal to rows routed (`dataset.Check`), and the pipeline
+  reconciles the row counts of the attempt hop by hop: rows the provider emitted, the order stage received
+  and handed on, and the router routed (`*dataset.InvariantError` on any mismatch).
+
+Then: parts (written in `.swath/parts/`, fsynced on close) are renamed
 into `data/` in ordinal order, `data/` is fsynced, and `manifest.json` is written to a temporary name, fsynced,
 renamed and its directory fsynced. That rename is the commit: without a manifest there is no dataset. The
 run reports follow; a report that cannot be written is a warning, and the dataset stands. A failure or

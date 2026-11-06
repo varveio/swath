@@ -73,9 +73,6 @@ type Env struct {
 	Order order.Options
 	// Router, if set, routes the rows into parts; nil discards them.
 	Router *parquetout.Options
-	// After, if set, is a resume's last published key: every row must sort
-	// after it (the provider restarts there; this checks it).
-	After *string
 	// Empty lists nothing: a resume whose final part is durable.
 	Empty bool
 	// Ordered, if set, counts rows the order stage has handed on.
@@ -107,9 +104,6 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		}
 		sink, enc = r, r
 	}
-	if env.After != nil {
-		sink = afterSink[P]{sink, *env.After}
-	}
 	if env.Ordered != nil {
 		sink = countSink[P]{sink, env.Ordered}
 	}
@@ -136,20 +130,6 @@ func (c countSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 type discard[P any] struct{}
 
 func (discard[P]) Write(context.Context, [][]schema.Row[P]) error { return nil }
-
-type afterSink[P any] struct {
-	order.Sink[P]
-	after string
-}
-
-func (a afterSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
-	for _, seg := range segs {
-		if len(seg) > 0 && seg[0].Key <= a.after {
-			return fmt.Errorf("resume: key %q is not after the last published key %q", seg[0].Key, a.after)
-		}
-	}
-	return a.Sink.Write(ctx, segs)
-}
 
 var (
 	regMu     sync.Mutex

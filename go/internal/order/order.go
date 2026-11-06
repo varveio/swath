@@ -25,11 +25,13 @@ package order
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 )
@@ -56,11 +58,15 @@ type Options struct {
 	// free space spill leaves on its filesystem (0: none). Past either, an
 	// emitter waits on the budget instead of spilling.
 	SpillMax, SpillReserve int64
+	// After, if set, is a resume's last published key: every row must sort
+	// after it. The stream-wide order guard checks it with every other row.
+	After *string
 }
 
 // Stats describe a run.
 type Stats struct {
 	Rows        int64 // rows handed to the sink
+	Received    int64 // rows the provider's emitters received (== Rows after a successful run)
 	MaxBuffered int64 // peak bytes read but not yet drained (in memory, excluding Shared)
 	SpillRows   int64 // rows written to spill files and replayed
 	SpillFrames int64
@@ -129,6 +135,11 @@ type run[R, P any] struct {
 	segs    [][]schema.Row[P]
 	segRows int
 	rows    int64
+	// The stream-wide order guard: the last key handed on (drainer only).
+	last    string
+	hasLast bool
+
+	received atomic.Int64 // rows the emitters received
 }
 
 // dispose releases the ranges that were queued but never expanded (a
@@ -145,6 +156,20 @@ func (o *run[R, P]) dispose() {
 		}
 	}
 	o.stack = nil
+}
+
+// orderError is a broken ordering contract seen by the guard: key, the
+// row at index (0-based, in the order handed on), is not after prev.
+func orderError(prev, key string, index int64, seam bool) error {
+	what := "the previous row"
+	if seam && index == 0 {
+		what = "the last published key (resume)"
+	}
+	rel := "descends below"
+	if key == prev {
+		rel = "repeats"
+	}
+	return &dataset.InvariantError{Reason: fmt.Sprintf("order: row %d key %q %s %s %q", index, key, rel, what, prev)}
 }
 
 // Test hooks that widen race windows; nil in production.
@@ -220,9 +245,20 @@ func (s *Shared) setWake(f func()) {
 }
 
 // send appends rows to the drainer's output batch, writing full batches.
+// Every row handed on passes the stream-wide order guard first: keys
+// strictly ascending across the whole run (and after Options.After), so no
+// sink, Parquet or other, ever receives a descending or repeated key from
+// a provider that broke its ordering contract.
 func (o *run[R, P]) send(rows []schema.Row[P]) error {
 	if len(rows) == 0 {
 		return nil
+	}
+	for i := range rows {
+		k := rows[i].Key
+		if o.hasLast && k <= o.last {
+			return orderError(o.last, k, o.rows+int64(o.segRows+i), o.opt.After != nil)
+		}
+		o.last, o.hasLast = k, true
 	}
 	o.segs = append(o.segs, rows)
 	o.segRows += len(rows)
@@ -251,6 +287,9 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes}
+	if opt.After != nil {
+		o.last, o.hasLast = *opt.After, true
+	}
 	if countRows {
 		o.measure = func(rows []schema.Row[P]) int64 { return int64(len(rows)) }
 	}
@@ -317,6 +356,12 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	}
 	o.dispose()
 	st.Rows, st.MaxBuffered, st.FrontierWait, st.BudgetWait = o.rows, o.max, o.frontier, o.budget
+	st.Received = o.received.Load()
+	if err == nil && st.Received != st.Rows {
+		// Conservation inside the stage (spill, compaction, replay): a row
+		// received and never handed on is a lost row, never a success.
+		err = &dataset.InvariantError{Reason: fmt.Sprintf("order stage: received %d rows, handed on %d", st.Received, st.Rows)}
+	}
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
@@ -424,6 +469,7 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	e.o.received.Add(int64(len(rows)))
 	if e.direct {
 		if e.o.stopped.Load() {
 			return context.Cause(e.o.ctx)

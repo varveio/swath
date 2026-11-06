@@ -16,6 +16,16 @@ streams the frontier: rows of the node it is draining are consumed as they arriv
 a node still being listed are at least 256 and half of its items, they are dropped with their storage, so a long
 streaming range retains only what is not yet drained (`TestRunningNodeStorageIsBounded`).
 
+## The order guard
+
+Every row the drainer hands on passes a stream-wide guard: its key must sort strictly after the previous
+row's, and on a resume after the last published key (`Options.After`). A provider that breaks its ordering
+contract (two ranges each ascending whose boundary keys repeat or descend) fails the run with a
+`*dataset.InvariantError` naming the row, before any sink sees it (`TestOrderGuard`), so text sinks get the
+same protection as Parquet. The stage also counts the rows its emitters received and refuses to report success
+unless it handed on exactly as many (spill, compaction and replay conserve rows); the pipeline compares both
+counts with the provider's and the router's.
+
 ## The budget
 
 `Options.Budget` is a byte budget: half of `-memory`, for rows in flight. A row counts its value (`schema.Row[P]`, the

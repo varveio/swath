@@ -275,7 +275,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	shared := &order.Shared{}
 	// The final part is durable: listing again could only add a second
 	// final part on a changed source. Publish what is recorded.
-	env := registry.Env{After: jr.after(), Empty: jr.complete()}
+	env := registry.Env{Empty: jr.complete()}
 	if pr := cfg.Progress; pr != nil {
 		pr.started.Store(sum.Timings.StartedAt.UnixNano())
 		listed := src.Listed
@@ -317,7 +317,8 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		}
 		return sum.failed(err)
 	}
-	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillMax: cfg.Limits.Spill.Max, SpillReserve: cfg.Limits.Spill.Reserve}
+	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillMax: cfg.Limits.Spill.Max, SpillReserve: cfg.Limits.Spill.Reserve,
+		After: jr.after()}
 	// Spill files are disposable: a crash relists their rows.
 	if cfg.Output.Dir != "" {
 		spill := filepath.Join(cfg.Output.Dir, dataset.JournalDir, "spill")
@@ -360,8 +361,19 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if err != nil {
 		return fail(err)
 	}
-	if sum.Output.RowsListed != want {
-		return fail(&dataset.InvariantError{Reason: fmt.Sprintf("row count mismatch: listed %d, ordered %d", want, sum.Output.RowsListed)})
+	// Reconciliation, hop by hop, before anything is published: rows the
+	// provider emitted, the order stage received and handed on (equal by
+	// order.Run's own check), and the router routed; the router's gate
+	// then checks rows written against rows routed. A row lost anywhere
+	// upstream of the writer shows as a mismatch, never as a smaller
+	// dataset. (A resume reconciles its own attempt; retained parts were
+	// counted by the attempt that wrote them.)
+	routed := ost.Rows
+	if router != nil {
+		routed = router.Routed()
+	}
+	if err := reconcile(want, ost.Received, ost.Rows, routed); err != nil {
+		return fail(err)
 	}
 	if router == nil {
 		sum.Outcome.Status = "listed"
@@ -396,6 +408,15 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		cfg.Warn(err.Error())
 	}
 	return sum, nil
+}
+
+// reconcile compares the row counts of one attempt at each hop.
+func reconcile(listed, received, ordered, routed int64) error {
+	if listed == received && received == ordered && ordered == routed {
+		return nil
+	}
+	return &dataset.InvariantError{Reason: fmt.Sprintf("row count mismatch: provider emitted %d, order stage received %d and handed on %d, router routed %d",
+		listed, received, ordered, routed)}
 }
 
 // failed records err as the outcome and returns the report with it.

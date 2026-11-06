@@ -292,22 +292,51 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	p.rows = p.info.Rows
 	base := int64(0)
+	var before *dataset.Part // the part this one follows: published, or resumed
 	if p.prev != nil {
 		<-p.prev.published // publication goes in ordinal order
 		if p.prev.err != nil {
 			p.err = fmt.Errorf("part %d: not published after part %d failed", p.ordinal, p.prev.ordinal)
 			return
 		}
-		base = p.prev.rows
+		base, before = p.prev.rows, &p.prev.info
 	} else if len(r.done) > 0 {
-		base = r.opt.Resume.Rows
+		base, before = r.opt.Resume.Rows, &r.done[len(r.done)-1]
 	}
 	p.rows += base
+	// Adjacency before publication: a part is checked against the part it
+	// follows (the resumed seam included) before Publish records or renames
+	// it, so overlapping parts are never journaled; Close's gate repeats
+	// the check over the whole set.
+	if p.err = adjacent(before, p.ordinal, p.info); p.err != nil {
+		r.fail(p.err)
+		return
+	}
 	if r.opt.Publish != nil && !r.aborted.Load() {
 		if p.info, p.err = r.opt.Publish(p.ordinal, p.info, p.limit, p.rows, p.final); p.err != nil {
 			r.fail(p.err)
 		}
 	}
+}
+
+// adjacent checks part ordinal (info) against the part before it (nil for
+// the first part of a dataset): nonempty, and strictly after it.
+func adjacent(before *dataset.Part, ordinal int, info dataset.Part) error {
+	if info.Rows == 0 || info.MinKey > info.MaxKey {
+		return &dataset.InvariantError{Reason: fmt.Sprintf("part %d: empty or inverted key range", ordinal)}
+	}
+	if before != nil && !(before.MaxKey < info.MinKey) {
+		return &dataset.InvariantError{Reason: fmt.Sprintf("part %d overlaps part %d: %q !< %q", ordinal, ordinal-1, before.MaxKey, info.MinKey)}
+	}
+	return nil
+}
+
+// Routed is the rows routed into parts by this run (not the resumed ones).
+func (r *Router[P]) Routed() int64 {
+	if res := r.opt.Resume; res != nil {
+		return r.rows - res.Rows
+	}
+	return r.rows
 }
 
 // cut closes the current part. Part 0 is waited for, to freeze the ratio.
@@ -405,4 +434,7 @@ type Encoder interface {
 	Close() ([]dataset.Part, error)
 	Abort()
 	EncoderWait() time.Duration
+	// Routed is the rows this run routed into parts: after listing it
+	// must equal the rows the order stage handed on.
+	Routed() int64
 }
