@@ -67,6 +67,7 @@ func TestEmptyContinuingPages(t *testing.T) {
 	}{
 		{name: "empty, empty, data", pages: []Page[Object]{more(), more(), last("a", "b")}, want: []string{"a", "b"}, requests: 3, empty: 2},
 		{name: "boundary only, empty, data", inclusive: true, after: "a", pages: []Page[Object]{more("a"), more(), last("b", "c")}, want: []string{"b", "c"}, requests: 3, empty: 2},
+		{name: "empty, boundary and data", inclusive: true, after: "a", pages: []Page[Object]{more(), last("a", "b")}, want: []string{"b"}, requests: 2, empty: 1},
 		{name: "data, empty, terminal empty", pages: []Page[Object]{more("a"), more(), last()}, want: []string{"a"}, requests: 3, empty: 1},
 		{name: "terminal empty", pages: []Page[Object]{last()}, requests: 1},
 		{name: "stuck token", pages: []Page[Object]{more("a"), {Truncated: true, Token: "t1"}}, bad: true},

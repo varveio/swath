@@ -255,11 +255,15 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 	p.c.Inc(cRequests)
 	p.mu.Unlock()
 	var seen map[string]bool // the tokens of a run of empty continuing pages
+	// chainStart: no page of this chain has held an entry yet, so its first
+	// row may be the key at an inclusive start bound (also after empty
+	// pages followed here).
+	chainStart := in.Token == ""
 	wait := requeueBase
 	for {
 		out, err := p.fetch(ctx, in)
 		if err == nil {
-			if p.d.StartInclusive && in.Token == "" && in.After != "" && len(out.Rows) > 0 && out.Rows[0].Key == in.After {
+			if p.d.StartInclusive && chainStart && in.After != "" && len(out.Rows) > 0 && out.Rows[0].Key == in.After {
 				out.Rows = out.Rows[1:]
 			}
 			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 {
