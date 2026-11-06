@@ -6,6 +6,7 @@ package listing
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -223,6 +224,10 @@ func TestResourceAdmission(t *testing.T) {
 	// encoders of 64 MiB parts take the floor); negative is none.
 	if a, b := spillReserve(5, DefaultPartSize), spillReserve(16, 256<<20); a != 1<<30 || b != 4<<30 {
 		t.Errorf("derived reserves %d, %d", a, b)
+	}
+	// A product past int64 saturates rather than wrapping.
+	if got := spillReserve(1<<20, math.MaxInt64/(1<<19)); got != math.MaxInt64 {
+		t.Errorf("an overflowing reserve derived as %d", got)
 	}
 	for in, want := range map[int64]int64{0: 1 << 30, -1: 0, 7: 7} {
 		c := Config{Source: SourceConfig{URI: "s3://b"}, Limits: Limits{Encoders: 2, Spill: SpillLimits{Reserve: in}}}

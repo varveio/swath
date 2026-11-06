@@ -6,7 +6,7 @@ package listing
 import (
 	"context"
 	"crypto/md5"
-	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -166,17 +166,46 @@ func TestGCSInvalidEnvelopeNeverCommits(t *testing.T) {
 	bodies := []string{`null`, `{"error":{"code":500,"message":"backend"}}`}
 	var served atomic.Int64
 	const k = 6
+	// The page token is opaque: a request's position is its startOffset or,
+	// for a continuation, the last name of the page that issued its token,
+	// as the front recorded it.
+	var after sync.Map // nextPageToken -> the position it continues from
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: u.Host})
 	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		tok, _ := base64.RawURLEncoding.DecodeString(q.Get("pageToken"))
-		if max(q.Get("startOffset"), string(tok)) >= "d05" {
+		pos := q.Get("startOffset")
+		if tok := q.Get("pageToken"); tok != "" {
+			if p, ok := after.Load(tok); ok {
+				pos = max(pos, p.(string))
+			}
+		}
+		if pos >= "d05" {
 			if i := served.Add(1); i <= k {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprint(w, bodies[i%2])
 				return
 			}
 		}
-		httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: u.Host}).ServeHTTP(w, r)
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, r)
+		var page struct {
+			Items         []struct{ Name string }
+			Prefixes      []string
+			NextPageToken string
+		}
+		if json.Unmarshal(rec.Body.Bytes(), &page) == nil && page.NextPageToken != "" {
+			last := pos
+			for _, it := range page.Items {
+				last = max(last, it.Name)
+			}
+			for _, p := range page.Prefixes {
+				last = max(last, p)
+			}
+			after.Store(page.NextPageToken, last)
+		}
+		maps.Copy(w.Header(), rec.Header())
+		w.WriteHeader(rec.Code)
+		w.Write(rec.Body.Bytes())
 	}))
 	t.Cleanup(front.Close)
 	out := filepath.Join(t.TempDir(), "ds")

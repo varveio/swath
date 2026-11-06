@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
@@ -15,31 +16,48 @@ import (
 
 // TestRequestRateFlag: --request-rate reaches the client: a GCS run at 20
 // requests per second takes at least (attempts-1)/20, and its report
-// carries the cap's counters with the feature on.
+// carries the cap's counters with the feature on and its waits counted
+// (at a lower rate if the run was too slow to need one).
 func TestRequestRateFlag(t *testing.T) {
 	s := newRowlessService(t)
-	dir := filepath.Join(t.TempDir(), "ds")
-	report := filepath.Join(t.TempDir(), "report.json")
-	start := time.Now()
-	if err := run(context.Background(), s.args(dir, "--request-rate", "20", "--report", report), io.Discard, false); err != nil {
-		t.Fatal(err)
+	// The cap holds at every rate (the attempts take at least their
+	// spacing) and engages (waits) at a rate the run can outpace: a run
+	// slow enough (the race detector on a loaded runner) never to need a
+	// wait at 20/s proves the cap without engaging it, so a lower rate is
+	// tried then, never a weaker assertion.
+	engaged := false
+	for _, rate := range []float64{20, 5, 2} {
+		dir := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		start := time.Now()
+		if err := run(context.Background(), s.args(dir, "--request-rate", fmt.Sprint(rate), "--report", report), io.Discard, false); err != nil {
+			t.Fatal(err)
+		}
+		el := time.Since(start)
+		var rep struct {
+			Source struct {
+				Stats struct {
+					Counters struct {
+						Features map[string]bool  `json:"features"`
+						Values   map[string]int64 `json:"values"`
+					} `json:"counters"`
+				} `json:"stats"`
+			} `json:"source"`
+		}
+		readJSON(t, report, &rep)
+		c := rep.Source.Stats.Counters
+		n := c.Values["attempts"]
+		if n < 10 || el < time.Duration(float64(n-1)*float64(time.Second)/rate) || !c.Features["request_rate"] {
+			t.Fatalf("%d attempts in %s at %v/s; features %v", n, el, rate, c.Features)
+		}
+		if c.Values["rate.waits"] > 0 {
+			engaged = true
+			break
+		}
+		t.Logf("%d attempts in %s at %v/s without a wait: slower than the cap", n, el, rate)
 	}
-	el := time.Since(start)
-	var rep struct {
-		Source struct {
-			Stats struct {
-				Counters struct {
-					Features map[string]bool  `json:"features"`
-					Values   map[string]int64 `json:"values"`
-				} `json:"counters"`
-			} `json:"stats"`
-		} `json:"source"`
-	}
-	readJSON(t, report, &rep)
-	c := rep.Source.Stats.Counters
-	n := c.Values["attempts"]
-	if n < 10 || el < time.Duration(n-1)*time.Second/20 || !c.Features["request_rate"] || c.Values["rate.waits"] == 0 {
-		t.Fatalf("%d attempts in %s at 20/s; features %v, rate.waits %d", n, el, c.Features, c.Values["rate.waits"])
+	if !engaged {
+		t.Fatal("the rate cap never engaged (rate.waits 0 at every rate)")
 	}
 	// B4: a rate whose spacing exceeds half the stall timeout is refused
 	// (before, the run started and the watchdog stopped it as stuck while

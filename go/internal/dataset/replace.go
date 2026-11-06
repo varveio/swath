@@ -74,7 +74,12 @@ func (p *Pending) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Commit installs the temporary file as the target, with durability d.
+// Commit installs the temporary file as the target, with durability d. A
+// directory sync that fails after the rename returns its error with the
+// new, complete file in place, visible but not proven durable: the caller
+// takes the replacement as failed (a run whose manifest sync fails exits
+// nonzero, and swath resume then finds the dataset committed; an outcome
+// file is reported unrecorded).
 func (p *Pending) Commit(d Durability) error {
 	name := filepath.Base(p.path)
 	var err error

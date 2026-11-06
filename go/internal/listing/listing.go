@@ -185,7 +185,12 @@ func spillMax(l SpillLimits, dir string) int64 {
 // The spill cap (--spill-max) and this reserve protect different things:
 // the cap bounds spill's own use, the reserve bounds what spill may take
 // from the parts and from other processes, whose use the cap cannot see.
+// A product past int64 saturates (no filesystem holds it: every spill
+// frame is refused) instead of wrapping to a small or negative reserve.
 func spillReserve(encoders int, partSize int64) int64 {
+	if encoders > 0 && partSize > math.MaxInt64/int64(encoders) {
+		return math.MaxInt64
+	}
 	return max(minSpillReserve, int64(encoders)*partSize)
 }
 

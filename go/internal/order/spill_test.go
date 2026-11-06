@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,10 @@ import (
 type frontier struct {
 	slowPages, siblings, sibPages, rows int
 	slowDelay, sibDelay                 time.Duration
+	// hold, if set, holds the slow range after its first page until every
+	// sibling has emitted all its rows (left counts them down).
+	hold chan struct{}
+	left *atomic.Int64
 }
 
 type fr struct{ i int } // -1: root, 0: the slow range, 1..: siblings
@@ -58,6 +63,16 @@ func (f *frontier) Expand(ctx context.Context, r fr, e source.Emitter[fr, tp]) e
 		if err := e.Rows(rows); err != nil {
 			return err
 		}
+		if f.hold != nil && r.i == 0 && p == 0 {
+			select {
+			case <-f.hold:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	if f.hold != nil && r.i > 0 && f.left.Add(-1) == 0 {
+		close(f.hold)
 	}
 	return nil
 }
@@ -80,20 +95,32 @@ func (f *frontier) keys() []string {
 
 // TestSpillKeepsWorkersBusy is the step-3 gate: with a reorder budget far
 // below one sibling's output, spill lets the siblings list while the slow
-// frontier holds the output back, so the run takes about the frontier's
-// time instead of frontier + siblings; the output is identical, and rows in
-// memory stay within the budget plus one batch per worker.
+// frontier holds the output back. The frontier is held after its first
+// page until every sibling has listed all its rows (a barrier), so the run
+// finishes only if the workers proceed while the frontier waits, which
+// without spill they cannot (they wait on the budget); the output is
+// identical, and rows in memory stay within the budget plus one batch per
+// worker.
 func TestSpillKeepsWorkersBusy(t *testing.T) {
 	// A sibling's last page fills a publish batch (11 × 100 ≥ publishRows),
 	// so it ends with nothing left to publish.
 	f := &frontier{slowPages: 40, siblings: 56, sibPages: 11, rows: 100, slowDelay: 10 * time.Millisecond, sibDelay: 5 * time.Millisecond}
 	want := f.keys()
 	const workers, budget = 8, 500
-	run := func(opt Options) (time.Duration, Stats) {
+	run := func(opt Options, held bool) Stats {
 		t.Helper()
 		c := &collect{}
-		start := time.Now()
-		st, err := Run[fr, tp](context.Background(), f, c, &testSchema, opt)
+		f.hold, f.left = nil, nil
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if held {
+			f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+			f.left.Store(int64(f.siblings))
+		}
+		st, err := Run[fr, tp](ctx, f, c, &testSchema, opt)
+		if held && errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%+v: the siblings did not finish while the frontier waited (spill did not keep workers busy)", opt)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,14 +132,14 @@ func TestSpillKeepsWorkersBusy(t *testing.T) {
 				t.Fatalf("%+v: row %d payload %+v", opt, i, d)
 			}
 		}
-		return time.Since(start), st
+		return st
 	}
-	plain, pst := run(Options{Workers: workers, Budget: budget})
+	pst := run(Options{Workers: workers, Budget: budget}, false)
 	dir := t.TempDir()
 	for _, compress := range []bool{false, true} {
-		spilled, st := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillCompress: compress})
-		t.Logf("compress=%v: no spill %v (max buffered %d), spill %v (max buffered %d, %d rows in %d frames, %d bytes, %d files)",
-			compress, plain, pst.MaxBuffered, spilled, st.MaxBuffered, st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles)
+		st := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillCompress: compress}, true)
+		t.Logf("compress=%v: no spill (max buffered %d), spill (max buffered %d, %d rows in %d frames, %d bytes, %d files)",
+			compress, pst.MaxBuffered, st.MaxBuffered, st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles)
 		if st.SpillRows == 0 {
 			t.Fatal("nothing spilled")
 		}
@@ -121,9 +148,6 @@ func TestSpillKeepsWorkersBusy(t *testing.T) {
 		// nothing to publish.
 		if st.BudgetWait != 0 {
 			t.Fatalf("compress=%v: budget wait %v with spill", compress, st.BudgetWait)
-		}
-		if !raceEnabled && spilled > plain*85/100 { // timing only without the race detector
-			t.Fatalf("spill did not keep workers busy: %v vs %v without spill", spilled, plain)
 		}
 		// D1: the budget, plus one publish batch per worker, plus the
 		// frontier path (here one range).

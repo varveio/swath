@@ -297,7 +297,7 @@ var errSpillFull = errors.New("spill: disk budget used")
 func (s *spiller[P]) admit(n int64, final bool) bool {
 	live := s.live.Add(n)
 	if !final {
-		if (s.max > 0 && live > s.max) || (s.reserve > 0 && freeBytes(s.dir) < n+s.reserve) {
+		if (s.max > 0 && live > s.max) || (s.reserve > 0 && freeBytes(s.dir)-n < s.reserve) {
 			s.live.Add(-n)
 			s.refused.Add(1)
 			s.full.Store(true)

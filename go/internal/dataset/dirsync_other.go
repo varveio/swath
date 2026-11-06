@@ -8,16 +8,19 @@ package dataset
 import (
 	"errors"
 	"os"
+
+	"github.com/varveio/swath/go/internal/faults"
 )
 
 // DirSyncEnforced reports whether syncDir makes a directory's entries
 // durable here.
 var DirSyncEnforced = true // a variable for tests
 
+// syncDir fsyncs dir, through faults.
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	return errors.Join(d.Sync(), d.Close())
+	return errors.Join(faults.Sync(d), d.Close())
 }

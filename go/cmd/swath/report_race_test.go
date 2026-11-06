@@ -79,17 +79,25 @@ func TestOneTerminalReport(t *testing.T) {
 // followed by a directory sync. SIGKILL (the crash matrix) cannot show
 // this; the sync is observed through the faults hook.
 func TestOutcomeFilesDurable(t *testing.T) {
+	dir := t.TempDir()
+	errorFile := filepath.Join(dir, errorName)
 	var mu sync.Mutex
 	synced := map[string]bool{}
+	var dirSyncs []bool // per sync of dir: whether error.json was gone then
 	defer faults.SetIO(func(op, name string, _ []byte) (int, error) {
-		if op == "sync" {
-			mu.Lock()
-			synced[strings.SplitN(filepath.Base(name), ".", 3)[1]] = true
-			mu.Unlock()
+		if op != "sync" {
+			return 0, nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if name == dir {
+			_, err := os.Stat(errorFile)
+			dirSyncs = append(dirSyncs, os.IsNotExist(err))
+		} else if parts := strings.SplitN(filepath.Base(name), ".", 3); len(parts) == 3 {
+			synced[parts[1]] = true
 		}
 		return 0, nil
 	})()
-	dir := t.TempDir()
 	if err := writeOutcome(dir, outcome{ExitCode: exitStuck, Class: "stuck"}); err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +105,17 @@ func TestOutcomeFilesDurable(t *testing.T) {
 	if !synced["error"] || !synced["report"] {
 		t.Fatalf("synced before rename: %v, want error.json and report.json", synced)
 	}
+	mu.Lock()
+	dirSyncs = nil
+	mu.Unlock()
 	if err := writeOutcome(dir, outcome{ExitCode: exitCompleted}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
 		t.Fatalf("a completed run left error.json: %v", err)
+	}
+	// The removal is made durable: the directory is synced after it.
+	if dataset.DirSyncEnforced && (len(dirSyncs) == 0 || !dirSyncs[len(dirSyncs)-1]) {
+		t.Fatalf("directory syncs after the removal (error.json gone at each): %v", dirSyncs)
 	}
 }
