@@ -329,6 +329,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 ## Semantics worth stating
 
 - **Sizes** accept `KiB`, `MiB`, `GiB` and `KB`, `MB`, `GB` suffixes.
+- **Provider flags** (`S3:` and `GCS:` in the list, and the range-engine flags both object stores share) apply
+  to their own sources only: one given for another source (`gs://... --anonymous`, where GCS takes
+  `--gcs-anonymous`; `--endpoint` against `--gcs-endpoint`; an S3 flag on a local tree) is refused (exit 2)
+  rather than ignored.
 - **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag;
   `0` turns off `--max-duration`, `--stall-timeout` and `--part-interval`'s time cut.
 - **`--row-budget`** bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder

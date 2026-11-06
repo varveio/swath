@@ -307,7 +307,8 @@ type options struct {
 	spillMax, spillReserve zsize
 	resume, noJournal      bool
 	noSpill, spillCompress bool
-	sources                map[string]any // each provider's options value, by scheme
+	sources                map[string]any      // each provider's options value, by scheme
+	owners                 map[string][]string // a provider flag's name: the schemes it applies to
 	term                   termOptions
 	format                 string
 	text                   *textout.Config // resolved: a text run's destination
@@ -401,18 +402,38 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	}
 	// Each provider owns its flag group; a group several share (the range
 	// engine's) is registered once and passed to each of them.
-	o.sources = map[string]any{}
-	shared := map[string]any{}
+	// owners records which providers each provider flag applies to (the
+	// flags a registration adds), so a flag given for another provider is
+	// refused rather than ignored (foreignFlags).
+	o.sources, o.owners = map[string]any{}, map[string][]string{}
+	shared, groupFlags := map[string]any{}, map[string][]string{}
+	added := func(register func()) []string {
+		before := map[string]bool{}
+		f.VisitAll(func(fl *flag.Flag) { before[fl.Name] = true })
+		register()
+		var names []string
+		f.VisitAll(func(fl *flag.Flag) {
+			if !before[fl.Name] {
+				names = append(names, fl.Name)
+			}
+		})
+		return names
+	}
 	for _, p := range registry.Factories() {
 		var g any
 		if p.Shared != "" {
 			var ok bool
 			if g, ok = shared[p.Shared]; !ok {
-				g = p.SharedFlags(f, diag)
+				groupFlags[p.Shared] = added(func() { g = p.SharedFlags(f, diag) })
 				shared[p.Shared] = g
 			}
+			for _, n := range groupFlags[p.Shared] {
+				o.owners[n] = append(o.owners[n], p.Scheme)
+			}
 		}
-		o.sources[p.Scheme] = p.Flags(f, diag, g)
+		for _, n := range added(func() { o.sources[p.Scheme] = p.Flags(f, diag, g) }) {
+			o.owners[n] = append(o.owners[n], p.Scheme)
+		}
 	}
 	f.SetOutput(io.Discard)
 	return f
@@ -432,6 +453,37 @@ func nonNegativeDurations(f *flag.FlagSet) (err error) {
 		}
 	})
 	return err
+}
+
+// foreignFlags refuses a provider flag given explicitly for a root of
+// another provider (gs://... --anonymous: S3's flag, which GCS would
+// ignore; GCS's is --gcs-anonymous). A root no provider takes is left to
+// the lookup's own refusal.
+func foreignFlags(f *flag.FlagSet, owners map[string][]string, root string) (err error) {
+	pf, lerr := registry.Lookup(root)
+	if lerr != nil {
+		return nil
+	}
+	f.Visit(func(fl *flag.Flag) {
+		own, ok := owners[fl.Name]
+		if !ok || slices.Contains(own, pf.Scheme) || err != nil {
+			return
+		}
+		names := make([]string, len(own))
+		for i, s := range own {
+			names[i] = schemeName(s)
+		}
+		err = fmt.Errorf("--%s applies to %s sources, not to %s", fl.Name, strings.Join(names, " and "), schemeName(pf.Scheme))
+	})
+	return err
+}
+
+// schemeName names a provider by its root form.
+func schemeName(scheme string) string {
+	if scheme == "" {
+		return "local"
+	}
+	return scheme + "://"
 }
 
 // rateFitsStall refuses a --request-rate whose spacing between attempts
@@ -505,6 +557,9 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 		return o, "", usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
 	}
 	if err := nonNegativeDurations(f); err != nil {
+		return o, "", usageError{err}
+	}
+	if err := foreignFlags(f, o.owners, root); err != nil {
 		return o, "", usageError{err}
 	}
 	if err := rateFitsStall(f, o.stall); err != nil {
