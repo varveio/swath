@@ -116,7 +116,7 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 func run(command string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd := shellCommand(ctx, command)
 	cmd.WaitDelay = cmdWaitDelay
 	out, errb := &cappedBuffer{max: cmdMaxCapture}, &cappedBuffer{max: cmdMaxCapture}
 	cmd.Stdout, cmd.Stderr = out, errb
