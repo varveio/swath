@@ -43,6 +43,7 @@ type Limiter struct {
 	waiters  []chan struct{} // FIFO; a closed channel holds a granted permit
 
 	lastThrottle, lastGrowth, lastValve time.Time
+	lastHeld                            time.Time // the held-back counts' own pace
 	toStart                             time.Time // the timeout window's start
 	toCount                             int
 	base, winMin                        time.Duration // latency baseline and the decay window's minimum
@@ -195,38 +196,36 @@ func (l *Limiter) sample(now time.Time, d time.Duration) {
 	}
 }
 
-// grow takes one +1 step when it is due and nothing holds it back; each
-// growth step that was due and held back is counted under its brake.
+// grow takes one +1 step when it is due and nothing holds it back. As in
+// Java's gauge, only a step taken consumes the pace, so the first step
+// after a cool-down or a freeze is immediate; a held-back step is counted
+// under its brake at most once per pace, on a clock of its own.
 func (l *Limiter) grow(now time.Time) {
 	if l.limit >= l.max {
 		return
 	}
-	due := now.Sub(l.lastGrowth) >= growthPace
+	held := func(c *atomic.Int64) {
+		if now.Sub(l.lastHeld) >= growthPace {
+			l.lastHeld = now
+			c.Add(1)
+		}
+	}
 	switch {
 	case !l.lastThrottle.IsZero() && now.Sub(l.lastThrottle) < cleanWindow:
-		if due {
-			l.lastGrowth = now
-			l.c.cooldown.Add(1)
-		}
+		held(&l.c.cooldown)
 		return
 	case l.toCount >= timeoutFreeze && now.Sub(l.toStart) <= timeoutWindow:
-		if due {
-			l.lastGrowth = now
-			l.c.timeoutFrozen.Add(1)
-		}
+		held(&l.c.timeoutFrozen)
 		return
 	case l.base > 0 && l.ewma > latencyFreeze*float64(l.base):
-		if due {
-			l.lastGrowth = now
-			l.c.latencyFrozen.Add(1)
-		}
+		held(&l.c.latencyFrozen)
 		if l.valveSuccesses > max(1, l.limit/valveSuccessDiv) && now.Sub(l.lastValve) >= valvePace {
 			l.lastValve = now
 			l.limit++
 			l.c.valve.Add(1)
 		}
 		return
-	case !due:
+	case now.Sub(l.lastGrowth) < growthPace:
 		return
 	}
 	l.lastGrowth = now

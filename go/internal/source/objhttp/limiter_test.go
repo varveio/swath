@@ -281,3 +281,29 @@ func TestFloorThrottleDoesNotRearm(t *testing.T) {
 		t.Fatalf("counts %+v, grew %d", n, grew)
 	}
 }
+
+// TestFirstGrowthAfterCooldownIsImmediate: as in Java's gauge ("the first
+// +1 after a cool-down fires immediately"), counting held-back steps does
+// not consume the growth pace: a success just past the clean window grows
+// the limit even when a held-back step was counted under a second ago.
+func TestFirstGrowthAfterCooldownIsImmediate(t *testing.T) {
+	c := &fakeClock{t: time.Unix(1e9, 0)}
+	l := newLimiter(8, c.now)
+	l.cycle(Throttled, 0) // 8 -> 5, window armed at t0
+	t0 := c.t
+	c.t = t0.Add(cleanWindow - time.Millisecond)
+	l.cycle(Success, 100*time.Millisecond) // held back, counted
+	c.t = t0.Add(cleanWindow + time.Millisecond)
+	l.cycle(Success, 100*time.Millisecond)
+	if l.Limit() != 6 {
+		t.Fatalf("limit %d 1 ms after the clean window, want 6", l.Limit())
+	}
+	c.add(time.Second - 2*time.Millisecond)
+	l.cycle(Success, 100*time.Millisecond)
+	if l.Limit() != 6 {
+		t.Fatalf("limit %d: two steps inside one pace", l.Limit())
+	}
+	if n := l.Counts(); n.Cooldown != 1 || n.Increases != 1 {
+		t.Fatalf("counts %+v", n)
+	}
+}
