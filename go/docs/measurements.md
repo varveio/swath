@@ -25,7 +25,7 @@ Every comparison was row-identical on the 13 canonical columns, with identical m
 |---|---:|
 | Live buckets, Go listing directly against the Java recording of the same bucket | 21 |
 | Synthetic fixtures served by replay (10k keys; 1,000,020 keys from `bench/gen_fixture_1m.py`), each in 5 Go modes (sequential, 4 and 8 workers, with and without `--seed`) | 2 × 5 |
-| Java listing a Go dataset served by replay's sorted mode (1 part and 6 parts) | 2 |
+| Java listing a Go dataset served by replay's sorted mode (1 part and 6 parts); historical: run on format-1 Go output, before format 2, which Java's reader does not read ([upgrade.md](upgrade.md)) | 2 |
 
 The 21 live buckets are noaa-normals-pds, noaa-nws-fourcastnetgfs-pds, real-changesets and 18 open buckets
 chosen for the Java policy features they engage (among them noaa-eri-pds and pansurg-curation-raw-open-data),
