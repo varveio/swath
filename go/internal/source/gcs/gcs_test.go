@@ -274,3 +274,26 @@ func TestBrokenADCRefused(t *testing.T) {
 		t.Fatalf("err %v class %q, want auth", err, classify(err))
 	}
 }
+
+// pages is a supplied client that answers a fixed page.
+type pages struct{ page client.Page }
+
+func (p *pages) List(context.Context, *client.ListInput) (*client.Page, error) {
+	out := p.page
+	return &out, nil
+}
+
+// TestInvalidPageClass: a page that parses but breaks the contract (out of
+// order) is an invalid page, not a parse failure; the run stops with that
+// cause.
+func TestInvalidPageClass(t *testing.T) {
+	p, err := New(context.Background(), Options{Bucket: "b", Workers: 1, Policy: keyrange.Policy{Sequential: true},
+		Client: &pages{client.Page{Items: []client.Object{{Name: "b"}, {Name: "a"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
+	if classify(err) != "invalid_page" || client.Classify(err) == client.ClassParse {
+		t.Fatalf("err %v class %q, want invalid_page", err, classify(err))
+	}
+}

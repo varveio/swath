@@ -118,7 +118,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		StartInclusive: true,
 		AcceptBound:    AcceptBound,
 		Requeue:        requeue,
-		InvalidPage:    client.ErrSyntax,
+		InvalidPage:    client.ErrInvalidPage,
 		Size:           func(o *Object) int64 { return o.Size },
 		Counters:       clientCounters,
 	}, p.fetch)

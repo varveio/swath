@@ -5,7 +5,6 @@ package gcs
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"strings"
@@ -140,29 +139,15 @@ var (
 	_ source.Reporter   = (*opened)(nil)
 )
 
-// classify names a failure's class for the outcome (error.json cause).
+// classify names the class of a GCS failure (client.Classify) for the
+// run's outcome.
 func classify(err error) string {
-	var ce *client.CredentialError
-	if errors.As(err, &ce) {
-		return "auth"
-	}
-	var e *client.Error
-	if !errors.As(err, &e) {
+	switch c := client.Classify(err); c {
+	case client.ClassOther, client.ClassCanceled:
 		return ""
+	default:
+		return string(c)
 	}
-	switch {
-	case e.Throttle():
-		return "throttle"
-	case e.Status == 401:
-		return "auth"
-	case e.Status == 403:
-		return "access_denied"
-	case e.Status == 404:
-		return "no_such_bucket"
-	case e.Status >= 500:
-		return "server"
-	}
-	return ""
 }
 
 // canonicalRoute: the scheme and host are case-insensitive; the path is

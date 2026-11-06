@@ -157,7 +157,12 @@ local token endpoint). The scope is `devstorage.read_only`. The binary links
 `golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata`, not Google's storage client;
 `google.golang.org/api/storage/v1` is a test dependency only (`TestClientPagesMatchGoogleClient` compares
 pages against it). Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
-(100 ms to 5 s); exhaustion is requeued by the engine, as for S3.
+(100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Classification* (`client.Classify`, S3's
+vocabulary): `auth` (401, a `CredentialError`), `access_denied` (403), `no_such_bucket` (404), `throttle` (429,
+`rateLimitExceeded`, `userRateLimitExceeded`), `timeout` (an attempt past the request timeout, 408), `server`
+(another 5xx), `transport`, `parse` (a 200 that does not parse), `invalid_page` (a parsed page that breaks the
+contract: `client.ErrInvalidPage`, which the engine wraps), `canceled`, `other`; the class is the run
+outcome's `cause` (`TestClassify` drives each through the client, `TestInvalidPageClass` through the engine).
 
 **On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,
 so `Description.Listing` is `keyrange.Listing`. `startOffset` is inclusive (`StartInclusive`); `endOffset`
