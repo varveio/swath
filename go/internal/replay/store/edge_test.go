@@ -5,11 +5,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
 
+	"github.com/varveio/swath/go/sortedparquet"
 	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
@@ -46,5 +48,33 @@ func TestRollupMaxIntLimit(t *testing.T) {
 	}
 	if d := diffEntries(got, want); d != "" {
 		t.Fatal(d)
+	}
+}
+
+// TestDisorderReasonMatchesJava reads a stamped OBJECT-only group holding
+// a, c, b, d through Rows and through the delimiter rollup: both fail with
+// the replay server's row_group_disorder reason, naming the part, the
+// group and the row, and each failure is counted.
+func TestDisorderReasonMatchesJava(t *testing.T) {
+	s := openParts(t, Options{}, sortedparquettest.Part{Rows: objects("a", "c", "b", "d")})
+	check := func(how string, err error) {
+		t.Helper()
+		var disorder *sortedparquet.DisorderError
+		if Refusal(err) != "row_group_disorder" || !errors.As(err, &disorder) || !errors.Is(err, sortedparquet.ErrCorrupt) {
+			t.Fatalf("%s: %v (reason %q)", how, err, Refusal(err))
+		}
+		if filepath.Base(disorder.Part) != "part-00001.parquet" || disorder.RowGroup != 0 || disorder.Row != 2 {
+			t.Fatalf("%s: located at %s group %d row %d", how, disorder.Part, disorder.RowGroup, disorder.Row)
+		}
+	}
+	_, err := s.Rows(context.Background(), nil, true, nil, 10, Projection{})
+	check("rows", err)
+	_, ok, err := s.DelimitedRollup(context.Background(), nil, true, nil, nil, []byte("/"), 10, Projection{}, true)
+	if !ok {
+		t.Fatal("declined")
+	}
+	check("rollup", err)
+	if n := s.Counters().DisorderRefusals.Load(); n != 2 {
+		t.Fatalf("disorder refusals counted %d, want 2", n)
 	}
 }

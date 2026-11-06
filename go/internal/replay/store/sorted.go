@@ -38,6 +38,9 @@ type Counters struct {
 	// Reseeks counts key cursor moves through the page index past at
 	// least one undecoded page.
 	Reseeks atomic.Int64
+	// DisorderRefusals counts reads that failed because a row group's
+	// keys do not ascend strictly (Refusal reports row_group_disorder).
+	DisorderRefusals atomic.Int64
 }
 
 // Sorted is the Store over a sorted-Parquet fixture. Besides the Store
@@ -100,10 +103,19 @@ func (s *Sorted) ReadRows(ctx context.Context, from []byte, fromInclusive bool, 
 	defer release()
 	var stats sortedparquet.Stats
 	defer s.record(&stats)
-	return s.reader.Read(ctx, sortedparquet.Range{
+	rows, err := s.reader.Read(ctx, sortedparquet.Range{
 		From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
 		Limit: limit, Columns: columns,
 	}, &stats)
+	return rows, s.failed(err)
+}
+
+// failed counts a read error the replay server classifies, and returns it.
+func (s *Sorted) failed(err error) error {
+	if sortedparquet.ReasonOf(err) == sortedparquet.ReasonRowGroupDisorder {
+		s.counters.DisorderRefusals.Add(1)
+	}
+	return err
 }
 
 // RollupRows is DelimitedRollup returning the reader's entries with the
@@ -129,7 +141,7 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 		Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: saturatingIncrement(limit),
 		SuppressAtOrBeforeFrom: suppressPrefixAtOrBeforeFloor, Columns: columns,
 	}, &stats)
-	return entries, true, err
+	return entries, true, s.failed(err)
 }
 
 // Rows implements Store with the Object projection.

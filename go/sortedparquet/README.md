@@ -63,7 +63,9 @@ and `no_page_index` (a non-empty row group whose key column lacks a ColumnIndex 
   after every key decoded before it in the same read, and inside its ColumnIndex bounds. A truncated
   maximum is either raised above the last key or, when its bytes are all 0xFF, a prefix of it, so a bound
   that may be truncated only bounds the keys below its successor; a page is skipped only when that
-  conservative bound rules it out. A violation is an error wrapping `ErrCorrupt`.
+  conservative bound rules it out. A violation is an error wrapping `ErrCorrupt`; keys out of order inside
+  one row group are a `*DisorderError` naming the part, row group and row, whose reason (`ReasonOf`) is
+  `row_group_disorder`.
 - Values come back as stored: a null size or time is null. Rendering policy belongs to the caller.
 - `RollupRead` returns the entries a one-key-at-a-time walk over `Read` would: each common prefix costs one
   routing hop and at most one page-index landing past it, and a row group whose first key and the next

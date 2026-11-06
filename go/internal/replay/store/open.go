@@ -91,8 +91,9 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 // Refusal returns the reason Open refused a fixture as not servable sorted
 // (no_stamp, unsupported_mode, unknown_format_version, incomplete_multifile,
 // mixed_row_types, sanity_failed, and for manifest datasets
-// unsupported_schema, invalid_manifest, no_page_index), or "" when err is
-// not such a refusal.
+// unsupported_schema, invalid_manifest, no_page_index), row_group_disorder
+// for a read that found a row group's keys out of order, or "" when err is
+// none of these.
 func Refusal(err error) string {
 	return sortedparquet.ReasonOf(err)
 }

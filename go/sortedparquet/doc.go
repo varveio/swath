@@ -21,7 +21,8 @@
 // same read. Page bounds are used conservatively: a bound at least as long
 // as the writer's recorded truncation length may be a truncation, so a page
 // is skipped only when a key at or after the target provably cannot be on
-// it. A violation found while reading wraps ErrCorrupt.
+// it. A violation found while reading wraps ErrCorrupt; keys out of order
+// inside one row group are a *DisorderError (reason row_group_disorder).
 //
 // What it does not check: keys it never decodes, values beyond their
 // Parquet type (a null size or time is returned as null), or that the files
