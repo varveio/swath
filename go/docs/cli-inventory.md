@@ -24,7 +24,7 @@ decision to add it later).
 | `--bearer-token-refresh-interval` (45 m) | none | removed | no decision recorded |
 | Credential-chain failure fails the run | a configured source that fails stops the run with cause `auth`; requests go unsigned only for an empty chain or `--anonymous` | kept | – |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also a local directory and `gs://bucket[/prefix]` | kept | – |
-| S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
+| S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
 
 ## Listing scope and filters
 
@@ -76,7 +76,7 @@ decision to add it later).
 | Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-max`, `--spill-reserve`; a full disk stops the run with exit 74, cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
 | `--tune sort.*` (sixteen settings) | none | removed | sort settings are code constants, 2026-11-05 |
 | `--parquet-part-size SIZE` (256 MB) | `--part-size` (64 MiB) | renamed | – |
-| `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle) |
+| `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle, `7d6d746`) |
 | `--part-rotation-max-rows N` (2,000,000) | none | removed | no decision recorded |
 | Same input and configuration give the same parts at any encoder count | the same; with `--part-interval` cuts (`resources.part_time_cuts` > 0) boundaries depend on timing | kept | – |
 
@@ -93,7 +93,7 @@ decision to add it later).
 | Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | committed parts kept exactly once; everything after the last committed part's key re-listed | kept (coarser) | part-granular journal, re-list after the last published key, 2026-11-05 |
 | Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
 | Resume accepts every free operational option | accepts the listed runtime and operational flags only | kept (narrower) | – |
-| Resume of a completed dataset exits 0 | exit 0, class `completed`, report `complete` true (partial coverage: 1, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
+| Resume of a completed dataset exits 0 | exit 0, class `completed`, report `complete` true (partial coverage: 1, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `b62ddbb`) |
 | Java checkpoint files | not read | removed | no migration of Java checkpoint files, 2026-11-05 |
 | `dump-run` (hidden staging inspector) | `swath show [--journal] DIR` (manifest summary or journal dump) | renamed | staging not ported, 2026-11-05 |
 
@@ -135,7 +135,7 @@ decision to add it later).
 | Report: `started_at`, `duration_ms`, `listing_duration_ms` | `timings.started_at`, `wall_ms`, `listing_ms` | renamed | – |
 | Report: `session_duration_ms`, `keys_per_sec` | none | removed | own report shape, 2026-11-06 |
 | Report: `objects`, `recovered_objects`, `bytes` | `output.rows_listed`, `rows_retained`, `bytes` | renamed | – |
-| Report: `complete`, `exit_code`, `stop_reason` | `outcome.complete`, `exit_code`, `stop_reason` | renamed | – |
+| Report: `complete`, `exit_code`, `stop_reason` | `outcome.complete`, `exit_code`, `stop_reason` (a run that did not commit: `complete` false, its class as `stop_reason`, `83668d0`) | renamed | – |
 | Report: `error_class` | `outcome.cause` | renamed | – |
 | Report: `stop_source` | none (`outcome.class`) | removed | own report shape, 2026-11-06 |
 | Report: `engine_flags` | `resources.features` | renamed | – |
@@ -150,13 +150,13 @@ decision to add it later).
 |---|---|---|---|
 | 0: success, empty result, already-complete resume, closed stdout | 0 `completed`, an already-complete resume included | kept | – |
 | 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (not resumable) or `incomplete` (partial coverage); a full disk is 74 | kept | – |
-| 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage` (malformed command line, unknown scheme) or `refused` (guarded output refusal, changed resume identity, nothing to resume) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
-| 74: output filesystem full | 74 `disk_full`, cause `no_space`, resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
+| 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage` (malformed command line, unknown scheme) or `refused` (guarded output refusal, changed resume identity, nothing to resume) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `309e562`) |
+| 74: output filesystem full | 74 `disk_full`, cause `no_space`, resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `0f5fb48`) |
 | 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows` | kept (causes renamed) | – |
 | 124: `--max-duration` elapsed | 124 `deadline` | kept | – |
 | 130: SIGINT | 130 `interrupted` | kept | – |
 | 143: SIGTERM | 143 `terminated` | kept | – |
-| Protocol violation outranks a resumable code and marks the run unresumable | exit 1, `cause` `protocol`, `resumable: false`; the journal's terminal `unresumable` frame; `swath resume` refuses | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
+| Protocol violation outranks a resumable code and marks the run unresumable | exit 1, `cause` `protocol`, `resumable: false`; the journal's terminal `unresumable` frame; `swath resume` refuses | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `f29d047`) |
 
 ## Diagnostics
 
