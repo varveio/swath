@@ -104,6 +104,12 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 		if delim != "" {
 			if j := strings.Index(k[len(prefix):], delim); j >= 0 {
 				cp := k[:len(prefix)+j+len(delim)]
+				if in.ContinuationToken == "" && in.StartAfter != "" && cp <= in.StartAfter {
+					// S3 returns no common prefix at or below StartAfter
+					// (measured: "a/" is not listed for start-after "a/"
+					// or "a/b"), so the keys it covers are skipped.
+					continue
+				}
 				if m := len(out.CommonPrefixes); m == 0 || out.CommonPrefixes[m-1] != cp {
 					out.CommonPrefixes = append(out.CommonPrefixes, cp)
 					n++
