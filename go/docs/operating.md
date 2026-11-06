@@ -55,7 +55,11 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
   wrong region is an error that names the bucket's region. Redirects are not followed. STS calls use the
   environment's or profile's region, not `--region`.
 - Requester-pays buckets: `--request-payer`. Endpoint variants: `--fips`, `--dualstack`; S3-compatible stores:
-  `--endpoint URL` and usually `--path-style`.
+  `--endpoint URL` (or `--endpoint-url`), addressed path-style unless `--path-style=false`.
+- Bearer tokens instead of SigV4 (an S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API):
+  `--bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
+  (`--bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
+  recorded, so give it again to `swath resume DIR` ([cli.md](cli.md), "Bearer tokens").
 - Not supported: access points and Multi-Region Access Points, Outposts, S3 directory buckets (a name ending
   in `--x-s3` is refused, exit 2).
 
@@ -117,11 +121,24 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
 
 ## Watching a run
 
+**On a terminal.** swath draws one progress line on stderr, redrawn every second: phase, objects (with rows a
+resume recovered), live and average keys/s, parts, requests in flight, elapsed time, API calls and the cost
+estimate. Off a terminal it is off unless asked: `--progress` appends the same record as a plain line every 30 s
+(`--progress-interval` sets it, at least 1 s); a log never receives control sequences. `-q` turns the
+automatic progress and the warnings off, `--no-progress` turns progress off everywhere. At the end, runs over
+1.5 s, runs that wrote parts and runs that did not complete print Java's statistics block on stderr (objects,
+time, keys/s, API calls per 1,000 objects, mean and peak in flight, throttles and retries when any, the
+estimate, files, bytes and peak RSS); `--stats` forces it (also for a supervisor's log), `--no-stats` drops it.
+An `INCOMPLETE (class)` first line names a stop, with the `swath resume DIR` command when it is resumable.
+The one-line summary stays on stdout. Colour: `--color auto|always|never`, auto honouring `NO_COLOR`.
+
 `DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output.
 
 Its fields are listed once, under "Progress file" in [cli.md](cli.md).
 
-In-flight requests and the limiter's state are not in `progress.json`. They are in the report, under
+`progress.json` also carries the live request account: `requests` (attempts sent), `retries`, `inflight` (now)
+and `limit` (the adaptive limiter's current limit), and `cost_usd` on AWS S3 or GCS. The totals are in the
+report, under
 `source.stats.counters.values`: `attempts`, `requests`, `retries`, `throttles`, `timeouts`, `inflight.max_active`,
 `inflight.busy_ns` (divided by the listing time, `timings.listing_ms`, it is the mean in flight), `limiter.decreases`,
 `limiter.increases`, `limiter.max_depth`, `limiter.waits`, and `source.stats.mean_active` (mean active ranges). The
@@ -136,6 +153,7 @@ report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `peak_nodes`,
 | `objects` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
 | `advance` | rising | flat while `answered` rises: alive but not progressing (watch `--max-duration`) |
 | `throttles` | flat | rising steadily: see Throttling |
+| `inflight` against `limit` | `limit` near `--workers`, `inflight` near `limit` | `limit` falling: the service throttles; `inflight` far below `limit`: the engine has too little work in parallel |
 | `resources.budget_wait_ns` (report) | near 0 with spill on | large: workers blocked on a full row budget |
 | `mean_active` against mean in flight (report) | both near `--workers` | active high, in flight low: requests held by the limiter or admission |
 | exit 75 on the same output | never twice | a second 75 in a row needs a person |

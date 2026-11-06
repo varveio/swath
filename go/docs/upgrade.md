@@ -120,8 +120,14 @@ parts are byte-identical within a build only.
 
 ## Run report and counters
 
-`run.json` replaces Java's run summary; it has none of its field names and none of its Java-only fields
-(`steals`, `sort.arm`, `shape.fingerprint`, `cost`). The downstream reader does not read it. A reader that tabulates runs
+`run.json` replaces Java's run summary. It keeps the Java fields that have consumers, with their names:
+`cost.api_calls` (every HTTP attempt; the cloud importer's request count), `cost.cost_usd` and `cost.basis`
+(`null` on a custom endpoint), `efficiency.keys_per_sec` and `efficiency.api_calls_per_1k_objects`, `args_hash`
+(the cloud importer's configuration digest; SHA-256 of the Go run's frozen identity, filters included, so its
+value differs from Java's listing-scope hash), and `stop_source` (under `outcome`); Java's
+`session_duration_ms` is `timings.session_ms`. Its other Java-only fields (`steals`, `sort.arm`,
+`shape.fingerprint`, `trajectory`, `slow_ranges`, `probe_latency`, `demand_gate`, `shape`) are not kept
+([cli-inventory.md](cli-inventory.md)). The downstream reader does not read it. A reader that tabulates runs
 (`bench/summaries.py`) maps Java's top-level fields as: `completed` → `outcome.complete`, `objects` →
 `output.rows_listed`, `duration_ms`/`listing_duration_ms` → `timings.wall_ms`/`listing_ms`, `config.target` →
 `invocation.source`, `config.max_parallel_listings` → `invocation.workers`, `output.files` →
@@ -164,6 +170,18 @@ rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath 
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
 is `--workers`, default 64 as Java's, whatever the CPU count (an earlier Go build derived it from the CPU
 count, `min(64, max(4, 3*GOMAXPROCS))`); `--encoders` stays CPU-derived.
+Java's text workflows keep their flags: `--format auto|table|tsv|jsonl`, stdout (no `-o`, or `-o -`; a
+closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]`, `--output-type file`, `--compression` and Java's TSV
+and JSONL row contract ([cli.md](cli.md), "Text output"); a script that reads Java's TSV header and columns
+reads Go's unchanged. Not ported: a directory of text parts (`-o DIR --format tsv` is refused; name one file),
+`--text-part-size`, `--text-writers`, the `.parquet` one-writer file. Text runs are not resumable, as Java's
+streams were not. `--bearer-token-command` and `--bearer-token-refresh-interval` are Java's; the command is
+never recorded, so a resume must be given it again (Java's rule too) and is now refused with a message when it
+is not, instead of failing on its first request. `--endpoint-url` and `--force` are accepted as Java's names
+of `--endpoint` and `--overwrite`; a custom endpoint is path-style by default, as Java's (an interrupted Go run
+started by an earlier build with `--endpoint` on a host name and no `--path-style` now resolves the path-style
+route, so its resume is refused by the identity check; start it over with `--overwrite`). The seven filters are
+Java's flags with Java's semantics, except that regular expressions are Go's RE2 ([cli.md](cli.md), "Filters").
 The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
 ## The downstream reader: dispatch on schema id

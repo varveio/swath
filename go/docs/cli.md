@@ -2,6 +2,7 @@
 
 ```text
 swath list SOURCE --output DIR [flags]   list SOURCE into a sorted dataset in DIR
+swath list SOURCE [-o FILE|-] [flags]    list SOURCE as text rows (TSV, JSONL, a table) to a file or stdout
 swath resume DIR [runtime flags]         continue the interrupted run in DIR
 swath show [--journal] DIR               show a dataset or an interrupted run
 swath diag list SOURCE [flags]           list with diagnostic flags (comparisons, policy toggles)
@@ -9,13 +10,17 @@ swath --version                          print the build (tool, module version, 
 ```
 
 SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `swath list` writes a dataset to `--output` (`-o`)
-([internals/parquet-output.md](internals/parquet-output.md)), or with `--count-only` only lists. It prints one
+([internals/parquet-output.md](internals/parquet-output.md)), text rows to a file or stdout (**Text output**
+below), or with `--count-only` only lists. It prints one
 line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. `swath resume DIR` replays the command the journal recorded; only
 the runtime flags (`--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
-`--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`) and the operational ones, how requests are
+`--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and the terminal flags
+`--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
+operational ones, how requests are
 authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`,
-`--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--limiter-slow-start`, `--request-rate`), may be given again (the last value
+`--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--limiter-slow-start`, `--request-rate`,
+`--bearer-token-command`, `--bearer-token-refresh-interval`), may be given again (the last value
 wins: `--anonymous=false` undoes a recorded `--anonymous`); anything else is a usage error. The source and output
 identity stays frozen: a resume whose overrides resolve another route (a profile with another region, say) is
 refused by the identity check. `swath resume` on a committed dataset with complete coverage has nothing to do
@@ -37,7 +42,7 @@ rewrites it):
 
 <!-- flags:begin -->
 ```text
-usage: swath list SOURCE --output DIR [flags]
+usage: swath list SOURCE [--output DIR|FILE|-] [flags]
   SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
 
   -anonymous
@@ -339,11 +344,51 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **`--memory`** is one budget: half of it bounds the bytes of rows in flight (reorder storage and encoder
   queues); see
   [internals/ordering.md](internals/ordering.md).
-- **`--output`** is refused when non-empty unless `--overwrite`, which replaces only a previous dataset of this
-  tool and never anything inside the listed root.
+- **`--output`** is refused when non-empty unless `--overwrite` (or Java's alias `--force`), which replaces only
+  a previous dataset of this tool and never anything inside the listed root.
+- **Text output** (Java's text formats, S3 and GCS sources; a local tree's byte keys need the dataset). Without
+  `-o`, or with `-o -`, rows go to stdout: `--format auto` (the default there) is Java's aligned table when
+  stdout is a terminal, TSV otherwise; `--format table|tsv|jsonl` chooses. `-o NAME.tsv` or `NAME.jsonl`
+  (optionally `.gz` or `.zst`) writes one file in that format; `--output-type file` names one file without such
+  an extension (with `--format`); any other `-o` is the Parquet dataset (`--format parquet`, the default there).
+  The row contract is Java's: TSV has the header `key size last_modified etag storage_class row_type` (tab
+  separated), a byte below 0x20 or 0x7f is written `\xNN` (nothing else is escaped, a backslash included), and
+  `row_type` is `OBJECT`; JSONL has no header and one object per row in Java's field order (`key`, `size`,
+  `last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name`, `checksum_algorithm`,
+  `checksum_type`, `row_type`; an absent value is omitted), written by `encoding/json` without HTML escaping
+  (unlike Java's writer it escapes U+2028 and U+2029; keys of these sources are always UTF-8); the table
+  right-aligns the size in 14 columns, then the time in 24, then the key, without a header. `last_modified` is
+  UTC with a fraction only when it is not zero (`2026-01-02T03:04:05Z`, `.123Z`, `.123456Z`). `--compression
+  none|gzip|zstd` (or the `.gz`/`.zst` name; the two must agree) compresses text, never a dataset. A file is
+  written to a temporary beside it and installed only when complete (synced, then renamed, the directory
+  synced), replacing a previous file; a failed run leaves the destination as it was. A reader that closes
+  stdout (`| head`) ends the run at once with exit 0, the report's outcome `stopped`, `stop_reason`
+  `downstream_closed`, `complete` false. On stdout the one-line summary is not printed (stdout carries the
+  rows; `--stats` prints the account on stderr) and `--report-format json` is refused (use `--report FILE`).
+  Text runs keep no journal: `swath resume` refuses a text destination, and an interrupted text run is run
+  again. `output.text` in the report names the format, destination, compression, rows and bytes.
+- **Filters** (Java's seven): `--include REGEX` and `--exclude REGEX` keep or drop keys in which the expression
+  matches anywhere (a substring search, as Java's `find`), `--min-size` and `--max-size` keep sizes within the
+  inclusive bounds (Java's units: `1k`, `256mb`, `1.5GiB`, binary, case-insensitive), `--modified-since` and
+  `--modified-until` keep modification times within the inclusive bounds (`2026-01-01`, `2026-01-01T12:00:00`
+  or with `Z` or an offset; UTC without one; a row without a time is kept, as Java's), `--storage-class
+  A,B` (repeatable) keeps the listed classes (case-insensitive). They reduce the rows written, not the requests
+  made, with one exception: an `--include` anchored at the start with a literal (`^logs/2026/`) narrows the listed
+  prefix to it (the same rows, fewer requests; the report's `invocation.source` names the narrowed root). The
+  dropped rows are counted in `output.rows_filtered` (`rows_listed` is what passed). The filters are part of the
+  resume identity (and of `args_hash`): a resume keeps them and refuses others. A filtered dataset says so in its
+  manifest: `coverage.filters` holds Java's descriptions (`include=…`, `exclude=…`, `min_size=…`, `max_size=…`,
+  `modified_after=…`, `modified_before=…`, `storage_class=…`), and a reader that needs the whole source refuses a
+  dataset whose `coverage.filters` is not empty ([upgrade.md](upgrade.md)). **Regular expressions are Go's RE2,
+  not Java's:** the common syntax is the same, but backreferences (`\1`), lookahead and lookbehind, possessive
+  quantifiers and atomic groups do not exist and are refused (exit 2); `\Z` is not supported (`\z` is), and
+  some character-class and Unicode-property details differ. RE2 runs in time linear in the key, so no pattern
+  can stall a listing.
 - **S3 modes.** The default is the parallel core; `--seed` tiles the scope from one delimiter page first;
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
-  dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` and `--path-style` select S3-compatible stores. S3 directory buckets (Express One Zone, names ending in
+  dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` (or Java's
+  name `--endpoint-url`) selects an S3-compatible store, addressed path-style by default, as Java's
+  `--force-path-style` default with a custom endpoint; `--path-style=false` uses virtual-host addressing there. S3 directory buckets (Express One Zone, names ending in
   `--x-s3`) are refused before any request (exit 2, class `refused`).
 - **Workers:** `--workers` (default 64 whatever the CPU count, Java's default; listing waits on the service,
   not the CPU) is the listing goroutines and the request limiter's start; `--encoders` stays CPU-derived.
@@ -368,6 +413,19 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   EC2) and the lookup finds nothing; a configured source that fails stops the run with cause `auth`, and one
   that is slow or failing transiently is waited for and retried, never replaced by anonymity. Secrets are never taken from flags (they would show in `ps`). Details:
   [internals/providers.md](internals/providers.md).
+- **Bearer tokens** (S3 client, Java's flags): `--bearer-token-command CMD` runs `CMD` with `/bin/sh -c`; its
+  stdout (trimmed, one line) is a bearer token sent as `Authorization: Bearer TOKEN` on every request instead of a
+  SigV4 signature, and no AWS credential is looked up (it excludes `--anonymous` and `--profile`). The use is an
+  S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API: `swath list s3://bucket --endpoint-url
+  https://storage.googleapis.com --bearer-token-command 'gcloud auth print-access-token' -o DIR` (the native
+  `gs://` provider is the alternative). The token is fetched again after `--bearer-token-refresh-interval`
+  (default 45 m, under a one-hour token lifetime), one run of the command at a time however many requests need
+  it; a command that exits non-zero, runs past 30 s, prints nothing or more than one line fails the request
+  with cause `auth` (fail closed: a stale token is never reused); its message carries the exit code and up to
+  4,096 characters of its stderr, control characters escaped. The command is never recorded: the journal,
+  `run.json`, the report, `error.json` and the stderr outcome line show `--bearer-token-command=[redacted]`, so
+  `swath resume DIR` must be given it again (`swath resume DIR --bearer-token-command CMD`) and refuses with a
+  message saying so otherwise (exit 2).
 - **Spill:** when the reorder budget is full, rows of ranges ahead of the frontier go to disposable files
   under `DIR/.swath/spill/` instead of stalling the workers; `swath diag list --no-spill` turns it off,
   `--spill-compress` compresses them. Spill stops (and listing waits instead) at `--spill-max` bytes on disk
@@ -378,6 +436,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   each from the half of `--memory` outside the row budget, and the descriptor limit (after the spill readers,
   the workers' connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given;
   when the resources cannot carry it, a warning names the shortfall.
+- **Row bound per part:** `--part-rotation-max-rows N` (default 0: off; Java's default was 2,000,000 with
+  256 MB parts) also closes a part at N rows. The cut depends on the rows only, so it is part of the resume
+  identity, a resume reproduces the boundaries, and a row-cut part does not calibrate the size ratio (only a part
+  closed by size does); `resources.part_row_cuts` counts them.
 - **Durable-progress age:** `--part-interval` (default 30 s, Java's rotation interval; 0: off) closes an open part that holds rows once
   it is that old, although not full, so the journal's recovery point (what a resume keeps) is never older than
   about that on a slow frontier; with 0, parts close by `--part-size` only and their boundaries do not depend on
@@ -482,5 +544,43 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   A supervisor watches that file; `DIR/run.json` follows the
   commit. `--max-duration` and `--stall-timeout` are runtime flags: `swath resume` replays the recorded
   values unless given again.
+- **Terminal** (Java's stderr surface). A live progress record on stderr, from the snapshot the progress file
+  is written from: the phase (`starting`, `verifying` with a resume's bytes checked, `listing`), objects listed
+  (with `+N recovered`: rows a resume kept), live and average keys/s, parts published, requests in flight,
+  elapsed time since the command began, API calls and, on a known tariff, the labelled estimate; no percentage
+  or ETA (a listing has no honest denominator), no key text. On a terminal it is redrawn in place (carriage
+  return, `ESC[2K`; on Windows after enabling virtual-terminal processing, else plain lines), its trailing
+  fields dropped whole to fit the width, every second; elsewhere it is appended as plain lines every 30 s.
+  Shown by default when stderr is a terminal and neither `-q` nor `-v` is given; `--progress` forces it,
+  `--no-progress` suppresses it, `--progress-interval D` (at least 1 s) sets the cadence and implies it.
+  Warnings written while the line is drawn erase it and repaint it after. At the end, `--stats` prints Java's
+  block on stderr: a disposition (`INCOMPLETE (class)` with `resume: swath resume DIR` for a resumable stop; a
+  refused run prints only this line), `N objects in T · K keys/s` (with the whole invocation's time when it is
+  over a second longer), `N API calls · R per 1k objects · in flight avg A · peak P`, throttles, retries and
+  entry errors when any, the estimate, and `files · bytes written · peak RSS`. Without `--stats` it is printed
+  for a run over 1.5 s, a run that wrote parts, and a run that did not complete; not with `-q`, not after a
+  closed stdout reader; `--no-stats` never. The one-line summary stays on stdout. `-v` (`-vv`, `-vvv`: the same;
+  Go has no finer log levels) prints a start line and shows progress as appended records; `-q` drops warnings
+  and the automatic progress and statistics; `-qq` also drops the final error line (the exit code, `error.json`
+  and `--report` stand). `--color auto|always|never` colours the progress line and the statistics (headline
+  cyan, the rest dim, `INCOMPLETE` red): auto is on for a terminal unless `NO_COLOR` is set and not empty or
+  `TERM=dumb`, and `CLICOLOR_FORCE` forces it. TTY detection and width: `golang.org/x/term`.
+- **Report continuity** (Java's report fields with consumers). `cost.api_calls` is every HTTP attempt this
+  invocation sent (pages, probes, client retries, engine requeues; the field the cloud importer reads as the
+  request count); `cost.cost_usd` is that count at `cost.basis.rate_per_1k_usd` (0.005, `source`
+  `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint), and both are
+  `null` on a custom endpoint, whose tariff is unknown. `efficiency.keys_per_sec` is `output.rows_listed` over
+  `timings.listing_ms` (listing and ordering; not publication, not the time before the run, not retained rows);
+  `efficiency.api_calls_per_1k_objects` is `null` without a row. Clocks: `timings.wall_ms` runs from
+  `timings.started_at` (the run's start, after the command line was read) to `finished_at`;
+  `timings.session_ms` is the whole invocation, from `attempt.started` (credential lookup, a resume's
+  verification and publication included); `listing_ms` ends with the order stage. `args_hash` (the field the
+  cloud importer reads as the configuration digest) is SHA-256 over the run's frozen identity (tool, format,
+  schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix,
+  route and region, and the filters): the same for a run and its resumes, never a credential, and not equal to
+  Java's (which covered the listing scope only). `outcome.stop_source` says what stopped a stopped run:
+  `sigint`, `sigterm`, `liveness_watchdog` (`--stall-timeout`), `timebox` (`--max-duration`), with
+  `+forced_exit` when it did not stop within the grace (`forced_exit` alone if it came first); `error.json`
+  carries it too. A hosted runner keeps reading the live `objects` from `progress.json`.
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;
   `SWATH_LOCALFS_ENGINE=portable` selects the portable filesystem engine; `SWATH_SPLIT_TRACE` traces S3 splits.

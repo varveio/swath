@@ -5,7 +5,8 @@ Every option, output mode, exit code, report field class and documented guarante
 [docs/metrics-and-observability.md](../../docs/metrics-and-observability.md)) against this tool
 ([cli.md](cli.md), [upgrade.md](upgrade.md)). Dates are owner decisions.
 
-Legend: **kept** (same name and meaning, differences noted), **renamed** (to the Go name given),
+Legend (the Decision column's "ported 2026-11-06" rows were restored by one lane; "not ported, 2026-11-06" gives the
+reason a Java feature stays out): **kept** (same name and meaning, differences noted), **renamed** (to the Go name given),
 **removed** (with the recorded decision and its date, or "no decision recorded"), **deferred** (a recorded
 decision to add it later).
 
@@ -15,13 +16,13 @@ decision to add it later).
 |---|---|---|---|
 | `--region REGION` | `--region` (default chain ends at `us-east-1`) | kept | – |
 | `--profile NAME` | `--profile` | kept | – |
-| `--endpoint-url URL` | `--endpoint URL` | renamed | – |
-| `--force-path-style` / `--no-force-path-style` | `--path-style` (boolean) | renamed | – |
+| `--endpoint-url URL` | `--endpoint URL`, or `--endpoint-url` (alias) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--force-path-style` / `--no-force-path-style` | `--path-style` (boolean; default on with a custom endpoint, as Java's) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) (default) |
 | `--no-sign-request` | `--anonymous` | renamed | – |
 | `--requester-pays requester` | `--request-payer` (boolean) | renamed | – |
 | `--fetch-owner` | `--fetch-owner` | kept | – |
-| `--bearer-token-command CMD` | none; GCS has its own provider (`gs://`, `--gcs-credentials`) | removed | no decision recorded |
-| `--bearer-token-refresh-interval` (45 m) | none | removed | no decision recorded |
+| `--bearer-token-command CMD` | `--bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--bearer-token-refresh-interval` (45 m) | `--bearer-token-refresh-interval` (45 m; one refresh in flight) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Credential-chain failure fails the run | a configured source that fails stops the run with cause `auth`; requests go unsigned only for an empty chain or `--anonymous` | kept | – |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also a local directory and `gs://bucket[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
@@ -30,34 +31,34 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--include REGEX` | none; `coverage.filters` is always `[]` | removed | no decision recorded |
-| `--exclude REGEX` | none | removed | no decision recorded |
-| `--min-size SIZE` | none | removed | no decision recorded |
-| `--max-size SIZE` | none | removed | no decision recorded |
-| `--modified-since DATE` | none | removed | no decision recorded |
-| `--modified-until DATE` | none | removed | no decision recorded |
-| `--storage-class CLASS[,CLASS]` | none | removed | no decision recorded |
+| `--include REGEX` | `--include` (Go RE2, found anywhere; `^literal` also narrows the listed prefix); `coverage.filters` records each filter | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--exclude REGEX` | `--exclude` (Go RE2) | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--min-size SIZE` | `--min-size` (Java's units) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--max-size SIZE` | `--max-size` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--modified-since DATE` | `--modified-since` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--modified-until DATE` | `--modified-until` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--storage-class CLASS[,CLASS]` | `--storage-class` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Current objects only; versions not listed | current objects only | kept | versions mode parked, 2026-11-05 |
 
 ## Output formats and datasets
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--format auto\|table\|tsv\|jsonl` | none; Parquet dataset only | deferred (TSV, JSONL) | TSV and JSONL after the port, streaming without resume allowed, 2026-11-06; `table` and `auto`: no decision recorded |
-| `--format parquet` | the only format; no flag | kept | – |
+| `--format auto\|table\|tsv\|jsonl` | `--format auto\|table\|tsv\|jsonl` (Java's TSV and JSONL row contract; auto: a table on a terminal, TSV otherwise) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--format parquet` | `--format parquet`, the default for a directory `-o` | kept | – |
 | `--format discard` | `--count-only` | renamed | – |
-| `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o`, `--output DIR` (a dataset directory only) | kept | stdout and files deferred with TSV/JSONL, 2026-11-06 |
-| `--output-type file\|dir` | none | removed | no decision recorded |
-| `-o NAME.parquet` one-writer directory layout | none | removed | no decision recorded |
-| `--compression none\|gzip\|zstd` (text only) | none | removed | no decision recorded |
-| `--text-part-size` (256 MB) | none | removed | partitioned text datasets not ported, 2026-11-05 |
-| `--text-writers N` (3) | none | removed | text writer lanes not ported, 2026-11-05 |
-| `--writeback-size SIZE` (off) | none | removed | no decision recorded |
-| stdout: at most once; a closed reader exits 0 | no stdout output | deferred | TSV and JSONL after the port, 2026-11-06 |
-| Text file published atomically | none | deferred | TSV and JSONL after the port, 2026-11-06 |
-| Text directory dataset, `_SUCCESS` last | none | removed | partitioned text datasets not ported, 2026-11-05 |
+| `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o`: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--output-type file\|dir` | `--output-type file\|dir` (file: one text file without a text extension; dir with a text format is refused) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features): it carries a distinct meaning (an extensionless text file) |
+| `-o NAME.parquet` one-writer directory layout | none (`-o NAME.parquet` is a dataset directory) | removed | not ported, 2026-11-06: no value now (Java's own FAQ calls it a trap) |
+| `--compression none\|gzip\|zstd` (text only) | `--compression none\|gzip\|zstd`, or the `.gz`/`.zst` name (text only) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features): it carries a distinct meaning (compressed stdout, or a name without the extension) |
+| `--text-part-size` (256 MB) | none | removed | not ported, 2026-11-06: no value now (partitioned text datasets) |
+| `--text-writers N` (3) | none | removed | not ported, 2026-11-06: no value now (partitioned text datasets) |
+| `--writeback-size SIZE` (off) | none | removed | not ported, 2026-11-06: no value now |
+| stdout: at most once; a closed reader exits 0 | stdout (no `-o`, or `-o -`); a closed reader exits 0, outcome `stopped`, `stop_reason` `downstream_closed`; not resumable | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| Text file published atomically | written beside the destination and installed when complete (synced, renamed, directory synced) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| Text directory dataset, `_SUCCESS` last | none (`-o DIR --format tsv` is refused) | removed | not ported, 2026-11-06: no value now (partitioned text datasets) |
 | `_SUCCESS` written last is the commit | `manifest.json` installed last (atomic rename, directory sync) is the commit | renamed | dataset format 2, 2026-11-05 |
-| `symlink.txt` part list | none; the manifest lists the parts | removed | dataset format 2, 2026-11-05 |
+| `symlink.txt` part list | none; the manifest lists the parts | removed | not ported, 2026-11-06: no value now |
 | `manifest.json` (format 1, camelCase) | `manifest.json` format 2 with `coverage` | renamed | dataset format 2, 2026-11-05 |
 | `.swath-state.json` | `.swath/` workspace (`lock`, `journal`, `parts/`, `spill/`) | renamed | – |
 | Schema `swath/canonical`, 13 columns | `swath/s3-objects/v1`, 9 columns (`version_id`, `is_latest`, `is_delete_marker`, `row_type` dropped) | renamed | dataset format 2 and versions mode parked, 2026-11-05 |
@@ -70,14 +71,14 @@ decision to add it later).
 | Java | Go | Status | Decision |
 |---|---|---|---|
 | `--sort` (globally key-sorted Parquet) | always sorted; no flag | kept | – |
-| `--no-sort` (unsorted Parquet, direct dataset) | none | removed | no decision recorded |
+| `--no-sort` (unsorted Parquet, direct dataset) | none | removed | not ported, 2026-11-06: architecture, measured first |
 | Sorted parts key-disjoint in unsigned byte order, named in key order | the same, every run | kept | – |
-| Staging under `_staging/`, k-way merge, finalization | ordered emission with disposable spill under `.swath/spill/` | removed | staging and external sort not ported, 2026-11-05 |
+| Staging under `_staging/`, k-way merge, finalization | ordered emission with disposable spill under `.swath/spill/` | removed | staging and external sort not ported, 2026-11-05; not ported, 2026-11-06: no value now (staging and merge controls) |
 | Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-max`, `--spill-reserve`; a full disk stops the run with exit 74, cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
-| `--tune sort.*` (sixteen settings) | none | removed | sort settings are code constants, 2026-11-05 |
+| `--tune sort.*` (three keys of Java's seven-key `--tune` registry; the other "sort" settings were JVM properties) | none | removed | sort settings are code constants, 2026-11-05 |
 | `--parquet-part-size SIZE` (256 MB) | `--part-size` (64 MiB) | renamed | – |
 | `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle, `7d6d746`) |
-| `--part-rotation-max-rows N` (2,000,000) | none | removed | no decision recorded |
+| `--part-rotation-max-rows N` (2,000,000) | `--part-rotation-max-rows N` (default 0: off; part of the resume identity; `resources.part_row_cuts`) | kept (default off) | ported 2026-11-06 (owner: restore the cheap Java CLI features); default off: Go's 64 MiB parts already bound a part, and a default would move every run's boundaries |
 | Same input and configuration give the same parts at any encoder count | the same; with `--part-interval` cuts (`resources.part_time_cuts` > 0) boundaries depend on timing | kept | – |
 
 ## Resume and durability
@@ -86,10 +87,10 @@ decision to add it later).
 |---|---|---|---|
 | `swath resume <dir>` | `swath resume DIR` | kept | – |
 | `--checkpoint auto` (`.swath/checkpoint.sqlite`) | journal at `DIR/.swath/journal`, always on for S3 and GCS; local runs keep none | renamed | record journal replaces the SQLite checkpoint, 2026-11-05 |
-| `--checkpoint PATH` | none | removed | record journal replaces the SQLite checkpoint, 2026-11-05 |
+| `--checkpoint PATH` | none | removed | record journal replaces the SQLite checkpoint, 2026-11-05; not ported, 2026-11-06: no value now (the SQLite checkpoint surface) |
 | `--checkpoint none` | `swath diag list --no-journal` | renamed | – |
 | `--restart` | none; `--overwrite` starts over an interrupted run | renamed | – |
-| `--overwrite`, `--force` | `--overwrite` | kept (alias `--force` removed) | no decision recorded (alias) |
+| `--overwrite`, `--force` | `--overwrite`, `--force` (alias) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | committed parts kept exactly once; everything after the last committed part's key re-listed | kept (coarser) | part-granular journal, re-list after the last published key, 2026-11-05 |
 | Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
 | Resume accepts every free operational option | accepts the listed runtime and operational flags only | kept (narrower) | – |
@@ -114,7 +115,7 @@ decision to add it later).
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
 | Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on), the same rule; `--limiter=false` fixes `--workers` in flight | kept | – |
 | Slow start from 4, doubling per second | `--limiter-slow-start` (off by default until measured): the limit starts at 4 and doubles each second up to `--workers` until the first throttle or timeout; feature `slow_start` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `51ec3a7`) |
-| Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05 |
+| Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05; not ported, 2026-11-06: no value now |
 
 ## Observability and reports
 
@@ -122,27 +123,27 @@ decision to add it later).
 |---|---|---|---|
 | `--report PATH` | `--report FILE` (written when the attempt ends, on failure too) | kept | – |
 | `_swath_summary.json`, updated during the run | `run.json`, written after the commit | renamed | own report shape, Java fields not kept, 2026-11-05 and 2026-11-06 |
-| `--stats` / `--no-stats` (stderr summary) | one stderr line always; `--report-format json` prints the report | removed | no decision recorded |
-| `--progress` / `--no-progress` (stderr) | `DIR/.swath/progress.json` every 2 s | removed | no decision recorded |
-| `--progress-interval DURATION` | none (fixed 2 s) | removed | no decision recorded |
+| `--stats` / `--no-stats` (stderr summary) | `--stats` / `--no-stats`: Java's block on stderr with Java's gating; the one-line summary stays on stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--progress` / `--no-progress` (stderr) | `--progress` / `--no-progress`: one record redrawn on a terminal, appended elsewhere, from the snapshot `progress.json` is written from | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--progress-interval DURATION` | `--progress-interval` (1 s redrawing, 30 s appended; floor 1 s) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `list_run_summary` log line (`-v`) | the one-line text report | renamed | – |
-| `--metrics-endpoint URL`, `SWATH_OTLP_ENDPOINT` | none | removed | no OTLP export, 2026-11-05 |
+| `--metrics-endpoint URL`, `SWATH_OTLP_ENDPOINT` | none | removed | no OTLP export, 2026-11-05; not ported, 2026-11-06: no value now |
 | `--no-metrics` | none | removed | no OTLP export, 2026-11-05 |
 | Report: `schema_version` | `report_version` | renamed | – |
 | Report: `run_id` | `attempt.id` | renamed | – |
 | Report: `argv`, `config` | `invocation` | renamed | – |
-| Report: `args_hash` | none (identity is in the journal) | removed | own report shape, 2026-11-06 |
+| Report: `args_hash` | `args_hash`: SHA-256 of the Go run's frozen identity (filters included; not Java's value) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `started_at`, `duration_ms`, `listing_duration_ms` | `timings.started_at`, `wall_ms`, `listing_ms` | renamed | – |
-| Report: `session_duration_ms`, `keys_per_sec` | none | removed | own report shape, 2026-11-06 |
+| Report: `session_duration_ms`, `keys_per_sec` | `timings.session_ms` (from `attempt.started`), `efficiency.keys_per_sec` (rows listed over `listing_ms`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `objects`, `recovered_objects`, `bytes` | `output.rows_listed`, `rows_retained`, `bytes` | renamed | – |
 | Report: `complete`, `exit_code`, `stop_reason` | `outcome.complete`, `exit_code`, `stop_reason` (a run that did not commit: `complete` false, its class as `stop_reason`, `83668d0`) | renamed | – |
 | Report: `error_class` | `outcome.cause` | renamed | – |
-| Report: `stop_source` | none (`outcome.class`) | removed | own report shape, 2026-11-06 |
+| Report: `stop_source` | `outcome.stop_source` (`sigint`, `sigterm`, `liveness_watchdog`, `timebox`, `+forced_exit`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `engine_flags` | `resources.features` | renamed | – |
 | Report: `recovered_errors`, `engine`, `seed`, `meters` | `source.stats.counters` (Go names; mapping in [upgrade.md](upgrade.md)) | renamed | no Java names, 2026-11-05 |
-| Report: `cost`, `efficiency` | none | removed | own report shape, Java fields not kept, 2026-11-06 |
+| Report: `cost`, `efficiency` | `cost` (`api_calls`, `cost_usd`, `basis`; null on a custom endpoint), `efficiency` (`keys_per_sec`, `api_calls_per_1k_objects`) | kept (fewer efficiency fields) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `sort` | none (spill: `resources.spill`) | removed | staging not ported, 2026-11-05 |
-| Report: `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `dataset_writer`, `demand_gate`, `shape` | none | removed | own report shape, Java fields not kept, 2026-11-06 |
+| Report: `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `dataset_writer`, `demand_gate`, `shape` | none | removed | own report shape, 2026-11-06; not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 
 ## Exit codes
 
@@ -164,11 +165,11 @@ decision to add it later).
 |---|---|---|---|
 | `--help`, `help` | `--help`, `help`, `swath list -h` | kept | – |
 | `--version` (five lines) | `--version` (tool, version, revision) | kept | – |
-| `-v`, `-vv`, `-vvv` | none | removed | no decision recorded |
-| `-q`, `--quiet` | none | removed | no decision recorded |
-| `--color auto\|always\|never` | none | removed | no decision recorded |
+| `-v`, `-vv`, `-vvv` | `-v` (`-vv`, `-vvv` the same): a start line, progress as appended records | kept (one level) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `-q`, `--quiet` | `-q`, `--quiet` (no warnings, no automatic progress or statistics); `-qq` also no error line | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--seed-descent`, `--probe`, `--floors`, `--structure`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
-| `--tune KEY=VALUE` (non-sort keys) | none | removed | no decision recorded |
-| `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | no decision recorded |
+| `--tune KEY=VALUE` (non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`seed.mode`, `summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
+| `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 | Bare `swath s3://…` is an error that suggests `swath list` | usage error, exit 2, prints the command list | kept | – |
 | Stuck: a snapshot of thread stacks and in-flight counts to the log before interrupting | goroutine stacks and progress counts to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`, else stderr | kept | – |

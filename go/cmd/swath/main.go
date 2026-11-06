@@ -253,6 +253,7 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 func commands(w io.Writer) {
 	fmt.Fprint(w, `usage:
   swath list SOURCE --output DIR [flags]   list SOURCE into a sorted dataset in DIR
+  swath list SOURCE [-o FILE|-] [flags]    list SOURCE as text rows (TSV, JSONL, a table) to a file or stdout
   swath resume DIR [runtime flags]         continue the interrupted run in DIR
   swath show [--journal] DIR               show a dataset or an interrupted run
   swath diag list SOURCE [flags]           list with diagnostic flags (comparisons, policy toggles)
@@ -436,7 +437,7 @@ func usage(w io.Writer, f *flag.FlagSet, diag bool) {
 	if diag {
 		fmt.Fprintln(w, "usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)")
 	} else {
-		fmt.Fprintln(w, "usage: swath list SOURCE --output DIR [flags]")
+		fmt.Fprintln(w, "usage: swath list SOURCE [--output DIR|FILE|-] [flags]")
 	}
 	fmt.Fprintln(w, "  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]")
 	fmt.Fprintln(w)

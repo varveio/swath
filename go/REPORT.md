@@ -2436,7 +2436,18 @@ bytes, not skipped; ids are unsigned; encoding is parallel; S3 and GCS runs resu
 - **Throttling.** The limiter starts at `--workers` unless `--limiter-slow-start` (off by default, unmeasured); under sustained throttling (the
   20 % arm in "Throttle handling") it holds the limit at 1-2 requests in flight for the whole run (Java's
   gauge rules; Java was not run under that fault here).
-- **Not built:** versions mode, filters beyond a prefix, text output (TSV, JSONL, table, stdout), Azure.
+- **Not built:** versions mode, Azure. Of Java's CLI, deliberately not ported: unsorted Parquet (`--no-sort`,
+  the direct dataset: an architecture change, to be measured first), partitioned text datasets
+  (`--text-part-size`, `--text-writers`), `--writeback-size`, OTLP metrics, `engine.readahead`, thief splits,
+  `--trace` and the diagnostic report blocks (`trajectory`, `slow_ranges`, `probe_latency`, `demand_gate`,
+  `shape`), `symlink.txt`, the `seed.mode` and `summary.interval` tune keys, the one-writer `.parquet` file, the
+  SQLite checkpoint surface and the staging and merge controls ([docs/cli-inventory.md](docs/cli-inventory.md)).
+- **Restored Java CLI features, tested in process only.** Text output (TSV, JSONL, table; stdout and files;
+  gzip and zstd), the seven filters (Go RE2 regular expressions, not Java's), the stderr progress display and
+  statistics, `-v`/`-q`/`--color`, bearer-token authentication, the report's `cost`, `efficiency`,
+  `args_hash`, `session_ms` and `stop_source`, and `--part-rotation-max-rows` are covered by unit and command
+  tests against fakes; none has been run against a live bucket or at scale, and the cloud importer and hosted
+  runner have not been run against the new report fields.
 - **Platforms.** Windows runs have no output lock and no directory sync ([docs/internals/durability.md](docs/internals/durability.md));
   Windows and macOS builds were compiled, not run.
 - **Scale.** Billions of keys, runs of hours and 256 or more workers are unmeasured; the replay recordings and
