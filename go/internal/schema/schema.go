@@ -8,7 +8,9 @@
 package schema
 
 import (
+	"bytes"
 	"errors"
+	"strings"
 	"unsafe"
 )
 
@@ -121,6 +123,38 @@ func (s *Schema[P]) RowsBytes(rows []Row[P]) int64 {
 		n += s.RowBytes(&rows[i])
 	}
 	return n
+}
+
+// Detach returns copies of rows that share no memory with them: a slice
+// of exactly len(rows), and every key and payload string re-pointed into
+// one private buffer sized to them, written and read back through the
+// payload's Codec (the spill encoding, so it round-trips every field). A
+// caller detaches a few rows from a large page so the page's row array and
+// the arena its strings view can be collected. Without a Codec only the
+// keys are cloned.
+func (s *Schema[P]) Detach(rows []Row[P]) []Row[P] {
+	out := make([]Row[P], len(rows))
+	if s.Codec == nil {
+		for i := range rows {
+			out[i] = Row[P]{Key: strings.Clone(rows[i].Key), Data: rows[i].Data}
+		}
+		return out
+	}
+	var buf []byte
+	for i := range rows {
+		buf = AppendString(buf, rows[i].Key)
+		buf = s.Codec.Append(buf, &rows[i].Data)
+	}
+	buf = bytes.Clone(buf) // exact size: append's growth slack is not kept
+	d := NewDecoder(buf)
+	for i := range out {
+		out[i].Key = d.Str()
+		s.Codec.Decode(d, &out[i].Data)
+	}
+	if d.Err() != nil || d.Len() != 0 {
+		panic("schema: payload codec does not round-trip")
+	}
+	return out
 }
 
 // LogicalBytes is a row's deterministic uncompressed size: its key and

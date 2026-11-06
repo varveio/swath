@@ -136,7 +136,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if env.Empty {
 		p = source.Empty[P]{}
 	} else if keep != nil {
-		p = newFiltered(p, keep, env.Filtered)
+		p = newFiltered(p, keep, b.s, env.Filtered)
 	}
 	st, err := order.Run(ctx, p, sink, b.s, env.Order)
 	return st, enc, err
