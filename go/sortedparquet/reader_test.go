@@ -72,7 +72,7 @@ func TestTruncatedBoundsAreConservative(t *testing.T) {
 			keys = append(keys, fmt.Sprintf("%s%04d", stem, i))
 		}
 		dir := writeParts(t, sortedparquettest.Part{Rows: rowsOf(keys), PageBytes: 4096, GroupRows: 150})
-		fixture, err := javaera.Open(context.Background(), dir, nil)
+		fixture, err := javaera.Open(context.Background(), dir, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -93,7 +93,7 @@ func TestTruncatedBoundsAreConservative(t *testing.T) {
 // whose keys inside a page do not, and requires the read to fail.
 func TestDisorderIsCorrupt(t *testing.T) {
 	dir := writeParts(t, sortedparquettest.Part{Rows: rowsOf([]string{"a", "c", "b", "d"})})
-	fixture, err := javaera.Open(context.Background(), dir, nil)
+	fixture, err := javaera.Open(context.Background(), dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestReadDecodesOnlyNamedColumns(t *testing.T) {
 		keys = append(keys, fmt.Sprintf("k%03d", i))
 	}
 	dir := writeParts(t, sortedparquettest.Part{Rows: rowsOf(keys), PageBytes: 1 << 20})
-	fixture, err := javaera.Open(context.Background(), dir, nil)
+	fixture, err := javaera.Open(context.Background(), dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,13 +163,13 @@ func TestFormat2Refusals(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, format2.ManifestName), raw, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			_, err := format2.Open(context.Background(), dir, nil)
+			_, err := format2.Open(context.Background(), dir, nil, nil)
 			if got := sortedparquet.ReasonOf(err); got != c.reason {
 				t.Fatalf("refusal %q (%v), want %q", got, err, c.reason)
 			}
 		})
 	}
-	if _, err := format2.Open(context.Background(), writeDataset(t), nil); err != nil {
+	if _, err := format2.Open(context.Background(), writeDataset(t), nil, nil); err != nil {
 		t.Fatalf("unchanged copy: %v", err)
 	}
 }
@@ -234,7 +234,7 @@ func TestFormat2RequiresBounds(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, format2.ManifestName), raw, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			dataset, err := format2.Open(context.Background(), dir, nil)
+			dataset, err := format2.Open(context.Background(), dir, nil, nil)
 			if got := sortedparquet.ReasonOf(err); got != sortedparquet.ReasonInvalidManifest {
 				if err == nil {
 					rows, _ := dataset.Reader.Read(context.Background(), sortedparquet.Range{From: []byte("n"), FromInclusive: true, Limit: 1}, nil)

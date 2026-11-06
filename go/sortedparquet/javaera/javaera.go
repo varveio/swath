@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -198,42 +199,48 @@ type Fixture struct {
 // children), checks in order that every part carries a recognised stamp of
 // the objects mode and known format version, that the parts are complete,
 // and that every non-empty row group holds only OBJECT rows with first keys
-// strictly ascending across the set, and opens it with the column type expectations expect. A set
-// that fails is refused with the first failing reason: no_stamp,
-// unsupported_mode, unknown_format_version, incomplete_multifile,
-// mixed_row_types or sanity_failed.
-func Open(ctx context.Context, path string, expect []sortedparquet.Column) (*Fixture, error) {
-	files, err := Resolve(path)
+// strictly ascending across the set, and opens it with the column type
+// expectations expect. A set that fails is refused with the first failing
+// reason: no_stamp, unsupported_mode, unknown_format_version,
+// incomplete_multifile, mixed_row_types or sanity_failed.
+//
+// The parts are read through files, which bounds the descriptors they hold
+// open whatever their number; nil uses a cache of its own with
+// sortedparquet.DefaultMaxOpenFiles.
+func Open(ctx context.Context, path string, expect []sortedparquet.Column, files *sortedparquet.FileCache) (*Fixture, error) {
+	names, err := Resolve(path)
 	if err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
+	if len(names) == 0 {
 		return nil, sortedparquet.Refuse(sortedparquet.ReasonNoStamp, "%s holds no *.parquet parts", path)
 	}
-	fixture := &Fixture{Files: files}
+	if files == nil {
+		files = sortedparquet.NewFileCache(0)
+	}
+	fixture := &Fixture{Files: names}
 	var sources []sortedparquet.PartSource
 	ok := false
 	defer func() {
 		if !ok {
 			for _, source := range sources {
-				_ = source.File.(*os.File).Close()
+				_ = source.File.(io.Closer).Close()
 			}
 		}
 	}()
-	for _, name := range files {
-		file, err := os.Open(name)
+	for _, name := range names {
+		opened, err := os.Open(name)
 		if err != nil {
 			return nil, err
 		}
-		info, err := file.Stat()
+		file, err := files.Add(name, opened)
 		if err != nil {
-			_ = file.Close()
 			return nil, err
 		}
-		source := sortedparquet.PartSource{Name: name, File: file, Size: info.Size(), BoundBytes: BoundBytes}
+		source := sortedparquet.PartSource{Name: name, File: file, Size: file.Size(), BoundBytes: BoundBytes}
 		sources = append(sources, source)
 		// An unreadable or foreign footer is not stamped.
-		footer, err := sortedparquet.OpenFooter(file, info.Size())
+		footer, err := sortedparquet.OpenFooter(file, file.Size())
 		if err != nil {
 			return nil, sortedparquet.Refuse(sortedparquet.ReasonNoStamp, "%s: %v", name, err)
 		}

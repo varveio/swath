@@ -14,8 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/parquet-go/parquet-go"
@@ -111,7 +113,11 @@ type Dataset struct {
 //
 // It does not check the parts' MD5 digests or the manifest's coverage: a
 // dataset that stopped early is served as what it holds.
-func Open(ctx context.Context, dir string, expect []sortedparquet.Column) (*Dataset, error) {
+//
+// The parts are read through files, which bounds the descriptors they hold
+// open whatever their number; nil uses a cache of its own with
+// sortedparquet.DefaultMaxOpenFiles.
+func Open(ctx context.Context, dir string, expect []sortedparquet.Column, files *sortedparquet.FileCache) (*Dataset, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, err
@@ -152,17 +158,20 @@ func Open(ctx context.Context, dir string, expect []sortedparquet.Column) (*Data
 		}
 	}
 
+	if files == nil {
+		files = sortedparquet.NewFileCache(0)
+	}
 	var sources []sortedparquet.PartSource
 	ok := false
 	defer func() {
 		if !ok {
 			for _, source := range sources {
-				_ = source.File.(*os.File).Close()
+				_ = source.File.(io.Closer).Close()
 			}
 		}
 	}()
 	for _, part := range manifest.Parts {
-		source, err := openPart(root, manifest, part)
+		source, err := openPart(root, dir, files, manifest, part)
 		if source.File != nil {
 			sources = append(sources, source)
 		}
@@ -181,8 +190,11 @@ func Open(ctx context.Context, dir string, expect []sortedparquet.Column) (*Data
 	return &Dataset{Reader: reader, Manifest: manifest, ManifestBytes: raw}, nil
 }
 
-func openPart(root *os.Root, manifest Manifest, part Part) (sortedparquet.PartSource, error) {
-	file, err := root.Open(part.Path)
+// openPart opens a part through root, which refuses a path escaping the
+// dataset, and adds it to files under its path in dir: the cache reopens
+// it by that path and requires the same file.
+func openPart(root *os.Root, dir string, files *sortedparquet.FileCache, manifest Manifest, part Part) (sortedparquet.PartSource, error) {
+	opened, err := root.Open(part.Path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s is missing", part.Path)
@@ -190,16 +202,21 @@ func openPart(root *os.Root, manifest Manifest, part Part) (sortedparquet.PartSo
 		// os.Root refuses a path that escapes the dataset.
 		return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonInvalidManifest, "%s: %v", part.Path, err)
 	}
-	source := sortedparquet.PartSource{Name: part.Path, File: file}
-	info, err := file.Stat()
+	info, err := opened.Stat()
 	if err != nil {
-		return source, err
+		_ = opened.Close()
+		return sortedparquet.PartSource{}, err
 	}
 	if !info.Mode().IsRegular() || info.Size() != part.Bytes {
-		return source, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s is %d bytes, its manifest entry %d", part.Path, info.Size(), part.Bytes)
+		_ = opened.Close()
+		return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s is %d bytes, its manifest entry %d", part.Path, info.Size(), part.Bytes)
 	}
-	source.Size = info.Size()
-	footer, err := sortedparquet.OpenFooter(file, info.Size())
+	file, err := files.Add(filepath.Join(dir, filepath.FromSlash(part.Path)), opened)
+	if err != nil {
+		return sortedparquet.PartSource{}, err
+	}
+	source := sortedparquet.PartSource{Name: part.Path, File: file, Size: file.Size()}
+	footer, err := sortedparquet.OpenFooter(file, file.Size())
 	if err != nil {
 		return source, fmt.Errorf("%s: %w", part.Path, err)
 	}

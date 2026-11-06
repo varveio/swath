@@ -63,7 +63,7 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	if !strings.HasPrefix(log.String(), "sort_fixture rows=6 objects=4 skipped=2 parts=1 ") {
 		t.Fatalf("summary %q", log.String())
 	}
-	sorted, err := format2.Open(context.Background(), out, nil)
+	sorted, err := format2.Open(context.Background(), out, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestKeyLimit(t *testing.T) {
 	if err != nil || stats.SchemaID != SchemaID {
 		t.Fatalf("with a key limit: %+v %v", stats, err)
 	}
-	sorted, err := format2.Open(context.Background(), out, nil)
+	sorted, err := format2.Open(context.Background(), out, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

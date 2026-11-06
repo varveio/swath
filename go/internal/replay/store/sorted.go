@@ -54,12 +54,17 @@ type Sorted struct {
 	schemaID string
 	objects  objectProjection
 	counters Counters
+	files    *sortedparquet.FileCache
 }
 
 var _ Store = (*Sorted)(nil)
 
 // Counters returns the store's counters.
 func (s *Sorted) Counters() *Counters { return &s.counters }
+
+// Files returns the descriptor cache the fixture's parts are read through,
+// for its counts.
+func (s *Sorted) Files() *sortedparquet.FileCache { return s.files }
 
 // SchemaID returns the fixture's declared schema id.
 func (s *Sorted) SchemaID() string { return s.schemaID }
