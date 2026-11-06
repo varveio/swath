@@ -114,6 +114,10 @@ type Metadata struct {
 	Identity string
 	// Ordering is always OrderingProfile.
 	Ordering string
+	// SchemaID is the declared schema id: the manifest's for a format-2
+	// dataset, "swath/canonical" for a Java-era fixture. Projections are
+	// chosen by it, never by the columns present.
+	SchemaID string
 }
 
 // DefaultReaders is the default concurrent page-decode bound:
