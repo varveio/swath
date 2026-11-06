@@ -187,10 +187,15 @@ func (p *Provider) Stats() Stats {
 }
 
 // fetch is the engine's page fetch: one ListObjectsV2. Start-after is
-// exclusive and there is no end bound, so the engine trims at hi.
+// exclusive and there is no end bound, so the engine trims at hi. A
+// continuation token carries the chain's start, so start-after is sent on
+// the first request only.
 func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
-	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter, StartAfter: q.After,
+	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter,
 		ContinuationToken: q.Token, MaxKeys: q.Max, FetchOwner: p.opt.FetchOwner && !q.Probe}
+	if q.Token == "" {
+		in.StartAfter = q.After
+	}
 	out, err := p.client.ListObjectsV2(ctx, in)
 	if err != nil {
 		return nil, err

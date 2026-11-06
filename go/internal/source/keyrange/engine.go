@@ -42,8 +42,11 @@ type Query struct {
 	// request (an exclusive end bound is ExclusiveEnd(Through)).
 	Through string
 	Bounded bool
-	Token   string // continuation token of the previous page; After and Through are the chain's
-	Max     int    // page size
+	// Token: the continuation token of the previous page. Every other
+	// field is the chain's and stays as on its first request; the
+	// provider maps them onto its wire (S3 omits start-after with a token).
+	Token string
+	Max   int // page size
 	// Probe: the page's objects are not emitted (seed, structure and 1-key
 	// probes); a provider may leave optional fields out.
 	Probe bool

@@ -139,7 +139,9 @@ counters, shared by the providers whose listing returns keys in unsigned byte or
 key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Range, P]`; a provider supplies:
 - a page fetch, `Fetch[P]`: one request (`Query`: prefix, delimiter, `After`, `Through`/`Bounded`, token,
   page size, `Probe` for requests whose objects are not emitted) to one `Page[P]` (rows in listing order,
-  common prefixes, truncated, token);
+  common prefixes, truncated, token). A continuation request repeats every field of its chain's first
+  request and adds the token; the provider maps them onto its wire (S3 sends start-after on the first
+  request only);
 - a `Description[P]`:
   - *bound inclusivity:* the engine's ranges are `(lo, hi]`. `After` means keys strictly above it; a
     provider whose start bound is inclusive sends it as is and sets `StartInclusive`, and the engine drops

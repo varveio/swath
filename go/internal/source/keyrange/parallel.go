@@ -228,7 +228,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			}
 			lower, upper := p.commit(st, r, c, m, ext, ok)
 			if !ok {
-				in.After, in.Token = "", out.Token
+				in.Token = out.Token
 				p.maybeProbe(pctx, st, r, c)
 				continue
 			}
@@ -241,7 +241,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			}
 			return e.Child(upper)
 		}
-		in.After, in.Token = "", out.Token
+		in.Token = out.Token
 		p.maybeProbe(pctx, st, r, c)
 	}
 }

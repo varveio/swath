@@ -9,7 +9,7 @@ badlySkewed	demand8/descent/floors/page=13	resume=true	spans=181	requests=261	ro
 badlySkewed	coin/descent	resume=false	spans=7	requests=14	rows=4050	a1de57fe4b50470cff734325
 badlySkewed	coin/descent	resume=true	spans=3	requests=4	rows=2699	cb2ac8c96debcb3befbd8c45
 badlySkewed	sequential	resume=false	spans=0	requests=6	rows=4050	10fe704d7e996636add3e77f
-badlySkewed	sequential	resume=true	spans=0	requests=4	rows=2699	463ab0452bbb70918fe8be7d
+badlySkewed	sequential	resume=true	spans=0	requests=4	rows=2699	c1cfa90fea78c5ab943aa376
 deepTree	coin	resume=false	spans=3	requests=10	rows=5000	6a83b5211445281cbc231e52
 deepTree	coin	resume=true	spans=3	requests=5	rows=3333	64c92e8d9b3641d67b28e9a3
 deepTree	coin/seedpage/floors/probe	resume=false	spans=6	requests=15	rows=5000	8eceef16b9f0b20627fd8ed7
@@ -21,7 +21,7 @@ deepTree	demand8/descent/floors/page=13	resume=true	spans=335	requests=418	rows=
 deepTree	coin/descent	resume=false	spans=7	requests=14	rows=5000	bf5ae9de5f8b3b5937f25ab2
 deepTree	coin/descent	resume=true	spans=3	requests=4	rows=3333	d69c9b7e5e2b6e9e7d1e3e32
 deepTree	sequential	resume=false	spans=0	requests=9	rows=5000	bbf28c02cc4f30630c81fe13
-deepTree	sequential	resume=true	spans=0	requests=4	rows=3333	8998152313d9ed201fae6321
+deepTree	sequential	resume=true	spans=0	requests=4	rows=3333	8df1dfceafa41a6743a7aa9d
 empty	coin	resume=false	spans=1	requests=1	rows=0	ad3d4f043ffa1502237e68a3
 empty	coin/seedpage/floors/probe	resume=false	spans=1	requests=2	rows=0	09029768f984405646ee8e9c
 empty	demand8/seedpage/page=7	resume=false	spans=1	requests=2	rows=0	09029768f984405646ee8e9c
@@ -39,7 +39,7 @@ exactly3000	demand8/descent/floors/page=13	resume=true	spans=117	requests=183	ro
 exactly3000	coin/descent	resume=false	spans=11	requests=13	rows=3000	c4a719aeb4f2d64f69e76459
 exactly3000	coin/descent	resume=true	spans=3	requests=3	rows=1999	8e6b0e1fc070c3d44e1d6310
 exactly3000	sequential	resume=false	spans=0	requests=4	rows=3000	aa31f28aeb071c473f8481c2
-exactly3000	sequential	resume=true	spans=0	requests=3	rows=1999	29f0b10a61b5301b61e8a93f
+exactly3000	sequential	resume=true	spans=0	requests=3	rows=1999	43090030107a45f29d82a5d4
 flatRandom	coin	resume=false	spans=3	requests=7	rows=3737	f5eb5afc66b1b082d19cf00d
 flatRandom	coin	resume=true	spans=3	requests=4	rows=2491	818403687bfd0951b429b776
 flatRandom	coin/seedpage/floors/probe	resume=false	spans=3	requests=11	rows=3737	428800652b693dec7e207db2
@@ -51,7 +51,7 @@ flatRandom	demand8/descent/floors/page=13	resume=true	spans=157	requests=236	row
 flatRandom	coin/descent	resume=false	spans=11	requests=14	rows=3737	33dd07754707e33909a5704a
 flatRandom	coin/descent	resume=true	spans=3	requests=4	rows=2491	902cddf66e5227ec0ffb2097
 flatRandom	sequential	resume=false	spans=0	requests=5	rows=3737	d869cd87c84b068b5f870515
-flatRandom	sequential	resume=true	spans=0	requests=3	rows=2491	045543f51caf5f08c38b283f
+flatRandom	sequential	resume=true	spans=0	requests=3	rows=2491	f8ad3613739835b2a7e4d133
 flatUpperHex	coin	resume=false	spans=3	requests=9	rows=4000	7b0bb9e2eb7b17b97159da42
 flatUpperHex	coin	resume=true	spans=3	requests=5	rows=2666	fab074b4aaee44a445c17f2d
 flatUpperHex	coin/seedpage/floors/probe	resume=false	spans=3	requests=12	rows=4000	7b99067bbb4b2a0cb70d9457
@@ -63,7 +63,7 @@ flatUpperHex	demand8/descent/floors/page=13	resume=true	spans=159	requests=250	r
 flatUpperHex	coin/descent	resume=false	spans=11	requests=13	rows=4000	6a2ce01f3596a465c0bb10ac
 flatUpperHex	coin/descent	resume=true	spans=3	requests=4	rows=2666	8bade8dfff74e631edafe8d9
 flatUpperHex	sequential	resume=false	spans=0	requests=6	rows=4000	629bdab1df2edd9d5d3a4cb3
-flatUpperHex	sequential	resume=true	spans=0	requests=4	rows=2666	3d395fc2b3ab44fda4c096c9
+flatUpperHex	sequential	resume=true	spans=0	requests=4	rows=2666	4a6c851243d1ccce0336880e
 hostile/cardinalityBomb	coin	resume=false	spans=5	requests=13	rows=6005	2fdd586029175feedf926154
 hostile/cardinalityBomb	coin	resume=true	spans=3	requests=8	rows=4003	6cba9764bba07a86cab62906
 hostile/cardinalityBomb	coin/seedpage/floors/probe	resume=false	spans=6	requests=18	rows=6005	2946e5f287b5241615efe84f
@@ -75,7 +75,7 @@ hostile/cardinalityBomb	demand8/descent/floors/page=13	resume=true	spans=239	req
 hostile/cardinalityBomb	coin/descent	resume=false	spans=12	requests=19	rows=6005	b8ff82ef5264e503b04fa328
 hostile/cardinalityBomb	coin/descent	resume=true	spans=3	requests=6	rows=4003	4be2267594696f633d28c61a
 hostile/cardinalityBomb	sequential	resume=false	spans=0	requests=10	rows=6005	b36aa95a4ef2e7f0aa3efbdd
-hostile/cardinalityBomb	sequential	resume=true	spans=0	requests=6	rows=4003	701c3ef5a3f1783af6d36f40
+hostile/cardinalityBomb	sequential	resume=true	spans=0	requests=6	rows=4003	ef36239142f58749023d6c38
 hostile/encodingMinefield	coin	resume=false	spans=1	requests=3	rows=2157	2542beb305fd053e70713c86
 hostile/encodingMinefield	coin	resume=true	spans=1	requests=3	rows=1437	2167e4ac29548dca2d5b1ff4
 hostile/encodingMinefield	coin/seedpage/floors/probe	resume=false	spans=5	requests=10	rows=2157	99a46a8e7ead7beb3f6eb5fe
@@ -87,7 +87,7 @@ hostile/encodingMinefield	demand8/descent/floors/page=13	resume=true	spans=1	req
 hostile/encodingMinefield	coin/descent	resume=false	spans=5	requests=9	rows=2157	39b46ab67d4dd3cc35209e29
 hostile/encodingMinefield	coin/descent	resume=true	spans=1	requests=3	rows=1437	2167e4ac29548dca2d5b1ff4
 hostile/encodingMinefield	sequential	resume=false	spans=0	requests=3	rows=2157	379871f91ab8b1555b30df83
-hostile/encodingMinefield	sequential	resume=true	spans=0	requests=3	rows=1437	a09ebb9aaebd6f26139f6e3f
+hostile/encodingMinefield	sequential	resume=true	spans=0	requests=3	rows=1437	c6248cc7339fd80ac5c71278
 hotNeedle	coin	resume=false	spans=3	requests=9	rows=4003	0822184c04e714274fc3eb3a
 hotNeedle	coin	resume=true	spans=3	requests=4	rows=2668	136c12cd7308b5975e92fe77
 hotNeedle	coin/seedpage/floors/probe	resume=false	spans=5	requests=13	rows=4003	5de82df21d7e25ce8554a0a7
@@ -99,7 +99,7 @@ hotNeedle	demand8/descent/floors/page=13	resume=true	spans=183	requests=269	rows
 hotNeedle	coin/descent	resume=false	spans=7	requests=12	rows=4003	b24f6919b4c6660bff363e51
 hotNeedle	coin/descent	resume=true	spans=3	requests=4	rows=2668	a48f4150fc0c1f14aa194bd1
 hotNeedle	sequential	resume=false	spans=0	requests=6	rows=4003	ee9d47975d3701c6b1c36ffc
-hotNeedle	sequential	resume=true	spans=0	requests=4	rows=2668	441fed902274c563fe78d1cb
+hotNeedle	sequential	resume=true	spans=0	requests=4	rows=2668	d93f4d5c80a11a9eca87e27d
 lastByteDiffer	coin	resume=false	spans=3	requests=4	rows=2000	ab6d3af0fa2820cdbfd1490f
 lastByteDiffer	coin	resume=true	spans=3	requests=3	rows=1333	64383ca51e19417b22c926c9
 lastByteDiffer	coin/seedpage/floors/probe	resume=false	spans=3	requests=6	rows=2000	aa6214f16358e3afa88c5102
@@ -111,7 +111,7 @@ lastByteDiffer	demand8/descent/floors/page=13	resume=true	spans=97	requests=124	
 lastByteDiffer	coin/descent	resume=false	spans=6	requests=8	rows=2000	34f09131dfae914becc14750
 lastByteDiffer	coin/descent	resume=true	spans=3	requests=3	rows=1333	ced3d937f775b37be81178c1
 lastByteDiffer	sequential	resume=false	spans=0	requests=3	rows=2000	726838a22d56d16ac7666fca
-lastByteDiffer	sequential	resume=true	spans=0	requests=2	rows=1333	cb514c011fdcd1d9b3b6dc8a
+lastByteDiffer	sequential	resume=true	spans=0	requests=2	rows=1333	82324abcbb9982e18ee8e38e
 longKeys1024	coin	resume=false	spans=3	requests=3	rows=1500	ec0ac5ea150b7c51054550b3
 longKeys1024	coin	resume=true	spans=3	requests=3	rows=999	1de31722bf1eb9abd012701d
 longKeys1024	coin/seedpage/floors/probe	resume=false	spans=3	requests=6	rows=1500	24051db24e3c7e664af5f53d
@@ -123,7 +123,7 @@ longKeys1024	demand8/descent/floors/page=13	resume=true	spans=57	requests=92	row
 longKeys1024	coin/descent	resume=false	spans=11	requests=12	rows=1500	c300b185666a33effd7cc055
 longKeys1024	coin/descent	resume=true	spans=1	requests=1	rows=999	1c612e9f5fd99750d198f517
 longKeys1024	sequential	resume=false	spans=0	requests=2	rows=1500	93cde13b4cfe3a1fa7ee7bca
-longKeys1024	sequential	resume=true	spans=0	requests=2	rows=999	974c6f7d4368f907652419f3
+longKeys1024	sequential	resume=true	spans=0	requests=2	rows=999	9ab85b146a847d203ec47282
 markersAndOddChars	coin	resume=false	spans=1	requests=1	rows=12	79823c4fe2951efbf72a6378
 markersAndOddChars	coin	resume=true	spans=1	requests=1	rows=7	f2416b7d7ab0cfa71122b9e7
 markersAndOddChars	coin/seedpage/floors/probe	resume=false	spans=6	requests=7	rows=12	6e3bae6e39c38d239dd66f6b
@@ -165,7 +165,7 @@ singlePrefixFlat	demand8/descent/floors/page=13	resume=true	spans=151	requests=2
 singlePrefixFlat	coin/descent	resume=false	spans=12	requests=16	rows=4000	394569dd41c2881bb06e2fac
 singlePrefixFlat	coin/descent	resume=true	spans=3	requests=3	rows=2666	ede6a6dab5eedf5ac2c57c14
 singlePrefixFlat	sequential	resume=false	spans=0	requests=6	rows=4000	6510e8f4737a895807d9e9d3
-singlePrefixFlat	sequential	resume=true	spans=0	requests=4	rows=2666	be6af6c57c85b5532f01e420
+singlePrefixFlat	sequential	resume=true	spans=0	requests=4	rows=2666	276c78ace5b4e7473daf169c
 supplementaryPlane	coin	resume=false	spans=3	requests=5	rows=3000	66f8b7cc08796007039e4356
 supplementaryPlane	coin	resume=true	spans=3	requests=4	rows=1999	2fbf843bc4705d287f5a13ef
 supplementaryPlane	coin/seedpage/floors/probe	resume=false	spans=3	requests=9	rows=3000	4d88135519e9cbab69e29d18
@@ -177,4 +177,4 @@ supplementaryPlane	demand8/descent/floors/page=13	resume=true	spans=307	requests
 supplementaryPlane	coin/descent	resume=false	spans=11	requests=13	rows=3000	f8a0c726a8e505a705a33607
 supplementaryPlane	coin/descent	resume=true	spans=3	requests=3	rows=1999	83a47e5b6f692f10a91eb632
 supplementaryPlane	sequential	resume=false	spans=0	requests=4	rows=3000	ad99c4fef10e20cfa8979315
-supplementaryPlane	sequential	resume=true	spans=0	requests=3	rows=1999	66391c98d5c67c96d03d5833
+supplementaryPlane	sequential	resume=true	spans=0	requests=3	rows=1999	274ef7207a2455c9f9d60a87

@@ -184,3 +184,96 @@ func TestInclusiveProviderMatchesKeyspace(t *testing.T) {
 		}
 	}
 }
+
+// chained binds a provider's continuation tokens to the request that
+// started their chain, as a real service may: a token request whose
+// prefix, delimiter, bounds, page size or probe flag differ from the
+// chain's first request is refused.
+type chained struct {
+	next   Fetch[Object]
+	mu     sync.Mutex
+	chains map[string]chainOf
+	n      int
+}
+
+type chainOf struct {
+	token string // the inner provider's token
+	q     Query  // the chain's first request, Token cleared
+}
+
+func (c *chained) fetch(ctx context.Context, q *Query) (*Page[Object], error) {
+	key := *q
+	key.Token = ""
+	inner := *q
+	if q.Token != "" {
+		c.mu.Lock()
+		ch, ok := c.chains[q.Token]
+		c.mu.Unlock()
+		if !ok || ch.q != key {
+			return nil, fmt.Errorf("400: token %q used with changed parameters %+v, chain %+v", q.Token, key, ch.q)
+		}
+		inner.Token = ch.token
+	}
+	out, err := c.next(ctx, &inner)
+	if err != nil || out.Token == "" {
+		return out, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.chains == nil {
+		c.chains = map[string]chainOf{}
+	}
+	c.n++
+	tok := fmt.Sprintf("chain%d", c.n)
+	c.chains[tok] = chainOf{token: out.Token, q: key}
+	cp := *out
+	cp.Token = tok
+	return &cp, nil
+}
+
+// TestBoundsStableAcrossTokenChain: the engine keeps a chain's logical
+// bounds (After, Through, prefix, delimiter) on every continuation, on
+// every path (ranges with splits and probes, the seed descent, structure
+// probes, resume, the sequential chain), under both start conventions.
+func TestBoundsStableAcrossTokenChain(t *testing.T) {
+	keys := slices.Compact(slices.Sorted(slices.Values(keyspaces()["deepTree"])))
+	if len(keys) < 100 {
+		t.Fatalf("fixture: %d keys", len(keys))
+	}
+	for i, opt := range []Options{
+		{Workers: 8, Probe: true},
+		{Workers: 16, Seed: true, SeedDescent: true, Structure: true},
+		{Workers: 4, Seed: true, Floors: true, Resume: &Resume{After: keys[len(keys)/3]}},
+		{Workers: 1, Sequential: true},
+	} {
+		for _, incl := range []bool{false, true} {
+			var inner Fetch[Object]
+			if incl {
+				inner = (&inclusive{keys: keys, bounded: true, pageCap: 7}).fetch
+			} else {
+				s := newSorted(keys, false, 1)
+				s.PageCap = 7
+				inner = fetchFrom(s)
+			}
+			c := &chained{next: inner}
+			p, err := New(opt, Description[Object]{Target: "test", StartInclusive: incl}, c.fetch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			col := &collect{}
+			if _, err := order.Run[Range, Object](context.Background(), p, col, &Schema, order.Options{Workers: opt.Workers, Budget: 1 << 22}); err != nil {
+				t.Fatalf("opt %d inclusive=%v: %v", i, incl, err)
+			}
+			want := keys
+			if opt.Resume != nil {
+				want = keys[slices.Index(keys, opt.Resume.After)+1:]
+			}
+			if got := keysOf(col.rows); !slices.Equal(got, want) {
+				t.Fatalf("opt %d inclusive=%v: %d keys, want %d", i, incl, len(got), len(want))
+			}
+			if c.n == 0 {
+				t.Fatalf("opt %d: no token chain exercised", i)
+			}
+		}
+	}
+}
