@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -186,4 +187,80 @@ func TestGCSInvalidEnvelopeNeverCommits(t *testing.T) {
 		t.Fatalf("only %d requests past d05: the invalid bodies were not all served", served.Load())
 	}
 	sameDataset(t, "invalid-envelope", ref, out)
+}
+
+// TestGCSCredentialRotationResumes: credentials are not identity on GCS
+// either. A run signed with one authorized-user credential (bearer tokens
+// from a fake token service), interrupted with parts retained, resumes
+// signed with a rotated credential on the same route to the uninterrupted
+// dataset; the rotated credential together with another billed project is
+// refused for the project. The bucket refuses unsigned requests.
+func TestGCSCredentialRotationResumes(t *testing.T) {
+	tok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"access_token":"tok-%s","token_type":"Bearer","expires_in":3600}`, r.Form.Get("refresh_token"))
+	}))
+	t.Cleanup(tok.Close)
+	dir := t.TempDir()
+	cred := func(name string) string {
+		p := filepath.Join(dir, name+".json")
+		os.WriteFile(p, fmt.Appendf(nil, `{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":%q,"token_uri":%q}`, name, tok.URL), 0o600)
+		return p
+	}
+	first, rotated := cred("first"), cred("rotated")
+	h := gcstest.Handler(gcstest.Keys(8000), time.Millisecond)
+	var signedBy sync.Map // bearer tokens seen
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":{"code":401,"message":"Anonymous caller"}}`)
+			return
+		}
+		signedBy.Store(bearer, true)
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	ep := srv.URL + gcstest.Path
+	signed := func(out string, resume bool, file, project string) Config {
+		cfg := gcsConfig(ep, out, resume)
+		o := cfg.Source.Options.(*GCSConfig)
+		o.Anonymous, o.CredentialsFile, o.UserProject = false, file, project
+		return cfg
+	}
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), signed(ref, false, first, "")); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	var n atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "renamed" && n.Add(1) == 2 {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	_, err := Run(context.Background(), signed(out, false, first, ""))
+	restore()
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("crash not injected: %v", err)
+	}
+	var mm *journal.MismatchError
+	if _, err := Run(context.Background(), signed(out, true, rotated, "other")); !errors.As(err, &mm) || mm.Field != "user project" {
+		t.Fatalf("rotated credential and another project: %v, want a user project mismatch", err)
+	}
+	signedBy.Delete("tok-rotated")
+	sum, err := Run(context.Background(), signed(out, true, rotated, ""))
+	if err != nil {
+		t.Fatalf("resume with a rotated credential: %v", err)
+	}
+	if sum.Output.PartsRetained == 0 {
+		t.Fatal("the resume retained no part")
+	}
+	if _, ok := signedBy.Load("tok-rotated"); !ok {
+		t.Fatal("the resume did not sign with the rotated credential")
+	}
+	sameDataset(t, "rotation", ref, out)
 }
