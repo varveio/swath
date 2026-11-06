@@ -28,6 +28,7 @@ rows, key range) or an interrupted run's recorded command, frozen identity, comm
 `--no-spill`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
+Running it in production (sizing, watching, resuming, reading the output): [operating.md](operating.md).
 
 ## Flags
 
