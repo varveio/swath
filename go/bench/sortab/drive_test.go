@@ -19,8 +19,10 @@ import (
 )
 
 // Cell is one measured configuration: an arm on a shape under limits,
-// uninterrupted (KillFrac 0) or SIGKILLed once KillFrac of the keys have
-// been listed and then resumed to completion.
+// uninterrupted (KillFrac 0) or SIGKILLed and then resumed to completion:
+// once KillFrac of the slow range's keys have been listed (slowfirst,
+// slowlast: 0.5 is peak speculation, the siblings running ahead), else of
+// all keys.
 type Cell struct {
 	Label    string  `json:"label"`
 	Arm      string  `json:"arm"`
@@ -144,7 +146,11 @@ func drive(c Cell, bin string) CellResult {
 			Pages: filepath.Join(c.Dir, fmt.Sprintf("pages-%d.log", n)), Status: filepath.Join(c.Dir, fmt.Sprintf("status-%d.json", n)),
 			Result: filepath.Join(c.Dir, fmt.Sprintf("result-%d.json", n))}
 		if n == 1 && c.KillFrac > 0 {
-			cfg.KillAt = max(1, int64(c.KillFrac*float64(c.Shape.Keys)))
+			n := c.Shape.Keys
+			if l.slow >= 0 {
+				n = c.Shape.SlowKeys
+			}
+			cfg.KillAt = max(1, int64(c.KillFrac*float64(n)))
 		}
 		at, err := attempt(bin, cfg, filepath.Join(c.Dir, fmt.Sprintf("config-%d.json", n)))
 		if err != nil {

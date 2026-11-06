@@ -15,9 +15,9 @@
 #   KEYS=200000000 KILL="0 peak" WORK=/data/sortab OUT=ab.jsonl bench/sortab.sh
 #
 # KILL lists the kill modes: 0 (uninterrupted) and/or peak (SIGKILL at peak
-# speculation, then resume): slowfirst/slowlast at 1 - SLOW_SHARE/2 of the
-# keys listed (the fast ranges done, the slow one half), flat and skewed
-# at 0.5; or a fraction.
+# speculation, then resume): slowfirst/slowlast once the slow range is half
+# listed (its siblings run ahead of it), flat and skewed at half the keys;
+# or a fraction (of the slow range's keys, or of all keys).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -55,10 +55,7 @@ echo "harness $BIN, results $OUT" >&2
 killfrac() { # shape mode
   case $2 in
     0) echo 0 ;;
-    peak) case $1 in
-            slowfirst|slowlast) python3 -c "print(1 - $SLOW_SHARE/2)" ;;
-            *) echo 0.5 ;;
-          esac ;;
+    peak) echo 0.5 ;;
     *) echo "$2" ;;
   esac
 }

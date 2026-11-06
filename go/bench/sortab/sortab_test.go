@@ -98,7 +98,7 @@ func TestArmsProduceTheDataset(t *testing.T) {
 }
 
 // TestKillAndRecover drives both arms through a SIGKILL at peak
-// speculation (90 % of keys listed, the slow first range half done) and
+// speculation (the slow first range half listed, its siblings done) and
 // the resume, as child processes, and checks the recovered datasets and
 // the resume accounting: B relists at most its in-memory tail plus a page
 // per range; A relists everything past its last journaled part.
@@ -109,7 +109,7 @@ func TestKillAndRecover(t *testing.T) {
 	sh := small("slowfirst")
 	sh.SlowLatencyMs = 40 // the frontier finishes long after its siblings
 	for _, arm := range []string{"A", "B"} {
-		c := Cell{Label: "test", Arm: arm, Shape: sh, Limits: smallLimits, KillFrac: 0.95, Dir: filepath.Join(t.TempDir(), "cell")}
+		c := Cell{Label: "test", Arm: arm, Shape: sh, Limits: smallLimits, KillFrac: 0.5, Dir: filepath.Join(t.TempDir(), "cell")}
 		res := drive(c, os.Args[0])
 		if res.Error != "" {
 			t.Fatalf("%s: %s", arm, res.Error)
@@ -117,7 +117,7 @@ func TestKillAndRecover(t *testing.T) {
 		if len(res.Attempts) != 2 || !res.Attempts[0].Killed || !res.Verified || res.Rows != sh.Keys {
 			t.Fatalf("%s: %+v", arm, res)
 		}
-		if res.RelistedKeys <= 0 || res.ResumeRequests <= 0 || res.ListedAtKill < c.Shape.Keys*9/10 {
+		if res.RelistedKeys <= 0 || res.ResumeRequests <= 0 || res.ListedAtKill < (sh.Keys-sh.SlowKeys)*9/10 {
 			t.Fatalf("%s: relisted %d keys, %d resume requests, %d listed at the kill", arm, res.RelistedKeys, res.ResumeRequests, res.ListedAtKill)
 		}
 		if arm == "B" && res.RelistedKeys > smallLimits.Memory/2/100+int64(sh.Ranges*sh.PageKeys) {

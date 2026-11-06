@@ -217,12 +217,16 @@ type Provider struct {
 	// this attempt and whether it is skipped: a resume. nil lists all.
 	Start func(r int, lo, hi int64) (from int64, skip bool)
 	// KillAt, if positive, SIGKILLs the process once this many keys have
-	// been listed in this attempt (the crash at a chosen point).
+	// been listed in this attempt (the crash at a chosen point): keys of
+	// the slow range when the shape has one, so the kill falls at the same
+	// trace position in both arms (A's suffix may be held back by its
+	// spill cap while the slow range lists), else keys of all ranges.
 	KillAt int64
 	// Done, if set, is called when range r has returned (B tracks it).
 	Done func(r int)
 
 	listed   atomic.Int64
+	slowKeys atomic.Int64 // keys of the slow range listed
 	requests atomic.Int64
 	ranges   atomic.Int64 // ranges finished
 	logMu    sync.Mutex
@@ -296,7 +300,13 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 			arena = l.appendKey(arena, i+int64(k))
 			rows[k] = schema.Row[s3.Object]{Key: unsafeString(arena[a:]), Data: l.Object(i + int64(k))}
 		}
-		if got := p.listed.Add(n); p.KillAt > 0 && got >= p.KillAt {
+		got := p.listed.Add(n)
+		if r.R == l.slow {
+			got = p.slowKeys.Add(n)
+		} else if l.slow >= 0 {
+			got = 0
+		}
+		if p.KillAt > 0 && got >= p.KillAt {
 			_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 			select {} // the signal is on its way
 		}
