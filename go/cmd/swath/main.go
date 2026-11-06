@@ -72,7 +72,12 @@ func main() {
 			select {
 			case <-finished:
 			case <-time.After(shutdownGrace):
-				fmt.Fprintf(os.Stderr, "swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace)
+				// The exit does not depend on the diagnostics: whatever
+				// blocks below (a full stderr pipe nobody drains, a disk
+				// that does not return), the process exits within
+				// forcedAllowance.
+				time.AfterFunc(forcedAllowance, func() { os.Exit(code) })
+				note(errOut, fmt.Sprintf("swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace))
 				f := forensics.Load()
 				if f == nil {
 					f = &forensicTarget{}
@@ -375,7 +380,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,
-		Warn:    func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) },
+		Warn:    func(m string) { note(errOut, "swath: warning: "+m+"\n") },
 	}
 	if !o.countOnly {
 		cfg.Output.Dir = o.out

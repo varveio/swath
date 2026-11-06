@@ -240,6 +240,29 @@ func reportUnrecorded(dir string, o outcome, why string) {
 	fmt.Fprintf(errOut, "swath: outcome: %s\n", b)
 }
 
+// diagWait bounds one diagnostic write to stderr: a pipe nobody drains
+// must not hold a stopping run, the watchdog or the forced exit.
+const diagWait = 250 * time.Millisecond
+
+// forcedAllowance bounds the forced exit after shutdownGrace: the dump
+// (stacksWait), the outcome (stacksWait) and the diagnostic lines
+// (diagWait each) fit in it; os.Exit follows at the latest then.
+const forcedAllowance = 5 * time.Second
+
+// note writes s to w, waiting at most diagWait; past that the line is
+// dropped (the write goes on in the background, and is lost at exit).
+func note(w io.Writer, s string) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.WriteString(w, s)
+	}()
+	select {
+	case <-done:
+	case <-time.After(diagWait):
+	}
+}
+
 // stacksMax bounds a goroutine dump (runtime.Stack truncates at it).
 const stacksMax = 1 << 20
 
@@ -271,13 +294,13 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 		select {
 		case ok := <-done:
 			if ok {
-				fmt.Fprintf(errOut, "swath: goroutine dump written to %s\n", path)
+				note(errOut, fmt.Sprintf("swath: goroutine dump written to %s\n", path))
 				return path
 			}
 		case <-time.After(stacksWait):
 		}
 	}
-	fmt.Fprintf(errOut, "%s%s\n", head, buf)
+	note(errOut, head+string(buf)+"\n")
 	return "stderr"
 }
 
@@ -308,7 +331,7 @@ func forcedAccount(f *forensicTarget, code int, why string) {
 	select {
 	case <-done:
 	case <-time.After(stacksWait):
-		fmt.Fprintln(errOut, "swath: the forced exit's outcome could not be written in time")
+		note(errOut, "swath: the forced exit's outcome could not be written in time\n")
 	}
 }
 

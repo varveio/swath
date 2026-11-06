@@ -314,13 +314,16 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   memory until the deadline. A stop (a signal, `--max-duration`, `--stall-timeout`) is graceful, and the process
   exits with its code 15 s later if the run has not stopped by then (I/O that does not return, say), first
   writing (bounded at 2 s, as the dump below) the same outcome the graceful stop would have to `error.json` and a
-  minimal report without the run's statistics, its `message` naming the forced exit. **Forensics:** at a stall, before the run is cancelled, and at a forced
+  minimal report without the run's statistics, its `message` naming the forced exit. The exit does not wait for
+  any of that beyond 5 s after the grace (20 s after the stop in all): each line to stderr waits at most 250 ms
+  and is dropped past it, so a stderr pipe nobody drains cannot hold the process (warnings are written the same
+  way), and the process exits at that bound whatever still blocks. **Forensics:** at a stall, before the run is cancelled, and at a forced
   exit, every goroutine's stack (at most 1 MiB) and the progress counts are written to
   `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time) while the run owns the output,
   else, or when that write fails or blocks for 2 s, to stderr.
 - **What a hosted runner needs.** A finite `--max-duration` on every attempt (the default, 0, has no limit, and
   only the deadline stops a service that answers forever without rows), and its own process deadline above
-  `--max-duration` plus 15 s, which kills the process (that attempt's report may then be missing: it is treated
+  `--max-duration` plus 20 s, which kills the process (that attempt's report may then be missing: it is treated
   as unavailable, never replaced by an older `error.json`). Exit 75 is retried with `swath resume`. Exit 124 is a
   bounded stop: the run is resumable but did not finish in the time given, so it is retried only under a
   separate budget (a count of attempts or a total time), and past that budget it needs a person: a source that

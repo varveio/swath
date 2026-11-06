@@ -177,8 +177,10 @@ previous file in place, perhaps with the same class and exit code, and says why 
 `TestOutcomeSettlementAfterConcurrentCommit`). Nothing can promise a new file on
 storage that refuses writes: without a report, only the exit code is current. A report that cannot be written
 is named with its attempt id on stderr. A stop (a signal, `--max-duration`, `--stall-timeout`) that the run does
-not finish within 15 s (I/O that does not return) ends the process with its exit code and neither file
-(`TestDeadlineExitsAfterGrace`); a supervisor's own process deadline covers a process that cannot even do that.
+not finish within 15 s (I/O that does not return) ends the process with its exit code, after writing the
+forced outcome (`error.json` and a minimal report) if that takes at most 2 s; the exit comes at most 5 s after
+the grace whatever blocks, a full stderr pipe included (`TestDeadlineExitsAfterGrace`,
+`TestForcedExitWithFullStderr`). A supervisor's own process deadline covers a process that cannot even do that.
 
 ## Why splits need no transaction
 
