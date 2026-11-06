@@ -185,7 +185,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		u.Path += "/"
 	}
 	c := &Client{cfg: cfg, base: u, http: cfg.HTTPClient, source: "anonymous",
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
 	if c.http == nil {
 		t := http.DefaultTransport.(*http.Transport).Clone()

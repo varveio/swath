@@ -74,7 +74,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: joinNotes(anonymousNote(cfg), a.note),
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)

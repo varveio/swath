@@ -122,21 +122,56 @@ func Transport(err error) bool {
 		errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "connection reset")
 }
 
-// retryable classifies a failed attempt for the loop.
-func retryable(err error) (retry, throttle, timeout bool) {
+// Failure is a failed attempt normalized once, for every decision taken on
+// it: whether the client repeats it, its cause (the outcome's class), and
+// the admission signal the limiter takes from it.
+type Failure struct {
+	Class    Class
+	Retry    bool // the client repeats the attempt (after a backoff)
+	Throttle bool // the service asked the client to slow down
+	Timeout  bool // the attempt, or its credential, ran out of time
+}
+
+// Normalize is err's Failure, with answer the client's mapping of its own
+// service answers (nil: a generic one from the Answer interface). The
+// admission signal follows the class, so an answer a client maps to a
+// timeout (a GCS 408, an S3 RequestTimeout) slows the limiter's growth as
+// an attempt past the request timeout does.
+func Normalize(err error, answer func(error) (Class, bool)) Failure {
+	if answer == nil {
+		answer = genericAnswer
+	}
+	c := Classify(err, answer)
+	return Failure{Class: c, Retry: retryable(err), Throttle: c == ClassThrottle, Timeout: c == ClassTimeout}
+}
+
+// genericAnswer maps an Answer by its own predicates.
+func genericAnswer(err error) (Class, bool) {
+	var a Answer
+	switch {
+	case !errors.As(err, &a):
+		return "", false
+	case a.Throttle():
+		return ClassThrottle, true
+	case a.Retryable():
+		return ClassServer, true
+	}
+	return ClassOther, true
+}
+
+// retryable reports whether the client repeats a failed attempt.
+func retryable(err error) bool {
 	var ce *CredentialError
 	var a Answer
 	switch {
 	case errors.As(err, &ce):
-		return ce.Transient, false, ce.Timeout
+		return ce.Transient
 	case errors.As(err, &a):
-		return a.Retryable(), a.Throttle(), false
-	case errors.Is(err, ErrTimeout):
-		return true, false, true
-	case errors.Is(err, ErrSyntax):
-		return true, false, false
+		return a.Retryable()
+	case errors.Is(err, ErrTimeout), errors.Is(err, ErrSyntax):
+		return true
 	}
-	return Transport(err), false, false
+	return Transport(err)
 }
 
 // Classify returns err's class: a credential failure (auth; one that may
@@ -200,6 +235,9 @@ type Retry struct {
 	// Rate, if set, caps attempts per second (Rate): each takes a token
 	// after its permit.
 	Rate *Rate
+	// Answer is the client's mapping of its service answers to classes
+	// (Normalize; nil: the generic one).
+	Answer func(error) (Class, bool)
 }
 
 // Defaults fills the zero values.
@@ -225,7 +263,7 @@ func (r *Retry) Defaults() {
 func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
 	var zero T
 	for n := 1; ; n++ {
-		v, admitted, err := admit(ctx, r.Limiter, r.Rate, attempt)
+		v, admitted, err := admit(ctx, r, attempt)
 		if err == nil {
 			c.answered.Add(1)
 			return v, nil
@@ -233,15 +271,15 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 		if ctx.Err() != nil || !admitted {
 			return zero, ctx.Err()
 		}
-		retry, throttle, timeout := retryable(err)
-		if throttle {
+		f := Normalize(err, r.Answer)
+		if f.Throttle {
 			c.throttles.Add(1)
 		}
-		if timeout {
+		if f.Timeout {
 			c.timeouts.Add(1)
 		}
-		if !retry || n >= r.MaxAttempts {
-			if retry {
+		if !f.Retry || n >= r.MaxAttempts {
+			if f.Retry {
 				err = &ExhaustedError{Attempts: n, Err: err}
 			}
 			return zero, err
@@ -261,7 +299,8 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 // admit runs one attempt under l's admission (none when l is nil), then
 // rt's cap (none when nil); admitted is false when the caller's context
 // ended while it waited.
-func admit[T any](ctx context.Context, l *Limiter, rt *Rate, attempt func() (T, error)) (v T, admitted bool, err error) {
+func admit[T any](ctx context.Context, r Retry, attempt func() (T, error)) (v T, admitted bool, err error) {
+	l, rt := r.Limiter, r.Rate
 	if l == nil {
 		if err := rt.Wait(ctx); err != nil {
 			return v, false, err
@@ -286,10 +325,10 @@ func admit[T any](ctx context.Context, l *Limiter, rt *Rate, attempt func() (T, 
 		o = Success
 		return v, true, nil
 	}
-	switch _, throttle, timeout := retryable(err); {
-	case throttle:
+	switch f := Normalize(err, r.Answer); {
+	case f.Throttle:
 		o = Throttled
-	case timeout:
+	case f.Timeout:
 		o = TimedOut
 	}
 	return v, true, err

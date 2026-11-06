@@ -150,3 +150,24 @@ func TestClassify(t *testing.T) {
 		t.Errorf("nil: class %q", got)
 	}
 }
+
+// TestFailureSignals: an attempt's failure is normalized once; its
+// admission signal follows its class, so a 408 (class timeout) is a
+// timeout signal to the limiter, a 429 a throttle, a 503 neither, and all
+// three are retried. Before, the 408 carried no timeout signal.
+func TestFailureSignals(t *testing.T) {
+	for _, c := range []struct {
+		status            int
+		class             objhttp.Class
+		throttle, timeout bool
+	}{
+		{408, objhttp.ClassTimeout, false, true},
+		{429, objhttp.ClassThrottle, true, false},
+		{503, objhttp.ClassServer, false, false},
+	} {
+		f := objhttp.Normalize(&Error{Status: c.status}, answer)
+		if f.Class != c.class || !f.Retry || f.Throttle != c.throttle || f.Timeout != c.timeout {
+			t.Fatalf("%d: %+v", c.status, f)
+		}
+	}
+}
