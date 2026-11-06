@@ -27,7 +27,7 @@ import (
 const (
 	exitCompleted   = 0   // the dataset is committed (or a dry run finished)
 	exitFatal       = 1   // a cause that a resume will not fix
-	exitUsage       = 2   // a malformed command line
+	exitUsage       = 2   // a malformed command line, or a refusal that is the caller's to fix
 	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR); resumable when the journal is intact
 	exitStuck       = 75  // no progress for the stall timeout; resumable when the journal is intact
 	exitDeadline    = 124 // --max-duration reached with the output unfinished; resumable
@@ -76,7 +76,7 @@ func (e *signalError) Error() string { return "stopped by " + e.sig.String() }
 
 // outcome is how a command ended: its class and exit code.
 type outcome struct {
-	Class     string `json:"class"` // completed, fatal, incomplete, usage, disk_full, stuck, deadline, interrupted, terminated
+	Class     string `json:"class"` // completed, fatal, incomplete, usage, refused, disk_full, stuck, deadline, interrupted, terminated
 	ExitCode  int    `json:"exit_code"`
 	Message   string `json:"message,omitempty"`
 	Resumable bool   `json:"resumable"` // swath resume DIR can continue it
@@ -101,6 +101,12 @@ func classify(err, cause error, dir string) outcome {
 	switch {
 	case errors.As(err, &u), errors.Is(err, flag.ErrHelp):
 		o.Class, o.ExitCode, o.Resumable = "usage", exitUsage, false
+	case refusal(err):
+		// The caller's to fix (another output, --overwrite, the original
+		// settings): nothing ran, and the output is as it was, so
+		// Resumable still says whether swath resume can continue a run
+		// there.
+		o.Class, o.ExitCode = "refused", exitUsage
 	case errors.Is(err, errIncomplete):
 		o.Class, o.ExitCode, o.Resumable = "incomplete", exitFatal, false
 	case errors.Is(cause, errStuck):
@@ -139,6 +145,21 @@ func classify(err, cause error, dir string) outcome {
 		}
 	}
 	return o
+}
+
+// refusal tells a refusal that is the caller's fault, as Java's exit 2
+// (its guarded refusals): an output that is not this tool's to write
+// without --overwrite (not empty, another tool's, an interrupted run) or
+// that overlaps the listed root, a resume whose identity changed, and a
+// resume with nothing to resume.
+func refusal(err error) bool {
+	var mm *journal.MismatchError
+	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume} {
+		if errors.Is(err, r) {
+			return true
+		}
+	}
+	return errors.As(err, &mm)
 }
 
 // committedCoverage is the coverage in dir's manifest (ok false without a

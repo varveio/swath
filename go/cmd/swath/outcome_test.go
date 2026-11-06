@@ -533,3 +533,61 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	readJSON(t, report, &rep)
 	check("resumed run", rep)
 }
+
+// TestRefusalsExit2: a refusal that is the caller's to fix exits 2 with
+// class refused, in the exit code and the report, as Java's guarded
+// refusals: a non-empty output without --overwrite, --overwrite on
+// another tool's directory, a new run over an interrupted one, an output
+// that is the listed root, a resume whose identity changed, a resume with
+// nothing to resume; an unknown scheme is a usage error. Run failures stay
+// 1. Before, every refusal but the malformed command line exited 1.
+func TestRefusalsExit2(t *testing.T) {
+	captureStderr(t)
+	ctx := context.Background()
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	gcs := func(dir string, extra ...string) []string {
+		return append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--memory", "1MiB", "-o", dir}, extra...)
+	}
+	foreign := t.TempDir()
+	os.WriteFile(filepath.Join(foreign, "notes.txt"), []byte("mine"), 0o644)
+	interrupted := filepath.Join(t.TempDir(), "ds")
+	crashRun(t, gcs(interrupted), 2)
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "a"), nil, 0o644)
+	for _, c := range []struct {
+		name, class string
+		resumable   bool
+		cmd         func(report string) error
+	}{
+		{"non-empty output", "refused", false, func(r string) error { return run(ctx, gcs(foreign, "--report", r), io.Discard, false) }},
+		{"overwrite of another tool's directory", "refused", false, func(r string) error {
+			return run(ctx, gcs(foreign, "--overwrite", "--report", r), io.Discard, false)
+		}},
+		{"new run over an interrupted one", "refused", true, func(r string) error { return run(ctx, gcs(interrupted, "--report", r), io.Discard, false) }},
+		{"output is the root", "refused", false, func(r string) error { return run(ctx, []string{src, "-o", src, "--report", r}, io.Discard, false) }},
+		{"changed identity", "refused", true, func(r string) error {
+			return runWith(ctx, gcs(interrupted, "--part-size", "8KiB", "--report", r), io.Discard, false, nil, true, nil)
+		}},
+		{"nothing to resume", "refused", false, func(r string) error { return resume(ctx, []string{"--report", r, t.TempDir()}, io.Discard) }},
+		{"unknown scheme", "usage", false, func(r string) error {
+			return run(ctx, []string{"ftp://host/x", "-o", t.TempDir(), "--report", r}, io.Discard, false)
+		}},
+	} {
+		report := filepath.Join(t.TempDir(), "report.json")
+		if code := exitCode(t, c.cmd(report)); code != exitUsage {
+			t.Fatalf("%s: exit %d, want %d", c.name, code, exitUsage)
+		}
+		var rep listing.Report
+		readJSON(t, report, &rep)
+		if o := rep.Outcome; o.Class != c.class || o.ExitCode != exitUsage || o.Resumable != c.resumable {
+			t.Fatalf("%s: report outcome %+v", c.name, o)
+		}
+		if c.name == "changed identity" && !strings.Contains(rep.Outcome.Error, "cannot resume: part size") {
+			t.Fatalf("%s: %s", c.name, rep.Outcome.Error)
+		}
+	}
+	// The interrupted run is untouched by the refusals: it resumes.
+	if err := resume(ctx, []string{interrupted}, io.Discard); err != nil {
+		t.Fatalf("resume after the refusals: %v", err)
+	}
+}

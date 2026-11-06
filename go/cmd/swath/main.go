@@ -399,7 +399,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	}
 	pf, err := registry.Lookup(root)
 	if err != nil {
-		return stopEarly(o.report, argv, cfgOut(o), att, err)
+		return stopEarly(o.report, argv, cfgOut(o), att, usageError{err})
 	}
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},

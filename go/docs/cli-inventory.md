@@ -91,7 +91,7 @@ decision to add it later).
 | `--restart` | none; `--overwrite` starts over an interrupted run | renamed | – |
 | `--overwrite`, `--force` | `--overwrite` | kept (alias `--force` removed) | no decision recorded (alias) |
 | Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | committed parts kept exactly once; everything after the last committed part's key re-listed | kept (coarser) | part-granular journal, re-list after the last published key, 2026-11-05 |
-| Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 1); a flag outside the runtime and operational lists is exit 2 | kept | – |
+| Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
 | Resume accepts every free operational option | accepts the listed runtime and operational flags only | kept (narrower) | – |
 | Resume of a completed dataset exits 0 | exit 0, class `completed`, report `complete` true (partial coverage: 1, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
 | Java checkpoint files | not read | removed | no migration of Java checkpoint files, 2026-11-05 |
@@ -150,7 +150,7 @@ decision to add it later).
 |---|---|---|---|
 | 0: success, empty result, already-complete resume, closed stdout | 0 `completed`, an already-complete resume included | kept | – |
 | 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (not resumable) or `incomplete` (partial coverage); a full disk is 74 | kept | – |
-| 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage`: malformed command line only; changed identity and output refusals are 1 | kept (narrower) | – |
+| 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage` (malformed command line, unknown scheme) or `refused` (guarded output refusal, changed resume identity, nothing to resume) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
 | 74: output filesystem full | 74 `disk_full`, cause `no_space`, resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
 | 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows` | kept (causes renamed) | – |
 | 124: `--max-duration` elapsed | 124 `deadline` | kept | – |
