@@ -204,12 +204,15 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 		if p.opt.NoDirs {
 			end = i
 		}
+		// The child is taken from the row before the rows are handed over:
+		// the emitter owns them then, and a filter may clear the DIR row.
+		key := row.Key
+		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: key}
 		if err := e.Rows(rows[start:end]); err != nil {
 			return err
 		}
 		start = i + 1
-		name := row.Key[len(r.prefix) : len(row.Key)-1]
-		if err := e.Child(Range{path: r.path + string(os.PathSeparator) + name, prefix: row.Key}); err != nil {
+		if err := e.Child(child); err != nil {
 			return err
 		}
 	}

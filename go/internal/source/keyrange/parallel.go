@@ -208,24 +208,35 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		if truncated && kept == 0 && !reached && skipped == 0 {
 			return fmt.Errorf("%w: truncated page with no key in (%q, %q]", p.d.invalid(), r.lo, r.hi)
 		}
+		// The density and split inputs are read before the rows are handed
+		// over: the emitter owns them then, and a filter compacts and clears
+		// them in place.
+		done := reached || !truncated || (!r.open && kept > 0 && c == r.hi)
+		var first, last string
+		if kept > 0 {
+			first, last = out.Rows[0].Key, out.Rows[kept-1].Key
+		}
+		var page []string
+		if !done {
+			page = make([]string, kept)
+			for i := range page {
+				page[i] = out.Rows[i].Key
+			}
+		}
+		overfetch := len(out.Rows) - kept
 		if err := p.emit(out.Rows[:kept], e); err != nil {
 			return err
 		}
 		p.lock()
-		p.c.Add(cOverfetchKeys, int64(len(out.Rows)-kept))
+		p.c.Add(cOverfetchKeys, int64(overfetch))
 		st.keys += int64(kept)
 		if kept > 0 {
-			st.dens.observe(out.Rows[0].Key, out.Rows[kept-1].Key, r.lo, r.hi, kept)
+			st.dens.observe(first, last, r.lo, r.hi, kept)
 		}
 		p.unlock()
-		done := reached || !truncated || (!r.open && kept > 0 && c == r.hi)
 		if done {
 			p.covered(r.lo, r.hi, r.open)
 			return faults.At("range-done")
-		}
-		page := make([]string, kept)
-		for i := range page {
-			page[i] = out.Rows[i].Key
 		}
 		if m, ext, ok := p.decide(st, r, page, c); ok {
 			lower, upper := p.commit(st, r, c, m, ext)

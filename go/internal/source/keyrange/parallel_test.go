@@ -296,3 +296,63 @@ func TestT6BalanceSmoke(t *testing.T) {
 		t.Fatalf("parallelism did not engage: max_active=%d accepted=%d", st.Get(cMaxActive), accepted)
 	}
 }
+
+// clearing is an emitter that owns its rows as a filter does: it drops
+// them all and clears them in place. It records the children.
+type clearing struct {
+	drop     bool
+	children []Range
+}
+
+func (c *clearing) Rows(rows []Row) error {
+	if c.drop {
+		clear(rows)
+	}
+	return nil
+}
+
+func (c *clearing) Child(r Range) error {
+	c.children = append(c.children, r)
+	return nil
+}
+
+// TestFilterLeavesSplitInputs: the page's density and the split's page
+// keys are read before the rows are handed over, so an emitter that drops
+// and clears them (a filter) cannot change the range's observations: the
+// same density and the same pivot as an emitter that keeps them.
+func TestFilterLeavesSplitInputs(t *testing.T) {
+	keys := make([]string, 5000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%06d", i)
+	}
+	type result struct {
+		dens     float64
+		children []span
+	}
+	expand := func(drop bool) result {
+		var p *Engine[Object]
+		var res result
+		p, err := newTest(newSorted(keys, false, 1), Options{Workers: 64, PageSize: 100, SplitCoin: func() bool {
+			res.dens = p.running[1].dens.ewma // decide holds the engine's lock
+			return true
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := &clearing{drop: drop}
+		if err := p.expandRange(context.Background(), Range{lo: "", hi: "l", id: 1, born: fromRoot}, e); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range e.children {
+			res.children = append(res.children, span{c.lo, c.hi, c.open})
+		}
+		return res
+	}
+	kept, dropped := expand(false), expand(true)
+	if kept.dens <= 0 || len(kept.children) != 2 {
+		t.Fatalf("no split observed: %+v", kept)
+	}
+	if dropped.dens != kept.dens || !slices.Equal(dropped.children, kept.children) {
+		t.Fatalf("a filter changed the split inputs: density %v, children %v; unfiltered %v, %v", dropped.dens, dropped.children, kept.dens, kept.children)
+	}
+}
