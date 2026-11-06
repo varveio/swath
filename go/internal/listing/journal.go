@@ -218,17 +218,25 @@ func recoverParts(out string, st *journal.State) (*suspect, error) {
 	return sus, dataset.SyncDir(filepath.Join(out, dataset.Workspace))
 }
 
-// keepSuspect sets aside the temporary part of a last record that read as
-// torn (moved into the suspect directory before the temporary parts are
+// keepSuspect sets aside the claimed part of the ordinal after the last
+// record (moved into the suspect directory before the temporary parts are
 // removed), and returns the suspect a resume must reproduce: that one, or
-// one an earlier resume set aside and has not reproduced yet. A suspect
-// whose ordinal was recorded since was reproduced (the record follows the
-// check) and is removed.
+// one an earlier resume set aside and has not reproduced yet. A claimed
+// part is set aside whether or not the journal ends in a torn tail: a
+// record acknowledged and then lost whole (the journal cut at the frame
+// boundary before it) leaves a clean end, the same as an append that never
+// began. Parts not claimed were never named by a record and are removed
+// with the rest. A suspect whose ordinal was recorded since was reproduced
+// (the record follows the check) and is removed.
 func keepSuspect(out string, st *journal.State) (*suspect, error) {
 	dir := filepath.Join(out, dataset.Workspace, dataset.SuspectDir)
 	n := len(st.Records)
 	name := dataset.PartName(n)
-	if tmp := dataset.TempPath(out, n); st.TornBytes > 0 {
+	_, held := os.Stat(filepath.Join(dir, name))
+	if tmp := dataset.ClaimPath(out, n); !(n > 0 && st.Records[n-1].Final) && held != nil {
+		// A suspect an earlier resume set aside stays: a later temporary
+		// part at its ordinal was never compared with it (it crashed
+		// before its record) and must not replace it.
 		if _, err := os.Stat(tmp); err == nil {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return nil, fmt.Errorf("resume: %w", err)
@@ -298,7 +306,7 @@ func checkParts(out string, st *journal.State) error {
 		keep[filepath.Base(final)] = true
 		path := final
 		if _, err := os.Stat(final); err != nil {
-			path = dataset.TempPath(out, i)
+			path = dataset.ClaimPath(out, i)
 			if _, err := os.Stat(path); err != nil || i != len(st.Records)-1 {
 				return fmt.Errorf("resume: part %d is journaled but missing from %s", i, data)
 			}
@@ -427,6 +435,17 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	if sus != nil && ordinal == sus.ordinal && (p.Bytes != sus.info.Bytes || p.MD5 != sus.info.MD5) {
 		return p, fmt.Errorf("%w: part %d is %d bytes, md5 %s now; the part set aside (%s) is %d bytes, md5 %s",
 			ErrAmbiguousTail, ordinal, p.Bytes, p.MD5, sus.path, sus.info.Bytes, sus.info.MD5)
+	}
+	// The claim: from here until the rename into data/, this part may be
+	// named by an acknowledged record, and recovery keeps it (keepSuspect).
+	// Its name must be durable before the record names it.
+	claim := dataset.ClaimPath(jr.out, ordinal)
+	if err := os.Rename(p.Path, claim); err != nil {
+		return p, fmt.Errorf("claim part %d: %w", ordinal, err)
+	}
+	p.Path = claim
+	if err := dataset.SyncDir(filepath.Dir(claim)); err != nil {
+		return p, fmt.Errorf("claim part %d: %w", ordinal, err)
 	}
 	if err := jr.j.Append(journal.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final}); err != nil {
 		return p, err

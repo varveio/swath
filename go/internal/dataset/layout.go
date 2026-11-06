@@ -64,6 +64,17 @@ func TempPath(out string, i int) string {
 	return filepath.Join(out, Workspace, PartsDir, PartName(i))
 }
 
+// ClaimSuffix marks the one part, in PartsDir, whose journal record is being
+// appended: the ordered committer renames part i from TempPath to ClaimPath
+// just before the append, and into data/ after it.
+const ClaimSuffix = ".claimed"
+
+// ClaimPath is where part i waits while its record is appended (TempPath
+// with ClaimSuffix). A part there may be named by a record that was
+// acknowledged and lost since; any other temporary part was never named by
+// a record.
+func ClaimPath(out string, i int) string { return TempPath(out, i) + ClaimSuffix }
+
 // ownEntries are the root entries a dataset owns; overwrite removes these and
 // their .tmp siblings, nothing else. The workspace is emptied except for the
 // lock. Earlier layouts' entries (_SUCCESS, symlink.txt, .swath.lock, the

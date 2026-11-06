@@ -11,7 +11,6 @@ import (
 	"hash"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -273,12 +272,9 @@ func (w *writer[P]) close() (dataset.Part, error) {
 	if err == nil {
 		err = w.file.Sync()
 	}
+	// The directory entry is made durable by the committer that claims
+	// the part for its record (listing), not here.
 	err = errors.Join(err, w.file.Close())
-	if err == nil {
-		// The temporary part's directory entry must be durable before a
-		// journal record names it (power loss, not only process crash).
-		err = dataset.SyncDir(filepath.Dir(w.file.Name()))
-	}
 	if err != nil {
 		return dataset.Part{}, fmt.Errorf("close %s: %w", w.file.Name(), err)
 	}

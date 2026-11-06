@@ -562,7 +562,7 @@ func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 		if !errors.Is(err, journal.ErrCorrupt) {
 			t.Fatalf("%s: resume did not refuse: %v", damage, err)
 		}
-		if _, err := os.Stat(dataset.TempPath(out, 2)); err != nil {
+		if _, err := os.Stat(dataset.ClaimPath(out, 2)); err != nil {
 			t.Fatalf("%s: the acknowledged temporary part is gone: %v", damage, err)
 		}
 	}
@@ -662,6 +662,81 @@ func TestAcknowledgedTailTruncationRefuses(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(out, dataset.DataDir, dataset.PartName(2))); err != nil {
 			t.Fatalf("%s: the published part is gone: %v", damage, err)
+		}
+	}
+}
+
+// TestAcknowledgedWholeLastFrameLossPreservesPart: the last record is
+// durable but its part not yet renamed, and the whole frame is then lost,
+// the journal ending at the preceding frame boundary. That reads as a clean
+// end (no torn bytes), the same as an append that never began, so the
+// part in .swath/parts/ is set aside as the torn tail's is: an unchanged
+// source reproduces it and resumes identically; a deleted row inside it or
+// a deleted suffix is refused with the part kept, at every attempt (Sol,
+// fifth review, M5).
+func TestAcknowledgedWholeLastFrameLossPreservesPart(t *testing.T) {
+	url0 := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url0, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []string{"unchanged", "deleted row", "deleted suffix"} {
+		url, b := crashBackend(t)
+		out := filepath.Join(t.TempDir(), "ds")
+		crashAtRecorded(t, url, out)
+		st, err := journal.Read(out)
+		if err != nil || len(st.Records) != 3 {
+			t.Fatalf("%s: %v (%d records)", change, err, len(st.Records))
+		}
+		acked := st.Records[2].Part
+		path := journal.Path(out)
+		jb, _ := os.ReadFile(path)
+		var offs []int
+		for off := 0; off+8 <= len(jb); off += 8 + int(binary.LittleEndian.Uint32(jb[off:off+4])) {
+			offs = append(offs, off)
+		}
+		os.WriteFile(path, jb[:offs[len(offs)-1]], 0o644)
+		if st, err := journal.Read(out); err != nil || len(st.Records) != 2 || st.TornBytes != 0 {
+			t.Fatalf("%s: the cut journal does not end cleanly after record 1: %v", change, err)
+		}
+		switch change {
+		case "deleted row":
+			if _, err := b.DeleteObject("bkt", string(acked.MinKey)); err != nil {
+				t.Fatal(err)
+			}
+		case "deleted suffix":
+			for i := range 8000 {
+				if k := fmt.Sprintf("d%02d/sub%d/obj+%06d", i%9, i%4, i); k > string(st.Records[1].Part.MaxKey) {
+					b.DeleteObject("bkt", k)
+				}
+			}
+		}
+		if change == "unchanged" {
+			if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
+				t.Fatalf("unchanged: %v", err)
+			}
+			sameDataset(t, change, ref, out)
+			if ents, _ := os.ReadDir(filepath.Join(out, dataset.Workspace, dataset.SuspectDir)); len(ents) != 0 {
+				t.Fatal("unchanged: the reproduced suspect part was kept")
+			}
+			continue
+		}
+		kept := filepath.Join(out, dataset.Workspace, dataset.SuspectDir, dataset.PartName(2))
+		for attempt := range 2 {
+			_, err := Run(context.Background(), crashConfig(url, out, true))
+			if !errors.Is(err, ErrAmbiguousTail) {
+				t.Fatalf("%s, attempt %d: resume did not refuse: %v", change, attempt, err)
+			}
+			got, err := measure(kept)
+			if err != nil || got.MD5 != acked.MD5 || got.Bytes != acked.Bytes {
+				t.Fatalf("%s, attempt %d: the acknowledged part is not kept: %v %+v", change, attempt, err, got)
+			}
+			if _, err := os.Stat(filepath.Join(out, dataset.DataDir, dataset.PartName(2))); err == nil {
+				t.Fatalf("%s: a replacement part 2 was published", change)
+			}
+			if st, err := journal.Read(out); err != nil || len(st.Records) != 2 {
+				t.Fatalf("%s: a replacement record 2 was written: %v", change, err)
+			}
 		}
 	}
 }
