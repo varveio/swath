@@ -3,7 +3,10 @@
 
 package s3
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf16"
+)
 
 // MaxPageSize is the most entries one page holds, whatever max-keys asks:
 // S3's own cap.
@@ -133,4 +136,37 @@ func bucketOf(path string) string {
 	path = strings.TrimPrefix(path, "/")
 	seg, _, _ := strings.Cut(path, "/")
 	return seg
+}
+
+// LatencyKey identifies the request for latency jitter: a hash of prefix,
+// delimiter, start-after, token and max-keys, so the same request always
+// draws the same jitter and successive pages of one walk (which differ
+// only in their token) draw different ones. It is the Java server's key
+// for the same request, so both servers jitter a request alike
+// (TestLatencyKeyGolden).
+func (r *Request) LatencyKey() int64 {
+	h := int64(1125899906842597)
+	h = 31*h + int64(bytesHash(r.Prefix))
+	h = 31*h + int64(bytesHash(r.Delimiter))
+	h = 31*h + int64(bytesHash(r.StartAfter))
+	var th int32
+	if r.TokenSet {
+		for _, u := range utf16.Encode([]rune(decodeText([]byte(r.Token)))) {
+			th = 31*th + int32(u)
+		}
+	}
+	h = 31*h + int64(th)
+	return 31*h + int64(r.MaxKeys)
+}
+
+// bytesHash is the polynomial hash of signed bytes, 0 for nil.
+func bytesHash(b []byte) int32 {
+	if b == nil {
+		return 0
+	}
+	h := int32(1)
+	for _, c := range b {
+		h = 31*h + int32(int8(c))
+	}
+	return h
 }

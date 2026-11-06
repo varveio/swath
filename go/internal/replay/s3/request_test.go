@@ -6,6 +6,9 @@ package s3
 import (
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/varveio/swath/go/internal/replay/latency"
 )
 
 func TestParseRequest(t *testing.T) {
@@ -96,3 +99,40 @@ func TestParseHTTPRoutesByFirstSegment(t *testing.T) {
 		}
 	}
 }
+
+// TestLatencyKeyGolden checks the jitter key end to end: the delays are the
+// Java server's for the same requests under
+// worker_page=223ms,pivot_probe=121ms,structure_probe=223ms+55ms/cp with
+// jitter 0.15.
+func TestLatencyKeyGolden(t *testing.T) {
+	p, err := latency.Parse("worker_page=223ms,pivot_probe=121ms,structure_probe=223ms+55ms/cp", 0.15, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		prefix, delim, startAfter string
+		token                     *string
+		maxKeys                   int32
+		want                      time.Duration
+	}{
+		{"", "", "", nil, 1000, 243283920},
+		{"a/", "", "", nil, 1000, 195661324},
+		{"a/", "/", "", nil, 1000, 220312875},
+		{"", "", "x", nil, 1, 127292513},
+		{"", "", "", ptr("v2:AGxvZ3M"), 1000, 240201115},
+		{"", "", "", ptr(""), 1000, 243283920},
+		{"é\x00", "", "", ptr("tokén"), 7, 238277199},
+		{"", "/", "", nil, 0, 198548590},
+	} {
+		r := &Request{Prefix: b(c.prefix), Delimiter: b(c.delim), StartAfter: b(c.startAfter), MaxKeys: c.maxKeys}
+		if c.token != nil {
+			r.Token, r.TokenSet = *c.token, true
+		}
+		shape := latency.Classify(len(r.Delimiter) > 0, int64(r.MaxKeys))
+		if got := p.Delay(shape, 0, r.LatencyKey()); got != c.want {
+			t.Errorf("%+v: %d, want %d", c, got, c.want)
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }
