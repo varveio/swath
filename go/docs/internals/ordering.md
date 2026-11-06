@@ -81,8 +81,12 @@ the budget full, it left the drainer listing the frontier alone (one range in fl
   always admitted, and concurrent emitters can each pass the free-space check before either writes, so the
   reserve can be undershot by at most one frame per worker; the reserve is checked, not held, so parts
   being published can use it too. A frame read back is refused (before allocating) past 256 MiB, compressed
-  or decoded; a spill marker (the item a node keeps per frame on disk) counts its own size against the row
-  budget; a failed run closes every open spill reader. The summary reports `spill_peak_bytes` and
+  or decoded, and a rows frame claiming more rows than the largest frame its file was given is refused
+  before its rows are allocated. A spill marker (the item a node keeps per frame on disk) counts its own
+  size against the row budget: after a spill, markers and children are admitted without a wait unless the
+  markers in memory would by themselves fill the budget, and a marker's bytes are released when its frame
+  is replayed (`TestSpillMarkersInByteMode`, the one order test in byte mode). A failed run closes every
+  open spill reader. The summary reports `spill_peak_bytes` and
   `spill_refused` (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical
   output; a reserve larger than the disk spills nothing).
 - `swath diag list --no-spill` restores waiting on the budget.
