@@ -17,8 +17,14 @@
 // current-object schema under an id of its own, since a converted capture
 // is not a listing by the Go lister.
 //
-// The capture is read whole into memory and sorted there: about 150 bytes
-// per row plus its key and value bytes, so a few million rows is the
+// The capture is read whole into one array, sized from the footers, sorted
+// in place and written from it in batches: 136 bytes per object row on a
+// 64-bit platform plus its key and string values (each its own allocation,
+// rounded up to the allocator's size class), the key of every other row,
+// and the writer's buffers. Measured on the synthetic 1M-row capture of
+// go/bench/replay/make-fixtures.sh (44-byte keys, a 32-byte etag and a
+// storage class per row; linux/amd64, GOMAXPROCS 4, 4 vCPU): 309 MiB peak
+// resident, about 300 bytes per row, 3 s. A few million rows is the
 // intended scope. The Go lister writes sorted datasets directly; this
 // command exists for captures recorded before it.
 package sortfixture
@@ -109,11 +115,11 @@ var rowTypes = [...]string{objectRowType, "COMMON_PREFIX", "DELETE_MARKER"}
 
 const objectRowType = "OBJECT"
 
-// row is one capture row kept for sorting: its key, whether it is a
-// current object, and the object's facts.
-type row struct {
-	object bool
-	schema.Row[Object]
+// captured is a capture held for sorting: its objects, which are written,
+// and the keys of its other rows, which only the duplicate rule reads.
+type captured struct {
+	objects []schema.Row[Object]
+	others  []string
 }
 
 // Run reads the capture, keeps its OBJECT rows, refuses a capture with no
@@ -143,29 +149,31 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	if len(files) == 0 {
 		return stats, fmt.Errorf("%w in %s", ErrNoParts, opts.Capture)
 	}
-	var rows []row
+	// One array, sized from the footers: the rows are sorted in place and
+	// written from it in batches, never copied whole.
+	total, err := countRows(files)
+	if err != nil {
+		return stats, fmt.Errorf("sort-fixture: %w", err)
+	}
+	c := captured{objects: make([]schema.Row[Object], 0, total)}
 	for _, file := range files {
-		if rows, err = readCapture(ctx, file, rows); err != nil {
+		if err := readCapture(ctx, file, &c); err != nil {
 			return stats, fmt.Errorf("sort-fixture: %s: %w", file, err)
 		}
 	}
-	stats.CaptureRows = int64(len(rows))
-	slices.SortFunc(rows, func(a, b row) int { return strings.Compare(a.Key, b.Key) })
-	objects := make([]schema.Row[Object], 0, len(rows))
-	longest := 0
-	for i := range rows {
-		if i > 0 && rows[i].Key == rows[i-1].Key {
-			return stats, fmt.Errorf("%w '%s'", ErrDuplicateKey, rows[i].Key)
-		}
-		if !rows[i].object {
-			stats.Skipped++
-			continue
-		}
-		longest = max(longest, len(rows[i].Key))
-		objects = append(objects, rows[i].Row)
+	objects := c.objects
+	stats.CaptureRows = int64(len(objects) + len(c.others))
+	stats.Objects, stats.Skipped = int64(len(objects)), int64(len(c.others))
+	slices.SortFunc(objects, func(a, b schema.Row[Object]) int { return strings.Compare(a.Key, b.Key) })
+	slices.Sort(c.others)
+	if key, ok := duplicate(objects, c.others); ok {
+		return stats, fmt.Errorf("%w '%s'", ErrDuplicateKey, key)
 	}
-	rows = nil
-	stats.Objects = int64(len(objects))
+	c.others = nil
+	longest := 0
+	for i := range objects {
+		longest = max(longest, len(objects[i].Key))
+	}
 
 	limit := cmp.Or(opts.KeyLimit, DefaultKeyLimit)
 	if longest > limit {
@@ -251,6 +259,55 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[Object], object
 	return parts, nil
 }
 
+// countRows returns the rows the parts' footers declare.
+func countRows(files []string) (int64, error) {
+	var total int64
+	for _, name := range files {
+		f, err := os.Open(name)
+		if err != nil {
+			return 0, err
+		}
+		info, err := f.Stat()
+		if err == nil {
+			var file *parquet.File
+			if file, err = parquet.OpenFile(f, info.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true)); err == nil {
+				total += file.NumRows()
+			}
+		}
+		_ = f.Close()
+		if err != nil {
+			return 0, fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	return total, nil
+}
+
+// duplicate returns a key two rows share: adjacent sorted objects, adjacent
+// sorted other rows, or an object and another row.
+func duplicate(objects []schema.Row[Object], others []string) (string, bool) {
+	for i := 1; i < len(objects); i++ {
+		if objects[i].Key == objects[i-1].Key {
+			return objects[i].Key, true
+		}
+	}
+	for i := 1; i < len(others); i++ {
+		if others[i] == others[i-1] {
+			return others[i], true
+		}
+	}
+	for i, j := 0, 0; i < len(objects) && j < len(others); {
+		switch order := strings.Compare(objects[i].Key, others[j]); {
+		case order == 0:
+			return others[j], true
+		case order < 0:
+			i++
+		default:
+			j++
+		}
+	}
+	return "", false
+}
+
 // captureColumns are the canonical columns a capture row is read from;
 // only key and row_type are required.
 var captureColumns = []string{"key", "size", "last_modified", "etag", "storage_class", "version_id",
@@ -270,20 +327,20 @@ const (
 	cRowType
 )
 
-// readCapture appends the rows of one capture part.
-func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
+// readCapture adds the rows of one capture part to c.
+func readCapture(ctx context.Context, name string, c *captured) error {
 	f, err := os.Open(name)
 	if err != nil {
-		return rows, err
+		return err
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
-		return rows, err
+		return err
 	}
 	file, err := parquet.OpenFile(f, info.Size())
 	if err != nil {
-		return rows, err
+		return err
 	}
 	index := make([]int, len(captureColumns))
 	for i, column := range captureColumns {
@@ -293,7 +350,7 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 		}
 	}
 	if index[cKey] < 0 || index[cRowType] < 0 {
-		return rows, errors.New("not a capture part: key and row_type columns are required")
+		return errors.New("not a capture part: key and row_type columns are required")
 	}
 	byColumn := make(map[int]int, len(index))
 	for i, column := range index {
@@ -307,7 +364,7 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 	values := make([]parquet.Value, len(captureColumns))
 	for {
 		if err := ctx.Err(); err != nil {
-			return rows, err
+			return err
 		}
 		n, readErr := reader.ReadRows(buffer)
 		for _, r := range buffer[:n] {
@@ -321,33 +378,32 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 			}
 			key := values[cKey].ByteArray()
 			if !values[cVersion].IsNull() {
-				return rows, fmt.Errorf("%w: key '%s' carries version_id '%s'", ErrVersioned, key, values[cVersion].ByteArray())
+				return fmt.Errorf("%w: key '%s' carries version_id '%s'", ErrVersioned, key, values[cVersion].ByteArray())
 			}
 			rowType := values[cRowType]
 			if rowType.IsNull() || !slices.Contains(rowTypes[:], string(rowType.ByteArray())) {
-				return rows, fmt.Errorf("%w: key '%s' has row_type %s", ErrRowType, key, describeValue(rowType))
+				return fmt.Errorf("%w: key '%s' has row_type %s", ErrRowType, key, describeValue(rowType))
 			}
-			kept := row{object: string(rowType.ByteArray()) == objectRowType}
-			kept.Key = string(key)
-			if kept.object {
-				kept.Data = Object{
-					Size:              number(values[cSize]),
-					Mtime:             number(values[cModified]),
-					ETag:              text(values[cETag]),
-					StorageClass:      text(values[cStorageClass]),
-					OwnerID:           text(values[cOwnerID]),
-					OwnerDisplayName:  text(values[cOwnerDisplayName]),
-					ChecksumAlgorithm: text(values[cChecksumAlgorithm]),
-					ChecksumType:      text(values[cChecksumType]),
-				}
+			if string(rowType.ByteArray()) != objectRowType {
+				c.others = append(c.others, string(key))
+				continue
 			}
-			rows = append(rows, kept)
+			c.objects = append(c.objects, schema.Row[Object]{Key: string(key), Data: Object{
+				Size: values[cSize].Int64(), HasSize: !values[cSize].IsNull(),
+				Mtime: values[cModified].Int64(), HasMtime: !values[cModified].IsNull(),
+				ETag:              text(values[cETag]),
+				StorageClass:      text(values[cStorageClass]),
+				OwnerID:           text(values[cOwnerID]),
+				OwnerDisplayName:  text(values[cOwnerDisplayName]),
+				ChecksumAlgorithm: text(values[cChecksumAlgorithm]),
+				ChecksumType:      text(values[cChecksumType]),
+			}})
 		}
 		if errors.Is(readErr, io.EOF) || n == 0 && readErr == nil {
-			return rows, nil
+			return nil
 		}
 		if readErr != nil {
-			return rows, readErr
+			return readErr
 		}
 	}
 }
@@ -358,15 +414,6 @@ func describeValue(v parquet.Value) string {
 		return "null"
 	}
 	return fmt.Sprintf("%q", v.ByteArray())
-}
-
-// number returns an integer column's value, nil when null.
-func number(v parquet.Value) *int64 {
-	if v.IsNull() {
-		return nil
-	}
-	n := v.Int64()
-	return &n
 }
 
 // text returns a string column's value, "" (null in the schema) when null.

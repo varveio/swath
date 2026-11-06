@@ -9,11 +9,13 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 )
 
-// Object is a sorted capture row's payload: one current object. Nil size or
-// time and empty strings are nulls.
+// Object is a sorted capture row's payload: one current object. A size or
+// time without its Has flag and an empty string are nulls. It holds no
+// pointer to a separate allocation: a capture is held whole in memory.
 type Object struct {
-	Size              *int64
-	Mtime             *int64 // UTC epoch microseconds
+	Size              int64
+	Mtime             int64 // UTC epoch microseconds
+	HasSize, HasMtime bool
 	ETag              string
 	StorageClass      string
 	OwnerID           string
@@ -33,19 +35,12 @@ func newSchema(keyLimit int) *schema.Schema[Object] {
 			return v, v != ""
 		}
 	}
-	number := func(get func(*Object) *int64) func(*Object) (int64, bool) {
-		return func(o *Object) (int64, bool) {
-			if v := get(o); v != nil {
-				return *v, true
-			}
-			return 0, false
-		}
-	}
+	number := func(get func(*Object) (int64, bool)) func(*Object) (int64, bool) { return get }
 	return &schema.Schema[Object]{
 		Info: schema.Info{Name: "swath_listing", ID: SchemaID, Key: schema.String, MaxKeyBytes: keyLimit, QuotedETag: true},
 		Columns: []schema.Column[Object]{
-			{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: number(func(o *Object) *int64 { return o.Size })},
-			{Spec: schema.Spec{Name: "last_modified", Type: schema.TimestampMicros}, Int: number(func(o *Object) *int64 { return o.Mtime })},
+			{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: number(func(o *Object) (int64, bool) { return o.Size, o.HasSize })},
+			{Spec: schema.Spec{Name: "last_modified", Type: schema.TimestampMicros}, Int: number(func(o *Object) (int64, bool) { return o.Mtime, o.HasMtime })},
 			// ETags are unique hex: a dictionary never pays.
 			{Spec: schema.Spec{Name: "etag", Type: schema.String}, Str: text(func(o *Object) string { return o.ETag }), Delta: true},
 			{Spec: schema.Spec{Name: "storage_class", Type: schema.String}, Str: text(func(o *Object) string { return o.StorageClass })},
@@ -70,11 +65,14 @@ func objectHeap(o *Object) int64 {
 type objectCodec struct{}
 
 func (objectCodec) Append(dst []byte, o *Object) []byte {
-	for _, v := range [...]*int64{o.Size, o.Mtime} {
-		if v == nil {
+	for _, v := range [...]struct {
+		n   int64
+		has bool
+	}{{o.Size, o.HasSize}, {o.Mtime, o.HasMtime}} {
+		if !v.has {
 			dst = append(dst, 0)
 		} else {
-			dst = binary.AppendVarint(append(dst, 1), *v)
+			dst = binary.AppendVarint(append(dst, 1), v.n)
 		}
 	}
 	for _, s := range [...]string{o.ETag, o.StorageClass, o.OwnerID, o.OwnerDisplayName, o.ChecksumAlgorithm, o.ChecksumType} {
@@ -84,12 +82,12 @@ func (objectCodec) Append(dst []byte, o *Object) []byte {
 }
 
 func (objectCodec) Decode(d *schema.Decoder, o *Object) {
-	for _, v := range [...]**int64{&o.Size, &o.Mtime} {
-		*v = nil
-		if d.Byte() == 1 {
-			x := d.Varint()
-			*v = &x
-		}
+	o.Size, o.HasSize, o.Mtime, o.HasMtime = 0, false, 0, false
+	if d.Byte() == 1 {
+		o.Size, o.HasSize = d.Varint(), true
+	}
+	if d.Byte() == 1 {
+		o.Mtime, o.HasMtime = d.Varint(), true
 	}
 	o.ETag, o.StorageClass, o.OwnerID = d.Str(), d.Str(), d.Str()
 	o.OwnerDisplayName, o.ChecksumAlgorithm, o.ChecksumType = d.Str(), d.Str(), d.Str()

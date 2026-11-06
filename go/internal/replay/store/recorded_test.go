@@ -228,3 +228,31 @@ func residentKiB() int64 {
 	}
 	return 0
 }
+
+// TestSortFixtureMemory sorts the synthetic 1M-row capture and bounds the
+// heap the process obtained from the system: one capture-sized array
+// (about 300 bytes a row here, sortfixture's package doc) fits; a second
+// copy of the rows, which the sort once made, does not. Run it alone
+// (-run TestSortFixtureMemory) so no other test's heap counts.
+func TestSortFixtureMemory(t *testing.T) {
+	root := recordedRoot(t)
+	runtime.GC()
+	out := filepath.Join(t.TempDir(), "sorted")
+	start := time.Now()
+	stats, err := sortfixture.Run(context.Background(), sortfixture.Options{
+		Capture: filepath.Join(root, "fixtures", "synthetic-1m", "capture"), Output: out,
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	t.Logf("sorted %d objects in %v; heap obtained %d MiB, resident %d KiB (GOMAXPROCS %d)",
+		stats.Objects, time.Since(start).Round(time.Millisecond), ms.HeapSys>>20, residentKiB(), runtime.GOMAXPROCS(0))
+	if stats.Objects != 1_000_000 {
+		t.Fatalf("sorted %d objects", stats.Objects)
+	}
+	if limit := uint64(450 << 20); ms.HeapSys > limit {
+		t.Fatalf("heap obtained %d MiB, over %d MiB", ms.HeapSys>>20, limit>>20)
+	}
+}
