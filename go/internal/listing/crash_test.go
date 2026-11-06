@@ -198,8 +198,22 @@ func TestAlteredPartIsRefused(t *testing.T) {
 	}
 	b[len(b)/2] ^= 1
 	os.WriteFile(part, b, 0o644)
-	if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, ErrPartAltered) {
+	// The refusal happens under the lock and is settled there (the outcome
+	// of the interrupted run must not stand as current).
+	cfg := crashConfig(url, out, true)
+	var settled []error
+	cfg.Settle = func(_ Report, err error) {
+		if l, lerr := journal.TakeLock(out); !errors.Is(lerr, journal.ErrLocked) {
+			l.Release()
+			t.Error("Settle ran without the lock")
+		}
+		settled = append(settled, err)
+	}
+	if _, err := Run(context.Background(), cfg); !errors.Is(err, ErrPartAltered) {
 		t.Fatalf("altered part accepted: %v", err)
+	}
+	if len(settled) != 1 || !errors.Is(settled[0], ErrPartAltered) {
+		t.Fatalf("the refused recovery was settled %v", settled)
 	}
 }
 

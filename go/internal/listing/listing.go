@@ -40,9 +40,12 @@ type Config struct {
 	// Settle, if set, is called once with the run's report and error while
 	// the run still owns the output directory (after its cleanup and
 	// publication, before the lock is released): the place for the
-	// caller's own writes into the output, such as an outcome file. It is
-	// not called when the run never owned the output (refused, locked by
-	// another process, or no output directory).
+	// caller's own writes into the output, such as an outcome file. A
+	// resume or replacement that fails before it owns the output (its
+	// source cannot be opened) takes the lock to settle when the output
+	// holds an unfinished run. It is not called for an output the run
+	// never owned (refused before the lock as unusable, complete or
+	// empty; locked by another process; no output directory).
 	Settle func(Report, error)
 }
 
@@ -169,13 +172,23 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	src, err := f.Open(ctx, registry.Request{Root: cfg.Source.URI, Options: opts, Workers: cfg.Limits.Workers, Warn: warn})
 	if err != nil {
-		return sum.failed(err)
+		// Before ownership (credentials, say): the outcome of the run this
+		// invocation would have continued or replaced is recorded too, so
+		// an earlier one is never left standing as current.
+		rep, err := sum.failed(err)
+		settleUnowned(cfg, rep, err)
+		return rep, err
 	}
 	s, loc := src.Schema(), src.Locator()
 	sum.Invocation.Source, sum.Invocation.SchemaID = loc.Root, s.ID
 	jr, err := openJournal(cfg, src, identity(src, s, cfg))
 	if err != nil {
-		return sum.failed(err)
+		// A refusal before the lock leaves the output as it was (jr nil);
+		// a failure under it (a damaged journal, an identity mismatch, a
+		// failed recovery) is settled before the lock is released.
+		rep, err := sum.failed(err)
+		jr.close(cfg, rep, err)
+		return rep, err
 	}
 	rep, err := owned(ctx, cfg, sum, src, s, jr)
 	jr.close(cfg, rep, err)

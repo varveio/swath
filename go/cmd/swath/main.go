@@ -294,16 +294,30 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		}
 		return err, classify(err, context.Cause(ctx), cfg.Output.Dir)
 	}
+	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
 		_, out := settle(sum, err)
-		writeOutcome(cfg.Output.Dir, out)
+		if werr := writeOutcome(cfg.Output.Dir, out); werr != nil {
+			unrecorded = "write " + errorName + ": " + werr.Error()
+		} else {
+			settled = true
+		}
 	}
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn)
 	sum, err := listing.Run(ctx, cfg)
 	stopWatch()
 	stopProfile()
 	err, out := settle(sum, err)
+	if cfg.Output.Dir != "" && !settled && (err != nil || unrecorded != "") {
+		// Refused before ownership (another owner's outcome stands), or
+		// the write failed: the outcome goes to stderr instead.
+		if unrecorded == "" && errors.Is(err, journal.ErrLocked) {
+			unrecorded = "another process owns the output"
+		}
+		reportUnrecorded(cfg.Output.Dir, out, unrecorded)
+	}
 	sum.Outcome.Class, sum.Outcome.ExitCode, sum.Outcome.Resumable, sum.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
+	sum.Outcome.Unrecorded = unrecorded
 	if o.reportFormat == "json" {
 		// The report goes out on failure too: its outcome names the error.
 		enc := json.NewEncoder(stdout)

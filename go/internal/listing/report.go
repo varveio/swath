@@ -71,6 +71,9 @@ type Outcome struct {
 	ExitCode  int    `json:"exit_code"`
 	Resumable bool   `json:"resumable"`
 	Cause     string `json:"cause,omitempty"`
+	// Unrecorded says why the output's outcome file does not hold this
+	// outcome: it could not be written, or another process owns the output.
+	Unrecorded string `json:"unrecorded,omitempty"`
 }
 
 // Timings of the run, wall and CPU.

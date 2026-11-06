@@ -92,12 +92,32 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 		jr = &runJournal{out: cfg.Output.Dir, lock: lock}
 	}
 	if err != nil {
-		cfg.Progress.own(false)
-		lock.Release()
-		return nil, err
+		// Still owned: the caller settles the failure, then releases.
+		return &runJournal{out: cfg.Output.Dir, lock: lock}, err
 	}
 	jr.src = rs
 	return jr, nil
+}
+
+// settleUnowned settles a run that failed before it owned its output, when
+// the invocation meant to continue or replace an unfinished run there:
+// that run's earlier outcome must not stand as the current one. It takes
+// the lock first; an output another process owns, a committed dataset and
+// a directory without a workspace are left as they are (the caller reports
+// the outcome itself).
+func settleUnowned(cfg Config, rep Report, err error) {
+	dir := cfg.Output.Dir
+	if cfg.Settle == nil || dir == "" || !(cfg.Output.Resume || cfg.Output.Replace) || dataset.Committed(dir) {
+		return
+	}
+	if fi, serr := os.Stat(filepath.Join(dir, dataset.Workspace)); serr != nil || !fi.IsDir() {
+		return
+	}
+	lock, lerr := journal.TakeLock(dir)
+	if lerr != nil {
+		return
+	}
+	(&runJournal{out: dir, lock: lock}).close(cfg, rep, err)
 }
 
 // prepareError names an interrupted run when the output refused is one.

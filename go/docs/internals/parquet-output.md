@@ -31,7 +31,7 @@ Every dataset carries one run report, `run.json` (`listing.Report`, `report_vers
 same type, also for a dry run or a failure. Sections: `build` (tool, module version, VCS revision),
 `invocation` (argv, source, output, schema, workers, encoders, memory and part size), `outcome` (`committed`,
 `listed` or `failed`, the error, completeness, stop reason, per-entry errors, and the command's `class`,
-`exit_code`, `resumable` and `cause`, as in [../cli.md](../cli.md)), `timings` (timestamps and
+`exit_code`, `resumable` and `cause`, as in [../cli.md](../cli.md), and `unrecorded`: why `error.json` does not hold this outcome, when it does not), `timings` (timestamps and
 integer `*_ms` durations, wall, listing, user and system CPU), `output` (rows this invocation listed, rows
 retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (peak RSS,
 row budget, peak buffered, waits in `*_ns`, spill, `features`) and `source` (the provider's statistics under

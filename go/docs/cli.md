@@ -228,8 +228,13 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Exit status and outcome.** A supervisor reads the exit code and, for a run that did not complete,
   `DIR/error.json` (`class`, `exit_code`, `message`, `resumable`, and `cause`: the provider's failure class such
   as `throttle` or `access_denied`, or `no_space` for a full disk); it never needs stderr. `error.json` and the
-  progress file are written only while the run holds the output lock (a run refused by another owner writes
-  neither), and `error.json` is removed when a later run or resume completes.
+  progress file are written only while the run holds the output lock, and `error.json` is removed when a later
+  run or resume completes. `error.json` is always the last attempt's outcome: a resume (or `--overwrite`) that
+  fails before it runs (credentials that do not load, a damaged journal, a failed recovery) takes the lock and
+  records its own outcome over the interrupted run's. An attempt that cannot record it (another process owns
+  the output, whose outcome stands; a refusal that leaves the directory as it was, such as a complete dataset or
+  an unusable output; a failed write) prints it on stderr as one line, `swath: outcome: {...}`, with the reason
+  when it should have been recorded; the JSON report carries the reason as `outcome.unrecorded`.
 
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|

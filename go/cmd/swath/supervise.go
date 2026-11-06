@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -122,28 +123,73 @@ const errorName = dataset.ErrorName
 // writeOutcome records a failed run's outcome (an incomplete committed
 // dataset included) in DIR/error.json (atomic replace), so a supervisor
 // never parses stderr; a completed run removes a stale one. The caller
-// owns the output (listing.Config.Settle).
-func writeOutcome(dir string, o outcome) {
+// owns the output (listing.Config.Settle, settleOutside).
+func writeOutcome(dir string, o outcome) error {
 	if dir == "" {
-		return
+		return nil
 	}
 	path := filepath.Join(dir, errorName)
 	if o.ExitCode == exitCompleted {
-		_ = os.Remove(path)
-		return
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	}
-	writeFileAtomic(path, o)
+	return writeFileAtomic(path, o)
 }
 
-func writeFileAtomic(path string, v any) {
+func writeFileAtomic(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
 	tmp := path + ".tmp"
-	if os.WriteFile(tmp, append(b, '\n'), 0o644) == nil {
-		_ = os.Rename(tmp, path)
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+		os.Remove(tmp)
+		return err
 	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// errOut is where the command reports an outcome its output does not hold.
+var errOut io.Writer = os.Stderr
+
+// settleOutside records o in dir's error.json for a command that stopped
+// before any run owned the output (a resume refused on a damaged journal),
+// under the output lock. A committed dataset, a directory without a
+// workspace and an output another process owns are left as they are:
+// unrecorded says why, empty when there was nothing to replace.
+func settleOutside(dir string, o outcome) (recorded bool, unrecorded string) {
+	if dir == "" || dataset.Committed(dir) {
+		return false, ""
+	}
+	if fi, err := os.Stat(filepath.Join(dir, dataset.Workspace)); err != nil || !fi.IsDir() {
+		return false, ""
+	}
+	lock, err := journal.TakeLock(dir)
+	if err != nil {
+		return false, err.Error()
+	}
+	defer lock.Release()
+	if err := writeOutcome(dir, o); err != nil {
+		return false, "write " + errorName + ": " + err.Error()
+	}
+	return true, ""
+}
+
+// reportUnrecorded puts on stderr, as one JSON line, an outcome that the
+// output's error.json does not hold (another owner's outcome stands there,
+// or the write failed), with the reason.
+func reportUnrecorded(dir string, o outcome, why string) {
+	if why != "" {
+		fmt.Fprintf(errOut, "swath: the outcome is not recorded in %s: %s\n", filepath.Join(dir, errorName), why)
+	}
+	b, _ := json.Marshal(o)
+	fmt.Fprintf(errOut, "swath: outcome: %s\n", b)
 }
 
 // progressName is the live progress file, inside the private workspace:
@@ -176,7 +222,7 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 				if dir != "" {
 					// Only while the run owns the output: a refused run
 					// never overwrites its owner's progress.
-					pr.Owned(func() { writeFileAtomic(filepath.Join(dir, progressName), s) })
+					pr.Owned(func() { _ = writeFileAtomic(filepath.Join(dir, progressName), s) })
 				}
 				if s.Advance != last {
 					last, since, warned = s.Advance, now, false

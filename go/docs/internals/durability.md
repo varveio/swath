@@ -74,7 +74,10 @@ that is the commit. The run reports follow it.
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the
    lock so a refused directory is left as it was). It is held through the run's cleanup, publication and the
-   command's `error.json` and progress writes (`listing.Config.Settle`, `Progress.Owned`). Every run with an
+   command's `error.json` and progress writes (`listing.Config.Settle`, `Progress.Owned`); a failure under the
+   lock (a damaged journal, a mismatch, a failed recovery) is settled before it is released, and a resume whose
+   source does not open takes the lock to settle, so the interrupted run's outcome never stands as current
+   (`TestOutcomeIsCurrent`). Every run with an
    output takes it: fresh runs, overwrites and filesystem runs, which keep no journal.
    Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
