@@ -150,7 +150,7 @@ report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `peak_nodes`,
 | `order.spill_live_bytes` | small and transient | climbing for minutes: the frontier is stalled while other ranges finish; disk exposure |
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
 | `objects` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
-| `advance` | rising | flat while `answered` rises: alive but not progressing (watch `--max-duration`) |
+| `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
 | `throttles` | flat | rising steadily: see Throttling |
 | `inflight` against `limit` | `limit` near `--workers`, `inflight` near `limit` | `limit` falling: the service throttles; `inflight` far below `limit`: the engine has too little work in parallel |
 | `resources.budget_wait_ns` (report) | near 0 with spill on | large: workers blocked on a full row budget |
@@ -188,7 +188,7 @@ time of `--limiter=false` on replay). If a run crawls with `throttles` rising an
 | 1 | `fatal`, `incomplete` | no: a resume will not fix it (access denied, no such bucket, a protocol violation, an invariant) |
 | 2 | `usage`, `refused` | no: fix the command or the output directory |
 | 74 | `disk_full` | `swath resume` once there is space (or after moving the output to a larger disk) |
-| 75 | `stuck` | `swath resume`; `cause` is `stuck_throttle`, `stuck_timeouts` or `stuck_no_rows` |
+| 75 | `stuck` | `swath resume`; `cause` is `stuck_empty_chain`, `stuck_throttle`, `stuck_timeouts` or `stuck_no_rows` |
 | 124 | `deadline` | `swath resume`, but only under a separate budget (attempts or total time); past it, a person |
 | 130, 143 | `interrupted` (SIGINT), `terminated` (SIGTERM) | `swath resume` |
 
@@ -243,7 +243,8 @@ when no reader uses it.
 
 ```text
 DIR/
-  data/part-NNNNN.parquet   key-sorted, disjoint parts, name order == key order
+  data/part-NNNNN.parquet   key-sorted, disjoint parts, name order == key order; at most 100,000 parts
+                            (exit 1, `cause` `part_limit` past that: start over with a larger `--part-size`)
   manifest.json             the commit: written last, names every part with exact key bounds and coverage
   run.json                  the run report (after the commit)
   error.json                the outcome of an attempt that did not complete

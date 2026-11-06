@@ -331,6 +331,16 @@ func (r *Router[P]) open(ctx context.Context) error {
 		}
 		r.waitNs.Add(int64(time.Since(t)))
 	}
+	if o := len(r.done) + len(r.parts); o >= dataset.MaxParts {
+		// Every earlier part is published (or failed) before the refusal,
+		// so the durable prefix ends at the last ordinal a dataset holds.
+		if n := len(r.parts); n > 0 {
+			<-r.parts[n-1].published
+		}
+		<-r.slots
+		return fmt.Errorf("%w: part %d cannot be opened (%d rows so far; part size %d bytes, row cap %d)",
+			dataset.ErrPartLimit, o, r.rows, r.opt.PartSize, r.opt.MaxRows)
+	}
 	p := &part[P]{ordinal: len(r.done) + len(r.parts), opened: time.Now(), segs: make(chan batch[P], partQueue), done: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}
 	p.pinned = r.opt.Cut != nil && r.opt.Cut.Ordinal == p.ordinal

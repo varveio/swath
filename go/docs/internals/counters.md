@@ -94,6 +94,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `structure.late` | count | decisions | structure | split decisions taken while the range's probe was still in flight |
 | `split.pivot_structure` | count | pivots | structure | pivots on a folder boundary from a structure probe (else midpoint, density or reflection) |
 | `empty_pages` | count | pages |  | continuing pages with no entry, followed by their token (also counted in requests) |
+| `empty_chain_pages` | count | pages |  | empty continuing pages past the 1,024th of their run: followed, but not progress for the watchdog (also in empty_pages) |
 | `prefixes_normalized` | count | pages |  | pages whose common prefixes came unsorted or repeated, sorted and deduplicated |
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys) |
 | `mutex.wait_ns` | count | ns |  | time goroutines spent waiting for the engine's decision mutex (summed over goroutines) |
