@@ -755,10 +755,20 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	if t := sum.Output.Text; t != nil {
 		parts, outBytes = 1, t.Bytes // one text file
 	}
-	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d wall=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
+	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d wall=%.3fs user=%s sys=%s peak_rss=%s max_buffered=%d\n",
 		sum.Output.RowsListed, parts, outBytes, float64(sum.Timings.WallMs)/1000,
-		float64(sum.Timings.UserCPUMs)/1000, float64(sum.Timings.SysCPUMs)/1000, float64(sum.Resources.PeakRSSBytes)/(1<<20), sum.Resources.MaxBufferedBytes)
+		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
+		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"), sum.Resources.MaxBufferedBytes)
 	return nil
+}
+
+// measured formats a measurement divided by unit, or "-" where the
+// platform did not measure it.
+func measured(v *int64, unit float64, format string) string {
+	if v == nil {
+		return "-"
+	}
+	return fmt.Sprintf(format, float64(*v)/unit)
 }
 
 // explain adds command-line advice to the errors a user can act on; the

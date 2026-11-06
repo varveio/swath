@@ -145,11 +145,12 @@ func TestColorResolution(t *testing.T) {
 
 // TestStatsBlock: Java's gating and lines from the report.
 func TestStatsBlock(t *testing.T) {
+	rss := int64(200_000_000)
 	per := 1.5
 	usd := 0.01
 	r := &listing.Report{Timings: listing.Timings{WallMs: 12_300, SessionMs: 14_000, ListingMs: 12_000},
 		Output:     listing.Output{RowsListed: 2_000_000, PartsWritten: 2, Bytes: 3_500_000},
-		Resources:  listing.Resources{PeakRSSBytes: 200_000_000},
+		Resources:  listing.Resources{PeakRSSBytes: &rss},
 		Cost:       &listing.Cost{APICalls: 2000, CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
 		Efficiency: &listing.Efficiency{KeysPerSec: 166_667, APICallsPer1kObjects: &per}}
 	got := statsLines(r, false)
