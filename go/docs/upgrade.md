@@ -166,11 +166,42 @@ is `--workers`, default 64 as Java's, whatever the CPU count (an earlier Go buil
 count, `min(64, max(4, 3*GOMAXPROCS))`); `--encoders` stays CPU-derived.
 The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
+## Varve: dispatch on schema id
+
+Varve's reader (`internal/swath`, varveio/varve#108) reads format 2 for every provider; this tool is unchanged
+for it. What Varve changed:
+
+- **Dispatch.** `Open` reads `manifest.json` first. A manifest with a `format` field takes the format-2 path,
+  which requires `"format": "swath-dataset"` and `format_version` 2 and reads no `_SUCCESS` or run summary.
+  Any other manifest takes the format-1 path unchanged (marker, run summary, thin hosted manifest).
+- **Acceptance.** The whole-source rule above, from the manifest only: `coverage.complete` true,
+  `stop_reason` `completed`, `skipped_entries` 0, `filters` present and empty, `scope.kind` `whole`. A
+  missing coverage or field fails closed.
+- **Schema id.** `schema_id` must be the opened provider's: `swath/s3-objects/v1` (`s3`),
+  `swath/gcs-objects/v1` (`gcs`) or `swath-local/v1` (a new `local` provider, whose source name is
+  `source.uri`; `s3` and `gcs` match `source.container`), with the matching `source.kind` (`s3`, `gcs`,
+  `local-fs`). Each id defines the part columns, which must match exactly by name and physical type (the
+  tables in [internals/parquet-output.md](internals/parquet-output.md#schemas) and the GCS schema).
+  `version_id`, `is_latest`, `is_delete_marker` and `row_type` are absent, not read as null, so Varve's
+  current-object row check and its `row_type` statistics rule apply to format 1 only. A format-1 dataset
+  cannot be opened as `local`.
+- **Keys.** `min_key_base64`/`max_key_base64` are decoded (strict standard base64) and compared as bytes;
+  the `key` column is read as BYTE_ARRAY with or without the STRING annotation. Local keys may be
+  non-UTF-8; S3 and GCS bounds must be UTF-8.
+- **Footer.** A part needs `swath.profile` `swath-dataset`, `swath.profile_version` `2`, `swath.schema_id`
+  equal to the manifest's, and `key` ascending as the first `sorting_columns` entry on every non-empty row
+  group. Page index, 1,024-byte truncation and browse eligibility are checked as for format 1.
+- **Rows.** Varve reads `key`, `size` and `last_modified`; a null `size` is rejected, so a local dataset
+  listed with `--metadata names` does not open for browsing. Local directory rows are entries whose keys end
+  in `/`.
+- **Fixtures.** Varve commits one dataset per schema written by this tool (`internal/swath/testdata/go-*`,
+  built at `f7d2ff2` from `bench/s3fake`, `gcstest` and a local tree).
+
 ## Gates
 
 - **DuckDB:** `bench/diffds.py` (row sets both ways with the projection above, strict ascending order within
   and across parts, min/max keys, counts).
-- **Varve:** the Varve probe reads a format-2 dataset through the reader with this guide's changes applied
-  (REPORT.md, "Varve reader compatibility").
+- **Varve:** Varve's reader opens, streams and browses format-2 datasets of every schema (varveio/varve#108,
+  "Varve: dispatch on schema id"); the earlier probe is in REPORT.md, "Varve reader compatibility".
 - **Dropped:** "the Java reader opens Go output". Java stays the producer oracle (replay differential), not
   a reader.
