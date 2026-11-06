@@ -27,9 +27,10 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | split decided, children partly queued (`split`) | in memory only: the resume starts from K; the split is lost harmlessly |
 | rows buffered or queued to an encoder (`range-done`, `encoding`) | relisted from K |
 | part closed and synced, no record (`part-closed`, `journal-append`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
-| record written, not synced (`journal-sync`) | a torn tail is ignored; a whole unsynced frame that survived is a valid record of a synced part |
+| record written, not synced (`journal-sync`) | a torn tail is ignored; a whole unsynced frame that survived is a valid record of a synced part, and recovery syncs the journal before acting on it |
 | record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, MD5), then renamed into `data/` |
-| rename done, directory sync absent (`renamed-unsynced`) | the same check: the part is either at its final name or still in `.swath/parts/` |
+| rename done, directory sync absent (`renamed-unsynced`) | the same check: the part is either at its final name or still in `.swath/parts/`; recovery syncs `data/` before it removes the temporary parts |
+| recovery itself interrupted after its renames (`recovered`, a resume-only point) | the next resume recovers again from the same journal (`TestRepeatedRecovery`) |
 | several parts closed out of order | only the contiguous ordinal prefix was published; later parts are reproduced |
 | every part published, no manifest (`published`) | the final part is durable: the resume does not list, and installs the manifest |
 | manifest installed (`manifest`) | committed; `swath resume` reports `ErrComplete`. The run reports are written after the commit and cannot revoke it |
@@ -83,9 +84,10 @@ that is the commit. The run reports follow it.
    endpoint may serve another bucket of the same name. Workers, encoders, memory, `-seed`, `-probe` and
    credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
-3. Recovers `data/`. Every retained part must match its record's size and MD5 (`ErrPartAltered` otherwise).
-   A part whose record is durable but whose rename did not happen is renamed now. Every unrecorded file in
-   `data/` is removed.
+3. Recovers `data/`. The journal is synced first (its accepted frames are acted on). Every retained part
+   must match its record's size and MD5 (`ErrPartAltered` otherwise). A part whose record is durable but whose
+   rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, and
+   only then are the temporary parts removed.
 4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
    normal start-up. S3 lists one range `(K, ⊤]` and splits it as on a fresh run. If K holds scalars S3
    refuses in `start-after`, the range starts at K's safe prefix and drops keys up to K.
@@ -122,13 +124,17 @@ over with `-overwrite`). The first frame is the header (tool, format, identity, 
 Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after
 `fsync`; its one caller is the ordered committer.
 
-An incomplete last frame, or a bad checksum on the last frame, is a torn tail, unless a part is published
-under its final name beyond the recorded ones. A rename only follows an acknowledged record, so such a part
-proves a record was lost (a damaged length, or bit rot in the last frame). The resume then refuses
-(`ErrCorrupt`) before deleting anything. It was never acknowledged, so
-nothing depends on it, and a reopen truncates it. A bad checksum with data after it is interior corruption
-(`ErrCorrupt`), and the resume refuses. So does an unknown header version. A journal whose header never
-became durable means nothing was durable, and the run starts over. `swath show --journal DIR` prints the header, every record and any torn
+Only an append that never completed is a torn tail, and only at the end: fewer bytes than the last frame's
+length says, or a whole last frame whose payload does not end in `}` (bytes that never reached the disk; a
+payload is JSON). It was never acknowledged, so nothing depends on it, and a reopen truncates it. Everything
+else is corruption (`ErrCorrupt`), and the resume refuses before deleting or renaming anything: a bad checksum
+with data after it; a whole last frame with a bad checksum (an acknowledged record damaged since: its part may
+be durable only in `.swath/parts/`, which nothing else names); a length over the frame limit; a length that
+overruns the file over bytes that hold a whole frame under a smaller length (the checksum covers the length,
+so a match proves the damage); a part published under its final name beyond the recorded ones; an unknown
+header version. A journal file that is empty or whose header frame is incomplete means the header never
+became durable, and the run starts over, but only when no part file exists in `data/` or `.swath/parts/`:
+the header is synced before any part exists, so a part proves damage. `swath show --journal DIR` prints the header, every record and any torn
 tail as JSON lines.
 
 **The contract, precisely.**

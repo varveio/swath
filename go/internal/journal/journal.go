@@ -17,7 +17,8 @@
 // little-endian payload length, a 4-byte CRC-32C of the payload, and the
 // payload (JSON). The first frame is the header (run identity). A torn
 // tail (a crash mid-append) ends the journal at the last whole frame; such
-// a frame was never acknowledged, so nothing depends on it.
+// a frame was never acknowledged, so nothing depends on it. Damage that
+// cannot be told from a torn tail is refused (see decode).
 package journal
 
 import (
@@ -142,6 +143,10 @@ func Reopen(out string, st *State) (*Journal, error) {
 			f.Close()
 			return nil, fmt.Errorf("journal: %w", err)
 		}
+		if err := f.Sync(); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("journal: %w", err)
+		}
 	}
 	return start(f), nil
 }
@@ -250,7 +255,9 @@ var (
 	ErrLocked    = errors.New("another swath process owns this output directory")
 )
 
-// Read loads the journal of dataset directory out.
+// Read loads the journal of dataset directory out. Damage it cannot tell
+// from a torn append is ErrCorrupt; ErrNoJournal means no journal file, or
+// a header that never became durable in an output with no part anywhere.
 func Read(out string) (*State, error) {
 	f, err := os.Open(Path(out))
 	if errors.Is(err, os.ErrNotExist) {
@@ -260,47 +267,87 @@ func Read(out string) (*State, error) {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
 	defer f.Close()
-	return decode(bufio.NewReader(f))
+	st, err := decode(bufio.NewReader(f))
+	if errors.Is(err, errTornHeader) {
+		// Create syncs the header before any part exists, so a part on
+		// disk proves the header was durable and has been damaged since.
+		if n := partFiles(out); n > 0 {
+			return nil, fmt.Errorf("%w: the header is damaged but %d part files exist", ErrCorrupt, n)
+		}
+		return nil, ErrNoJournal
+	}
+	return st, err
 }
 
-// decode reads frames until the end or the first incomplete or corrupt
-// frame (a torn tail).
+// partFiles counts the files in data/ and in the temporary parts directory.
+func partFiles(out string) int {
+	n := 0
+	for _, d := range []string{filepath.Join(out, dataset.DataDir), filepath.Join(out, dataset.Workspace, dataset.PartsDir)} {
+		ents, _ := os.ReadDir(d)
+		n += len(ents)
+	}
+	return n
+}
+
+// errTornHeader: the header frame is incomplete (Read decides what it means).
+var errTornHeader = errors.New("journal header incomplete")
+
+// maxLengthProbe bounds the search for a frame whose length field was
+// damaged: records and headers are far smaller.
+const maxLengthProbe = 64 << 10
+
+// decode reads frames to the end. Only an append that never completed is a
+// torn tail, and it can only be the last frame: fewer bytes than its length
+// field says, or a whole frame whose payload ends in bytes that never
+// reached the disk (a payload is JSON and ends in '}'). Everything else is
+// corruption (ErrCorrupt): a bad checksum with data after it, a whole last
+// frame with a bad checksum (an acknowledged record damaged since: its part
+// may be durable in .swath/parts and nothing else names it), a length field
+// over the frame limit, or one that overruns the file when the bytes there
+// hold a whole frame under a smaller length.
 func decode(r io.Reader) (*State, error) {
 	st := &State{}
 	var hdr [8]byte
 	first := true
+	torn := func(n int64) (*State, error) {
+		st.TornBytes += n
+		if first {
+			return nil, errTornHeader
+		}
+		return st, nil
+	}
 	for {
 		n, err := io.ReadFull(r, hdr[:])
 		if err == io.EOF {
-			return st, finish(st, first)
+			if first {
+				return nil, errTornHeader
+			}
+			return st, nil
 		}
 		if err != nil {
-			st.TornBytes += int64(n)
-			rest, _ := io.Copy(io.Discard, r)
-			st.TornBytes += rest
-			return st, finish(st, first)
+			return torn(int64(n))
 		}
 		size, sum := binary.LittleEndian.Uint32(hdr[:4]), binary.LittleEndian.Uint32(hdr[4:])
 		if size > maxFrame {
-			return nil, fmt.Errorf("journal: frame of %d bytes", size)
+			return nil, fmt.Errorf("%w: frame %d claims %d bytes", ErrCorrupt, len(st.Records)+1, size)
 		}
 		payload := make([]byte, size)
 		m, err := io.ReadFull(r, payload)
 		if err != nil {
-			// A torn tail: the last append did not complete. It was never
-			// acknowledged, so nothing depends on it.
-			st.TornBytes += 8 + int64(m)
-			return st, finish(st, first)
+			if wholeUnder(payload[:m], sum) {
+				return nil, fmt.Errorf("%w: frame %d's length overruns the file but a whole frame is there", ErrCorrupt, len(st.Records)+1)
+			}
+			return torn(8 + int64(m))
 		}
 		if frameCRC(hdr[:4], payload) != sum {
 			rest, _ := io.Copy(io.Discard, r)
 			if rest > 0 {
-				// A whole frame with a bad checksum and data after it is
-				// corruption, not a torn append: refuse to guess.
 				return nil, fmt.Errorf("%w: frame %d has a bad checksum and %d bytes follow it", ErrCorrupt, len(st.Records)+1, rest)
 			}
-			st.TornBytes += 8 + int64(m)
-			return st, finish(st, first)
+			if size > 0 && payload[size-1] == '}' {
+				return nil, fmt.Errorf("%w: the last frame (%d) was written whole and is damaged", ErrCorrupt, len(st.Records)+1)
+			}
+			return torn(8 + int64(m))
 		}
 		if first {
 			if err := json.Unmarshal(payload, &st.Header); err != nil || st.Header.Type != "header" {
@@ -314,19 +361,43 @@ func decode(r io.Reader) (*State, error) {
 		}
 		var rec Record
 		if err := json.Unmarshal(payload, &rec); err != nil || rec.Type != "part" {
-			return nil, fmt.Errorf("journal: bad record %d", len(st.Records))
+			return nil, fmt.Errorf("%w: bad record %d", ErrCorrupt, len(st.Records))
 		}
 		if rec.Ordinal != len(st.Records) {
-			return nil, fmt.Errorf("journal: record for part %d after %d records", rec.Ordinal, len(st.Records))
+			return nil, fmt.Errorf("%w: record for part %d after %d records", ErrCorrupt, rec.Ordinal, len(st.Records))
 		}
 		st.Records = append(st.Records, rec)
 	}
 }
 
-func finish(st *State, noHeader bool) error {
-	if noHeader {
-		// The header never became durable: nothing did.
-		return ErrNoJournal
+// wholeUnder reports whether b starts with a whole frame payload under some
+// length other than the recorded one: the checksum covers the length, so a
+// match proves the frame was written whole and only its length is damaged.
+func wholeUnder(b []byte, sum uint32) bool {
+	var l [4]byte
+	for i := range min(len(b), maxLengthProbe) {
+		if b[i] != '}' {
+			continue
+		}
+		binary.LittleEndian.PutUint32(l[:], uint32(i+1))
+		if frameCRC(l[:], b[:i+1]) == sum {
+			return true
+		}
+	}
+	return false
+}
+
+// Sync makes the journal's accepted frames durable. A recovery calls it
+// before acting on them: a whole frame that survived a crash may never
+// have been synced.
+func Sync(out string) error {
+	f, err := os.Open(Path(out))
+	if err != nil {
+		return fmt.Errorf("journal: %w", err)
+	}
+	defer f.Close()
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("journal: %w", err)
 	}
 	return nil
 }

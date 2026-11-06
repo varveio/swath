@@ -148,6 +148,12 @@ func recoverParts(out string, st *journal.State) error {
 		return fmt.Errorf("%w: part %d is published but the journal holds only %d records (%d damaged bytes); refusing to recover",
 			journal.ErrCorrupt, i, len(st.Records), st.TornBytes)
 	}
+	// The accepted frames are acted on below (a part is renamed because of
+	// its record), so they must be durable first: a whole frame that
+	// survived a crash may never have been synced.
+	if err := journal.Sync(out); err != nil {
+		return fmt.Errorf("resume: %w", err)
+	}
 	keep := map[string]bool{}
 	for i, rec := range st.Records {
 		final := filepath.Join(data, dataset.PartName(i))
@@ -180,6 +186,14 @@ func recoverParts(out string, st *journal.State) error {
 				return fmt.Errorf("resume: %w", err)
 			}
 		}
+	}
+	// Every recorded part's final name, found or made, must be durable
+	// before the temporary copies, the fallback, are removed.
+	if err := dataset.SyncDir(data); err != nil {
+		return fmt.Errorf("resume: %w", err)
+	}
+	if err := faults.At("recovered"); err != nil {
+		return err
 	}
 	// Unrecorded parts: the resume writes them again.
 	parts := filepath.Join(out, dataset.Workspace, dataset.PartsDir)

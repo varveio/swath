@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -90,12 +91,71 @@ func TestJournalRoundTripAndTornTail(t *testing.T) {
 	if st, err = Read(out); err != nil || len(st.Records) != 4 || st.TornBytes != 0 {
 		t.Fatalf("%+v %v", st, err)
 	}
-	// A corrupt frame ends the journal there.
+	// A whole last frame whose end never reached the disk (zeros) is torn.
 	b, _ := os.ReadFile(Path(out))
-	b[len(b)-3] ^= 0xff
-	os.WriteFile(Path(out), b, 0o644)
-	if st, err = Read(out); err != nil || len(st.Records) != 3 || st.TornBytes == 0 {
-		t.Fatalf("%+v %v", st, err)
+	whole := len(b)
+	unwritten := append(append([]byte{}, b...), 20, 0, 0, 0, 1, 2, 3, 4)
+	unwritten = append(unwritten, make([]byte, 20)...)
+	os.WriteFile(Path(out), unwritten, 0o644)
+	if st, err = Read(out); err != nil || len(st.Records) != 4 || st.TornBytes != 28 {
+		t.Fatalf("unwritten tail: %+v %v", st, err)
+	}
+	// Bit rot in a whole last frame, and a damaged length that overruns
+	// the file over a whole frame, are an acknowledged record damaged:
+	// refused, not taken for a torn tail.
+	rot := append([]byte{}, b...)
+	rot[len(rot)-3] ^= 0xff
+	os.WriteFile(Path(out), rot, 0o644)
+	if _, err = Read(out); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("bit rot in the last frame: %v", err)
+	}
+	var offs []int
+	for off := 0; off+8 <= whole; off += 8 + int(binary.LittleEndian.Uint32(b[off:off+4])) {
+		offs = append(offs, off)
+	}
+	long := append([]byte{}, b...)
+	last := offs[len(offs)-1]
+	binary.LittleEndian.PutUint32(long[last:last+4], binary.LittleEndian.Uint32(b[last:last+4])+7)
+	os.WriteFile(Path(out), long, 0o644)
+	if _, err = Read(out); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("overrunning length of the last frame: %v", err)
+	}
+}
+
+// TestDamagedHeader: a header that never became durable (an empty or short
+// file) is no journal only while no part exists; a header whose length was
+// damaged over the records after it is corruption, never "no journal".
+func TestDamagedHeader(t *testing.T) {
+	out := t.TempDir()
+	j, err := Create(out, Identity{Tool: "swath-go"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Append(Record{Ordinal: 0, Part: dataset.PartInfo{MaxKey: "k"}})
+	j.Close()
+	b, _ := os.ReadFile(Path(out))
+	hl := binary.LittleEndian.Uint32(b[:4])
+	short := b[:8+hl/2]
+	os.WriteFile(Path(out), short, 0o644)
+	if _, err := Read(out); !errors.Is(err, ErrNoJournal) {
+		t.Fatalf("short header, no parts: %v", err)
+	}
+	os.WriteFile(Path(out), nil, 0o644)
+	if _, err := Read(out); !errors.Is(err, ErrNoJournal) {
+		t.Fatalf("empty journal, no parts: %v", err)
+	}
+	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
+	os.WriteFile(filepath.Join(out, dataset.DataDir, dataset.PartName(0)), []byte("p"), 0o644)
+	os.WriteFile(Path(out), short, 0o644)
+	if _, err := Read(out); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("short header with a part on disk: %v", err)
+	}
+	os.Remove(filepath.Join(out, dataset.DataDir, dataset.PartName(0)))
+	long := append([]byte{}, b...)
+	binary.LittleEndian.PutUint32(long[:4], uint32(len(b)))
+	os.WriteFile(Path(out), long, 0o644)
+	if _, err := Read(out); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("header length overrunning the records: %v", err)
 	}
 }
 

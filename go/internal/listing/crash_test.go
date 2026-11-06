@@ -449,3 +449,100 @@ func TestENOSPCOnJournalResumes(t *testing.T) {
 	}
 	sameDataset(t, "after ENOSPC", ref, out)
 }
+
+// crashAtRecorded leaves a run whose third part's record is durable and
+// whose rename never happened: the part exists only in .swath/parts.
+func crashAtRecorded(t *testing.T, url, out string) {
+	t.Helper()
+	var n atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "recorded" && n.Add(1) == 3 {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	defer restore()
+	if _, err := Run(context.Background(), crashConfig(url, out, false)); !errors.Is(err, faults.ErrCrash) {
+		t.Fatal(err)
+	}
+}
+
+// TestAcknowledgedRecordDamageRefuses: when the last record is durable but
+// its part not yet renamed, damage to that record (bit rot, an overrunning
+// length) is refused and the acknowledged temporary part kept; a genuinely
+// torn record (bytes missing) is dropped and the run resumes identically.
+// A damaged header length is refused too, never taken for "no journal".
+func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	for _, damage := range []string{"bit rot", "overrunning length", "header length", "torn"} {
+		out := filepath.Join(t.TempDir(), "ds")
+		crashAtRecorded(t, url, out)
+		path := journal.Path(out)
+		b, _ := os.ReadFile(path)
+		var offs []int
+		for off := 0; off+8 <= len(b); off += 8 + int(binary.LittleEndian.Uint32(b[off:off+4])) {
+			offs = append(offs, off)
+		}
+		last := offs[len(offs)-1]
+		switch damage {
+		case "bit rot":
+			b[last+20] ^= 0xff
+		case "overrunning length":
+			binary.LittleEndian.PutUint32(b[last:last+4], binary.LittleEndian.Uint32(b[last:last+4])+7)
+		case "header length":
+			binary.LittleEndian.PutUint32(b[:4], uint32(len(b)))
+		case "torn":
+			b = b[:len(b)-5]
+		}
+		os.WriteFile(path, b, 0o644)
+		_, err := Run(context.Background(), crashConfig(url, out, true))
+		if damage == "torn" {
+			if err != nil {
+				t.Fatalf("torn: %v", err)
+			}
+			sameDataset(t, damage, ref, out)
+			continue
+		}
+		if !errors.Is(err, journal.ErrCorrupt) {
+			t.Fatalf("%s: resume did not refuse: %v", damage, err)
+		}
+		if _, err := os.Stat(dataset.TempPath(out, 2)); err != nil {
+			t.Fatalf("%s: the acknowledged temporary part is gone: %v", damage, err)
+		}
+	}
+}
+
+// TestRepeatedRecovery: a resume that crashes inside its own recovery,
+// after renaming the recorded part and before retiring the temporary
+// parts, is recovered by the next resume, identically.
+func TestRepeatedRecovery(t *testing.T) {
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	crashAtRecorded(t, url, out)
+	restore := faults.Set(func(p string) error {
+		if p == "recovered" {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	_, err := Run(context.Background(), crashConfig(url, out, true))
+	restore()
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("recovery crash: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "data", dataset.PartName(2))); err != nil {
+		t.Fatalf("the recorded part was not renamed before the crash: %v", err)
+	}
+	if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
+		t.Fatal(err)
+	}
+	sameDataset(t, "repeated recovery", ref, out)
+}
