@@ -1919,6 +1919,74 @@ before it):
 - **On the command** (`722c303`): `--part-interval` (default 60 s), the `--spill-max` default and encoder
   admission in the help.
 
+## Ordered emission vs external sort: A/B
+
+The deciding experiment for ordered emission: one provider trace listed through (A) the pipeline the
+command runs (`listing.Run`: order stage, part router and writer, journal, resume) and (B) the run-based
+external sort recovered from PR #248 commit `7d99970` (`sortout/`) writing through the same part router,
+writer and part policy, under the same limits. Code: `bench/sortab/` (test files only; `TestNotLinked`
+keeps it out of the command, whose stripped binary is byte-identical with and without it), the matrix
+`bench/sortab.sh`, the table and gate `bench/sortab_table.py`.
+
+- **Trace (synthetic).** `Shape` in `bench/sortab/trace_test.go`: sibling ranges under one root, each a chain
+  of LIST pages answered after a per-page latency (deterministic jitter); keys `r%04d/obj-%012d` generated
+  from their index, never materialized; S3-schema payloads (size, time, ETag, storage class). Shapes:
+  `slowfirst` (one slow range first, hundreds of fast siblings), `slowlast` (its reverse), `flat`, `skewed`
+  (Zipf range sizes). Every page is logged, so a killed attempt's requests and keys are known.
+- **Arm B.** sortout's algorithm on the port's types: a buffer bounded at half the row budget (the filling
+  buffer and the one being written stay within the budget A gets), `SortPtrs`, one sorted run written while
+  the next fills, a k-way merge into `parquetout.Router` with parts published as they close and the manifest
+  last; runs use the order-spill row codec (sortout's Parquet run writer is gone) and merge through a fan-in
+  cascade of 64 (Java's cascade; sortout merged all runs at once). B gets Java's recovery: each run is synced
+  and a checkpoint (runs, per range the last durable index and whether it is complete) is installed by
+  atomic rename; a resume keeps those runs and relists only each unfinished range's non-durable tail. B's runs
+  hold the whole listing and cannot be capped; A's spill is capped by `SPILL_MAX`. The merge refuses a
+  repeated key, so the sort cannot hide a provider's duplicate.
+- **Crash and recovery.** Each attempt is a child process. The kill is a SIGKILL the provider sends itself at
+  a key count: for a shape with a slow range, once half of that range is listed (peak speculation, at the same
+  trace position in both arms whatever A's spill cap holds back), else at half the keys. The resume runs to
+  completion; then the dataset is verified: every key once, in order, with its payload, each part's rows and
+  bounds as the manifest says, strict adjacency between parts.
+- **Recorded per cell** (`CellResult`): wall and completion-plus-recovery, CPU per row (wait4), peak RSS
+  (VmHWM: wait4's `ru_maxrss` keeps the parent's RSS across exec), requests, resume requests, relisted keys
+  (the overlap of the killed attempt's and the resume's pages), rows durable at the kill, spill or run bytes,
+  `/proc/self/io`, peak nodes and readers, the share of 50 ms samples in which encoding advanced, the first
+  durable part (A: journaled; B: a checkpointed run) and the first published part, and the waits (A:
+  frontier, budget, encoder; B: seal, encoder, the merge phase).
+- **Gate** (`sortab_table.py`, thresholds stated before any campaign run): relisted keys at most the largest
+  part's rows plus 5 % of the keyspace; resume wall at most 1.5 x the arm's uninterrupted wall x the fraction
+  not durable at the kill, plus 10 s; peak RSS at most 2 x `--memory` + encoders x 24 MiB; peak spill or live
+  runs at most the spill cap; A's wall at most B's x 1.10, uninterrupted and with recovery.
+
+**SMOKE, not evidence** (2026-11-06, harness at `0e88ce0`; the cascade, added after, does not engage at 8
+runs). It proves both arms run end to end, the kill and resume work in both, the verification passes and the
+tabulator evaluates the gate. Host: 4 vCPU shared with other agents' test suites (load average about 14
+during the run) and its root disk full, so the work directory was tmpfs (`/dev/shm`: no real disk I/O or
+fsync cost, which flatters B's staging most). Trace: `slowfirst`, 3,000,000 keys, 300 ranges, 1,000 keys a
+page, 50 ms a page (slow range 60,000 keys at 500 ms), jitter 0.3, seed 7; 8 workers, `--memory` 256 MiB,
+4 encoders, part 8 MiB, A's spill cap 64 MiB; 1 rep:
+
+```
+MEASURE=…/measure.sh WORK=/dev/shm/m2/smoke MIN_FREE_GB=2 KEEP_LOGS=1 bench/sortab.sh   # defaults above
+python3 bench/sortab_table.py /dev/shm/m2/smoke/sortab.jsonl
+```
+
+| kill | arm | ok | wall s | 1st attempt s | CPU µs/row | requests | resume req | durable at kill | relisted keys | restart s | peak RSS MiB | peak spill/runs MiB | first part s | waits s (goroutine-summed) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| none | A | yes | 41.3 | 41.3 | 2.01 | 3,050 | - | - | - | - | 295 | 64 | 32.9 | budget 128.3, frontier 38.2, encoder 2.2 |
+| none | B | yes | 36.0 | 36.0 | 2.38 | 3,050 | - | - | - | - | 218 | 219 | 33.1 | merge phase 4.8, encoder 2.3, seal 0.0 |
+| peak | A | yes | 56.0 | 15.4 | 2.51 | 4,656 | 3,050 | 0 | 1,580,282 | 40.7 | 297 | 64 | 47.8 | budget 133.8, frontier 38.0, encoder 1.8 |
+| peak | B | yes | 38.1 | 15.3 | 2.37 | 3,271 | 1,251 | 1,770,109 | 217,326 | 22.8 | 216 | 219 | 35.0 | merge phase 4.7, encoder 2.3, seal 0.0 |
+
+What the smoke shows about the harness, not about the decision: at the kill A had listed 1.58M keys and
+journaled none (the slow first range had not filled part 0), so its resume relisted all of them (3,050
+requests, the whole trace again); B had 1.77M rows in checkpointed runs and relisted 217k keys (its buffers
+and in-flight pages). With A's spill capped at 64 MiB its siblings waited on the budget (128 goroutine-s)
+instead of speculating. The gate table evaluates as designed (here A fails relist and wall, B fails disk:
+its runs, 219 MiB, are the whole listing against a 64 MiB cap). The campaign that decides, with its
+commands, sizes past RAM and the spill cap, 64/256/512 workers and 3 reps, needs a quiet host with real disk:
+private notes, measurement-campaign requirements, item 4.
+
 ## Layering: provider registry
 
 The pipeline no longer knows which providers exist. Before this change, `listing` imported both providers, held
