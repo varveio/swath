@@ -422,7 +422,7 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 		}
 		tok.SetAuthHeader(req)
 	}
-	c.counts.Attempt()
+	defer c.counts.Attempt()()
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)

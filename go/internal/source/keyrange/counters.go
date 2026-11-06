@@ -96,7 +96,7 @@ var Counters = []counters.Def{
 	d("objects", counters.Count, "objects", "objects listed (emitted rows)"),
 	d("bytes", counters.Count, "bytes", "sum of listed object sizes"),
 	d("pages", counters.Count, "pages", "listing pages processed (and the seed's probes)"),
-	d("requests", counters.Count, "requests", "listing requests, retries not counted"),
+	d("requests", counters.Count, "requests", "logical listing requests (a call the client retried or the engine requeued is one); attempts counts HTTP requests"),
 	d("overfetch_keys", counters.Count, "keys", "keys listed past a range's hi (or at or below a resume key) and dropped"),
 	d("truncated_at_max_keys", counters.Flag, "", "-max-keys stopped the listing; the dataset is incomplete", "max_keys"),
 	d("seed.prefixes", counters.Count, "prefixes", "common prefixes on the top seed page", "seed"),

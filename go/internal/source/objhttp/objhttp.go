@@ -215,7 +215,8 @@ func (r *Retry) Defaults() {
 // Do runs attempt until it succeeds, fails in a way not worth repeating,
 // or has run MaxAttempts times (then an *ExhaustedError), waiting a
 // full-jitter exponential backoff between attempts and counting retries,
-// throttles and timeouts. With r.Limiter, each attempt waits for a permit
+// throttles and timeouts (every throttled or timed-out attempt, the last
+// one of an exhausted call included). With r.Limiter, each attempt waits for a permit
 // first and returns it with its outcome and latency; no permit is held
 // during a backoff. The caller's cancellation ends it at once.
 func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
@@ -230,6 +231,12 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 			return zero, ctx.Err()
 		}
 		retry, throttle, timeout := retryable(err)
+		if throttle {
+			c.throttles.Add(1)
+		}
+		if timeout {
+			c.timeouts.Add(1)
+		}
 		if !retry || n >= r.MaxAttempts {
 			if retry {
 				err = &ExhaustedError{Attempts: n, Err: err}
@@ -237,12 +244,6 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 			return zero, err
 		}
 		c.retries.Add(1)
-		if throttle {
-			c.throttles.Add(1)
-		}
-		if timeout {
-			c.timeouts.Add(1)
-		}
 		d := min(r.MaxBackoff, r.BaseBackoff<<min(n-1, 30))
 		t := time.NewTimer(rand.N(d) + 1)
 		select {
@@ -287,11 +288,16 @@ func admit[T any](ctx context.Context, l *Limiter, attempt func() (T, error)) (v
 type Counts struct {
 	Attempts  int64 `json:"attempts"`  // HTTP requests sent
 	Retries   int64 `json:"retries"`   // attempts repeated after a retryable failure
-	Throttles int64 `json:"throttles"` // of those, throttling answers
-	Timeouts  int64 `json:"timeouts"`  // of those, attempts past the per-request timeout
+	Throttles int64 `json:"throttles"` // attempts answered with a throttle, retried or not
+	Timeouts  int64 `json:"timeouts"`  // attempts past the per-request timeout, retried or not
 	// ParseFailures counts 200 responses whose body did not parse (a cut or
 	// garbled body); they are retried like transport faults, never dropped.
 	ParseFailures int64 `json:"parse_failures"`
+	// InflightMax is the most attempts in flight at once (admitted, from
+	// send to body read); InflightNs sums their time in flight, so
+	// InflightNs over the listing's wall time is the mean in flight.
+	InflightMax int64 `json:"inflight_max"`
+	InflightNs  int64 `json:"inflight_ns"`
 	// Limiter is the admission's engagements (zero without a limiter).
 	Limiter LimiterCounts `json:"limiter"`
 }
@@ -300,6 +306,21 @@ type Counts struct {
 type Counters struct {
 	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
 	answered                                              atomic.Int64
+	inflight, inflightMax, inflightNs                     atomic.Int64
+}
+
+// Attempt counts an HTTP request sent, and in flight until the returned
+// func is called (after its body is read): call it just before the send.
+func (c *Counters) Attempt() (done func()) {
+	c.attempts.Add(1)
+	t0 := time.Now()
+	n := c.inflight.Add(1)
+	for m := c.inflightMax.Load(); n > m && !c.inflightMax.CompareAndSwap(m, n); m = c.inflightMax.Load() {
+	}
+	return func() {
+		c.inflight.Add(-1)
+		c.inflightNs.Add(int64(time.Since(t0)))
+	}
 }
 
 // Answered is the number of requests the service answered usably (an
@@ -307,8 +328,6 @@ type Counters struct {
 // part of Counts.
 func (c *Counters) Answered() int64 { return c.answered.Load() }
 
-// Attempt counts an HTTP request sent.
-func (c *Counters) Attempt() { c.attempts.Add(1) }
 
 // ParseFailure counts a 200 whose body did not parse.
 func (c *Counters) ParseFailure() { c.parseFailures.Add(1) }
@@ -316,7 +335,8 @@ func (c *Counters) ParseFailure() { c.parseFailures.Add(1) }
 // Load returns the counts so far.
 func (c *Counters) Load() Counts {
 	return Counts{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(),
-		Timeouts: c.timeouts.Load(), ParseFailures: c.parseFailures.Load()}
+		Timeouts: c.timeouts.Load(), ParseFailures: c.parseFailures.Load(), InflightMax: c.inflightMax.Load(),
+		InflightNs: c.inflightNs.Load()}
 }
 
 // CounterDefs are the client counters' definitions, after the engine's in a
@@ -326,11 +346,13 @@ func (c *Counters) Load() Counts {
 func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 	const f = "limiter"
 	return []counters.Def{
-		{Key: "attempts", Kind: counters.Count, Unit: "requests", Help: "HTTP requests, retries included"},
+		{Key: "attempts", Kind: counters.Count, Unit: "requests", Help: "HTTP requests sent: every attempt, client retries and engine requeues included (the request economics)"},
 		{Key: "retries", Kind: counters.Count, Unit: "requests", Help: "attempts repeated after a retryable failure"},
-		{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "of the retries, " + throttles + " answers"},
-		{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "of the retries, attempts past " + timeoutFlag},
+		{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "attempts answered " + throttles + ", retried or not (the last of an exhausted call included)"},
+		{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past " + timeoutFlag + ", retried or not"},
 		{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"},
+		{Key: "inflight.max", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"},
+		{Key: "inflight.ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"},
 		{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit multiplied by 0.7 on a " + throttles + " answer"},
 		{Key: "limiter.floor_throttles", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers at a limit of 1: no decrease and no fresh 10 s cool-down"},
 		{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one (at most one per second, after 10 s without a throttle)"},
@@ -345,12 +367,12 @@ func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 }
 
 // NumCounters is len(CounterDefs(...)).
-const NumCounters = 15
+const NumCounters = 17
 
 // Store writes n into set at the IDs of CounterDefs, the first at first.
 func (n Counts) Store(set *counters.Set, first counters.ID) {
 	l := n.Limiter
-	for i, v := range [NumCounters]int64{n.Attempts, n.Retries, n.Throttles, n.Timeouts, n.ParseFailures,
+	for i, v := range [NumCounters]int64{n.Attempts, n.Retries, n.Throttles, n.Timeouts, n.ParseFailures, n.InflightMax, n.InflightNs,
 		l.Decreases, l.FloorThrottles, l.Increases, l.Cooldown, l.LatencyFrozen, l.TimeoutFrozen, l.Valve, l.Waits, l.WaitNs, l.Depth} {
 		set.Set(first+counters.ID(i), v)
 	}

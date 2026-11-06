@@ -240,7 +240,7 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 	if err := c.auth.sign(actx, req, c.cfg.Now()); err != nil {
 		return nil, err
 	}
-	c.counts.Attempt()
+	defer c.counts.Attempt()()
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)

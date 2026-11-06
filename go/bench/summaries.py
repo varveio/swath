@@ -44,9 +44,10 @@ def go_row(path, d):
         "file": path, "producer": d["build"]["tool"], "bucket": inv["source"], "version": d["build"].get("revision", ""),
         "concurrency": inv["workers"], "seed_mode": "shallow" if feats.get("seed") else "none",
         "toggles_off": ",".join(sorted(k for k, v in feats.items() if not v)), "completed": d["outcome"]["complete"], "objects": out["rows_listed"],
-        "duration_ms": t["wall_ms"], "listing_duration_ms": t["listing_ms"], "api_calls": src.get("requests"),
+        "duration_ms": t["wall_ms"], "listing_duration_ms": t["listing_ms"], "api_calls": src.get("attempts", src.get("requests")),
         "pages": src.get("pages"), "splits": sum(v for k, v in src.items() if k.startswith("split.accepted")),
-        "steals": 0, "peak_in_flight": src.get("max_active"), "avg_in_flight": src.get("mean_active"),
+        "steals": 0, "peak_in_flight": src.get("inflight.max", src.get("max_active")),
+        "avg_in_flight": src["inflight.ns"] / (t["listing_ms"] * 1e6) if src.get("inflight.ns") and t["listing_ms"] else src.get("mean_active"),
         "files_out": out["parts_written"] + out["parts_retained"], "bytes_out": out["bytes"],
         "retries": src.get("retries", ""), "throttle_events": src.get("throttles", ""),
         "overfetch_keys": src.get("overfetch_keys"),
@@ -54,7 +55,7 @@ def go_row(path, d):
         "probe_requests": src.get("probe.requests", 0) + src.get("structure.requests", 0) + src.get("seed.probes", 0),
     }
     g = {}
-    flat("go", {k: v for k, v in src.items() if k.split(".")[0] in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "timeouts", "attempts", "probe")}, g)
+    flat("go", {k: v for k, v in src.items() if k.split(".")[0] in ("split", "seed", "child_empty", "overfetch_keys", "max_queued", "mean_active", "timeouts", "attempts", "requests", "max_active", "probe")}, g)
     r.update(g)
     return r
 

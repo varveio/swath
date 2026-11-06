@@ -45,7 +45,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `objects` | count | objects |  | objects listed (emitted rows) |
 | `bytes` | count | bytes |  | sum of listed object sizes |
 | `pages` | count | pages |  | listing pages processed (and the seed's probes) |
-| `requests` | count | requests |  | listing requests, retries not counted |
+| `requests` | count | requests |  | logical listing requests (a call the client retried or the engine requeued is one); attempts counts HTTP requests |
 | `overfetch_keys` | count | keys |  | keys listed past a range's hi (or at or below a resume key) and dropped |
 | `truncated_at_max_keys` | flag |  | max_keys | -max-keys stopped the listing; the dataset is incomplete |
 | `seed.prefixes` | count | prefixes | seed | common prefixes on the top seed page |
@@ -118,11 +118,13 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `prefixes_normalized` | count | pages |  | pages whose common prefixes came unsorted or repeated, sorted and deduplicated |
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys) |
 | `seed.short_continuing_estimated` | count | samples | seed | continuing seed samples shorter than a nominal page, weighed (or classed dense) as a full page: an estimate |
-| `attempts` | count | requests |  | HTTP requests, retries included |
+| `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
-| `throttles` | count | requests |  | of the retries, 429/503/SlowDown answers |
-| `timeouts` | count | requests |  | of the retries, attempts past -request-timeout |
+| `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |
+| `timeouts` | count | requests |  | attempts past -request-timeout, retried or not |
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
+| `inflight.max` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
+| `inflight.ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
 | `limiter.decreases` | count | steps | limiter | limit multiplied by 0.7 on a 429/503/SlowDown answer |
 | `limiter.floor_throttles` | count | answers | limiter | 429/503/SlowDown answers at a limit of 1: no decrease and no fresh 10 s cool-down |
 | `limiter.increases` | count | steps | limiter | limit raised by one (at most one per second, after 10 s without a throttle) |

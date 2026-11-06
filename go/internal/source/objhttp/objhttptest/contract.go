@@ -72,8 +72,9 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 		{"timeout, then a page", []answer{slow, ok}, 9, objhttp.Counts{Attempts: 2, Retries: 1, Timeouts: 1}, "", false},
 		{"cut connection, then a page", []answer{cut, ok}, 9, objhttp.Counts{Attempts: 2, Retries: 1}, "", false},
 		{"5xx exhausted", []answer{server}, 3, objhttp.Counts{Attempts: 3, Retries: 2}, objhttp.ClassServer, true},
-		{"throttle exhausted", []answer{throttle}, 2, objhttp.Counts{Attempts: 2, Retries: 1, Throttles: 1}, objhttp.ClassThrottle, true},
-		{"timeout exhausted", []answer{slow}, 2, objhttp.Counts{Attempts: 2, Retries: 1, Timeouts: 1}, objhttp.ClassTimeout, true},
+		// the exhausted call's last throttle or timeout is counted too
+		{"throttle exhausted", []answer{throttle}, 2, objhttp.Counts{Attempts: 2, Retries: 1, Throttles: 2}, objhttp.ClassThrottle, true},
+		{"timeout exhausted", []answer{slow}, 2, objhttp.Counts{Attempts: 2, Retries: 1, Timeouts: 2}, objhttp.ClassTimeout, true},
 		{"cut exhausted", []answer{cut}, 2, objhttp.Counts{Attempts: 2, Retries: 1}, objhttp.ClassTransport, true},
 		{"garbled exhausted", []answer{garbled}, 2, objhttp.Counts{Attempts: 2, Retries: 1, ParseFailures: 2}, objhttp.ClassParse, true},
 		{"denied, not retried", []answer{denied}, 9, objhttp.Counts{Attempts: 1}, objhttp.ClassAccessDenied, false},
@@ -110,7 +111,13 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 			cl := build(Settings{Endpoint: srv.URL, Timeout: 200 * time.Millisecond,
 				Retry: objhttp.Retry{MaxAttempts: c.attempts, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
 			err := cl.List(context.Background())
-			if got := cl.Counters(); got != c.want {
+			got := cl.Counters()
+			// one attempt at a time, each in flight for some time
+			if want := min(c.want.Attempts, 1); got.InflightMax != want || (want > 0) != (got.InflightNs > 0) {
+				t.Errorf("in flight: max %d, %d ns, want max %d", got.InflightMax, got.InflightNs, want)
+			}
+			got.InflightMax, got.InflightNs = 0, 0
+			if got != c.want {
 				t.Errorf("counters %+v, want %+v (err %v)", got, c.want, err)
 			}
 			if c.class == "" {

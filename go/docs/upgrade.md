@@ -131,15 +131,16 @@ parts are byte-identical within a build only.
 
 | Java meter or field | Go (`source.stats.counters.values` unless noted) |
 |---|---|
-| `cost.api_calls`, `swath.api.calls` | `requests` (logical calls); `attempts` counts HTTP requests with retries |
+| `cost.api_calls`, `swath.api.calls` | `attempts`: every HTTP request sent, client retries and engine requeues included (Java counted fetch attempts with the SDK's retries off); `requests` counts logical calls |
 | `swath.retries`, `recovered_errors.retries` | `retries` |
-| `swath.throttle.events` | `throttles` |
+| `swath.throttle.events` | `throttles` (every throttled attempt, the last of an exhausted call included) |
 | `engine.pages`, `swath.page.raw_count` | `pages` |
 | `swath.entries.emitted`, `objects` | `objects` |
 | `engine.splits` | `split.accepted_bounded` + `split.accepted_frontier` |
 | `engine.steals`, `swath.steals` | – (splits are owner-side: always 0) |
-| `swath.in_flight.avg`, `engine.avg_in_flight` | `mean_active` |
-| `engine.peak_in_flight`, `swath.workers.active` | `max_active` |
+| `swath.in_flight.avg`, `engine.avg_in_flight` | `inflight.ns` / (`timings.listing_ms` × 10⁶): attempts in flight, send to body read; `mean_active` is ranges in `Expand`, which includes backoffs and admission waits |
+| `engine.peak_in_flight` | `inflight.max` |
+| `swath.workers.active` | `max_active` (ranges in `Expand` at once) |
 | `swath.probe.fetches` | `probe.requests` |
 | `swath.probe.empty_upper_bisections` | `probe.moved` (an empty upper child found, the pivot moved toward the cursor) |
 | `swath.steal_reason{PIVOT,midpoint}` | splits minus `split.pivot_extrapolated` |

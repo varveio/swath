@@ -57,7 +57,9 @@ func TestRetriesAndThrottles(t *testing.T) {
 	if pg.Contents[0].Key != "k " {
 		t.Fatalf("%+v", pg)
 	}
-	if got := c.Counters(); got != (Counters{Attempts: 4, Retries: 3, Throttles: 1}) {
+	got := c.Counters()
+	got.InflightMax, got.InflightNs = 0, 0
+	if got != (Counters{Attempts: 4, Retries: 3, Throttles: 1}) {
 		t.Fatalf("%+v", got)
 	}
 }

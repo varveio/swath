@@ -12,6 +12,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
+	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 // proxied puts the fault proxy in front of a fake bucket.
@@ -90,5 +91,41 @@ func TestOneAdmission(t *testing.T) {
 	s := px.Stats()
 	if s.MaxActive != 1 || s.Throttled == 0 || s.Reset == 0 || st.Counters.Value("limiter.waits") == 0 {
 		t.Fatalf("proxy %+v, waits %d", s, st.Counters.Value("limiter.waits"))
+	}
+}
+
+// TestAttemptsAreRequestEconomics: the request economics count HTTP
+// attempts. A call answered SlowDown twice, then a page, is 3 attempts and
+// 1 logical request; a call exhausted by throttles (3 of 3) and requeued
+// counts all 3 throttles, the last included (it was uncounted). In-flight
+// attempts are measured at the send, apart from the active ranges.
+func TestAttemptsAreRequestEconomics(t *testing.T) {
+	keys := testKeys()[:50] // one page
+	for _, c := range []struct {
+		name       string
+		fail       int
+		extra, thr int64 // attempts beyond the logical request; throttles
+	}{
+		{"retried", 2, 2, 2},
+		{"exhausted and requeued", 3, 3, 3}, // the requeue repeats the same logical request
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ep := fakeBucket(t, keys, c.fail)
+			cl, err := client.New(client.Config{Endpoint: ep, PathStyle: true, Anonymous: true, Region: "us-east-1",
+				MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, st := list(t, Options{Bucket: "bkt", Client: cl, Workers: 1}, 1)
+			if !slices.Equal(keysOf(rows), keys) {
+				t.Fatalf("%d keys, want %d", len(rows), len(keys))
+			}
+			v := st.Counters.Value
+			if v("requests") != 1 || v("attempts") != v("requests")+c.extra || v("retries") != 2 ||
+				v("throttles") != c.thr || v("inflight.max") != 1 || v("inflight.ns") <= 0 {
+				t.Fatalf("requests %d attempts %d retries %d throttles %d inflight max %d ns %d", v("requests"), v("attempts"),
+					v("retries"), v("throttles"), v("inflight.max"), v("inflight.ns"))
+			}
+		})
 	}
 }
