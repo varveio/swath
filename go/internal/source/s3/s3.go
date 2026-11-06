@@ -147,6 +147,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		Floors: opt.Floors, SplitCoin: opt.splitCoin, Trace: opt.trace,
 	}, keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
+		AcceptBound: AcceptBound,
 		Requeue:     requeue,
 		InvalidPage: client.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
@@ -158,6 +159,11 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	p.Engine = e
 	return p, nil
 }
+
+// AcceptBound is S3's bound policy: the pivot alphabet. S3 refuses control
+// characters in start-after and a verbatim-echo endpoint mishandles '%', so
+// a real key outside the alphabet is never sent as a start bound.
+func AcceptBound(s string) bool { return keyrange.Safe(s) }
 
 // requeue: a transient failure whose client retries were exhausted is
 // asked again (keyrange.Description.Requeue).

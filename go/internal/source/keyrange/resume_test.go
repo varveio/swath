@@ -86,7 +86,7 @@ func TestBoundVetoOnEveryRequest(t *testing.T) {
 			var mu sync.Mutex
 			var sent []string
 			fetch := fetchFrom(f)
-			d := Description[Object]{Target: "test", SafeBound: veto}
+			d := Description[Object]{Target: "test", AcceptBound: veto}
 			opt := c.opt
 			opt.Workers = 4
 			p, err := New(opt, d, func(ctx context.Context, q *Query) (*Page[Object], error) {

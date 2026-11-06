@@ -34,8 +34,8 @@ func isSafe(cp int) bool {
 
 // Safe reports whether every scalar of s is in the pivot alphabet: valid
 // UTF-8 without C0, DEL, C1, '%', surrogates or non-characters. Synthesized
-// pivots are always Safe; real keys used as bounds (cursors, seed and
-// structure boundaries) must be too.
+// pivots are always Safe; it is also the default and S3's bound policy
+// for real keys sent as bounds (Description.AcceptBound).
 func Safe(s string) bool {
 	if !utf8.ValidString(s) {
 		return false

@@ -17,17 +17,22 @@ import (
 	"github.com/varveio/swath/go/internal/order"
 )
 
-// inclusive is a fake listing whose start bound is inclusive (keys >= After)
-// and which honours an exclusive end bound (keys < end): the other bound
-// convention. It records every bound it was sent.
+// inclusive is a fake listing with either start convention: inclusive
+// (keys >= After) unless exclusive is set (keys > After); with bounded, it
+// honours an exclusive end bound (keys < end) when ExclusiveEnd accepts
+// one under acceptEnd. refuse names bounds it answers with a 400. It
+// records every bound it was sent.
 type inclusive struct {
-	keys     []string
-	bounded  bool // send ExclusiveEnd(Through) as the end bound
-	pageCap  int
-	mu       sync.Mutex
-	starts   []string
-	ends     []string
-	requests int
+	keys      []string
+	exclusive bool
+	bounded   bool // send ExclusiveEnd(Through) as the end bound
+	acceptEnd func(string) bool
+	refuse    func(string) bool
+	pageCap   int
+	mu        sync.Mutex
+	starts    []string
+	ends      []string
+	requests  int
 }
 
 func (f *inclusive) fetch(_ context.Context, q *Query) (*Page[Object], error) {
@@ -35,20 +40,27 @@ func (f *inclusive) fetch(_ context.Context, q *Query) (*Page[Object], error) {
 	f.requests++
 	end := ""
 	if f.bounded && q.Bounded {
-		end = ExclusiveEnd(q.Through)
+		end, _ = ExclusiveEnd(q.Through, f.acceptEnd)
 	}
 	if q.Token == "" {
 		f.starts = append(f.starts, q.After)
 		if end != "" {
-			f.ends = append(f.ends, q.Through)
+			f.ends = append(f.ends, end)
 		}
 	}
 	f.mu.Unlock()
+	if f.refuse != nil && (q.After != "" && f.refuse(q.After) || end != "" && f.refuse(end)) {
+		return nil, fmt.Errorf("400: bound refused: %q, %q", q.After, end)
+	}
 	i := sort.SearchStrings(f.keys, q.Prefix)
 	if q.Token != "" {
 		i, _ = strconv.Atoi(q.Token)
 	} else if q.After != "" {
-		i = max(i, sort.SearchStrings(f.keys, q.After)) // inclusive
+		if f.exclusive {
+			i = max(i, sort.Search(len(f.keys), func(j int) bool { return f.keys[j] > q.After }))
+		} else {
+			i = max(i, sort.SearchStrings(f.keys, q.After)) // inclusive
+		}
 	}
 	size := q.Max
 	if f.pageCap > 0 {
@@ -103,11 +115,11 @@ func TestBoundsAtExactKeys(t *testing.T) {
 				for _, pageCap := range []int{1, 2, 1000} {
 					what := fmt.Sprintf("(%q, %q] open=%v inclusive=%v bounded=%v page=%d", c.lo, c.hi, c.open, incl, bounded, pageCap)
 					var fetch Fetch[Object]
-					if incl {
-						f := &inclusive{keys: keys, bounded: bounded, pageCap: pageCap}
+					if incl || bounded {
+						f := &inclusive{keys: keys, exclusive: !incl, bounded: bounded, pageCap: pageCap}
 						fetch = f.fetch
 					} else {
-						s := newSorted(keys, false, 1)
+						s := newSorted(keys, false, 1) // S3-shaped: exclusive, no end bound
 						s.PageCap = pageCap
 						fetch = fetchFrom(s)
 					}
@@ -126,8 +138,11 @@ func TestBoundsAtExactKeys(t *testing.T) {
 			}
 		}
 	}
-	if ExclusiveEnd("b") != "b\x00" || !("b" < ExclusiveEnd("b") && ExclusiveEnd("b") <= "b\x00\x00") {
+	if e, ok := ExclusiveEnd("b", nil); !ok || e != "b\x00" || !("b" < e && e <= "b\x00\x00") {
 		t.Fatal("ExclusiveEnd is the immediate successor")
+	}
+	if _, ok := ExclusiveEnd("b", func(s string) bool { return !strings.Contains(s, "\x00") }); ok {
+		t.Fatal("ExclusiveEnd accepted a refused end bound")
 	}
 }
 
@@ -152,7 +167,7 @@ func TestInclusiveProviderMatchesKeyspace(t *testing.T) {
 				f := &inclusive{keys: want, bounded: i != 2, pageCap: 7 + 6*i}
 				d := Description[Object]{Target: "test", StartInclusive: true}
 				if vetoed {
-					d.SafeBound = veto
+					d.AcceptBound = veto
 				}
 				if i == 0 {
 					rng := rand.New(rand.NewSource(int64(len(keys))))
@@ -273,6 +288,74 @@ func TestBoundsStableAcrossTokenChain(t *testing.T) {
 			}
 			if c.n == 0 {
 				t.Fatalf("opt %d: no token chain exercised", i)
+			}
+		}
+	}
+}
+
+// TestProviderBoundPolicy: bound admissibility is the provider's, not the
+// pivot alphabet's. A provider accepting '%' and non-ASCII receives real
+// keys holding them as start bounds; one refusing NUL end bounds, or end
+// bounds past 1,024 bytes, gets none of those and the engine trims locally.
+// The fake answers a refused bound with a 400, so a refused bound sent
+// fails the run.
+func TestProviderBoundPolicy(t *testing.T) {
+	var keys []string
+	for i := range 600 {
+		keys = append(keys, fmt.Sprintf("p%%%03d", i), fmt.Sprintf("qé%03d/x", i), fmt.Sprintf("r世%03d", i))
+	}
+	for i := range 40 {
+		keys = append(keys, strings.Repeat("L", 1021)+fmt.Sprintf("%03d", i)) // 1,024 bytes
+	}
+	slices.Sort(keys)
+	accept := func(s string) bool { return len(s) <= 1024 && !strings.ContainsAny(s, "\x00\r\n") }
+	for _, c := range []struct {
+		name      string
+		acceptEnd func(string) bool
+	}{
+		{"NUL end refused: local trim", func(s string) bool { return !strings.Contains(s, "\x00") }},
+		{"end past 1024 bytes refused", func(s string) bool { return len(s) <= 1024 }},
+	} {
+		for i, opt := range []Options{
+			{Workers: 8},
+			{Workers: 8, Seed: true, SeedDescent: true, Structure: true},
+			{Workers: 8, Resume: &Resume{After: keys[len(keys)/4]}}, // a key holding '%'
+		} {
+			f := &inclusive{keys: keys, bounded: true, acceptEnd: c.acceptEnd, pageCap: 9,
+				refuse: func(s string) bool {
+					return !c.acceptEnd(s) && strings.HasSuffix(s, "\x00") || !accept(strings.TrimSuffix(s, "\x00"))
+				}}
+			rng := rand.New(rand.NewSource(int64(i)))
+			var mu sync.Mutex
+			opt.SplitCoin = func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(2) == 0 }
+			p, err := New(opt, Description[Object]{Target: "test", StartInclusive: true, AcceptBound: accept}, f.fetch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			col := &collect{}
+			if _, err := order.Run[Range, Object](context.Background(), p, col, &Schema, order.Options{Workers: 8, Budget: 1 << 22}); err != nil {
+				t.Fatalf("%s opt %d: %v", c.name, i, err)
+			}
+			want := keys
+			if opt.Resume != nil {
+				want = keys[slices.Index(keys, opt.Resume.After)+1:]
+			}
+			if got := keysOf(col.rows); !slices.Equal(got, want) {
+				t.Fatalf("%s opt %d: %d keys, want %d", c.name, i, len(got), len(want))
+			}
+			var pct, wide bool
+			f.mu.Lock() // a cancelled structure probe may still be returning
+			starts, ends := slices.Clone(f.starts), len(f.ends)
+			f.mu.Unlock()
+			for _, s := range starts {
+				pct = pct || strings.Contains(s, "%")
+				wide = wide || strings.ContainsFunc(s, func(r rune) bool { return r >= 0x80 })
+			}
+			if !pct || !wide {
+				t.Fatalf("%s opt %d: no real key with '%%' (%v) or non-ASCII (%v) sent as a start bound", c.name, i, pct, wide)
+			}
+			if i == 0 && c.name == "end past 1024 bytes refused" && ends == 0 {
+				t.Fatalf("%s: no end bound sent", c.name)
 			}
 		}
 	}

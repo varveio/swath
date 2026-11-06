@@ -39,7 +39,8 @@ type Query struct {
 	After string
 	// Through, when Bounded: the range ends at Through inclusive. The
 	// engine trims keys past it, so a provider may ignore it, or bound the
-	// request (an exclusive end bound is ExclusiveEnd(Through)).
+	// request (an exclusive end bound is ExclusiveEnd(Through), when the
+	// provider accepts it).
 	Through string
 	Bounded bool
 	// Token: the continuation token of the previous page. Every other
@@ -70,12 +71,15 @@ type Description[P any] struct {
 	// StartInclusive: the provider's start bound lists keys >= After
 	// (an inclusive start offset), not > After (an exclusive start-after).
 	StartInclusive bool
-	// SafeBound is the pivot-safety hook: a veto, beyond the pivot alphabet
-	// (Safe), on strings the engine would send as bounds and split at
-	// (pivots, cursors, seed and structure boundaries); nil vetoes nothing.
-	// A vetoed pivot is a rejected split (guard clause unsafe_cursor or
-	// probe), a vetoed boundary is not a cut.
-	SafeBound func(string) bool
+	// AcceptBound is the provider's request admissibility: whether a
+	// string may be sent as a start bound and so split at (pivots, cursors,
+	// seed and structure boundaries, a seed top-up, a resume's start). The
+	// engine itself needs only valid UTF-8 (bounds are compared as bytes).
+	// nil is the conservative pivot alphabet (Safe), which S3 declares
+	// explicitly. A refused pivot is a rejected split (guard clause
+	// unsafe_pivot or unsafe_cursor), a refused boundary is not a cut.
+	// Synthesized pivots always use the pivot alphabet.
+	AcceptBound func(string) bool
 	// Requeue reports whether a failed request is asked again after a
 	// backoff instead of failing the run (the client's retries exhausted
 	// on a transient failure).
@@ -100,9 +104,13 @@ func (d *Description[P]) invalid() error {
 	return ErrInvalidPage
 }
 
-// safe: s is Safe and the provider does not veto it as a bound.
+// safe: s is valid UTF-8 and the provider accepts it as a bound
+// (AcceptBound, by default the pivot alphabet).
 func (p *Engine[P]) safe(s string) bool {
-	return Safe(s) && (p.d.SafeBound == nil || p.d.SafeBound(s))
+	if p.d.AcceptBound == nil {
+		return Safe(s)
+	}
+	return utf8.ValidString(s) && p.d.AcceptBound(s)
 }
 
 // safeStart is the longest prefix of key k, on a scalar boundary, that the
@@ -110,7 +118,7 @@ func (p *Engine[P]) safe(s string) bool {
 // It sorts at or before k, so listing after it and dropping keys <= k
 // resumes after k.
 func (p *Engine[P]) safeStart(k string) string {
-	s := safePrefix(k)
+	s := k
 	for s != "" && !p.safe(s) {
 		_, n := utf8.DecodeLastRuneInString(s)
 		s = s[:len(s)-n]
@@ -119,8 +127,17 @@ func (p *Engine[P]) safeStart(k string) string {
 }
 
 // ExclusiveEnd is the exclusive end bound that lists keys up to through
-// inclusive: its immediate successor in byte order.
-func ExclusiveEnd(through string) string { return through + "\x00" }
+// inclusive, its immediate successor in byte order (through + NUL), and
+// whether the provider accepts it (accept nil accepts it). A provider that
+// does not accept it (NUL refused, or 1,025 bytes past a 1,024-byte limit)
+// sends no end bound: the engine trims at Through itself.
+func ExclusiveEnd(through string, accept func(string) bool) (string, bool) {
+	end := through + "\x00"
+	if accept != nil && !accept(end) {
+		return "", false
+	}
+	return end, true
+}
 
 // Options configure an Engine.
 type Options struct {

@@ -146,11 +146,14 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
   - *bound inclusivity:* the engine's ranges are `(lo, hi]`. `After` means keys strictly above it; a
     provider whose start bound is inclusive sends it as is and sets `StartInclusive`, and the engine drops
     a key equal to `After` from the first page of a request chain. `Through` is the inclusive end; a
-    provider may ignore it (the engine trims) or bound the request with `ExclusiveEnd(Through)`, the
-    immediate successor (`Through` + NUL);
-  - *pivot safety:* synthesized pivots use the pivot alphabet (`Safe`: valid UTF-8 without C0, DEL, C1,
-    `%`, surrogates or non-characters); `SafeBound` is a provider veto on top, applied to every bound the
-    engine sends: pivots (guard clause `unsafe_pivot`), cursors (`unsafe_cursor`), seed and structure
+    provider may ignore it (the engine trims) or bound the request with `ExclusiveEnd(Through, accept)`,
+    the immediate successor (`Through` + NUL), when its own predicate accepts that string (a service may
+    refuse NUL, or 1,025 bytes); otherwise it sends no end bound and the engine trims;
+  - *bound admissibility:* the engine needs only valid UTF-8 bounds (it compares bytes); which strings a
+    provider accepts as a start bound is its `AcceptBound` predicate, by default the pivot alphabet
+    (`Safe`: valid UTF-8 without C0, DEL, C1, `%`, surrogates or non-characters), which S3 declares
+    explicitly (`s3.AcceptBound`). Synthesized pivots always use the pivot alphabet. The predicate guards
+    every bound the engine sends: pivots (guard clause `unsafe_pivot`), cursors (`unsafe_cursor`), seed and structure
     boundaries, the seed's top-up after the top page's last entry (not sent when vetoed,
     `seed.top_paginated_declined.unsafe`) and a resume's start (K's longest accepted prefix);
   - `Requeue` (which failures are asked again after a backoff instead of failing the run), `InvalidPage`

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -227,6 +228,22 @@ func TestParseURL(t *testing.T) {
 	for _, bad := range []string{"b/p", "s3://", "s3:///p"} {
 		if _, _, err := ParseURL(bad); err == nil {
 			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
+// TestS3BoundPolicy: S3 keeps the conservative bound policy, the pivot
+// alphabet: no control character, '%', surrogate or non-character is sent
+// in start-after, while '/', non-ASCII letters and long keys are.
+func TestS3BoundPolicy(t *testing.T) {
+	for _, s := range []string{"a/b", "café", "世", strings.Repeat("k", 1024)} {
+		if !AcceptBound(s) {
+			t.Errorf("refused %q", s)
+		}
+	}
+	for _, s := range []string{"a%20b", "a\x01", "a\x7f", "a\u0085", "a﷐", "a￿", "\xff"} {
+		if AcceptBound(s) {
+			t.Errorf("accepted %q", s)
 		}
 	}
 }

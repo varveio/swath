@@ -485,7 +485,7 @@ const (
 //   - unsafe cursor: c becomes the lower child's start-after;
 //   - cursor: m must be > c, or the upper child would list (m, c] again;
 //   - unsafe pivot: m becomes a bound; the provider may veto it
-//     (Description.SafeBound);
+//     (Description.AcceptBound);
 //   - bound: m must be < H (or below prefixCeil(scope) on the frontier), or
 //     the lower child would list keys of the next range.
 func guard(c, m string, found bool, ceil string, bounded, done bool, safe func(string) bool) clause {
