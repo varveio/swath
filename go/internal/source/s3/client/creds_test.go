@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // fakeSTS answers AssumeRoleWithWebIdentity and AssumeRole, recording each
@@ -141,5 +144,56 @@ printf '{"Version":1,"AccessKeyId":"AKP%s","SecretAccessKey":"s","SessionToken":
 	keys.Range(func(any, any) bool { n++; return true })
 	if n < 2 {
 		t.Fatalf("signed with %d distinct keys over 4 s of 2-second credentials", n)
+	}
+}
+
+// TestCredentialOutageRecovers: an STS outage at a refresh (503 for six
+// calls: two of the SDK's three-attempt retrievals) is a transient
+// credential failure, retried by the client until STS answers again; a
+// refused identity token stays a fatal auth failure.
+func TestCredentialOutageRecovers(t *testing.T) {
+	dir := t.TempDir()
+	isolate(t, dir)
+	tokenFile := filepath.Join(dir, "token")
+	os.WriteFile(tokenFile, []byte("jwt"), 0o600)
+	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile web]\nrole_arn = arn:aws:iam::111111111111:role/web\nweb_identity_token_file = "+tokenFile+"\n"), 0o600)
+	var n atomic.Int32
+	var refuse atomic.Bool
+	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		i := n.Add(1)
+		switch {
+		case refuse.Load():
+			w.WriteHeader(400)
+			fmt.Fprint(w, `<ErrorResponse><Error><Type>Sender</Type><Code>InvalidIdentityToken</Code><Message>no</Message></Error></ErrorResponse>`)
+		case i >= 2 && i <= 7:
+			w.WriteHeader(503)
+			fmt.Fprint(w, `<ErrorResponse><Error><Type>Receiver</Type><Code>ServiceUnavailable</Code><Message>down</Message></Error></ErrorResponse>`)
+		default:
+			exp := time.Now().Add(2 * time.Second).UTC().Format(time.RFC3339)
+			fmt.Fprintf(w, `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials>
+<AccessKeyId>AK%d</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>t</SessionToken><Expiration>%s</Expiration>
+</Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`, i, exp)
+		}
+	}))
+	t.Cleanup(sts.Close)
+	t.Setenv("AWS_ENDPOINT_URL_STS", sts.URL)
+	ok := func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(okPage)) }
+	c, _ := testClient(t, ok, Config{Profile: "web", Region: "us-east-1"})
+	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2500 * time.Millisecond) // the first credentials expire; the refresh meets the outage
+	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+		t.Fatalf("after the outage: %v (class %s, %d STS calls)", err, Classify(err), n.Load())
+	}
+	if c.Counters().Retries == 0 || n.Load() < 8 {
+		t.Fatalf("retries %d, STS calls %d: the outage was not met", c.Counters().Retries, n.Load())
+	}
+	refuse.Store(true)
+	time.Sleep(2500 * time.Millisecond)
+	_, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
+	var ex *ExhaustedError
+	if Classify(err) != objhttp.ClassAuth || errors.As(err, &ex) {
+		t.Fatalf("refused token: %v (class %s), want auth, not retried", err, Classify(err))
 	}
 }

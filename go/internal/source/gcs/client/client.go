@@ -26,8 +26,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"cloud.google.com/go/auth"
+	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
@@ -152,6 +156,10 @@ type Client struct {
 
 	retry  objhttp.Retry
 	counts objhttp.Counters
+
+	tokMu    sync.Mutex
+	tokCall  *tokenCall   // the outstanding token source call, if any
+	tokCalls atomic.Int64 // token source calls started (tests)
 }
 
 // New resolves credentials and builds the client. Without Application
@@ -241,43 +249,64 @@ func adcConfigured() bool {
 	return err == nil
 }
 
-// token waits for the token source under the attempt's deadline. A refresh
-// that outlives the wait finishes in the background (its own HTTP client is
-// bounded by the request timeout) and later attempts reuse its token.
+// tokenCall is one token source call that every concurrent waiter shares.
+type tokenCall struct {
+	done chan struct{}
+	t    *oauth2.Token
+	err  error
+}
+
+// token waits for the token source under the attempt's deadline. Waiters
+// share one outstanding call (at most one goroutine calls the source at a
+// time, however many attempts wait or give up); a call that outlives the
+// waits finishes in the background (its own HTTP client is bounded by the
+// request timeout) and later attempts reuse its token.
 func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
-	type result struct {
-		t   *oauth2.Token
-		err error
+	c.tokMu.Lock()
+	call := c.tokCall
+	if call == nil {
+		call = &tokenCall{done: make(chan struct{})}
+		c.tokCall = call
+		c.tokCalls.Add(1)
+		go func() {
+			call.t, call.err = c.ts.Token()
+			c.tokMu.Lock()
+			c.tokCall = nil
+			c.tokMu.Unlock()
+			close(call.done)
+		}()
 	}
-	ch := make(chan result, 1)
-	go func() {
-		t, err := c.ts.Token()
-		ch <- result{t, err}
-	}()
+	c.tokMu.Unlock()
 	select {
-	case r := <-ch:
-		if r.err != nil {
-			return nil, &CredentialError{Source: c.source, Transient: transientToken(r.err), Err: r.err}
+	case <-call.done:
+		if call.err != nil {
+			return nil, &CredentialError{Source: c.source, Transient: transientToken(call.err),
+				Timeout: errors.Is(call.err, context.DeadlineExceeded), Err: call.err}
 		}
-		return r.t, nil
+		return call.t, nil
 	case <-ctx.Done():
 		return nil, &CredentialError{Source: c.source, Transient: true, Timeout: true,
 			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
 	}
 }
 
-// transientToken: the token endpoint's 5xx, 408 and 429, and transport
-// failures, may pass; a refused grant (400, 401) will not.
+// transientToken: the token endpoint's or the metadata server's 5xx, 408
+// and 429, transport failures and a token exchange's own timeout may pass;
+// a refused grant (400, 401) and unusable credentials will not.
 func transientToken(err error) bool {
+	status := func(s int) bool { return s >= 500 || s == 408 || s == 429 }
 	var re *oauth2.RetrieveError
-	if errors.As(err, &re) {
-		if re.Response == nil {
-			return false
-		}
-		s := re.Response.StatusCode
-		return s >= 500 || s == 408 || s == 429
+	var me *metadata.Error
+	var ae *auth.Error
+	switch {
+	case errors.As(err, &re):
+		return re.Response != nil && status(re.Response.StatusCode)
+	case errors.As(err, &me):
+		return status(me.Code)
+	case errors.As(err, &ae) && ae.Response != nil:
+		return status(ae.Response.StatusCode)
 	}
-	return objhttp.Transport(err)
+	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // Credentials names where the credentials came from (never the secret).

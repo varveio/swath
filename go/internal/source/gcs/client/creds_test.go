@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
@@ -289,4 +291,45 @@ func TestADCConfiguredButBroken(t *testing.T) {
 			t.Skip("running on Google Cloud: the metadata server supplies credentials")
 		}
 	})
+}
+
+// slowTokens takes 200 ms per token and records the most concurrent calls.
+type slowTokens struct{ now, most atomic.Int64 }
+
+func (s *slowTokens) Token() (*oauth2.Token, error) {
+	n := s.now.Add(1)
+	defer s.now.Add(-1)
+	for m := s.most.Load(); n > m && !s.most.CompareAndSwap(m, n); m = s.most.Load() {
+	}
+	time.Sleep(200 * time.Millisecond)
+	return &oauth2.Token{AccessToken: "t", Expiry: time.Now().Add(-time.Second)}, nil // expired: every wait asks again
+}
+
+// TestTokenWaitersCoalesce: attempts that give up waiting for a slow token
+// source leave no goroutine behind each; all waiters share one outstanding
+// call, so the source is never called concurrently.
+func TestTokenWaitersCoalesce(t *testing.T) {
+	ts := &slowTokens{}
+	c, err := New(context.Background(), Config{Endpoint: "http://127.0.0.1:1/storage/v1/", TokenSource: ts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	start := time.Now()
+	for range 40 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 10 {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+				_, _ = c.token(ctx)
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	if ts.most.Load() != 1 || c.tokCalls.Load() > int64(elapsed/(200*time.Millisecond))+2 {
+		t.Fatalf("400 waits over %s: %d token calls, at most %d at once", elapsed, c.tokCalls.Load(), ts.most.Load())
+	}
 }

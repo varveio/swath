@@ -13,8 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"cloud.google.com/go/auth"
+	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 type failingTokens struct{ err error }
@@ -108,10 +111,16 @@ func TestClassify(t *testing.T) {
 		name      string
 		err       error
 		exhausted bool
+		class     objhttp.Class // when not the default for exhausted
 	}{
-		{"refused grant", &oauth2.RetrieveError{Response: &http.Response{StatusCode: 400}, ErrorCode: "invalid_grant"}, false},
-		{"token endpoint 503", &oauth2.RetrieveError{Response: &http.Response{StatusCode: 503}}, true},
-		{"token endpoint unreachable", &net.OpError{Op: "dial", Err: errors.New("connection refused")}, true},
+		{"refused grant", &oauth2.RetrieveError{Response: &http.Response{StatusCode: 400}, ErrorCode: "invalid_grant"}, false, ""},
+		{"token endpoint 503", &oauth2.RetrieveError{Response: &http.Response{StatusCode: 503}}, true, ""},
+		{"token endpoint unreachable", &net.OpError{Op: "dial", Err: errors.New("connection refused")}, true, ""},
+		{"metadata server 503", &metadata.Error{Code: 503, Message: "unavailable"}, true, ""},
+		{"metadata server 429", fmt.Errorf("compute: %w", &metadata.Error{Code: 429}), true, ""},
+		{"metadata server 404", &metadata.Error{Code: 404, Message: "no service account"}, false, ""},
+		{"auth library 503", &auth.Error{Response: &http.Response{StatusCode: 503}}, true, ""},
+		{"token exchange timeout", fmt.Errorf("oauth2: %w", context.DeadlineExceeded), true, objhttp.ClassTimeout},
 	} {
 		e, _ := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: failingTokens{x.err}, MaxAttempts: 1})
 		_, err := e.List(context.Background(), &ListInput{Bucket: "b"})
@@ -119,6 +128,9 @@ func TestClassify(t *testing.T) {
 		want := objhttp.ClassAuth // a refusal stops the run; an outage of the token endpoint is transient
 		if x.exhausted {
 			want = objhttp.ClassTransport
+		}
+		if x.class != "" {
+			want = x.class
 		}
 		var ce *CredentialError
 		if Classify(err) != want || errors.As(err, &ex) != x.exhausted || !errors.As(err, &ce) {

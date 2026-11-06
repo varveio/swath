@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/logging"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
@@ -99,8 +101,32 @@ func (a *auth) sign(ctx context.Context, req *http.Request, now time.Time) error
 	}
 	c, err := a.creds.Retrieve(ctx) // cached by the SDK until expiry
 	if err != nil {
-		return &objhttp.CredentialError{Source: a.source, Err: err} // not retried
+		return &objhttp.CredentialError{Source: a.source, Transient: transientRefresh(err),
+			Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
 	}
 	req.Header.Set("X-Amz-Content-Sha256", unsignedPayload)
 	return a.signer.SignHTTP(ctx, c, req, unsignedPayload, "s3", a.region, now)
+}
+
+// transientRefresh: a credential service's (STS, IMDS, SSO, container
+// endpoint) 5xx, 408 and 429 or throttling codes, transport failures and a
+// refresh past its deadline may pass and are retried, then requeued; a
+// refused or expired grant, a missing role or an unusable profile will not.
+func transientRefresh(err error) bool {
+	var hs interface{ HTTPStatusCode() int }
+	if errors.As(err, &hs) {
+		if s := hs.HTTPStatusCode(); s >= 500 || s == 408 || s == 429 {
+			return true
+		}
+	}
+	var ae smithy.APIError
+	if errors.As(err, &ae) {
+		switch ae.ErrorCode() {
+		case "Throttling", "ThrottlingException", "RequestLimitExceeded", "TooManyRequestsException",
+			"IDPCommunicationError", "InternalError", "InternalFailure", "ServiceUnavailable":
+			return true
+		}
+		return false
+	}
+	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
 }

@@ -139,10 +139,10 @@ func retryable(err error) (retry, throttle, timeout bool) {
 	return Transport(err), false, false
 }
 
-// Classify returns err's class: the caller's cancellation, a contract
-// break, a credential failure (auth; one that may pass, such as a token
-// endpoint's outage, is timeout or transport, so that its exhaustion is
-// requeued like any other and never fails a run), then the service's answer (answer, the
+// Classify returns err's class: a credential failure (auth; one that may
+// pass, such as a token endpoint's outage, is timeout or transport, so that
+// its exhaustion is requeued like any other and never fails a run), the
+// caller's cancellation, a contract break, then the service's answer (answer, the
 // client's mapping of its own Answer type; ok false when err holds none),
 // a parse failure, an attempt timeout, a transport failure, other.
 func Classify(err error, answer func(error) (Class, bool)) Class {
@@ -150,11 +150,10 @@ func Classify(err error, answer func(error) (Class, bool)) Class {
 	switch {
 	case err == nil:
 		return ""
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return ClassCanceled
-	case errors.Is(err, ErrInvalidPage):
-		return ClassInvalidPage
 	case errors.As(err, &ce):
+		// before the context check: a credential failure may wrap a
+		// deadline (a token exchange's own timeout) without the caller's
+		// context having ended (Do returns the caller's cancellation bare)
 		switch {
 		case !ce.Transient:
 			return ClassAuth
@@ -162,6 +161,10 @@ func Classify(err error, answer func(error) (Class, bool)) Class {
 			return ClassTimeout
 		}
 		return ClassTransport
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return ClassCanceled
+	case errors.Is(err, ErrInvalidPage):
+		return ClassInvalidPage
 	}
 	if c, ok := answer(err); ok {
 		return c

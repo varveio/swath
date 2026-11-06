@@ -116,8 +116,10 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   progress for `--stall-timeout`: exit 75, resumable). Every request, including probes and the seed page,
   goes through the same path.
 - *Shared with GCS* (`internal/source/objhttp`): the retry loop (`objhttp.Do`: attempts, backoff, exhaustion),
-  the class vocabulary, transport classification, `CredentialError` (an S3 credential refresh that fails is one,
-  not retried), the client counters and route canonicalization; `objhttptest.Contract` is the retry and
+  the class vocabulary, transport classification, `CredentialError` (an S3 credential refresh that fails is one:
+  a credential service's 5xx, 408, 429 or throttling code, a transport failure or a timeout is transient, retried
+  and requeued, `TestCredentialOutageRecovers`; a refused grant is `auth`; `Classify` reads a credential failure
+  before a wrapped deadline, so a token exchange's own timeout is never taken for the caller's cancellation), the client counters and route canonicalization; `objhttptest.Contract` is the retry and
   classification contract both clients' tests run with their own wire answers (`TestRetryContract`). The
   report brief, coverage and capabilities come from `keyrange.Report` and `keyrange.Capabilities`. Each client
   keeps its answers' meaning (status, codes, reasons), its parser and its authentication.
@@ -166,7 +168,9 @@ authorized-user JSON; otherwise Application Default Credentials, and without any
 buckets allow it). Credentials that are configured but do not load refuse the run (`client.CredentialError`,
 class `auth`), never anonymity. The token source lives as long as the client: it is built on a context that is
 never cancelled, whose HTTP client bounds each token exchange by `--gcs-request-timeout`, and each attempt
-waits for its token under its own deadline; a token endpoint's 5xx, 408, 429, transport failure or timeout is
+waits for its token under its own deadline, all waiters sharing one outstanding token call (one goroutine at a
+time, `TestTokenWaitersCoalesce`); a token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429,
+transport failure or timeout is
 retried like a listing failure (counted in `timeouts` for the last), a refused grant stops the request
 (`TestAuthorizedUserADC`, `TestSlowRefreshBounded`, `TestRefusedGrant`, `TestADCConfiguredButBroken`, against a
 local token endpoint). The scope is `devstorage.read_only`. The binary links
