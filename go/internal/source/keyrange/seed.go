@@ -57,7 +57,7 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 		}()
 		return f
 	}
-	d := newDescent(p.opt.Prefix, p.opt.Workers)
+	d := newDescent(p.opt.Prefix, p.opt.Workers, p.safe)
 	q, res := d.start()
 	used := map[seedProbe]bool{}
 	for res == nil {

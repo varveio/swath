@@ -81,6 +81,7 @@ const (
 	cStructureLate
 	cSplitPivotStructure
 	cEmptyPages
+	cSeedTopUnsafe
 	numCounters
 )
 
@@ -161,6 +162,7 @@ var Counters = []counters.Def{
 	d("structure.late", counters.Count, "decisions", "split decisions taken while the range's probe was still in flight", "structure"),
 	d("split.pivot_structure", counters.Count, "pivots", "pivots on a folder boundary from a structure probe (else midpoint, density or reflection)", "structure"),
 	d("empty_pages", counters.Count, "pages", "continuing pages with no entry, followed by their token (also counted in requests)"),
+	d("seed.top_paginated_declined.unsafe", counters.Count, "probes", "top-up probes not sent: the top page's last entry is not a bound the provider accepts", "seed"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {
@@ -211,6 +213,7 @@ var seedMarks = map[string]counters.ID{
 	"sentinel_declined.no_spare_slot":      cSentinelDeclinedNoSpare,
 	"sentinel_declined.not_above_last_cut": cSentinelDeclinedNotAbove,
 	"top_paginated":                        cSeedTopPaginated,
+	"top_paginated_declined.unsafe":        cSeedTopUnsafe,
 	"mass_weighted_subsample":              cSeedMassWeighted,
 	"heavy_cut_descended":                  cSeedSampledLevels,
 	"explosion_confirmed":                  cSeedExplosions,

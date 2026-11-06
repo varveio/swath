@@ -1,7 +1,7 @@
 # Durability and resume
 
 An S3 run with an output directory keeps a journal so that `swath resume DIR` continues an interrupted run. A resume never
-re-lists a published key and never skips one, and the final dataset is byte-identical to an uninterrupted
+publishes a key twice and never skips one, and the final dataset is byte-identical to an uninterrupted
 run's. Package `internal/journal` holds the journal; `internal/listing/journal.go` connects it to the router
 and the provider. Filesystem runs opt out: they are fast enough to restart.
 
@@ -45,8 +45,9 @@ resume and compare with an uninterrupted run.
 - On a live bucket, durable output is exactly-once: no published key is listed again into the dataset, and
   none is skipped. Objects that change during the run change the rows, and so the part boundaries, as they
   would in any run.
-- When K holds scalars S3 refuses in `start-after`, the resume fetches from K's safe prefix and drops keys up
-  to K. Such keys are fetched again but never published twice.
+- When K is not a bound the provider accepts (for S3, scalars outside the pivot alphabet), the resume fetches
+  from K's longest accepted prefix and drops keys up to K, also in ranges split off before the cursor passes
+  K. Such keys are fetched again but never published twice.
 
 ## The unit is the part
 
@@ -93,8 +94,8 @@ that is the commit. The run reports follow it.
    rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, and
    only then are the temporary parts removed.
 4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
-   normal start-up. S3 lists one range `(K, ⊤]` and splits it as on a fresh run. If K holds scalars S3
-   refuses in `start-after`, the range starts at K's safe prefix and drops keys up to K.
+   normal start-up. S3 lists one range `(K, ⊤]` and splits it as on a fresh run. If K is not a bound
+   the provider accepts, the range starts at K's longest accepted prefix and drops keys up to K.
 5. Continues the router at the next ordinal with the recorded limit, so part boundaries fall exactly where
    the uninterrupted run would have put them.
 

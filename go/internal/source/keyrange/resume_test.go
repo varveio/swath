@@ -4,11 +4,15 @@
 package keyrange
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/order"
 )
 
 // TestResumeAfterKey: a resume lists (K, ⊤] after K, the last published
@@ -53,5 +57,68 @@ func TestResumeAfterKey(t *testing.T) {
 			}
 			checkTiling(t, what, leaves)
 		}
+	}
+}
+
+// TestBoundVetoOnEveryRequest: the provider's bound predicate guards every
+// request, not only pivots: a resume after "a5" with a provider vetoing
+// '5' starts at the accepted prefix "a" and drops keys up to "a5"; a capped
+// top seed page ending in the object "b5" sends no top-up after it. Every
+// transmitted bound is accepted and every unpublished key appears once.
+func TestBoundVetoOnEveryRequest(t *testing.T) {
+	veto := func(s string) bool { return !strings.ContainsRune(s, '5') }
+	resumed := []string{"a/x", "a1", "a4", "a5", "a50", "a6", "b5", "c1", "c2", "c3", "c4", "d/y", "e1"}
+	seeded := []string{"a/x", "a/y", "b5", "c1", "c2", "c3", "d/y", "e1"} // the top page: a/, b5 (capped)
+	for _, c := range []struct {
+		name string
+		keys []string
+		opt  Options
+	}{
+		{"resume/sequential", resumed, Options{Sequential: true, Resume: &Resume{After: "a5"}}},
+		{"resume/parallel", resumed, Options{Resume: &Resume{After: "a5"}}},
+		{"seed descent, capped top", seeded, Options{Seed: true, SeedDescent: true}},
+		{"seed page, capped top", seeded, Options{Seed: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			keys := c.keys
+			f := newSorted(keys, false, 1)
+			f.PageCap = 2
+			var mu sync.Mutex
+			var sent []string
+			fetch := fetchFrom(f)
+			d := Description[Object]{Target: "test", SafeBound: veto}
+			opt := c.opt
+			opt.Workers = 4
+			p, err := New(opt, d, func(ctx context.Context, q *Query) (*Page[Object], error) {
+				if q.Token == "" && q.After != "" {
+					mu.Lock()
+					sent = append(sent, q.After)
+					mu.Unlock()
+				}
+				return fetch(ctx, q)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			col := &collect{}
+			if _, err := order.Run[Range, Object](context.Background(), p, col, &Schema, order.Options{Workers: 4, Budget: 1 << 20}); err != nil {
+				t.Fatal(err)
+			}
+			want := keys
+			if opt.Resume != nil {
+				want = keys[slices.Index(keys, "a5")+1:]
+			}
+			if got := keysOf(col.rows); !slices.Equal(got, want) {
+				t.Fatalf("keys %q, want %q; sent %q", got, want, sent)
+			}
+			for _, b := range sent {
+				if !veto(b) {
+					t.Fatalf("sent a vetoed bound %q (all: %q)", b, sent)
+				}
+			}
+			if st := p.Stats(); strings.HasPrefix(c.name, "seed descent") && st.Get(cSeedTopUnsafe) != 1 {
+				t.Fatalf("top-up not declined: unsafe=%d top_paginated=%d sent=%q", st.Get(cSeedTopUnsafe), st.Get(cSeedTopPaginated), sent)
+			}
+		})
 	}
 }

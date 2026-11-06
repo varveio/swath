@@ -101,9 +101,9 @@ func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	after := p.opt.Resume.After
 	p.mu.Lock()
 	t := Range{lo: after, open: true, id: p.ids.Add(1), born: fromSeed}
-	// K is a real key and may hold scalars outside the pivot alphabet: start
-	// at its safe prefix and drop keys up to K there.
-	if s := safePrefix(after); s != after {
+	// K is a real key and may not be a bound the provider accepts: start at
+	// its longest accepted prefix and drop keys up to K there.
+	if s := p.safeStart(after); s != after {
 		t.lo, t.after = s, after
 	}
 	p.queued++
@@ -429,6 +429,14 @@ func (p *Engine[P]) commit(st *running, r Range, c, m string, extrapolated, ok b
 		sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}}
 	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper,
 		sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped}}
+	// A resumed range split before its cursor passed the resume key hands
+	// the key on: keys up to it are already published.
+	if r.after > c {
+		lower.after = r.after
+	}
+	if r.after > m {
+		upper.after = r.after
+	}
 	if os.Getenv("SWATH_SPLIT_TRACE") != "" {
 		fmt.Fprintf(os.Stderr, "split id=%d lo=%q c=%q m=%q hi=%q open=%v keys=%d\n", r.id, r.lo, c, m, r.hi, r.open, st.keys)
 	}

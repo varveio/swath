@@ -119,13 +119,15 @@ type descent struct {
 	weightBudget  int
 	weightIdx     int
 	currentWeight string
+
+	safe func(string) bool // the provider's bound predicate: a start-after the walk may send
 }
 
-func newDescent(prefix string, workers int) *descent {
+func newDescent(prefix string, workers int, safe func(string) bool) *descent {
 	w := max(1, workers)
 	target := min(seedPage, 4*w)
 	d := &descent{prefix: prefix, workers: w, targetSeeds: target, maxProbes: min(256, max(1, target)),
-		marks: map[string]int{}}
+		marks: map[string]int{}, safe: safe}
 	d.topCeil = scopeCeiling(prefix)
 	return d
 }
@@ -201,6 +203,12 @@ func (d *descent) onTop(o seedOutcome) (seedProbe, *seedResult) {
 	d.observeTop(o)
 	d.addCuts(o.prefixes, d.topCeil)
 	if d.topCapped && len(d.cuts) > 0 && d.totalProbes < d.maxProbes && o.hasLast {
+		// The top-up starts after the page's last entry; a provider that
+		// vetoes it as a bound never receives it (no top-up).
+		if d.safe != nil && !d.safe(o.last) {
+			d.mark("top_paginated_declined.unsafe")
+			return d.afterTop()
+		}
 		d.phase = phaseTopExtra
 		d.totalProbes++
 		return seedProbe{prefix: d.prefix, after: o.last}, nil

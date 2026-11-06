@@ -114,6 +114,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `structure.late` | count | decisions | structure | split decisions taken while the range's probe was still in flight |
 | `split.pivot_structure` | count | pivots | structure | pivots on a folder boundary from a structure probe (else midpoint, density or reflection) |
 | `empty_pages` | count | pages |  | continuing pages with no entry, followed by their token (also counted in requests) |
+| `seed.top_paginated_declined.unsafe` | count | probes | seed | top-up probes not sent: the top page's last entry is not a bound the provider accepts |
 | `attempts` | count | requests |  | HTTP requests, retries included |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | of the retries, 429/503/SlowDown answers |

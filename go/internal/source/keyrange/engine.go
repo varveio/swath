@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/schema"
@@ -99,6 +100,19 @@ func (d *Description[P]) invalid() error {
 // safe: s is Safe and the provider does not veto it as a bound.
 func (p *Engine[P]) safe(s string) bool {
 	return Safe(s) && (p.d.SafeBound == nil || p.d.SafeBound(s))
+}
+
+// safeStart is the longest prefix of key k, on a scalar boundary, that the
+// engine may send as a start bound (safe); "" lists from the scope's start.
+// It sorts at or before k, so listing after it and dropping keys <= k
+// resumes after k.
+func (p *Engine[P]) safeStart(k string) string {
+	s := safePrefix(k)
+	for s != "" && !p.safe(s) {
+		_, n := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-n]
+	}
+	return s
 }
 
 // ExclusiveEnd is the exclusive end bound that lists keys up to through
@@ -278,7 +292,7 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 	last := ""
 	skip := ""
 	if p.opt.Resume != nil {
-		in.After, skip = safePrefix(p.opt.Resume.After), p.opt.Resume.After
+		in.After, skip = p.safeStart(p.opt.Resume.After), p.opt.Resume.After
 	}
 	for {
 		out, err := p.list(ctx, in)

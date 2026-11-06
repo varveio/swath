@@ -147,8 +147,10 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     provider may ignore it (the engine trims) or bound the request with `ExclusiveEnd(Through)`, the
     immediate successor (`Through` + NUL);
   - *pivot safety:* synthesized pivots use the pivot alphabet (`Safe`: valid UTF-8 without C0, DEL, C1,
-    `%`, surrogates or non-characters); `SafeBound` is a provider veto on top, applied to pivots (guard
-    clause `unsafe_pivot`), cursors (`unsafe_cursor`) and seed and structure boundaries;
+    `%`, surrogates or non-characters); `SafeBound` is a provider veto on top, applied to every bound the
+    engine sends: pivots (guard clause `unsafe_pivot`), cursors (`unsafe_cursor`), seed and structure
+    boundaries, the seed's top-up after the top page's last entry (not sent when vetoed,
+    `seed.top_paginated_declined.unsafe`) and a resume's start (K's longest accepted prefix);
   - `Requeue` (which failures are asked again after a backoff instead of failing the run), `InvalidPage`
     (the error contract breaks wrap), `Size` (a row's bytes) and the provider's own `Counters`, reported
     after the engine's.
