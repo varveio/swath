@@ -142,14 +142,16 @@ func TestParseURL(t *testing.T) {
 	}
 }
 
-// TestTokenChainsAndEmptyPages: tokens bound to their chain's parameters
-// (startOffset, endOffset, prefix, delimiter, maxResults) and empty
-// continuing pages, both of which the JSON API allows: every configuration
-// still lists exactly the bucket.
+// TestTokenChainsAndEmptyPages: opaque tokens bound to their chain's
+// parameters (startOffset, endOffset, prefix, delimiter, maxResults), empty
+// continuing pages and nonempty pages cut short at varying lengths, all of
+// which the JSON API allows: every configuration still lists exactly the
+// bucket, control-character names included.
 func TestTokenChainsAndEmptyPages(t *testing.T) {
-	keys := testKeys()
+	keys := append(testKeys(), "ctl\x01", "ctl\x01\x01", "ctl\x02", "ctl\x1f/x")
+	slices.Sort(keys)
 	f, ep := newFake(t, keys)
-	f.empty = 3
+	f.empty, f.short = 3, true
 	for _, c := range []struct {
 		opt     Options
 		workers int
@@ -199,7 +201,136 @@ func TestBoundPolicy(t *testing.T) {
 	if !slices.Equal(got, keys) {
 		t.Fatalf("%d keys, want %d", len(got), len(keys))
 	}
-	t.Logf("end bounds omitted: %d, splits %d", st.Counters.Value("end_offset_omitted"), st.Counters.Value("split.accepted_bounded")+st.Counters.Value("split.accepted_frontier"))
+	if st.Counters.Value("requests") == 0 {
+		t.Fatal("no requests")
+	}
+}
+
+// TestEndOffsetOmitted: a bounded range whose end is a 1,024-byte name
+// cannot send endOffset = end+NUL (1,025 bytes): the request goes without
+// endOffset, end_offset_omitted counts it, the service lists past the end
+// and the engine trims exactly there. First one fetch through the adapter,
+// then whole listings whose split pivots fall among 1,024-byte names (a
+// 1,023-byte stem and one more byte), with short pages so that ranges split.
+func TestEndOffsetOmitted(t *testing.T) {
+	stem := strings.Repeat("L", 1023)
+	keys := []string{"A", "K", "M", "Z"}
+	for c := byte('!'); c <= '~'; c++ {
+		keys = append(keys, stem+string(c))
+	}
+	slices.Sort(keys)
+	f, ep := newFake(t, keys)
+	p, err := New(context.Background(), Options{Bucket: "bkt", Endpoint: ep, Anonymous: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	through := stem + "m"
+	pg, err := p.fetch(context.Background(), &keyrange.Query{After: stem + "a", Through: through, Bounded: true, Max: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := f.last.Load().(url.Values)
+	if _, sent := q["endOffset"]; sent || q.Get("startOffset") != stem+"a" {
+		t.Fatalf("endOffset sent (%d bytes) or startOffset wrong", len(q.Get("endOffset")))
+	}
+	if n := p.Set().Load(p.ID(cEndOmitted)); n != 1 {
+		t.Fatalf("end_offset_omitted %d, want 1", n)
+	}
+	if last := pg.Rows[len(pg.Rows)-1].Key; last <= through {
+		t.Fatalf("the page ends at %q: nothing past the end to trim", last)
+	}
+
+	f.cap = 3 // short pages: every range continues, and idle workers split it
+	for _, workers := range []int{4, 16, 64} {
+		before := len(f.sent())
+		got, st := list(t, Options{Bucket: "bkt", Endpoint: ep}, workers)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("%d workers: %d keys, want %d", workers, len(got), len(keys))
+		}
+		omitted := st.Counters.Value("end_offset_omitted")
+		if omitted == 0 || st.Counters.Value("overfetch_keys") == 0 {
+			t.Fatalf("%d workers: end_offset_omitted %d, overfetch_keys %d: the omission path did not engage (splits %d)", workers,
+				omitted, st.Counters.Value("overfetch_keys"), st.Counters.Value("split.accepted_bounded")+st.Counters.Value("split.accepted_frontier"))
+		}
+		var without int64
+		for _, q := range f.sent()[before:] {
+			e, sent := q["endOffset"]
+			if sent && len(e[0]) > 1024 {
+				t.Fatalf("an endOffset of %d bytes was sent", len(e[0]))
+			}
+			if !sent && strings.HasPrefix(q.Get("startOffset"), stem) && q.Get("delimiter") == "" {
+				without++
+			}
+		}
+		if without == 0 {
+			t.Fatalf("%d workers: no request among the long names went without endOffset", workers)
+		}
+	}
+}
+
+// TestDelimiterBoundaries: a folder marker ("a/"), its descendants, the
+// objects adjacent to it in byte order ("a-b", "a.b" below, "a0" above) and
+// a nested marker list exactly at page size one, through every policy that
+// sends delimiter requests (seed descent, structure probes) and 1-key
+// probes; and a delimiter request whose inclusive startOffset is the
+// marker reports the folder as a prefix, never as an object.
+func TestDelimiterBoundaries(t *testing.T) {
+	keys := []string{"a", "a-b", "a.b", "a/", "a/b/", "a/b/c", "a/x", "a/y/z", "a0", "a0/", "a0/q", "b"}
+	f, ep := newFake(t, keys)
+	f.cap = 1
+	for _, c := range []struct {
+		name    string
+		pol     keyrange.Policy
+		workers int
+	}{
+		{"sequential", keyrange.Policy{Sequential: true}, 1},
+		{"demand splits", keyrange.Policy{}, 8},
+		{"seed descent, structure, probes", keyrange.Policy{Seed: true, SeedDescent: true, Structure: true, Probe: true}, 8},
+		{"one-page seed, structure", keyrange.Policy{Seed: true, Structure: true}, 64},
+	} {
+		before := len(f.sent())
+		got, _ := list(t, Options{Bucket: "bkt", Endpoint: ep, Policy: c.pol}, c.workers)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("%s: %q, want %q", c.name, got, keys)
+		}
+		delimited := 0
+		for _, q := range f.sent()[before:] {
+			if q.Get("delimiter") != "" {
+				delimited++
+			}
+		}
+		if (c.pol.Seed || c.pol.Structure) != (delimited > 0) {
+			t.Fatalf("%s: %d delimiter requests", c.name, delimited)
+		}
+	}
+	for _, r := range []struct {
+		after, prefix string
+		want          []string // prefixes, then objects, of the first entry
+	}{
+		{"a/", "", []string{"a/"}},
+		{"a.b", "", []string{"", "a.b"}},
+		{"a/x", "a/", []string{"", "a/x"}},
+		{"a/b/", "a/", []string{"a/b/"}},
+	} {
+		in := &client.ListInput{Bucket: "bkt", Delimiter: "/", StartOffset: r.after, Prefix: r.prefix, MaxResults: 1}
+		c, err := client.New(context.Background(), client.Config{Endpoint: ep, Anonymous: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pg, err := c.List(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var first []string
+		if len(pg.Prefixes) > 0 {
+			first = []string{pg.Prefixes[0]}
+		} else if len(pg.Items) > 0 {
+			first = []string{"", pg.Items[0].Name}
+		}
+		if !slices.Equal(first, r.want) || pg.NextPageToken == "" {
+			t.Fatalf("startOffset %q prefix %q: first entry %q (token %q), want %q", r.after, r.prefix, first, pg.NextPageToken, r.want)
+		}
+	}
 }
 
 // TestRouteIdentity: the identity freezes the bucket's route (base and

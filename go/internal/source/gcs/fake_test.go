@@ -4,7 +4,9 @@
 package gcs
 
 import (
-	"encoding/base64"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,43 +14,95 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
 
 // fakeGCS serves objects.list over keys (sorted by bytes) as the JSON API
 // defines it: prefix, delimiter, startOffset (inclusive), endOffset
-// (exclusive), pageToken, maxResults (default and cap 1,000). The token
-// holds the last name or prefix returned and the query that started its
-// chain: a token sent with other parameters is a 400, as a service that
-// binds tokens to their request may answer. With empty set, every empty-th
-// page is an empty page with a token (the API documents them). Sizes are
-// strings, as on the wire.
+// (exclusive), pageToken, maxResults (default and cap 1,000), and a
+// partial-response fields selector. Page tokens are opaque (random), bound
+// on the server to the query that started their chain: a token sent with
+// other parameters, or one never issued, is a 400, as a service that binds
+// tokens to their request may answer. With empty set, every empty-th page
+// is an empty page with a token (the API documents them); with short set,
+// nonempty pages are cut short at varying lengths; cap lowers the page
+// size limit. Every object carries the full metadata resource, sizes and
+// generations as strings, as on the wire.
 type fakeGCS struct {
 	keys     []string
 	empty    int64
+	short    bool
+	cap      int
 	requests atomic.Int64
 	empties  atomic.Int64
 	last     atomic.Value // the last request's query
+
+	secret  [16]byte
+	mu      sync.Mutex
+	tokens  map[string]position
+	queries []url.Values
 }
+
+// position is where an issued token continues: after the last name or
+// prefix returned, in the chain started by query; nonce tells apart the
+// tokens of empty pages at one position.
+type position struct{ chain, after, nonce string }
 
 // chainOf is the query a token's chain started with.
 func chainOf(q url.Values) string {
-	return strings.Join([]string{q.Get("prefix"), q.Get("delimiter"), q.Get("startOffset"), q.Get("endOffset"), q.Get("maxResults")}, "\x00")
+	b, _ := json.Marshal([]string{q.Get("prefix"), q.Get("delimiter"), q.Get("startOffset"), q.Get("endOffset"), q.Get("maxResults")})
+	return string(b)
 }
 
 func newFake(t testing.TB, keys []string) (*fakeGCS, string) {
-	f := &fakeGCS{keys: append([]string(nil), keys...)}
+	f := &fakeGCS{keys: append([]string(nil), keys...), tokens: map[string]position{}}
+	_, _ = rand.Read(f.secret[:])
 	sort.Strings(f.keys)
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv.URL + "/storage/v1/"
 }
 
+// issue returns the opaque token for pos: a keyed hash, so one position
+// always gets the same token (the oracle compares tokens) and nothing in
+// it can be parsed back.
+func (f *fakeGCS) issue(pos position) string {
+	h := sha256.Sum256([]byte(string(f.secret[:]) + pos.chain + "\x00" + pos.after + "\x00" + pos.nonce))
+	t := "CgR" + hex.EncodeToString(h[:12])
+	f.mu.Lock()
+	f.tokens[t] = pos
+	f.mu.Unlock()
+	return t
+}
+
+// sent is every query received so far.
+func (f *fakeGCS) sent() []url.Values {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]url.Values(nil), f.queries...)
+}
+
+// object is the objects resource as the JSON API sends it, with fields the
+// listing does not read.
+func object(i int, k string) map[string]any {
+	return map[string]any{
+		"kind": "storage#object", "id": "bkt/" + k + "/17", "selfLink": "https://example.invalid/" + url.PathEscape(k),
+		"name": k, "bucket": "bkt", "size": strconv.Itoa(len(k)), "updated": "2026-11-06T01:02:03.456789Z",
+		"timeCreated": "2026-11-05T00:00:00Z", "etag": "e" + strconv.Itoa(i), "generation": strconv.Itoa(1700000000000000 + i),
+		"metageneration": strconv.Itoa(1 + i%3), "storageClass": []string{"STANDARD", "NEARLINE", "ARCHIVE"}[i%3],
+		"md5Hash": "md5-" + strconv.Itoa(i) + "==", "crc32c": "c" + strconv.Itoa(i), "contentType": "application/x-" + strconv.Itoa(i%5),
+	}
+}
+
 func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.requests.Add(1)
+	serial := f.requests.Add(1)
 	q := r.URL.Query()
 	f.last.Store(q)
+	f.mu.Lock()
+	f.queries = append(f.queries, q)
+	f.mu.Unlock()
 	bucket, ok := strings.CutPrefix(r.URL.Path, "/storage/v1/b/")
 	if !ok || !strings.HasSuffix(bucket, "/o") {
 		http.Error(w, `{"error":{"code":404,"message":"no route"}}`, 404)
@@ -56,43 +110,38 @@ func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix, delim, start, end, token := q.Get("prefix"), q.Get("delimiter"), q.Get("startOffset"), q.Get("endOffset"), q.Get("pageToken")
 	if token != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(token)
-		parts := strings.SplitN(string(raw), "\x01", 3)
-		if err != nil || len(parts) != 3 || parts[0] != chainOf(q) {
+		f.mu.Lock()
+		pos, ok := f.tokens[token]
+		f.mu.Unlock()
+		if !ok || pos.chain != chainOf(q) {
 			http.Error(w, `{"error":{"code":400,"message":"Invalid argument: the page token does not match the request"}}`, 400)
 			return
 		}
-		token = parts[1]
+		token = pos.after
 	}
-	next := func(after, nonce string) string {
-		return base64.RawURLEncoding.EncodeToString([]byte(chainOf(q) + "\x01" + after + "\x01" + nonce))
-	}
-	if serial := f.requests.Load(); f.empty > 0 && serial%f.empty == 0 {
+	resp := map[string]any{}
+	if f.empty > 0 && serial%f.empty == 0 {
 		// An empty page that still makes progress: a new token that
 		// continues from the request's own position.
 		f.empties.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"nextPageToken":"` + next(token, strconv.FormatInt(serial, 10)) + `"}`))
+		resp["nextPageToken"] = f.issue(position{chainOf(q), token, strconv.FormatInt(serial, 10)})
+		f.write(w, q, resp)
 		return
 	}
 	max := 1000
+	if f.cap > 0 {
+		max = f.cap
+	}
 	if s := q.Get("maxResults"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n < max {
 			max = n
 		}
 	}
-	type item struct {
-		Name    string `json:"name"`
-		Size    string `json:"size"`
-		Updated string `json:"updated"`
-		ETag    string `json:"etag"`
-		Gen     string `json:"generation"`
+	if f.short {
+		max = 1 + int(serial)%max
 	}
-	var resp struct {
-		Items    []item   `json:"items,omitempty"`
-		Prefixes []string `json:"prefixes,omitempty"`
-		Next     string   `json:"nextPageToken,omitempty"`
-	}
+	var items []any
+	var prefixes []string
 	n, lastOut := 0, ""
 	for i := sort.SearchStrings(f.keys, prefix); i < len(f.keys); i++ {
 		k := f.keys[i]
@@ -112,17 +161,77 @@ func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if n == max {
-			resp.Next = next(lastOut, "")
+			resp["nextPageToken"] = f.issue(position{chainOf(q), lastOut, ""})
 			break
 		}
 		n++
 		lastOut = out
 		if isPrefix {
-			resp.Prefixes = append(resp.Prefixes, out)
+			prefixes = append(prefixes, out)
 		} else {
-			resp.Items = append(resp.Items, item{Name: k, Size: strconv.Itoa(len(k)), Updated: "2026-11-06T01:02:03.456789Z", ETag: "e" + strconv.Itoa(i), Gen: "17"})
+			items = append(items, object(i, k))
+		}
+	}
+	if items != nil {
+		resp["items"] = items
+	}
+	if prefixes != nil {
+		resp["prefixes"] = prefixes
+	}
+	f.write(w, q, resp)
+}
+
+// write sends resp, reduced to the fields selector when the request has
+// one (fields=a,b,items(c,d)).
+func (f *fakeGCS) write(w http.ResponseWriter, q url.Values, resp map[string]any) {
+	if sel := q.Get("fields"); sel != "" {
+		top, sub := parseFields(sel)
+		for k := range resp {
+			if !top[k] {
+				delete(resp, k)
+			}
+		}
+		if items, ok := resp["items"].([]any); ok {
+			for _, it := range items {
+				for k := range it.(map[string]any) {
+					if !sub["items"][k] {
+						delete(it.(map[string]any), k)
+					}
+				}
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// parseFields reads a one-level partial-response selector.
+func parseFields(sel string) (top map[string]bool, sub map[string]map[string]bool) {
+	top, sub = map[string]bool{}, map[string]map[string]bool{}
+	depth, from := 0, 0
+	field := func(s string) {
+		name, inner, nested := strings.Cut(s, "(")
+		top[name] = true
+		if nested {
+			sub[name] = map[string]bool{}
+			for _, x := range strings.Split(strings.TrimSuffix(inner, ")"), ",") {
+				sub[name][x] = true
+			}
+		}
+	}
+	for i, c := range sel {
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				field(sel[from:i])
+				from = i + 1
+			}
+		}
+	}
+	field(sel[from:])
+	return top, sub
 }
