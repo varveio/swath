@@ -6,10 +6,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/journal"
 )
 
 func TestRun(t *testing.T) {
@@ -95,4 +98,37 @@ func TestCLIDocFlags(t *testing.T) {
 		return
 	}
 	t.Fatal("docs/cli.md flag list is stale; run UPDATE=1 go test ./cmd/swath")
+}
+
+// TestRefusedRunLeavesOwnerMetadata: a run refused because another process
+// owns the output writes neither error.json nor the progress file there.
+func TestRefusedRunLeavesOwnerMetadata(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	var buf bytes.Buffer
+	if err := run(context.Background(), []string{src, "-o", out}, &buf, false); err != nil {
+		t.Fatal(err)
+	}
+	// Another process now owns the output (say, an overwrite in progress).
+	lock, err := journal.TakeLock(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	progress := filepath.Join(out, progressName)
+	if err := os.WriteFile(progress, []byte("owner"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(context.Background(), []string{src, "-o", out, "--overwrite", "--stall-timeout", "40ms"}, &buf, false); !errors.Is(err, journal.ErrLocked) {
+		t.Fatalf("competing run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, errorName)); err == nil {
+		t.Fatal("the refused run wrote error.json into the owner's output")
+	}
+	if b, _ := os.ReadFile(progress); string(b) != "owner" {
+		t.Fatalf("the refused run rewrote the owner's progress: %q", b)
+	}
 }

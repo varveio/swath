@@ -278,22 +278,30 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		defer stopTimer()
 	}
 	cfg.Progress = &listing.Progress{}
+	// The outcome: error.json is written while the run still owns the
+	// output (Settle), and never by a run that did not own it.
+	settle := func(sum listing.Report, err error) (error, outcome) {
+		if err == nil && cfg.Output.Dir != "" && !sum.Outcome.Complete {
+			// A committed dataset that does not cover its scope (a key
+			// limit) never exits 0: a supervisor must not take it as complete.
+			err = errIncomplete
+		}
+		if err != nil && pf.Classify != nil {
+			if c := pf.Classify(err); c != "" {
+				err = &classified{err, c}
+			}
+		}
+		return err, classify(err, context.Cause(ctx), cfg.Output.Dir)
+	}
+	cfg.Settle = func(sum listing.Report, err error) {
+		_, out := settle(sum, err)
+		writeOutcome(cfg.Output.Dir, out)
+	}
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn)
 	sum, err := listing.Run(ctx, cfg)
 	stopWatch()
 	stopProfile()
-	if err == nil && cfg.Output.Dir != "" && !sum.Outcome.Complete {
-		// A committed dataset that does not cover its scope (a key limit)
-		// never exits 0: a supervisor must not take it as complete.
-		err = errIncomplete
-	}
-	if err != nil && pf.Classify != nil {
-		if c := pf.Classify(err); c != "" {
-			err = &classified{err, c}
-		}
-	}
-	out := classify(err, context.Cause(ctx), cfg.Output.Dir)
-	writeOutcome(cfg.Output.Dir, out)
+	err, out := settle(sum, err)
 	sum.Outcome.Class, sum.Outcome.ExitCode, sum.Outcome.Resumable, sum.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
 	if o.reportFormat == "json" {
 		// The report goes out on failure too: its outcome names the error.

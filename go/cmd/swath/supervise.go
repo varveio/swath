@@ -115,9 +115,9 @@ func hasJournal(dir string) bool {
 const errorName = dataset.ErrorName
 
 // writeOutcome records a failed run's outcome (an incomplete committed
-// dataset included) in DIR/error.json (atomic
-// replace), so a supervisor never parses stderr; a completed run removes a
-// stale one.
+// dataset included) in DIR/error.json (atomic replace), so a supervisor
+// never parses stderr; a completed run removes a stale one. The caller
+// owns the output (listing.Config.Settle).
 func writeOutcome(dir string, o outcome) {
 	if dir == "" {
 		return
@@ -125,10 +125,6 @@ func writeOutcome(dir string, o outcome) {
 	path := filepath.Join(dir, errorName)
 	if o.ExitCode == exitCompleted {
 		_ = os.Remove(path)
-		return
-	}
-	// Only into an output this tool owns: never into a directory it refused.
-	if _, err := os.Stat(filepath.Join(dir, dataset.Workspace)); err != nil {
 		return
 	}
 	writeFileAtomic(path, o)
@@ -173,9 +169,9 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 			case now := <-t.C:
 				s := pr.Snapshot()
 				if dir != "" {
-					if _, err := os.Stat(filepath.Join(dir, dataset.Workspace)); err == nil {
-						writeFileAtomic(filepath.Join(dir, progressName), s)
-					}
+					// Only while the run owns the output: a refused run
+					// never overwrites its owner's progress.
+					pr.Owned(func() { writeFileAtomic(filepath.Join(dir, progressName), s) })
 				}
 				if s.Advance != last {
 					last, since, warned = s.Advance, now, false

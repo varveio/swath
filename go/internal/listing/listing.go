@@ -35,8 +35,15 @@ type Config struct {
 	Argv   []string     // the command line, recorded in the run report and the journal
 	Warn   func(string) // one-time warnings for the user (nil: dropped)
 	// Progress, if set, is updated while the run goes (watchdog, progress
-	// file).
+	// file); Progress.Owned says whether this run owns the output.
 	Progress *Progress
+	// Settle, if set, is called once with the run's report and error while
+	// the run still owns the output directory (after its cleanup and
+	// publication, before the lock is released): the place for the
+	// caller's own writes into the output, such as an outcome file. It is
+	// not called when the run never owned the output (refused, locked by
+	// another process, or no output directory).
+	Settle func(Report, error)
 }
 
 // SourceConfig is what to list.
@@ -170,15 +177,20 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	if err != nil {
 		return sum.failed(err)
 	}
+	rep, err := owned(ctx, cfg, sum, src, s, jr)
+	jr.close(cfg, rep, err)
+	return rep, err
+}
+
+// owned is the run while it owns its output (jr is nil without one).
+func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s schema.Info, jr *runJournal) (Report, error) {
 	if ex, ok := src.(source.Excluder); ok && cfg.Output.Dir != "" {
 		if err := ex.Exclude(cfg.Output.Dir); err != nil {
-			jr.close()
 			return sum.failed(err)
 		}
 	}
 	if last := jr.last(); last != nil {
 		if err := jr.src.Restart(string(last.Part.MaxKey)); err != nil {
-			jr.close()
 			return sum.failed(err)
 		}
 	}
@@ -223,7 +235,6 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 // pipeline runs provider → order → router → publish. p is src, or Empty
 // when a resume has nothing left to list.
 func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, s schema.Info, jr *runJournal) (Report, error) {
-	defer jr.close()
 	// One shared cause: the first asynchronous failure (an encoder, the
 	// disk, the journal) cancels listing at once, and is what Run returns.
 	ctx, cancel := context.WithCancelCause(ctx)

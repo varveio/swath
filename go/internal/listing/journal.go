@@ -41,10 +41,12 @@ type runJournal struct {
 	src   source.Resumable
 }
 
-// openJournal prepares the output: a fresh journaled run (Prepare, then a
-// new journal), a resume (identity check, recovery of the published
-// parts), or no journal at all. A source that cannot resume gets a plain
-// Prepare, without the lock.
+// openJournal takes ownership of the output and prepares it: a fresh
+// journaled run (Prepare, then a new journal), a resume (identity check,
+// recovery of the published parts), or no journal at all. Every output is
+// owned through its lock, journaled or not; refusals that need no lock
+// (an output that may not be used, nothing to resume) come first, so a
+// refused output is left as it was.
 func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJournal, error) {
 	if cfg.Output.Dir == "" {
 		if cfg.Output.Resume {
@@ -56,16 +58,22 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 	if c, ok := src.(source.Capable); !ok || !c.Capabilities().Resume {
 		resumable = false
 	}
-	if !resumable {
-		if cfg.Output.Resume {
-			return nil, fmt.Errorf("resume: a %s source cannot resume", src.Locator().Kind)
+	path := src.Locator().Path
+	switch {
+	case cfg.Output.Resume && !resumable:
+		return nil, fmt.Errorf("resume: a %s source cannot resume", src.Locator().Kind)
+	case cfg.Output.Resume && dataset.Committed(cfg.Output.Dir):
+		return nil, ErrComplete
+	case cfg.Output.Resume:
+		if _, err := os.Stat(filepath.Join(cfg.Output.Dir, dataset.Workspace)); err != nil {
+			return nil, ErrNothingToResume
 		}
-		if err := dataset.Prepare(cfg.Output.Dir, src.Locator().Path, id.SchemaID, cfg.Output.Replace); err != nil {
-			return nil, fmt.Errorf("prepare output: %w", err)
+	default:
+		if _, err := dataset.Usable(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
+			return nil, prepareError(cfg.Output.Dir, err)
 		}
-		return nil, nil
 	}
-	if !journal.Enforced && cfg.Warn != nil {
+	if resumable && !journal.Enforced && cfg.Warn != nil {
 		cfg.Warn("the output lock and directory syncs are not enforced on this platform: a concurrent run or a power loss can damage the journal")
 	}
 	// Ownership first: nothing in the output is read, removed or renamed
@@ -74,8 +82,17 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 	if err != nil {
 		return nil, err
 	}
-	jr, err := openLocked(cfg, src.Locator().Path, id, lock)
+	cfg.Progress.own(true)
+	var jr *runJournal
+	if resumable {
+		jr, err = openLocked(cfg, path, id, lock)
+	} else if err = dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
+		err = prepareError(cfg.Output.Dir, err)
+	} else {
+		jr = &runJournal{out: cfg.Output.Dir, lock: lock}
+	}
 	if err != nil {
+		cfg.Progress.own(false)
 		lock.Release()
 		return nil, err
 	}
@@ -83,14 +100,19 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 	return jr, nil
 }
 
+// prepareError names an interrupted run when the output refused is one.
+func prepareError(out string, err error) error {
+	if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(out) {
+		err = fmt.Errorf("%w: %w", err, ErrInterrupted)
+	}
+	return fmt.Errorf("prepare output: %w", err)
+}
+
 // openLocked does openJournal's work with the lock held.
 func openLocked(cfg Config, path string, id journal.Identity, lock *journal.Lock) (*runJournal, error) {
 	if !cfg.Output.Resume {
 		if err := dataset.Prepare(cfg.Output.Dir, path, id.SchemaID, cfg.Output.Replace); err != nil {
-			if errors.Is(err, dataset.ErrNotEmpty) && dataset.Resumable(cfg.Output.Dir) {
-				err = fmt.Errorf("%w: %w", err, ErrInterrupted)
-			}
-			return nil, fmt.Errorf("prepare output: %w", err)
+			return nil, prepareError(cfg.Output.Dir, err)
 		}
 		if cfg.Output.NoJournal {
 			return &runJournal{out: cfg.Output.Dir, lock: lock}, nil
@@ -300,9 +322,10 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	return p, faults.At("renamed")
 }
 
-// close closes the journal and releases the output lock; the run (with
-// its cleanup and publication) is over.
-func (jr *runJournal) close() {
+// close closes the journal, lets the caller record the outcome while the
+// output is still owned (Config.Settle), and releases the output lock; the
+// run (with its cleanup and publication) is over.
+func (jr *runJournal) close(cfg Config, rep Report, err error) {
 	if jr == nil {
 		return
 	}
@@ -310,6 +333,10 @@ func (jr *runJournal) close() {
 		_ = jr.j.Close()
 		jr.j = nil
 	}
+	if cfg.Settle != nil {
+		cfg.Settle(rep, err)
+	}
+	cfg.Progress.own(false)
 	jr.lock.Release()
 }
 

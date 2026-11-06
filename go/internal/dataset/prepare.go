@@ -22,57 +22,73 @@ var (
 	ErrRootNotDir = errors.New("root is not a directory")
 )
 
-// Prepare validates out against root and creates out/data. out may not be
-// root or an ancestor of root (by path and by directory identity, along the
-// given and the symlink-resolved root path). A non-empty out is refused
-// unless replace is set, and replacing requires a previous dataset of this
-// schema outside root; it removes only the dataset's own entries. An empty
-// root means the source is not a local tree.
+// Prepare validates out against root (Usable) and creates out/data. out may
+// not be root or an ancestor of root (by path and by directory identity,
+// along the given and the symlink-resolved root path). A non-empty out is
+// refused unless replace is set, and replacing requires a previous dataset
+// of this schema outside root; it removes only the dataset's own entries.
+// An empty root means the source is not a local tree. The caller holds the
+// output lock.
 func Prepare(out, root, schemaID string, replace bool) error {
-	absOut, err := filepath.Abs(out)
+	absOut, err := Usable(out, root, schemaID, replace)
 	if err != nil {
 		return err
 	}
-	if root == "" { // not a local listing: nothing to protect but the output itself
-		return prepareOut(out, absOut, schemaID, replace)
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return err
-	}
-	if absOut == absRoot || isUnder(absRoot, absOut) {
-		return fmt.Errorf("%s: %w", out, ErrOutIsRoot)
-	}
-	if fi, err := os.Stat(absOut); err == nil {
-		if ancestorOrSelf(absRoot, fi) {
-			return fmt.Errorf("%s: %w (same directory identity)", out, ErrOutIsRoot)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat output: %w", err)
-	}
-	if replace {
-		inside, err := insideRoot(absRoot, absOut)
-		if err != nil {
-			return err
-		}
-		if inside {
-			return fmt.Errorf("%s: %w", out, ErrInsideRoot)
-		}
-	}
-	return prepareOut(out, absOut, schemaID, replace)
+	return prepareOut(absOut, replace)
 }
 
-// prepareOut applies the emptiness and replacement rules and creates out/data.
-func prepareOut(out, absOut, schemaID string, replace bool) error {
+// Usable applies Prepare's refusals without changing anything, so a run
+// refuses an output it may not use before it creates its lock there.
+// Prepare checks again under the lock. It returns out's absolute path.
+func Usable(out, root, schemaID string, replace bool) (string, error) {
+	absOut, err := filepath.Abs(out)
+	if err != nil {
+		return "", err
+	}
+	if root != "" { // a local listing: protect the listed tree
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return "", err
+		}
+		if absOut == absRoot || isUnder(absRoot, absOut) {
+			return "", fmt.Errorf("%s: %w", out, ErrOutIsRoot)
+		}
+		if fi, err := os.Stat(absOut); err == nil {
+			if ancestorOrSelf(absRoot, fi) {
+				return "", fmt.Errorf("%s: %w (same directory identity)", out, ErrOutIsRoot)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("stat output: %w", err)
+		}
+		if replace {
+			inside, err := insideRoot(absRoot, absOut)
+			if err != nil {
+				return "", err
+			}
+			if inside {
+				return "", fmt.Errorf("%s: %w", out, ErrInsideRoot)
+			}
+		}
+	}
 	ents, err := os.ReadDir(absOut)
 	switch {
 	case err == nil && nonLock(absOut, ents) > 0:
 		if !replace {
-			return fmt.Errorf("%s: %w", out, ErrNotEmpty)
+			return "", fmt.Errorf("%s: %w", out, ErrNotEmpty)
 		}
 		if !isDataset(absOut, schemaID) {
-			return fmt.Errorf("%s: %w", out, ErrNotDataset)
+			return "", fmt.Errorf("%s: %w", out, ErrNotDataset)
 		}
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return "", fmt.Errorf("read output: %w", err)
+	}
+	return absOut, nil
+}
+
+// prepareOut removes a previous dataset's own entries (Usable allowed it)
+// and creates out/data.
+func prepareOut(absOut string, replace bool) error {
+	if ents, err := os.ReadDir(absOut); err == nil && replace && nonLock(absOut, ents) > 0 {
 		for _, name := range ownEntries {
 			for _, n := range []string{name, name + ".tmp"} {
 				if err := os.RemoveAll(filepath.Join(absOut, n)); err != nil {
@@ -89,8 +105,6 @@ func prepareOut(out, absOut, schemaID string, replace bool) error {
 				}
 			}
 		}
-	case err != nil && !errors.Is(err, os.ErrNotExist):
-		return fmt.Errorf("read output: %w", err)
 	}
 	for _, d := range []string{DataDir, filepath.Join(Workspace, PartsDir)} {
 		if err := os.MkdirAll(filepath.Join(absOut, d), 0o755); err != nil {

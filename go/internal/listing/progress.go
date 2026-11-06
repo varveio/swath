@@ -4,6 +4,7 @@
 package listing
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -19,6 +20,33 @@ type Progress struct {
 	ordered atomic.Int64
 	encoded atomic.Int64
 	parts   atomic.Int64
+
+	mu    sync.Mutex // held across an owned write and across a change of ownership
+	owner bool       // the run holds the output's lock
+}
+
+// Owned calls write while the run owns its output directory and reports
+// whether it did. Ownership cannot end during write, so a process whose run
+// was refused, or has released the output, never writes into it.
+func (p *Progress) Owned(write func()) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.owner {
+		write()
+	}
+	return p.owner
+}
+
+func (p *Progress) own(v bool) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.owner = v
+	p.mu.Unlock()
 }
 
 // ProgressSnapshot is Progress at one moment.
