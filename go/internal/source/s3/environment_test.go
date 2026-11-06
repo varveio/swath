@@ -76,13 +76,16 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 
 // TestOneAdmission: with one permit, the seed descent's prefetches, the
 // structure probes sent alongside pages, split probes, retries and
-// requeues never put two requests in flight at the server.
+// requeues never put two requests in flight at the server. The faults
+// span the whole run, so which requests get them depends on the request
+// number alone (seed 2: throttles at 2 and 3, a reset at 5), not on how
+// many requests a loaded host fits into a time window.
 func TestOneAdmission(t *testing.T) {
 	keys := testKeys()
 	px, ep := proxied(t, keys, faulttest.Plan{Seed: 2, Windows: []faulttest.Window{
 		{Fraction: 1, Fault: faulttest.Latency, Delay: 2 * time.Millisecond},
-		{Fraction: 0.2, Fault: faulttest.Throttle, To: 300 * time.Millisecond},
-		{Fraction: 0.1, Fault: faulttest.Reset, To: 300 * time.Millisecond}}})
+		{Fraction: 0.2, Fault: faulttest.Throttle},
+		{Fraction: 0.1, Fault: faulttest.Reset}}})
 	rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Workers: 1,
 		Policy: keyrange.Policy{Seed: true, SeedDescent: true, Structure: true, Probe: true, Limiter: true}}, 8)
 	if !slices.Equal(keysOf(rows), keys) {
