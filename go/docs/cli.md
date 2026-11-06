@@ -340,7 +340,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **`--output`** is refused when non-empty unless `--overwrite` (or Java's alias `--force`), which replaces only
   a previous dataset of this tool and never anything inside the listed root.
 - **Text output** (S3 and GCS sources; a local tree's keys are bytes, which JSON cannot carry, so it needs the
-  dataset). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
+  dataset: `swath list DIR` without `-o DIR` or `--count-only`, or with a text `-o`, is refused with exit 2). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
   format and compression; any other name is the Parquet dataset; no `-o`, or `-o -`, is stdout, where `--format
   auto|table|tsv|jsonl` chooses (`auto`, the default: the table on a terminal, TSV otherwise) and a pipe
   compresses (`| zstd`). `--format` with a `-o` file or directory is refused, because the name already says it.

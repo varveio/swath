@@ -80,3 +80,23 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		t.Fatalf("a command flag with a local root: %v", err)
 	}
 }
+
+// TestLocalTextRefusedUpFront: a local source's keys are bytes, so a text
+// run of one (no -o, -o -, or a text file) is refused with exit 2 before
+// the walk, naming the alternatives.
+func TestLocalTextRefusedUpFront(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{src}, {src, "-o", "-"}, {src, "-o", filepath.Join(t.TempDir(), "rows.tsv")}} {
+		var buf bytes.Buffer
+		err := run(context.Background(), args, &buf, false)
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "needs -o DIR (a dataset) or --count-only") {
+			t.Errorf("%v: exit %d (%v)", args, exitOf(err), err)
+		}
+		if buf.Len() != 0 {
+			t.Errorf("%v: wrote %q", args, buf.String())
+		}
+	}
+}

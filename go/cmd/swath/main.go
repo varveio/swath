@@ -579,6 +579,9 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 		return o, "", usageError{err}
 	}
 	o.text = text
+	if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys && text != nil {
+		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset) or --count-only: its keys are bytes, which text output cannot carry", schemeName(pf.Scheme))}
+	}
 	if err := checkSidePaths(o); err != nil {
 		return o, "", usageError{err}
 	}

@@ -49,6 +49,10 @@ type Factory struct {
 	// Open validates the root and returns a source ready to list. It must
 	// not touch the output directory.
 	Open func(ctx context.Context, req Request) (Source, error)
+	// BinaryKeys: the provider's keys are bytes, not UTF-8 (schema.Binary),
+	// so its rows cannot be written as text; the command refuses a text run
+	// of it before opening it.
+	BinaryKeys bool
 	// Classify, if set, names the class of a failure the provider caused
 	// ("throttle", "access_denied", ...), for the run's outcome; "" if it
 	// does not know the error.
