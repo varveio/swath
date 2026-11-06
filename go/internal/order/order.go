@@ -791,18 +791,22 @@ func (o *run[R, P]) release() {
 	o.drain.Broadcast()
 }
 
+// drainFrame is a node on the drain path and the index of its next item.
+type drainFrame[R, P any] struct {
+	n *node[R, P]
+	i int
+}
+
 // drainTree walks the tree depth-first from root, streaming rows to sink.
+// Each step takes the top frame's next item (drainFinished without the
+// lock for a finished node, drainNext for one still being listed), or,
+// with its items consumed, closes a finished node (closeNode), expands a
+// queued one here (expandHere) or waits on the frontier (awaitFrontier).
+// The steps run with o.mu held and return with it held.
 func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	var st Stats
-	released, releasedMeta := &o.released, &o.releasedMeta
-	release := o.release
 	releaseEvery := max(1, o.opt.Budget/16)
-
-	type frame struct {
-		n *node[R, P]
-		i int
-	}
-	frames := []frame{{n: root}}
+	frames := []drainFrame[R, P]{{n: root}}
 	o.mu.Lock()
 	root.onPath.Store(true)
 	for len(frames) > 0 {
@@ -812,168 +816,183 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		}
 		f := &frames[len(frames)-1]
 		n := f.n
-		if n.state == done && f.i < len(n.items) {
-			// A finished node's items are immutable: drain them without the lock.
-			items := n.items
-			o.mu.Unlock()
-			var child *node[R, P]
-			var err error
-			for f.i < len(items) && err == nil {
-				it := items[f.i]
-				items[f.i] = item[R, P]{}
-				f.i++
-				if it.child != nil {
-					*released += it.units
-					*releasedMeta += it.units
-					child = it.child
-					break
-				}
-				if it.spill != nil {
-					*released += it.units
-					*releasedMeta += it.units
-					o.g.markers.add(-1)
-					err = o.replay(it.spill)
-					if *released >= releaseEvery {
-						o.mu.Lock()
-						release()
-						o.mu.Unlock()
-					}
-					continue
-				}
-				*released += it.units
-				err = o.send(it.rows)
-				if *released >= releaseEvery {
-					o.mu.Lock()
-					release()
-					o.mu.Unlock()
+		var child *node[R, P]
+		var err error
+		switch {
+		case n.state == done && f.i < len(n.items):
+			child, err = o.drainFinished(f, releaseEvery)
+		case f.i < len(n.items):
+			child, err = o.drainNext(f, releaseEvery)
+		case n.state == done:
+			if err = o.closeNode(n); err == nil {
+				frames = frames[:len(frames)-1]
+				o.g.nodes.add(-1)
+				if len(frames) > 0 {
+					frames[len(frames)-1].n.onPath.Store(true)
+					o.drain.Broadcast() // its emitter may be blocked on the budget
 				}
 			}
-			o.mu.Lock()
-			if err != nil {
-				o.mu.Unlock()
-				return st, err
-			}
-			if child != nil {
-				n.onPath.Store(false)
-				child.onPath.Store(true)
-				frames = append(frames, frame{n: child})
-			}
-			continue
+		case n.state == queued:
+			err = o.expandHere(n, f.i == 0)
+		case n.state == expanding:
+			err = o.awaitFrontier(n)
 		}
-		if f.i < len(n.items) {
-			it := n.items[f.i]
-			n.items[f.i] = item[R, P]{}
-			f.i++
-			// A running node keeps growing at the end while the drainer
-			// consumes it from the front: drop the consumed slots (with
-			// their backing storage) once they are half of it, so a long
-			// streaming range retains only what is not yet drained.
-			if f.i >= compactAt && 2*f.i >= len(n.items) {
-				n.items = append([]item[R, P](nil), n.items[f.i:]...)
-				f.i = 0
-			}
-			if hookItems != nil {
-				hookItems(f.i, len(n.items)-f.i)
-			}
-			if it.child != nil {
-				*released += it.units
-				*releasedMeta += it.units
-				n.onPath.Store(false)
-				it.child.onPath.Store(true)
-				frames = append(frames, frame{n: it.child})
-				continue
-			}
-			if it.spill != nil {
-				*released += it.units
-				*releasedMeta += it.units
-				o.g.markers.add(-1)
-				if *released >= releaseEvery {
-					release()
-				}
-				o.mu.Unlock()
-				err := o.replay(it.spill)
-				o.mu.Lock()
-				if err != nil {
-					o.mu.Unlock()
-					return st, err
-				}
-				continue
-			}
-			*released += it.units
-			if *released >= releaseEvery {
-				release()
-			}
+		if err != nil {
 			o.mu.Unlock()
-			err := o.send(it.rows)
-			o.mu.Lock()
-			if err != nil {
-				o.mu.Unlock()
-				return st, err
-			}
-			continue
+			return st, err
 		}
-		switch n.state {
-		case done:
-			if n.spill != nil { // the trailer: check the count, delete the file
-				f := n.spill
-				n.spill = nil
-				o.mu.Unlock()
-				rows, err := o.sp.next(f)
-				o.mu.Lock()
-				if err == nil && rows != nil {
-					err = errors.New("spill: frames after the last marker")
-				}
-				if err != nil {
-					o.mu.Unlock()
-					return st, err
-				}
-			}
-			n.items = nil
+		if child != nil {
 			n.onPath.Store(false)
-			frames = frames[:len(frames)-1]
-			o.g.nodes.add(-1)
-			if len(frames) > 0 {
-				frames[len(frames)-1].n.onPath.Store(true)
-				o.drain.Broadcast() // its emitter may be blocked on the budget
-			}
-		case queued: // nobody has it: expand it here
-			n.state = expanding
-			n.awaited.Store(true)
-			release()
-			o.mu.Unlock()
-			err := o.expandBy(n, f.i == 0, true)
-			o.mu.Lock()
-			if err != nil {
-				o.mu.Unlock()
-				return st, err
-			}
-		case expanding:
-			if len(o.segs) > 0 {
-				// Hand on what is batched before waiting on the frontier:
-				// the sink (a part's age bound, its durability) sees every
-				// row the walk has reached. Recheck after, without the lock.
-				o.mu.Unlock()
-				err := o.flush()
-				o.mu.Lock()
-				if err != nil {
-					o.mu.Unlock()
-					return st, err
-				}
-				continue
-			}
-			release()
-			n.awaited.Store(true)
-			o.drain.Broadcast() // its emitter may be blocked on the budget
-			t := time.Now()
-			o.waitAt(o.drain, waitFrontier)
-			o.frontier += time.Since(t)
-			n.awaited.Store(false)
+			child.onPath.Store(true)
+			frames = append(frames, drainFrame[R, P]{n: child})
 		}
 	}
-	release()
+	o.release()
 	if hookDrained != nil {
 		hookDrained(o.buffered, o.meta)
 	}
 	o.mu.Unlock()
 	return st, o.flush()
+}
+
+// drainFinished drains a finished node's items up to its next child,
+// which it returns. A finished node's items are immutable: they are
+// drained without the lock, which is retaken to release budget.
+func (o *run[R, P]) drainFinished(f *drainFrame[R, P], releaseEvery int64) (*node[R, P], error) {
+	items := f.n.items
+	o.mu.Unlock()
+	var child *node[R, P]
+	var err error
+	for f.i < len(items) && err == nil {
+		it := items[f.i]
+		items[f.i] = item[R, P]{}
+		f.i++
+		if it.child != nil {
+			o.released += it.units
+			o.releasedMeta += it.units
+			child = it.child
+			break
+		}
+		if it.spill != nil {
+			o.released += it.units
+			o.releasedMeta += it.units
+			o.g.markers.add(-1)
+			err = o.replay(it.spill)
+			if o.released >= releaseEvery {
+				o.mu.Lock()
+				o.release()
+				o.mu.Unlock()
+			}
+			continue
+		}
+		o.released += it.units
+		err = o.send(it.rows)
+		if o.released >= releaseEvery {
+			o.mu.Lock()
+			o.release()
+			o.mu.Unlock()
+		}
+	}
+	o.mu.Lock()
+	return child, err
+}
+
+// drainNext takes the next item of a node still being listed: a child is
+// returned to descend into; rows and spilled frames are sent without the
+// lock.
+func (o *run[R, P]) drainNext(f *drainFrame[R, P], releaseEvery int64) (*node[R, P], error) {
+	n := f.n
+	it := n.items[f.i]
+	n.items[f.i] = item[R, P]{}
+	f.i++
+	// A running node keeps growing at the end while the drainer
+	// consumes it from the front: drop the consumed slots (with
+	// their backing storage) once they are half of it, so a long
+	// streaming range retains only what is not yet drained.
+	if f.i >= compactAt && 2*f.i >= len(n.items) {
+		n.items = append([]item[R, P](nil), n.items[f.i:]...)
+		f.i = 0
+	}
+	if hookItems != nil {
+		hookItems(f.i, len(n.items)-f.i)
+	}
+	if it.child != nil {
+		o.released += it.units
+		o.releasedMeta += it.units
+		return it.child, nil
+	}
+	if it.spill != nil {
+		o.released += it.units
+		o.releasedMeta += it.units
+		o.g.markers.add(-1)
+		if o.released >= releaseEvery {
+			o.release()
+		}
+		o.mu.Unlock()
+		err := o.replay(it.spill)
+		o.mu.Lock()
+		return nil, err
+	}
+	o.released += it.units
+	if o.released >= releaseEvery {
+		o.release()
+	}
+	o.mu.Unlock()
+	err := o.send(it.rows)
+	o.mu.Lock()
+	return nil, err
+}
+
+// closeNode finishes a drained node: a spilled node's trailer is read
+// (the count checked, the file deleted) and its items dropped.
+func (o *run[R, P]) closeNode(n *node[R, P]) error {
+	if n.spill != nil {
+		f := n.spill
+		n.spill = nil
+		o.mu.Unlock()
+		rows, err := o.sp.next(f)
+		o.mu.Lock()
+		if err == nil && rows != nil {
+			err = errors.New("spill: frames after the last marker")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	n.items = nil
+	n.onPath.Store(false)
+	return nil
+}
+
+// expandHere expands a queued node nobody has claimed, on the drainer.
+func (o *run[R, P]) expandHere(n *node[R, P], direct bool) error {
+	n.state = expanding
+	n.awaited.Store(true)
+	o.release()
+	o.mu.Unlock()
+	err := o.expandBy(n, direct, true)
+	o.mu.Lock()
+	return err
+}
+
+// awaitFrontier waits for the node being expanded elsewhere to publish,
+// after handing on what is batched.
+func (o *run[R, P]) awaitFrontier(n *node[R, P]) error {
+	if len(o.segs) > 0 {
+		// Hand on what is batched before waiting on the frontier:
+		// the sink (a part's age bound, its durability) sees every
+		// row the walk has reached. The caller rechecks after.
+		o.mu.Unlock()
+		err := o.flush()
+		o.mu.Lock()
+		return err
+	}
+	o.release()
+	n.awaited.Store(true)
+	o.drain.Broadcast() // its emitter may be blocked on the budget
+	t := time.Now()
+	o.waitAt(o.drain, waitFrontier)
+	o.frontier += time.Since(t)
+	n.awaited.Store(false)
+	return nil
 }
