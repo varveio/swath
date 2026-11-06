@@ -15,8 +15,10 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
 )
 
-// TestRateLimitStormLowersConcurrency: a window of 429 rateLimitExceeded
-// answers, with connection resets throughout, neither fails a GCS run nor changes its
+// TestRateLimitStormLowersConcurrency: 429 rateLimitExceeded answers to the
+// first 40 requests (a request-number window: a time window can hold no
+// request on a loaded host),
+// with connection resets throughout, neither fail a GCS run nor change its
 // output, and the limiter lowers the requests in flight.
 func TestRateLimitStormLowersConcurrency(t *testing.T) {
 	keys := testKeys()
@@ -24,7 +26,7 @@ func TestRateLimitStormLowersConcurrency(t *testing.T) {
 	base, path, _ := strings.Cut(strings.TrimPrefix(ep, "http://"), "/")
 	px, err := faulttest.New("http://"+base, faulttest.Plan{Seed: 3, Dialect: "gcs", Windows: []faulttest.Window{
 		{Fraction: 1, Fault: faulttest.Latency, Delay: 30 * time.Millisecond},
-		{To: 300 * time.Millisecond, Fraction: 0.7, Fault: faulttest.Throttle},
+		{N1: 40, Fraction: 0.7, Fault: faulttest.Throttle}, // the first 40 requests, however long they take
 		{Fraction: 0.15, Fault: faulttest.Reset}}})
 	if err != nil {
 		t.Fatal(err)
