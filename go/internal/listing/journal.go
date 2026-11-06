@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -109,6 +110,7 @@ func (jr *runJournal) rename(old, new string) error {
 type suspect struct {
 	ordinal int
 	path    string
+	rel     string           // path relative to the output root
 	info    dataset.PartInfo // bytes and MD5 only
 	// rows is the claimed part's row count (its footer; 0 if unreadable):
 	// the resume cuts the reproduced part there (parquetout.Options.Cut),
@@ -320,30 +322,174 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
-	sus, err := recoverParts(verifier{ctx, cfg.Progress}, cfg.Output.Dir, st, lock)
+	// Recovery acts through the output root, opened and then checked to be
+	// the directory the lock is on (as runJournal.rooted); the run keeps it.
+	r, err := os.OpenRoot(cfg.Output.Dir)
 	if err != nil {
+		return nil, fmt.Errorf("resume: %w", err)
+	}
+	if err := lock.Verify(); err != nil {
+		r.Close()
+		return nil, err
+	}
+	sus, err := recoverParts(verifier{ctx, cfg.Progress}, r, cfg.Output.Dir, st, lock)
+	if err != nil {
+		r.Close()
 		return nil, err
 	}
 	j, err := journal.Reopen(cfg.Output.Dir, st)
 	if err != nil {
+		r.Close()
 		return nil, err
 	}
-	return &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st, suspect: sus}, nil
+	return &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st, suspect: sus, root: r}, nil
+}
+
+// ErrUnsafeLayout: a path resume recovery reads, renames or removes is not
+// what swath made there: data/, the workspace, its parts or suspect
+// directory is a symbolic link or not a directory, or a retained or claimed
+// part is a symbolic link or not a regular file. Recovery checks every such
+// path without following links before it changes anything, and refuses
+// (exit 1, class fatal, not resumable) with the output left as it was; the
+// operator inspects it, or starts over with --overwrite. The refusal is a
+// *LayoutError.
+var ErrUnsafeLayout = errors.New("the output's layout is not one swath made")
+
+// LayoutError is a refusal by ErrUnsafeLayout: Path, relative to the
+// output, is Got where recovery needs Want.
+type LayoutError struct {
+	Path, Want, Got string
+}
+
+func (e *LayoutError) Error() string {
+	return fmt.Sprintf("resume: %s is %s, not %s; refusing to recover: %v", e.Path, e.Got, e.Want, ErrUnsafeLayout)
+}
+
+func (e *LayoutError) Unwrap() error { return ErrUnsafeLayout }
+
+// kind names a file mode for a LayoutError.
+func kind(m fs.FileMode) string {
+	switch {
+	case m&fs.ModeSymlink != 0:
+		return "a symbolic link"
+	case m.IsDir():
+		return "a directory"
+	case m.IsRegular():
+		return "a regular file"
+	}
+	return "a special file (" + m.Type().String() + ")"
+}
+
+// need checks rel (relative to r) without following a link: a directory
+// when dir, else a regular file. A missing path is nil, nil when optional.
+func need(r *os.Root, rel string, dir, optional bool) (fs.FileInfo, error) {
+	fi, err := r.Lstat(rel)
+	switch {
+	case optional && errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("resume: %w", err)
+	case dir && !fi.Mode().IsDir():
+		return nil, &LayoutError{Path: rel, Want: "a directory", Got: kind(fi.Mode())}
+	case !dir && !fi.Mode().IsRegular():
+		return nil, &LayoutError{Path: rel, Want: "a regular file", Got: kind(fi.Mode())}
+	}
+	return fi, nil
+}
+
+// openPart opens part file rel through r, refusing anything but the regular
+// file need found there (a link swapped in between the two is refused too).
+func openPart(r *os.Root, rel string) (*os.File, error) {
+	fi, err := need(r, rel, false, false)
+	if err != nil {
+		return nil, err
+	}
+	f, err := r.Open(rel)
+	if err != nil {
+		return nil, fmt.Errorf("resume: %w", err)
+	}
+	if got, err := f.Stat(); err != nil || !os.SameFile(fi, got) {
+		f.Close()
+		return nil, &LayoutError{Path: rel, Want: "the regular file found there", Got: "another file once opened"}
+	}
+	return f, nil
+}
+
+// Paths recovery acts on, relative to the output root.
+var (
+	partsRel   = filepath.Join(dataset.Workspace, dataset.PartsDir)
+	suspectRel = filepath.Join(dataset.Workspace, dataset.SuspectDir)
+)
+
+func partRel(i int) string  { return filepath.Join(dataset.DataDir, dataset.PartName(i)) }
+func claimRel(i int) string { return filepath.Join(partsRel, dataset.PartName(i)+dataset.ClaimSuffix) }
+
+// checkLayout is recovery's first step, before anything is renamed or
+// removed: every directory it acts in is a directory, and every part it may
+// keep, rename or set aside is a regular file, by lstat (a link is refused
+// whatever it names). This closes the case of a link already in place when
+// the resume starts (an interrupted output whose data/ was replaced by a
+// link to an unrelated directory, whose files cleanup would otherwise
+// remove). It does not close a replacement between this check and a later
+// action; recovery then acts through r, the output root, so a link that
+// leaves the output is refused by the root, and a link inside it is the
+// pathname-replacement window durability.md documents.
+func checkLayout(r *os.Root, st *journal.State) error {
+	for _, d := range []struct {
+		rel      string
+		optional bool
+	}{{dataset.Workspace, false}, {dataset.DataDir, false}, {partsRel, true}, {suspectRel, true}} {
+		if _, err := need(r, d.rel, true, d.optional); err != nil {
+			return err
+		}
+	}
+	n := len(st.Records)
+	for i := range n {
+		fi, err := need(r, partRel(i), false, true)
+		if err != nil {
+			return err
+		}
+		if fi == nil && i == n-1 {
+			if _, err := need(r, claimRel(i), false, true); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := need(r, claimRel(n), false, true)
+	return err
+}
+
+// renameIn renames within r the paths under out (rename's arguments are
+// pathnames the run made under out).
+func renameIn(r *os.Root, out string) func(old, new string) error {
+	return func(old, new string) error {
+		o, err1 := filepath.Rel(out, old)
+		n, err2 := filepath.Rel(out, new)
+		if err := errors.Join(err1, err2); err != nil {
+			return err
+		}
+		return r.Rename(o, n)
+	}
 }
 
 // recoverParts makes data/ hold exactly the journaled parts: a part whose
 // record is durable but whose rename did not happen is renamed now (its
 // temporary file was synced before the record); every other file in data/
 // (unrecorded temporary parts) is removed. The temporary part of a record
-// that read as torn is set aside as the suspect, returned.
-func recoverParts(v verifier, out string, st *journal.State, lock *journal.Lock) (*suspect, error) {
-	if err := checkParts(v, out, st, lock); err != nil {
+// that read as torn is set aside as the suspect, returned. r is the output
+// root (out, opened after the lock was verified): recovery reads, renames
+// and removes only through it, after checkLayout.
+func recoverParts(v verifier, r *os.Root, out string, st *journal.State, lock *journal.Lock) (*suspect, error) {
+	if err := checkLayout(r, st); err != nil {
+		return nil, err
+	}
+	if err := checkParts(v, r, out, st, lock); err != nil {
 		return nil, err
 	}
 	if err := lock.Verify(); err != nil {
 		return nil, err
 	}
-	sus, err := keepSuspect(v, out, st)
+	sus, err := keepSuspect(v, r, out, st)
 	if err != nil {
 		return nil, err
 	}
@@ -351,14 +497,13 @@ func recoverParts(v verifier, out string, st *journal.State, lock *journal.Lock)
 		return nil, err
 	}
 	// Unrecorded parts: the resume writes them again.
-	parts := filepath.Join(out, dataset.Workspace, dataset.PartsDir)
-	if err := os.RemoveAll(parts); err != nil {
+	if err := r.RemoveAll(partsRel); err != nil {
 		return nil, fmt.Errorf("resume: %w", err)
 	}
-	if err := os.MkdirAll(parts, 0o755); err != nil {
+	if err := r.MkdirAll(partsRel, 0o755); err != nil {
 		return nil, fmt.Errorf("resume: %w", err)
 	}
-	return sus, dataset.SyncDir(filepath.Join(out, dataset.Workspace))
+	return sus, dataset.SyncDirIn(r, dataset.Workspace)
 }
 
 // keepSuspect sets aside the claimed part of the ordinal after the last
@@ -371,52 +516,55 @@ func recoverParts(v verifier, out string, st *journal.State, lock *journal.Lock)
 // began. Parts not claimed were never named by a record and are removed
 // with the rest. A suspect whose ordinal was recorded since was reproduced
 // (the record follows the check) and is removed.
-func keepSuspect(v verifier, out string, st *journal.State) (*suspect, error) {
-	dir := filepath.Join(out, dataset.Workspace, dataset.SuspectDir)
+func keepSuspect(v verifier, r *os.Root, out string, st *journal.State) (*suspect, error) {
+	dir := filepath.Join(out, suspectRel)
 	n := len(st.Records)
+	final := n > 0 && st.Records[n-1].Final
 	name := dataset.PartName(n)
-	_, held := os.Stat(filepath.Join(dir, name))
-	if tmp := dataset.ClaimPath(out, n); !(n > 0 && st.Records[n-1].Final) && held != nil {
+	_, held := r.Lstat(filepath.Join(suspectRel, name))
+	if tmp := claimRel(n); !final && held != nil {
 		// A suspect an earlier resume set aside stays: a later temporary
 		// part at its ordinal was never compared with it (it crashed
 		// before its record) and must not replace it.
-		if _, err := os.Stat(tmp); err == nil {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
+		if _, err := r.Lstat(tmp); err == nil {
+			if err := r.MkdirAll(suspectRel, 0o755); err != nil {
 				return nil, fmt.Errorf("resume: %w", err)
 			}
-			if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
+			if err := r.Rename(tmp, filepath.Join(suspectRel, name)); err != nil {
 				return nil, fmt.Errorf("resume: %w", err)
 			}
-			if err := dataset.SyncDir(dir); err != nil {
+			if err := dataset.SyncDirIn(r, suspectRel); err != nil {
 				return nil, fmt.Errorf("resume: %w", err)
 			}
-			if err := dataset.SyncDir(filepath.Join(out, dataset.Workspace)); err != nil {
+			if err := dataset.SyncDirIn(r, dataset.Workspace); err != nil {
 				return nil, fmt.Errorf("resume: %w", err)
 			}
 		}
 	}
-	ents, err := os.ReadDir(dir)
+	d, err := r.Open(suspectRel)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("resume: %w", err)
 	}
+	ents, err := d.ReadDir(-1)
+	d.Close()
+	if err != nil {
+		return nil, fmt.Errorf("resume: %w", err)
+	}
 	var sus *suspect
 	for _, e := range ents {
-		path := filepath.Join(dir, e.Name())
+		rel := filepath.Join(suspectRel, e.Name())
 		switch {
 		case e.Name() < name: // recorded since: reproduced
-			if err := os.Remove(path); err != nil {
+			if err := r.Remove(rel); err != nil {
 				return nil, fmt.Errorf("resume: %w", err)
 			}
-		case e.Name() == name && !(n > 0 && st.Records[n-1].Final):
-			info, err := v.measure(path)
-			if err != nil {
-				return nil, fmt.Errorf("resume: suspect part: %w", err)
+		case e.Name() == name && !final:
+			if sus, err = measureSuspect(v, r, out, rel, n); err != nil {
+				return nil, err
 			}
-			rows, _ := parquetout.PartRows(path) // unreadable: no boundary, the comparison refuses
-			sus = &suspect{ordinal: n, path: path, info: info, rows: rows}
 		default:
 			return nil, fmt.Errorf("%w: %s holds %s but the journal holds %d records", journal.ErrCorrupt, dir, e.Name(), n)
 		}
@@ -424,15 +572,31 @@ func keepSuspect(v verifier, out string, st *journal.State) (*suspect, error) {
 	return sus, nil
 }
 
+// measureSuspect reads the suspect part rel (ordinal n) through r.
+func measureSuspect(v verifier, r *os.Root, out, rel string, n int) (*suspect, error) {
+	path := filepath.Join(out, rel)
+	f, err := openPart(r, rel)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := v.measureFile(f, path)
+	if err != nil {
+		return nil, fmt.Errorf("resume: suspect part: %w", err)
+	}
+	rows, _ := parquetout.PartRows(f) // unreadable: no boundary, the comparison refuses
+	return &suspect{ordinal: n, path: path, rel: rel, info: info, rows: rows}, nil
+}
+
 // checkParts is recoverParts up to the removal of the temporary parts.
-func checkParts(v verifier, out string, st *journal.State, lock *journal.Lock) error {
+func checkParts(v verifier, r *os.Root, out string, st *journal.State, lock *journal.Lock) error {
 	data := filepath.Join(out, dataset.DataDir)
 	// Refuse ambiguous damage before deleting anything: a part published
 	// under its final name beyond the recorded ones means an acknowledged
 	// record was lost (a damaged frame length, or bit rot in the last
 	// frame), not a torn append, which is never followed by a rename.
 	for i := len(st.Records); ; i++ {
-		if _, err := os.Stat(filepath.Join(data, dataset.PartName(i))); err != nil {
+		if _, err := r.Lstat(partRel(i)); err != nil {
 			break
 		}
 		return fmt.Errorf("%w: part %d is published but the journal holds only %d records (%d damaged bytes); refusing to recover",
@@ -446,30 +610,35 @@ func checkParts(v verifier, out string, st *journal.State, lock *journal.Lock) e
 	}
 	keep := map[string]bool{}
 	for i, rec := range st.Records {
-		final := filepath.Join(data, dataset.PartName(i))
-		keep[filepath.Base(final)] = true
-		path := final
-		if _, err := os.Stat(final); err != nil {
-			path = dataset.ClaimPath(out, i)
-			if _, err := os.Stat(path); err != nil || i != len(st.Records)-1 {
+		final := partRel(i)
+		keep[dataset.PartName(i)] = true
+		rel := final
+		if _, err := r.Lstat(final); err != nil {
+			rel = claimRel(i)
+			if _, err := r.Lstat(rel); err != nil || i != len(st.Records)-1 {
 				return fmt.Errorf("resume: part %d is journaled but missing from %s", i, data)
 			}
 		}
 		// Trust no retained part by existence: its size and digest must be
 		// the journal's before the frontier moves past it.
-		if err := v.verifyPart(path, rec.Part); err != nil {
+		if err := v.verifyPartIn(r, out, rel, rec.Part); err != nil {
 			return fmt.Errorf("resume: part %d: %w", i, err)
 		}
-		if path != final {
+		if rel != final {
 			if err := lock.Verify(); err != nil {
 				return err
 			}
-			if _, err := dataset.PublishPart(out, i, dataset.Part{Path: path, PartInfo: rec.Part}); err != nil {
+			if _, err := dataset.PublishPartWith(renameIn(r, out), out, i, dataset.Part{Path: filepath.Join(out, rel), PartInfo: rec.Part}); err != nil {
 				return fmt.Errorf("resume: %w", err)
 			}
 		}
 	}
-	ents, err := os.ReadDir(data)
+	d, err := r.Open(dataset.DataDir)
+	if err != nil {
+		return fmt.Errorf("resume: %w", err)
+	}
+	ents, err := d.ReadDir(-1)
+	d.Close()
 	if err != nil {
 		return fmt.Errorf("resume: %w", err)
 	}
@@ -477,15 +646,17 @@ func checkParts(v verifier, out string, st *journal.State, lock *journal.Lock) e
 		return err
 	}
 	for _, e := range ents {
+		// Removed through the root: an entry that is a link is removed
+		// itself, never what it names.
 		if !keep[e.Name()] {
-			if err := os.Remove(filepath.Join(data, e.Name())); err != nil {
+			if err := r.Remove(filepath.Join(dataset.DataDir, e.Name())); err != nil {
 				return fmt.Errorf("resume: %w", err)
 			}
 		}
 	}
 	// Every recorded part's final name, found or made, must be durable
 	// before the temporary copies, the fallback, are removed.
-	if err := dataset.SyncDir(data); err != nil {
+	if err := dataset.SyncDirIn(r, dataset.DataDir); err != nil {
 		return fmt.Errorf("resume: %w", err)
 	}
 	return faults.At("recovered")
@@ -494,8 +665,16 @@ func checkParts(v verifier, out string, st *journal.State, lock *journal.Lock) e
 // ErrPartAltered reports a retained part that does not match its record.
 var ErrPartAltered = errors.New("retained part does not match its journal record")
 
-func (v verifier) verifyPart(path string, want dataset.PartInfo) error {
-	got, err := v.measure(path)
+// verifyPartIn checks retained part rel (under r, the root of out) against
+// its record.
+func (v verifier) verifyPartIn(r *os.Root, out, rel string, want dataset.PartInfo) error {
+	path := filepath.Join(out, rel)
+	f, err := openPart(r, rel)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	got, err := v.measureFile(f, path)
 	if err != nil {
 		return err
 	}
@@ -528,6 +707,11 @@ func (v verifier) measure(path string) (dataset.PartInfo, error) {
 		return dataset.PartInfo{}, err
 	}
 	defer f.Close()
+	return v.measureFile(f, path)
+}
+
+// measureFile is measure of the open file f (path names it in errors).
+func (v verifier) measureFile(f *os.File, path string) (dataset.PartInfo, error) {
 	h := md5.New()
 	buf := make([]byte, verifyChunk)
 	var n int64
@@ -659,7 +843,11 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	if sus != nil && ordinal == sus.ordinal {
 		// Reproduced and recorded: the copy set aside is redundant (a
 		// later recovery removes it if this does not).
-		_ = os.Remove(sus.path)
+		if jr.root != nil {
+			_ = jr.root.Remove(sus.rel)
+		} else {
+			_ = os.Remove(sus.path)
+		}
 		jr.suspect = nil
 	}
 	if err := faults.At("recorded"); err != nil {

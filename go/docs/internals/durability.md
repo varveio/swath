@@ -123,11 +123,14 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    before the router starts), so a replacement between a check and those actions cannot reach the impostor
    (`TestReplacedAfterCheckGetsNoPart`, the fault point `part-create` between the router's check and the
    create; under a load average of 13-20 `TestReplacedOutputIsNeverTouched` had seen a part created by
-   pathname in the impostor's `.swath/parts`). What is not excluded: a replacement between a check and its
-   action for the other pathname operations (the spill files, recovery, cleanup, the manifest, the reports,
-   the outcome and progress files), and helpers of several steps (preparation, recovery of a part, the
-   publication's directory sync, the manifest's write and rename) check once before they start, so that
-   window spans the helper.
+   pathname in the impostor's `.swath/parts`). Resume recovery (step 3) acts through the same root, opened
+   before it starts. What is not excluded: a replacement between a check and its action for the other
+   pathname operations (the spill files, cleanup, the manifest, the reports, the outcome and progress
+   files), and helpers of several steps (preparation, the publication's directory sync, the manifest's write
+   and rename) check once before they start, so that window spans the helper. Below the root, recovery's
+   type checks (step 3) close the case of a link already in place when the resume starts; a path below the
+   root replaced after those checks and before an action is the same check/action window: the root
+   refuses a link that leaves the output, but follows one that stays inside it.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
    pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that
@@ -143,7 +146,16 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    row budget, `-seed` and
    credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
-3. Recovers `data/`. The journal is synced first (its accepted frames are acted on). Every retained part
+3. Recovers `data/`. Every path it acts on is checked first by lstat, never following a link: `data/`,
+   `.swath/`, `.swath/parts/` and `.swath/suspect/` must be directories, every retained part, a claimed part
+   and the suspect read must be regular files. Anything else (an interrupted output whose `data/` became a
+   link to an unrelated directory, whose files cleanup would remove) is refused before anything is read,
+   renamed or removed, with `listing.ErrUnsafeLayout` (a `*listing.LayoutError` naming the path; exit 1,
+   class `fatal`, not resumable), the output left as it was (`TestRecoveryRefusesSymlinkedData`,
+   `TestRecoveryRefusesSymlinkedSuspectDir`, `TestRecoveryRefusesNonRegularPart`). Recovery then reads,
+   renames, removes and syncs through the output root (`os.Root`), as part creation does; an unrecorded
+   entry of `data/` that is a link is removed itself, never what it names.
+   The journal is synced first (its accepted frames are acted on). Every retained part
    must match its record's size and MD5 (`ErrPartAltered` otherwise). A part whose record is durable but whose
    rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, the
    part of a torn last record is set aside (the journal, below), and only then are the temporary parts removed.

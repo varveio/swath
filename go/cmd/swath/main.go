@@ -691,6 +691,8 @@ func explain(err error) error {
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
+	case errors.Is(err, listing.ErrUnsafeLayout):
+		return fmt.Errorf("%w (nothing was changed; inspect the output, or start over with swath list --overwrite)", err)
 	case errors.Is(err, listing.ErrInterrupted):
 		return fmt.Errorf("%w (swath resume DIR continues it; --overwrite starts over)", err)
 	case errors.Is(err, dataset.ErrNotEmpty):
