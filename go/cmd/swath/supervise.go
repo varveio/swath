@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 )
@@ -160,21 +161,27 @@ var errOut io.Writer = os.Stderr
 
 // settleOutside records o in dir's error.json for a command that stopped
 // before any run owned the output (a resume refused on a damaged journal),
-// under the output lock. A committed dataset, a directory without a
-// workspace and an output another process owns are left as they are:
-// unrecorded says why, empty when there was nothing to replace.
-func settleOutside(dir string, o outcome) (recorded bool, unrecorded string) {
-	if dir == "" || dataset.Committed(dir) {
+// under the output lock, when dir holds the unfinished run the command
+// read: seen is its journal.Witness then, and must still match under the
+// lock. A committed dataset, a directory without a journal (nothing is
+// created there, not even the lock), an output another process owns and a
+// run another process completed, replaced or continued since are left as
+// they are: unrecorded says why, empty when there was nothing to replace.
+func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded string) {
+	if dir == "" || seen == "" || dataset.Committed(dir) {
 		return false, ""
 	}
-	if fi, err := os.Stat(filepath.Join(dir, dataset.Workspace)); err != nil || !fi.IsDir() {
-		return false, ""
+	if err := faults.At("settle-lock"); err != nil {
+		return false, err.Error()
 	}
 	lock, err := journal.TakeLock(dir)
 	if err != nil {
 		return false, err.Error()
 	}
 	defer lock.Release()
+	if dataset.Committed(dir) || journal.Witness(dir) != seen {
+		return false, "another process completed or replaced the run before this one held the lock"
+	}
 	if err := writeOutcome(dir, o); err != nil {
 		return false, "write " + errorName + ": " + err.Error()
 	}

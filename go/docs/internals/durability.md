@@ -83,7 +83,11 @@ that is the commit. The run reports follow it.
    command's `error.json` and progress writes (`listing.Config.Settle`, `Progress.Owned`); a failure under the
    lock (a damaged journal, a mismatch, a failed recovery) is settled before it is released, and a resume whose
    source does not open takes the lock to settle, so the interrupted run's outcome never stands as current
-   (`TestOutcomeIsCurrent`). Every run with an
+   (`TestOutcomeIsCurrent`). Such an early failure settles only the run it saw: it takes `journal.Witness` (a
+   digest of the journal and `error.json`) before the lock and records its outcome only if, under the lock, the
+   dataset is uncommitted and the witness unchanged; a run another process completed, replaced or continued
+   meanwhile keeps its outcome (`TestOutcomeSettlementAfterConcurrentCommit`). A directory without a journal is
+   nothing to resume and is left untouched, without a lock (`TestNothingToResumeLeavesDirectoryUntouched`). Every run with an
    output takes it: fresh runs, overwrites and filesystem runs, which keep no journal.
    Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
@@ -122,8 +126,8 @@ each range). The ramp-up cost has not been measured.
 
 A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
 may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.
-`swath resume` on a complete dataset returns `ErrComplete`; on a directory without a journal,
-`ErrNothingToResume`. A new run over an interrupted one needs `-overwrite`.
+`swath resume` on a complete dataset returns `ErrComplete`; on a directory without a journal (an empty
+workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `-overwrite`.
 
 ## Why splits need no transaction
 

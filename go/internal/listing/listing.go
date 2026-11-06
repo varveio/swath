@@ -170,13 +170,19 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	if warn == nil {
 		warn = func(string) {}
 	}
+	// The unfinished run this invocation means to continue or replace, as
+	// it is now: an early failure settles only that run (settleUnowned).
+	seen := ""
+	if cfg.Output.Dir != "" && (cfg.Output.Resume || cfg.Output.Replace) {
+		seen = journal.Witness(cfg.Output.Dir)
+	}
 	src, err := f.Open(ctx, registry.Request{Root: cfg.Source.URI, Options: opts, Workers: cfg.Limits.Workers, Warn: warn})
 	if err != nil {
 		// Before ownership (credentials, say): the outcome of the run this
 		// invocation would have continued or replaced is recorded too, so
 		// an earlier one is never left standing as current.
 		rep, err := sum.failed(err)
-		settleUnowned(cfg, rep, err)
+		settleUnowned(cfg, seen, rep, err)
 		return rep, err
 	}
 	s, loc := src.Schema(), src.Locator()
@@ -185,9 +191,15 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	if err != nil {
 		// A refusal before the lock leaves the output as it was (jr nil);
 		// a failure under it (a damaged journal, an identity mismatch, a
-		// failed recovery) is settled before the lock is released.
+		// failed recovery) is settled before the lock is released, except
+		// a dataset completed or a run gone by the time the lock was held:
+		// another process's outcome stands.
 		rep, err := sum.failed(err)
-		jr.close(cfg, rep, err)
+		if errors.Is(err, ErrComplete) || errors.Is(err, ErrNothingToResume) {
+			jr.release(cfg)
+		} else {
+			jr.close(cfg, rep, err)
+		}
 		return rep, err
 	}
 	rep, err := owned(ctx, cfg, sum, src, s, jr)

@@ -6,10 +6,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,9 +20,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 )
 
 // TestOutcomeIsCurrent: a stuck run leaves error.json with 75; a resume
@@ -31,11 +38,6 @@ import (
 // outcome is reported, on stderr and in the report (Sol, fourth review,
 // minimum change 4).
 func TestOutcomeIsCurrent(t *testing.T) {
-	tok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)
-	}))
-	t.Cleanup(tok.Close)
 	var hang atomic.Bool // every request waits: no progress
 	hang.Store(true)
 	gcs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,25 +48,9 @@ func TestOutcomeIsCurrent(t *testing.T) {
 		fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1"}]}`)
 	}))
 	t.Cleanup(gcs.Close)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("APPDATA", home)
-	good, broken := filepath.Join(home, "adc.json"), filepath.Join(home, "broken.json")
-	os.WriteFile(good, fmt.Appendf(nil, `{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"rt","token_uri":%q}`, tok.URL), 0o600)
-	os.WriteFile(broken, []byte(`{"type":"authorized_user",`), 0o600)
-	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", good)
-	var stderr bytes.Buffer
-	errOut = &stderr
-	t.Cleanup(func() { errOut = os.Stderr })
-
-	code := func(err error) int {
-		var ee *exitError
-		if errors.As(err, &ee) {
-			return ee.code
-		}
-		t.Fatalf("not an exit: %v", err)
-		return 0
-	}
+	good, broken := fakeADC(t)
+	stderr := captureStderr(t)
+	code := func(err error) int { return exitCode(t, err) }
 	dir := filepath.Join(t.TempDir(), "ds")
 	errorFile := filepath.Join(dir, errorName)
 	read := func() outcome {
@@ -175,5 +161,193 @@ func TestOutcomeIsCurrent(t *testing.T) {
 	}
 	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
 		t.Fatal("error.json after the resume completed")
+	}
+}
+
+// fakeADC points Application Default Credentials at a fake token server:
+// good is an authorized-user file that works, broken one that does not
+// parse (the source does not open). good is set.
+func fakeADC(t *testing.T) (good, broken string) {
+	t.Helper()
+	tok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"tok","token_type":"Bearer","expires_in":3600}`)
+	}))
+	t.Cleanup(tok.Close)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("APPDATA", home)
+	good, broken = filepath.Join(home, "adc.json"), filepath.Join(home, "broken.json")
+	os.WriteFile(good, fmt.Appendf(nil, `{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"rt","token_uri":%q}`, tok.URL), 0o600)
+	os.WriteFile(broken, []byte(`{"type":"authorized_user",`), 0o600)
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", good)
+	return good, broken
+}
+
+// captureStderr collects what the command reports on stderr.
+func captureStderr(t *testing.T) *bytes.Buffer {
+	var b bytes.Buffer
+	errOut = &b
+	t.Cleanup(func() { errOut = os.Stderr })
+	return &b
+}
+
+func exitCode(t *testing.T, err error) int {
+	t.Helper()
+	var ee *exitError
+	if errors.As(err, &ee) {
+		return ee.code
+	}
+	t.Fatalf("not an exit: %v", err)
+	return 0
+}
+
+// dirTree is every entry under dir: directories, and files with their size
+// and digest.
+func dirTree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	m := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		if d.IsDir() {
+			m[rel] = "dir"
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		m[rel] = fmt.Sprintf("%d/%x", len(b), sha256.Sum256(b))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// crashRun runs args in process and crashes it at the nth recorded part.
+func crashRun(t *testing.T, args []string, nth int64) {
+	t.Helper()
+	var n atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "recorded" && n.Add(1) == nth {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	defer restore()
+	if err := run(context.Background(), args, io.Discard, false); !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("crash not injected: %v", err)
+	}
+}
+
+// TestOutcomeSettlementAfterConcurrentCommit: an invocation that fails
+// before it owns the output (a resume refused on a damaged journal, or a
+// resume whose source does not open) settles its outcome only if the run
+// it saw is still there once it holds the lock. Paused just before the
+// lock while another process completes the run, or replaces it with a new
+// interrupted one, and then continued, it must leave the directory exactly
+// as the other process left it; its outcome goes to stderr (Sol, fifth
+// review, M4).
+func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
+	good, broken := fakeADC(t)
+	stderr := captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	args := func(dir string, extra ...string) []string {
+		return append([]string{"gs://bkt", "--gcs-endpoint", ep, "--part-size", "4KiB", "--memory", "1MiB", "-o", dir}, extra...)
+	}
+	ctx := context.Background()
+	for _, failing := range []string{"damaged journal", "source does not open"} {
+		for _, other := range []string{"completes", "replaces"} {
+			name := failing + ", another process " + other
+			dir := filepath.Join(t.TempDir(), "ds")
+			t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", good)
+			crashRun(t, args(dir), 2)
+			if failing == "damaged journal" {
+				jb, _ := os.ReadFile(journal.Path(dir))
+				os.WriteFile(journal.Path(dir), append(jb, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0), 0o644)
+			} else {
+				t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", broken)
+			}
+			paused, cont := make(chan struct{}), make(chan struct{})
+			restore := faults.Set(func(p string) error {
+				if p == "settle-lock" {
+					close(paused)
+					<-cont
+				}
+				return nil
+			})
+			done := make(chan error, 1)
+			go func() { done <- resume(ctx, []string{dir}, io.Discard) }()
+			select {
+			case <-paused:
+			case err := <-done:
+				restore()
+				t.Fatalf("%s: the failing resume never reached the lock: %v", name, err)
+			case <-time.After(time.Minute):
+				t.Fatalf("%s: the failing resume never reached the lock", name)
+			}
+			restore()
+			t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", good)
+			if other == "completes" {
+				if err := run(ctx, args(dir, "--overwrite"), io.Discard, false); err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+			} else {
+				crashRun(t, args(dir, "--overwrite"), 1)
+			}
+			want := dirTree(t, dir)
+			stderr.Reset()
+			close(cont)
+			if c := exitCode(t, <-done); c != exitFatal {
+				t.Fatalf("%s: exit %d", name, c)
+			}
+			if got := dirTree(t, dir); !maps.Equal(want, got) {
+				t.Fatalf("%s: the directory changed:\nbefore %v\nafter  %v", name, want, got)
+			}
+			if !strings.Contains(stderr.String(), "swath: outcome: {") {
+				t.Fatalf("%s: the outcome is not on stderr: %q", name, stderr.String())
+			}
+		}
+	}
+}
+
+// TestNothingToResumeLeavesDirectoryUntouched: `swath resume` on a
+// directory without a journal (an empty workspace, one holding only the
+// lock, or none) refuses with ErrNothingToResume and changes nothing: no
+// lock is created and error.json is not replaced. The same through a run
+// asked to resume directly (the library path the command does not reach).
+func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
+	captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(100), 0)
+	ctx := context.Background()
+	for _, layout := range []string{"empty workspace", "lock only", "no workspace"} {
+		dir := filepath.Join(t.TempDir(), "ds")
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, errorName), []byte(`{"class":"stuck","exit_code":75,"resumable":true}`), 0o644)
+		if layout != "no workspace" {
+			os.MkdirAll(filepath.Join(dir, dataset.Workspace), 0o755)
+		}
+		if layout == "lock only" {
+			os.WriteFile(filepath.Join(dir, dataset.Workspace, dataset.LockName), nil, 0o644)
+		}
+		want := dirTree(t, dir)
+		if err := resume(ctx, []string{dir}, io.Discard); !errors.Is(err, listing.ErrNothingToResume) {
+			t.Fatalf("%s: resume: %v", layout, err)
+		}
+		if got := dirTree(t, dir); !maps.Equal(want, got) {
+			t.Fatalf("%s: resume changed the directory:\nbefore %v\nafter  %v", layout, want, got)
+		}
+		err := runWith(ctx, []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--output", dir}, io.Discard, false, nil, true)
+		if !errors.Is(err, listing.ErrNothingToResume) {
+			t.Fatalf("%s: resumed run: %v", layout, err)
+		}
+		if got := dirTree(t, dir); !maps.Equal(want, got) {
+			t.Fatalf("%s: a resumed run changed the directory:\nbefore %v\nafter  %v", layout, want, got)
+		}
 	}
 }

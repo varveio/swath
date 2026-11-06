@@ -231,9 +231,11 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   progress file are written only while the run holds the output lock, and `error.json` is removed when a later
   run or resume completes. `error.json` is always the last attempt's outcome: a resume (or `--overwrite`) that
   fails before it runs (credentials that do not load, a damaged journal, a failed recovery) takes the lock and
-  records its own outcome over the interrupted run's. An attempt that cannot record it (another process owns
-  the output, whose outcome stands; a refusal that leaves the directory as it was, such as a complete dataset or
-  an unusable output; a failed write) prints it on stderr as one line, `swath: outcome: {...}`, with the reason
+  records its own outcome over the interrupted run's, if that run is still the one it read (its journal and
+  `error.json` unchanged) and the dataset still uncommitted once it holds the lock. An attempt that cannot
+  record it (another process owns the output, whose outcome stands; another process completed or replaced the
+  run first; a refusal that leaves the directory as it was, such as a complete dataset, a directory without a
+  journal, where nothing is created, or an unusable output; a failed write) prints it on stderr as one line, `swath: outcome: {...}`, with the reason
   when it should have been recorded; the JSON report carries the reason as `outcome.unrecorded`.
 
   | Code | Class | Meaning | Resumable |

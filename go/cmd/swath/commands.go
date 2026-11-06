@@ -59,20 +59,24 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	if dir == "" {
 		return usageError{errors.New("usage: swath resume DIR [runtime flags]")}
 	}
+	// The run a refusal below is about, as read now: it is settled only
+	// if it is still that run once this process holds the lock.
+	seen := journal.Witness(dir)
+	stop := func(err error) error { return refuse(dir, seen, err) }
 	if dataset.Committed(dir) {
-		return refuse(dir, listing.ErrComplete)
+		return stop(listing.ErrComplete)
 	}
 	st, err := journal.Read(dir)
 	if errors.Is(err, journal.ErrNoJournal) {
 		if dataset.Resumable(dir) {
 			// The journal's header never became durable: nothing was
 			// published, and the command was not recorded.
-			return refuse(dir, errNoCommand)
+			return stop(errNoCommand)
 		}
-		return refuse(dir, listing.ErrNothingToResume)
+		return stop(listing.ErrNothingToResume)
 	}
 	if err != nil {
-		return refuse(dir, err)
+		return stop(err)
 	}
 	argv := st.Header.Argv
 	diag := len(argv) >= 2 && argv[0] == "diag" && argv[1] == "list"
@@ -83,7 +87,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	case len(argv) >= 1 && argv[0] == "list":
 		base = argv[1:]
 	default:
-		return refuse(dir, fmt.Errorf("resume: the journal in %s records no command (written by an older build): finish it with that build or start over", dir))
+		return stop(fmt.Errorf("resume: the journal in %s records no command (written by an older build): finish it with that build or start over", dir))
 	}
 	// The recorded command without --overwrite (the output is resumed, not
 	// replaced), then the overrides, then the directory as given (it may
@@ -102,11 +106,12 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 // refuse settles a resume that stopped before it could run: its outcome
 // replaces the interrupted run's in error.json (under the output lock), so
 // a supervisor never acts on a stale one; a committed dataset, a directory
-// without a run and an output another process owns keep theirs, and the
-// outcome goes to stderr.
-func refuse(dir string, err error) error {
+// without a run, an output another process owns and a run that changed
+// since seen (its journal.Witness) keep theirs, and the outcome goes to
+// stderr.
+func refuse(dir, seen string, err error) error {
 	o := classify(err, nil, dir)
-	if recorded, why := settleOutside(dir, o); !recorded {
+	if recorded, why := settleOutside(dir, seen, o); !recorded {
 		reportUnrecorded(dir, o, why)
 	}
 	return &exitError{err, o.ExitCode}

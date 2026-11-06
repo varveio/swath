@@ -85,7 +85,10 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 	case cfg.Output.Resume && dataset.Committed(cfg.Output.Dir):
 		return nil, ErrComplete
 	case cfg.Output.Resume:
-		if _, err := os.Stat(filepath.Join(cfg.Output.Dir, dataset.Workspace)); err != nil {
+		// An unfinished run has a journal file (a workspace alone, empty
+		// or holding only the lock, is nothing to resume, and is left as
+		// it is: no lock is created).
+		if !dataset.Resumable(cfg.Output.Dir) {
 			return nil, ErrNothingToResume
 		}
 	default:
@@ -121,23 +124,31 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 
 // settleUnowned settles a run that failed before it owned its output, when
 // the invocation meant to continue or replace an unfinished run there:
-// that run's earlier outcome must not stand as the current one. It takes
-// the lock first; an output another process owns, a committed dataset and
-// a directory without a workspace are left as they are (the caller reports
-// the outcome itself).
-func settleUnowned(cfg Config, rep Report, err error) {
+// that run's earlier outcome must not stand as the current one. seen is the
+// run's journal.Witness when the invocation began ("" when there was no
+// unfinished run). It takes the lock first and settles only if, under it,
+// the dataset is still uncommitted and the witness unchanged; an output
+// another process owns, or whose run another process completed, replaced
+// or continued meanwhile, is left as it is (the caller reports the outcome
+// itself).
+func settleUnowned(cfg Config, seen string, rep Report, err error) {
 	dir := cfg.Output.Dir
-	if cfg.Settle == nil || dir == "" || !(cfg.Output.Resume || cfg.Output.Replace) || dataset.Committed(dir) {
+	if cfg.Settle == nil || dir == "" || seen == "" || !(cfg.Output.Resume || cfg.Output.Replace) || dataset.Committed(dir) {
 		return
 	}
-	if fi, serr := os.Stat(filepath.Join(dir, dataset.Workspace)); serr != nil || !fi.IsDir() {
+	if err := faults.At("settle-lock"); err != nil {
 		return
 	}
 	lock, lerr := journal.TakeLock(dir)
 	if lerr != nil {
 		return
 	}
-	(&runJournal{out: dir, lock: lock}).close(cfg, rep, err)
+	jr := &runJournal{out: dir, lock: lock}
+	if dataset.Committed(dir) || journal.Witness(dir) != seen {
+		jr.release(cfg)
+		return
+	}
+	jr.close(cfg, rep, err)
 }
 
 // prepareError names an interrupted run when the output refused is one.
@@ -479,6 +490,20 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 	}
 	if cfg.Settle != nil {
 		cfg.Settle(rep, err)
+	}
+	jr.release(cfg)
+}
+
+// release gives up the output without settling: nothing found under the
+// lock is this invocation's to record (the run completed or was replaced
+// by another process, or there is none).
+func (jr *runJournal) release(cfg Config) {
+	if jr == nil {
+		return
+	}
+	if jr.j != nil {
+		_ = jr.j.Close()
+		jr.j = nil
 	}
 	cfg.Progress.own(false)
 	jr.lock.Release()

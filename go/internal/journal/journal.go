@@ -23,7 +23,9 @@ package journal
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +48,30 @@ const (
 
 // Path is the journal path of dataset directory out.
 func Path(out string) string { return filepath.Join(out, Dir, Name) }
+
+// Witness identifies the unfinished run in out as this process sees it now:
+// a digest of the journal file and of the outcome file (error.json), or ""
+// when out holds no journal file (no unfinished run to settle). An
+// invocation that failed before it owned out records its outcome only if
+// the witness it took before is unchanged once it holds the lock: a run
+// another process completed, replaced or continued meanwhile reads
+// differently, and its outcome is not this invocation's to replace.
+func Witness(out string) string {
+	j, err := os.ReadFile(Path(out))
+	if err != nil {
+		return ""
+	}
+	h := sha256.New()
+	fmt.Fprintf(h, "%d\n", len(j))
+	h.Write(j)
+	if o, err := os.ReadFile(filepath.Join(out, dataset.ErrorName)); err == nil {
+		fmt.Fprintf(h, "outcome %d\n", len(o))
+		h.Write(o)
+	} else {
+		fmt.Fprintf(h, "no outcome: %v", errors.Is(err, os.ErrNotExist))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 const maxFrame = 64 << 20
 
