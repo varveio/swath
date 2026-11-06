@@ -1680,6 +1680,13 @@ parts; computed, not measured). Wall is about 1.3 ms per part (the record's and 
 the peak heap rises by about 4.4 KB per part (the router keeps every part's record; the journal state is read
 once on resume). At the default 64 MiB parts, 10,000 parts is about 640 GB of dataset.
 
+**Now a gate (`TestPartCountGrowth`, every run but `-short`; `SWATH_GROWTH=1` adds the 10,000-part run).** At
+200 and 800 one-row parts it requires the journal and the manifest under 1 KiB + 320 bytes per part, their
+growth between the two sizes under 320 bytes per part, and the live heap at the last part's rename (after a
+collection: the per-part records the run keeps) to grow by under 8 KiB per part. Measured on this host: 233 and
+252 bytes per part; live heap 2.1 -> 2.8 MiB, about 1.2 KB per part (2.5 -> 4.0 MiB under `-race`). The peak
+heap above is mostly garbage between collections and is logged, not asserted.
+
 ## Throttle handling and adaptive concurrency (2026-11-06)
 
 **What was built.** `objhttp.Limiter` (`acc3f88`) admits every HTTP attempt of the S3 and GCS clients (pages,

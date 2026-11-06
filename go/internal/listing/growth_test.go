@@ -17,16 +17,37 @@ import (
 	"github.com/varveio/swath/go/internal/journal"
 )
 
-// TestPartCountGrowth measures what a run keeps per part: the journal's
-// and manifest's bytes, the peak Go heap and the wall, for runs of 1,000
-// and 10,000 one-row parts (a GCS source of that many names, PartSize 1,
-// eight workers).
-// Opt-in measurement (SWATH_GROWTH=1), not a gate: it logs the numbers.
+// Ceilings on what a run keeps per part (one-row parts; keys of about 20
+// bytes): the journal and the manifest at most growthBase plus growthBytes
+// per part, and the live heap when the last part is published (after a
+// collection: the router's and the committer's per-part records) at most
+// growthHeap more per part between the two sizes. Measured (REPORT.md,
+// "Part-count growth"): about 233 and 253 bytes per part, and 1.2 KB of
+// live heap per part (2.3 KB under the race detector).
+const (
+	growthBase  = 1 << 10
+	growthBytes = 320
+	growthHeap  = 8 << 10
+)
+
+// TestPartCountGrowth: a run of n one-row parts (a GCS source of n names,
+// PartSize 1, eight workers) keeps the journal, the manifest and the live
+// heap within linear ceilings in n, for 200 and 800 parts;
+// SWATH_GROWTH=1 adds 10,000 parts and logs the peak heap and the wall.
 func TestPartCountGrowth(t *testing.T) {
-	if os.Getenv("SWATH_GROWTH") == "" {
-		t.Skip("measurement; set SWATH_GROWTH=1")
+	if testing.Short() {
+		t.Skip("lists 1,000 parts")
 	}
-	for _, n := range []int{1000, 10000} {
+	sizes := []int{200, 800}
+	if os.Getenv("SWATH_GROWTH") != "" {
+		sizes = append(sizes, 10000)
+	}
+	type point struct {
+		parts                   int
+		journal, manifest, live int64
+	}
+	var got []point
+	for _, n := range sizes {
 		ep := gcsBucket(t, n)
 		out := filepath.Join(t.TempDir(), "ds")
 		runtime.GC()
@@ -48,12 +69,17 @@ func TestPartCountGrowth(t *testing.T) {
 				}
 			}
 		}()
-		var jbytes atomic.Int64 // the journal's size when the last part is published
+		var jbytes, live atomic.Int64 // at the last part's publication
+		var published atomic.Int64
 		restore := faults.Set(func(p string) error {
-			if p == "published" {
+			if p == "renamed" && published.Add(1) == int64(n) {
 				if fi, err := os.Stat(filepath.Join(out, dataset.JournalDir, journal.Name)); err == nil {
 					jbytes.Store(fi.Size())
 				}
+				runtime.GC()
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				live.Store(int64(m.HeapAlloc))
 			}
 			return nil
 		})
@@ -67,19 +93,29 @@ func TestPartCountGrowth(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		runtime.GC()
-		var after runtime.MemStats
-		runtime.ReadMemStats(&after)
-		size := func(p string) int64 {
-			fi, err := os.Stat(p)
-			if err != nil {
-				return -1
-			}
-			return fi.Size()
+		fi, err := os.Stat(filepath.Join(out, dataset.ManifestName))
+		if err != nil {
+			t.Fatal(err)
 		}
 		parts, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))
-		t.Logf("parts=%d rows=%d wall=%s journal=%d B manifest=%d B peak heap=%.1f MiB (base %.1f) retained after run=%.1f MiB",
-			len(parts), sum.Output.RowsListed, wall.Round(time.Millisecond), jbytes.Load(), size(filepath.Join(out, "manifest.json")),
-			float64(peak.Load())/(1<<20), float64(base.HeapAlloc)/(1<<20), float64(after.HeapAlloc)/(1<<20))
+		if len(parts) != n || published.Load() != int64(n) {
+			t.Fatalf("%d parts, %d published, want %d", len(parts), published.Load(), n)
+		}
+		p := point{n, jbytes.Load(), fi.Size(), live.Load()}
+		t.Logf("parts=%d rows=%d wall=%s journal=%d B manifest=%d B live at the last publication=%.1f MiB peak heap=%.1f MiB (base %.1f)",
+			n, sum.Output.RowsListed, wall.Round(time.Millisecond), p.journal, p.manifest, float64(p.live)/(1<<20),
+			float64(peak.Load())/(1<<20), float64(base.HeapAlloc)/(1<<20))
+		if limit := int64(growthBase + growthBytes*n); p.journal > limit || p.manifest > limit {
+			t.Fatalf("%d parts: journal %d B, manifest %d B, ceiling %d B", n, p.journal, p.manifest, limit)
+		}
+		got = append(got, p)
+	}
+	for i := 1; i < len(got); i++ {
+		a, b := got[i-1], got[i]
+		d := int64(b.parts - a.parts)
+		if (b.journal-a.journal)/d > growthBytes || (b.manifest-a.manifest)/d > growthBytes || (b.live-a.live)/d > growthHeap {
+			t.Fatalf("%d -> %d parts: per part journal %d B, manifest %d B, live heap %d B (ceilings %d, %d)",
+				a.parts, b.parts, (b.journal-a.journal)/d, (b.manifest-a.manifest)/d, (b.live-a.live)/d, growthBytes, growthHeap)
+		}
 	}
 }
