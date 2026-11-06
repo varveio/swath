@@ -13,7 +13,7 @@ SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `
 line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. `swath resume DIR` replays the command the journal recorded; only
 the runtime flags (`--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
-`--report-format`, `--report`, `--max-duration`, `--stall-timeout`) and the operational ones, how requests are
+`--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`) and the operational ones, how requests are
 authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`,
 `--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--request-rate`), may be given again (the last value
 wins: `--anonymous=false` undoes a recorded `--anonymous`); anything else is a usage error. The source and output
@@ -43,7 +43,7 @@ usage: swath list SOURCE --output DIR [flags]
   -dualstack
     	S3: use the dual-stack (IPv6) endpoint
   -encoders int
-    	Parquet encoder goroutines (default GOMAXPROCS)
+    	Parquet encoder goroutines (default GOMAXPROCS); fewer are admitted when --memory or the descriptor limit cannot carry them, never fewer than one
   -endpoint URL
     	S3: endpoint URL of an S3-compatible store
   -fetch-owner
@@ -78,6 +78,8 @@ usage: swath list SOURCE --output DIR [flags]
     	output dataset directory (required unless --count-only)
   -overwrite
     	replace a previous dataset in --output
+  -part-interval duration
+    	close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 1m0s)
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
@@ -101,7 +103,7 @@ usage: swath list SOURCE --output DIR [flags]
   -spill-compress
     	compress spill files (zstd level 1)
   -spill-max bytes
-    	cap on spill bytes on disk (0: no cap); past it, listing waits instead of spilling
+    	cap on spill bytes on disk (0: half the free space on the spill filesystem at start, after --spill-reserve); past it, listing waits instead of spilling
   -spill-reserve bytes
     	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
   -stall-timeout duration
@@ -110,7 +112,7 @@ usage: swath list SOURCE --output DIR [flags]
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, report, max-duration, stall-timeout (runtime) and
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, request-rate (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
@@ -126,7 +128,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -dualstack
     	S3: use the dual-stack (IPv6) endpoint
   -encoders int
-    	Parquet encoder goroutines (default GOMAXPROCS)
+    	Parquet encoder goroutines (default GOMAXPROCS); fewer are admitted when --memory or the descriptor limit cannot carry them, never fewer than one
   -endpoint URL
     	S3: endpoint URL of an S3-compatible store
   -fetch-owner
@@ -169,6 +171,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	output dataset directory (required unless --count-only)
   -overwrite
     	replace a previous dataset in --output
+  -part-interval duration
+    	close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 1m0s)
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
@@ -198,7 +202,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -spill-compress
     	compress spill files (zstd level 1)
   -spill-max bytes
-    	cap on spill bytes on disk (0: no cap); past it, listing waits instead of spilling
+    	cap on spill bytes on disk (0: half the free space on the spill filesystem at start, after --spill-reserve); past it, listing waits instead of spilling
   -spill-reserve bytes
     	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
   -stall-timeout duration
@@ -209,7 +213,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, report, max-duration, stall-timeout (runtime) and
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, request-rate (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
@@ -246,9 +250,17 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   [internals/providers.md](internals/providers.md).
 - **Spill:** when the reorder budget is full, rows of ranges ahead of the frontier go to disposable files
   under `DIR/.swath/spill/` instead of stalling the workers; `swath diag list --no-spill` turns it off,
-  `--spill-compress` compresses them. Spill stops (and listing waits instead) at `--spill-max` bytes on disk or
-  when the filesystem would drop below `--spill-reserve` free bytes (default 1 GiB)
+  `--spill-compress` compresses them. Spill stops (and listing waits instead) at `--spill-max` bytes on disk
+  (default 0: half the space free on the spill filesystem when the run starts, after the reserve) or when the
+  filesystem would drop below `--spill-reserve` free bytes (default 1 GiB)
   ([internals/ordering.md](internals/ordering.md)).
+- **Encoders:** `--encoders` (default GOMAXPROCS) is a ceiling: each encoder is admitted against the half of
+  `--memory` outside the row budget (one writer's working set each) and the descriptor limit (after the spill
+  readers, the workers' connections and a reserve), never fewer than one; a warning names the shortfall.
+- **Durable-progress age:** `--part-interval` (default 60 s; 0: off) closes an open part that holds rows once
+  it is that old, although not full, so the journal's recovery point (what a resume keeps) is never older than
+  about that on a slow frontier; with 0, parts close by `--part-size` only and their boundaries do not depend on
+  timing. It may change on `swath resume`.
 - **Resume:** an S3 run keeps a journal in `DIR/.swath/` with the command that started it; after a crash or
   interruption, `swath resume DIR` continues it ([internals/durability.md](internals/durability.md)).
   `swath diag list --no-journal` turns it off (parts are then published only at the end).

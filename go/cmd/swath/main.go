@@ -158,6 +158,15 @@ func stopEarly(report string, argv []string, dir string, att *listing.Attempt, e
 	return &exitError{err, o.ExitCode}
 }
 
+// partInterval maps --part-interval (0: off) to listing.Limits (negative:
+// off; 0 would take the default).
+func partInterval(d time.Duration) time.Duration {
+	if d <= 0 {
+		return -1
+	}
+	return d
+}
+
 // usageError is a malformed command line.
 type usageError struct{ error }
 
@@ -235,6 +244,7 @@ type options struct {
 	countOnly              bool
 	reportFormat, report   string
 	maxDuration, stall     time.Duration
+	partInterval           time.Duration
 	workers, encoders      int
 	partSize, memory       size
 	spillMax, spillReserve zsize
@@ -245,7 +255,7 @@ type options struct {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "report-format", "report", "max-duration", "stall-timeout"}
+var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -266,10 +276,11 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	o.memory = listing.DefaultMemory
 	f.Var(&o.memory, "memory", "`bytes` of rows held between listing and encoding; sets the reorder bound")
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))")
-	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS)")
+	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS); fewer are admitted when --memory or the descriptor limit cannot carry them, never fewer than one")
+	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full, bounding the age of the durable progress; 0: parts close by size only")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
 	f.BoolVar(&o.spillCompress, "spill-compress", false, "compress spill files (zstd level 1)")
-	f.Var(&o.spillMax, "spill-max", "cap on spill `bytes` on disk (0: no cap); past it, listing waits instead of spilling")
+	f.Var(&o.spillMax, "spill-max", "cap on spill `bytes` on disk (0: half the free space on the spill filesystem at start, after --spill-reserve); past it, listing waits instead of spilling")
 	o.spillReserve = 1 << 30
 	f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem, for the parts still to be written")
 	f.StringVar(&o.reportFormat, "report-format", "text", "`text` (one line) or json (the run report, as in run.json)")
@@ -360,7 +371,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal},
-		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
+		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize), PartInterval: partInterval(o.partInterval),
 			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,
