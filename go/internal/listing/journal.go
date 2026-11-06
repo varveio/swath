@@ -182,37 +182,58 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 
 // settleUnowned settles a run that failed before it owned its output, when
 // the invocation meant to continue or replace an unfinished run there:
-// that run's earlier outcome must not stand as the current one. seen is the
-// run's journal.Witness when the invocation began ("" when there was no
-// unfinished run). It takes the lock first and settles only if, under it,
-// the dataset is still uncommitted and the witness unchanged; an output
-// another process owns, or whose run another process completed, replaced
-// or continued meanwhile, is left as it is (the caller reports the outcome
-// itself). It returns why it did not settle ("" when it did, or when
-// there is no output or no settlement to make).
+// that run's earlier outcome must not stand as the current one
+// (SettleUnfinished, writing through cfg.Settle). seen is the run's
+// journal.Witness when the invocation began ("" when there was no
+// unfinished run). It returns why it did not settle ("" when it did, or
+// when there is no output or no settlement to make).
 func settleUnowned(cfg Config, seen string, rep Report, err error) string {
-	dir := cfg.Output.Dir
-	switch {
-	case cfg.Settle == nil || dir == "":
+	if cfg.Settle == nil || cfg.Output.Dir == "" {
 		return ""
+	}
+	return SettleUnfinished(cfg.Output.Dir, seen, func() error {
+		cfg.Settle(rep, err)
+		return nil
+	})
+}
+
+// SettleUnfinished is the one early settlement, for the listing and the
+// command alike: an invocation that stopped before it owned dir records
+// its outcome (write) over the unfinished run it saw there (seen, that
+// run's journal.Witness), so that run's earlier outcome never stands as
+// the current one. It takes the output lock first and writes only if,
+// under it, the dataset is still uncommitted, the witness unchanged and the
+// lock's path still the directory; a committed dataset, a directory
+// without a run (nothing is created there, not even the lock), an output
+// another process owns, and a run another process completed, replaced or
+// continued since are left as they are. It returns why it did not record
+// the outcome, never empty then; "" when write ran and succeeded.
+func SettleUnfinished(dir, seen string, write func() error) (unrecorded string) {
+	switch {
+	case dir == "":
+		return UnrecordedNoOutput
 	case dataset.Committed(dir):
 		return unrecordedComplete
-	case seen == "" || !(cfg.Output.Resume || cfg.Output.Replace):
+	case seen == "":
 		return unrecordedNoRun
 	}
 	if err := faults.At("settle-lock"); err != nil {
 		return err.Error()
 	}
-	lock, lerr := journal.TakeLock(dir)
-	if lerr != nil {
-		return lerr.Error()
+	lock, err := journal.TakeLock(dir)
+	if err != nil {
+		return err.Error()
 	}
-	jr := &runJournal{out: dir, lock: lock}
+	defer lock.Release()
 	if dataset.Committed(dir) || journal.Witness(dir) != seen {
-		jr.release(cfg)
 		return UnrecordedChanged
 	}
-	jr.close(cfg, rep, err)
+	if err := lock.Verify(); err != nil {
+		return err.Error()
+	}
+	if err := write(); err != nil {
+		return err.Error()
+	}
 	return ""
 }
 
