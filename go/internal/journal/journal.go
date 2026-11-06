@@ -92,7 +92,7 @@ type Record struct {
 	Type      string           `json:"type"` // "part"
 	Ordinal   int              `json:"ordinal"`
 	Part      dataset.PartInfo `json:"part"`
-	Limit     int64            `json:"limit"`           // the router's frozen logical bytes per part (0 before part 0 closes)
+	Limit     int64            `json:"limit"`           // the router's frozen logical bytes per part (0 until the calibrating part closes)
 	RowsTotal int64            `json:"rows_total"`      // rows in parts 0..Ordinal
 	Final     bool             `json:"final,omitempty"` // the last part: the listing is complete
 }

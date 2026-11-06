@@ -120,3 +120,88 @@ func TestTimeCutClaimResumes(t *testing.T) {
 		})
 	}
 }
+
+// TestTimeCutPartDoesNotCalibrate: a source that trickles at first (part
+// 0 closed by the part interval with a few rows) and then speeds up must
+// cut the rest by size as a clean run does: the ratio is calibrated on the
+// first part closed by size, never on a small time-cut part (mostly
+// footer). Also across a resume: a run stopped after recording the
+// time-cut part 0 (its record holds no frozen limit) and one stopped
+// after recording the calibrating part (its limit restored) resume to the
+// same part count. Before, part 0's ratio froze a limit about a fifteenth
+// of the part size for the whole run and every resume of it.
+func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
+	var keys []string
+	for i := range 6000 {
+		keys = append(keys, fmt.Sprintf("k%05d", i))
+	}
+	run := func(out string, resume bool, slow bool, interval time.Duration) (Report, error) {
+		p := &scripted{keys: keys, chunk: 1}
+		if slow {
+			p.slowAt = func(i int) time.Duration { // a slow start, then fast
+				if i < 30 {
+					return 5 * time.Millisecond
+				}
+				return 0
+			}
+		}
+		scriptMu.Lock()
+		scriptNext = p
+		scriptMu.Unlock()
+		return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
+			Limits: Limits{PartSize: 2 << 10, Workers: 1, Memory: 256 << 10, PartInterval: interval}})
+	}
+	ref := filepath.Join(t.TempDir(), "ref")
+	refRep, err := run(ref, false, false, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := checkContract(t, ref)
+	parts := func(t *testing.T, out string) int {
+		t.Helper()
+		if got := checkContract(t, out); !slices.Equal(got, want) {
+			t.Fatalf("%d rows, want %d", len(got), len(want))
+		}
+		var m dataset.Manifest
+		readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
+		return len(m.Parts)
+	}
+	// Each part the interval closed, plus the clean run's parts, plus the
+	// calibrating part's slack (a frozen tiny limit gives hundreds).
+	ref0 := refRep.Output.PartsWritten
+	out := filepath.Join(t.TempDir(), "slow")
+	rep, err := run(out, false, true, 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Resources.PartTimeCuts == 0 {
+		t.Fatal("no part cut by time")
+	}
+	if n := parts(t, out); n > ref0+int(rep.Resources.PartTimeCuts)+2 {
+		t.Fatalf("%d parts (%d by time) after a slow start, a clean run %d", n, rep.Resources.PartTimeCuts, ref0)
+	}
+	for _, nth := range []int64{1, 2} {
+		t.Run(fmt.Sprintf("resume after record %d", nth), func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "ds")
+			var seen atomic.Int64
+			restore := faults.Set(func(p string) error {
+				if p == "recorded" && seen.Add(1) == nth {
+					return faults.ErrCrash
+				}
+				return nil
+			})
+			_, err := run(out, false, true, 50*time.Millisecond)
+			restore()
+			if !errors.Is(err, faults.ErrCrash) {
+				t.Fatalf("crash not injected: %v", err)
+			}
+			if _, err := run(out, true, false, -1); err != nil {
+				t.Fatalf("resume: %v", err)
+			}
+			// nth parts kept, the rest listed by size only.
+			if n := parts(t, out); n > ref0+int(nth)+2 {
+				t.Fatalf("%d parts after the resume, a clean run %d", n, ref0)
+			}
+		})
+	}
+}

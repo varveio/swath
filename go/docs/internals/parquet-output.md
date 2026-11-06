@@ -56,8 +56,13 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
 
 - A row's logical size is its key plus the payload's uncompressed column bytes (`Schema.Bytes`, defined by
   the producer: string lengths, 8 or 4 bytes per present integer).
-- Part 0 is cut at `PartSize / 0.1` logical bytes (0.1 is an assumed compression ratio).
-- When part 0 closes, its measured ratio is frozen; every later part is cut at `PartSize / ratio`.
+- Parts are cut at `PartSize / 0.1` logical bytes (0.1 is an assumed compression ratio) until the
+  calibrating part closes: the first part closed by size (never one the part interval closed; a run whose
+  parts are all closed by time keeps the 0.1 estimate). Its measured ratio is frozen (the journal records it); every later part is cut at
+  `PartSize / ratio`. Without the interval that is part 0. A part the interval closed small does not
+  calibrate: its encoded size is more footer, and its ratio would freeze a limit far below the part size
+  for the whole run and its resumes (`TestTimeCutPartDoesNotCalibrate`: 546 parts against a clean run's 12
+  before; now at most the clean run's count plus the parts the interval closed, plus two).
 - Ordinals are dense and zero-based; the router knows the last part (the journal records it, so a resume
   after the final part only publishes).
 

@@ -20,7 +20,7 @@ import (
 )
 
 // initialRatio is the compression ratio (encoded / logical bytes) assumed
-// for part 0, before any part has been measured. Listings of the realistic
+// until a part has been measured. Listings of the realistic
 // benchmark tree measure about 0.11.
 const initialRatio = 0.1
 
@@ -82,10 +82,11 @@ type Resume struct {
 }
 
 // Router is the order stage's sink. It owns part boundaries: a row's logical
-// size is its uncompressed field bytes; part 0 is cut at PartSize/0.1
-// logical bytes, its measured ratio is then frozen, and every later part is
-// cut at PartSize/ratio. Boundaries therefore depend only on the rows, never
-// on timing or the encoder count. Ordinals are dense and the router marks
+// size is its uncompressed field bytes; parts are cut at PartSize/0.1
+// logical bytes until the calibrating part (the first closed by size: part
+// 0 when the interval does not cut) has been measured; its ratio is then frozen and every later
+// part is cut at PartSize/ratio. Without interval cuts, boundaries depend
+// only on the rows, never on timing or the encoder count. Ordinals are dense and the router marks
 // the last part final.
 //
 // Each part is encoded by its own goroutine with its own writer and codec,
@@ -129,6 +130,7 @@ type part[P any] struct {
 	logical   int64
 	n         int64 // rows routed into this part
 	pinned    bool  // its boundary is Options.Cut
+	bySize    bool  // closed because it reached the size target
 	final     bool
 	limit     int64 // logical bytes per part in effect after this part
 	rows      int64 // rows in parts 0..ordinal
@@ -238,10 +240,11 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 			}
 			target := r.limit
 			if target == 0 {
-				target = int64(float64(r.opt.PartSize) / initialRatio)
+				target = r.initialTarget()
 			}
 			if r.cur.logical >= target {
 				r.full = true // cut before the next row
+				r.cur.bySize = true
 			}
 		}
 		if start < len(seg) {
@@ -382,7 +385,10 @@ func (r *Router[P]) encode(p *part[P]) {
 		r.fail(p.err)
 		return
 	}
-	if p.ordinal == 0 && !p.final {
+	if p.limit == 0 && !p.final && p.bySize {
+		// The calibrating part: the first closed by size. A part the
+		// interval closed is smaller, its encoded size more footer, and
+		// its ratio would freeze too small a limit for the whole run.
 		ratio := float64(p.info.Bytes) / float64(max(1, p.logical))
 		p.limit = max(1, int64(float64(r.opt.PartSize)/ratio))
 	}
@@ -435,13 +441,17 @@ func (r *Router[P]) Routed() int64 {
 	return r.rows
 }
 
-// cut closes the current part. Part 0 is waited for, to freeze the ratio.
+// initialTarget is the logical bytes per part before calibration.
+func (r *Router[P]) initialTarget() int64 { return int64(float64(r.opt.PartSize) / initialRatio) }
+
+// cut closes the current part. Until the ratio is frozen, the part is
+// waited for: it may be the calibrating part.
 func (r *Router[P]) cut(ctx context.Context, final bool) error {
 	p := r.cur
 	p.final = final
 	close(p.segs)
 	r.cur, r.full = nil, false
-	if p.ordinal == 0 && !final {
+	if r.limit == 0 && !final {
 		select {
 		case <-p.done:
 		case <-ctx.Done():
