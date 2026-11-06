@@ -100,6 +100,9 @@ func TestCLIDocFlags(t *testing.T) {
 	usage(&b, newFlags(&options{}, false), false)
 	b.WriteString("\n")
 	usage(&b, newFlags(&options{}, true), true)
+	if strings.Contains(b.String(), " \t") {
+		t.Fatal("the usage has a space before a tab (git diff --check flags it in docs/cli.md)")
+	}
 	const begin, end = "<!-- flags:begin -->\n", "<!-- flags:end -->"
 	readme, err := os.ReadFile("../../docs/cli.md")
 	if err != nil {

@@ -35,8 +35,9 @@ per invocation, and `started`; `error.json` carries the same, so a reader holdin
 `invocation` (argv, source, output, schema, workers, encoders, row budget and part size), `outcome` (`committed`,
 `listed` or `failed`, the error, completeness, stop reason, per-entry errors, and the command's `class`,
 `exit_code`, `resumable` and `cause`, as in [../cli.md](../cli.md), and `unrecorded`: why `error.json` does not hold this outcome, when it does not), `timings` (timestamps and
-integer `*_ms` durations, wall, listing, user and system CPU), `output` (rows this invocation listed, rows
-retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (peak RSS,
+integer `*_ms` durations, wall, listing, user and system CPU; the CPU times, like peak RSS, are optional: present
+where the platform measures them, `resources.rusage_available` false and all three left out where it does not), `output` (rows this invocation listed, rows
+retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (`rusage_available` and, where true, peak RSS,
 row budget, peak buffered, waits in `*_ns`, spill, `features`) and `source` (the provider's statistics under
 its name: `s3`, `local`; requests and attempts are this invocation's). It is operational: written after the
 commit (a failure to write it is a warning, the dataset stands) and never part of acceptance, which reads the
@@ -75,8 +76,8 @@ and a journaled run publishes it, so a crash loses at most about that long of fr
 whole part's worth (the default is Java's rotation interval, 30 s; a cut part can be far below its target
 size). The order stage hands on its batch before the drainer waits on the frontier, so the
 open part holds every row the walk has reached. A cut by time makes that run's boundaries depend on timing:
-the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (a negative
-value), boundaries depend only on the rows and the byte-identity guarantees above hold
+the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (zero;
+`--part-interval` refuses a negative value), boundaries depend only on the rows and the byte-identity guarantees above hold
 (`TestIntervalClosesAnAgedPart`, `TestPartIntervalBoundsRecoveryPointAge`: a 2 s trickle keeps the recovery
 point under 260 ms old at a 200 ms interval, against 1.96 s by size only). A resume that must reproduce a
 claimed part ([durability.md](durability.md#the-journal)) closes that ordinal at the claimed part's row count

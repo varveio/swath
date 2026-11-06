@@ -215,9 +215,10 @@ In all nine pairs the GCS dataset equals the S3 dataset (keys and sizes) and is 
 requests and overfetches nothing (`endOffset`). The noaa-eri-pds gap is two slow GCS repetitions on a shared
 host; an earlier build on the same server took 11.67–11.77 s on GCS against 11.15–12.06 s on S3.
 
-Live GCS, measured privately on one 5.1M-object bucket in-region (2026-11-06): Go 30-32 s end to end against the
-Java tool's 49-52 s; the Go listing phase alone is slower (34-40 s against 23-28 s), the pipeline wins; mean in
-flight about 16 of 64 workers; split tree 398 deep where a balanced one needs 13; the cause and the planned
+Live GCS, measured privately on one 5.1M-object bucket in-region (2026-11-06), by API and clock: Go on the JSON
+API 29.5-32.4 s end to end; Go on the XML API 34.4-39.8 s end to end; the Java tool on the XML API 49-52 s end to
+end, of which its listing phase 23-28 s. Both Go arms finish first end to end, though each takes longer than
+Java's listing phase alone; mean in flight about 16 of 64 workers; split tree 398 deep where a balanced one needs 13; the cause and the planned
 pivot-policy change are in [Known gaps](#known-gaps).
 
 **Reproduce:** swath-replay with GCS latency injection (varveio/swath#250) serving `--protocols s3,gcs`; list
@@ -374,8 +375,9 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   than a balanced tree: 398 deep on the live GCS run above where a balanced one needs 13, with about 16 of 64
   workers in flight. The causes are in `keyrange`'s pivot policy: the frontier's forward reflection steps by the
   distance since the previous pivot (about one page), the density refinement caps the step at `max(4, hunger)`
-  page spans and wins whenever it is nearer the cursor, and where `between` finds no midpoint the density step
-  is taken again. The planned change doubles the step along a chain of upper children (a gallop; a lower child
+  page spans and wins whenever it is nearer the cursor, and where `between` finds no midpoint scalar its fallback, a
+  key just above the cursor, still counts as found and lies within one page span of it, so the density step,
+  when the page yields one, replaces it (refinement applies only to a found pivot; with none found the page does not split). The planned change doubles the step along a chain of upper children (a gallop; a lower child
   resets it), still capped at the midpoint of a bounded range; as an experiment on a fake serving the same keys it took the run from 22.3 s to 7.1 s and the depth
   from 408 to 84. Date-partitioned layouts are not helped by it: there Java's hierarchy seed wins (a synthetic
   case: 19 s against 4.4 s), and the Go seed is one delimiter page.

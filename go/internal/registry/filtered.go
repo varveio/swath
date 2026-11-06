@@ -56,12 +56,16 @@ type filterEmitter[P any] struct {
 // Downstream memory accounting (schema.RowsBytes) charges only the rows
 // handed on, but a compacted page still holds its whole row array, and a
 // provider's strings may view one arena for the whole page (S3 does). So
-// unless the survivors hold more than half of the page, both by rows and by
-// charged bytes, they are detached (schema.Detach): copied into a slice and
-// a string buffer sized to them, and the page becomes garbage. The rule
-// bounds what a page handed on keeps alive to about twice what it is
-// charged; the copy costs at most half a page, less than parsing it did.
-// A page where most rows survive keeps the zero-copy path.
+// the survivors are detached (schema.Detach) when they are at most half the
+// page's rows or at most half its charged bytes: copied into a slice and a
+// string buffer sized to them, and the page becomes garbage. A page handed
+// on whole has more than half its rows and more than half its charged bytes
+// surviving, so it keeps alive less than about twice what it is charged.
+// The copy is of the survivors: under the OR only one of their rows and
+// their bytes is bounded by half the page, and the other may be nearly all
+// of it (half the rows can hold almost all the bytes, and most rows can
+// survive while few bytes do). A page where more than half of both survive
+// keeps the zero-copy path.
 func (e filterEmitter[P]) Rows(rows []schema.Row[P]) error {
 	kept := rows[:0]
 	var all, survived int64

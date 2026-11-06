@@ -516,9 +516,14 @@ func usage(w io.Writer, f *flag.FlagSet, diag bool) {
 	}
 	fmt.Fprintln(w, "  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]")
 	fmt.Fprintln(w)
-	f.SetOutput(w)
+	// PrintDefaults indents each usage with four spaces and a tab; eight
+	// spaces look the same and leave no space before a tab in the
+	// generated docs/cli.md.
+	var defaults strings.Builder
+	f.SetOutput(&defaults)
 	f.PrintDefaults()
 	f.SetOutput(io.Discard)
+	fmt.Fprint(w, strings.ReplaceAll(defaults.String(), "\n    \t", "\n        "))
 	fmt.Fprintln(w, "\nswath resume DIR [--workers N ...] continues an interrupted run with its recorded command;")
 	fmt.Fprintln(w, "only "+strings.Join(runtimeFlags, ", ")+" (runtime) and")
 	fmt.Fprintln(w, strings.Join(operationalFlags, ", ")+" (operational) may change.")
