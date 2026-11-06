@@ -19,11 +19,13 @@ source is opened, and by `swath resume` before it settles anything): the text ou
 or anything inside another dataset or run of this tool; an ordinary name such as `OUT/report.json` is fine. FILE
 is resolved once and written where it was checked: its directory's symbolic links are resolved before a `..`
 after them applies (as an open climbs from a link's target), its own name is checked as the entry it is even
-while a symbolic link there points elsewhere, and the output is found by file identity (on a case-insensitive
+while a symbolic link there points elsewhere, and so is where that link leads, a dangling one included, and the output is found by file identity (on a case-insensitive
 filesystem `out/` is `OUT/`). Another dataset or run is recognized by a heuristic: a `.swath/lock` or
 `.swath/journal`, or a `manifest.json` with this tool's `format` and a `coverage` object; an earlier layout's
 marks (`_SUCCESS` beside `data/`, a `schemaId` manifest) and other tools' manifests are not. The
-`SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` files are checked the same way. `swath resume DIR` replays the command the journal recorded; only
+`SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` files are checked the same way and may not be symbolic links
+(a profile is opened, never through a link; the report replaces its name by a rename, which replaces a link
+there rather than writing its target). `swath resume DIR` replays the command the journal recorded; only
 the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, the diagnostic `--spill-reserve` and `--spill-compress`,
 `--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and the terminal flags
 `--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the

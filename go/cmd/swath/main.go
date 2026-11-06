@@ -811,7 +811,7 @@ func explain(err error) error {
 func profile(cpu, mem string) (stop func(), err error) {
 	stops := []func(){}
 	if path := cpu; path != "" {
-		f, err := os.Create(path)
+		f, err := createNoFollow(path)
 		if err != nil {
 			return nil, err
 		}
@@ -823,7 +823,7 @@ func profile(cpu, mem string) (stop func(), err error) {
 	if path := mem; path != "" {
 		runtime.MemProfileRate = 64 << 10
 		stops = append(stops, func() {
-			if f, err := os.Create(path); err == nil {
+			if f, err := createNoFollow(path); err == nil {
 				_ = pprof.Lookup("allocs").WriteTo(f, 0)
 				f.Close()
 			}
@@ -834,6 +834,19 @@ func profile(cpu, mem string) (stop func(), err error) {
 			s()
 		}
 	}, nil
+}
+
+// createNoFollow creates or truncates the profile file path, refusing a
+// symbolic link at its name (the Lstat; on Unix O_NOFOLLOW too, so a link
+// planted after the Lstat fails the open): checkSidePaths checked where the
+// link pointed then, and a link is not followed to where it points now.
+// The report needs no such open: dataset.Replace renames a temporary file
+// over the name, which replaces a link there and never writes its target.
+func createNoFollow(path string) (*os.File, error) {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symbolic link: a profile is not written through one", path)
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|oNoFollow, 0o644)
 }
 
 // size is a byte count flag, positive, parsed as the size filters are

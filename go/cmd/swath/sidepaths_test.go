@@ -453,3 +453,103 @@ func TestSidePathsBesideUnrelatedDirectories(t *testing.T) {
 		}
 	}
 }
+
+// TestFoldsCaseProbe: the probe respells a directory's own name, so two
+// case-distinct hard links in it (a and A, one file) are not taken for
+// case folding, nor are distinct fresh names that differ only by case
+// then refused as one. A directory whose name has no letter defers to an
+// ancestor's.
+func TestFoldsCaseProbe(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "Dir")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "dir")); err == nil {
+		t.Skip("the temporary directory's filesystem ignores case")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(dir, "a"), filepath.Join(dir, "A")); err != nil {
+		t.Skip("no hard links:", err)
+	}
+	if foldsCase(dir) {
+		t.Error("foldsCase: case-distinct hard links taken for case folding")
+	}
+	digits := filepath.Join(dir, "123")
+	if err := os.Mkdir(digits, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if foldsCase(digits) {
+		t.Error("foldsCase: a letterless name not deferred to its parent's")
+	}
+	o := options{out: filepath.Join(dir, "x")}
+	if _, err := checkSidePath(o, filepath.Join(dir, "X", "manifest.json")); err != nil {
+		t.Errorf("a distinct fresh directory differing by case refused: %v", err)
+	}
+}
+
+// TestDanglingLinkSidePaths (R8): a side path that is a symbolic link to a
+// managed name that does not exist yet (mem -> OUT/manifest.json, before
+// the run publishes it) is checked where an open would land once it
+// exists, and refused with exit 2 before the run; the manifest the run
+// would publish is never written through it. A profile is never written
+// through a link at all.
+func TestDanglingLinkSidePaths(t *testing.T) {
+	captureStderr(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	for _, tc := range []struct{ name, env string }{{"--report", ""}, {"cpu", "SWATH_CPUPROFILE"}, {"mem", "SWATH_MEMPROFILE"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			out := filepath.Join(base, "OUT")
+			if err := os.Mkdir(out, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(base, "mem")
+			if err := os.Symlink(filepath.Join(out, "manifest.json"), link); err != nil {
+				t.Skip("no symbolic links:", err)
+			}
+			args := []string{src, "-o", out, "--no-progress", "--no-stats"}
+			if tc.env == "" {
+				args = append(args, "--report", link)
+			} else {
+				t.Setenv(tc.env, link)
+			}
+			err := run(context.Background(), args, &buf, false)
+			b, rerr := os.ReadFile(filepath.Join(out, "manifest.json"))
+			if rerr == nil && !strings.Contains(string(b), `"coverage"`) {
+				t.Fatalf("the manifest was overwritten through the link: %d bytes", len(b))
+			}
+			if c := exitOf(err); c != exitUsage {
+				t.Fatalf("exit %d (%v), want %d", c, err, exitUsage)
+			}
+		})
+	}
+	base := t.TempDir()
+	// A link to an ordinary file is refused as a profile (an open would
+	// follow it); its target is untouched.
+	target := filepath.Join(base, "target")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(base, "plain")
+	if err := os.Symlink(target, plain); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SWATH_MEMPROFILE", plain)
+	if c := exitOf(run(context.Background(), []string{src, "--count-only"}, &buf, false)); c != exitUsage {
+		t.Errorf("a profile through a link: exit %d, want %d", c, exitUsage)
+	}
+	if f, err := createNoFollow(plain); err == nil {
+		f.Close()
+		t.Error("createNoFollow opened a link")
+	}
+	if b, _ := os.ReadFile(target); string(b) != "keep" {
+		t.Fatalf("the link's target changed: %d bytes", len(b))
+	}
+}

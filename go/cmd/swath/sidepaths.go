@@ -39,6 +39,12 @@ func checkSidePaths(o *options) error {
 			continue
 		}
 		dest, err := checkSidePath(*o, *side.path)
+		if fi, lerr := os.Lstat(dest); err == nil && side.what != "--report" && lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			// A profile is opened, which would follow the link to wherever
+			// it points by then (createNoFollow refuses it there too); the
+			// report is renamed over its name, which replaces a link.
+			err = fmt.Errorf("is a symbolic link: a profile is not written through one")
+		}
 		if err != nil {
 			return fmt.Errorf("%s %s: %w", side.what, *side.path, err)
 		}
@@ -152,36 +158,30 @@ func existingPrefix(p string) (string, []string) {
 	}
 }
 
-// foldsCase reports whether dir looks names up without case: an entry of
-// dir (or dir itself, in its parent) with a letter, respelled in the other
-// case, reaches the same file. With no name to try it answers true, the
-// answer that refuses. A variable for tests.
+// foldsCase reports whether dir looks names up without case: dir's own
+// name, respelled in the other case, reaches dir itself in its parent (a
+// directory cannot be hard-linked, so two case-distinct names of one
+// directory are folding, never two links). A name without letters defers
+// to the nearest ancestor's; with none to try it answers true, the answer
+// that refuses. It probes the parent's filesystem, which is dir's but at a
+// mount point. A variable for tests.
 var foldsCase = func(dir string) bool {
-	try := func(parent, name string) (answer, known bool) {
+	for d := dir; ; d = filepath.Dir(d) {
+		parent, name := filepath.Dir(d), filepath.Base(d)
+		if parent == d {
+			return true
+		}
 		other := swapCase(name)
 		if other == name {
-			return false, false
+			continue
 		}
-		fa, ea := os.Lstat(filepath.Join(parent, name))
+		fa, ea := os.Lstat(d)
+		if ea != nil || !fa.IsDir() {
+			continue
+		}
 		fb, eb := os.Lstat(filepath.Join(parent, other))
-		if ea != nil {
-			return false, false
-		}
-		return eb == nil && os.SameFile(fa, fb), true
+		return eb == nil && os.SameFile(fa, fb)
 	}
-	if f, err := os.Open(dir); err == nil {
-		names, _ := f.Readdirnames(64)
-		f.Close()
-		for _, n := range names {
-			if answer, known := try(dir, n); known {
-				return answer
-			}
-		}
-	}
-	if answer, known := try(filepath.Dir(dir), filepath.Base(dir)); known {
-		return answer
-	}
-	return true
 }
 
 // swapCase is name with each letter's case swapped.
@@ -215,31 +215,69 @@ func absRaw(path string) string {
 	return path
 }
 
-// resolvePath is what an open of path reaches: absolute, the symbolic
-// links of its longest existing prefix resolved component by component
-// (filepath.EvalSymlinks, which applies a ".." to the resolved target),
-// and the part that does not exist yet joined lexically.
+// maxLinks bounds the symbolic links resolvePath follows (Linux's
+// MAXSYMLINKS is 40); past it an open fails, and the path is checked as
+// far as it was resolved.
+const maxLinks = 40
+
+// resolvePath is what an open of path reaches, walked component by
+// component as the kernel does: a symbolic link is read and its target
+// walked in its place, also when the target does not exist yet (a
+// dangling link to OUT/manifest.json reaches OUT/manifest.json once the
+// run publishes it), a ".." climbs from what is resolved so far, and the
+// names below the first missing one are joined lexically.
 func resolvePath(path string) string {
 	raw := absRaw(path)
-	rest := ""
-	for cur := raw; ; {
-		if r, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(r, rest)
+	vol := filepath.VolumeName(raw)
+	cur := vol + string(filepath.Separator)
+	todo := splitPath(raw[len(vol):])
+	for links := 0; len(todo) > 0; {
+		c := todo[0]
+		todo = todo[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
 		}
-		i := strings.LastIndexAny(cur, seps)
-		if i < 0 {
-			return filepath.Clean(raw)
+		next := filepath.Join(cur, c)
+		fi, err := os.Lstat(next)
+		if err != nil {
+			return filepath.Join(append([]string{canonical(cur), c}, todo...)...)
 		}
-		rest = filepath.Join(cur[i+1:], rest)
-		next := cur[:i]
-		if i <= len(filepath.VolumeName(cur)) {
-			next = cur[:i+1] // the root
+		if fi.Mode()&os.ModeSymlink == 0 {
+			cur = next
+			continue
 		}
-		if next == cur {
-			return filepath.Clean(raw)
+		target, err := os.Readlink(next)
+		if links++; err != nil || links > maxLinks {
+			return filepath.Join(append([]string{canonical(cur), c}, todo...)...)
 		}
-		cur = next
+		if tv := filepath.VolumeName(target); filepath.IsAbs(target) {
+			cur = tv + string(filepath.Separator)
+			target = target[len(tv):]
+		} else if tv != "" {
+			return filepath.Join(append([]string{canonical(cur), c}, todo...)...) // a volume-relative link: not followed here
+		}
+		todo = append(splitPath(target), todo...)
 	}
+	return canonical(cur)
+}
+
+// canonical is dir, an existing directory resolved so far, as
+// filepath.EvalSymlinks names it: the same on Unix; on Windows also through
+// what Lstat does not report as a link (a junction, a short name).
+func canonical(dir string) string {
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		return r
+	}
+	return dir
+}
+
+// splitPath is path's names, split at every separator.
+func splitPath(path string) []string {
+	return strings.FieldsFunc(path, func(r rune) bool { return strings.ContainsRune(seps, r) })
 }
 
 // sideDest is where a file at path is written by a writer that replaces
