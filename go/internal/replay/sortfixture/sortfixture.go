@@ -137,10 +137,20 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	if opts.Capture == "" || opts.Output == "" {
 		return stats, errors.New("sort-fixture: a capture and an output are required")
 	}
-	// Refuse an output that is not new or empty before the capture is
-	// read; the check is repeated under the output lock.
+	// Ownership first, as the lister takes it: an output that is not new
+	// or empty is refused before anything is created there, then the
+	// output lock is held from before the capture is read until Run
+	// returns; Prepare repeats the check under it.
 	if _, err := dataset.Usable(opts.Output, "", SchemaID, false); err != nil {
 		return stats, fmt.Errorf("sort-fixture: output: %w", err)
+	}
+	lock, err := journal.TakeLock(opts.Output)
+	if err != nil {
+		return stats, fmt.Errorf("sort-fixture: %w", err)
+	}
+	defer lock.Release()
+	if err := lock.Verify(); err != nil {
+		return stats, fmt.Errorf("sort-fixture: %w", err)
 	}
 	files, err := javaera.Resolve(opts.Capture)
 	if err != nil {
@@ -181,7 +191,7 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	}
 	sch := newSchema(limit)
 	stats.SchemaID = sch.ID
-	parts, err := write(ctx, opts, sch, objects, start)
+	parts, err := write(ctx, opts, lock, sch, objects, start)
 	if err != nil {
 		return stats, err
 	}
@@ -198,22 +208,14 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	return stats, nil
 }
 
-// write publishes objects, sorted, through the dataset writer. It owns
-// the output as the lister does: nothing in it is created, removed or
-// renamed before this process holds the output lock (journal.TakeLock),
-// each removal and the publication follow a check that the output is still
-// the directory locked, and the lock file stays in the workspace, as the
-// lister leaves it. An output another process owns is refused
-// (journal.ErrLocked) without a change.
-func write(ctx context.Context, opts Options, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
-	lock, err := journal.TakeLock(opts.Output)
-	if err != nil {
-		return nil, fmt.Errorf("sort-fixture: %w", err)
-	}
-	defer lock.Release()
-	if err := lock.Verify(); err != nil {
-		return nil, fmt.Errorf("sort-fixture: %w", err)
-	}
+// write publishes objects, sorted, through the dataset writer, under lock.
+// It owns the output as the lister does: the router checks the output is
+// still the directory locked before it creates each part, and creates it
+// through that directory (os.Root), not its pathname; each removal, and
+// the manifest's installation, follow the same check; the lock file stays
+// in the workspace, as the lister leaves it. An output another process
+// owns was refused (journal.ErrLocked) by Run without a change.
+func write(ctx context.Context, opts Options, lock *journal.Lock, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
 	if err := dataset.Prepare(opts.Output, "", sch.ID, false); err != nil {
 		return nil, fmt.Errorf("sort-fixture: output: %w", err)
 	}
@@ -223,7 +225,25 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[Object], object
 			dataset.Cleanup(opts.Output)
 		}
 	}
-	router, err := parquetout.NewRouter(parquetout.Options{Out: opts.Output, PartSize: partSize, Encoders: 1}, sch)
+	root, err := os.OpenRoot(opts.Output)
+	if err != nil {
+		return nil, fmt.Errorf("sort-fixture: output: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := lock.Verify(); err != nil { // the root is the directory locked
+		return nil, fmt.Errorf("sort-fixture: %w", err)
+	}
+	router, err := parquetout.NewRouter(parquetout.Options{
+		Out: opts.Output, PartSize: partSize, Encoders: 1,
+		Verify: lock.Verify,
+		Open: func(path string) (*os.File, error) {
+			rel, err := filepath.Rel(opts.Output, path)
+			if err != nil {
+				return nil, err
+			}
+			return root.OpenFile(rel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		},
+	}, sch)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("sort-fixture: %w", err)
@@ -251,7 +271,15 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[Object], object
 		Scope:    dataset.Scope{Kind: "whole"},
 		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: start.UTC(), ListingFinishedAt: time.Now().UTC()},
 	}
-	if err := dataset.Publish(opts.Output, meta, parts, nil); err != nil {
+	// The manifest is the commit: it is installed only while the output is
+	// still the directory locked.
+	commit := func(install func() error) error {
+		if err := lock.Verify(); err != nil {
+			return err
+		}
+		return install()
+	}
+	if err := dataset.Publish(opts.Output, meta, parts, commit); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("sort-fixture: publish: %w", err)
 	}
