@@ -404,7 +404,9 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 }
 
 // pipeline runs provider → order → router → publish. p is src, or Empty
-// when a resume has nothing left to list.
+// when a resume has nothing left to list. Its phases: wire the
+// environment (progress, router, order stage, filters, text output), run
+// the source, account the attempt, reconcile the hops, then commit.
 func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, s schema.Info, jr *runJournal) (Report, error) {
 	// One shared cause: the first asynchronous failure (an encoder, the
 	// disk, the journal) cancels listing at once, and is what Run returns.
@@ -417,100 +419,145 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// The final part is durable: listing again could only add a second
 	// final part on a changed source. Publish what is recorded.
 	env := registry.Env{Empty: jr.complete()}
-	if pr := cfg.Progress; pr != nil {
-		pr.started.Store(sum.Timings.StartedAt.UnixNano())
-		listed := src.Listed
-		pr.listed.Store(&listed)
-		if l, ok := src.(source.Live); ok {
-			answered := l.Answered
-			pr.answered.Store(&answered)
-		}
-		if f, ok := src.(source.Faulted); ok {
-			faults := f.Faults
-			pr.faults.Store(&faults)
-		}
-		if c, ok := src.(source.Contended); ok {
-			contention := c.Contention
-			pr.contention.Store(&contention)
-		}
-		if r, ok := src.(source.Requested); ok {
-			requests := r.Requests
-			pr.requests.Store(&requests)
-			if p, ok := src.(source.Priced); ok {
-				if rate, basis := p.Tariff(); basis != "" {
-					pr.tariff.Store(math.Float64bits(rate))
-				}
-			}
-		}
-		pr.retained.Store(sum.Output.RowsRetained)
-		env.Ordered = &pr.ordered
-	}
+	watchSource(cfg.Progress, &sum, src, &env)
 	if cfg.Output.Dir != "" {
-		ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add,
-			Interval: max(0, cfg.Limits.PartInterval), MaxRows: cfg.Limits.PartMaxRows}
-		jr.routerOptions(&ropt)
-		jr.verifyOption(&ropt)
-		if pr := cfg.Progress; pr != nil {
-			ropt.Encoded = &pr.encoded
+		env.Router = routerOptions(cfg, jr, shared, cancel)
+	}
+	a := &attempt{cfg: cfg, jr: jr, sum: sum}
+	oopt, err := orderOptions(cfg, jr, sum.Resources.RowBudgetBytes, shared)
+	if err != nil {
+		return a.sum.failed(err)
+	}
+	env.Order = oopt
+	var dropped atomic.Int64
+	env.Filter, env.Filtered = cfg.Filter, &dropped
+	var text *textout.Out
+	if cfg.Output.Text != nil {
+		t, err := textout.Open(*cfg.Output.Text)
+		if err != nil {
+			return a.sum.failed(err)
 		}
-		if pub := ropt.Publish; pub != nil {
-			// A failed run reports the parts the journal acknowledged
-			// (durable, counted by publish); progress counts those renamed.
-			ropt.Publish = func(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
-				p, err := pub(ordinal, p, limit, rows, final)
-				if err == nil {
-					if pr := cfg.Progress; pr != nil {
-						pr.parts.Add(1)
-						pr.lastPart.Store(time.Now().UnixNano())
-					}
+		text, env.Text = t, t
+	}
+	ost, router, err := src.Run(ctx, env)
+	a.router = router
+	if text != nil {
+		err = a.settleText(text, err)
+	}
+	if router == nil && cfg.Output.Dir != "" && err != nil {
+		return a.sum.failed(err) // the router could not start: nothing was written
+	}
+	if cfg.Output.Dir != "" && oopt.SpillDir != "" && jr.verify() == nil {
+		_ = os.Remove(oopt.SpillDir) // only if empty; order.Run removed its own files
+		_ = os.Remove(filepath.Dir(oopt.SpillDir))
+	}
+	a.account(ost, oopt, dropped.Load())
+	listed := time.Now()
+	a.sum.Timings.ListingFinishedAt, a.sum.Timings.ListingMs = listed.UTC(), listed.Sub(a.sum.Timings.StartedAt).Milliseconds()
+	if r, ok := src.(source.Reporter); ok {
+		a.sum.setSource(r.Report())
+	}
+	// Rows the filters dropped were listed but never reached the order
+	// stage.
+	a.sum.Output.RowsFiltered = dropped.Load()
+	want := src.Listed() - a.sum.Output.RowsFiltered
+	if err != nil {
+		return a.fail(err)
+	}
+	// Reconciliation, hop by hop, before anything is published: rows the
+	// provider emitted, the order stage received and handed on (equal by
+	// order.Run's own check), and the router routed; the router's gate
+	// then checks rows written against rows routed. A row lost anywhere
+	// upstream of the writer shows as a mismatch, never as a smaller
+	// dataset. (A resume reconciles its own attempt; retained parts were
+	// counted by the attempt that wrote them.)
+	routed := ost.Rows
+	if router != nil {
+		routed = router.Routed()
+	}
+	if err := reconcile(want, ost.Received, ost.Rows, routed); err != nil {
+		return a.fail(err)
+	}
+	if router == nil {
+		a.sum.Outcome.Status = StatusListed
+		if text != nil {
+			a.sum.Outcome.Status = StatusWritten
+		}
+		a.sum.finish()
+		return a.sum, nil
+	}
+	return a.commit(s, src, listed)
+}
+
+// watchSource hands the progress file the source's live counters and the
+// order stage's counter of rows handed on.
+func watchSource(pr *Progress, sum *Report, src registry.Source, env *registry.Env) {
+	if pr == nil {
+		return
+	}
+	pr.started.Store(sum.Timings.StartedAt.UnixNano())
+	listed := src.Listed
+	pr.listed.Store(&listed)
+	if l, ok := src.(source.Live); ok {
+		answered := l.Answered
+		pr.answered.Store(&answered)
+	}
+	if f, ok := src.(source.Faulted); ok {
+		faults := f.Faults
+		pr.faults.Store(&faults)
+	}
+	if c, ok := src.(source.Contended); ok {
+		contention := c.Contention
+		pr.contention.Store(&contention)
+	}
+	if r, ok := src.(source.Requested); ok {
+		requests := r.Requests
+		pr.requests.Store(&requests)
+		if p, ok := src.(source.Priced); ok {
+			if rate, basis := p.Tariff(); basis != "" {
+				pr.tariff.Store(math.Float64bits(rate))
+			}
+		}
+	}
+	pr.retained.Store(sum.Output.RowsRetained)
+	env.Ordered = &pr.ordered
+}
+
+// routerOptions configures the Parquet router: parts journaled as they
+// close, their queues charged to the shared row budget, and an encoder
+// failure cancelling the run with its cause.
+func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel context.CancelCauseFunc) *parquetout.Options {
+	ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add,
+		Interval: max(0, cfg.Limits.PartInterval), MaxRows: cfg.Limits.PartMaxRows}
+	jr.routerOptions(&ropt)
+	jr.verifyOption(&ropt)
+	if pr := cfg.Progress; pr != nil {
+		ropt.Encoded = &pr.encoded
+	}
+	if pub := ropt.Publish; pub != nil {
+		// A failed run reports the parts the journal acknowledged
+		// (durable, counted by publish); progress counts those renamed.
+		ropt.Publish = func(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
+			p, err := pub(ordinal, p, limit, rows, final)
+			if err == nil {
+				if pr := cfg.Progress; pr != nil {
+					pr.parts.Add(1)
+					pr.lastPart.Store(time.Now().UnixNano())
 				}
-				return p, err
 			}
-		}
-		ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
-		env.Router = &ropt
-	}
-	var router parquetout.Encoder
-	// durable puts the parts that stay in the output after a failure (the
-	// recovered ones and those journaled by this invocation) in the
-	// report; a run without a journal keeps none.
-	durable := func() {
-		if !jr.journaled() {
-			return
-		}
-		// Acknowledged by the journal: an append that succeeded is
-		// durable although its rename then failed (the resume renames it).
-		sum.Output.PartsWritten, sum.Output.Bytes = int(jr.acked.parts.Load()), jr.acked.bytes.Load()
-		sum.Output.RowsDurable = sum.Output.RowsRetained
-		if r := jr.acked.rows.Load(); r > 0 {
-			sum.Output.RowsDurable = r
-		}
-		if jr.state != nil {
-			for _, rec := range jr.state.Records {
-				sum.Output.Bytes += rec.Part.Bytes
-			}
+			return p, err
 		}
 	}
-	fail := func(err error) (Report, error) {
-		if verr := jr.verify(); verr != nil && !errors.Is(err, journal.ErrOutputReplaced) {
-			// A failure by pathname (a part or spill file not found) is the
-			// replacement's consequence: name the cause.
-			err = fmt.Errorf("%w: %w", verr, err)
-		}
-		if router != nil {
-			router.Abort()
-			// A crash leaves the output as a kill would; a journaled run
-			// keeps its temporary parts too: one may be recorded already
-			// (its rename failed), and -resume decides which are.
-			if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
-				dataset.Cleanup(cfg.Output.Dir)
-			}
-		}
-		durable()
-		return sum.failed(err)
-	}
+	ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
+	return &ropt
+}
+
+// orderOptions configures the order stage: the row budget, the resume
+// key, and spill (its directory, after reclaiming a crashed run's orphans,
+// and its disk budget).
+func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared) (order.Options, error) {
 	gauges := &order.Gauges{}
-	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillReserve: cfg.Limits.Spill.Reserve,
+	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillReserve: cfg.Limits.Spill.Reserve,
 		After: jr.after(), Gauges: gauges}
 	if pr := cfg.Progress; pr != nil {
 		pr.gauges.Store(gauges)
@@ -521,7 +568,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		// Reclaim a crashed run's orphans (the output lock is held), with
 		// spill on or off.
 		if err := jr.verify(); err != nil {
-			return sum.failed(err)
+			return oopt, err
 		}
 		if err := os.RemoveAll(spill); err != nil && cfg.Warn != nil {
 			cfg.Warn(fmt.Sprintf("a previous run's spill files could not be removed: %v", err))
@@ -538,102 +585,118 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if oopt.SpillDir != "" {
 		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
 	}
-	env.Order = oopt
-	var dropped atomic.Int64
-	env.Filter, env.Filtered = cfg.Filter, &dropped
-	var text *textout.Out
-	if cfg.Output.Text != nil {
-		t, err := textout.Open(*cfg.Output.Text)
-		if err != nil {
-			return sum.failed(err)
-		}
-		text, env.Text = t, t
+	return oopt, nil
+}
+
+// attempt is one pipeline run's report and the state its failure and
+// commit paths share.
+type attempt struct {
+	cfg    Config
+	jr     *runJournal
+	router parquetout.Encoder
+	sum    Report
+}
+
+// settleText commits the text output after a successful run, or aborts
+// it, and reports what it wrote; the error is the run's, or the commit's.
+func (a *attempt) settleText(text *textout.Out, err error) error {
+	if err == nil {
+		err = text.Commit()
+	} else {
+		text.Abort()
 	}
-	ost, router, err := src.Run(ctx, env)
-	if text != nil {
-		if err == nil {
-			err = text.Commit()
-		} else {
-			text.Abort()
-		}
-		sum.Output.Text = &TextOutput{Format: text.Format(), Destination: cfg.Output.Text.Path, Compression: cfg.Output.Text.Compression,
-			Rows: text.Rows(), Bytes: text.Bytes()}
-		if sum.Output.Text.Destination == "" {
-			sum.Output.Text.Destination = "-"
-		}
-		if sum.Output.Text.Compression == "" {
-			sum.Output.Text.Compression = textout.None
-		}
+	a.sum.Output.Text = &TextOutput{Format: text.Format(), Destination: a.cfg.Output.Text.Path, Compression: a.cfg.Output.Text.Compression,
+		Rows: text.Rows(), Bytes: text.Bytes()}
+	if a.sum.Output.Text.Destination == "" {
+		a.sum.Output.Text.Destination = "-"
 	}
-	if router == nil && cfg.Output.Dir != "" && err != nil {
-		return sum.failed(err) // the router could not start: nothing was written
+	if a.sum.Output.Text.Compression == "" {
+		a.sum.Output.Text.Compression = textout.None
 	}
-	if cfg.Output.Dir != "" && oopt.SpillDir != "" && jr.verify() == nil {
-		_ = os.Remove(oopt.SpillDir) // only if empty; order.Run removed its own files
-		_ = os.Remove(filepath.Dir(oopt.SpillDir))
-	}
-	sum.Resources.MaxBufferedBytes, sum.Output.RowsListed = ost.MaxBuffered, ost.Rows
-	sum.Output.RowsFiltered = dropped.Load()
-	sum.Resources.Features = map[string]bool{"spill": oopt.SpillDir != ""}
+	return err
+}
+
+// account puts the order stage's and the router's resources in the report.
+func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
+	res := &a.sum.Resources
+	res.MaxBufferedBytes, a.sum.Output.RowsListed = ost.MaxBuffered, ost.Rows
+	a.sum.Output.RowsFiltered = filtered
+	res.Features = map[string]bool{"spill": oopt.SpillDir != ""}
 	if oopt.SpillDir != "" {
-		sum.Resources.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
+		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders}
 	}
-	sum.Resources.PeakNodes, sum.Resources.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
-	sum.Resources.FrontierWaitNs, sum.Resources.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
-	if router != nil {
-		w := int64(router.EncoderWait())
-		sum.Resources.EncoderWaitNs = &w
-		sum.Resources.PartTimeCuts = router.TimeCuts()
-		sum.Resources.PartRowCuts = router.RowCuts()
+	res.PeakNodes, res.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
+	res.FrontierWaitNs, res.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
+	if a.router != nil {
+		w := int64(a.router.EncoderWait())
+		res.EncoderWaitNs = &w
+		res.PartTimeCuts = a.router.TimeCuts()
+		res.PartRowCuts = a.router.RowCuts()
 	}
-	listed := time.Now()
-	sum.Timings.ListingFinishedAt, sum.Timings.ListingMs = listed.UTC(), listed.Sub(sum.Timings.StartedAt).Milliseconds()
-	if r, ok := src.(source.Reporter); ok {
-		sum.setSource(r.Report())
+}
+
+// durable puts the parts that stay in the output after a failure (the
+// recovered ones and those journaled by this invocation) in the report; a
+// run without a journal keeps none.
+func (a *attempt) durable() {
+	jr, out := a.jr, &a.sum.Output
+	if !jr.journaled() {
+		return
 	}
-	// Rows the filters dropped were listed but never reached the order
-	// stage.
-	sum.Output.RowsFiltered = dropped.Load()
-	want := src.Listed() - sum.Output.RowsFiltered
-	if err != nil {
-		return fail(err)
+	// Acknowledged by the journal: an append that succeeded is durable
+	// although its rename then failed (the resume renames it).
+	out.PartsWritten, out.Bytes = int(jr.acked.parts.Load()), jr.acked.bytes.Load()
+	out.RowsDurable = out.RowsRetained
+	if r := jr.acked.rows.Load(); r > 0 {
+		out.RowsDurable = r
 	}
-	// Reconciliation, hop by hop, before anything is published: rows the
-	// provider emitted, the order stage received and handed on (equal by
-	// order.Run's own check), and the router routed; the router's gate
-	// then checks rows written against rows routed. A row lost anywhere
-	// upstream of the writer shows as a mismatch, never as a smaller
-	// dataset. (A resume reconciles its own attempt; retained parts were
-	// counted by the attempt that wrote them.)
-	routed := ost.Rows
-	if router != nil {
-		routed = router.Routed()
-	}
-	if err := reconcile(want, ost.Received, ost.Rows, routed); err != nil {
-		return fail(err)
-	}
-	if router == nil {
-		sum.Outcome.Status = StatusListed
-		if text != nil {
-			sum.Outcome.Status = StatusWritten
+	if jr.state != nil {
+		for _, rec := range jr.state.Records {
+			out.Bytes += rec.Part.Bytes
 		}
-		sum.finish()
-		return sum, nil
 	}
-	parts, err := router.Close()
+}
+
+// fail settles a run that failed after the source ran: the router is
+// aborted, an unjournaled run's output cleaned, the durable parts reported.
+func (a *attempt) fail(err error) (Report, error) {
+	jr := a.jr
+	if verr := jr.verify(); verr != nil && !errors.Is(err, journal.ErrOutputReplaced) {
+		// A failure by pathname (a part or spill file not found) is the
+		// replacement's consequence: name the cause.
+		err = fmt.Errorf("%w: %w", verr, err)
+	}
+	if a.router != nil {
+		a.router.Abort()
+		// A crash leaves the output as a kill would; a journaled run
+		// keeps its temporary parts too: one may be recorded already
+		// (its rename failed), and -resume decides which are.
+		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
+			dataset.Cleanup(a.cfg.Output.Dir)
+		}
+	}
+	a.durable()
+	return a.sum.failed(err)
+}
+
+// commit closes the router, publishes the manifest (the commit) and
+// writes the run report.
+func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (Report, error) {
+	cfg, jr, sum := a.cfg, a.jr, &a.sum
+	parts, err := a.router.Close()
 	if err != nil {
-		return fail(fmt.Errorf("encode: %w", err))
+		return a.fail(fmt.Errorf("encode: %w", err))
 	}
 	if err := jr.unresolved(); err != nil {
-		return fail(err)
+		return a.fail(err)
 	}
 	sum.Output.PartsWritten = len(parts) - sum.Output.PartsRetained
 	for _, part := range parts {
 		sum.Output.Bytes += part.Bytes
 	}
 	if err := jr.verify(); err != nil {
-		return fail(err)
+		return a.fail(err)
 	}
 	meta := manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed)
 	meta.Coverage.Filters = append(meta.Coverage.Filters, cfg.Filter.Descriptions()...)
@@ -641,7 +704,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 			dataset.Cleanup(cfg.Output.Dir)
 		}
-		durable()
+		a.durable()
 		return sum.failed(fmt.Errorf("publish: %w", err))
 	}
 	if pr := cfg.Progress; pr != nil && !jr.journaled() {
@@ -652,15 +715,15 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
 	sum.Output.RowsDurable = sum.Output.RowsCommitted
 	sum.finish()
-	cfg.finalize(&sum, nil)
+	cfg.finalize(sum, nil)
 	if err := jr.verify(); err != nil {
 		if cfg.Warn != nil {
 			cfg.Warn("run report not written: " + err.Error())
 		}
-	} else if err := dataset.WriteReport(cfg.Output.Dir, sum); err != nil && cfg.Warn != nil {
+	} else if err := dataset.WriteReport(cfg.Output.Dir, *sum); err != nil && cfg.Warn != nil {
 		cfg.Warn(err.Error())
 	}
-	return sum, nil
+	return *sum, nil
 }
 
 // reconcile compares the row counts of one attempt at each hop.
