@@ -233,5 +233,9 @@ tail as JSON lines.
   - recovery syncs the journal before renaming on its strength, and `data/` before removing temporary parts.
 
   Nothing tests this: SIGKILL cannot show power-loss behaviour.
-- **Unsupported on Windows:** directories cannot be synced and the lock is not enforced, so neither
-  guarantee holds there; a journaled run prints a warning (`journal.Enforced` is false).
+- **Refused on Windows:** directories cannot be synced and the lock is not enforced there
+  (`journal.Enforced` is false), so a journaled run and `swath resume` are refused with
+  `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
+  What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable, with a
+  warning that nothing stops a second run from writing the same output directory. The Windows build is
+  cross-compiled in the tests (`TestWindowsBuild`), never run natively.
