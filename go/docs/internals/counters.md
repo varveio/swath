@@ -19,7 +19,7 @@ a policy names it (`Feature`). `features` maps every such policy to whether this
 an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
 - absent, feature `false`: the policy was off for this run (for S3: `seed` without `-seed` or on resume,
-  `split` and `probe` with `--sequential`, `probe` without `--probe`, `floors` without `--floors`, `structure` without `--structure` (all `swath diag list` flags), `resume` on a fresh run, `max_keys`
+  `split` with `--sequential`, `floors` without `--floors`, `structure` without `--structure` (all `swath diag list` flags), `resume` on a fresh run, `max_keys`
   without `-max-keys`, `limiter` with `--limiter=false`, a library caller's zero `Admission` or a supplied client, `slow_start` without
   `--limiter-slow-start` or without the limiter, `request_rate` without `--request-rate`);
 - present and zero: the policy was on and never fired.
