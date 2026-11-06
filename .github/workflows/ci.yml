@@ -343,8 +343,10 @@ jobs:
           set -euo pipefail
           for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
             echo "building $target"
-            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build -o /dev/null ./cmd/swath
+            GOOS="${target%/*}" GOARCH="${target#*/}" SWATH_REVISION="$GITHUB_SHA" ./build.sh -o "$RUNNER_TEMP/swath-${target%/*}-${target#*/}"
           done
+          # The CI build names its commit (build.sh stamps it).
+          "$RUNNER_TEMP/swath-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
 
   ci-gate:
     needs: [fast-tests, integration-tests, docker-check]

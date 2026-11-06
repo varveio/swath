@@ -15,11 +15,16 @@ in `go.mod`):
 
 ```bash
 cd go
-CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o swath ./cmd/swath
-GOOS=linux  GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o swath-linux-arm64 ./cmd/swath
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o swath-darwin-arm64 ./cmd/swath
+./build.sh -o swath                                   # static, stripped, the revision stamped
+GOOS=linux  GOARCH=arm64 ./build.sh -o swath-linux-arm64
+GOOS=darwin GOARCH=arm64 ./build.sh -o swath-darwin-arm64
 ./swath --version        # swath-go VERSION (REVISION)
 ```
+
+`build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …listing.revision=REV'` with REV the
+checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI sets its commit). A plain
+`go build ./cmd/swath` works too but takes the revision from the Go toolchain's VCS stamp, which a build in a
+git worktree may lack (`--version` then shows none).
 
 The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. Only Linux has been
 run. A stripped linux/amd64 binary is about 18 MB ([REPORT.md](../REPORT.md), "Step 1b revision": 17.7 MB

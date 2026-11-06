@@ -9,7 +9,7 @@ the two are separate tools. Documentation:
 [docs/testing.md](docs/testing.md); running it in production: [docs/operating.md](docs/operating.md). Measurements and findings: [REPORT.md](REPORT.md).
 
 ```bash
-CGO_ENABLED=0 go build -ldflags='-s -w' -o swath ./cmd/swath
+./build.sh -o swath                         # CGO_ENABLED=0, the revision stamped (docs/operating.md)
 ./swath list /some/root -o /tmp/ds          # list, order, encode, publish
 ./swath list /some/root --count-only        # list only
 ./swath list s3://bucket -o /tmp/ds         # an S3 bucket or prefix

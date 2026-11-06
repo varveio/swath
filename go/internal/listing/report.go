@@ -215,15 +215,23 @@ func (r *Report) finish() {
 // BuildInfo is this binary's name, module version and VCS revision.
 func BuildInfo() Build { return build() }
 
+// revision is the commit the binary was built from, set at link time by
+// go/build.sh and CI (-ldflags -X ...listing.revision=...); empty, the Go
+// toolchain's VCS stamp is used, which a build in a git worktree may lack.
+var revision string
+
 // build is this binary's name, module version and VCS revision.
 func build() Build {
-	b := Build{Tool: "swath-go", Version: "devel"}
+	b := Build{Tool: "swath-go", Version: "devel", Revision: revision}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return b
 	}
 	if v := info.Main.Version; v != "" && v != "(devel)" {
 		b.Version = v
+	}
+	if b.Revision != "" {
+		return b
 	}
 	dirty := false
 	for _, s := range info.Settings {
