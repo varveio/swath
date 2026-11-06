@@ -252,9 +252,18 @@ func isDataset(out, schemaID string) bool {
 	if e1 == nil && e2 == nil && fi.IsDir() {
 		return true
 	}
-	// An interrupted journaled run: data/ and .swath/journal, no manifest yet.
-	_, e3 := os.Stat(filepath.Join(out, JournalDir, "journal"))
-	return e2 == nil && fi.IsDir() && e3 == nil
+	if e2 != nil || !fi.IsDir() {
+		return false
+	}
+	// An interrupted run: data/ and this tool's own marks, no manifest yet:
+	// a journaled one's .swath/journal, or an unjournaled one's (a local
+	// listing; nothing to resume) output lock or outcome file.
+	for _, mark := range []string{filepath.Join(JournalDir, "journal"), filepath.Join(Workspace, LockName), ErrorName} {
+		if _, err := os.Stat(filepath.Join(out, mark)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // Resumable reports whether out holds an interrupted journaled run.

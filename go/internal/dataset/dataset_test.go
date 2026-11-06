@@ -149,3 +149,35 @@ func TestOverwriteRemovesTheCommitFirst(t *testing.T) {
 	}
 	exists(t, filepath.Join(out, "data/part-00000.parquet"))
 }
+
+// TestOverwriteInterruptedUnjournaled: an unjournaled run (a local
+// listing) stopped before its commit leaves data/, error.json and the
+// output lock; --overwrite replaces that output (the lock and the outcome
+// file are this tool's marks), where before it refused it as not a
+// dataset while swath resume found nothing to resume. data/ without a mark
+// of ours is still refused.
+func TestOverwriteInterruptedUnjournaled(t *testing.T) {
+	out := t.TempDir()
+	for _, d := range []string{DataDir, Workspace} {
+		if err := os.MkdirAll(filepath.Join(out, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(out, DataDir, "part-00000.parquet"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(out, ErrorName), []byte(`{"class":"deadline"}`), 0o644)
+	os.WriteFile(filepath.Join(out, Workspace, LockName), nil, 0o644)
+	if Resumable(out) {
+		t.Fatal("an unjournaled run reads as resumable")
+	}
+	if err := Prepare(out, "", "swath/local-files/v1", true); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, ErrorName)); !os.IsNotExist(err) {
+		t.Fatal("error.json kept")
+	}
+	foreign := t.TempDir()
+	os.MkdirAll(filepath.Join(foreign, DataDir), 0o755)
+	if err := Prepare(foreign, "", "swath/local-files/v1", true); !errors.Is(err, ErrNotDataset) {
+		t.Fatalf("data/ without a mark of ours: %v, want ErrNotDataset", err)
+	}
+}
