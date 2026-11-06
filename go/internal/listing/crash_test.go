@@ -479,8 +479,9 @@ func crashAtRecorded(t *testing.T, url, out string) {
 
 // TestAcknowledgedRecordDamageRefuses: when the last record is durable but
 // its part not yet renamed, damage to that record (bit rot, an overrunning
-// length) is refused and the acknowledged temporary part kept; a genuinely
-// torn record (bytes missing) is dropped and the run resumes identically.
+// length, a damaged closing byte) is refused and the acknowledged temporary
+// part kept; a record that reads as torn (bytes missing, or a tail of zeros
+// that never reached the disk) is dropped and the run resumes identically.
 // A damaged header length is refused too, never taken for "no journal".
 func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 	url := crashBucket(t)
@@ -488,7 +489,7 @@ func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
 		t.Fatal(err)
 	}
-	for _, damage := range []string{"bit rot", "overrunning length", "header length", "torn"} {
+	for _, damage := range []string{"bit rot", "overrunning length", "header length", "closing byte", "closing byte lost", "torn", "torn, zero tail"} {
 		out := filepath.Join(t.TempDir(), "ds")
 		crashAtRecorded(t, url, out)
 		path := journal.Path(out)
@@ -505,12 +506,18 @@ func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 			binary.LittleEndian.PutUint32(b[last:last+4], binary.LittleEndian.Uint32(b[last:last+4])+7)
 		case "header length":
 			binary.LittleEndian.PutUint32(b[:4], uint32(len(b)))
+		case "closing byte":
+			b[len(b)-1] = ']'
+		case "closing byte lost":
+			b[len(b)-1] = ' '
 		case "torn":
 			b = b[:len(b)-5]
+		case "torn, zero tail":
+			clear(b[len(b)-5:])
 		}
 		os.WriteFile(path, b, 0o644)
 		_, err := Run(context.Background(), crashConfig(url, out, true))
-		if damage == "torn" {
+		if strings.HasPrefix(damage, "torn") {
 			if err != nil {
 				t.Fatalf("torn: %v", err)
 			}
@@ -522,6 +529,46 @@ func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 		}
 		if _, err := os.Stat(dataset.TempPath(out, 2)); err != nil {
 			t.Fatalf("%s: the acknowledged temporary part is gone: %v", damage, err)
+		}
+	}
+}
+
+// TestAcknowledgedTailTruncationRefuses: a last record cut short after its
+// part was renamed into data/ was acknowledged (the rename follows the
+// record's sync), so the cut is not a torn append: recovery refuses before
+// deleting anything, for a truncated frame and a damaged closing byte alike,
+// and the published part stays.
+func TestAcknowledgedTailTruncationRefuses(t *testing.T) {
+	url := crashBucket(t)
+	for _, damage := range []string{"truncated", "zero tail", "closing byte"} {
+		out := filepath.Join(t.TempDir(), "ds")
+		var n atomic.Int64
+		restore := faults.Set(func(p string) error {
+			if p == "renamed" && n.Add(1) == 3 {
+				return faults.ErrCrash
+			}
+			return nil
+		})
+		if _, err := Run(context.Background(), crashConfig(url, out, false)); !errors.Is(err, faults.ErrCrash) {
+			t.Fatal(err)
+		}
+		restore()
+		path := journal.Path(out)
+		b, _ := os.ReadFile(path)
+		switch damage {
+		case "truncated":
+			b = b[:len(b)-5]
+		case "zero tail":
+			clear(b[len(b)-5:])
+		case "closing byte":
+			b[len(b)-1] = ']'
+		}
+		os.WriteFile(path, b, 0o644)
+		if _, err := Run(context.Background(), crashConfig(url, out, true)); !errors.Is(err, journal.ErrCorrupt) {
+			t.Fatalf("%s: resume did not refuse: %v", damage, err)
+		}
+		if _, err := os.Stat(filepath.Join(out, dataset.DataDir, dataset.PartName(2))); err != nil {
+			t.Fatalf("%s: the published part is gone: %v", damage, err)
 		}
 	}
 }

@@ -133,11 +133,14 @@ Every later frame is a part record, with the ordinals dense from 0. `Append` wri
 `fsync`; its one caller is the ordered committer.
 
 Only an append that never completed is a torn tail, and only at the end: fewer bytes than the last frame's
-length says, or a whole last frame whose payload does not end in `}` (bytes that never reached the disk; a
-payload is JSON). It was never acknowledged, so nothing depends on it, and a reopen truncates it. Everything
-else is corruption (`ErrCorrupt`), and the resume refuses before deleting or renaming anything: a bad checksum
-with data after it; a whole last frame with a bad checksum (an acknowledged record damaged since: its part may
-be durable only in `.swath/parts/`, which nothing else names); a length over the frame limit; a length that
+length says, or a whole last frame with a bad checksum whose payload ends in a zero byte (bytes that never
+reached the disk read as zeros; a payload is JSON and ends in `}`). It was never acknowledged, so nothing
+depends on it, and a reopen truncates it. A record cut short this way after its sync is indistinguishable from
+a torn append unless its part was renamed (below); its part, then only in `.swath/parts/`, is written again from
+the source. Everything else is corruption (`ErrCorrupt`), and the resume refuses before deleting or renaming
+anything: a bad checksum with data after it; a whole last frame with a bad checksum whose last byte is not
+zero, `}` or any other (an acknowledged record damaged since, its closing byte included: its part may be
+durable only in `.swath/parts/`, which nothing else names); a length over the frame limit; a length that
 overruns the file over bytes that hold a whole frame under a smaller length (the checksum covers the length,
 so a match proves the damage); a part published under its final name beyond the recorded ones; an unknown
 header version. A journal file that is empty or whose header frame is incomplete means the header never

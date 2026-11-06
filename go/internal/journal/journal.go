@@ -299,12 +299,14 @@ const maxLengthProbe = 64 << 10
 // decode reads frames to the end. Only an append that never completed is a
 // torn tail, and it can only be the last frame: fewer bytes than its length
 // field says, or a whole frame whose payload ends in bytes that never
-// reached the disk (a payload is JSON and ends in '}'). Everything else is
-// corruption (ErrCorrupt): a bad checksum with data after it, a whole last
-// frame with a bad checksum (an acknowledged record damaged since: its part
-// may be durable in .swath/parts and nothing else names it), a length field
-// over the frame limit, or one that overruns the file when the bytes there
-// hold a whole frame under a smaller length.
+// reached the disk, which read as zeros (a payload is JSON and ends in '}').
+// Everything else is corruption (ErrCorrupt): a bad checksum with data after
+// it, a whole last frame with a bad checksum whose last byte was written (a
+// '}' or any other nonzero byte: an acknowledged record damaged since, its
+// closing byte included; its part may be durable in .swath/parts and
+// nothing else names it), a length field over the frame limit, or one that
+// overruns the file when the bytes there hold a whole frame under a smaller
+// length.
 func decode(r io.Reader) (*State, error) {
 	st := &State{}
 	var hdr [8]byte
@@ -344,8 +346,8 @@ func decode(r io.Reader) (*State, error) {
 			if rest > 0 {
 				return nil, fmt.Errorf("%w: frame %d has a bad checksum and %d bytes follow it", ErrCorrupt, len(st.Records)+1, rest)
 			}
-			if size > 0 && payload[size-1] == '}' {
-				return nil, fmt.Errorf("%w: the last frame (%d) was written whole and is damaged", ErrCorrupt, len(st.Records)+1)
+			if size > 0 && payload[size-1] != 0 {
+				return nil, fmt.Errorf("%w: the last frame (%d) was written to its end and is damaged", ErrCorrupt, len(st.Records)+1)
 			}
 			return torn(8 + int64(m))
 		}
