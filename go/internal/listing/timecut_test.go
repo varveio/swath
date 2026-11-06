@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -135,16 +136,36 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 	for i := range 6000 {
 		keys = append(keys, fmt.Sprintf("k%05d", i))
 	}
-	run := func(out string, resume bool, slow bool, interval time.Duration) (Report, error) {
+	// run lists keys; with slow, the source holds before key 10 until a
+	// part is closed (with 10 rows, far below the part size, only the
+	// interval closes one), at most 10 s, then lists fast: a slow start
+	// that does not depend on the host's timing. hook, if set, sees every
+	// fault point too.
+	run := func(out string, resume bool, slow bool, interval time.Duration, hook func(string) error) (Report, error) {
 		p := &scripted{keys: keys, chunk: 1}
+		cut := make(chan struct{})
+		var once sync.Once
 		if slow {
-			p.slowAt = func(i int) time.Duration { // a slow start, then fast
-				if i < 30 {
-					return 5 * time.Millisecond
+			p.slowAt = func(i int) time.Duration {
+				if i == 10 {
+					select {
+					case <-cut:
+					case <-time.After(10 * time.Second):
+					}
 				}
 				return 0
 			}
 		}
+		restore := faults.Set(func(pt string) error {
+			if pt == "part-closed" {
+				once.Do(func() { close(cut) })
+			}
+			if hook != nil {
+				return hook(pt)
+			}
+			return nil
+		})
+		defer restore()
 		scriptMu.Lock()
 		scriptNext = p
 		scriptMu.Unlock()
@@ -152,7 +173,7 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 			Limits: Limits{PartSize: 2 << 10, Workers: 1, Memory: 256 << 10, PartInterval: interval}})
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
-	refRep, err := run(ref, false, false, -1)
+	refRep, err := run(ref, false, false, -1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +191,7 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 	// calibrating part's slack (a frozen tiny limit gives hundreds).
 	ref0 := refRep.Output.PartsWritten
 	out := filepath.Join(t.TempDir(), "slow")
-	rep, err := run(out, false, true, 50*time.Millisecond)
+	rep, err := run(out, false, true, 50*time.Millisecond, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,18 +205,16 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 		t.Run(fmt.Sprintf("resume after record %d", nth), func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "ds")
 			var seen atomic.Int64
-			restore := faults.Set(func(p string) error {
+			_, err := run(out, false, true, 50*time.Millisecond, func(p string) error {
 				if p == "recorded" && seen.Add(1) == nth {
 					return faults.ErrCrash
 				}
 				return nil
 			})
-			_, err := run(out, false, true, 50*time.Millisecond)
-			restore()
 			if !errors.Is(err, faults.ErrCrash) {
 				t.Fatalf("crash not injected: %v", err)
 			}
-			if _, err := run(out, true, false, -1); err != nil {
+			if _, err := run(out, true, false, -1, nil); err != nil {
 				t.Fatalf("resume: %v", err)
 			}
 			// nth parts kept, the rest listed by size only.
