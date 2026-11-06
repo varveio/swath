@@ -49,6 +49,26 @@ where one range can hold a whole bucket:
 Beyond the budget the walk holds the rows pending on the root-to-frontier path (the O(depth × fan-out) of any
 depth-first walk) and one publish batch per worker.
 
+## The waits
+
+Every wait is on one of two condition variables under the stage's mutex, and every event that can make a
+waiter eligible broadcasts to both; each waiter rechecks its own condition. Each wait is driven to its wait
+and released by one event in a test with a deterministic barrier (`hookWait`):
+
+| Wait | Who | Released by | Test |
+|---|---|---|---|
+| idle (`work`) | a worker, nothing queued | a range completing with children (pushed then), the drain ending, a stop | `TestIdleWorkerWakesOnChildren` |
+| admission (`work`) | a worker, ranges queued, the budget used and spill unavailable (off, or the disk budget refused) | drained bytes released, bytes released downstream, spill credit returned (a drained range's file deleted), a stop | `TestAdmissionWaitWakes` |
+| publish (`drain`) | an emitter of rows facing a full budget; of markers, while the markers alone would fill it; after a refused frame | the same releases, a marker replayed while the total stays full, spill credit, the drainer awaiting its node, a stop | `TestPublishWaitWakes`, `TestMarkerSaturationWakes`, `TestRefusedSpillWakesOnCredit` |
+| frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
+
+A release of drained bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
+waits for the marker bytes alone, which can fall while the total stays full. A deleted spill file returns
+its credit and wakes every waiter, so a worker held at admission and an emitter whose frame was refused retry
+at once. Publishing only children never waits (`TestChildOnlyPublishIsAdmitted`). The run's own `WaitGroup`
+waits for providers and spill I/O to return: a stop wakes every condition variable but cannot interrupt
+arbitrary I/O, which the command's forced-exit grace covers.
+
 ## Cancellation
 
 A stop (sink error, provider error, or context cancellation) sets an atomic flag and broadcasts to every
@@ -60,10 +80,13 @@ returns the first error.
 When the budget is used up, a range that is not the one being drained spills instead of waiting. Its
 emitter writes the rows it would have published to the range's spill file and publishes markers in their
 place, so the range keeps listing while a slow frontier holds the output back. A range that ends with
-nothing left to publish (its last batch went out with its last page) never waits either: with spill on and
-no disk refusal, no worker waits on the budget at all (`TestSpillKeepsWorkersBusy`). Waiting at a range's end
-freed nothing and kept the node from being done; on a deep bucket, where rows far ahead of the frontier keep
-the budget full, it left the drainer listing the frontier alone (one range in flight of 64):
+nothing left to publish (its last batch went out with its last page), or with only children, never waits
+either. Waiting at a range's end freed nothing and kept the node from being done; on a deep bucket, where rows
+far ahead of the frontier keep the budget full, it left the drainer listing the frontier alone (one range in
+flight of 64). Spill does not remove every wait: a worker still waits when the disk budget refuses a frame,
+and an emitter of markers waits once the markers in memory would fill the budget by themselves, so at
+sufficient scale (hundreds of finished ranges ahead of a stalled frontier) producers wait even with unlimited
+disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on the budget:
 - **Order.** The rows of one range are already in key order, so the drainer replays a range's frames front to
   back when it reaches the markers: no index, no merge, no dictionaries. Frames are written before their
   markers are published, so the drainer never reads ahead of the writer.

@@ -135,6 +135,9 @@ type run[R, P any] struct {
 	segs    [][]schema.Row[P]
 	segRows int
 	rows    int64
+	// released: bytes drained but still counted; releasedMarkers: the part
+	// of it held by spill markers (drainer only; returned under mu).
+	released, releasedMarkers int64
 	// The stream-wide order guard: the last key handed on (drainer only).
 	last    string
 	hasLast bool
@@ -170,6 +173,25 @@ func orderError(prev, key string, index int64, seam bool) error {
 		rel = "repeats"
 	}
 	return &dataset.InvariantError{Reason: fmt.Sprintf("order: row %d key %q %s %s %q", index, key, rel, what, prev)}
+}
+
+// The order stage's waits, by site (hookWait).
+const (
+	waitIdle      = "idle"      // a worker: no queued range (work.Wait)
+	waitAdmission = "admission" // a worker: ranges queued, budget used and spill unavailable (work.Wait)
+	waitPublish   = "publish"   // an emitter: row or marker capacity (drain.Wait)
+	waitFrontier  = "frontier"  // the drainer: the range it needs is being listed (drain.Wait)
+)
+
+// hookWait sees every wait just before it starts (tests; mu held).
+var hookWait func(site string)
+
+// waitAt waits on c (mu held), telling hookWait first.
+func (o *run[R, P]) waitAt(c *sync.Cond, site string) {
+	if hookWait != nil {
+		hookWait(site)
+	}
+	c.Wait()
 }
 
 // Test hooks that widen race windows; nil in production.
@@ -284,42 +306,12 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if opt.Workers < 1 || opt.Budget < 1 {
 		return Stats{}, errors.New("order: workers and budget must be positive")
 	}
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes}
-	if opt.After != nil {
-		o.last, o.hasLast = *opt.After, true
+	o, closeRun, err := newRun(ctx, p, sink, s, opt)
+	if err != nil {
+		return Stats{}, err
 	}
-	if countRows {
-		o.measure = func(rows []schema.Row[P]) int64 { return int64(len(rows)) }
-	}
-	if opt.Shared != nil {
-		opt.Shared.setWake(func() {
-			o.mu.Lock()
-			o.work.Broadcast()
-			o.drain.Broadcast()
-			o.mu.Unlock()
-		})
-		defer opt.Shared.setWake(nil)
-	}
-	if opt.SpillDir != "" {
-		sp, err := newSpiller(s.Codec, opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
-		if err != nil {
-			return Stats{}, err
-		}
-		defer sp.close()
-		o.sp = sp
-	}
-	o.work = sync.NewCond(&o.mu)
-	o.drain = sync.NewCond(&o.mu)
-	stop := context.AfterFunc(ctx, func() {
-		o.stopped.Store(true)
-		o.mu.Lock()
-		o.work.Broadcast()
-		o.drain.Broadcast()
-		o.mu.Unlock()
-	})
-	defer stop()
+	defer closeRun()
+	ctx, cancel := o.ctx, o.cancel
 	root := &node[R, P]{r: p.Root()}
 	o.stack = []*node[R, P]{root}
 
@@ -369,17 +361,67 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	return st, err
 }
 
+// newRun builds a run's state (Run's set-up without the goroutines); the
+// returned function releases it.
+func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s *schema.Schema[P], opt Options) (*run[R, P], func(), error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes}
+	o.work = sync.NewCond(&o.mu)
+	o.drain = sync.NewCond(&o.mu)
+	if opt.After != nil {
+		o.last, o.hasLast = *opt.After, true
+	}
+	if countRows {
+		o.measure = func(rows []schema.Row[P]) int64 { return int64(len(rows)) }
+	}
+	// wake rouses every waiter: capacity came back (bytes released
+	// downstream, spill credit returned) or the run stopped. Each waiter
+	// rechecks its own condition.
+	wake := func() {
+		o.mu.Lock()
+		o.work.Broadcast()
+		o.drain.Broadcast()
+		o.mu.Unlock()
+	}
+	if opt.SpillDir != "" {
+		sp, err := newSpiller(s.Codec, opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
+		if err != nil {
+			cancel(nil)
+			return nil, nil, err
+		}
+		sp.wake = wake
+		o.sp = sp
+	}
+	if opt.Shared != nil {
+		opt.Shared.setWake(wake)
+	}
+	stop := context.AfterFunc(ctx, func() {
+		o.stopped.Store(true)
+		wake()
+	})
+	return o, func() {
+		stop()
+		if opt.Shared != nil {
+			opt.Shared.setWake(nil)
+		}
+		if o.sp != nil {
+			o.sp.close()
+		}
+		cancel(nil)
+	}, nil
+}
+
 func (o *run[R, P]) worker() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for {
 		for !o.finished && !o.stopped.Load() && (len(o.stack) == 0 || ((o.sp == nil || o.sp.full.Load()) && o.full())) {
 			if len(o.stack) == 0 {
-				o.work.Wait()
+				o.waitAt(o.work, waitIdle)
 				continue
 			}
 			t := time.Now()
-			o.work.Wait()
+			o.waitAt(o.work, waitAdmission)
 			o.budget += time.Since(t)
 		}
 		if o.finished || o.stopped.Load() {
@@ -535,17 +577,20 @@ func (e *emitter[R, P]) publish() error {
 			// may have marked this node awaited meanwhile).
 			refused = true
 			continue
-		} else if o.sp != nil && e.rows == 0 && len(e.items) > 0 {
+		} else if e.rows == 0 {
 			// Only children and spill markers: admitted without a wait
 			// unless the markers in memory would by themselves fill the
 			// budget, so spilling keeps workers busy and the markers stay
-			// bounded.
+			// bounded. Children alone (a range that ends after its last
+			// split, with spill on or off) cost nothing here and are
+			// admitted: holding them back would free nothing and keep the
+			// subtree from the drainer.
 			if o.markers+e.units < o.opt.Budget {
 				break
 			}
 		}
 		t := time.Now()
-		o.drain.Wait()
+		o.waitAt(o.drain, waitPublish)
 		o.budget += time.Since(t)
 		refused = false
 	}
@@ -607,25 +652,28 @@ func (o *run[R, P]) replay(f *spillFile) error {
 	return o.send(rows)
 }
 
+// release returns the bytes drained since the last release to the budget
+// (mu held) and wakes every waiter: any release can make a waiter eligible,
+// not only one that ends a full budget. A worker held at admission and an
+// emitter of rows wait for the total to drop below the budget, but an
+// emitter of markers and children waits for the marker bytes alone, which
+// can fall while the total stays full.
+func (o *run[R, P]) release() {
+	if o.released == 0 {
+		return
+	}
+	o.buffered -= o.released
+	o.markers -= o.releasedMarkers
+	o.released, o.releasedMarkers = 0, 0
+	o.work.Broadcast()
+	o.drain.Broadcast()
+}
+
 // drainTree walks the tree depth-first from root, streaming rows to sink.
 func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	var st Stats
-	// released: bytes drained but still counted; releasedMarkers: the
-	// part of it held by spill markers.
-	var released, releasedMarkers int64
-	release := func() { // mu held
-		if released == 0 {
-			return
-		}
-		full := o.full()
-		o.buffered -= released
-		o.markers -= releasedMarkers
-		released, releasedMarkers = 0, 0
-		if full && !o.full() {
-			o.work.Broadcast()
-			o.drain.Broadcast()
-		}
-	}
+	released, releasedMarkers := &o.released, &o.releasedMarkers
+	release := o.release
 	releaseEvery := max(1, o.opt.Budget/16)
 
 	type frame struct {
@@ -657,19 +705,19 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 					break
 				}
 				if it.spill != nil {
-					released += it.units
-					releasedMarkers += it.units
+					*released += it.units
+					*releasedMarkers += it.units
 					err = o.replay(it.spill)
-					if released >= releaseEvery {
+					if *released >= releaseEvery {
 						o.mu.Lock()
 						release()
 						o.mu.Unlock()
 					}
 					continue
 				}
-				released += it.units
+				*released += it.units
 				err = o.send(it.rows)
-				if released >= releaseEvery {
+				if *released >= releaseEvery {
 					o.mu.Lock()
 					release()
 					o.mu.Unlock()
@@ -709,9 +757,9 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 				continue
 			}
 			if it.spill != nil {
-				released += it.units
-				releasedMarkers += it.units
-				if released >= releaseEvery {
+				*released += it.units
+				*releasedMarkers += it.units
+				if *released >= releaseEvery {
 					release()
 				}
 				o.mu.Unlock()
@@ -723,8 +771,8 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 				}
 				continue
 			}
-			released += it.units
-			if released >= releaseEvery {
+			*released += it.units
+			if *released >= releaseEvery {
 				release()
 			}
 			o.mu.Unlock()
@@ -775,7 +823,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			n.awaited.Store(true)
 			o.drain.Broadcast() // its emitter may be blocked on the budget
 			t := time.Now()
-			o.drain.Wait()
+			o.waitAt(o.drain, waitFrontier)
 			o.frontier += time.Since(t)
 			n.awaited.Store(false)
 		}

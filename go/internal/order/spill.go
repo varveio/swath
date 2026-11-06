@@ -57,6 +57,7 @@ type spiller[P any] struct {
 	peak     atomic.Int64
 	refused  atomic.Int64 // frames refused by the disk budget
 	full     atomic.Bool  // the last frame was refused; cleared when a file is deleted
+	wake     func()       // rouses the run's waiters (credit returned); nil in tests
 	seq      atomic.Uint64
 	enc      sync.Pool // *zstd.Encoder
 	dec      *zstd.Decoder
@@ -226,10 +227,15 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 	return true
 }
 
-// release returns a deleted file's bytes to the budget.
+// release returns a deleted file's bytes to the budget and wakes every
+// waiter: a worker held at admission, or an emitter whose frame was
+// refused, may now spill.
 func (s *spiller[P]) release(f *spillFile) {
 	s.live.Add(-f.size)
 	s.full.Store(false)
+	if s.wake != nil {
+		s.wake()
+	}
 }
 
 var errSpillFrame = errors.New("spill: corrupt frame")
