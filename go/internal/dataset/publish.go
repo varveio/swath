@@ -6,7 +6,6 @@ package dataset
 import (
 	"github.com/varveio/swath/go/internal/faults"
 
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -204,37 +203,7 @@ func Committed(out string) bool {
 }
 
 func writeJSON(dir, name string, v any) error {
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
-		return fmt.Errorf("encode %s: %w", name, err)
-	}
-	return writeAtomic(dir, name, b.Bytes())
-}
-
-// writeAtomic writes name via name.tmp, fsync, rename and a directory fsync.
-func writeAtomic(dir, name string, data []byte) error {
-	tmp := filepath.Join(dir, name+".tmp")
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("write %s: %w", name, err)
-	}
-	_, err = faults.Write(f, data)
-	if err == nil {
-		err = faults.Sync(f)
-	}
-	if err = errors.Join(err, f.Close()); err != nil {
-		return fmt.Errorf("write %s: %w", name, err)
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
-		return fmt.Errorf("commit %s: %w", name, err)
-	}
-	if err := syncDir(dir); err != nil {
-		return fmt.Errorf("sync after %s: %w", name, err)
-	}
-	return nil
+	return ReplaceJSON(filepath.Join(dir, name), v, Durable)
 }
 
 // SyncDir fsyncs a directory, making the entries created or renamed in it

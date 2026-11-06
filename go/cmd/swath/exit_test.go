@@ -260,7 +260,7 @@ func TestDiskFullExits74(t *testing.T) {
 	for target, match := range map[string]func(string) bool{
 		"part":     func(n string) bool { return strings.HasSuffix(n, ".parquet") },
 		"journal":  func(n string) bool { return filepath.Base(n) == "journal" },
-		"manifest": func(n string) bool { return filepath.Base(n) == dataset.ManifestName+".tmp" },
+		"manifest": func(n string) bool { return dataset.TempOf(dataset.ManifestName, filepath.Base(n)) },
 	} {
 		out := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")

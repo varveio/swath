@@ -105,8 +105,15 @@ func prepareOut(absOut string, replace bool) error {
 		if err := faults.At("overwrite-uncommitted"); err != nil {
 			return err
 		}
+		root, _ := os.ReadDir(absOut)
 		for _, name := range ownEntries {
-			for _, n := range []string{name, name + ".tmp"} {
+			names := []string{name, name + ".tmp"} // .tmp: earlier builds' temporary files
+			for _, e := range root {
+				if TempOf(name, e.Name()) {
+					names = append(names, e.Name())
+				}
+			}
+			for _, n := range names {
 				if err := os.RemoveAll(filepath.Join(absOut, n)); err != nil {
 					return fmt.Errorf("remove previous dataset: %w", err)
 				}

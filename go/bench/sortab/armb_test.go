@@ -75,26 +75,7 @@ func loadCheckpoint(dir string) (*checkpoint, error) {
 }
 
 func saveCheckpoint(dir string, b []byte) error {
-	tmp := filepath.Join(dir, checkpointName+".tmp")
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, checkpointName)); err != nil {
-		return err
-	}
-	return dataset.SyncDir(dir)
+	return dataset.Replace(filepath.Join(dir, checkpointName), b, dataset.Durable)
 }
 
 // BStats are arm B's own measurements.

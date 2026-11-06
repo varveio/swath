@@ -38,7 +38,7 @@ func TestDiskFaultMatrix(t *testing.T) {
 		// A part is written in several buffered writes and synced once.
 		"part":     {func(n string) bool { return strings.HasSuffix(n, ".parquet") && strings.Contains(n, dataset.PartsDir) }, 40, 3},
 		"journal":  {func(n string) bool { return filepath.Base(n) == "journal" }, 4, 4},
-		"manifest": {func(n string) bool { return filepath.Base(n) == dataset.ManifestName+".tmp" }, 1, 1},
+		"manifest": {func(n string) bool { return dataset.TempOf(dataset.ManifestName, filepath.Base(n)) }, 1, 1},
 	}
 	for target, tg := range targets {
 		for _, op := range []string{"write", "sync"} {

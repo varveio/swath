@@ -76,7 +76,8 @@ const ClaimSuffix = ".claimed"
 func ClaimPath(out string, i int) string { return TempPath(out, i) + ClaimSuffix }
 
 // ownEntries are the root entries a dataset owns; overwrite removes these and
-// their .tmp siblings, nothing else. The workspace is emptied except for the
+// their temporary files (TempOf, and earlier builds' .tmp siblings), nothing
+// else. The workspace is emptied except for the
 // lock. Earlier layouts' entries (_SUCCESS, symlink.txt, .swath.lock, the
 // _swath_*summary.json reports and
 // Swath's .swath-state.json) are removed too, so an old dataset can be

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source"
@@ -263,30 +262,15 @@ func writeOutcome(dir string, o outcome) error {
 	return writeFileAtomic(path, o)
 }
 
-// writeFileAtomic replaces path with v as indented JSON through a unique
-// temporary file beside it, so concurrent writers of one path (the
-// graceful and the forced account of an attempt) never share or remove
-// each other's temporary file. No sync: these are operational files.
+// writeFileAtomic replaces path with v as indented JSON (dataset.Replace,
+// atomic, not synced: these are operational files read by this
+// invocation's supervisor, rewritten by the next attempt).
 func writeFileAtomic(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	_, err = faults.Write(f, append(b, '\n'))
-	if err = errors.Join(err, f.Chmod(0o644), f.Close()); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return dataset.Replace(path, append(b, '\n'), dataset.Atomic)
 }
 
 // errOut is where the command reports an outcome its output does not hold.

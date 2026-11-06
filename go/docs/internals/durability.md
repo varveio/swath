@@ -82,6 +82,12 @@ Rows may sit in memory, or in an unpublished `.tmp` part, beyond the last record
 resume lists them again. At the end, `manifest.json` is installed by an atomic rename and a directory sync:
 that is the commit. The run reports follow it.
 
+Every JSON file swath replaces goes through one primitive, `dataset.Replace`, with a temporary file of its
+own beside the target (`.NAME.*.tmp`, so concurrent writers never share one; an overwrite removes leftovers)
+and a stated durability: `Durable` (file synced before the rename, directory after) for `manifest.json` and
+`run.json`; `Atomic` (never torn, not synced) for the files rewritten as the run goes or read only by its
+supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
+
 ## Resume
 
 `swath resume DIR` (it replays the command recorded in the journal header; only the runtime flags `--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`, `--part-interval`, `--report-format`, `--report`, `--max-duration` and `--stall-timeout`, and the operational ones (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`, `--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--request-rate`) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
