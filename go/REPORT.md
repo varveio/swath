@@ -635,24 +635,21 @@ buffer.
   refuses anonymous ListBucket.
 - Per the instructions, no other host was tried, so there are no real-bucket numbers.
 
-**Varve.** A temporary test in `varve/internal/swath` (Varve `2353ada`; deleted afterwards, `git status` clean;
-scratch copy) opened the datasets with `Open(ctx, DirSource(root), "s3", "bench")`:
+**Downstream reader.** A temporary test in a scratch copy of the downstream reader (private at the time of
+writing; nothing changed in its checkout) opened the datasets:
 
 | Dataset | Open | Eligibility | Flat List | Delimiter List | Stream |
 |---|---|---|---|---|---|
 | whole bucket, 1 part | ok | eligible, no reasons | ok | root → `data/ home/ projects/`; `projects/proj-00-` → `projects/proj-00-model/` | 971,927 objects = manifest, ascending |
 | whole bucket, 7 parts (`-seed`, 4 MB parts) | ok | eligible | ok | same | 971,927, ascending |
-| `s3://bench/home/` (prefix) | refused: `run summary contradicts whole-bucket coverage` | | | | |
-| local `out-realistic` | refused: `manifest does not describe the selected bucket dataset` | | | | |
+| `s3://bench/home/` (prefix) | refused: the run summary contradicts whole-bucket coverage | | | | |
+| local `out-realistic` | refused: the manifest does not describe a bucket dataset | | | | |
 
-The S3 dataset passes every check that the local one failed:
-- the bucket match;
-- the run summary;
-- the four S3 columns `version_id`, `is_latest`, `is_delete_marker` and `row_type`, with their pure-object
-  statistics.
+The S3 dataset passes every check that the local one failed: the bucket match, the run summary, and the four
+S3 columns `version_id`, `is_latest`, `is_delete_marker` and `row_type` with their pure-object statistics.
 
-The prefix refusal is correct, not a bug. Varve treats a dataset as a whole-bucket listing, and the run
-summary says this one is not. Opening a prefix dataset would need a Varve-side notion of a prefix dataset.
+The prefix refusal is correct, not a bug: that reader treats a dataset as a whole-bucket listing, and the run
+summary says this one is not.
 
 **Stage 2 (static delimiter seed; since replaced by the parallel core's seed, see the next section).**
 - **Done:** one delimited ListObjectsV2 of the root yields the root's own objects (rows) and its common prefixes
@@ -913,7 +910,7 @@ S3 datasets now carry swath's run summary as `_swath_summary.json` (`listing.Run
 - **The Go report:** under `go`.
 - **Fields left out:** those with no counterpart (Java's trajectory, AIMD, probes, sort pipeline) are left
   out rather than written as null.
-- **Varve probe:** a temporary test in the Varve checkout opened a Go dataset of the 1M synthetic fixture
+- **Downstream reader probe:** a temporary test in a scratch copy of the downstream reader opened a Go dataset of the 1M synthetic fixture
   (1,000,020 objects streamed) and a live noaa-normals-pds Go dataset (148,917). It refused the wrong
   bucket. The probe was deleted and `git status` is clean.
 
@@ -2068,7 +2065,7 @@ One coordinated change, documented for readers in [docs/upgrade.md](docs/upgrade
    journal still records the final part.
 
 Gates: `verify.py` (rewritten for format 2) passes on local and S3 datasets; `diffds.py` finds format 2 and
-format 1 of the same listing identical through the projection; the Varve probe passes (next section but one).
+format 1 of the same listing identical through the projection; the downstream reader probe passes (next section but one).
 Java reading Go output is no longer a gate. Byte baselines change once here: the S3 parts lose four columns
 and every part's footer changes.
 
@@ -2113,14 +2110,14 @@ Gates for every item below, run by one script on a 20,000-key fake bucket (synth
 305-entry local tree with a name that is not UTF-8 and a symlink: `verify.py` on sequential, parallel,
 prefix and local datasets; `diffds.py` format 1 (Java-compatible, `ec23ff8`) vs format 2 and sequential vs
 parallel; same-build byte identity (part MD5s equal across `-sequential`, `-workers 16 -seed` and
-`-workers 4 -seed`, and across local runs with 1 and 4 workers); the Varve probe on a scratch copy of Varve
-with the upgrade guide applied, and Varve's own `internal/swath` tests.
+`-workers 4 -seed`, and across local runs with 1 and 4 workers); the downstream reader probe on a scratch copy
+with the upgrade guide applied, and that reader's own tests.
 
 6. **Keys are bytes.** Filesystem `key` and `link_target` are unannotated BYTE_ARRAY; names that are not
    UTF-8 are listed with their exact bytes (format 1 skipped them and their subtrees; `invalid_utf8_names`
    is gone). S3 keys stay STRING. Manifest and journal part bounds are `min_key_base64`/`max_key_base64`
    (`dataset.Key`, compared as bytes); journal version 4. Tests: `TestKeysAreBytes` (end to end, manifest
-   bytes), the filesystem oracle now includes the non-UTF-8 names. Varve probe: the decoder reads the two
+   bytes), the filesystem oracle now includes the non-UTF-8 names. downstream reader probe: the decoder reads the two
    base64 fields into `[]byte` (two lines changed; the diff stays 4 files, +117/−5). Same-build byte identity holds;
    the local parts' bytes change (key and link target lose STRING), the S3 column content does not.
 
@@ -2445,7 +2442,7 @@ bytes, not skipped; ids are unsigned; encoding is parallel; S3 and GCS runs resu
 - **Scale.** Billions of keys, runs of hours and 256 or more workers are unmeasured; the replay recordings and
   live buckets in this report are the largest runs. The lazy scale fake and the measured-run script exist
   ("Scale tier (smoke)"); the runs are scheduled on other infrastructure.
-- **Interoperability.** Format 2 is read by a patched copy of Varve (see "Varve reader compatibility"), not by
+- **Interoperability.** Format 2 is read by a patched copy of the downstream reader (see "Downstream reader compatibility"), not by
   Java swath's reader.
 - **Local benchmarks.** Cold-cache numbers are guest-cold in a VM and single runs; all trees are synthetic.
 
@@ -2476,17 +2473,16 @@ same part MD5.
    opening a child directory, `parallel-lstat` and `portable` re-check it with `Lstat` and `fstat` and skip it on
    a mismatch (`unsafe_dirs`). Test: `TestOpenDirCheckedRejectsSymlink`.
 
-## Varve reader compatibility
+## Downstream reader compatibility
 
 **Format 2 (current).** The changes in [docs/upgrade.md](docs/upgrade.md) were applied to a scratch copy of
-Varve at `2353ada4` (the checkout itself is untouched). The diff is 4 files, +117/−5 lines:
-- a format-2 manifest decoder that requires whole-bucket coverage and fails closed (`manifest_v2.go`, 80 lines);
-- dispatch on the manifest's `format` before the `_SUCCESS` check (`manifest.go`);
-- the current-object schema treated as all current objects (`reader.go`);
-- the `swath.profile` stamp accepted, and no `row_type` statistics check for that schema (`eligibility.go`).
+the downstream reader (private at the time of writing; its checkout untouched): a format-2 manifest decoder
+that requires whole-bucket coverage and fails closed, dispatch on the manifest's `format` before any marker
+check, the current-object schema treated as all current objects, and the `swath.profile` stamp accepted with
+no `row_type` statistics check for that schema. A small change, a few dozen lines.
 
-The probe read a 20,000-key fake bucket (synthetic, `keys.tsv` from a fixed generator) through `Open`,
-`Stream`, `Eligibility` and a delimiter `List`:
+The probe read a 20,000-key fake bucket (synthetic, `keys.tsv` from a fixed generator) through open, stream,
+eligibility and a delimiter list:
 
 | Dataset | Result |
 |---|---|
@@ -2495,10 +2491,11 @@ The probe read a 20,000-key fake bucket (synthetic, `keys.tsv` from a fixed gene
 | format 1 (the pre-change binary, ec23ff8) | the same: the legacy path still works |
 | format 2, prefix `s3://eq/d03/` | refused: "dataset does not cover the whole bucket" |
 
-Varve's own `internal/swath` tests pass in the patched copy. `bench/diffds.py` finds the format-2 and format-1
-datasets of the same listing identical through its projection (20,000 rows both ways); format 2 is 2.2%
-smaller. The earlier format-1 findings for local datasets (no bucket, no S3 columns, null `size` with
-`--fields names`) still stand: format 2 does not make a local dataset a bucket dataset.
+The reader's own tests pass in the patched copy. `bench/diffds.py` finds the format-2 and format-1 datasets of
+the same listing identical through its projection (20,000 rows both ways); format 2 is 2.2% smaller. The
+earlier format-1 findings for local datasets (no bucket, no S3 columns, null `size` with `--fields names`)
+still stand: format 2 does not make a local dataset a bucket dataset. Since then the reader dispatches on the
+schema id and reads every provider's datasets (docs/upgrade.md, "The downstream reader: dispatch on schema id").
 
 ## Skipped or not measured
 

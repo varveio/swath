@@ -1,6 +1,6 @@
 PASS _SUCCESS present
 PASS _swath_local_summary.json present
-PASS no _swath_summary.json (Swath's reserved run-summary name, parsed by Varve)
+PASS no _swath_summary.json (Swath's reserved run-summary name, parsed by the downstream reader)
 PASS data/ holds exactly the 1 manifest parts, in name order
 PASS manifest totalRows == sum(rowCount)
 PASS DuckDB count 1071819 == manifest totalRows 1071819

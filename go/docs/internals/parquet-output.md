@@ -9,10 +9,10 @@ dataset layout"); this page says how the Go writer meets it.
 | Choice | Value | Why / who depends on it |
 |---|---|---|
 | Row path | parquet-go `GenericWriter[any]` fed column values (`[]parquet.Value` per column, one page at a time) | No per-row reflection: a schema mismatch with a struct row silently selects parquet-go's reflective conversion. The column path keeps parquet-go's 64-row write quantum, so pages are identical to its row path. |
-| `size` and other integers | INT64 / INT32 with the standard `INT(64,true)` / `INT(32,true)` annotation | Format 2 drops the Java adapter that stripped it; Varve's reader checks the physical type only. |
+| `size` and other integers | INT64 / INT32 with the standard `INT(64,true)` / `INT(32,true)` annotation | Format 2 drops the Java adapter that stripped it; the downstream reader checks the physical type only. |
 | Timestamps | INT64 `TIMESTAMP(MICROS, UTC)` | canonical `last_modified`. |
 | Key encoding | `DELTA_BYTE_ARRAY` | sorted keys share long prefixes. It is also what makes the column-index adapter possible: with dictionary keys the type is library-private. |
-| Key column index | one-page indexes stamped `BoundaryOrder = ASCENDING` (`ascendingKey` adapter); multi-page indexes untouched | older Java readers reject a one-page index with `UNORDERED`; Varve and current Java accept both. Built through parquet-go's public indexer factory, not by rewriting footers. |
+| Key column index | one-page indexes stamped `BoundaryOrder = ASCENDING` (`ascendingKey` adapter); multi-page indexes untouched | older Java readers reject a one-page index with `UNORDERED`; the downstream reader and current Java accept both. Built through parquet-go's public indexer factory, not by rewriting footers. |
 | `etag` | `DELTA_BYTE_ARRAY` | ETags are unique hex: a dictionary never pays. parquet-mr (Java swath) tries a dictionary and falls back to `DELTA_BYTE_ARRAY`; writing delta directly matches its result and is 2–3 % smaller per dataset than dictionary-then-PLAIN. |
 | Other byte arrays | `RLE_DICTIONARY`, 8 KiB dictionary limit per chunk | storage class, owner and checksum columns repeat. |
 | Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap (REPORT.md "Step 4a"). |
@@ -138,9 +138,9 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 
 ## What readers rely on
 
-- **Varve's Go reader** opens format-2 S3 datasets with the changes in [../upgrade.md](../upgrade.md): it
+- **The downstream reader** opens format-2 S3 datasets with the changes in [../upgrade.md](../upgrade.md): it
   dispatches on the manifest's format, accepts whole-bucket coverage from the manifest, reads the
-  current-object schema and the `swath.profile` stamp (REPORT.md, "Varve reader compatibility").
+  current-object schema and the `swath.profile` stamp (REPORT.md, "Downstream reader compatibility").
 - **swath's Java reader** does not open format 2, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
 

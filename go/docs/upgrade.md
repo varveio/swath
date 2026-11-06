@@ -1,9 +1,9 @@
 # Upgrading readers to dataset format 2
 
-This guide covers what a reader of swath datasets (Varve, `bench/diffds.py`, `bench/summaries.py`) changes to
+This guide covers what a reader of swath datasets (the downstream reader, `bench/diffds.py`, `bench/summaries.py`) changes to
 read format 2, which this tool writes. Format 1 is the Java-compatible layout. Format 2 is not a superset of
 it: there are no aliases, so a format-1 reader rejects a format-2 dataset, and a Java reader cannot open one by
-design. DuckDB and the Varve probe are the acceptance gates (see "Gates").
+design. DuckDB and the downstream reader are the acceptance gates (see "Gates").
 
 ## Dispatch
 
@@ -121,7 +121,7 @@ parts are byte-identical within a build only.
 ## Run report and counters
 
 `run.json` replaces Java's run summary; it has none of its field names and none of its Java-only fields
-(`steals`, `sort.arm`, `shape.fingerprint`, `cost`). Varve does not read it. A reader that tabulates runs
+(`steals`, `sort.arm`, `shape.fingerprint`, `cost`). The downstream reader does not read it. A reader that tabulates runs
 (`bench/summaries.py`) maps Java's top-level fields as: `completed` → `outcome.complete`, `objects` →
 `output.rows_listed`, `duration_ms`/`listing_duration_ms` → `timings.wall_ms`/`listing_ms`, `config.target` →
 `invocation.source`, `config.max_parallel_listings` → `invocation.workers`, `output.files` →
@@ -166,42 +166,34 @@ is `--workers`, default 64 as Java's, whatever the CPU count (an earlier Go buil
 count, `min(64, max(4, 3*GOMAXPROCS))`); `--encoders` stays CPU-derived.
 The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
-## Varve: dispatch on schema id
+## The downstream reader: dispatch on schema id
 
-Varve's reader (`internal/swath`, varveio/varve#108) reads format 2 for every provider; this tool is unchanged
-for it. What Varve changed:
+The downstream reader reads format 2 for every provider; this tool is unchanged for it. What such a reader
+does, stated as the contract rather than as its code:
 
-- **Dispatch.** `Open` reads `manifest.json` first. A manifest with a `format` field takes the format-2 path,
-  which requires `"format": "swath-dataset"` and `format_version` 2 and reads no `_SUCCESS` or run summary.
-  Any other manifest takes the format-1 path unchanged (marker, run summary, thin hosted manifest).
-- **Acceptance.** The whole-source rule above, from the manifest only: `coverage.complete` true,
-  `stop_reason` `completed`, `skipped_entries` 0, `filters` present and empty, `scope.kind` `whole`. A
-  missing coverage or field fails closed.
-- **Schema id.** `schema_id` must be the opened provider's: `swath/s3-objects/v1` (`s3`),
-  `swath/gcs-objects/v1` (`gcs`) or `swath-local/v1` (a new `local` provider, whose source name is
-  `source.uri`; `s3` and `gcs` match `source.container`), with the matching `source.kind` (`s3`, `gcs`,
-  `local-fs`). Each id defines the part columns, which must match exactly by name and physical type (the
-  tables in [internals/parquet-output.md](internals/parquet-output.md#schemas) and the GCS schema).
-  `version_id`, `is_latest`, `is_delete_marker` and `row_type` are absent, not read as null, so Varve's
-  current-object row check and its `row_type` statistics rule apply to format 1 only. A format-1 dataset
-  cannot be opened as `local`.
-- **Keys.** `min_key_base64`/`max_key_base64` are decoded (strict standard base64) and compared as bytes;
-  the `key` column is read as BYTE_ARRAY with or without the STRING annotation. Local keys may be
-  non-UTF-8; S3 and GCS bounds must be UTF-8.
-- **Footer.** A part needs `swath.profile` `swath-dataset`, `swath.profile_version` `2`, `swath.schema_id`
-  equal to the manifest's, and `key` ascending as the first `sorting_columns` entry on every non-empty row
-  group. Page index, 1,024-byte truncation and browse eligibility are checked as for format 1.
-- **Rows.** Varve reads `key`, `size` and `last_modified`; a null `size` is rejected, so a local dataset
-  listed with `--metadata names` does not open for browsing. Local directory rows are entries whose keys end
-  in `/`.
-- **Fixtures.** Varve commits one dataset per schema written by this tool (`internal/swath/testdata/go-*`,
-  built at `f7d2ff2` from `bench/s3fake`, `gcstest` and a local tree).
+- **Open.** Read `manifest.json` first. A manifest with a `format` field is format 2: require version 2 and
+  read no `_SUCCESS` and no run summary. Any other manifest is format 1 and takes the legacy path.
+- **Whole-source acceptance.** From the manifest's coverage: `complete` true, `stop_reason` `completed`,
+  `skipped_entries` 0, `filters` present and empty, `scope.kind` `whole`; a missing field refuses.
+- **Schema id.** Each schema id defines the exact columns by name and type; the reader dispatches on it
+  (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, the local schema) and checks `source.kind` and the
+  container against what it was asked to open. The Java-era `version_id`, `is_latest`, `is_delete_marker`
+  and `row_type` columns are absent in format 2, not read as null, so the current-object row check and the
+  `row_type` statistics rule apply to format 1 only.
+- **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.
+- **Part footers.** Every part carries `swath.profile`, `swath.profile_version` 2, a `swath.schema_id` equal
+  to the manifest's, and `key` ascending as the first sorting column.
+- **Rows.** `key`, `size` and `last_modified` are read; a null `size` is rejected, so a local dataset listed
+  with names only is not readable by such a reader; directory rows of a local dataset are entries whose
+  keys end in `/`.
+- **Fixtures.** One dataset per schema written by this tool serves as the reader's fixture; the commands
+  that produce them are the ones in docs/testing.md.
 
 ## Gates
 
 - **DuckDB:** `bench/diffds.py` (row sets both ways with the projection above, strict ascending order within
   and across parts, min/max keys, counts).
-- **Varve:** Varve's reader opens, streams and browses format-2 datasets of every schema (varveio/varve#108,
-  "Varve: dispatch on schema id"); the earlier probe is in REPORT.md, "Varve reader compatibility".
+- **Downstream reader:** opens, streams and browses format-2 datasets of every schema (section above);
+  the earlier probe is in REPORT.md, "Downstream reader compatibility".
 - **Dropped:** "the Java reader opens Go output". Java stays the producer oracle (replay differential), not
   a reader.
