@@ -403,17 +403,27 @@ func appendXML(b *bytes.Buffer, s string) {
 }
 
 // appendURL percent-encodes s as S3's encoding-type=url does (everything
-// but unreserved bytes and '/').
+// but unreserved bytes and '/'), copying runs of safe bytes whole.
 func appendURL(b *bytes.Buffer, s string) {
 	const hex = "0123456789ABCDEF"
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~' || c == '/' {
-			b.WriteByte(c)
-			continue
+	for len(s) > 0 {
+		i := 0
+		for i < len(s) && urlSafe[s[i]] {
+			i++
 		}
-		b.WriteByte('%')
-		b.WriteByte(hex[c>>4])
-		b.WriteByte(hex[c&15])
+		b.WriteString(s[:i])
+		if i == len(s) {
+			return
+		}
+		c := s[i]
+		b.Write([]byte{'%', hex[c>>4], hex[c&15]})
+		s = s[i+1:]
 	}
 }
+
+var urlSafe = func() (t [256]bool) {
+	for c := range 256 {
+		t[c] = 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~' || c == '/'
+	}
+	return t
+}()

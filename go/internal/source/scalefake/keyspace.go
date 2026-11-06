@@ -42,10 +42,15 @@ type Shape struct {
 	// long prefixes.
 	SegmentPad int
 	// KeyLen stretches leaf names (with a stem fixed per directory, before
-	// the varying digits) so every key is at least this long; 0: natural.
+	// the varying digits: an 8-byte head drawn per directory, then one
+	// shared run) so every key is at least this long; 0: natural.
 	KeyLen int
 	Seed   uint64
 }
+
+// stemHead is the bytes of a stretched leaf name's stem drawn per
+// directory; the rest of the stem is one run shared by every directory.
+const stemHead = 8
 
 // MaxDirs bounds the number of leaf directories (one int64 each).
 const MaxDirs = 1 << 22
@@ -62,6 +67,7 @@ type Keyspace struct {
 	leafW  int     // base-36 digits of a leaf slot
 	slots  uint64  // 36^leafW
 	stemN  int     // bytes of the per-directory stem in a leaf name
+	stem   string  // the stem's shared tail (all but its per-directory head)
 	maxLen int
 }
 
@@ -137,6 +143,7 @@ func New(s Shape) (*Keyspace, error) {
 		natural += len(l.pad) + l.width + 1
 	}
 	k.stemN = max(0, s.KeyLen-natural)
+	k.stem = filler(s.Seed, 0x57e3, max(0, k.stemN-stemHead))
 	k.maxLen = natural + k.stemN
 	return k, nil
 }
@@ -170,8 +177,9 @@ func (k *Keyspace) AppendKey(b []byte, i int64) []byte {
 		b = append(b, '/')
 		rest %= div
 	}
-	if k.stemN > 0 {
-		b = appendFiller(b, k.shape.Seed, 0xd1e<<32|uint64(j), k.stemN)
+	if k.stemN > 0 { // a per-directory head, then the shared run
+		b = appendFiller(b, k.shape.Seed, 0xd1e<<32|uint64(j), min(k.stemN, stemHead))
+		b = append(b, k.stem...)
 	}
 	return appendBase36(b, slot, k.leafW)
 }
