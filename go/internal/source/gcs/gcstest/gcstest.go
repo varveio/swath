@@ -40,17 +40,16 @@ func Bucket(t testing.TB, keys []string, delay time.Duration) string {
 const Path = "/storage/v1/"
 
 // Handler serves objects.list of bucket "bkt" over keys, each request after
-// delay: prefix, startOffset (inclusive), endOffset (exclusive),
-// maxResults, and a token naming the last name; no delimiter (the default
-// policy sends none).
+// delay: prefix, delimiter, startOffset (inclusive), endOffset (exclusive),
+// maxResults, and a token naming the last name or prefix returned.
 func Handler(keys []string, delay time.Duration) http.Handler {
 	keys = append([]string(nil), keys...)
 	sort.Strings(keys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(delay)
 		q := r.URL.Query()
-		if q.Get("delimiter") != "" || r.URL.Path != "/storage/v1/b/bkt/o" {
-			http.Error(w, `{"error":{"code":400,"message":"unsupported"}}`, 400)
+		if r.URL.Path != "/storage/v1/b/bkt/o" {
+			http.Error(w, `{"error":{"code":404,"message":"no such bucket"}}`, 404)
 			return
 		}
 		after := ""
@@ -67,21 +66,36 @@ func Handler(keys []string, delay time.Duration) http.Handler {
 			limit = n
 		}
 		var resp struct {
-			Items []map[string]string `json:"items,omitempty"`
-			Next  string              `json:"nextPageToken,omitempty"`
+			Items    []map[string]string `json:"items,omitempty"`
+			Prefixes []string            `json:"prefixes,omitempty"`
+			Next     string              `json:"nextPageToken,omitempty"`
 		}
-		start, end, prefix := q.Get("startOffset"), q.Get("endOffset"), q.Get("prefix")
+		start, end, prefix, delim := q.Get("startOffset"), q.Get("endOffset"), q.Get("prefix"), q.Get("delimiter")
+		n, last := 0, ""
 		for i := sort.SearchStrings(keys, max(start, prefix)); i < len(keys); i++ {
 			k := keys[i]
 			if !strings.HasPrefix(k, prefix) || (end != "" && k >= end) {
 				break
 			}
-			if k <= after {
+			out, isPrefix := k, false
+			if delim != "" {
+				if j := strings.Index(k[len(prefix):], delim); j >= 0 {
+					// Names at or after startOffset roll up into their
+					// prefix, even one at or below the offset (as GCS).
+					out, isPrefix = k[:len(prefix)+j+len(delim)], true
+				}
+			}
+			if out <= after || (isPrefix && out == last) {
 				continue
 			}
-			if len(resp.Items) == limit {
-				resp.Next = base64.RawURLEncoding.EncodeToString([]byte(resp.Items[limit-1]["name"]))
+			if n == limit {
+				resp.Next = base64.RawURLEncoding.EncodeToString([]byte(last))
 				break
+			}
+			n, last = n+1, out
+			if isPrefix {
+				resp.Prefixes = append(resp.Prefixes, out)
+				continue
 			}
 			resp.Items = append(resp.Items, map[string]string{"name": k, "size": strconv.Itoa(len(k)),
 				"updated": "2026-01-01T00:00:00Z", "generation": strconv.Itoa(1000 + i), "etag": "e" + strconv.Itoa(i)})
