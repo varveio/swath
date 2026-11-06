@@ -39,7 +39,7 @@ migration history, at the end.
 | **Durable-prefix recovery.** A resume never emits a published key again and never skips one: it lists after the last recorded part's max key K, or from K's longest prefix the provider accepts as a bound, re-fetching and dropping the keys up to K. On a static source the result is byte-identical to an uninterrupted run; on a live one, durable output is exactly-once. | `swath resume`, `source.Resumable.Restart(K)`; no split or cursor is journaled ([durability.md](durability.md)). | crash matrix, `TestResumeAfterKey`, `TestBoundVetoOnEveryRequest`, `TestSIGKILLResume`, `TestAmbiguousTailRefusesOnChangedSource` |
 | **One owner per output.** Nothing in the output is read, removed or renamed before the process holds its lock. | `journal.TakeLock` before preparation or recovery. | `TestCompetingRunsAreRefused` |
 | **A frozen identity.** A resume refuses changed schema, writer recipe, part size, key cap or source identity (`*journal.MismatchError`) and a journal of another version (`*journal.VersionError`). | `journal.Check`, a pure function. | `TestCheck`, `TestResumeChecksIdentity` |
-| **Shutdown order.** On cancellation the drainer stops, wakes all waiters, waits for the workers, then the router closes and waits for its encoders; an interrupted run gets 15 s. | `order.Run`, `cmd/swath`. | cancellation tests |
+| **Shutdown order.** On cancellation the drainer stops, wakes all waiters, waits for the workers, then the router closes and waits for its encoders; an interrupted run (a signal, `--max-duration`, `--stall-timeout`) gets 15 s, then the process exits with its code. | `order.Run`, `cmd/swath`. | cancellation tests |
 
 ## Migration history: Java's I1–I12
 

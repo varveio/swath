@@ -37,8 +37,15 @@ import (
 	_ "github.com/varveio/swath/go/internal/source/s3"
 )
 
-// shutdownGrace bounds the time an interrupted run spends stopping.
+// shutdownGrace bounds the time a stopped run (a signal, the deadline, a
+// stall) spends stopping.
 const shutdownGrace = 15 * time.Second
+
+// exitAfterGrace exits the process with code if it is still running
+// shutdownGrace after a stop began: blocked disk I/O or code that does not
+// watch its context cannot outlive a signal, --max-duration or the stall
+// timeout. main sets it; tests run the command in process and leave it nil.
+var exitAfterGrace func(code int, why string)
 
 func main() {
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -46,21 +53,26 @@ func main() {
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	finished := make(chan struct{})
 	defer close(finished)
+	exitAfterGrace = func(code int, why string) {
+		go func() {
+			select {
+			case <-finished:
+			case <-time.After(shutdownGrace):
+				fmt.Fprintf(os.Stderr, "swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace)
+				os.Exit(code)
+			}
+		}()
+	}
 	go func() {
 		select {
 		case <-finished:
-			return
 		case sig := <-sigs:
 			cancel(&signalError{sig}) // graceful: the run stops and cleans up
-		}
-		select { // bounded shutdown: an interrupted run gets 15 s
-		case <-finished:
-		case <-time.After(shutdownGrace):
-			fmt.Fprintf(os.Stderr, "swath: still stopping after %s; exiting (an interrupted journaled run can be resumed)\n", shutdownGrace)
-			os.Exit(exitInterrupted)
+			exitAfterGrace(exitInterrupted, sig.String())
 		}
 	}()
-	killAt(os.Getenv("SWATH_TEST_KILL_AT"))
+	killAt(os.Getenv("SWATH_TEST_KILL_AT"), kill)
+	killAt(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} })
 	err := dispatch(ctx, os.Args[1:], os.Stdout)
 	if err == nil || errors.Is(err, flag.ErrHelp) {
 		return
@@ -102,7 +114,13 @@ func writeReport(path string, r listing.Report) {
 		return
 	}
 	if err := writeFileAtomic(path, r); err != nil {
-		fmt.Fprintf(errOut, "swath: the report is not written to %s: %v\n", path, err)
+		// The attempt is named, so a supervisor never takes an older
+		// error.json (another attempt's) for this one's outcome.
+		id := ""
+		if r.Attempt != nil {
+			id = r.Attempt.ID
+		}
+		fmt.Fprintf(errOut, "swath: the report of attempt %s is not written to %s: %v\n", id, path, err)
 	}
 }
 
@@ -165,9 +183,11 @@ SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]. swath
 `)
 }
 
-// killAt is a test hook: "point:n" makes the process SIGKILL itself the
-// n-th time it reaches crash point point (package faults).
-func killAt(spec string) {
+// killAt is a test hook: "point:n" runs act (SWATH_TEST_KILL_AT: the
+// process SIGKILLs itself; SWATH_TEST_HANG_AT: the goroutine blocks
+// forever, as on stuck I/O) the n-th time the process reaches crash point
+// point (package faults).
+func killAt(spec string, act func()) {
 	point, n, ok := strings.Cut(spec, ":")
 	if !ok {
 		return
@@ -179,7 +199,7 @@ func killAt(spec string) {
 	var seen atomic.Int64
 	faults.Set(func(p string) error {
 		if p == point && seen.Add(1) == nth {
-			kill()
+			act()
 		}
 		return nil
 	})
@@ -324,6 +344,19 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		var stopTimer context.CancelFunc
 		ctx, stopTimer = context.WithTimeoutCause(ctx, o.maxDuration, errDeadline)
 		defer stopTimer()
+	}
+	if exitAfterGrace != nil {
+		// The deadline and the stall timeout stop the run as a signal
+		// does, and as surely: after the grace the process exits.
+		stopGrace := context.AfterFunc(ctx, func() {
+			switch c := context.Cause(ctx); {
+			case errors.Is(c, errDeadline):
+				exitAfterGrace(exitDeadline, "--max-duration")
+			case errors.Is(c, errStuck):
+				exitAfterGrace(exitStuck, "--stall-timeout")
+			}
+		})
+		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
 	// The outcome: error.json is written while the run still owns the

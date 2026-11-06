@@ -142,7 +142,10 @@ write, another process owns the output, or the run changed before this process h
 previous file in place, perhaps with the same class and exit code, and says why in the report's
 `outcome.unrecorded` (never empty then) and on stderr (`TestAttemptIdentifiesTheOutcome`,
 `TestOutcomeSettlementAfterConcurrentCommit`). Nothing can promise a new file on
-storage that refuses writes: without a report, only the exit code is current.
+storage that refuses writes: without a report, only the exit code is current. A report that cannot be written
+is named with its attempt id on stderr. A stop (a signal, `--max-duration`, `--stall-timeout`) that the run does
+not finish within 15 s (I/O that does not return) ends the process with its exit code and neither file
+(`TestDeadlineExitsAfterGrace`); a supervisor's own process deadline covers a process that cannot even do that.
 
 ## Why splits need no transaction
 

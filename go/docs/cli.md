@@ -258,8 +258,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | 0 | `completed` | the dataset is committed (or a dry run finished) | – |
   | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0; a full disk (`cause` `no_space`) is `fatal` too | no; `no_space`: yes, journal intact, once there is space |
   | 2 | `usage` | a malformed command line | no |
-  | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half) | yes, journal intact |
-  | 124 | `deadline` | `--max-duration` reached with the output unfinished | yes |
+  | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace) | yes, journal intact |
+  | 124 | `deadline` | `--max-duration` reached with the output unfinished (also after the 15 s shutdown grace) | yes |
   | 130 | `interrupted` | SIGINT (also after the 15 s shutdown grace) | yes |
   | 143 | `terminated` | SIGTERM, a graceful stop | yes |
 
@@ -271,7 +271,18 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   without one. So work queued behind a low request limit, or a stretch of empty continuing pages, is alive while
   the service answers; a source that hangs, or only fails or throttles, is stuck. Nothing in the pipeline gives
   up on a slow source (S3 requeues a page after its retries). As with Java swath, a service that answers forever
-  without rows keeps a run alive; `--max-duration` bounds it.
+  without rows keeps a run alive; `--max-duration` bounds it. A run of empty continuing pages must not repeat
+  any of its last 1,024 tokens (an invalid page, exit 1); a chain of ever fresh tokens is followed in bounded
+  memory until the deadline. A stop (a signal, `--max-duration`, `--stall-timeout`) is graceful, and the process
+  exits with its code 15 s later if the run has not stopped by then (I/O that does not return, say), without
+  writing the report or `error.json`.
+- **What a hosted runner needs.** A finite `--max-duration` on every attempt (the default, 0, has no limit, and
+  only the deadline stops a service that answers forever without rows), and its own process deadline above
+  `--max-duration` plus 15 s, which kills the process (that attempt's report may then be missing: it is treated
+  as unavailable, never replaced by an older `error.json`). Exit 75 is retried with `swath resume`. Exit 124 is a
+  bounded stop: the run is resumable but did not finish in the time given, so it is retried only under a
+  separate budget (a count of attempts or a total time), and past that budget it needs a person: a source that
+  keeps the run alive without rows hits 124 on every attempt.
 - **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename:
   `objects` (rows listed so far), `ordered`, `encoded`, `parts`, `advance` (their sum, which rises in every
   phase), `answered` (requests the service answered usably: liveness, not progress), `started_at`, `as_of`,
