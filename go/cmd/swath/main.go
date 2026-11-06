@@ -299,6 +299,7 @@ type options struct {
 	overwrite              bool
 	countOnly              bool
 	reportFormat, report   string
+	cpuProfile, memProfile string // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
 	maxDuration, stall     time.Duration
 	partInterval           time.Duration
 	workers, encoders      int
@@ -581,7 +582,7 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys && text != nil {
 		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset) or --count-only: its keys are bytes, which text output cannot carry", schemeName(pf.Scheme))}
 	}
-	if err := checkSidePaths(o); err != nil {
+	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
 	}
 	if text != nil && text.Path == "" {
@@ -637,7 +638,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	if !o.countOnly && o.text == nil {
 		cfg.Output.Dir = o.out
 	}
-	stopProfile, err := profile()
+	stopProfile, err := profile(o.cpuProfile, o.memProfile)
 	if err != nil {
 		return stopEarly(o.report, argv, cfgOut(o), att, err)
 	}
@@ -795,11 +796,12 @@ func explain(err error) error {
 	return err
 }
 
-// profile starts the CPU profile and arranges the allocation profile named
-// by the environment, for development.
-func profile() (stop func(), err error) {
+// profile starts the CPU profile and arranges the allocation profile, the
+// files SWATH_CPUPROFILE and SWATH_MEMPROFILE name (as checkSidePaths
+// resolved them), for development.
+func profile(cpu, mem string) (stop func(), err error) {
 	stops := []func(){}
-	if path := os.Getenv("SWATH_CPUPROFILE"); path != "" {
+	if path := cpu; path != "" {
 		f, err := os.Create(path)
 		if err != nil {
 			return nil, err
@@ -809,7 +811,7 @@ func profile() (stop func(), err error) {
 		}
 		stops = append(stops, func() { pprof.StopCPUProfile(); f.Close() })
 	}
-	if path := os.Getenv("SWATH_MEMPROFILE"); path != "" {
+	if path := mem; path != "" {
 		runtime.MemProfileRate = 64 << 10
 		stops = append(stops, func() {
 			if f, err := os.Create(path); err == nil {

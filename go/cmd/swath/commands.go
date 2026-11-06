@@ -67,9 +67,11 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := nonNegativeDurations(f); err != nil {
 		return usageError{err}
 	}
-	if err := checkSidePaths(resumeTarget(o, dir)); err != nil {
+	target := resumeTarget(o, dir)
+	if err := checkSidePaths(&target); err != nil {
 		return usageError{err}
 	}
+	o.report = target.report // the destination checked, which refuse writes
 	// The run a refusal below is about, as read now: it is settled only
 	// if it is still that run once this process holds the lock.
 	seen := journal.Witness(dir)

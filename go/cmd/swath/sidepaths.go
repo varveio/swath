@@ -19,29 +19,54 @@ import (
 // name directly in it (not data/, the manifest, run.json, error.json, the
 // .swath workspace with its lock and journal, nor an earlier layout's
 // entry); and anything inside another directory this tool manages (a
-// dataset or an interrupted run, whose lock this run does not hold). Paths
-// are compared cleaned and absolute, after resolving the symbolic links of
-// the part that exists.
-func checkSidePaths(o options) error {
-	for _, side := range []struct{ what, path string }{
-		{"--report", o.report},
-		{"SWATH_CPUPROFILE", os.Getenv("SWATH_CPUPROFILE")},
-		{"SWATH_MEMPROFILE", os.Getenv("SWATH_MEMPROFILE")},
+// dataset or an interrupted run, whose lock this run does not hold).
+//
+// Each path is resolved once (sideDest) and o then names the resolved
+// destination: every writer (the report's, the profiles') writes there,
+// the pathname that was checked, not a second resolution of the original.
+func checkSidePaths(o *options) error {
+	o.cpuProfile, o.memProfile = os.Getenv("SWATH_CPUPROFILE"), os.Getenv("SWATH_MEMPROFILE")
+	for _, side := range []struct {
+		what string
+		path *string
+	}{
+		{"--report", &o.report},
+		{"SWATH_CPUPROFILE", &o.cpuProfile},
+		{"SWATH_MEMPROFILE", &o.memProfile},
 	} {
-		if side.path == "" {
+		if *side.path == "" {
 			continue
 		}
-		if err := checkSidePath(o, side.path); err != nil {
-			return fmt.Errorf("%s %s: %w", side.what, side.path, err)
+		dest, err := checkSidePath(*o, *side.path)
+		if err != nil {
+			return fmt.Errorf("%s %s: %w", side.what, *side.path, err)
 		}
+		*side.path = dest
 	}
 	return nil
 }
 
-func checkSidePath(o options, path string) error {
-	p := resolvePath(path)
-	if o.text != nil && o.text.Path != "" && samePath(p, resolvePath(o.text.Path)) {
-		return fmt.Errorf("is the text output file")
+// checkSidePath checks path (checkSidePaths) and returns its destination.
+// The destination keeps its last name as given (sideDest), so a reserved
+// slot is refused by its name whatever a symbolic link there points at;
+// where that name is such a link, what it reaches (a profile's open
+// follows it) is checked too.
+func checkSidePath(o options, path string) (string, error) {
+	dest, through := sideDest(path)
+	for _, p := range []string{dest, through} {
+		if err := checkDest(o, p); err != nil {
+			return "", err
+		}
+	}
+	return dest, nil
+}
+
+func checkDest(o options, p string) error {
+	if o.text != nil && o.text.Path != "" {
+		td, tt := sideDest(o.text.Path)
+		if samePath(p, td) || samePath(p, tt) {
+			return fmt.Errorf("is the text output file")
+		}
 	}
 	out := ""
 	if o.text == nil && !o.countOnly && o.out != "" {
@@ -81,23 +106,67 @@ func samePath(a, b string) bool {
 	return ea == nil && eb == nil && os.SameFile(fa, fb)
 }
 
-// resolvePath is path absolute and cleaned, with the symbolic links of its
-// longest existing prefix resolved: what a later open of path would reach.
-func resolvePath(path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
+// seps are the path separators of this platform.
+const seps = string(filepath.Separator) + "/"
+
+// absRaw is path made absolute without cleaning it: filepath.Abs would
+// apply a ".." before the symbolic link it follows is resolved, while an
+// open climbs from the link's target.
+func absRaw(path string) string {
+	if filepath.IsAbs(path) {
+		return path
 	}
+	if wd, err := os.Getwd(); err == nil {
+		if abs := wd + string(filepath.Separator) + path; filepath.IsAbs(abs) {
+			return abs
+		}
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
+
+// resolvePath is what an open of path reaches: absolute, the symbolic
+// links of its longest existing prefix resolved component by component
+// (filepath.EvalSymlinks, which applies a ".." to the resolved target),
+// and the part that does not exist yet joined lexically.
+func resolvePath(path string) string {
+	raw := absRaw(path)
 	rest := ""
-	for cur := abs; ; {
+	for cur := raw; ; {
 		if r, err := filepath.EvalSymlinks(cur); err == nil {
 			return filepath.Join(r, rest)
 		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return abs
+		i := strings.LastIndexAny(cur, seps)
+		if i < 0 {
+			return filepath.Clean(raw)
 		}
-		rest = filepath.Join(filepath.Base(cur), rest)
-		cur = parent
+		rest = filepath.Join(cur[i+1:], rest)
+		next := cur[:i]
+		if i <= len(filepath.VolumeName(cur)) {
+			next = cur[:i+1] // the root
+		}
+		if next == cur {
+			return filepath.Clean(raw)
+		}
+		cur = next
 	}
+}
+
+// sideDest is where a file at path is written by a writer that replaces
+// it (a rename over its name): its directory resolved (resolvePath) and
+// its last name as given, so a symbolic link of that name is replaced,
+// not followed. through is path resolved whole: what a writer that opens
+// the name reaches.
+func sideDest(path string) (dest, through string) {
+	raw := absRaw(path)
+	trimmed := strings.TrimRight(raw, seps)
+	i := strings.LastIndexAny(trimmed, seps)
+	if i < 0 || trimmed[i+1:] == "." || trimmed[i+1:] == ".." || trimmed[i+1:] == "" {
+		d := resolvePath(raw)
+		return d, d
+	}
+	dest = filepath.Join(resolvePath(trimmed[:i+1]), trimmed[i+1:])
+	return dest, resolvePath(dest)
 }

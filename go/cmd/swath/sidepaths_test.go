@@ -187,3 +187,115 @@ func TestResumeCannotReplaceManagedOutput(t *testing.T) {
 		t.Fatalf("report: %v %s", err, b)
 	}
 }
+
+// TestSidePathResolvedAsWritten (R8): a side path is checked at the
+// pathname its writer reaches. With B/link -> A/sub, B/link/../D is A/D
+// (an open climbs from the link's target), not B/D as a lexical clean of
+// the path says: a report there, onto the dataset A/D's manifest or
+// beside another dataset, is refused, and the writer of an allowed path
+// writes the destination that was checked.
+func TestSidePathResolvedAsWritten(t *testing.T) {
+	captureStderr(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	A, B := filepath.Join(base, "A"), filepath.Join(base, "B")
+	for _, d := range []string{filepath.Join(A, "sub"), filepath.Join(B, "D")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(A, "sub"), filepath.Join(B, "link")); err != nil {
+		t.Skip("no symbolic links:", err)
+	}
+	out := filepath.Join(A, "D")
+	var buf bytes.Buffer
+	if err := run(context.Background(), []string{src, "-o", out, "--no-progress", "--no-stats"}, &buf, false); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(out, "manifest.json")
+	committed, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	via := filepath.Join(B, "link") + string(filepath.Separator) + ".." + string(filepath.Separator) + "D"
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"the dataset's manifest", []string{src, "-o", out, "--overwrite", "--no-progress", "--no-stats", "--report", via + string(filepath.Separator) + "manifest.json"}},
+		{"inside another dataset", []string{src, "--count-only", "--report", via + string(filepath.Separator) + "report.json"}},
+	} {
+		if c := exitOf(run(context.Background(), tc.args, &buf, false)); c != exitUsage {
+			t.Errorf("%s: exit %d, want %d", tc.name, c, exitUsage)
+		}
+	}
+	if b, err := os.ReadFile(manifest); err != nil || !bytes.Equal(b, committed) {
+		t.Fatalf("the manifest changed: %v\n%s", err, b)
+	}
+	for _, p := range []string{filepath.Join(out, "report.json"), filepath.Join(B, "D", "report.json")} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s written: %v", p, err)
+		}
+	}
+	// Allowed: the same climb out of an ordinary directory lands where it
+	// was checked (A/other/report.json), never in B.
+	if err := os.Mkdir(filepath.Join(A, "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	report := filepath.Join(B, "link") + string(filepath.Separator) + ".." + string(filepath.Separator) + "other" + string(filepath.Separator) + "report.json"
+	if err := run(context.Background(), []string{src, "--count-only", "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(A, "other", "report.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReservedSlotRefusedWhateverItsLinkTarget (R8): OUT/manifest.json is
+// the manifest's slot even while a symbolic link there points outside the
+// output: an overwrite removes the link and publishes a manifest in it, so
+// a report naming it is refused, the link and its target left as they
+// were.
+func TestReservedSlotRefusedWhateverItsLinkTarget(t *testing.T) {
+	captureStderr(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	out := filepath.Join(base, "OUT")
+	var buf bytes.Buffer
+	if err := run(context.Background(), []string{src, "-o", out, "--no-progress", "--no-stats"}, &buf, false); err != nil {
+		t.Fatal(err)
+	}
+	manifest, ext := filepath.Join(out, "manifest.json"), filepath.Join(base, "ext.json")
+	if err := os.Rename(manifest, ext); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(ext, manifest); err != nil {
+		t.Skip("no symbolic links:", err)
+	}
+	before, _ := os.ReadFile(ext)
+	t.Setenv("SWATH_MEMPROFILE", "")
+	for _, env := range []string{"", "SWATH_MEMPROFILE"} {
+		args := []string{src, "-o", out, "--overwrite", "--no-progress", "--no-stats"}
+		if env == "" {
+			args = append(args, "--report", manifest)
+		} else {
+			t.Setenv(env, manifest)
+		}
+		if c := exitOf(run(context.Background(), args, &buf, false)); c != exitUsage {
+			t.Errorf("%q: exit %d, want %d", env, c, exitUsage)
+		}
+		t.Setenv("SWATH_MEMPROFILE", "")
+	}
+	if l, err := os.Readlink(manifest); err != nil || l != ext {
+		t.Fatalf("the link changed: %q %v", l, err)
+	}
+	if b, _ := os.ReadFile(ext); !bytes.Equal(b, before) {
+		t.Fatalf("the link's target changed")
+	}
+}
