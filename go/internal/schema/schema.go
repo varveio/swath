@@ -65,6 +65,10 @@ type Info struct {
 	// bytes; filesystem paths are not capped, and their column-index
 	// bounds are truncated (conservative) instead.
 	MaxKeyBytes int
+	// QuotedETag: the etag column holds an HTTP entity tag stored without
+	// its surrounding quotes (S3); text output restores them, so a row
+	// shows the ETag exactly as the API returned it.
+	QuotedETag bool
 }
 
 // Schema is a producer's row schema: the key column, then Columns in

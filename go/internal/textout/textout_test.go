@@ -26,18 +26,21 @@ func nonEmpty(f func(*obj) string) func(*obj) (string, bool) {
 	return func(o *obj) (string, bool) { v := f(o); return v, v != "" }
 }
 
+// testSchema has a provider's extra column (owner_id stands in, with no
+// owner_display_name) and an unquoted etag (GCS-like).
 var testSchema = &schema.Schema[obj]{Info: schema.Info{ID: "test", Key: schema.String}, Columns: []schema.Column[obj]{
 	{Spec: schema.Spec{Name: "size"}, Int: func(o *obj) (int64, bool) { return o.size, true }},
 	{Spec: schema.Spec{Name: "last_modified"}, Int: func(o *obj) (int64, bool) { return o.mtime, o.mtime != 0 }},
 	{Spec: schema.Spec{Name: "etag"}, Str: nonEmpty(func(o *obj) string { return o.etag })},
 	{Spec: schema.Spec{Name: "storage_class"}, Str: nonEmpty(func(o *obj) string { return o.class })},
 	{Spec: schema.Spec{Name: "owner_id"}, Str: nonEmpty(func(o *obj) string { return o.owner })},
+	{Spec: schema.Spec{Name: "generation"}, Int: func(o *obj) (int64, bool) { return 7, true }},
 }}
 
 var rows = [][]schema.Row[obj]{{
 	{Key: "a/b.txt", Data: obj{size: 12, mtime: 1_700_000_000_000_000, etag: "e1", class: "STANDARD"}},
-	{Key: "tab\there\nnl\\x<&>", Data: obj{size: 0, mtime: 1_700_000_000_123_000}},
-	{Key: "µ", Data: obj{size: 1 << 40, mtime: 1_700_000_000_123_456, etag: "e\x7f", owner: "o"}},
+	{Key: "tab\there\nnl\\x<&>\"\x1b\x7fµ", Data: obj{size: 0}},
+	{Key: "µ", Data: obj{size: 1 << 40, mtime: 1_700_000_000_000_120, etag: "e", owner: "o"}},
 }}
 
 func write(t *testing.T, cfg Config) []byte {
@@ -73,26 +76,28 @@ func write(t *testing.T, cfg Config) []byte {
 	return buf.Bytes()
 }
 
-// TestRowContract: Java's TSV (header, \xNN control escaping, last_modified
-// with 0, 3 or 6 fraction digits, OBJECT), JSONL (field order, absent
-// fields omitted, no HTML escaping) and table (14 and 24 columns).
+// TestRowContract: the three formats over a schema with fewer fields than
+// S3's (absent fields omitted; a provider's other columns not written),
+// JSON escaping as jq prints it (the same rule, minus the quote escape,
+// in TSV and the table), and LastModified with a fraction only when it
+// has one.
 func TestRowContract(t *testing.T) {
-	tsv := "key\tsize\tlast_modified\tetag\tstorage_class\trow_type\n" +
-		"a/b.txt\t12\t2023-11-14T22:13:20Z\te1\tSTANDARD\tOBJECT\n" +
-		"tab\\x09here\\x0anl\\x<&>\t0\t2023-11-14T22:13:20.123Z\t\t\tOBJECT\n" +
-		"µ\t1099511627776\t2023-11-14T22:13:20.123456Z\te\\x7f\t\tOBJECT\n"
+	tsv := "Key\tLastModified\tETag\tSize\tStorageClass\tOwner.ID\n" +
+		"a/b.txt\t2023-11-14T22:13:20+00:00\te1\t12\tSTANDARD\t\n" +
+		"tab\\there\\nnl\\\\x<&>\"\\u001b\\u007fµ\t\t\t0\t\t\n" +
+		"µ\t2023-11-14T22:13:20.000120+00:00\te\t1099511627776\t\to\n"
 	if got := string(write(t, Config{Format: TSV})); got != tsv {
 		t.Fatalf("tsv\n%q\nwant\n%q", got, tsv)
 	}
-	jsonl := `{"key":"a/b.txt","size":12,"last_modified":"2023-11-14T22:13:20Z","etag":"e1","storage_class":"STANDARD","row_type":"OBJECT"}` + "\n" +
-		`{"key":"tab\there\nnl\\x<&>","size":0,"last_modified":"2023-11-14T22:13:20.123Z","row_type":"OBJECT"}` + "\n" +
-		`{"key":"µ","size":1099511627776,"last_modified":"2023-11-14T22:13:20.123456Z","etag":"e` + "\x7f" + `","owner_id":"o","row_type":"OBJECT"}` + "\n"
+	jsonl := `{"Key":"a/b.txt","LastModified":"2023-11-14T22:13:20+00:00","ETag":"e1","Size":12,"StorageClass":"STANDARD"}` + "\n" +
+		`{"Key":"tab\there\nnl\\x<&>\"\u001b\u007fµ","Size":0}` + "\n" +
+		`{"Key":"µ","LastModified":"2023-11-14T22:13:20.000120+00:00","ETag":"e","Size":1099511627776,"Owner":{"ID":"o"}}` + "\n"
 	if got := string(write(t, Config{Format: JSONL})); got != jsonl {
 		t.Fatalf("jsonl\n%s\nwant\n%s", got, jsonl)
 	}
-	table := "            12  2023-11-14T22:13:20Z      a/b.txt\n" +
-		"             0  2023-11-14T22:13:20.123Z  tab\\x09here\\x0anl\\x<&>\n" +
-		" 1099511627776  2023-11-14T22:13:20.123456Z  µ\n"
+	table := "2023-11-14 22:13:20         12 a/b.txt\n" +
+		"                             0 tab\\there\\nnl\\\\x<&>\"\\u001b\\u007fµ\n" +
+		"2023-11-14 22:13:20 1099511627776 µ\n"
 	if got := string(write(t, Config{Format: Table})); got != table {
 		t.Fatalf("table\n%q\nwant\n%q", got, table)
 	}
@@ -100,16 +105,17 @@ func TestRowContract(t *testing.T) {
 
 // TestFileCompressedAndAtomic: a file is written beside its destination
 // and renamed when complete (an aborted one leaves the destination as it
-// was and no temporary); gzip and zstd decode to the plain rows.
+// was and no temporary); a .jsonl.gz and a .jsonl.zst decode to the plain
+// rows.
 func TestFileCompressedAndAtomic(t *testing.T) {
 	dir := t.TempDir()
-	plain := write(t, Config{Format: TSV})
+	plain := write(t, Config{Format: JSONL})
 	for comp, dec := range map[string]func(io.Reader) (io.Reader, error){
 		Gzip: func(r io.Reader) (io.Reader, error) { return gzip.NewReader(r) },
 		Zstd: func(r io.Reader) (io.Reader, error) { d, err := zstd.NewReader(r); return d, err },
 	} {
-		path := filepath.Join(dir, "out.tsv."+comp)
-		r, err := dec(bytes.NewReader(write(t, Config{Format: TSV, Path: path, Compression: comp})))
+		path := filepath.Join(dir, "out.jsonl."+comp)
+		r, err := dec(bytes.NewReader(write(t, Config{Format: JSONL, Path: path, Compression: comp})))
 		if err != nil {
 			t.Fatal(err)
 		}

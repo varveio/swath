@@ -170,12 +170,16 @@ rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath 
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
 is `--workers`, default 64 as Java's, whatever the CPU count (an earlier Go build derived it from the CPU
 count, `min(64, max(4, 3*GOMAXPROCS))`); `--encoders` stays CPU-derived.
-Java's text workflows keep their flags: `--format auto|table|tsv|jsonl`, stdout (no `-o`, or `-o -`; a
-closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]`, `--output-type file`, `--compression` and Java's TSV
-and JSONL row contract ([cli.md](cli.md), "Text output"); a script that reads Java's TSV header and columns
-reads Go's unchanged. Not ported: a directory of text parts (`-o DIR --format tsv` is refused; name one file),
-`--text-part-size`, `--text-writers`, the `.parquet` one-writer file. Text runs are not resumable, as Java's
-streams were not. `--bearer-token-command` and `--bearer-token-refresh-interval` are Java's; the command is
+Text output keeps stdout (no `-o`, or `-o -`; a closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]` and
+`--format auto|table|tsv|jsonl` (stdout only; with `-o` the name decides). Its rows now use the S3 API's object
+shape, so they are read with what already reads S3 listings ([cli.md](cli.md), "Text output"): Java's `key`,
+`size`, `last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name`, `checksum_algorithm`,
+`checksum_type` are `Key`, `Size`, `LastModified` (`+00:00`), `ETag` (with its quotes), `StorageClass`,
+`Owner.ID`, `Owner.DisplayName`, `ChecksumAlgorithm` (a list in JSONL), `ChecksumType`, in the API's order;
+`row_type` is gone; control bytes use JSON's escapes, not `\xNN`; the table is the `aws s3 ls` line. Not
+ported: `--output-type` and `--format parquet` (the `-o` name decides), `--compression` (the name compresses a
+file; pipe stdout through `zstd`), a directory of text parts, `--text-part-size`, `--text-writers`, the
+`.parquet` one-writer file. Text runs are not resumable: they keep no journal. `--bearer-token-command` and `--bearer-token-refresh-interval` are Java's; the command is
 never recorded, so a resume must be given it again (Java's rule too) and is now refused with a message when it
 is not, instead of failing on its first request. `--endpoint-url` and `--force` are accepted as Java's names
 of `--endpoint` and `--overwrite`; a custom endpoint is path-style by default, as Java's (an interrupted Go run

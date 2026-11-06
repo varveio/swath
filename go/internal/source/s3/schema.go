@@ -30,7 +30,7 @@ type Row = schema.Row[Object]
 // the owner columns are null unless -fetch-owner, the checksum columns are
 // null when S3 omits them, etag and storage_class when it does.
 var Schema = schema.Schema[Object]{
-	Info: schema.Info{Name: "swath_listing", ID: "swath/s3-objects/v1", Key: schema.String, MaxKeyBytes: 1024},
+	Info: schema.Info{Name: "swath_listing", ID: "swath/s3-objects/v1", Key: schema.String, MaxKeyBytes: 1024, QuotedETag: true},
 	Columns: []schema.Column[Object]{
 		{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: func(o *Object) (int64, bool) { return o.Size, true }},
 		{Spec: schema.Spec{Name: "last_modified", Type: schema.TimestampMicros}, Int: func(o *Object) (int64, bool) { return o.Mtime, true }},

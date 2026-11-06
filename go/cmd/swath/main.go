@@ -298,8 +298,7 @@ type options struct {
 	noSpill, spillCompress bool
 	sources                map[string]any // each provider's options value, by scheme
 	term                   termOptions
-	format, outputType     string
-	compression            string
+	format                 string
 	text                   *textout.Config // resolved: a text run's destination
 	filter                 filter.Spec
 	partMaxRows            int64
@@ -351,9 +350,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f := flag.NewFlagSet("list", flag.ContinueOnError)
 	f.StringVar(&o.out, "output", "", "output: a dataset `directory`, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)")
 	f.StringVar(&o.out, "o", "", "short for --output")
-	f.StringVar(&o.format, "format", "", "auto, table, tsv, jsonl (text: stdout or one file; auto is a table on a terminal, TSV otherwise) or parquet (the dataset; the default for a directory)")
-	f.StringVar(&o.outputType, "output-type", "", "file or dir: what -o names when its extension does not say (file: one text file without a .tsv or .jsonl name)")
-	f.StringVar(&o.compression, "compression", "", "text output: none, gzip or zstd (default: from a .gz or .zst name, else none)")
+	f.StringVar(&o.format, "format", "", "stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format")
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in --output")
 	f.BoolVar(&o.overwrite, "force", false, "Java swath's name for --overwrite")
 	o.partSize = listing.DefaultPartSize

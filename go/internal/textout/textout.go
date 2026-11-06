@@ -1,14 +1,13 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package textout writes a listing as text rows, Java swath's text
-// contract for object stores: TSV (a header, then key, size,
-// last_modified, etag, storage_class, row_type), JSONL (one object per
-// row, no header) or an aligned table, to stdout or to one file, optionally
-// gzip or zstd compressed. A file is written to a sibling temporary and
-// renamed over the destination once complete, so a visible file is never
-// a partial one. Text output is one-shot: it keeps no journal and cannot
-// be resumed.
+// Package textout writes a listing as text rows shaped as the S3 API's
+// object: JSONL (one ListObjectsV2 Contents object per line), TSV (the
+// same fields as columns, under one header line) or the aws s3 ls table,
+// to stdout or to one file, optionally gzip or zstd compressed. A file is
+// written to a sibling temporary and renamed over the destination once
+// complete, so a visible file is never a partial one. Text output is
+// one-shot: it keeps no journal and cannot be resumed.
 package textout
 
 import (
@@ -72,9 +71,6 @@ func (c *counter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// TSVHeader is the TSV contract's header line.
-const TSVHeader = "key\tsize\tlast_modified\tetag\tstorage_class\trow_type\n"
-
 // Open prepares the destination: for a file, a temporary beside it.
 func Open(cfg Config) (*Out, error) {
 	switch cfg.Format {
@@ -120,9 +116,6 @@ func Open(cfg Config) (*Out, error) {
 		w = o.comp
 	}
 	o.bw = bufio.NewWriterSize(w, 256<<10)
-	if cfg.Format == TSV {
-		_, _ = o.bw.WriteString(TSVHeader)
-	}
 	return o, nil
 }
 
@@ -184,52 +177,50 @@ func (o *Out) Abort() {
 	}
 }
 
-// MtimeText is Java's last_modified text for epoch microseconds: UTC
-// seconds, then .mmm or .uuuuuu only when the fraction is not zero, then
-// Z; "" for 0 (missing).
-func MtimeText(dst []byte, micros int64) []byte {
-	if micros == 0 {
-		return dst
-	}
-	sec, us := micros/1_000_000, micros%1_000_000
-	if us < 0 {
-		sec, us = sec-1, us+1_000_000
-	}
-	t := time.Unix(sec, 0).UTC()
-	if y := t.Year(); y < 0 || y > 9999 {
-		return t.Add(time.Duration(us)*time.Microsecond).AppendFormat(dst, time.RFC3339Nano)
-	}
+// appendISO appends epoch microseconds as RFC 3339 in UTC the way the
+// AWS CLI prints a LastModified: seconds, then .ffffff only when the
+// fraction is not zero, then +00:00.
+func appendISO(dst []byte, micros int64) []byte {
+	t := time.UnixMicro(micros).UTC()
 	dst = t.AppendFormat(dst, "2006-01-02T15:04:05")
-	switch {
-	case us == 0:
-	case us%1000 == 0:
-		dst = append(dst, '.')
-		dst = appendPadded(dst, us/1000, 3)
-	default:
-		dst = append(dst, '.')
-		dst = appendPadded(dst, us, 6)
+	if us := t.Nanosecond() / 1000; us != 0 {
+		s := strconv.Itoa(us)
+		dst = append(dst, ".000000"[:7-len(s)]...)
+		dst = append(dst, s...)
 	}
-	return append(dst, 'Z')
+	return append(dst, "+00:00"...)
 }
 
-func appendPadded(dst []byte, v int64, width int) []byte {
-	s := strconv.FormatInt(v, 10)
-	for i := len(s); i < width; i++ {
-		dst = append(dst, '0')
-	}
-	return append(dst, s...)
+// appendJSON appends s as a JSON string, escaped as jq prints it: \" and
+// \\, \b \f \n \r \t, any other byte below 0x20 and 0x7f as \u00xx,
+// everything else (UTF-8) as is.
+func appendJSON(dst []byte, s string) []byte {
+	return append(appendEscaped(append(dst, '"'), s, true), '"')
 }
 
-// appendEscaped is Java's control-character escaping for TSV and table
-// text: a byte below 0x20 or 0x7f becomes \xNN (lower-case hex); nothing
-// else is changed (a backslash stays as it is).
-func appendEscaped(dst []byte, s string) []byte {
+// appendEscaped is the one escaping rule of all three formats: JSON's
+// string escapes (without the quote escape outside JSON). It is
+// reversible, keeps a row on one line and its TSV fields between tabs,
+// and never sends a terminal a control byte.
+func appendEscaped(dst []byte, s string, json bool) []byte {
 	const hex = "0123456789abcdef"
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < 0x20 || c == 0x7f {
-			dst = append(dst, '\\', 'x', hex[c>>4], hex[c&15])
-		} else {
+		switch c := s[i]; {
+		case c == '\\', c == '"' && json:
+			dst = append(dst, '\\', c)
+		case c == '\b':
+			dst = append(dst, '\\', 'b')
+		case c == '\f':
+			dst = append(dst, '\\', 'f')
+		case c == '\n':
+			dst = append(dst, '\\', 'n')
+		case c == '\r':
+			dst = append(dst, '\\', 'r')
+		case c == '\t':
+			dst = append(dst, '\\', 't')
+		case c < 0x20 || c == 0x7f:
+			dst = append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&15])
+		default:
 			dst = append(dst, c)
 		}
 	}

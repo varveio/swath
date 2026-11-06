@@ -7,12 +7,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,7 +23,6 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
-	"github.com/varveio/swath/go/internal/textout"
 )
 
 func textBucket(t *testing.T, n int) (args []string, keys []string) {
@@ -50,18 +52,21 @@ func TestTextOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if lines[0] != strings.TrimSuffix(textout.TSVHeader, "\n") || len(lines) != len(keys)+1 {
+	const header = "Key\tLastModified\tETag\tChecksumAlgorithm\tChecksumType\tSize\tStorageClass\tOwner.DisplayName\tOwner.ID"
+	if lines[0] != header || len(lines) != len(keys)+1 {
 		t.Fatalf("%d lines, first %q", len(lines), lines[0])
 	}
 	for i, k := range keys {
-		if f := strings.Split(lines[i+1], "\t"); f[0] != k || f[5] != "OBJECT" {
+		if f := strings.Split(lines[i+1], "\t"); f[0] != k || f[5] != strconv.Itoa(len(k)) {
 			t.Fatalf("row %d: %q", i, lines[i+1])
 		}
 	}
 	out.Reset()
+	// The ETag as the API returns it: the body's MD5 in quotes.
+	etag := fmt.Sprintf(`"\"%x\""`, md5.Sum([]byte(keys[0])))
 	if err := run(context.Background(), append(src, "-o", "-", "--format", "jsonl"), &out, false); err != nil ||
-		!strings.HasPrefix(out.String(), `{"key":"`+keys[0]+`","size":`) {
-		t.Fatalf("%v %.80s", err, out.String())
+		!strings.HasPrefix(out.String(), `{"Key":"`+keys[0]+`","LastModified":"`) || !strings.Contains(out.String(), `+00:00","ETag":`+etag+`,"Size":`) {
+		t.Fatalf("%v %.200s", err, out.String())
 	}
 	file := filepath.Join(t.TempDir(), "list.jsonl.gz")
 	out.Reset()
@@ -134,19 +139,16 @@ func TestResolveOutput(t *testing.T) {
 		{o: options{}, format: "tsv"},
 		{o: options{}, tty: true, format: "table"},
 		{o: options{out: "-", format: "jsonl"}, format: "jsonl"},
+		{o: options{format: "table"}, format: "table"},
 		{o: options{out: "x.TSV.zst"}, format: "tsv", path: "x.TSV.zst", comp: "zstd"},
-		{o: options{out: "x", format: "tsv", outputType: "file"}, format: "tsv", path: "x"},
+		{o: options{out: "x.jsonl.gz"}, format: "jsonl", path: "x.jsonl.gz", comp: "gzip"},
+		{o: options{out: "x.jsonl"}, format: "jsonl", path: "x.jsonl"},
 		{o: options{out: "ds"}},
-		{o: options{out: "ds", format: "parquet"}},
-		{o: options{out: "ds", format: "tsv"}, failure: "not supported"},
-		{o: options{out: "x.tsv", format: "jsonl"}, failure: "conflicts"},
-		{o: options{out: "x.tsv.gz", compression: "zstd"}, failure: "conflicts"},
-		{o: options{out: "ds", compression: "gzip"}, failure: "text output only"},
-		{o: options{out: "x.parquet", outputType: "file", format: "parquet"}, failure: "one-writer"},
-		{o: options{out: "x", outputType: "file"}, failure: "pass --format"},
-		{o: options{outputType: "file"}, failure: "meaningless"},
-		{o: options{format: "parquet"}, failure: "pass -o DIR"},
+		{o: options{out: "ds", format: "tsv"}, failure: "--format is for stdout"},
+		{o: options{out: "x.tsv", format: "tsv"}, failure: "--format is for stdout"},
+		{o: options{format: "parquet"}, failure: "want auto, table, tsv or jsonl"},
 		{o: options{countOnly: true, format: "tsv"}, failure: "--count-only"},
+		{o: options{countOnly: true, out: "x.tsv"}, failure: "--count-only"},
 	} {
 		c, err := resolveOutput(&tc.o, tc.tty)
 		switch {

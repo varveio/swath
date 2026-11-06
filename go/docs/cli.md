@@ -53,8 +53,6 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
     	S3: run --bearer-token-command again after this duration (default 45m)
   -color string
     	colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default "auto")
-  -compression string
-    	text output: none, gzip or zstd (default: from a .gz or .zst name, else none)
   -count-only
     	walk and count without writing a dataset
   -dualstack
@@ -74,7 +72,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
   -force
     	Java swath's name for --overwrite
   -format string
-    	auto, table, tsv, jsonl (text: stdout or one file; auto is a table on a terminal, TSV otherwise) or parquet (the dataset; the default for a directory)
+    	stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
   -gcs-anonymous
     	GCS: send no credentials, ignoring any in the environment
   -gcs-credentials file
@@ -117,8 +115,6 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
     	short for --output
   -output directory
     	output: a dataset directory, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)
-  -output-type string
-    	file or dir: what -o names when its extension does not say (file: one text file without a .tsv or .jsonl name)
   -overwrite
     	replace a previous dataset in --output
   -part-interval duration
@@ -192,8 +188,6 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: run --bearer-token-command again after this duration (default 45m)
   -color string
     	colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default "auto")
-  -compression string
-    	text output: none, gzip or zstd (default: from a .gz or .zst name, else none)
   -count-only
     	walk and count without writing a dataset
   -dualstack
@@ -215,7 +209,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -force
     	Java swath's name for --overwrite
   -format string
-    	auto, table, tsv, jsonl (text: stdout or one file; auto is a table on a terminal, TSV otherwise) or parquet (the dataset; the default for a directory)
+    	stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
   -gcs-anonymous
     	GCS: send no credentials, ignoring any in the environment
   -gcs-credentials file
@@ -264,8 +258,6 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	short for --output
   -output directory
     	output: a dataset directory, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)
-  -output-type string
-    	file or dir: what -o names when its extension does not say (file: one text file without a .tsv or .jsonl name)
   -overwrite
     	replace a previous dataset in --output
   -part-interval duration
@@ -346,22 +338,43 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   [internals/ordering.md](internals/ordering.md).
 - **`--output`** is refused when non-empty unless `--overwrite` (or Java's alias `--force`), which replaces only
   a previous dataset of this tool and never anything inside the listed root.
-- **Text output** (Java's text formats, S3 and GCS sources; a local tree's byte keys need the dataset). Without
-  `-o`, or with `-o -`, rows go to stdout: `--format auto` (the default there) is Java's aligned table when
-  stdout is a terminal, TSV otherwise; `--format table|tsv|jsonl` chooses. `-o NAME.tsv` or `NAME.jsonl`
-  (optionally `.gz` or `.zst`) writes one file in that format; `--output-type file` names one file without such
-  an extension (with `--format`); any other `-o` is the Parquet dataset (`--format parquet`, the default there).
-  The row contract is Java's: TSV has the header `key size last_modified etag storage_class row_type` (tab
-  separated), a byte below 0x20 or 0x7f is written `\xNN` (nothing else is escaped, a backslash included), and
-  `row_type` is `OBJECT`; JSONL has no header and one object per row in Java's field order (`key`, `size`,
-  `last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name`, `checksum_algorithm`,
-  `checksum_type`, `row_type`; an absent value is omitted), written by `encoding/json` without HTML escaping
-  (unlike Java's writer it escapes U+2028 and U+2029; keys of these sources are always UTF-8); the table
-  right-aligns the size in 14 columns, then the time in 24, then the key, without a header. `last_modified` is
-  UTC with a fraction only when it is not zero (`2026-01-02T03:04:05Z`, `.123Z`, `.123456Z`). `--compression
-  none|gzip|zstd` (or the `.gz`/`.zst` name; the two must agree) compresses text, never a dataset. A file is
-  written to a temporary beside it and installed only when complete (synced, then renamed, the directory
-  synced), replacing a previous file; a failed run leaves the destination as it was. A reader that closes
+- **Text output** (S3 and GCS sources; a local tree's keys are bytes, which JSON cannot carry, so it needs the
+  dataset). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
+  format and compression; any other name is the Parquet dataset; no `-o`, or `-o -`, is stdout, where `--format
+  auto|table|tsv|jsonl` chooses (`auto`, the default: the table on a terminal, TSV otherwise) and a pipe
+  compresses (`| zstd`). `--format` with a `-o` file or directory is refused, because the name already says it.
+  Rows are the S3 API's object (ListObjectsV2 `Contents`), so they are read with what already reads S3 listings:
+  - JSONL, one object per line, the API's names in its order: `Key`, `LastModified`, `ETag`,
+    `ChecksumAlgorithm` (a list), `ChecksumType`, `Size`, `StorageClass`, `Owner` (`DisplayName`, `ID`; only with
+    `--fetch-owner`). A field without a value, or one the provider lacks (GCS has no checksum or owner fields), is
+    left out, not null. A line is byte for byte what `aws s3api list-objects-v2 ... | jq -c '.Contents[]'`
+    prints for the object: `ETag` keeps its quotes (the dataset stores it bare), `LastModified` is printed as the
+    AWS CLI does (UTC, `+00:00`, a microsecond fraction only when not zero), strings are escaped as jq does.
+
+    ```text
+    {"Key":"logs/2023/app.log","LastModified":"2023-11-14T22:13:20+00:00","ETag":"\"fba9dede5f27731c9771645a39863328\"","ChecksumAlgorithm":["CRC64NVME"],"ChecksumType":"FULL_OBJECT","Size":434234,"StorageClass":"STANDARD"}
+    ```
+  - TSV: the same fields as columns in the same order under one header line, a column for each field the
+    provider has (S3: all nine, `Owner.DisplayName` and `Owner.ID` flattened; GCS: `Key LastModified ETag Size
+    StorageClass`), an absent value empty, `ChecksumAlgorithm` its one value.
+
+    ```text
+    Key	LastModified	ETag	ChecksumAlgorithm	ChecksumType	Size	StorageClass	Owner.DisplayName	Owner.ID
+    logs/2023/app.log	2023-11-14T22:13:20+00:00	"fba9dede5f27731c9771645a39863328"	CRC64NVME	FULL_OBJECT	434234	STANDARD		
+    ```
+  - The table: the `aws s3 ls --recursive` line, the time to the second, the size right-aligned in 10 columns,
+    the key, no header; in UTC (aws prints local time), so two runs' rows compare equal wherever they ran.
+
+    ```text
+    2023-11-14 22:13:20     434234 logs/2023/app.log
+    ```
+
+  One escaping rule for all three, JSON's string escapes: `\\`, `\b`, `\f`, `\n`, `\r`, `\t`, any other byte
+  below 0x20 and 0x7f as `\u00xx`, and `\"` inside JSON only. It is reversible, keeps a row on one line and a
+  TSV field between its tabs, and never sends a terminal a control byte. Other provider columns (GCS
+  `generation`, `md5`, `crc32c`, `content_type`) have no S3 field and are not written: they are in the dataset.
+  A file is written to a temporary beside it and installed only when complete (synced, then renamed, the
+  directory synced), replacing a previous file; a failed run leaves the destination as it was. A reader that closes
   stdout (`| head`) ends the run at once with exit 0, the report's outcome `stopped`, `stop_reason`
   `downstream_closed`, `complete` false. On stdout the one-line summary is not printed (stdout carries the
   rows; `--stats` prints the account on stderr) and `--report-format json` is refused (use `--report FILE`).

@@ -44,13 +44,18 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--format auto\|table\|tsv\|jsonl` | `--format auto\|table\|tsv\|jsonl` (Java's TSV and JSONL row contract; auto: a table on a terminal, TSV otherwise) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--format parquet` | `--format parquet`, the default for a directory `-o` | kept | – |
+| `--format auto\|table\|tsv\|jsonl` | `--format auto\|table\|tsv\|jsonl`, stdout only (auto: the table on a terminal, TSV otherwise); with `-o` refused, the name decides | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features); stdout only 2026-11-06 (owner: text output in the shapes people already know): a file's name already says its format |
+| `--format parquet` | none: any `-o` without a text extension is the dataset | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the `-o` name already decides) |
+| Text row fields `key size last_modified etag storage_class row_type` (+ JSONL `owner_id owner_display_name checksum_algorithm checksum_type`) | the S3 API's object: `Key LastModified ETag ChecksumAlgorithm ChecksumType Size StorageClass Owner{DisplayName,ID}`, in the API's order; a JSONL line equals `aws s3api list-objects-v2 \| jq -c '.Contents[]'` | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
+| `row_type` (always `OBJECT`) | none | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (every row is an object) |
+| `last_modified` `...Z` with 0, 3 or 6 fraction digits | `LastModified` as the AWS CLI prints it: `+00:00`, 6 fraction digits only when not zero | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
+| TSV/table escaping: a control byte as `\xNN`, backslash unescaped | JSON's string escapes (`\\ \b \f \n \r \t \u00xx`) in all three formats | renamed | 2026-11-06 (owner: text output in the shapes people already know): reversible (the old rule was not: a key containing `\x09` read back as a tab) and one rule instead of two |
+| Table: size in 14, time in 24, key | the `aws s3 ls` line: `YYYY-MM-DD HH:MM:SS`, size in 10, key (UTC) | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
 | `--format discard` | `--count-only` | renamed | – |
 | `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o`: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--output-type file\|dir` | `--output-type file\|dir` (file: one text file without a text extension; dir with a text format is refused) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features): it carries a distinct meaning (an extensionless text file) |
+| `--output-type file\|dir` | none: the `-o` name decides | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (an extensionless text file names no format) |
 | `-o NAME.parquet` one-writer directory layout | none (`-o NAME.parquet` is a dataset directory) | removed | not ported, 2026-11-06: no value now (Java's own FAQ calls it a trap) |
-| `--compression none\|gzip\|zstd` (text only) | `--compression none\|gzip\|zstd`, or the `.gz`/`.zst` name (text only) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features): it carries a distinct meaning (compressed stdout, or a name without the extension) |
+| `--compression none\|gzip\|zstd` (text only) | the `-o` name's `.gz`/`.zst`; stdout through a pipe (`\| zstd`) | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the name says it for a file; a pipe does it for stdout) |
 | `--text-part-size` (256 MB) | none | removed | not ported, 2026-11-06: no value now (partitioned text datasets) |
 | `--text-writers N` (3) | none | removed | not ported, 2026-11-06: no value now (partitioned text datasets) |
 | `--writeback-size SIZE` (off) | none | removed | not ported, 2026-11-06: no value now |
