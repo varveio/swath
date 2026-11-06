@@ -25,6 +25,7 @@ type Progress struct {
 	ordered  atomic.Int64
 	encoded  atomic.Int64
 	parts    atomic.Int64
+	lastPart atomic.Int64 // unix nanoseconds of the last part published
 	gauges   atomic.Pointer[order.Gauges]
 
 	mu    sync.Mutex // held across an owned write and across a change of ownership
@@ -72,6 +73,10 @@ type ProgressSnapshot struct {
 	// outstanding nodes, spill markers, open spill readers, live spill
 	// bytes (nil before the stage starts).
 	Order *order.GaugeSnapshot `json:"order,omitempty"`
+	// PartAgeMs is the age of the recovery point: the time since the last
+	// part was published (journaled), or since the start before the first.
+	// A crash now loses the work of that long.
+	PartAgeMs int64 `json:"part_age_ms"`
 }
 
 // Snapshot reads p; a nil Progress reads as zero.
@@ -96,6 +101,10 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	if st := p.started.Load(); st != 0 {
 		s.StartedAt = time.Unix(0, st).UTC()
 		s.DurationMs = now.Sub(s.StartedAt).Milliseconds()
+		s.PartAgeMs = s.DurationMs
+	}
+	if lp := p.lastPart.Load(); lp != 0 {
+		s.PartAgeMs = now.Sub(time.Unix(0, lp)).Milliseconds()
 	}
 	return s
 }

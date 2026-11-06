@@ -43,8 +43,15 @@ Every boundary in the left column is a named crash point (`internal/faults`). `T
 there without cleanup, and `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself there, for S3 and GCS. Both then
 resume and compare with an uninterrupted run.
 
+**The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size
+target or, on a slow frontier, once it has been open for the part interval (default 60 s,
+[parquet-output.md](parquet-output.md)). `progress.json` reports the age (`part_age_ms`: since the last part
+was published, or since the start). What a crash loses is not bounded by that age: rows listed past the
+frontier (in memory or spill) and parts encoded after a gap in the ordinals are listed again too.
+
 **The promise:**
-- On a static source, recovery is byte-identical to an uninterrupted run.
+- On a static source, recovery is byte-identical to an uninterrupted run when no part was cut by time;
+  otherwise it is the same rows, with boundaries that depend on when each attempt cut.
 - On a live bucket, durable output is exactly-once: no published key is listed again into the dataset, and
   none is skipped. Objects that change during the run change the rows, and so the part boundaries, as they
   would in any run.

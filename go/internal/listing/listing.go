@@ -73,7 +73,12 @@ type Limits struct {
 	Encoders int   // Parquet encoders; default GOMAXPROCS, admitted against memory and descriptors (admitEncoders)
 	Memory   int64 // budget in bytes for rows held between listing and encoding; default 256 MiB
 	PartSize int64 // target bytes per part; default 64 MiB (frozen for a resume)
-	Spill    SpillLimits
+	// PartInterval bounds the open part's age: a part open that long with
+	// rows is closed although not full, so durable progress advances on a
+	// slow frontier (0: DefaultPartInterval; negative: by size only, which
+	// keeps part boundaries independent of timing).
+	PartInterval time.Duration
+	Spill        SpillLimits
 }
 
 // SpillLimits bound spill.
@@ -128,6 +133,10 @@ func spillMax(l SpillLimits, dir string) int64 {
 const (
 	DefaultMemory   = 256 << 20
 	DefaultPartSize = 64 << 20
+	// DefaultPartInterval is the default part age bound. Java rotated
+	// parts every 30 s; a cut closes a part far below its target size, so
+	// the default is twice that.
+	DefaultPartInterval = 60 * time.Second
 	// minMemory is the smallest budget accepted.
 	minMemory = 256 << 10
 )
@@ -161,6 +170,9 @@ func (c *Config) resolve() error {
 	}
 	if l.PartSize == 0 {
 		l.PartSize = DefaultPartSize
+	}
+	if l.PartInterval == 0 {
+		l.PartInterval = DefaultPartInterval
 	}
 	if l.Memory < minMemory {
 		return bad("memory budget %d is below %d bytes", l.Memory, minMemory)
@@ -335,7 +347,8 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		env.Ordered = &pr.ordered
 	}
 	if cfg.Output.Dir != "" {
-		ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add}
+		ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add,
+			Interval: max(0, cfg.Limits.PartInterval)}
 		jr.routerOptions(&ropt)
 		if pr := cfg.Progress; pr != nil {
 			ropt.Encoded = &pr.encoded
@@ -344,6 +357,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 					p, err := pub(ordinal, p, limit, rows, final)
 					if err == nil {
 						pr.parts.Add(1)
+						pr.lastPart.Store(time.Now().UnixNano())
 					}
 					return p, err
 				}
@@ -408,6 +422,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if router != nil {
 		w := int64(router.EncoderWait())
 		sum.Resources.EncoderWaitNs = &w
+		sum.Resources.PartTimeCuts = router.TimeCuts()
 	}
 	listed := time.Now()
 	sum.Timings.ListingFinishedAt, sum.Timings.ListingMs = listed.UTC(), listed.Sub(sum.Timings.StartedAt).Milliseconds()

@@ -106,7 +106,7 @@ func runScripted(t *testing.T, p *scripted, out string, resume bool) (Report, er
 	scriptNext = p
 	scriptMu.Unlock()
 	return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
-		Limits: Limits{PartSize: 2 << 10, Workers: 4, Memory: 256 << 10}})
+		Limits: Limits{PartSize: 2 << 10, Workers: 4, Memory: 256 << 10, PartInterval: -1}})
 }
 
 // TestBoundaryDefectNeverReachesTheJournal: a provider whose ranges are
@@ -173,5 +173,58 @@ func TestBoundaryDefectNeverReachesTheJournal(t *testing.T) {
 			}
 			sameDataset(t, defect, clean, out)
 		})
+	}
+}
+
+// TestPartIntervalBoundsRecoveryPointAge: a trickling source (one key per
+// range, 40 ms per range, one worker: about 2 s) with the part interval at
+// 200 ms publishes parts as it goes, and the recovery point's age
+// (progress.json's part_age_ms) stays near the interval; by size only,
+// the one part closes at the end and the age grows with the run. Both
+// datasets hold the same rows.
+func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
+	var keys []string
+	for i := range 50 {
+		keys = append(keys, fmt.Sprintf("k%04d", i))
+	}
+	var ages [2]int64
+	var cuts [2]int64
+	for i, interval := range []time.Duration{-1, 200 * time.Millisecond} {
+		scriptMu.Lock()
+		scriptNext = &scripted{keys: keys, chunk: 1, slow: 40 * time.Millisecond}
+		scriptMu.Unlock()
+		pr := &Progress{}
+		stop, sampled := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(sampled)
+			for {
+				select {
+				case <-stop:
+					return
+				case <-time.After(10 * time.Millisecond):
+				}
+				if s := pr.Snapshot(); s.Objects > 0 && s.Objects < int64(len(keys)) {
+					ages[i] = max(ages[i], s.PartAgeMs)
+				}
+			}
+		}()
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: t.TempDir()},
+			Limits: Limits{Workers: 1, PartInterval: interval}, Progress: pr})
+		close(stop)
+		<-sampled
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum.Output.RowsCommitted != int64(len(keys)) {
+			t.Fatalf("%d rows", sum.Output.RowsCommitted)
+		}
+		cuts[i] = sum.Resources.PartTimeCuts
+		t.Logf("interval %v: %d parts (%d by time), recovery point age up to %d ms over %d ms", interval, sum.Output.PartsWritten, cuts[i], ages[i], sum.Timings.ListingMs)
+	}
+	if ages[0] < 1500 || cuts[0] != 0 {
+		t.Fatalf("by size only: age %d ms, %d time cuts", ages[0], cuts[0])
+	}
+	if ages[1] > 700 || cuts[1] < 3 {
+		t.Fatalf("with the interval: age up to %d ms, %d time cuts", ages[1], cuts[1])
 	}
 }

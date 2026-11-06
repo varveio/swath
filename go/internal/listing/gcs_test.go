@@ -37,7 +37,7 @@ func gcsBucket(t *testing.T, n int) string {
 
 func gcsConfig(ep, out string, resume bool) Config {
 	return Config{Source: SourceConfig{URI: "gs://bkt", Options: &GCSConfig{Endpoint: ep, Anonymous: true}},
-		Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, Memory: 256 << 10, Spill: SpillLimits{Off: true}}}
+		Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, Memory: 256 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
 }
 
 // TestGCSResumeRefusesAnotherRoute: a GCS run interrupted with parts

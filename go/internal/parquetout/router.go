@@ -50,6 +50,12 @@ type Options struct {
 	// Account, if set, is told the bytes (schema.RowsBytes) queued to the
 	// encoders (+) and written (-): they share the order stage's budget.
 	Account func(int64)
+	// Interval, if positive, bounds the age of the open part: once it has
+	// been open that long with rows, it is closed (and, journaled,
+	// published) although not full, so durable progress advances on a
+	// slow frontier. Boundaries then depend on timing whenever such a cut
+	// happens; 0 cuts by size only.
+	Interval time.Duration
 }
 
 // Resume is the router state recovered from a journal.
@@ -87,10 +93,19 @@ type Router[P any] struct {
 	waitNs  atomic.Int64 // time Write waited for an encoder (queue or slot)
 	closed  bool
 	done    []dataset.Part // resumed parts, already published
+
+	// mu serializes Write, Close and Abort with the interval cut.
+	mu       sync.Mutex
+	stopTick chan struct{} // closed by Close and Abort (nil without Interval)
+	tickCtx  context.Context
+	tickStop context.CancelFunc // ends a part-0 cut the ticker waits on
+	ticked   sync.WaitGroup
+	timeCuts atomic.Int64 // parts closed by the interval
 }
 
 type part[P any] struct {
 	ordinal   int
+	opened    time.Time
 	prev      *part[P] // the previous part of this run, nil for the first
 	segs      chan batch[P]
 	done      chan struct{}
@@ -115,8 +130,51 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	if res := opt.Resume; res != nil {
 		r.done, r.limit, r.rows = res.Parts, res.Limit, res.Rows
 	}
+	if opt.Interval > 0 {
+		r.stopTick = make(chan struct{})
+		r.tickCtx, r.tickStop = context.WithCancel(context.Background())
+		r.ticked.Add(1)
+		go r.tick(r.stopTick)
+	}
 	return r, nil
 }
+
+// tick closes the open part once it is Interval old, until stopped.
+func (r *Router[P]) tick(stop <-chan struct{}) {
+	defer r.ticked.Done()
+	t := time.NewTicker(max(time.Millisecond, r.opt.Interval/8))
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		r.mu.Lock()
+		if !r.closed && r.cur != nil && time.Since(r.cur.opened) >= r.opt.Interval && r.firstErr() == nil {
+			r.timeCuts.Add(1)
+			_ = r.cut(r.tickCtx, false) // a failure is the encoder's, and reported by it
+		}
+		r.mu.Unlock()
+	}
+}
+
+// stop ends the interval cuts (mu held: the ticker may be waiting for it,
+// so it is released while the ticker exits).
+func (r *Router[P]) stop() {
+	if r.stopTick == nil {
+		return
+	}
+	close(r.stopTick)
+	r.tickStop()
+	r.stopTick = nil
+	r.mu.Unlock()
+	r.ticked.Wait()
+	r.mu.Lock()
+}
+
+// TimeCuts is the number of parts the interval closed.
+func (r *Router[P]) TimeCuts() int64 { return r.timeCuts.Load() }
 
 // EncoderWait is the time Write waited for an encoder: a full part queue,
 // or every encoder busy when a part was opened.
@@ -125,6 +183,8 @@ func (r *Router[P]) EncoderWait() time.Duration { return time.Duration(r.waitNs.
 // Write routes ascending segments into parts. Each part receives the
 // segments of one Write call as a single batch.
 func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var batch [][]schema.Row[P]
 	for _, seg := range segs {
 		start := 0
@@ -222,7 +282,7 @@ func (r *Router[P]) open(ctx context.Context) error {
 		}
 		r.waitNs.Add(int64(time.Since(t)))
 	}
-	p := &part[P]{ordinal: len(r.done) + len(r.parts), segs: make(chan batch[P], partQueue), done: make(chan struct{}),
+	p := &part[P]{ordinal: len(r.done) + len(r.parts), opened: time.Now(), segs: make(chan batch[P], partQueue), done: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}
 	if n := len(r.parts); n > 0 {
 		p.prev = r.parts[n-1]
@@ -380,12 +440,15 @@ func (r *Router[P]) firstErr() error {
 // Close marks the last part final, waits for every encoder and returns the
 // parts in ordinal order after the publication gate.
 func (r *Router[P]) Close() ([]dataset.Part, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stop()
 	if r.closed {
 		return nil, errors.New("router already closed")
 	}
 	if r.cur != nil {
 		if err := r.cut(context.Background(), true); err != nil {
-			r.Abort()
+			r.abort()
 			return nil, err
 		}
 	}
@@ -414,6 +477,13 @@ func (r *Router[P]) Close() ([]dataset.Part, error) {
 // Abort stops every encoder; it is safe after Close. Unpublished files are
 // removed by dataset.Cleanup.
 func (r *Router[P]) Abort() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.abort()
+}
+
+func (r *Router[P]) abort() {
+	r.stop()
 	if r.closed {
 		return
 	}
@@ -434,6 +504,7 @@ type Encoder interface {
 	Close() ([]dataset.Part, error)
 	Abort()
 	EncoderWait() time.Duration
+	TimeCuts() int64
 	// Routed is the rows this run routed into parts: after listing it
 	// must equal the rows the order stage handed on.
 	Routed() int64

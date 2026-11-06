@@ -145,6 +145,9 @@ type Resources struct {
 	// spill markers in memory (spill readers: Spill.PeakReaders).
 	PeakNodes   int64 `json:"peak_nodes"`
 	PeakMarkers int64 `json:"peak_markers"`
+	// PartTimeCuts counts parts closed by the part interval, not by size:
+	// with any, part boundaries depended on timing.
+	PartTimeCuts int64 `json:"part_time_cuts"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

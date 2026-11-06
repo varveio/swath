@@ -61,7 +61,20 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
 - Ordinals are dense and zero-based; the router knows the last part (the journal records it, so a resume
   after the final part only publishes).
 
-The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`. Each part is
+The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`, unless the
+part interval cuts (below).
+
+**The part interval** (`listing.Limits.PartInterval`, default 60 s; `parquetout.Options.Interval`) bounds the
+age of the recovery point on a slow frontier: a part open that long with rows is closed although not full,
+and a journaled run publishes it, so a crash loses at most about that long of frontier progress instead of a
+whole part's worth (Java rotated parts every 30 s; a cut part can be far below its target size, so the
+default is twice that). The order stage hands on its batch before the drainer waits on the frontier, so the
+open part holds every row the walk has reached. A cut by time makes that run's boundaries depend on timing:
+the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (a negative
+value), boundaries depend only on the rows and the byte-identity guarantees above hold
+(`TestIntervalClosesAnAgedPart`, `TestPartIntervalBoundsRecoveryPointAge`: a 2 s trickle keeps the recovery
+point under 260 ms old at a 200 ms interval, against 1.96 s by size only). The command does not have a
+`--part-interval` flag yet; it runs with the default. Each part is
 written by its own goroutine and zstd encoder from a bounded channel; at most `Encoders` parts are open.
 
 ## Publication gate and order

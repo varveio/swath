@@ -936,6 +936,19 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 				return st, err
 			}
 		case expanding:
+			if len(o.segs) > 0 {
+				// Hand on what is batched before waiting on the frontier:
+				// the sink (a part's age bound, its durability) sees every
+				// row the walk has reached. Recheck after, without the lock.
+				o.mu.Unlock()
+				err := o.flush()
+				o.mu.Lock()
+				if err != nil {
+					o.mu.Unlock()
+					return st, err
+				}
+				continue
+			}
 			release()
 			n.awaited.Store(true)
 			o.drain.Broadcast() // its emitter may be blocked on the budget
