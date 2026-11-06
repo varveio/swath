@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -309,5 +311,54 @@ func TestInclusiveBoundDropsCoveredPrefixes(t *testing.T) {
 		if st := p.Stats(); !slices.Equal(out.Prefixes, c.want) || st.Get(cBoundDrops) != c.drops {
 			t.Fatalf("inclusive=%v after=%q: prefixes %q, bound_drops %d; want %q, %d", c.inclusive, c.after, out.Prefixes, st.Get(cBoundDrops), c.want, c.drops)
 		}
+	}
+}
+
+// TestFreshEmptyTokensUseBoundedMemory: a service that answers every
+// request with an empty continuing page and a token never sent before is
+// followed until the context ends, holding only the latest tokens (before,
+// the run kept every token of the chain: 40,000 pages of 2 KiB tokens held
+// some 80 MB); a token repeated within the window is still an invalid page
+// (Sol, sixth review).
+func TestFreshEmptyTokensUseBoundedMemory(t *testing.T) {
+	const pages, tokenBytes = 40000, 2048
+	pad := strings.Repeat("x", tokenBytes)
+	var calls int
+	var base, end runtime.MemStats
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	stop := errors.New("enough pages")
+	fresh := func(_ context.Context, q *Query) (*Page[Object], error) {
+		calls++
+		switch calls {
+		case 10:
+			runtime.GC()
+			runtime.ReadMemStats(&base)
+		case pages:
+			runtime.GC()
+			runtime.ReadMemStats(&end)
+			cancel(stop)
+		}
+		return &Page[Object]{Truncated: true, Token: fmt.Sprintf("%08d", calls) + pad}, nil
+	}
+	p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Expand(ctx, Range{open: true, id: 1}, &direct{&collect{}}); !errors.Is(err, stop) {
+		t.Fatalf("want the context's cause, got %v", err)
+	}
+	if grew := int64(end.HeapAlloc) - int64(base.HeapAlloc); grew > 16<<20 {
+		t.Fatalf("the heap grew by %d MiB over %d fresh empty pages", grew>>20, pages)
+	}
+	// A token sent again after emptyTokenWindow-1 others is a cycle.
+	calls = 0
+	cycle := func(_ context.Context, q *Query) (*Page[Object], error) {
+		calls++
+		return &Page[Object]{Truncated: true, Token: fmt.Sprintf("t%d", calls%emptyTokenWindow)}, nil
+	}
+	p, _ = New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, cycle)
+	if err := p.Expand(context.Background(), Range{open: true, id: 1}, &direct{&collect{}}); !errors.Is(err, ErrInvalidPage) || calls != emptyTokenWindow+1 {
+		t.Fatalf("a cycle within the window: %v after %d pages", err, calls)
 	}
 }

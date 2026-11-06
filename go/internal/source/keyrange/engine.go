@@ -250,12 +250,15 @@ func (p *Engine[P]) Stats() Stats {
 // it, and a common prefix at or below it, are dropped here. A continuing page with no entry (object stores may return them;
 // also the page that held only the key at an inclusive bound) is followed
 // by its token here, for every path (ranges, the sequential chain, the
-// probes): each token of such a run must be new, or the page is invalid.
+// probes): each token of such a run must differ from the last
+// emptyTokenWindow ones, or the page is invalid. A service that sends fresh
+// tokens forever is followed until the run's deadline (--max-duration), in
+// bounded memory.
 func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 	p.mu.Lock()
 	p.c.Inc(cRequests)
 	p.mu.Unlock()
-	var seen map[string]bool // the tokens of a run of empty continuing pages
+	var seen *tokenWindow // the recent tokens of a run of empty continuing pages
 	// chainStart: no page of this chain has held an entry yet, so its first
 	// row may be the key at an inclusive start bound (also after empty
 	// pages followed here).
@@ -297,12 +300,11 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 				return nil, fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
 			}
 			if seen == nil {
-				seen = map[string]bool{in.Token: true}
+				seen = newTokenWindow(in.Token)
 			}
-			if seen[out.Token] {
+			if !seen.add(out.Token) {
 				return nil, fmt.Errorf("%w: an empty page's continuation token makes no progress", p.d.invalid())
 			}
-			seen[out.Token] = true
 			if ctx.Err() != nil {
 				return nil, context.Cause(ctx)
 			}
@@ -437,3 +439,38 @@ func (p *Engine[P]) Listed() int64 { return p.c.Load(cObjects) }
 
 // Get is counter id's value.
 func (s *Stats) Get(id counters.ID) int64 { return s.Counters.Get(id) }
+
+// emptyTokenWindow is how many of the latest tokens of a run of empty
+// continuing pages are kept to detect a token that makes no progress: a
+// cycle within it is an invalid page; a longer one, like a chain of ever
+// fresh tokens, is bounded by the run's deadline, not by memory.
+const emptyTokenWindow = 1024
+
+// tokenWindow holds the latest emptyTokenWindow tokens of a run.
+type tokenWindow struct {
+	set  map[string]bool
+	ring []string
+	next int
+}
+
+func newTokenWindow(first string) *tokenWindow {
+	w := &tokenWindow{set: map[string]bool{}, ring: make([]string, 0, 16)}
+	w.add(first)
+	return w
+}
+
+// add records tok and reports whether it is not among the kept tokens.
+func (w *tokenWindow) add(tok string) bool {
+	if w.set[tok] {
+		return false
+	}
+	w.set[tok] = true
+	if len(w.ring) < emptyTokenWindow {
+		w.ring = append(w.ring, tok)
+		return true
+	}
+	delete(w.set, w.ring[w.next])
+	w.ring[w.next] = tok
+	w.next = (w.next + 1) % emptyTokenWindow
+	return true
+}
