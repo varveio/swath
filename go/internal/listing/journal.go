@@ -473,19 +473,6 @@ func checkLayout(r *os.Root, st *journal.State) error {
 	return nil
 }
 
-// renameIn renames within r the paths under out (rename's arguments are
-// pathnames the run made under out).
-func renameIn(r *os.Root, out string) func(old, new string) error {
-	return func(old, new string) error {
-		o, err1 := filepath.Rel(out, old)
-		n, err2 := filepath.Rel(out, new)
-		if err := errors.Join(err1, err2); err != nil {
-			return err
-		}
-		return r.Rename(o, n)
-	}
-}
-
 // recoverParts makes data/ hold exactly the journaled parts: a part whose
 // record is durable but whose rename did not happen is renamed now (its
 // temporary file was synced before the record); every other file in data/
@@ -648,7 +635,7 @@ func checkParts(v verifier, r *os.Root, out string, st *journal.State, lock *jou
 			if err := lock.Verify(); err != nil {
 				return err
 			}
-			if _, err := dataset.PublishPartWith(renameIn(r, out), out, i, dataset.Part{Path: filepath.Join(out, rel), PartInfo: rec.Part}); err != nil {
+			if _, err := dataset.PublishPartIn(r, out, i, dataset.Part{Path: filepath.Join(out, rel), PartInfo: rec.Part}); err != nil {
 				return fmt.Errorf("resume: %w", err)
 			}
 		}

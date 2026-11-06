@@ -12,9 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 )
 
@@ -285,4 +288,49 @@ func TestRecoveryRefusesLinkedSuspectUnchanged(t *testing.T) {
 		t.Errorf("the refused output changed: the claimed part was published")
 	}
 	requireRefusedAndKept(t, err, outside)
+}
+
+// TestRecoveryPublishesThroughRoot: the publication of a recorded part
+// whose rename did not happen syncs data/ through the output root, not by
+// pathname (tenth durability review: PublishPartWith's sync opened
+// out/data by name). The output is moved away between the rename and the
+// sync, and an empty directory put at its path: the sync still reaches the
+// moved output's data/, and the resume stops at the next identity check
+// (journal.ErrOutputReplaced) instead of failing to open the impostor's
+// data/ by name.
+func TestRecoveryPublishesThroughRoot(t *testing.T) {
+	lr := newLayoutRun(t, 1)
+	final := filepath.Join(lr.out, dataset.DataDir, dataset.PartName(0))
+	claim := dataset.ClaimPath(lr.out, 0)
+	if err := os.MkdirAll(filepath.Dir(claim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(final, claim); err != nil {
+		t.Fatal(err)
+	}
+	moved := lr.out + ".moved"
+	var once sync.Once
+	defer faults.Set(func(point string) error {
+		if point == "renamed-unsynced" {
+			once.Do(func() {
+				if err := os.Rename(lr.out, moved); err != nil {
+					t.Error(err)
+				}
+				if err := os.Mkdir(lr.out, 0o755); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		return nil
+	})()
+	err := lr.resume(t)
+	if !errors.Is(err, journal.ErrOutputReplaced) || strings.Contains(err.Error(), "sync data directory") {
+		t.Fatalf("resume error %v, want the replacement found after a sync through the root", err)
+	}
+	if _, serr := os.Stat(filepath.Join(moved, dataset.DataDir, dataset.PartName(0))); serr != nil {
+		t.Fatalf("the part was not published in the moved output: %v", serr)
+	}
+	if ents, _ := os.ReadDir(lr.out); len(ents) != 0 {
+		t.Fatalf("the directory at the output's path was written: %v", ents)
+	}
 }
