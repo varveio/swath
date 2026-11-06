@@ -228,8 +228,11 @@ func TestSingleUnsafeCursorDoesNotDisableLaterSplits(t *testing.T) {
 		if st.Get(cSplitRejectedUnsafeCursor) == 0 {
 			t.Fatalf("%s: the unsafe cursor was never met", name)
 		}
-		if splits(st) < 10 || st.Get(cMaxActive) < 2 {
-			t.Errorf("%s: one unsafe cursor suppressed later splits: %d splits, max active %d", name, splits(st), st.Get(cMaxActive))
+		// Splits, not peak concurrency: with GOMAXPROCS=1 and a fake
+		// without latency, one worker may drain each child before the next
+		// starts.
+		if splits(st) < 10 {
+			t.Errorf("%s: one unsafe cursor suppressed later splits: %d splits", name, splits(st))
 		}
 	}
 	odd := slices.Clone(keys)
