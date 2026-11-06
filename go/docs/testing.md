@@ -139,6 +139,18 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   attempts (the replay server's HTTP count), splits, empty children, overfetched keys, probes and mean active
   ranges per arm.
 
+## Replay server oracle
+
+The Go `swath-replay` ([replay.md](replay.md)) is held to the Java one by `bench/replaydiff`: both servers on one
+fixture, the same scripted matrix, token walks and seeded random requests to each, and every answer's status,
+compared headers and body bytes required equal ([internals/replay.md](internals/replay.md#the-differential-driver)):
+
+```bash
+go build -o /tmp/replaydiff ./bench/replaydiff && ./build.sh -o swath-replay ./cmd/swath-replay
+/tmp/replaydiff -java "$(command -v swath-replay)" -go ./swath-replay -fixture /data/sorted -bucket bkt \
+  -report /tmp/diff.json
+```
+
 ## The fake bucket
 
 `bench/s3fake` serves a gofakes3 bucket loaded from a key list:
