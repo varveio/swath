@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -59,6 +60,7 @@ type forensicTarget struct {
 	report string // --report
 	argv   []string
 	att    *listing.Attempt
+	frozen atomic.Pointer[outcome] // the run's classification, once made
 }
 
 func main() {
@@ -76,12 +78,15 @@ func main() {
 				// blocks below (a full stderr pipe nobody drains, a disk
 				// that does not return), the process exits within
 				// forcedAllowance.
-				time.AfterFunc(forcedAllowance, func() { os.Exit(code) })
-				note(errOut, fmt.Sprintf("swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace))
 				f := forensics.Load()
 				if f == nil {
 					f = &forensicTarget{}
 				}
+				if fr := f.frozen.Load(); fr != nil {
+					code = fr.ExitCode // the run's classification stands
+				}
+				time.AfterFunc(forcedAllowance, func() { os.Exit(code) })
+				note(errOut, fmt.Sprintf("swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace))
 				dumpStacks(f.dir, f.pr, "forced-exit", why, f.pr.Snapshot())
 				forcedAccount(f, code, why)
 				os.Exit(code)
@@ -116,6 +121,29 @@ func main() {
 		os.Exit(exitUsage)
 	}
 	os.Exit(exitFatal)
+}
+
+// settled is a run's frozen classification: the error as classified and
+// its outcome.
+type settled struct {
+	err error
+	out outcome
+}
+
+// classifyRun is the terminal classification of a run's result: a
+// committed dataset that does not cover its scope (a key limit) never
+// exits 0 (a supervisor must not take it as complete), and the provider
+// names the class of its errors.
+func classifyRun(ctx context.Context, dir string, provider func(error) string, sum listing.Report, err error) (error, outcome) {
+	if err == nil && dir != "" && !sum.Outcome.Complete {
+		err = errIncomplete
+	}
+	if err != nil && provider != nil {
+		if c := provider(err); c != "" {
+			err = &classified{err, c}
+		}
+	}
+	return err, classify(err, context.Cause(ctx), dir)
 }
 
 // newAttempt identifies this invocation (listing.Attempt).
@@ -413,19 +441,25 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att})
 	// The outcome: error.json is written while the run still owns the
 	// output (Settle), and never by a run that did not own it.
+	// One frozen classification: the first computation (Finalize, before
+	// any account is written) is reused by Settle, the command's return
+	// and a forced exit, so a stop cause that arrives later (the deadline
+	// passing while the run settles) cannot reclassify a run whose
+	// error.json is written.
+	var frozenMu sync.Mutex
+	var frozen *settled
 	settle := func(sum listing.Report, err error) (error, outcome) {
-		if err == nil && cfg.Output.Dir != "" && !sum.Outcome.Complete {
-			// A committed dataset that does not cover its scope (a key
-			// limit) never exits 0: a supervisor must not take it as complete.
-			err = errIncomplete
+		frozenMu.Lock()
+		defer frozenMu.Unlock()
+		if frozen != nil {
+			return frozen.err, frozen.out
 		}
-		if err != nil && pf.Classify != nil {
-			if c := pf.Classify(err); c != "" {
-				err = &classified{err, c}
-			}
-		}
-		out := classify(err, context.Cause(ctx), cfg.Output.Dir)
+		err, out := classifyRun(ctx, cfg.Output.Dir, pf.Classify, sum, err)
 		out.Attempt = att
+		frozen = &settled{err, out}
+		if f := forensics.Load(); f != nil {
+			f.frozen.Store(&out)
+		}
 		return err, out
 	}
 	// One terminal account: the classification is applied to the report
@@ -445,6 +479,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	}
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn)
 	sum, err := listing.Run(ctx, cfg)
+	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
 	stopProfile()
 	err, out := settle(sum, err)

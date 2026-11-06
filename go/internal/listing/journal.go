@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -52,6 +53,11 @@ type runJournal struct {
 	// suspect is the part of a record that read as torn, kept until the
 	// resume reproduces it byte for byte (nil when there is none).
 	suspect *suspect
+	// acked counts this invocation's parts the journal acknowledged (the
+	// append returned): durable whether or not the rename followed.
+	acked struct {
+		parts, bytes, rows atomic.Int64
+	}
 }
 
 // suspect is a temporary part set aside by recovery because its record
@@ -570,6 +576,9 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	if err := jr.j.Append(journal.Record{Part: p.PartInfo, Ordinal: ordinal, Limit: limit, RowsTotal: rows, Final: final}); err != nil {
 		return p, err
 	}
+	jr.acked.parts.Add(1)
+	jr.acked.bytes.Add(p.Bytes)
+	jr.acked.rows.Store(rows)
 	if sus != nil && ordinal == sus.ordinal {
 		// Reproduced and recorded: the copy set aside is redundant (a
 		// later recovery removes it if this does not).

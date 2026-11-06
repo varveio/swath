@@ -271,11 +271,14 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   random, and `started`). For a run that did not complete, `DIR/error.json` holds the same outcome in the
   dataset (`class`, `exit_code`, `message`, `resumable`, `cause`: the provider's failure class such as
   `throttle` or `access_denied`, or `no_space` for a full disk; and the same `attempt`); it never needs stderr.
-  The command classifies the outcome once, before any account is written, so `DIR/run.json` (a committed
-  dataset), `error.json` and the report agree on `class`, `exit_code`, `resumable` and `cause` (a dataset
-  committed with partial coverage is `incomplete`, exit 1, in all three). The report's `output` counts the
-  parts that stay in the output on failure too: after a failure of a journaled run, `parts_written`, `bytes`
-  and `rows_durable` are the journaled parts, the recovered ones included in `bytes` and `rows_durable`.
+  The command classifies the outcome once, before any account is written, and that classification is frozen:
+  `DIR/run.json` (a committed dataset), `error.json`, the report, the exit code and a forced exit's outcome agree
+  on `class`, `exit_code`, `resumable` and `cause`, also when a stop cause (the deadline, a signal) arrives
+  after the run settled (a dataset committed with partial coverage is `incomplete`, exit 1, in all of them).
+  The report's `output` counts the parts that stay in the output on failure too: after a failure of a
+  journaled run, `parts_written`, `bytes` and `rows_durable` are the parts the journal acknowledged (the append
+  returned, a failed rename after it included: the resume renames them), the recovered ones included in
+  `bytes` and `rows_durable`.
   `error.json` is a convenience: it is current only when its `attempt.id` is the report's. No program can
   promise a new file on storage that refuses writes, so an attempt whose `error.json` write fails leaves the
   previous one in place, possibly with the same class and exit code; its report names another attempt and says

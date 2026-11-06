@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync/atomic"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -346,9 +345,6 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 // pipeline runs provider → order → router → publish. p is src, or Empty
 // when a resume has nothing left to list.
 func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, s schema.Info, jr *runJournal) (Report, error) {
-	var published struct {
-		parts, bytes, rows atomic.Int64
-	}
 	// One shared cause: the first asynchronous failure (an encoder, the
 	// disk, the journal) cancels listing at once, and is what Run returns.
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -383,14 +379,11 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 			ropt.Encoded = &pr.encoded
 		}
 		if pub := ropt.Publish; pub != nil {
-			// Each part published here is durable (journaled): a failed
-			// run reports them (durable).
+			// A failed run reports the parts the journal acknowledged
+			// (durable, counted by publish); progress counts those renamed.
 			ropt.Publish = func(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
 				p, err := pub(ordinal, p, limit, rows, final)
 				if err == nil {
-					published.parts.Add(1)
-					published.bytes.Add(p.Bytes)
-					published.rows.Store(rows)
 					if pr := cfg.Progress; pr != nil {
 						pr.parts.Add(1)
 						pr.lastPart.Store(time.Now().UnixNano())
@@ -410,9 +403,11 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		if !jr.journaled() {
 			return
 		}
-		sum.Output.PartsWritten, sum.Output.Bytes = int(published.parts.Load()), published.bytes.Load()
+		// Acknowledged by the journal: an append that succeeded is
+		// durable although its rename then failed (the resume renames it).
+		sum.Output.PartsWritten, sum.Output.Bytes = int(jr.acked.parts.Load()), jr.acked.bytes.Load()
 		sum.Output.RowsDurable = sum.Output.RowsRetained
-		if r := published.rows.Load(); r > 0 {
+		if r := jr.acked.rows.Load(); r > 0 {
 			sum.Output.RowsDurable = r
 		}
 		if jr.state != nil {

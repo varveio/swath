@@ -319,7 +319,15 @@ func forcedAccount(f *forensicTarget, code int, why string) {
 	go func() {
 		defer close(done)
 		err := fmt.Errorf("forced exit: still stopping (%s) after %s", why, shutdownGrace)
-		o := classify(err, context.Cause(f.ctx), f.dir)
+		var o outcome
+		if fr := f.frozen.Load(); fr != nil {
+			// The run was classified already (its accounts may be
+			// written): the forced exit keeps that classification.
+			o = *fr
+			o.Message = err.Error() + ": " + fr.Message
+		} else {
+			o = classify(err, context.Cause(f.ctx), f.dir)
+		}
 		o.ExitCode, o.Attempt = code, f.att
 		if f.dir != "" {
 			f.pr.Owned(func() { _ = writeFileAtomicAs(filepath.Join(f.dir, errorName), ".forced.tmp", o) })

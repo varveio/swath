@@ -23,6 +23,7 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 )
@@ -219,5 +220,51 @@ func TestOneTerminalAccount(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, dataset.ReportName)); err == nil {
 			t.Fatal("run.json for an uncommitted run")
 		}
+	})
+	// A fatal failure is settled (error.json written) and the deadline
+	// passes before the command returns: the report and the exit code keep
+	// the run's classification (fatal, 1). Before, the command classified
+	// again with the deadline as the stop cause and returned 124 with a
+	// "deadline" report beside a "fatal" error.json of the same attempt.
+	t.Run("settlement crosses the deadline", func(t *testing.T) {
+		h := gcstest.Handler(gcstest.Keys(20000), 0)
+		var n atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if n.Add(1) > 12 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(403)
+				fmt.Fprint(w, `{"error":{"code":403,"message":"denied","errors":[{"reason":"forbidden"}]}}`)
+				return
+			}
+			h.ServeHTTP(w, r)
+		}))
+		t.Cleanup(srv.Close)
+		const deadline = 4 * time.Second // the 403 comes well before it, also under the race detector
+		var failedAt time.Time
+		restore := faults.Set(func(p string) error {
+			if p == "run-returned" {
+				failedAt = time.Now()
+				time.Sleep(deadline + 500*time.Millisecond) // the run is settled; the deadline passes
+			}
+			return nil
+		})
+		defer restore()
+		dir := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		start := time.Now()
+		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
+			"--part-size", "4KiB", "--memory", "1MiB", "--max-duration", deadline.String(), "--report", report, "-o", dir}, io.Discard, false)
+		if time.Since(start) < deadline || failedAt.Sub(start) >= deadline {
+			t.Fatalf("the run failed after %s and the command returned after %s: not across the %s deadline",
+				failedAt.Sub(start), time.Since(start), deadline)
+		}
+		var rep listing.Report
+		readJSON(t, report, &rep)
+		var o outcome
+		readJSON(t, filepath.Join(dir, errorName), &o)
+		if c := exitCode(t, err); c != exitFatal || o.Class != "fatal" {
+			t.Fatalf("exit %d, error.json %+v, report %+v", c, o, rep.Outcome)
+		}
+		same(t, "error.json", listing.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
 	})
 }

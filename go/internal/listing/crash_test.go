@@ -405,10 +405,25 @@ func TestRenameFailureAfterRecordResumes(t *testing.T) {
 		}
 		return nil
 	})
-	_, err := Run(context.Background(), crashConfig(url, out, false))
+	rep, err := Run(context.Background(), crashConfig(url, out, false))
 	restore()
 	if !errors.Is(err, eio) {
 		t.Fatalf("got %v", err)
+	}
+	// The report's durable totals are the journal's: the third part was
+	// acknowledged (its append returned) although its rename failed.
+	st, jerr := journal.Read(out)
+	if jerr != nil {
+		t.Fatal(jerr)
+	}
+	var bytes int64
+	for _, rec := range st.Records {
+		bytes += rec.Part.Bytes
+	}
+	last := st.Records[len(st.Records)-1]
+	if len(st.Records) < 3 || rep.Output.PartsWritten != len(st.Records) || rep.Output.Bytes != bytes || rep.Output.RowsDurable != last.RowsTotal {
+		t.Fatalf("report: %d parts, %d bytes, %d durable rows; the journal: %d records, %d bytes, %d rows",
+			rep.Output.PartsWritten, rep.Output.Bytes, rep.Output.RowsDurable, len(st.Records), bytes, last.RowsTotal)
 	}
 	if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
 		t.Fatalf("resume: %v", err)
