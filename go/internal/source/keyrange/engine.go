@@ -195,30 +195,48 @@ func (p *Engine[P]) Stats() Stats {
 	return s
 }
 
-// list fetches one page. A provider with an inclusive start bound gets
-// After as is; a key equal to it is dropped here.
+// list fetches one page that holds an entry, or the chain's last page.
+// A provider with an inclusive start bound gets After as is; a key equal to
+// it is dropped here. A continuing page with no entry (GCS documents them;
+// also the page that held only the key at an inclusive bound) is followed
+// by its token here, for every path (ranges, the sequential chain, the
+// probes): each token of such a run must be new, or the page is invalid.
 func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 	p.mu.Lock()
 	p.c.Inc(cRequests)
 	p.mu.Unlock()
-	for wait := requeueBase; ; wait = min(2*wait, requeueMax) {
+	var seen map[string]bool // the tokens of a run of empty continuing pages
+	wait := requeueBase
+	for {
 		out, err := p.fetch(ctx, in)
 		if err == nil {
 			if p.d.StartInclusive && in.Token == "" && in.After != "" && len(out.Rows) > 0 && out.Rows[0].Key == in.After {
 				out.Rows = out.Rows[1:]
-				if len(out.Rows) == 0 && len(out.Prefixes) == 0 && out.Truncated && out.Token != "" {
-					// The page held only the key at the bound: the
-					// next page is the first one past it.
-					next := *in
-					next.Token = out.Token
-					p.mu.Lock()
-					p.c.Inc(cRequests)
-					p.mu.Unlock()
-					in = &next
-					continue
-				}
 			}
-			return out, nil
+			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 {
+				return out, nil
+			}
+			if out.Token == "" {
+				return nil, fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
+			}
+			if seen == nil {
+				seen = map[string]bool{in.Token: true}
+			}
+			if seen[out.Token] {
+				return nil, fmt.Errorf("%w: an empty page's continuation token makes no progress", p.d.invalid())
+			}
+			seen[out.Token] = true
+			if ctx.Err() != nil {
+				return nil, context.Cause(ctx)
+			}
+			next := *in
+			next.Token = out.Token
+			in, wait = &next, requeueBase
+			p.mu.Lock()
+			p.c.Inc(cRequests)
+			p.c.Inc(cEmptyPages)
+			p.mu.Unlock()
+			continue
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, ctx.Err()
@@ -236,6 +254,7 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 				return nil, context.Cause(ctx)
 			case <-t.C:
 			}
+			wait = min(2*wait, requeueMax)
 			continue
 		}
 		return nil, fmt.Errorf("list %s: %w", p.d.Target, err)

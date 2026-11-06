@@ -113,6 +113,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `structure.suppressed` | count | decisions | structure | probes not sent: 8 in a row found no folder in this range |
 | `structure.late` | count | decisions | structure | split decisions taken while the range's probe was still in flight |
 | `split.pivot_structure` | count | pivots | structure | pivots on a folder boundary from a structure probe (else midpoint, density or reflection) |
+| `empty_pages` | count | pages |  | continuing pages with no entry, followed by their token (also counted in requests) |
 | `attempts` | count | requests |  | HTTP requests, retries included |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | of the retries, 429/503/SlowDown answers |

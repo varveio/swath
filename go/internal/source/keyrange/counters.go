@@ -80,6 +80,7 @@ const (
 	cStructureSuppressed
 	cStructureLate
 	cSplitPivotStructure
+	cEmptyPages
 	numCounters
 )
 
@@ -159,6 +160,7 @@ var Counters = []counters.Def{
 	d("structure.suppressed", counters.Count, "decisions", "probes not sent: 8 in a row found no folder in this range", "structure"),
 	d("structure.late", counters.Count, "decisions", "split decisions taken while the range's probe was still in flight", "structure"),
 	d("split.pivot_structure", counters.Count, "pivots", "pivots on a folder boundary from a structure probe (else midpoint, density or reflection)", "structure"),
+	d("empty_pages", counters.Count, "pages", "continuing pages with no entry, followed by their token (also counted in requests)"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {

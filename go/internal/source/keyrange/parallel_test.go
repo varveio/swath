@@ -219,12 +219,7 @@ func TestT4Paging(t *testing.T) {
 	if err := p.expandRange(context.Background(), r, &direct{c}); err != nil || len(c.rows) != 1000 || f.Calls != 1 {
 		t.Fatalf("page ending at hi: err=%v rows=%d calls=%d", err, len(c.rows), f.Calls)
 	}
-	// Truncated empty page.
-	empty := &stub{pages: []*keyrangetest.Page{{IsTruncated: true, NextContinuationToken: "1"}, {}}}
-	p, _ = newTest(empty, Options{Workers: 1})
-	if err := p.expandRange(context.Background(), Range{open: true}, &direct{&collect{}}); err == nil {
-		t.Fatal("truncated empty page accepted")
-	}
+	// A truncated empty page is followed by its token (paging_test.go).
 	// Non-ascending keys and keys not after lo.
 	bad := &stub{pages: []*keyrangetest.Page{{Contents: []keyrangetest.Object{{Key: "b"}, {Key: "a"}}}}}
 	p, _ = newTest(bad, Options{Workers: 1})
