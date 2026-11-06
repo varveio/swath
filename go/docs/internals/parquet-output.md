@@ -72,8 +72,9 @@ part interval cuts (below).
 **The part interval** (`listing.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) bounds the
 age of the recovery point on a slow frontier: a part open that long with rows is closed although not full,
 and a journaled run publishes it, so a crash loses at most about that long of frontier progress instead of a
-whole part's worth (the default is Java's rotation interval, 30 s; a cut part can be far below its target
-size). The order stage hands on its batch before the drainer waits on the frontier, so the
+whole part's worth. It bounds the frontier's age only: rows listed past the frontier (buffered, spilled, or in
+parts not yet recorded) are lost and relisted whatever the interval ([durability.md](durability.md)). The
+default is Java's rotation interval, 30 s; a cut part can be far below its target size. The order stage hands on its batch before the drainer waits on the frontier, so the
 open part holds every row the walk has reached. A cut by time makes that run's boundaries depend on timing:
 the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (a negative
 value), boundaries depend only on the rows and the byte-identity guarantees above hold
