@@ -327,3 +327,60 @@ func TestSpillMarkersInByteMode(t *testing.T) {
 	}
 	t.Logf("%d frames, marker peak %d of budget %d, budget wait %v", st.SpillFrames, peak, budget, st.BudgetWait)
 }
+
+// longRange is a slow empty range, then a long range of pages one row
+// each: a worker claims the long one while the drainer waits on the slow
+// one, so the drainer then consumes the long range while it grows.
+type longRange struct{ pages int }
+
+func (l *longRange) Root() fr { return fr{-1} }
+
+func (l *longRange) Expand(ctx context.Context, r fr, e source.Emitter[fr, tp]) error {
+	switch r.i {
+	case -1:
+		if err := e.Child(fr{0}); err != nil {
+			return err
+		}
+		return e.Child(fr{1})
+	case 0:
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	}
+	for p := range l.pages {
+		if err := e.Rows([]schema.Row[tp]{{Key: fmt.Sprintf("k%08d", p), Data: tp{Size: 1}}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TestRunningNodeStorageIsBounded: a long streaming range on the drain
+// path keeps its consumed items' storage only until they are half of it, so
+// what it retains does not grow with the pages it has streamed (byte-mode
+// budget; Sol fourth review, P2-11). The old drainer zeroed consumed slots
+// but kept the slice, which grew with every page.
+func TestRunningNodeStorageIsBounded(t *testing.T) {
+	countRows = false
+	defer func() { countRows = true }()
+	const pages = 60000
+	var mu sync.Mutex
+	peak, seen := 0, 0
+	hookItems = func(n int) { mu.Lock(); peak = max(peak, n); seen++; mu.Unlock() }
+	defer func() { hookItems = nil }()
+	c := &collect{}
+	if _, err := Run[fr, tp](context.Background(), &longRange{pages: pages}, c, &testSchema, Options{Workers: 4, Budget: 64 << 10}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.keys) != pages {
+		t.Fatalf("%d keys, want %d", len(c.keys), pages)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if seen < pages/2 {
+		t.Fatalf("the drainer consumed only %d of %d items from a running node: the test did not stream", seen, pages)
+	}
+	if limit := 32 * compactAt; peak > limit {
+		t.Fatalf("a running node retained storage for %d items after %d pages (limit %d)", peak, pages, limit)
+	}
+	t.Logf("peak retained %d item slots over %d pages (%d drained while running)", peak, pages, seen)
+}

@@ -156,6 +156,14 @@ var hookBeforeDrain, hookAfterExpand func()
 var hookMarkers func(markers int64)
 var hookDrained func(buffered, markers int64)
 
+// hookItems sees the item storage a running node retains after the drainer
+// consumes one of its items (tests; mu held).
+var hookItems func(retained int)
+
+// compactAt is the number of consumed items of a running node from which
+// the drainer drops them, once they are at least half of its items.
+const compactAt = 256
+
 // countRows makes the budget count rows instead of bytes (tests).
 var countRows bool
 
@@ -636,6 +644,17 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			it := n.items[f.i]
 			n.items[f.i] = item[R, P]{}
 			f.i++
+			// A running node keeps growing at the end while the drainer
+			// consumes it from the front: drop the consumed slots (with
+			// their backing storage) once they are half of it, so a long
+			// streaming range retains only what is not yet drained.
+			if f.i >= compactAt && 2*f.i >= len(n.items) {
+				n.items = append([]item[R, P](nil), n.items[f.i:]...)
+				f.i = 0
+			}
+			if hookItems != nil {
+				hookItems(cap(n.items))
+			}
 			if it.child != nil {
 				n.onPath.Store(false)
 				it.child.onPath.Store(true)

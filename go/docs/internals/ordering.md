@@ -12,7 +12,9 @@ ranges stay visible as they grow.
 
 The drainer walks the tree depth-first: it hands the sink each row segment in order (in batches of at least
 4096 rows), descends into each child, and frees a node once it is drained and its `Expand` has returned. It
-streams the frontier: rows of the node it is draining are consumed as they arrive.
+streams the frontier: rows of the node it is draining are consumed as they arrive, and once the consumed items of
+a node still being listed are at least 256 and half of its items, they are dropped with their storage, so a long
+streaming range retains only what is not yet drained (`TestRunningNodeStorageIsBounded`).
 
 ## The budget
 
