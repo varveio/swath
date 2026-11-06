@@ -32,6 +32,8 @@ public final class AzureProfileComparator {
             "Content-Language", "Content-MD5", "Cache-Control", "ServerEncrypted", "Content-Disposition",
             "Content-CRC64", "AccessTierChangeTime", "EncryptionScope", "EncryptionContext", "TagCount");
 
+    private static final String NATIVE_ONLY_BLOB_FIELD = "OrMetadata";
+
     private AzureProfileComparator() {
     }
 
@@ -232,8 +234,16 @@ public final class AzureProfileComparator {
             if ("BlobPrefix".equals(kind)) {
                 if (fields.size() != 1) fail("flat BlobPrefix has unexpected field");
             } else {
-                if (fields.size() != 2 || !"Properties".equals(fields.get(1).getTagName())) {
+                if (fields.size() < 2 || !"Properties".equals(fields.get(1).getTagName())) {
                     fail("Blob Properties missing or out of order");
+                }
+                // Native listings add an empty OrMetadata (object-replication policy) element;
+                // it is profile-omitted, so replay must not send it.
+                boolean orMetadata = fields.size() == 3 && NATIVE_ONLY_BLOB_FIELD.equals(fields.get(2).getTagName())
+                        && elements(fields.get(2)).isEmpty() && fields.get(2).getTextContent().isEmpty()
+                        && !fields.get(2).hasAttributes();
+                if (fields.size() > 3 || fields.size() == 3 && (replay || !orMetadata)) {
+                    fail("Blob has an unexpected field after Properties");
                 }
                 properties = properties(fields.get(1), replay);
             }

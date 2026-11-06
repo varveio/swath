@@ -499,8 +499,19 @@ class EvidenceTest(unittest.TestCase):
         repo = pathlib.Path(__file__).resolve().parents[2]
         ledger = evidence.strict_json((repo / "docs/replay-provider-ledger.json").read_text())
         matrix = (repo / "docs/replay-provider-conformance.md").read_text()
-        evidence.validate_ledger(ledger)
         evidence.validate_matrix(matrix, ledger)
+        # Every archived capture is checked against its manifest. REPLAY_MATCH receipts also
+        # bind a replay distribution, which `evidence.py validate --distribution` checks; here
+        # those rows are held to the OBSERVED proof they contain.
+        observed = json.loads(json.dumps(ledger))
+        for row in observed["rows"]:
+            if row["status"] == "REPLAY_MATCH":
+                row["status"] = "OBSERVED"
+                for proof in row["evidence"].values():
+                    for key in ("replay_test", "replay_test_path", "replay_result_file", "replay_result_sha256"):
+                        proof.pop(key, None)
+        with evidence.evidence_root(evidence.EVIDENCE_ARCHIVE) as root:
+            evidence.validate_ledger(observed, evidence.load_manifests(root), root)
         with self.assertRaisesRegex(ValueError, "matrix differs"):
             evidence.validate_matrix(matrix.replace("gcs-01 |", "gcs-01 |", 1)
                                      .replace("Provisional bounded list", "Unsupported", 1), ledger)

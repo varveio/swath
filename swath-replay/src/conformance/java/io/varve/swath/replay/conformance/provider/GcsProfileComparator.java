@@ -31,7 +31,7 @@ public final class GcsProfileComparator {
             "md5Hash", "crc32c", "owner", "metadata", "timeStorageClassUpdated", "componentCount",
             "cacheControl", "contentEncoding", "contentDisposition", "contentLanguage", "kmsKeyName",
             "customerEncryption", "temporaryHold", "eventBasedHold", "retentionExpirationTime",
-            "customTime", "softDeleteTime", "hardDeleteTime");
+            "customTime", "softDeleteTime", "hardDeleteTime", "timeFinalized");
 
     private GcsProfileComparator() {
     }

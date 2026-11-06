@@ -44,6 +44,39 @@ class ProviderExchangeComparatorTest {
     }
 
     @Test
+    void nativeGcsTransportAndVolatileHeadersAreClassified() throws Exception {
+        byte[] nativeBody = bytes("""
+                {"error":{"code":400,"message":"native text","errors":[{"reason":"invalid"}]}}
+                """);
+        byte[] replayBody = bytes("""
+                {"error":{"code":400,"message":"replay text","errors":[{"reason":"invalid"}]}}
+                """);
+        Map<String, List<String>> nativeHeaders = new java.util.HashMap<>(Map.of(
+                "Content-Type", List.of("application/json; charset=UTF-8"), "Date", List.of(DATE),
+                "X-GUploader-UploadID", List.of("upload-id-digest"), "x-goog-gcs-base-ts", List.of("1729530000"),
+                "Expires", List.of("Mon, 01 Jan 1990 00:00:00 GMT"), "Alt-Svc", List.of("h3=\":443\""),
+                "Pragma", List.of("no-cache"), "Vary", List.of("Origin", "X-Origin"),
+                "Cache-Control", List.of("no-cache, no-store, max-age=0, must-revalidate"),
+                "Server", List.of("UploadServer")));
+        var nativeExchange = exchange(400, nativeHeaders, nativeBody);
+        var replayExchange = exchange(400, Map.of("content-type", List.of("application/json; charset=utf-8")),
+                replayBody);
+        assertThatCode(() -> ProviderExchangeComparator.assertGcs(nativeExchange, replayExchange,
+                "live", "replay", false)).doesNotThrowAnyException();
+        nativeHeaders.put("Vary", List.of("Origin", ""));
+        assertThatThrownBy(() -> ProviderExchangeComparator.assertGcs(exchange(400, nativeHeaders, nativeBody),
+                replayExchange, "live", "replay", false)).hasMessageContaining("vary must be nonempty");
+        nativeHeaders.put("Vary", List.of("Origin"));
+        nativeHeaders.put("Expires", List.of("0"));
+        assertThatThrownBy(() -> ProviderExchangeComparator.assertGcs(exchange(400, nativeHeaders, nativeBody),
+                replayExchange, "live", "replay", false)).hasMessageContaining("expires");
+        nativeHeaders.put("Expires", List.of("Mon, 01 Jan 1990 00:00:00 GMT"));
+        nativeHeaders.put("x-goog-gcs-base-ts", List.of(""));
+        assertThatThrownBy(() -> ProviderExchangeComparator.assertGcs(exchange(400, nativeHeaders, nativeBody),
+                replayExchange, "live", "replay", false)).hasMessageContaining("must be nonempty");
+    }
+
+    @Test
     void azureVersionClientRequestIdAndErrorCodeAreChecked() throws Exception {
         byte[] nativeBody = bytes("""
                 <?xml version="1.0"?><Error><Code>InvalidHeaderValue</Code><Message>native</Message></Error>
