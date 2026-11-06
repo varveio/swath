@@ -124,7 +124,10 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	limited := opt.Policy.Limiter && p.client == nil
 	if p.client == nil {
 		var lim *objhttp.Limiter
-		if limited {
+		switch {
+		case limited && opt.Policy.LimiterSlowStart:
+			lim = objhttp.NewSlowStartLimiter(opt.Workers)
+		case limited:
 			lim = objhttp.NewLimiter(opt.Workers)
 		}
 		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: objhttp.NewRate(opt.Policy.RequestRate), Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,

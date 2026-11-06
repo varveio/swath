@@ -294,7 +294,7 @@ var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill
 // admitted, which no identity holds: the source and output identity (the
 // route, the scope, the schema) is checked on resume and refuses a change,
 // such as another region resolved from a new profile.
-var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "request-rate"}
+var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate"}
 
 // resumeFlags are the flags swath resume accepts.
 var resumeFlags = append(slices.Clone(runtimeFlags), operationalFlags...)

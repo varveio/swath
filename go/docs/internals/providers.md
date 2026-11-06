@@ -180,7 +180,13 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   through when there is progress. Its only inputs are the attempts' own latency and answers; no permit is held
   during a backoff, and admission waits are not latency samples. A permit is returned however the attempt ends,
   a panic included. The rules and constants are Java swath's
-  `ConcurrencyGauge`; Java's slow start (from 4, doubling per second) is not ported. Counters `limiter.*`.
+  `ConcurrencyGauge`. Java's slow start is behind `--limiter-slow-start` (off by default until measured,
+  `objhttp.NewSlowStartLimiter`): the limit starts at min(4, workers) and each paced growth step doubles it
+  instead of adding one, the first double on the first success and then at most one per second (4 to 64 in
+  3 s), under the same brakes (the latency valve's step stays +1); the first throttle answer or attempt timeout
+  ends the ramp for good. It applies to whatever builds the client, a resume included; the reason in Java is
+  that a restart at the full width into a throttling endpoint (a resume after a stall) storms it at once.
+  Counters `limiter.*`, the ramp's `limiter.slow_start.{doubles,ns,end}`.
 - *Rate cap* (`objhttp.Rate`, `--request-rate N`, off by default): after its permit every attempt takes a token
   from a bucket of one, refilled every 1/N, so attempts are spaced at least 1/N apart whatever the limit
   (`TestRateCapsAttempts`: 60 attempts with retries from 8 callers take at least 59/N, and with 2 permits never

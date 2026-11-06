@@ -135,6 +135,9 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
 | `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
 | `limiter.depth` | max | permits | limiter | most permits the limit stood below the worker count |
+| `limiter.slow_start.doubles` | count | steps | limiter | --limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout) |
+| `limiter.slow_start.ns` | max | ns | limiter | --limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout) |
+| `limiter.slow_start.end` | max | permits | limiter | --limiter-slow-start: the limit the ramp ended at (0: still ramping) |
 | `rate.waits` | count | attempts | request_rate | attempts that waited for a --request-rate token |
 | `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |
 <!-- s3:end -->

@@ -15,7 +15,7 @@ FILE when the attempt ends, on failure too. `swath resume DIR` replays the comma
 the runtime flags (`--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
 `--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`) and the operational ones, how requests are
 authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`,
-`--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--request-rate`), may be given again (the last value
+`--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--limiter-slow-start`, `--request-rate`), may be given again (the last value
 wins: `--anonymous=false` undoes a recorded `--anonymous`); anything else is a usage error. The source and output
 identity stays frozen: a resume whose overrides resolve another route (a profile with another region, say) is
 refused by the identity check.
@@ -63,6 +63,8 @@ usage: swath list SOURCE --output DIR [flags]
     	GCS: bill a requester-pays bucket's requests to this project
   -limiter
     	requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight (default true)
+  -limiter-slow-start
+    	requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -memory bytes
@@ -114,7 +116,7 @@ usage: swath list SOURCE --output DIR [flags]
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
 only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, request-rate (operational) may change.
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -150,6 +152,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	GCS: bill a requester-pays bucket's requests to this project
   -limiter
     	requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight (default true)
+  -limiter-slow-start
+    	requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -max-keys N
@@ -215,7 +219,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
 only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, request-rate (operational) may change.
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -236,7 +240,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that
   starts at `--workers`, falls by 0.7 on each throttle answer and grows back by one per second after 10 s
   without one (Java swath's rules; [internals/providers.md](internals/providers.md)); `--limiter=false` keeps a
-  fixed `--workers` requests in flight. `--request-rate N` (S3 and GCS, default 0: none) also caps the run's
+  fixed `--workers` requests in flight. `--limiter-slow-start` (off by default) starts the limit at 4 instead
+  and doubles it each second up to `--workers` until the first throttle answer or timeout (Java's slow start);
+  a resume replays it from the recorded command and may add or undo it, since a resumed client starts a new
+  limiter (counters `limiter.slow_start.*`). `--request-rate N` (S3 and GCS, default 0: none) also caps the run's
   HTTP attempts at N per second (at least 0.001), every attempt counted (pages, probes, client retries, engine
   requeues): a token bucket of one token, taken after the limiter's permit, so the k-th token of a burst is due
   (k-1)/N seconds after the first, as with Java's `--request-rate`. Tokens are scheduled, not the sends: a caller

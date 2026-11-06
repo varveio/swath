@@ -15,16 +15,17 @@ import (
 // one permit at a time after a throttle-free window, and growth (never the
 // limit) freezes while successful attempts are slow or attempts time out.
 const (
-	decreaseFactor  = 0.7              // per throttle answer
-	cleanWindow     = 10 * time.Second // throttle-free time before any growth
-	growthPace      = time.Second      // at most one +1 step per pace
-	timeoutWindow   = 10 * time.Second // trailing window of attempt timeouts
-	timeoutFreeze   = 3                // timeouts in the window that freeze growth
-	latencyFreeze   = 2.0              // growth freezes while the latency EWMA exceeds this multiple of the baseline
-	latencyAlpha    = 0.2              // EWMA smoothing of successful attempts' latency
-	baselineDecay   = time.Minute      // the rolling-minimum baseline re-floors to the last window's minimum
-	valvePace       = 30 * time.Second // while latency-frozen, at most one +1 step per valve pace
-	valveSuccessDiv = 32               // ... and only with more than max(1, limit/32) successes in that pace
+	decreaseFactor   = 0.7              // per throttle answer
+	cleanWindow      = 10 * time.Second // throttle-free time before any growth
+	growthPace       = time.Second      // at most one +1 step per pace
+	timeoutWindow    = 10 * time.Second // trailing window of attempt timeouts
+	timeoutFreeze    = 3                // timeouts in the window that freeze growth
+	latencyFreeze    = 2.0              // growth freezes while the latency EWMA exceeds this multiple of the baseline
+	latencyAlpha     = 0.2              // EWMA smoothing of successful attempts' latency
+	baselineDecay    = time.Minute      // the rolling-minimum baseline re-floors to the last window's minimum
+	valvePace        = 30 * time.Second // while latency-frozen, at most one +1 step per valve pace
+	valveSuccessDiv  = 32               // ... and only with more than max(1, limit/32) successes in that pace
+	slowStartInitial = 4                // a slow-start limiter's first limit (Java's SLOW_START_INITIAL_T)
 )
 
 // Limiter is the adaptive admission of a client's HTTP attempts: every
@@ -33,9 +34,19 @@ const (
 // maximum (the worker count) and is lowered only by throttle answers. Its
 // inputs are the attempts' own latency and answers, never admission waits
 // or anything downstream of the listing. Safe for concurrent use.
+//
+// A slow-start limiter (NewSlowStartLimiter, Java's gauge ramp) starts at 4
+// instead and doubles at each paced growth step (at most one per second)
+// until the maximum or the first congestion signal (a throttle answer or an
+// attempt timeout), which ends the ramp for good: growth is then the +1
+// step. Java's reason: a run that starts, or a resume that restarts, at the
+// full width into a throttling endpoint storms it at once.
 type Limiter struct {
 	max int
 	now func() time.Time
+
+	ramp      bool      // slow start: growth doubles (l.mu)
+	rampStart time.Time // the limiter's creation
 
 	mu       sync.Mutex
 	limit    int
@@ -57,6 +68,7 @@ type Limiter struct {
 
 type limiterCounts struct {
 	decreases, floor, increases, cooldown, latencyFrozen, timeoutFrozen, valve, waits, waitNs, depth atomic.Int64
+	doubles, rampNs, rampEnd                                                                         atomic.Int64
 }
 
 // NewLimiter returns a limiter of at most n permits (at least 1).
@@ -67,6 +79,35 @@ func NewLimiter(n int) *Limiter {
 func newLimiter(n int, now func() time.Time) *Limiter {
 	n = max(n, 1)
 	return &Limiter{max: n, limit: n, now: now}
+}
+
+// NewSlowStartLimiter returns a limiter of at most n permits that starts
+// at min(4, n) and ramps by doubling (Limiter).
+func NewSlowStartLimiter(n int) *Limiter {
+	return newSlowStartLimiter(n, time.Now)
+}
+
+func newSlowStartLimiter(n int, now func() time.Time) *Limiter {
+	l := newLimiter(n, now)
+	l.limit = min(slowStartInitial, l.max)
+	l.rampStart = now()
+	if l.limit < l.max {
+		l.ramp = true
+	} else {
+		l.c.rampEnd.Store(int64(l.limit))
+	}
+	return l
+}
+
+// endRamp ends the slow start (l.mu held): the time since the limiter's
+// creation and the limit it ended at are recorded once.
+func (l *Limiter) endRamp(now time.Time) {
+	if !l.ramp {
+		return
+	}
+	l.ramp = false
+	l.c.rampNs.Store(int64(now.Sub(l.rampStart)))
+	l.c.rampEnd.Store(int64(l.limit))
 }
 
 // Limit is the current limit.
@@ -137,8 +178,10 @@ func (l *Limiter) Release(o Outcome, latency time.Duration) {
 	l.inflight--
 	switch o {
 	case Throttled:
+		l.endRamp(now)
 		l.decrease(now)
 	case TimedOut:
+		l.endRamp(now)
 		if l.toStart.IsZero() || now.Sub(l.toStart) > timeoutWindow {
 			l.toStart, l.toCount = now, 0
 		}
@@ -196,7 +239,8 @@ func (l *Limiter) sample(now time.Time, d time.Duration) {
 	}
 }
 
-// grow takes one +1 step when it is due and nothing holds it back. As in
+// grow takes one +1 step (a doubling during slow start) when it is due
+// and nothing holds it back; the valve's step is always +1. As in
 // Java's gauge, only a step taken consumes the pace, so the first step
 // after a cool-down or a freeze is immediate; a held-back step is counted
 // under its brake at most once per pace, on a clock of its own.
@@ -229,6 +273,14 @@ func (l *Limiter) grow(now time.Time) {
 		return
 	}
 	l.lastGrowth = now
+	if l.ramp {
+		l.limit = min(l.max, 2*l.limit)
+		l.c.doubles.Add(1)
+		if l.limit == l.max {
+			l.endRamp(now)
+		}
+		return
+	}
 	l.limit++
 	l.c.increases.Add(1)
 }
@@ -245,6 +297,13 @@ type LimiterCounts struct {
 	Waits          int64 // attempts that waited for a permit
 	WaitNs         int64 // their summed wait
 	Depth          int64 // most permits taken away below the maximum
+	// Slow start (zero without it): doublings, the time from the
+	// limiter's creation to the ramp's end (the maximum reached or the
+	// first throttle or timeout) and the limit it ended at; RampEnd 0
+	// while the ramp is still on.
+	SlowStartDoubles int64
+	SlowStartNs      int64
+	SlowStartEnd     int64
 }
 
 // Counts returns the engagements so far (zero for a nil limiter).
@@ -254,5 +313,6 @@ func (l *Limiter) Counts() LimiterCounts {
 	}
 	c := &l.c
 	return LimiterCounts{c.decreases.Load(), c.floor.Load(), c.increases.Load(), c.cooldown.Load(), c.latencyFrozen.Load(),
-		c.timeoutFrozen.Load(), c.valve.Load(), c.waits.Load(), c.waitNs.Load(), c.depth.Load()}
+		c.timeoutFrozen.Load(), c.valve.Load(), c.waits.Load(), c.waitNs.Load(), c.depth.Load(),
+		c.doubles.Load(), c.rampNs.Load(), c.rampEnd.Load()}
 }

@@ -24,6 +24,10 @@ type Policy struct {
 	// Limiter: the provider's client admits its HTTP attempts through an
 	// adaptive limiter (objhttp.Limiter) of at most Workers permits.
 	Limiter bool
+	// LimiterSlowStart: the limiter starts at 4 and doubles per second
+	// until the worker count or the first throttle or timeout
+	// (objhttp.NewSlowStartLimiter); off by default.
+	LimiterSlowStart bool
 	// RequestRate caps the client's HTTP attempts per second
 	// (objhttp.Rate); 0: no cap.
 	RequestRate float64
@@ -54,6 +58,7 @@ func Flags(f *flag.FlagSet, diag bool) *Policy {
 	p := &Policy{SeedDescent: true, Limiter: true}
 	bf := func(v *bool, name, usage string) { f.Var(&boolFlag{p: p, v: v}, name, usage) }
 	bf(&p.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
+	bf(&p.LimiterSlowStart, "limiter-slow-start", "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
 	f.Var((*rateFlag)(&p.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; 0: no cap")
 	bf(&p.Seed, "seed", "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
 	if diag {

@@ -375,19 +375,23 @@ func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 		{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"},
 		{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"},
 		{Key: "limiter.depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"},
+		{Key: "limiter.slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: f, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout)"},
+		{Key: "limiter.slow_start.ns", Kind: counters.Max, Unit: "ns", Feature: f, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout)"},
+		{Key: "limiter.slow_start.end", Kind: counters.Max, Unit: "permits", Feature: f, Help: "--limiter-slow-start: the limit the ramp ended at (0: still ramping)"},
 		{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: "request_rate", Help: "attempts that waited for a --request-rate token"},
 		{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: "request_rate", Help: "time those attempts waited, summed"},
 	}
 }
 
 // NumCounters is len(CounterDefs(...)).
-const NumCounters = 19
+const NumCounters = 22
 
 // Store writes n into set at the IDs of CounterDefs, the first at first.
 func (n Counts) Store(set *counters.Set, first counters.ID) {
 	l := n.Limiter
 	for i, v := range [NumCounters]int64{n.Attempts, n.Retries, n.Throttles, n.Timeouts, n.ParseFailures, n.InflightMax, n.InflightNs,
 		l.Decreases, l.FloorThrottles, l.Increases, l.Cooldown, l.LatencyFrozen, l.TimeoutFrozen, l.Valve, l.Waits, l.WaitNs, l.Depth,
+		l.SlowStartDoubles, l.SlowStartNs, l.SlowStartEnd,
 		n.Rate.Waits, n.Rate.WaitNs} {
 		set.Set(first+counters.ID(i), v)
 	}

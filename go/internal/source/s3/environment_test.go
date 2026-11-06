@@ -129,3 +129,26 @@ func TestAttemptsAreRequestEconomics(t *testing.T) {
 		})
 	}
 }
+
+// TestSlowStartStartsNarrow: with LimiterSlowStart the client's limiter
+// starts at 4 and doubles on the first success, so the first 100 ms hold at
+// most 8 requests in flight at the server; the ramp's counters are on.
+func TestSlowStartStartsNarrow(t *testing.T) {
+	keys := testKeys()
+	for i := range 8000 {
+		keys = append(keys, fmt.Sprintf("logs/%03d/%05d", i%200, i))
+	}
+	slices.Sort(keys)
+	slow := faulttest.Window{Fraction: 1, Fault: faulttest.Latency, Delay: 60 * time.Millisecond}
+	const workers = 32
+	px, ep := proxied(t, keys, faulttest.Plan{Seed: 1, Windows: []faulttest.Window{slow}})
+	rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Workers: workers,
+		Policy: keyrange.Policy{Seed: true, SeedDescent: true, Limiter: true, LimiterSlowStart: true}}, workers)
+	if !slices.Equal(keysOf(rows), keys) {
+		t.Fatalf("%d keys, want %d", len(rows), len(keys))
+	}
+	tl, v := px.Timeline(), st.Counters.Value
+	if len(tl) == 0 || tl[0].MaxActive > 8 || v("limiter.slow_start.doubles") == 0 {
+		t.Fatalf("first 100 ms: %+v; doubles %d", tl[:min(1, len(tl))], v("limiter.slow_start.doubles"))
+	}
+}
