@@ -21,10 +21,10 @@ func init() {
 }
 
 // flagged is the GCS flag group's value: the GCS options and the range
-// engine's policy, whose flags every engine provider shares.
+// engine's policy and HTTP admission, whose flags every engine provider shares.
 type flagged struct {
 	Options
-	policy *keyrange.Policy
+	common *keyrange.Common
 }
 
 func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{SeedDescent: true}}} }
@@ -32,7 +32,7 @@ func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{S
 // flags registers the GCS flag group and the shared engine flags. The GCS
 // flags are prefixed: one flag set serves every provider.
 func flags(f *flag.FlagSet, diag bool) any {
-	o := &flagged{policy: keyrange.Flags(f, diag)}
+	o := &flagged{common: keyrange.Flags(f, diag)}
 	f.StringVar(&o.Endpoint, "gcs-endpoint", "", "GCS: JSON API base `URL` (default "+client.DefaultEndpoint+")")
 	f.BoolVar(&o.Anonymous, "gcs-anonymous", false, "GCS: send no credentials, ignoring any in the environment")
 	f.StringVar(&o.CredentialsFile, "gcs-credentials", "", "GCS: service-account or authorized-user JSON `file` (default: Application Default Credentials)")
@@ -50,8 +50,8 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	switch o := req.Options.(type) {
 	case *flagged: // the command line
 		opt = o.Options
-		if o.policy != nil {
-			opt.Policy = *o.policy
+		if o.common != nil {
+			opt.Policy, opt.Admission = o.common.Policy, o.common.Admission
 		}
 	case *Options: // a library caller
 		opt = *o

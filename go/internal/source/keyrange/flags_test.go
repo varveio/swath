@@ -14,12 +14,13 @@ import (
 func TestFlagsRegisteredOnce(t *testing.T) {
 	for _, diag := range []bool{false, true} {
 		f := flag.NewFlagSet("t", flag.ContinueOnError)
-		a, b := Flags(f, diag), Flags(f, diag)
-		if a != b {
+		ca, cb := Flags(f, diag), Flags(f, diag)
+		if ca != cb {
 			t.Fatal("a second registration made a second policy")
 		}
-		if !a.SeedDescent || !a.Limiter || a.Seed || a.Floors {
-			t.Fatalf("defaults: %+v", *a)
+		a, b := &ca.Policy, &cb.Policy
+		if !a.SeedDescent || !ca.Admission.Limiter || a.Seed || a.Floors {
+			t.Fatalf("defaults: %+v", *ca)
 		}
 		args := []string{"-seed"}
 		if diag {
@@ -28,9 +29,12 @@ func TestFlagsRegisteredOnce(t *testing.T) {
 		if err := f.Parse(args); err != nil {
 			t.Fatal(err)
 		}
-		want := Policy{Seed: true, SeedDescent: true, Limiter: true}
+		want, limiter := Policy{Seed: true, SeedDescent: true}, true
 		if diag {
-			want = Policy{Seed: true, Floors: true, Sequential: true, MaxKeys: 9}
+			want, limiter = Policy{Seed: true, Floors: true, Sequential: true, MaxKeys: 9}, false
+		}
+		if cb.Admission.Limiter != limiter {
+			t.Fatalf("diag=%v: limiter %v", diag, cb.Admission.Limiter)
 		}
 		if *b != want {
 			t.Fatalf("diag=%v: %+v, want %+v", diag, *b, want)

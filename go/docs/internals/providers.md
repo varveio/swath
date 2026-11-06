@@ -169,8 +169,10 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   classification contract both clients' tests run with their own wire answers (`TestRetryContract`). The
   report brief, coverage and capabilities come from `keyrange.Report` and `keyrange.Capabilities`. Each client
   keeps its answers' meaning (status, codes, reasons), its parser and its authentication.
-- *Admission* (`objhttp.Limiter`, both clients; on by default in the command, `--limiter=false` turns it off; a
-  library caller's zero `Policy` leaves it off): every HTTP attempt (pages, seed,
+- *Admission* (`objhttp.Admission`, the transport configuration both providers' options carry beside the
+  engine's `keyrange.Policy`, and its one construction `Admission.New`: `objhttp.Limiter`, both clients; on by
+  default in the command, `--limiter=false` turns it off; a library caller's zero `Admission` leaves it off;
+  the engine only reports its features, `Admission.Off`): every HTTP attempt (pages, seed,
   structure and split probes, client retries, engine requeues) takes a permit before it is sent and returns it
   when its answer is read, so in-flight requests never exceed the limit. The limit starts at the worker count;
   each throttle answer (S3 429/503/`SlowDown`; GCS 429 and rate-limit reasons) multiplies it by 0.7 (floor 1;

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
 )
 
@@ -31,7 +32,7 @@ func TestRateLimitStormLowersConcurrency(t *testing.T) {
 	srv := httptest.NewServer(px)
 	t.Cleanup(srv.Close)
 	got, st := list(t, Options{Bucket: "bkt", Endpoint: srv.URL + "/" + path,
-		Policy: keyrange.Policy{Seed: true, SeedDescent: true, Limiter: true}}, 16)
+		Policy: keyrange.Policy{Seed: true, SeedDescent: true}, Admission: objhttp.Admission{Limiter: true}}, 16)
 	if !slices.Equal(got, keys) {
 		t.Fatalf("%d keys, want %d", len(got), len(keys))
 	}

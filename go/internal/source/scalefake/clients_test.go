@@ -20,6 +20,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/gcs"
 	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3"
 	s3client "github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/scalefake"
@@ -239,7 +240,7 @@ func TestS3EngineOverLazyKeyspace(t *testing.T) {
 	k, srv, url := serve(t, s, scalefake.Options{Latency: time.Millisecond, Jitter: 2 * time.Millisecond, Fail503: 0.02, FaultSeed: 5})
 	const workers = 32
 	p, err := s3.New(context.Background(), s3.Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true,
-		Region: "us-east-1", Workers: workers, Policy: keyrange.Policy{Seed: true, Limiter: true}})
+		Region: "us-east-1", Workers: workers, Policy: keyrange.Policy{Seed: true}, Admission: objhttp.Admission{Limiter: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +264,7 @@ func TestGCSEngineOverLazyKeyspace(t *testing.T) {
 	k, srv, url := serve(t, s, scalefake.Options{Latency: time.Millisecond, Fail503: 0.02, FaultSeed: 6})
 	const workers = 16
 	p, err := gcs.New(context.Background(), gcs.Options{Bucket: "bkt", Endpoint: url + "/storage/v1/", Anonymous: true,
-		Workers: workers, Policy: keyrange.Policy{Seed: true, Limiter: true}})
+		Workers: workers, Policy: keyrange.Policy{Seed: true}, Admission: objhttp.Admission{Limiter: true}})
 	if err != nil {
 		t.Fatal(err)
 	}

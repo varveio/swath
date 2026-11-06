@@ -206,13 +206,7 @@ func (p *Engine[P]) disabled() []string {
 	if p.opt.MaxKeys == 0 {
 		off = append(off, "max_keys")
 	}
-	if !p.opt.Limiter {
-		off = append(off, "limiter")
-	}
-	if p.opt.RequestRate <= 0 {
-		off = append(off, "request_rate")
-	}
-	return off
+	return append(off, p.opt.ClientOff...)
 }
 
 // seedMarks maps the seed descent's engagements onto counters; the

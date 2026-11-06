@@ -20,7 +20,7 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
 - absent, feature `false`: the policy was off for this run (for S3: `seed` without `-seed` or on resume,
   `split` and `probe` with `--sequential`, `probe` without `--probe`, `floors` without `--floors`, `structure` without `--structure` (all `swath diag list` flags), `resume` on a fresh run, `max_keys`
-  without `-max-keys`, `limiter` with `--limiter=false`, a library caller's zero `Policy` or a supplied client);
+  without `-max-keys`, `limiter` with `--limiter=false`, a library caller's zero `Admission` or a supplied client);
 - present and zero: the policy was on and never fired.
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with

@@ -22,10 +22,10 @@ func init() {
 }
 
 // flagged is the S3 flag group's value: the S3 options and the range
-// engine's policy, whose flags every engine provider shares.
+// engine's policy and HTTP admission, whose flags every engine provider shares.
 type flagged struct {
 	Options
-	policy *keyrange.Policy
+	common *keyrange.Common
 }
 
 func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{SeedDescent: true}}} }
@@ -33,7 +33,7 @@ func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{S
 // flags registers the S3 flag group and the shared engine flags; the
 // returned value is filled when the flag set is parsed.
 func flags(f *flag.FlagSet, diag bool) any {
-	o := &flagged{policy: keyrange.Flags(f, diag)}
+	o := &flagged{common: keyrange.Flags(f, diag)}
 	f.StringVar(&o.Endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store")
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
@@ -56,8 +56,8 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	switch o := req.Options.(type) {
 	case *flagged: // the command line
 		opt = o.Options
-		if o.policy != nil {
-			opt.Policy = *o.policy
+		if o.common != nil {
+			opt.Policy, opt.Admission = o.common.Policy, o.common.Admission
 		}
 	case *Options: // a library caller
 		opt = *o

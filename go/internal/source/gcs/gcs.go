@@ -54,6 +54,9 @@ type Options struct {
 	Resume          *Resume // continue after a journaled run's last published key
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
+	// Admission is the built-in client's (the shared engine flags); a
+	// supplied Client has its own.
+	Admission objhttp.Admission
 }
 
 // Resume continues after the last published key.
@@ -121,16 +124,10 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		return nil, errors.New("no bucket")
 	}
 	p := &Provider{opt: opt, client: opt.Client}
-	limited := opt.Policy.Limiter && p.client == nil
-	if p.client == nil {
-		var lim *objhttp.Limiter
-		switch {
-		case limited && opt.Policy.LimiterSlowStart:
-			lim = objhttp.NewSlowStartLimiter(opt.Workers)
-		case limited:
-			lim = objhttp.NewLimiter(opt.Workers)
-		}
-		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: objhttp.NewRate(opt.Policy.RequestRate), Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
+	own := p.client == nil
+	if own {
+		lim, rate := opt.Admission.New(opt.Workers)
+		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
 			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout})
 		if err != nil {
 			return nil, fmt.Errorf("GCS client: %w", err)
@@ -146,10 +143,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		resume = &keyrange.Resume{After: opt.Resume.After}
 	}
 	eo := opt.Policy.Options()
-	eo.Prefix, eo.Workers, eo.Resume, eo.Limiter = opt.Prefix, opt.Workers, resume, limited
-	if opt.Client != nil {
-		eo.RequestRate = 0 // a supplied client has no cap of ours
-	}
+	eo.Prefix, eo.Workers, eo.Resume, eo.ClientOff = opt.Prefix, opt.Workers, resume, opt.Admission.Off(own)
 	e, err := keyrange.New(eo, keyrange.Description[Object]{
 		Target:  "gs://" + opt.Bucket + "/" + opt.Prefix,
 		Listing: keyrange.Listing, // names list in unsigned UTF-8 byte order; startOffset is any name

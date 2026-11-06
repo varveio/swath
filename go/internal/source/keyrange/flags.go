@@ -21,22 +21,20 @@ type Policy struct {
 	MaxKeys     int64 // stop after this many objects (sequential only; 0 = all)
 	Probe       bool  // check each split's upper child with a 1-key request first (off by default)
 	Floors      bool  // the gate-chain floors (off by default)
-	// Limiter: the provider's client admits its HTTP attempts through an
-	// adaptive limiter (objhttp.Limiter) of at most Workers permits.
-	Limiter bool
-	// LimiterSlowStart: the limiter starts at 4 and doubles per second
-	// until the worker count or the first throttle or timeout
-	// (objhttp.NewSlowStartLimiter); off by default.
-	LimiterSlowStart bool
-	// RequestRate caps the client's HTTP attempts per second
-	// (objhttp.Rate); 0: no cap.
-	RequestRate float64
+}
+
+// Common is the flag group every provider on the engine shares: the
+// engine's policy and its HTTP client's admission (objhttp.Admission),
+// kept apart.
+type Common struct {
+	Policy    Policy
+	Admission objhttp.Admission
 }
 
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedDescent: p.SeedDescent, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors, Limiter: p.Limiter, RequestRate: p.RequestRate}
+		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors}
 }
 
 // Flags registers the engine's policy flags on f and returns the Policy
@@ -44,10 +42,10 @@ func (p Policy) Options() Options {
 // its own flag group; the flags are registered once per flag set and later
 // callers get the same Policy. The policy toggles and comparison modes are
 // diagnostic (swath diag list); -seed and -limiter are on swath list too.
-func Flags(f *flag.FlagSet, diag bool) *Policy {
+func Flags(f *flag.FlagSet, diag bool) *Common {
 	if fl := f.Lookup("seed"); fl != nil {
 		if b, ok := fl.Value.(*boolFlag); ok {
-			return b.p
+			return b.c
 		}
 		panic("keyrange: flag -seed is registered by something other than the range engine")
 	}
@@ -55,11 +53,12 @@ func Flags(f *flag.FlagSet, diag bool) *Policy {
 	// requests through the adaptive limiter (Java's gauge rules);
 	// --limiter=false turns it off. A library caller's zero Policy has
 	// neither.
-	p := &Policy{SeedDescent: true, Limiter: true}
-	bf := func(v *bool, name, usage string) { f.Var(&boolFlag{p: p, v: v}, name, usage) }
-	bf(&p.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
-	bf(&p.LimiterSlowStart, "limiter-slow-start", "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
-	f.Var((*rateFlag)(&p.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
+	c := &Common{Policy: Policy{SeedDescent: true}, Admission: objhttp.Admission{Limiter: true}}
+	p, a := &c.Policy, &c.Admission
+	bf := func(v *bool, name, usage string) { f.Var(&boolFlag{c: c, v: v}, name, usage) }
+	bf(&a.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
+	bf(&a.SlowStart, "limiter-slow-start", "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
+	f.Var((*rateFlag)(&a.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
 	bf(&p.Seed, "seed", "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
 	if diag {
 		bf(&p.Structure, "structure", "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
@@ -69,13 +68,13 @@ func Flags(f *flag.FlagSet, diag bool) *Policy {
 		bf(&p.Probe, "probe", "ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")
 		f.Var((*int64Flag)(&p.MaxKeys), "max-keys", "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
 	}
-	return p
+	return c
 }
 
-// boolFlag is a bool flag that knows its Policy, so that a second
+// boolFlag is a bool flag that knows its Common, so that a second
 // registration on the same flag set finds it.
 type boolFlag struct {
-	p *Policy
+	c *Common
 	v *bool
 }
 
