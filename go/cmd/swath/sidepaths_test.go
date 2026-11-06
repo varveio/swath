@@ -122,3 +122,68 @@ func TestProfilePathsCannotReplaceManagedOutput(t *testing.T) {
 		t.Fatalf("profile onto the manifest: %v", err)
 	}
 }
+
+// TestResumeCannotReplaceManagedOutput (R8): swath resume checks --report
+// before any refusal or completion settles, as a list command does. On a
+// committed dataset, a resume with --report OUT/manifest.json is refused
+// with exit 2 and the manifest stays; so are the early refusals' reports
+// (a text run, whose file --report names; a directory with no run, whose
+// --report names another dataset's manifest) and a negative duration.
+func TestResumeCannotReplaceManagedOutput(t *testing.T) {
+	captureStderr(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	out := filepath.Join(base, "OUT")
+	var buf bytes.Buffer
+	if err := run(context.Background(), []string{src, "-o", out, "--no-progress", "--no-stats"}, &buf, false); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(out, "manifest.json")
+	committed, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	textOut := filepath.Join(base, "rows.tsv")
+	if err := os.WriteFile(textOut, []byte("rows\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(base, "EMPTY")
+	if err := os.Mkdir(empty, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"completed, its manifest", []string{"resume", out, "--report", manifest}},
+		{"completed, its journal", []string{"resume", out, "--report", filepath.Join(out, ".swath", "journal")}},
+		{"completed, negative duration", []string{"resume", out, "--max-duration=-1s"}},
+		{"a text run, its file", []string{"resume", textOut, "--report", textOut}},
+		{"no run, another dataset's manifest", []string{"resume", empty, "--report", manifest}},
+	} {
+		buf.Reset()
+		if c := exitOf(dispatch(context.Background(), tc.args, &buf)); c != exitUsage {
+			t.Errorf("%s: exit %d, want %d", tc.name, c, exitUsage)
+		}
+	}
+	if b, err := os.ReadFile(manifest); err != nil || !bytes.Equal(b, committed) {
+		t.Fatalf("the manifest changed: %v\n%s", err, b)
+	}
+	if b, _ := os.ReadFile(textOut); string(b) != "rows\n" {
+		t.Fatalf("the text output changed: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(out, ".swath", "journal")); !os.IsNotExist(err) {
+		t.Fatalf("a report was written as the journal: %v", err)
+	}
+	// Allowed: an ordinary report beside the dataset, which says complete.
+	report := filepath.Join(out, "report.json")
+	if err := dispatch(context.Background(), []string{"resume", out, "--report", report}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(report); err != nil || !strings.Contains(string(b), `"report_version"`) {
+		t.Fatalf("report: %v %s", err, b)
+	}
+}
