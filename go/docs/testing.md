@@ -150,7 +150,9 @@ into the binary). In front of swath-replay or a fake bucket it answers a share o
 window with the throttle answer (503 `SlowDown` for S3, 429 `rateLimitExceeded` for GCS), delays them, or
 resets their connection; a rate cap throttles requests beyond N per trailing second. Request n of a run gets
 the same faults for the same seed and plan. It records a timeline (100 ms buckets: arrivals, faults, most
-requests in flight). `bench/faultproxy` serves it:
+requests in flight). A request counts as in flight from its arrival until the proxy releases its answer, so a
+client that sends its next request on the previous answer is never seen with two; answers are forwarded
+whole, not streamed. `bench/faultproxy` serves it:
 
 ```bash
 go run ./bench/faultproxy -target http://127.0.0.1:19090 -listen 127.0.0.1:19091 \

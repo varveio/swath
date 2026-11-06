@@ -19,6 +19,7 @@ import (
 	"hash/fnv"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
@@ -65,7 +66,7 @@ type Bucket struct {
 	Throttled int64 // of them, answered with the throttle
 	Reset     int64 // of them, reset
 	Delayed   int64 // of them, delayed
-	MaxActive int64 // most requests in the proxy at once (all kinds)
+	MaxActive int64 // most requests in the proxy at once (all kinds), from arrival until the answer is released
 }
 
 // Stats are a run's totals.
@@ -77,13 +78,17 @@ type Stats struct {
 // Step is the timeline's resolution.
 const Step = 100 * time.Millisecond
 
-// Proxy is the fault-injecting proxy, an http.Handler.
+// Proxy is the fault-injecting proxy, an http.Handler. It forwards each
+// answer whole, buffered, never streamed (Bucket.MaxActive).
 type Proxy struct {
 	plan  Plan
 	next  *httputil.ReverseProxy
 	seq   atomic.Uint64
 	start atomic.Int64 // UnixNano of the first request
 	now   func() time.Time
+	// answered, if set, runs after a request's answer is released, in
+	// the handler: tests stall it to stand for a descheduled handler.
+	answered func()
 
 	mu       sync.Mutex
 	active   int64
@@ -187,16 +192,25 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.stats.Forwarded++
 	}
 	p.mu.Unlock()
-	defer func() {
+	// The request leaves the count before its answer can reach the client:
+	// a client that sends its next request as soon as it has an answer (a
+	// one-permit limiter) must never find the previous one still counted.
+	// Decrementing when the handler returns instead raced the client under
+	// load: a reset is visible the moment the connection closes, and the
+	// retry could arrive before the handler's deferred decrement ran.
+	leave := sync.OnceFunc(func() {
 		p.mu.Lock()
 		p.active--
 		p.mu.Unlock()
-	}()
+	})
+	defer leave() // a panic or an abandoned request included
 
 	switch {
 	case throttle:
+		leave()
 		p.throttle(w)
 	case reset:
+		leave()
 		resetConn(w)
 	default:
 		if delay > 0 {
@@ -206,7 +220,20 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		p.next.ServeHTTP(w, r)
+		// Buffered, so the whole answer is held until the request has
+		// left the count (a listing page is small).
+		rec := httptest.NewRecorder()
+		p.next.ServeHTTP(rec, r)
+		leave()
+		h := w.Header()
+		for k, v := range rec.Header() {
+			h[k] = v
+		}
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+	}
+	if p.answered != nil {
+		p.answered()
 	}
 }
 

@@ -111,3 +111,39 @@ func TestParseWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestAnsweredRequestLeavesTheCount: a client that sends one request at a
+// time, the next as soon as it has an answer, is never seen with two in
+// flight, even when the handler stalls after the answer is released (a
+// descheduled handler on a loaded host). Each fault ends a request
+// differently: a reset is visible to the client at once, a throttle and a
+// forwarded page when the handler's buffered answer is flushed.
+func TestAnsweredRequestLeavesTheCount(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.Repeat("page ", 4000)) // more than one write buffer
+	}))
+	defer up.Close()
+	for _, f := range []Fault{Reset, Throttle, Latency} {
+		t.Run(f.String(), func(t *testing.T) {
+			p, err := New(up.URL, Plan{Seed: 3, Windows: []Window{{Fraction: 0.5, Fault: f, Delay: time.Millisecond}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.answered = func() { time.Sleep(20 * time.Millisecond) }
+			srv := httptest.NewServer(p)
+			defer srv.Close()
+			c := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}} // a reset is not retried by the transport
+			for range 20 {
+				resp, err := c.Get(srv.URL + "/b?list-type=2")
+				if err != nil {
+					continue
+				}
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+			if s := p.Stats(); s.MaxActive != 1 || s.Requests != 20 {
+				t.Fatalf("one at a time: %+v", s)
+			}
+		})
+	}
+}
