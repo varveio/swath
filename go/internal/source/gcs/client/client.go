@@ -4,6 +4,12 @@
 // Package client is a small Cloud Storage JSON API client: objects.list
 // only, with OAuth2 credentials from golang.org/x/oauth2/google (or none),
 // counted retries with full-jitter backoff, and typed errors.
+//
+// Credentials live as long as the client: the token source is built on a
+// context that is never cancelled, whose HTTP client bounds each token
+// exchange by the request timeout, and every attempt waits for its token
+// under its own attempt deadline. Absent Application Default Credentials
+// mean anonymous access; configured but unusable ones refuse the client.
 package client
 
 import (
@@ -18,6 +24,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -132,6 +140,22 @@ func (e *ExhaustedError) Unwrap() error { return e.Err }
 // ErrSyntax marks a 200 whose body did not parse.
 var ErrSyntax = errors.New("malformed objects.list response")
 
+// CredentialError is a credential failure: configured credentials that do
+// not load, or a token the token endpoint would not issue. Transient
+// failures (the endpoint's 5xx, 408 or 429, a cut connection, an attempt
+// past the request timeout) are retried; the others stop the request.
+type CredentialError struct {
+	Source    string // where the credentials came from (never the secret)
+	Transient bool
+	Timeout   bool // the token did not arrive within the request timeout
+	Err       error
+}
+
+func (e *CredentialError) Error() string {
+	return "GCS credentials (" + e.Source + "): " + e.Err.Error()
+}
+func (e *CredentialError) Unwrap() error { return e.Err }
+
 var errTimeout = errors.New("request timed out")
 
 // Counters are what the client did.
@@ -150,8 +174,10 @@ type Client struct {
 	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
 }
 
-// New resolves credentials and builds the client. Without credentials (and
-// not Anonymous), requests go unauthenticated, which public buckets allow.
+// New resolves credentials and builds the client. Without Application
+// Default Credentials (no GOOGLE_APPLICATION_CREDENTIALS, no gcloud file, not
+// on Google Cloud), requests go unauthenticated, which public buckets allow.
+// Credentials that are configured but do not load are a *CredentialError.
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
@@ -182,29 +208,96 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
 		c.http = &http.Client{Transport: t}
 	}
+	// The token source keeps this context for every refresh: it must
+	// outlive New's caller's deadline, and its HTTP client bounds each token
+	// exchange (the attempt deadline bounds the wait, token below).
+	life := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient,
+		&http.Client{Transport: c.http.Transport, Timeout: cfg.RequestTimeout})
 	switch {
 	case cfg.TokenSource != nil:
 		c.ts, c.source = cfg.TokenSource, "token source"
 	case cfg.Anonymous:
 	case cfg.CredentialsFile != "":
+		c.source = "file " + cfg.CredentialsFile
 		b, err := os.ReadFile(cfg.CredentialsFile)
 		if err != nil {
-			return nil, err
+			return nil, &CredentialError{Source: c.source, Err: err}
 		}
-		creds, err := google.CredentialsFromJSON(ctx, b, readScope)
+		creds, err := google.CredentialsFromJSON(life, b, readScope)
 		if err != nil {
-			return nil, fmt.Errorf("credentials %s: %w", cfg.CredentialsFile, err)
+			return nil, &CredentialError{Source: c.source, Err: err}
 		}
-		c.ts, c.source = oauth2.ReuseTokenSource(nil, creds.TokenSource), "file"
+		c.ts = creds.TokenSource
 	default:
-		lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		creds, err := google.FindDefaultCredentials(lctx, readScope)
-		cancel()
-		if err == nil {
+		creds, err := google.FindDefaultCredentials(life, readScope)
+		switch {
+		case err == nil:
 			c.ts, c.source = creds.TokenSource, "application default credentials"
+		case adcConfigured():
+			return nil, &CredentialError{Source: "application default credentials", Err: err}
+		default:
+			c.source = "anonymous (no application default credentials)"
 		}
 	}
 	return c, nil
+}
+
+// adcConfigured reports whether Application Default Credentials are
+// configured in a place golang.org/x/oauth2/google reads: then a failure
+// to load them is an error, not anonymity.
+func adcConfigured() bool {
+	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
+		return true
+	}
+	dir := os.Getenv("APPDATA")
+	if runtime.GOOS != "windows" {
+		home := os.Getenv("HOME")
+		if home == "" {
+			home, _ = os.UserHomeDir()
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	_, err := os.Stat(filepath.Join(dir, "gcloud", "application_default_credentials.json"))
+	return err == nil
+}
+
+// token waits for the token source under the attempt's deadline. A refresh
+// that outlives the wait finishes in the background (its own HTTP client is
+// bounded by the request timeout) and later attempts reuse its token.
+func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
+	type result struct {
+		t   *oauth2.Token
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		t, err := c.ts.Token()
+		ch <- result{t, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return nil, &CredentialError{Source: c.source, Transient: transientToken(r.err), Err: r.err}
+		}
+		return r.t, nil
+	case <-ctx.Done():
+		return nil, &CredentialError{Source: c.source, Transient: true, Timeout: true,
+			Err: fmt.Errorf("no token within %s: %w", c.cfg.RequestTimeout, ctx.Err())}
+	}
+}
+
+// transientToken: the token endpoint's 5xx, 408 and 429, and transport
+// failures, may pass; a refused grant (400, 401) will not.
+func transientToken(err error) bool {
+	var re *oauth2.RetrieveError
+	if errors.As(err, &re) {
+		if re.Response == nil {
+			return false
+		}
+		s := re.Response.StatusCode
+		return s >= 500 || s == 408 || s == 429
+	}
+	return transport(err)
 }
 
 // Credentials names where the credentials came from (never the secret).
@@ -309,19 +402,25 @@ func retryable(err error) (retry, throttle, timeout bool) {
 		return true, false, true
 	case errors.Is(err, ErrSyntax):
 		return true, false, false
-	case errors.Is(err, errCredentials):
-		return false, false, false
 	}
+	var ce *CredentialError
+	if errors.As(err, &ce) {
+		return ce.Transient, false, ce.Timeout
+	}
+	return transport(err), false, false
+}
+
+// transport reports a connection failure worth repeating (not a
+// certificate refusal).
+func transport(err error) bool {
 	var cert *tls.CertificateVerificationError
 	if errors.As(err, &cert) {
-		return false, false, false
+		return false
 	}
 	var ne net.Error
 	return errors.As(err, &ne) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) ||
-		errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "connection reset"), false, false
+		errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "connection reset")
 }
-
-var errCredentials = errors.New("credentials")
 
 // maxResponse bounds a page body: 1,000 items of 1,024-byte names with
 // every field requested stay well under it.
@@ -336,9 +435,9 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	}
 	req.Header.Set("User-Agent", "swath-go")
 	if c.ts != nil {
-		tok, err := c.ts.Token()
+		tok, err := c.token(actx)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", errCredentials, err)
+			return nil, err
 		}
 		tok.SetAuthHeader(req)
 	}

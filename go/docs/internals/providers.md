@@ -145,8 +145,15 @@ covered intervals, the requests sent, the output and the non-zero counters, agai
 (`fields=nextPageToken,prefixes,items(name,size,updated,…)`); another endpoint (`--gcs-endpoint`, an emulator
 or the replay server) gets the full response. A response is read up to 16 MiB; a 400 names its query in the
 error. Credentials: `--gcs-anonymous` sends none; `--gcs-credentials FILE` reads a service-account or
-authorized-user JSON; otherwise Application Default Credentials, and without any the requests go
-unauthenticated (public buckets allow it). The scope is `devstorage.read_only`. The binary links
+authorized-user JSON; otherwise Application Default Credentials, and without any (no
+`GOOGLE_APPLICATION_CREDENTIALS`, no gcloud file, not on Google Cloud) the requests go unauthenticated (public
+buckets allow it). Credentials that are configured but do not load refuse the run (`client.CredentialError`,
+class `auth`), never anonymity. The token source lives as long as the client: it is built on a context that is
+never cancelled, whose HTTP client bounds each token exchange by `--gcs-request-timeout`, and each attempt
+waits for its token under its own deadline; a token endpoint's 5xx, 408, 429, transport failure or timeout is
+retried like a listing failure (counted in `timeouts` for the last), a refused grant stops the request
+(`TestAuthorizedUserADC`, `TestSlowRefreshBounded`, `TestRefusedGrant`, `TestADCConfiguredButBroken`, against a
+local token endpoint). The scope is `devstorage.read_only`. The binary links
 `golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata`, not Google's storage client;
 `google.golang.org/api/storage/v1` is a test dependency only (`TestClientPagesMatchGoogleClient` compares
 pages against it). Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff

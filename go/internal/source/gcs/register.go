@@ -142,6 +142,10 @@ var (
 
 // classify names a failure's class for the outcome (error.json cause).
 func classify(err error) string {
+	var ce *client.CredentialError
+	if errors.As(err, &ce) {
+		return "auth"
+	}
 	var e *client.Error
 	if !errors.As(err, &e) {
 		return ""

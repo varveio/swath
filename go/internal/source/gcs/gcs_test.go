@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -255,5 +256,21 @@ func TestEngineFlagsShared(t *testing.T) {
 	p := src.(*opened).p
 	if !other.Seed || !p.opt.Seed || !p.opt.Structure || !p.opt.SeedDescent || !p.opt.Anonymous {
 		t.Fatalf("policy not shared: %+v", p.opt)
+	}
+}
+
+// TestBrokenADCRefused: malformed configured credentials refuse the
+// provider with the auth class (the run outcome's cause), not anonymity.
+func TestBrokenADCRefused(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	f := dir + "/adc.json"
+	if err := os.WriteFile(f, []byte(`{"type":"authorized_user",`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", f)
+	_, err := New(context.Background(), Options{Bucket: "b"})
+	if err == nil || classify(err) != "auth" {
+		t.Fatalf("err %v class %q, want auth", err, classify(err))
 	}
 }
