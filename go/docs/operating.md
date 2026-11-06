@@ -79,8 +79,7 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
 | Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder queues). Not a cap on resident memory |
 | Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. A warning names a shortfall |
-| Spill disk | `--spill-max` | 0: half the free space on the output filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; past the cap listing waits instead of failing |
-| Disk reserve | `--spill-reserve` | 1 GiB | free space spill leaves for the parts still to be written |
+| Spill disk | `--spill-max` | 0: half the free space on the output filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
 **Disk for the worst case** is the dataset itself plus the spill cap plus the reserve, all on the output's
@@ -143,7 +142,7 @@ report, under
 `inflight.busy_ns` (divided by the listing time, `timings.listing_ms`, it is the mean in flight), `limiter.decreases`,
 `limiter.increases`, `limiter.max_depth`, `limiter.waits`, and `source.stats.mean_active` (mean active ranges). The
 report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `peak_nodes`, `peak_markers`,
-`part_time_cuts` and `spill.peak_bytes`, `spill.peak_readers`, `spill.max_bytes`.
+`part_time_cuts` and `spill.peak_bytes`, `spill.peak_readers`, `spill.max_bytes`, `spill.reserve_bytes`.
 
 | Signal | Healthy | Act when |
 |---|---|---|

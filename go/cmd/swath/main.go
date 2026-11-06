@@ -361,10 +361,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
 	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full, bounding the age of the durable progress; 0: parts close by size only")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
-	f.BoolVar(&o.spillCompress, "spill-compress", false, "compress spill files (zstd level 1)")
-	f.Var(&o.spillMax, "spill-max", "cap on spill `bytes` on disk (0: half the free space on the spill filesystem at start, after --spill-reserve); past it, listing waits instead of spilling")
-	o.spillReserve = 1 << 30
-	f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem, for the parts still to be written")
+	f.Var(&o.spillMax, "spill-max", "the spill disk budget: cap on spill `bytes` on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling")
 	f.StringVar(&o.reportFormat, "report-format", "text", "`text` (one line) or json (the run report, as in run.json)")
 	f.StringVar(&o.report, "report", "", "also write the run report (JSON, with the outcome and the attempt id) to this `file` when the attempt ends, on failure too")
 	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
@@ -388,6 +385,8 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	if diag {
 		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
 		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
+		f.Var(&o.spillReserve, "spill-reserve", "diagnostic: free `bytes` spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)")
+		f.BoolVar(&o.spillCompress, "spill-compress", false, "diagnostic: compress spill files (zstd level 1)")
 	}
 	// Each provider owns its flag group; a group several share (the range
 	// engine's) is registered once and passed to each of them.

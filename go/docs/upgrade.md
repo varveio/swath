@@ -198,6 +198,9 @@ longer has is refused (exit 2); finish such a run with the build that started it
   `--memory`; the default (128 MiB, from 256 MiB of `--memory`) and the encoders it admits are unchanged.
   The run report's `invocation.memory_bytes` is `invocation.row_budget_bytes` (equal to
   `resources.row_budget_bytes`). A journal that recorded `--memory` is refused on resume.
+- `--spill-max` is the one disk budget on `swath list`; `--spill-reserve` (now derived by default: one part per
+  encoder at full size, at least 1 GiB, which is 1 GiB at the defaults) and `--spill-compress` moved to
+  `swath diag list`. `swath resume` still accepts both. The report's `resources.spill` adds `reserve_bytes`.
 
 ## The downstream reader: dispatch on schema id
 

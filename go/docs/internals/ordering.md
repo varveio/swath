@@ -74,7 +74,7 @@ by about 15 MiB at the smallest `--row-budget`; RSS at 512 workers with 1 KiB ke
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
 a floor of one: as many writers as fit in an allowance equal to the row budget, kept apart from it (24 MiB each,
 measured at about 20 MiB of heap for one writer) and as many descriptors as the soft limit leaves after 8
-spill readers, two per worker and a reserve of 32 (`listing.admitEncoders`; the default 256 MiB admits 5). An
+spill readers, two per worker and a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 5). An
 explicit `--encoders` above that is honoured with a warning.
 
 ## The waits
@@ -121,7 +121,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
   range larger than the remaining budget therefore never blocks; this is what the slow-frontier shape needs.
 - **Files.** One file per range under `DIR/.swath/spill/spill-*/` (or the temp directory without an output).
-  Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`-spill-compress`, level 1),
+  Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`swath diag list --spill-compress`, level 1),
   or a trailer with the row count. A rows frame holds each row's key and the producer's payload encoded by
   its `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values, `s3.Object` its
   size, time and six strings); the encoding is private to one run. The trailer is written when the range ends and checked after replay.
@@ -140,8 +140,12 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   the budget is full, since their rows will spill, unless the disk budget has refused a frame.
 - **Disk budget.** A frame is written only if the live spill bytes stay within `-spill-max` (default: half
   the space free on the spill filesystem when the run starts, after the reserve; a library caller's negative
-  value means no cap; the cap in effect is the report's `spill.max_bytes`) and the spill filesystem keeps `-spill-reserve` bytes free afterwards (default 1 GiB, room for the parts
-  still to be published; the spill directory is under the output directory, so they share the filesystem). A refused
+  value means no cap; the cap in effect is the report's `spill.max_bytes`) and the spill filesystem keeps a reserve free afterwards (`listing.spillReserve`: one part per encoder at
+  full size, at least 1 GiB, so the parts being written, which share the filesystem with the spill directory
+  under the output, and the journal and manifest have room; `swath diag list --spill-reserve` sets it; the
+  reserve in effect is the report's `spill.reserve_bytes`). The two protect different things and are both
+  kept: the cap bounds spill's own use, the reserve what spill may take from the parts and from other
+  processes on the filesystem, whose use the cap cannot see. A refused
   frame is not an error: the emitter waits on the reorder budget, as with `swath diag list --no-spill`, and retries after the
   drainer moves. An ENOSPC on a frame of rows is handled the same way after truncating the torn frame; one
   that cannot be undone, or on a trailer, stops the run (resumable: nothing durable is lost). A
@@ -157,7 +161,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   markers in memory would by themselves fill the budget, and a marker's bytes are released when its frame
   is replayed (`TestSpillMarkersInByteMode`, the one order test in byte mode). A failed run closes every
   open spill reader. The report's `resources` carries `peak_nodes`, `peak_markers` and, under `spill`,
-  `peak_bytes`, `peak_readers` and `max_bytes`; `progress.json` carries the same as live values with their peaks
+  `peak_bytes`, `peak_readers`, `max_bytes` and `reserve_bytes`; `progress.json` carries the same as live values with their peaks
   under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, each with a `peak_` twin). The summary
   reports `spill_peak_bytes` and
   `spill_refused` (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical

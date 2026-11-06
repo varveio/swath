@@ -14,7 +14,7 @@ SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `
 below), or with `--count-only` only lists. It prints one
 line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. `swath resume DIR` replays the command the journal recorded; only
-the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
+the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, the diagnostic `--spill-reserve` and `--spill-compress`,
 `--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and the terminal flags
 `--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
 operational ones, how requests are
@@ -29,8 +29,8 @@ true), so a supervisor may resume until exit 0; one committed with partial cover
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
-`list` flag plus the diagnostic ones: `--sequential`, `--floors`, `--max-keys` (range-engine sources), `--no-journal` and
-`--no-spill`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
+`list` flag plus the diagnostic ones: `--sequential`, `--floors`, `--max-keys` (range-engine sources), `--no-journal`,
+`--no-spill`, `--spill-reserve` and `--spill-compress`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
 Running it in production (sizing, watching, resuming, reading the output): [operating.md](operating.md).
@@ -150,12 +150,8 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
     	bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
     	ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting
-  -spill-compress
-    	compress spill files (zstd level 1)
   -spill-max bytes
-    	cap on spill bytes on disk (0: half the free space on the spill filesystem at start, after --spill-reserve); past it, listing waits instead of spilling
-  -spill-reserve bytes
-    	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
+    	the spill disk budget: cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
   -stall-timeout duration
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
   -stats
@@ -296,11 +292,11 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -sequential
     	ranges: list with one continuation-token chain (no ranges; the reference)
   -spill-compress
-    	compress spill files (zstd level 1)
+    	diagnostic: compress spill files (zstd level 1)
   -spill-max bytes
-    	cap on spill bytes on disk (0: half the free space on the spill filesystem at start, after --spill-reserve); past it, listing waits instead of spilling
+    	the spill disk budget: cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
   -spill-reserve bytes
-    	free bytes spill leaves on its filesystem, for the parts still to be written (default 1073741824)
+    	diagnostic: free bytes spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)
   -stall-timeout duration
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
   -stats
@@ -435,10 +431,12 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   `swath resume DIR` must be given it again (`swath resume DIR --bearer-token-command CMD`) and refuses with a
   message saying so otherwise (exit 2).
 - **Spill:** when the reorder budget is full, rows of ranges ahead of the frontier go to disposable files
-  under `DIR/.swath/spill/` instead of stalling the workers; `swath diag list --no-spill` turns it off,
-  `--spill-compress` compresses them. Spill stops (and listing waits instead) at `--spill-max` bytes on disk
-  (default 0: half the space free on the spill filesystem when the run starts, after the reserve) or when the
-  filesystem would drop below `--spill-reserve` free bytes (default 1 GiB)
+  under `DIR/.swath/spill/` instead of stalling the workers. `--spill-max` is the one disk budget: spill stops
+  (and listing waits instead) at that many bytes on disk (default 0: half the space free on the spill
+  filesystem when the run starts, after the reserve) or when the filesystem would drop below the reserve, one
+  part per encoder at full size and at least 1 GiB (room for the parts being written on the same filesystem).
+  `swath diag list --no-spill` turns spill off, `--spill-reserve` sets the reserve and `--spill-compress`
+  compresses the files
   ([internals/ordering.md](internals/ordering.md)).
 - **Encoders:** the default count is GOMAXPROCS lowered to what the resources carry: one writer's working set
   (24 MiB) each from an allowance equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,

@@ -182,7 +182,6 @@ func TestConfigRejectsInvalid(t *testing.T) {
 	for name, cfg := range map[string]Config{
 		"no source":         {},
 		"negative workers":  {Source: SourceConfig{URI: src}, Limits: Limits{Workers: -1}},
-		"negative reserve":  {Source: SourceConfig{URI: src}, Limits: Limits{Spill: SpillLimits{Reserve: -1}}},
 		"tiny row budget":   {Source: SourceConfig{URI: src}, Limits: Limits{RowBudget: 1}},
 		"resume no output":  {Source: SourceConfig{URI: src}, Output: OutputConfig{Resume: true}},
 		"resume replace":    {Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out, Resume: true, Replace: true}},
@@ -201,8 +200,8 @@ func TestConfigRejectsInvalid(t *testing.T) {
 
 // TestResourceAdmission: encoders are admitted against a writer
 // allowance equal to the row budget and the descriptor limit, never below one; the
-// default spill cap is half the free space after the reserve, a negative
-// one is none.
+// default spill reserve is derived from the encoders' parts, and the
+// default spill cap is half the free space after it; a negative one is none.
 func TestResourceAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		budget  int64
@@ -218,6 +217,17 @@ func TestResourceAdmission(t *testing.T) {
 	} {
 		if got := admitEncoders(tc.budget, tc.workers, tc.fds); got != tc.want {
 			t.Errorf("admitEncoders(%d, %d, %d) = %d, want %d", tc.budget, tc.workers, tc.fds, got, tc.want)
+		}
+	}
+	// The reserve: one part per encoder, at least 1 GiB (the defaults' 5
+	// encoders of 64 MiB parts take the floor); negative is none.
+	if a, b := spillReserve(5, DefaultPartSize), spillReserve(16, 256<<20); a != 1<<30 || b != 4<<30 {
+		t.Errorf("derived reserves %d, %d", a, b)
+	}
+	for in, want := range map[int64]int64{0: 1 << 30, -1: 0, 7: 7} {
+		c := Config{Source: SourceConfig{URI: "s3://b"}, Limits: Limits{Encoders: 2, Spill: SpillLimits{Reserve: in}}}
+		if err := c.resolve(); err != nil || c.Limits.Spill.Reserve != want {
+			t.Errorf("reserve %d resolved to %d (%v), want %d", in, c.Limits.Spill.Reserve, err, want)
 		}
 	}
 	dir := t.TempDir()

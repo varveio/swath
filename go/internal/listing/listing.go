@@ -125,8 +125,8 @@ type Limits struct {
 type SpillLimits struct {
 	Off      bool  // wait on the reorder budget instead of spilling ahead-of-frontier rows
 	Compress bool  // zstd level 1 on spill frames
-	Max      int64 // cap on live spill bytes (0: half the free space on the spill filesystem at start; negative: none)
-	Reserve  int64 // free bytes spill leaves on its filesystem (0: none; the CLI default is 1 GiB)
+	Max      int64 // cap on live spill bytes (0: half the free space on the spill filesystem at start, after Reserve; negative: none)
+	Reserve  int64 // free bytes spill leaves on its filesystem (0: derived, spillReserve; negative: none)
 }
 
 // ConfigError is an invalid configuration: a value or a combination.
@@ -141,9 +141,11 @@ type Spill struct {
 	Ranges    int64 `json:"ranges"` // ranges that spilled
 	PeakBytes int64 `json:"peak_bytes"`
 	Refused   int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
-	// MaxBytes is the cap on live spill bytes in effect (0: none).
-	MaxBytes    int64 `json:"max_bytes"`
-	PeakReaders int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
+	// MaxBytes is the cap on live spill bytes in effect (0: none);
+	// ReserveBytes the free space spill left on its filesystem (0: none).
+	MaxBytes     int64 `json:"max_bytes"`
+	ReserveBytes int64 `json:"reserve_bytes"`
+	PeakReaders  int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
 }
 
 // spillMax is the live spill cap for spill under dir: the configured one,
@@ -169,8 +171,22 @@ func spillMax(l SpillLimits, dir string) int64 {
 	return max(1, (free-l.Reserve)/2)
 }
 
+// spillReserve is the free space spill leaves on its filesystem when none
+// is configured: room for every encoder's open part at full size, since
+// parts are written on the same filesystem and a full disk fails the run
+// where a refused spill frame only waits; at least minSpillReserve, a
+// margin for the journal, the manifest and whatever else writes there.
+// The spill cap (--spill-max) and this reserve protect different things:
+// the cap bounds spill's own use, the reserve bounds what spill may take
+// from the parts and from other processes, whose use the cap cannot see.
+func spillReserve(encoders int, partSize int64) int64 {
+	return max(minSpillReserve, int64(encoders)*partSize)
+}
+
 // Defaults.
 const (
+	// minSpillReserve is spillReserve's floor.
+	minSpillReserve = 1 << 30
 	// DefaultRowBudget bounds rows in flight at 128 MiB: enough for every
 	// worker's pages at the default 64 workers to queue behind a slow
 	// frontier, and the allowance that admits 5 encoders (admitEncoders).
@@ -195,7 +211,7 @@ func (c *Config) resolve() error {
 	switch {
 	case c.Source.URI == "":
 		return bad("no source")
-	case l.Workers < 0 || l.Encoders < 0 || l.RowBudget < 0 || l.PartSize < 0 || l.Spill.Reserve < 0:
+	case l.Workers < 0 || l.Encoders < 0 || l.RowBudget < 0 || l.PartSize < 0:
 		return bad("negative limit: %+v", *l)
 	case o.Resume && o.Dir == "":
 		return bad("resume needs an output directory")
@@ -219,6 +235,12 @@ func (c *Config) resolve() error {
 	}
 	if l.PartSize == 0 {
 		l.PartSize = DefaultPartSize
+	}
+	switch {
+	case l.Spill.Reserve == 0:
+		l.Spill.Reserve = spillReserve(l.Encoders, l.PartSize)
+	case l.Spill.Reserve < 0:
+		l.Spill.Reserve = 0
 	}
 	if l.RowBudget < minRowBudget {
 		return bad("row budget %d is below %d bytes", l.RowBudget, minRowBudget)
@@ -555,7 +577,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	sum.Resources.Features = map[string]bool{"spill": oopt.SpillDir != ""}
 	if oopt.SpillDir != "" {
 		sum.Resources.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
-			MaxBytes: oopt.SpillMax, PeakReaders: ost.PeakReaders}
+			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders}
 	}
 	sum.Resources.PeakNodes, sum.Resources.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
 	sum.Resources.FrontierWaitNs, sum.Resources.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)

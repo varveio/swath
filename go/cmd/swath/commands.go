@@ -123,7 +123,11 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}
 	cmd = append(append(cmd, overrides...), "--output", dir)
-	return runWith(ctx, cmd, stdout, diag, argv, true, att)
+	// Parsed with the diagnostic flag set, a superset of swath list's: the
+	// runtime overrides include diagnostic ones (--spill-reserve,
+	// --spill-compress), and a recorded swath list command holds none
+	// that could change meaning.
+	return runWith(ctx, cmd, stdout, true, argv, true, att)
 }
 
 // refuse settles a resume that stopped before it could run: its outcome

@@ -79,7 +79,7 @@ decision to add it later).
 | `--no-sort` (unsorted Parquet, direct dataset) | none | removed | not ported, 2026-11-06: architecture, measured first |
 | Sorted parts key-disjoint in unsigned byte order, named in key order | the same, every run | kept | – |
 | Staging under `_staging/`, k-way merge, finalization | ordered emission with disposable spill under `.swath/spill/` | removed | staging and external sort not ported, 2026-11-05; not ported, 2026-11-06: no value now (staging and merge controls) |
-| Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-max`, `--spill-reserve`; a full disk stops the run with exit 74, cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
+| Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-max` (one disk budget; the reserve is derived, `swath diag list --spill-reserve` overrides it); a full disk stops the run with exit 74, cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
 | `--tune sort.*` (three keys of Java's seven-key `--tune` registry; the other "sort" settings were JVM properties) | none | removed | sort settings are code constants, 2026-11-05 |
 | `--parquet-part-size SIZE` (256 MB) | `--part-size` (64 MiB) | renamed | – |
 | `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle, `7d6d746`) |
