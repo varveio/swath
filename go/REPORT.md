@@ -1707,6 +1707,66 @@ collection: the per-part records the run keeps) to grow by under 8 KiB per part.
 252 bytes per part; live heap 2.1 -> 2.8 MiB, about 1.2 KB per part (2.5 -> 4.0 MiB under `-race`). The peak
 heap above is mostly garbage between collections and is logged, not asserted.
 
+## Scale tier (smoke, 2026-11-06)
+
+**Built, not measured at scale.** The owner moved scale runs off the development host. They run later on
+scalable infrastructure, using the private campaign requirements (item 7 and part of item 9). The two runs
+below are a smoke check that the fake and the script work end to end. They are synthetic, one rep each, on a
+loaded 4-core host whose disk was nearly full. They are not evidence about scale.
+
+- **`internal/source/scalefake`** (test and bench support; `TestImportBoundary` keeps it out of `cmd/swath`):
+  a lazy, deterministic keyspace defined by a seed and a shape. The shape is flat or a hierarchy with
+  per-level fan-out, with optional hierarchical log-normal skew, a long shared root prefix, a shared pad on
+  every directory segment, and leaf names stretched to 1 KiB. Key i is computed in O(depth), and keys ascend
+  strictly in i. A query is a binary search over i plus O(page) key computations, and nothing is
+  materialized. Memory is 8 bytes per leaf directory: 2 MB for the 1B-key campaign shape, `32,32,32,8`.
+  The server speaks S3 ListObjectsV2 (path-style, `encoding-type=url`; a common prefix at or below
+  `start-after` is skipped, as S3 does) and GCS objects.list (inclusive `startOffset` with GCS's roll-up,
+  `endOffset`). Both support latency plus jitter and a seeded 503 fraction. Accounting is at
+  `/__scalefake/stats`: requests, pages, keys served, in flight now and as a per-window peak, and busy time,
+  whose rate is the true mean in flight. A per-request log is optional. `bench/scalefake` serves it as an
+  endpoint.
+- **Tests.** Order, exact count and seek are checked against a materialized reference on nine shapes.
+  Random queries paged to the end equal the reference. The S3 and GCS clients see the keyspace and its
+  metadata over the wire. Both providers on the range engine list a lazy keyspace exactly, with the seed,
+  the limiter, latency and 2 % 503s (`SCALEFAKE_KEYS=N` scales them by hand).
+- **Fake cost** (`BenchmarkS3Page`, one core, under the measurement lock): 1.07 ms per 1,000-key page for
+  natural keys and 3.7 ms with 1 KiB keys. That is about 0.9M and 0.27M keys/s per core, so the fake needs
+  a few cores of its own at campaign rates.
+- **`bench/scale_run.sh OUTDIR KEYS WORKERS PORT`** lists through the S3 route with the shipped defaults
+  plus `--seed`. It samples every 10 s: RSS, the `progress.json` peaks (nodes, markers, spill readers, spill
+  live bytes, recorded-part age), requests per second, true in-flight requests, and listed and encoded rows
+  per second. **`bench/scale_table.py`** prints the totals, requests per 1k keys, keys served per key
+  listed, budget wait, spill cap and refusals, and the plateau gates. The gates are: peak RSS at most
+  `--memory` + 1 GiB, with no late growth; peak nodes at most 64 per worker, with no late growth; spill
+  readers at most 8; and recorded-part age at most `--part-interval` + 60 s.
+
+Smoke runs (synthetic; shape `32,32,32,8`, skew 1, seed 1; injected latency 30 ms + U[0, 20) ms; 16 workers;
+shipped defaults plus `--seed`; revision `8322769` for the first run, `b2bf4b7` plus the tabulator for the
+second; one rep each):
+
+| Run | Rows | Wall s | Peak RSS MiB (`--memory` 256) | Peak nodes | Peak markers | Spill readers | Peak spill MiB | Requests per 1k keys | Keys served per listed | Mean in flight | Output B per row |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| natural keys | 2,000,000 | 24.4 | 334 | 259 | 0 | 1 | 0 | 1.118 | 1.100 | 3.9 | 29.3 |
+| 1 KiB keys (output on tmpfs) | 200,000 | 5.3 | 602 | 150 | 68 | 8 | 60 | 1.575 | 1.393 | 7.3 | 36.3 |
+
+What the smoke run showed (one rep, a busy host; to be checked at scale):
+
+- **The spill cap collapses on a nearly full disk.** In the natural-key run, the free space left only a
+  1-byte spill cap (`max_bytes` 1) and 13,888 spills were refused. Listing waited on the row budget:
+  269 goroutine-seconds of budget wait in a 24 s run, a mean of 3.9 requests in flight of 16, and 984,575
+  rows listed against 219,000 encoded at 10 s. This is the ordered-emission record's "listed far ahead of
+  published" and `budget_wait` signal, caused by the environment. On a sized disk (the 1 KiB run on tmpfs,
+  with a 7.3 GiB cap) it did not occur.
+- CPU was 5.9 µs per row with natural keys and 10.6 µs with 1 KiB keys (user plus sys, including spill).
+  Those figures put 1B rows at about 1.6 and 2.9 core-hours of swath CPU.
+- The output took 29.3 and 36.3 bytes per row (delta byte array plus zstd compress the per-directory stems
+  of the 1 KiB keys). That puts 1B rows at about 29 and 36 GB of dataset for this shape. Keys that share
+  less would cost more.
+
+Gaps the campaign needs closed first: the report has no decision-mutex wait (one of item 7's gates), and
+the script drives the S3 route only (the fake also serves GCS).
+
 ## Throttle handling and adaptive concurrency (2026-11-06)
 
 **What was built.** `objhttp.Limiter` (`acc3f88`) admits every HTTP attempt of the S3 and GCS clients (pages,
@@ -2297,7 +2357,8 @@ bytes, not skipped; ids are unsigned; encoding is parallel; S3 and GCS runs resu
 - **Platforms.** Windows runs have no output lock and no directory sync ([docs/internals/durability.md](docs/internals/durability.md));
   Windows and macOS builds were compiled, not run.
 - **Scale.** Billions of keys, runs of hours and 256 or more workers are unmeasured; the replay recordings and
-  live buckets in this report are the largest runs.
+  live buckets in this report are the largest runs. The lazy scale fake and the measured-run script exist
+  ("Scale tier (smoke)"); the runs are scheduled on other infrastructure.
 - **Interoperability.** Format 2 is read by a patched copy of Varve (see "Varve reader compatibility"), not by
   Java swath's reader.
 - **Local benchmarks.** Cold-cache numbers are guest-cold in a VM and single runs; all trees are synthetic.

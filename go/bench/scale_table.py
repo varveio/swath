@@ -12,7 +12,8 @@ Plateau gates (each PASS, FAIL or n/a when the run has too few samples):
   readers peak spill readers <= 8 (order.MaxSpillReaders)
   age     the largest sampled recorded-part age, once a part was published, <= --part-interval + AGE_SLACK
           (default 60 s)
-A run that did not commit fails every gate it has no evidence for.
+A run that did not commit fails every gate. Budget wait is goroutine-seconds blocked on the row budget (a
+listing that waits instead of spilling: high with a small spill cap); spill refused counts refused spills.
 """
 import argparse
 import json
@@ -98,7 +99,8 @@ def check(r, a):
         "wall_s": wall, "rows_per_s": rows / wall if wall else 0,
         "memory_mib": mem / MIB, "peak_rss_mib": peak_rss / MIB, "peak_nodes": peak_nodes,
         "peak_markers": max([res.get("peak_markers", 0)] + [0]), "peak_readers": readers,
-        "peak_spill_mib": spill.get("peak_bytes", 0) / MIB, "max_part_age_s": max_age,
+        "peak_spill_mib": spill.get("peak_bytes", 0) / MIB, "spill_cap_mib": spill.get("max_bytes", 0) / MIB,
+        "spill_refused": spill.get("refused", 0), "budget_wait_s": res.get("budget_wait_ns", 0) / 1e9, "max_part_age_s": max_age,
         "requests": reqs, "req_per_1k": 1000 * reqs / rows if rows else 0,
         "served_per_listed": f.get("keys", 0) / rows if rows else 0, "throttled": f.get("throttled", 0),
         "mean_inflight": busy / wall if wall else 0, "peak_inflight": f.get("peak_inflight", 0),
@@ -138,16 +140,16 @@ def main():
     a = ap.parse_args()
     runs = [load(d) for d in a.dirs]
     print("| run | status | rows | workers | wall s | rows/s | --memory MiB | peak RSS MiB | peak nodes | peak markers |"
-          " spill readers | peak spill MiB | max part age s | requests | req per 1k keys | served per listed |"
+          " spill readers | peak spill MiB | spill cap MiB | spill refused | budget wait s | max part age s | requests | req per 1k keys | served per listed |"
           " throttled | mean inflight | peak inflight | rss | nodes | readers | age |")
-    print("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|")
+    print("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|")
     bad = False
     for r in runs:
         c = check(r, a)
         age = "-" if c["max_part_age_s"] is None else f"{c['max_part_age_s']:.0f}"
         print(f"| {c['run']} | {c['status']} | {c['rows']:,} | {c['workers']} | {c['wall_s']:.1f} | {c['rows_per_s']:,.0f} | "
               f"{c['memory_mib']:.0f} | {c['peak_rss_mib']:.0f} | {c['peak_nodes']} | {c['peak_markers']} | {c['peak_readers']} | "
-              f"{c['peak_spill_mib']:.0f} | {age} | {c['requests']:,} | {c['req_per_1k']:.3f} | {c['served_per_listed']:.3f} | "
+              f"{c['peak_spill_mib']:.0f} | {c['spill_cap_mib']:.0f} | {c['spill_refused']:,} | {c['budget_wait_s']:.0f} | {age} | {c['requests']:,} | {c['req_per_1k']:.3f} | {c['served_per_listed']:.3f} | "
               f"{c['throttled']} | {c['mean_inflight']:.1f} | {c['peak_inflight']} | "
               + " | ".join(verdict(c["gates"][k]) for k in ("rss", "nodes", "readers", "age")) + " |")
         bad = bad or any(v is False for v in c["gates"].values())
