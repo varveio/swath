@@ -293,8 +293,8 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 | `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | yes |
 | `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `listing` |
 
-A source that is not resumable (or declines `Resume`) runs without the output lock or journal, as the local
-listing always has; `swath resume` on it is an error.
+A source that is not resumable (or declines `Resume`) runs without a journal; it still takes the output lock
+like every run with an output. `swath resume` on it is an error.
 
 ## Provider capabilities
 

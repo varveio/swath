@@ -284,14 +284,19 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		return sum.failed(err)
 	}
 	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: sum.Resources.RowBudgetBytes, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillMax: cfg.Limits.Spill.Max, SpillReserve: cfg.Limits.Spill.Reserve}
-	if !cfg.Limits.Spill.Off {
-		// Spill files are disposable: a crash relists their rows.
-		oopt.SpillDir = os.TempDir()
-		if cfg.Output.Dir != "" {
-			oopt.SpillDir = filepath.Join(cfg.Output.Dir, dataset.JournalDir, "spill")
-			// Reclaim a crashed run's orphans (the output lock is held).
-			_ = os.RemoveAll(oopt.SpillDir)
+	// Spill files are disposable: a crash relists their rows.
+	if cfg.Output.Dir != "" {
+		spill := filepath.Join(cfg.Output.Dir, dataset.JournalDir, "spill")
+		// Reclaim a crashed run's orphans (the output lock is held), with
+		// spill on or off.
+		if err := os.RemoveAll(spill); err != nil && cfg.Warn != nil {
+			cfg.Warn(fmt.Sprintf("a previous run's spill files could not be removed: %v", err))
 		}
+		if !cfg.Limits.Spill.Off {
+			oopt.SpillDir = spill
+		}
+	} else if !cfg.Limits.Spill.Off {
+		oopt.SpillDir = os.TempDir()
 	}
 	env.Order = oopt
 	ost, router, err := src.Run(ctx, env)

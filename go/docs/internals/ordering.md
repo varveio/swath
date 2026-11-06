@@ -62,7 +62,7 @@ place, so the range keeps listing while a slow frontier holds the output back:
 - **Defensive reads.** A frame length is checked against a bound (256 MiB) before anything is allocated, and
   the reader is closed on every error path.
 - **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
-  on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it, under the output
+  on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it (spill on or off; a failed removal is a warning), under the output
   lock, and the resume relists from the durable frontier.
 - **Memory.** In-memory buffered rows stay within the budget plus one publish batch per worker plus the
   frontier path, with or without spill (`TestSpillKeepsWorkersBusy`). Workers also claim new ranges while
@@ -71,10 +71,14 @@ place, so the range keeps listing while a slow frontier holds the output back:
   and the spill filesystem keeps `-spill-reserve` bytes free afterwards (default 1 GiB, room for the parts
   still to be published; the spill directory is under the output directory, so they share the filesystem). A refused
   frame is not an error: the emitter waits on the reorder budget, as with `swath diag list --no-spill`, and retries after the
-  drainer moves. An ENOSPC on a spill write is handled the same way after truncating the torn frame. A
+  drainer moves. An ENOSPC on a frame of rows is handled the same way after truncating the torn frame; one
+  that cannot be undone, or on a trailer, stops the run (resumable: nothing durable is lost). A
   range's bytes return to the budget when its file is deleted after replay. Trailers (a few bytes) are
   always admitted, and concurrent emitters can each pass the free-space check before either writes, so the
-  reserve can be undershot by at most one frame per worker. The summary reports `spill_peak_bytes` and
+  reserve can be undershot by at most one frame per worker; the reserve is checked, not held, so parts
+  being published can use it too. A frame read back is refused (before allocating) past 256 MiB, compressed
+  or decoded; a spill marker (the item a node keeps per frame on disk) counts its own size against the row
+  budget; a failed run closes every open spill reader. The summary reports `spill_peak_bytes` and
   `spill_refused` (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical
   output; a reserve larger than the disk spills nothing).
 - `swath diag list --no-spill` restores waiting on the budget.

@@ -39,8 +39,11 @@ import (
 // bytes free afterwards (room for the parts still to be published, which
 // share the filesystem when the spill directory is under the output). A
 // refused frame is not an error: the emitter waits on the reorder budget,
-// as without spill (graceful backpressure). An ENOSPC on a spill write is
-// treated the same way, after truncating the torn frame.
+// as without spill (graceful backpressure). An ENOSPC on a frame of rows is
+// treated the same way, after truncating the torn frame; an ENOSPC that
+// cannot be undone (opening the file, a failed truncation) or on a
+// trailer stops the run with that error. The reserve is checked, not held:
+// concurrent writers and the parts being published can use it up first.
 
 var spillCRC = crc32.MakeTable(crc32.Castagnoli)
 
@@ -58,6 +61,9 @@ type spiller[P any] struct {
 	enc      sync.Pool // *zstd.Encoder
 	dec      *zstd.Decoder
 
+	mu   sync.Mutex
+	open map[*spillFile]struct{} // files with an open reader, closed by close
+
 	rows, frames, bytes, files atomic.Int64
 }
 
@@ -69,20 +75,38 @@ func newSpiller[P any](codec schema.Codec[P], parent string, compress bool, max,
 	if err != nil {
 		return nil, fmt.Errorf("spill: %w", err)
 	}
-	s := &spiller[P]{codec: codec, dir: dir, compress: compress, max: max, reserve: reserve}
+	s := &spiller[P]{codec: codec, dir: dir, compress: compress, max: max, reserve: reserve, open: map[*spillFile]struct{}{}}
 	if compress {
-		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1)); err != nil {
+		// A decoded frame is bounded like a raw one: a damaged or hostile
+		// frame cannot claim more memory than any frame written.
+		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxSpillDecoded)); err != nil {
 			return nil, err
 		}
 	}
 	return s, nil
 }
 
+// close releases every reader still open (a run that failed downstream
+// of a replay leaves one) and removes the spill directory.
 func (s *spiller[P]) close() {
+	s.mu.Lock()
+	for f := range s.open {
+		f.close()
+	}
+	s.open = map[*spillFile]struct{}{}
+	s.mu.Unlock()
 	if s.dec != nil {
 		s.dec.Close()
 	}
 	_ = os.RemoveAll(s.dir)
+}
+
+// closeFile closes f's reader and forgets it.
+func (s *spiller[P]) closeFile(f *spillFile) {
+	s.mu.Lock()
+	delete(s.open, f)
+	s.mu.Unlock()
+	f.close()
 }
 
 // spillFile is one range's file. Its owner (the range's emitter) appends;
@@ -152,6 +176,11 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 	}
 	if err != nil {
 		s.live.Add(-n)
+		if err == errSpillFull && final {
+			// A trailer cannot wait: the range is complete and its file is
+			// unreadable without it. The run stops (resumable).
+			return fmt.Errorf("spill trailer: %w", syscall.ENOSPC)
+		}
 		if err == errSpillFull {
 			s.refused.Add(1)
 			s.full.Store(true)
@@ -202,6 +231,10 @@ var errSpillFrame = errors.New("spill: corrupt frame")
 // maxSpillFrame bounds a frame read back: an emitter batch is far smaller.
 const maxSpillFrame = 256 << 20
 
+// maxSpillDecoded bounds a compressed frame's decoded size (a variable for
+// tests).
+var maxSpillDecoded uint64 = maxSpillFrame
+
 func (f *spillFile) close() {
 	if f.f != nil {
 		f.f.Close()
@@ -218,27 +251,30 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 			return nil, fmt.Errorf("spill: %w", err)
 		}
 		f.f, f.r = fh, bufio.NewReaderSize(fh, 1<<16)
+		s.mu.Lock()
+		s.open[f] = struct{}{}
+		s.mu.Unlock()
 	}
 	var hdr [8]byte
 	if _, err := io.ReadFull(f.r, hdr[:]); err != nil {
-		f.close()
+		s.closeFile(f)
 		return nil, fmt.Errorf("spill: %w", err)
 	}
 	size := binary.LittleEndian.Uint32(hdr[:4])
 	if size == 0 || size > maxSpillFrame { // checked before allocating
-		f.close()
+		s.closeFile(f)
 		return nil, errSpillFrame
 	}
 	payload := make([]byte, size)
 	if _, err := io.ReadFull(f.r, payload); err != nil || crc32.Checksum(payload, spillCRC) != binary.LittleEndian.Uint32(hdr[4:]) {
-		f.close()
+		s.closeFile(f)
 		return nil, errSpillFrame
 	}
 	body := payload[1:]
 	switch payload[0] {
 	case 'T':
 		n, k := binary.Uvarint(body)
-		f.close()
+		s.closeFile(f)
 		if k <= 0 || int64(n) != f.read {
 			return nil, fmt.Errorf("spill: %s holds %d rows, trailer says %d", f.path, f.read, n)
 		}
@@ -248,17 +284,17 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 	case 'Z':
 		var err error
 		if body, err = s.dec.DecodeAll(body, nil); err != nil {
-			f.close()
+			s.closeFile(f)
 			return nil, errSpillFrame
 		}
 	case 'R':
 	default:
-		f.close()
+		s.closeFile(f)
 		return nil, errSpillFrame
 	}
 	rows, err := decodeRows(body, s.codec)
 	if err != nil {
-		f.close()
+		s.closeFile(f)
 		return nil, err
 	}
 	f.read += int64(len(rows))

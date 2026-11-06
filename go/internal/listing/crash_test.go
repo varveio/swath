@@ -444,8 +444,18 @@ func TestENOSPCOnJournalResumes(t *testing.T) {
 	if !errors.Is(err, syscall.ENOSPC) {
 		t.Fatalf("got %v", err)
 	}
-	if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
+	// A crashed run's spill files are reclaimed by the resume, spill on or off.
+	orphan := filepath.Join(out, dataset.JournalDir, "spill", "orphan")
+	if err := os.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := crashConfig(url, out, true)
+	cfg.Limits.Spill.Off = true
+	if _, err := Run(context.Background(), cfg); err != nil {
 		t.Fatalf("resume: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(orphan)); err == nil {
+		t.Fatal("the resume left a crashed run's spill files")
 	}
 	sameDataset(t, "after ENOSPC", ref, out)
 }

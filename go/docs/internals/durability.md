@@ -7,7 +7,8 @@ and the provider. Filesystem runs opt out: they are fast enough to restart.
 
 ## Progress states
 
-A key passes through five states. Only the last two survive a crash, and they are never ahead of each other:
+A key passes through five states. Only the last two survive a crash. Durable progress always runs ahead of
+the rename into `data/` (a record is synced before its part is renamed), and recovery closes that gap:
 
 | State | Where it lives | After a crash |
 |---|---|---|
@@ -15,9 +16,9 @@ A key passes through five states. Only the last two survive a crash, and they ar
 | emitted | rows in the order stage (memory, or a disposable spill file) | listed again from the durable frontier |
 | encoded | an open or closed part in `.swath/parts/` | discarded unless its journal record is durable |
 | durable | a synced journal record for a synced part | kept; the part is renamed if the rename was lost |
-| committed | renamed into `data/`, and finally named by `manifest.json` (the dataset commit) | kept |
+| published | renamed into `data/` (early, part by part; not yet a dataset) | kept |
 
-The durable frontier K is the max key of the last record, and records exist only for a contiguous ordinal
+The dataset is committed only when `manifest.json` names every part. The durable frontier K is the max key of the last record, and records exist only for a contiguous ordinal
 prefix (part i is published only after part i−1). No worker's cursor is ever persisted: a worker that has
 fetched far past K holds rows that exist only in memory, so the resume lists from K, not from any cursor.
 
@@ -145,10 +146,11 @@ tail as JSON lines.
   the page cache does. This is what the crash matrix and the SIGKILL tests demonstrate.
 - **Power loss or a kernel crash.** Recovery holds when the filesystem honours `fsync` on files and
   directories (ext4, XFS and APFS do). Before a journal record names a part:
-  - the part file is synced, and so is its directory entry in `data/`;
+  - the part file is synced, and so is its directory entry in `.swath/parts/`;
   - `data/` and `.swath/` were created with their entries in the output directory synced;
   - the journal frame is synced before `Append` returns;
-  - a rename is followed by a sync of `data/`.
+  - a rename is followed by a sync of `data/`;
+  - recovery syncs the journal before renaming on its strength, and `data/` before removing temporary parts.
 
   Nothing tests this: SIGKILL cannot show power-loss behaviour.
 - **Unsupported on Windows:** directories cannot be synced and the lock is not enforced, so neither

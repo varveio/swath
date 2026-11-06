@@ -28,6 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
@@ -150,6 +151,17 @@ var hookBeforeDrain, hookAfterExpand func()
 
 // countRows makes the budget count rows instead of bytes (tests).
 var countRows bool
+
+// markerUnits is what a spill marker (the item left in a node for a frame
+// on disk) counts against the budget: its own size, so a range that spills
+// many frames still holds the bound in memory. Nothing when the budget
+// counts rows (tests).
+func markerUnits() int64 {
+	if countRows {
+		return 0
+	}
+	return int64(unsafe.Sizeof(item[struct{}, struct{}]{}))
+}
 
 // full reports whether the budget is used up (mu held): bytes buffered here
 // plus bytes held downstream.
@@ -490,8 +502,8 @@ func (e *emitter[R, P]) spill() error {
 			return err // refused: the items not yet written keep their rows
 		}
 		e.rows -= len(e.items[i].rows)
-		e.units -= e.items[i].units
-		e.items[i] = item[R, P]{spill: e.n.spill}
+		e.units -= e.items[i].units - markerUnits()
+		e.items[i] = item[R, P]{spill: e.n.spill, units: markerUnits()}
 	}
 	return nil
 }
@@ -589,6 +601,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 				continue
 			}
 			if it.spill != nil {
+				released += it.units
 				o.mu.Unlock()
 				err := o.replay(it.spill)
 				o.mu.Lock()

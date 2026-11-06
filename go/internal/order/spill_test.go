@@ -5,11 +5,14 @@ package order
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
@@ -186,5 +189,64 @@ func TestSpillDiskBudget(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
 		t.Fatalf("spill files left: %d", len(ents))
+	}
+}
+
+// TestSpillReadFailures: a frame whose length exceeds the limit, and a
+// compressed frame that decodes past the decode limit, are refused before
+// their memory is allocated; a reader left open by a failure downstream
+// of a replay is closed with the spiller.
+func TestSpillReadFailures(t *testing.T) {
+	newSp := func(compress bool) *spiller[tp] {
+		s, err := newSpiller(testSchema.Codec, t.TempDir(), compress, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	s := newSp(false)
+	f := s.file()
+	if err := os.WriteFile(f.path, []byte{0xff, 0xff, 0xff, 0x7f, 0, 0, 0, 0}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.f != nil {
+		t.Fatalf("oversized length: %v (reader open %v)", err, f.f != nil)
+	}
+	s.close()
+
+	old := maxSpillDecoded
+	maxSpillDecoded = 1 << 20
+	s = newSp(true)
+	maxSpillDecoded = old
+	enc, _ := zstd.NewWriter(nil)
+	bomb := enc.EncodeAll(make([]byte, 4<<20), nil) // a few hundred bytes that expand to 4 MiB
+	f = s.file()
+	if err := os.WriteFile(f.path, s.frame('Z', bomb), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.f != nil {
+		t.Fatalf("decoded past the limit: %v (reader open %v)", err, f.f != nil)
+	}
+	s.close()
+
+	s = newSp(false)
+	f = s.file()
+	rows := []schema.Row[tp]{{Key: "a"}, {Key: "b"}}
+	if err := s.write(f, rows[:1], false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.write(f, rows[1:], true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.next(f); err != nil || len(got) != 1 {
+		t.Fatalf("replay: %v %v", got, err)
+	}
+	// The sink fails here; the run ends without reading the trailer.
+	if f.f == nil {
+		t.Fatal("the reader is not open mid-file")
+	}
+	s.close()
+	if f.f != nil {
+		t.Fatal("close left a spill reader open")
 	}
 }

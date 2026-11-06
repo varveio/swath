@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/journal"
@@ -130,5 +132,23 @@ func TestRefusedRunLeavesOwnerMetadata(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(progress); string(b) != "owner" {
 		t.Fatalf("the refused run rewrote the owner's progress: %q", b)
+	}
+}
+
+// TestDiskFullIsResumable: a full disk loses nothing durable, so with an
+// intact journal the outcome is resumable, with the cause named.
+func TestDiskFullIsResumable(t *testing.T) {
+	dir := t.TempDir()
+	j, err := journal.Create(dir, journal.Identity{Tool: "swath-go"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	o := classify(fmt.Errorf("journal: %w", syscall.ENOSPC), nil, dir)
+	if o.ExitCode != exitFatal || !o.Resumable || o.Cause != "no_space" {
+		t.Fatalf("journal ENOSPC: %+v", o)
+	}
+	if o := classify(fmt.Errorf("journal: %w", syscall.ENOSPC), nil, t.TempDir()); o.Resumable {
+		t.Fatalf("ENOSPC without a journal is resumable: %+v", o)
 	}
 }

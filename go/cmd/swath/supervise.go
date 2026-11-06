@@ -78,6 +78,11 @@ func classify(err, cause error, dir string) outcome {
 		o.Class, o.ExitCode = "terminated", exitTerminated
 	case errors.As(cause, &se):
 		o.Class, o.ExitCode = "interrupted", exitInterrupted
+	case errors.Is(err, syscall.ENOSPC):
+		// A full disk stops the run (a journal append or a part cannot be
+		// written) but loses nothing durable: resumable once there is
+		// space, when the journal is intact.
+		o.Class, o.ExitCode, o.Cause = "fatal", exitFatal, "no_space"
 	default:
 		o.Class, o.ExitCode, o.Resumable = "fatal", exitFatal, false
 		var ce interface{ Class() string }

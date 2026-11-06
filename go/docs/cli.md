@@ -205,13 +205,14 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   `swath diag list --no-journal` turns it off (parts are then published only at the end).
 - **Exit status and outcome.** A supervisor reads the exit code and, for a run that did not complete,
   `DIR/error.json` (`class`, `exit_code`, `message`, `resumable`, and `cause`: the provider's failure class such
-  as `throttle` or `access_denied`); it never needs stderr. `error.json` is written only into an output this
-  tool owns (one with `.swath/`) and is removed when a later run or resume completes.
+  as `throttle` or `access_denied`, or `no_space` for a full disk); it never needs stderr. `error.json` and the
+  progress file are written only while the run holds the output lock (a run refused by another owner writes
+  neither), and `error.json` is removed when a later run or resume completes.
 
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
   | 0 | `completed` | the dataset is committed (or a dry run finished) | – |
-  | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
+  | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0; a full disk (`cause` `no_space`) is `fatal` too | no; `no_space`: yes, journal intact, once there is space |
   | 2 | `usage` | a malformed command line | no |
   | 75 | `stuck` | no progress for `--stall-timeout` (default 10 min; a warning at half) | yes, journal intact |
   | 124 | `deadline` | `--max-duration` reached with the output unfinished | yes |
