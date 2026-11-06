@@ -1579,6 +1579,53 @@ only; its GCS handler is built without the latency function (`ReplayServer`: `ne
 identity, metrics)`), so the two routes' wall times on replay are not comparable, and no live GCS bucket was
 listed.
 
+## Overfetch on the deep recordings (2026-11-06)
+
+**The extra requests and overfetched keys on the deep recordings come from Go splitting 7-9x more often than
+Java, which is what makes it 2-5x faster; per split, Go overfetches within 15 % of Java. The rest is empty
+upper children, which Java avoids by probing the pivot from the idle thief. Probing costs a request per
+probe; at Go's split rate that is more requests than the empty children it saves, so the mechanism is not
+ported.**
+
+**Measurement.** Replay at the recording's p50 page latency (fourcastnetgfs 99 ms, nara 103 ms), 64 workers,
+`--seed`, build `66f1aeb`, 3 interleaved reps (Java defaults, Go defaults, Go `--probe`), one session on
+2026-11-06; median (min–max); harness `bench/policy_replay.sh`, table `bench/policy_table.py`.
+
+| Recording | Arm | Wall s | Requests | Splits | Empty children | Overfetched keys | Probes | Mean active |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| fourcastnetgfs | java-default | 81.8 (80.2–84.3) | 4,916 (4,893–4,942) | 287 (273–292) | 54 (53–58) | 177,414 (176,414–179,414) | 648 (630–676) | 8.6 |
+| fourcastnetgfs | go-base | 16.4 (16.0–17.0) | 6,078 (6,054–6,231) | 2,464 (2,366–2,598) | 1,093 (1,078–1,237) | 1,751,569 (1,727,569–1,904,569) | 256 | 40.4 |
+| fourcastnetgfs | go-probe | 38.0 (32.9–38.7) | 7,979 (7,549–8,256) | 1,113 (971–1,123) | 201 (130–251) | 734,070 (639,070–774,070) | 3,135 (2,840–3,452) | 21.4 |
+| nara-1950-census | java-default | 111.4 (109.9–114.0) | 14,961 (14,933–14,964) | 1,015 (997–1,034) | 170 (165–177) | 709,051 (707,051–719,051) | 704 (685–711) | 19.3 |
+| nara-1950-census | go-base | 55.0 (49.6–57.2) | 19,128 (18,961–19,595) | 7,131 (6,949–7,632) | 2,908 (2,803–3,409) | 5,360,246 (5,192,656–5,828,656) | 224 | 39.1 |
+| nara-1950-census | go-probe | 119.9 (113.0–120.3) | 24,343 (23,567–25,169) | 3,664 (3,493–3,896) | 443 (368–551) | 2,325,656 (2,183,656–2,487,656) | 8,476 (7,842–9,140) | 22.0 |
+
+Per split (medians): overfetched keys 711 (Go) vs 618 (Java) on fourcastnetgfs and 752 vs 699 on nara;
+empty children 0.44 vs 0.19 and 0.41 vs 0.17.
+
+**What Java does at range ends and splits that Go does not.** Both list a range with full pages (1,000 keys)
+and trim the last one at the bound (Java `RangeScanner` re-reads `hi` per key; S3 has no end bound), so
+both overfetch up to a page per range end. Java splits from the thief: an idle worker picks a victim, probes
+the pivot with a 1-key request (`Thief` `RequestKeyProbe`, bisecting when it is empty) while the victim keeps
+listing, and only then narrows the victim's bound. Go splits at the owner, after a full page, when workers
+are idle; its `--probe` sends the same 1-key probe but on the owner's path, before the split.
+
+**Readings.**
+- Go's excess over Java is the split count: 8.6x on fourcastnetgfs and 7.0x on nara, buying 40 ranges active
+  against Java's 9-19 and 5.0x and 2.0x less wall. Each split adds a trimmed page end and one child's first
+  page, so requests (+24 % and +28 %) and overfetched keys (9.9x and 7.6x) follow.
+- The per-split excess over Java is the empty upper children, each one request and up to a page of keys past
+  its bound. The probe removes most of them (1,093 → 201, 2,908 → 443) but sends 2.8 and 2.3 probes per split:
+  31 % and 27 % more requests than without it, and 2.3x and 2.2x the wall, because the owner waits for the
+  probe and an empty probe cools the range down.
+- A thief-side (asynchronous) probe would take the wait off the owner, but not the requests: it saves at most
+  one request per empty child (0.41-0.44 per split) and spends at least one per probe (Java spends 2.3 and
+  0.7 per split). On these recordings it cannot bring requests below the default's, and Go's wall is already
+  under Java's; it would trade requests for overfetched keys (bytes listed, not requests billed). The
+  owner-only split stays; `--probe` stays off.
+- GCS ranges send `endOffset` and overfetch nothing past a bound ("GCS provider"); the S3 cost is S3's
+  missing end bound at Go's split rate.
+
 ## Layering: provider registry
 
 The pipeline no longer knows which providers exist. Before this change, `listing` imported both providers, held
