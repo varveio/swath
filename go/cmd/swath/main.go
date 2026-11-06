@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -73,6 +75,45 @@ func main() {
 		os.Exit(exitUsage)
 	}
 	os.Exit(exitFatal)
+}
+
+// newAttempt identifies this invocation (listing.Attempt).
+func newAttempt() *listing.Attempt {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return &listing.Attempt{ID: hex.EncodeToString(b[:]), Started: time.Now().UTC()}
+}
+
+// cfgOut is the output directory a run with o would own ("" with
+// --count-only).
+func cfgOut(o options) string {
+	if o.countOnly {
+		return ""
+	}
+	return o.out
+}
+
+// writeReport writes the run report to path (--report), atomically, when
+// the attempt ends. That file, at a path the supervisor names outside the
+// output, is the attempt's outcome of record; a failure to write it goes to
+// stderr and the exit code stands alone.
+func writeReport(path string, r listing.Report) {
+	if path == "" {
+		return
+	}
+	if err := writeFileAtomic(path, r); err != nil {
+		fmt.Fprintf(errOut, "swath: the report is not written to %s: %v\n", path, err)
+	}
+}
+
+// stopEarly ends an attempt that stopped before a run began (an unknown
+// scheme, say): the report (--report) holds its outcome.
+func stopEarly(report string, argv []string, dir string, att *listing.Attempt, err error) error {
+	o := classify(err, nil, "")
+	r := listing.Unstarted(argv, dir, att, err)
+	r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Cause = o.Class, o.ExitCode, o.Cause
+	writeReport(report, r)
+	return &exitError{err, o.ExitCode}
 }
 
 // usageError is a malformed command line.
@@ -148,7 +189,7 @@ type options struct {
 	out                    string
 	overwrite              bool
 	countOnly              bool
-	reportFormat           string
+	reportFormat, report   string
 	maxDuration, stall     time.Duration
 	workers, encoders      int
 	partSize, memory       size
@@ -159,7 +200,7 @@ type options struct {
 }
 
 // runtimeFlags may change on swath resume: they do not change the output.
-var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "report-format", "max-duration", "stall-timeout"}
+var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "report-format", "report", "max-duration", "stall-timeout"}
 
 func newFlags(o *options, diag bool) *flag.FlagSet {
 	f := flag.NewFlagSet("list", flag.ContinueOnError)
@@ -178,6 +219,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	o.spillReserve = 1 << 30
 	f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem, for the parts still to be written")
 	f.StringVar(&o.reportFormat, "report-format", "text", "`text` (one line) or json (the run report, as in run.json)")
+	f.StringVar(&o.report, "report", "", "also write the run report (JSON, with the outcome and the attempt id) to this `file` when the attempt ends, on failure too")
 	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
 	f.DurationVar(&o.stall, "stall-timeout", 10*time.Minute, "stop the run as stuck after this long without progress (exit 75; resumable); 0: never")
 	if diag {
@@ -212,11 +254,15 @@ func usage(w io.Writer, f *flag.FlagSet, diag bool) {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, diag bool) error {
-	return runWith(ctx, args, stdout, diag, nil, false)
+	return runWith(ctx, args, stdout, diag, nil, false, nil)
 }
 
-// runWith lists; argv0 is the recorded command, resumed tells a resume.
-func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, recorded []string, resumed bool) error {
+// runWith lists; argv0 is the recorded command, resumed tells a resume, att
+// is the attempt (nil: a new one).
+func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, recorded []string, resumed bool, att *listing.Attempt) error {
+	if att == nil {
+		att = newAttempt()
+	}
 	var o options
 	f := newFlags(&o, diag)
 	var root string
@@ -254,22 +300,23 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	}
 	pf, err := registry.Lookup(root)
 	if err != nil {
-		return err
+		return stopEarly(o.report, argv, cfgOut(o), att, err)
 	}
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize),
 			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
-		Argv: argv,
-		Warn: func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) },
+		Argv:    argv,
+		Attempt: att,
+		Warn:    func(m string) { fmt.Fprintln(os.Stderr, "swath: warning:", m) },
 	}
 	if !o.countOnly {
 		cfg.Output.Dir = o.out
 	}
 	stopProfile, err := profile()
 	if err != nil {
-		return err
+		return stopEarly(o.report, argv, cfgOut(o), att, err)
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -292,7 +339,9 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 				err = &classified{err, c}
 			}
 		}
-		return err, classify(err, context.Cause(ctx), cfg.Output.Dir)
+		out := classify(err, context.Cause(ctx), cfg.Output.Dir)
+		out.Attempt = att
+		return err, out
 	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
@@ -318,6 +367,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	}
 	sum.Outcome.Class, sum.Outcome.ExitCode, sum.Outcome.Resumable, sum.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
 	sum.Outcome.Unrecorded = unrecorded
+	writeReport(o.report, sum)
 	if o.reportFormat == "json" {
 		// The report goes out on failure too: its outcome names the error.
 		enc := json.NewEncoder(stdout)

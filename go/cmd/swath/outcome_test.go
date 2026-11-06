@@ -342,12 +342,90 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 		if got := dirTree(t, dir); !maps.Equal(want, got) {
 			t.Fatalf("%s: resume changed the directory:\nbefore %v\nafter  %v", layout, want, got)
 		}
-		err := runWith(ctx, []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--output", dir}, io.Discard, false, nil, true)
+		err := runWith(ctx, []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--output", dir}, io.Discard, false, nil, true, nil)
 		if !errors.Is(err, listing.ErrNothingToResume) {
 			t.Fatalf("%s: resumed run: %v", layout, err)
 		}
 		if got := dirTree(t, dir); !maps.Equal(want, got) {
 			t.Fatalf("%s: a resumed run changed the directory:\nbefore %v\nafter  %v", layout, want, got)
 		}
+	}
+}
+
+// TestAttemptIdentifiesTheOutcome: error.json and the report a supervisor
+// names (--report) carry the same attempt. When a later attempt cannot
+// write error.json (its temporary file cannot be created), the old
+// error.json stays, with the same class and exit code as the new outcome,
+// but the later attempt's report names another attempt, so a supervisor
+// that compares them never takes the old outcome for the current one; the
+// same for a refusal before the run (Sol, fifth review, M4).
+func TestAttemptIdentifiesTheOutcome(t *testing.T) {
+	gcs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // no progress: every attempt is stuck
+	}))
+	t.Cleanup(gcs.Close)
+	captureStderr(t)
+	dir := filepath.Join(t.TempDir(), "ds")
+	reports := t.TempDir()
+	errorFile := filepath.Join(dir, errorName)
+	readOutcome := func() outcome {
+		t.Helper()
+		var o outcome
+		b, err := os.ReadFile(errorFile)
+		if err != nil || json.Unmarshal(b, &o) != nil || o.Attempt == nil || o.Attempt.ID == "" {
+			t.Fatalf("error.json: %v %q", err, b)
+		}
+		return o
+	}
+	readReport := func(path string) listing.Report {
+		t.Helper()
+		var r listing.Report
+		b, err := os.ReadFile(path)
+		if err != nil || json.Unmarshal(b, &r) != nil || r.Attempt == nil || r.Attempt.ID == "" {
+			t.Fatalf("report %s: %v %q", path, err, b)
+		}
+		return r
+	}
+	ctx := context.Background()
+	r1 := filepath.Join(reports, "1.json")
+	err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", gcs.URL + "/storage/v1/", "--gcs-anonymous", "--stall-timeout", "1s", "-o", dir, "--report", r1}, io.Discard, false)
+	if c := exitCode(t, err); c != exitStuck {
+		t.Fatalf("first attempt: exit %d (%v)", c, err)
+	}
+	old, rep := readOutcome(), readReport(r1)
+	if rep.Attempt.ID != old.Attempt.ID || !rep.Attempt.Started.Equal(old.Attempt.Started) || rep.Outcome.ExitCode != exitStuck || old.ExitCode != exitStuck {
+		t.Fatalf("first attempt: error.json %+v and report %+v %+v disagree", old, rep.Attempt, rep.Outcome)
+	}
+	stale, _ := os.ReadFile(errorFile)
+
+	os.MkdirAll(filepath.Join(errorFile+".tmp", "x"), 0o755)
+	r2 := filepath.Join(reports, "2.json")
+	if c := exitCode(t, resume(ctx, []string{dir, "--report", r2}, io.Discard)); c != exitStuck {
+		t.Fatalf("second attempt: exit %d", c)
+	}
+	if b, _ := os.ReadFile(errorFile); !bytes.Equal(b, stale) {
+		t.Fatalf("error.json was written: %q", b)
+	}
+	rep = readReport(r2)
+	if rep.Attempt.ID == old.Attempt.ID || rep.Outcome.ExitCode != exitStuck || !strings.Contains(rep.Outcome.Unrecorded, "write "+errorName) {
+		t.Fatalf("second attempt: report %+v %+v against the stale %+v", rep.Attempt, rep.Outcome, old.Attempt)
+	}
+	if rep.Attempt.Started.Before(old.Attempt.Started) {
+		t.Fatalf("second attempt started %v, before the first %v", rep.Attempt.Started, old.Attempt.Started)
+	}
+
+	// A refusal before the run (a damaged journal), its write failing too.
+	jb, _ := os.ReadFile(journal.Path(dir))
+	os.WriteFile(journal.Path(dir), append(jb, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0), 0o644)
+	r3 := filepath.Join(reports, "3.json")
+	if c := exitCode(t, resume(ctx, []string{dir, "--report", r3}, io.Discard)); c != exitFatal {
+		t.Fatalf("refusal: exit %d", c)
+	}
+	if b, _ := os.ReadFile(errorFile); !bytes.Equal(b, stale) {
+		t.Fatalf("refusal: error.json was written: %q", b)
+	}
+	rep = readReport(r3)
+	if rep.Attempt.ID == old.Attempt.ID || rep.Outcome.ExitCode != exitFatal || rep.Outcome.Class != "fatal" || !strings.Contains(rep.Outcome.Unrecorded, "write "+errorName) {
+		t.Fatalf("refusal: report %+v %+v", rep.Attempt, rep.Outcome)
 	}
 }

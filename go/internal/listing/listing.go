@@ -32,8 +32,10 @@ type Config struct {
 	Source SourceConfig
 	Output OutputConfig
 	Limits Limits
-	Argv   []string     // the command line, recorded in the run report and the journal
-	Warn   func(string) // one-time warnings for the user (nil: dropped)
+	Argv   []string // the command line, recorded in the run report and the journal
+	// Attempt, if set, identifies this invocation in its report.
+	Attempt *Attempt
+	Warn    func(string) // one-time warnings for the user (nil: dropped)
 	// Progress, if set, is updated while the run goes (watchdog, progress
 	// file); Progress.Owned says whether this run owns the output.
 	Progress *Progress
@@ -146,7 +148,7 @@ func (c *Config) resolve() error {
 // cause (ctx.Err() on cancellation).
 func Run(ctx context.Context, cfg Config) (Report, error) {
 	start := time.Now()
-	sum := Report{ReportVersion: ReportVersion, Build: build(), Timings: Timings{StartedAt: start.UTC()},
+	sum := Report{ReportVersion: ReportVersion, Build: build(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: start.UTC()},
 		Outcome: Outcome{Status: "failed"}}
 	if err := cfg.resolve(); err != nil {
 		return sum.failed(err)

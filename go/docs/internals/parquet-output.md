@@ -28,7 +28,10 @@ dataset layout"); this page says how the Go writer meets it.
 ## Run reports
 
 Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 1); `--report-format json` prints the
-same type, also for a dry run or a failure. Sections: `build` (tool, module version, VCS revision),
+same type, also for a dry run or a failure, and `--report FILE` writes it to FILE when the attempt ends (also for a
+resume refused before it runs). Sections: `build` (tool, module version, VCS revision), `attempt` (`id`, random
+per invocation, and `started`; `error.json` carries the same, so a reader holding the report can tell a stale
+`error.json` from this attempt's),
 `invocation` (argv, source, output, schema, workers, encoders, memory and part size), `outcome` (`committed`,
 `listed` or `failed`, the error, completeness, stop reason, per-entry errors, and the command's `class`,
 `exit_code`, `resumable` and `cause`, as in [../cli.md](../cli.md), and `unrecorded`: why `error.json` does not hold this outcome, when it does not), `timings` (timestamps and

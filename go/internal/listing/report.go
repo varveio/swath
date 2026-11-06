@@ -20,17 +20,45 @@ const ReportVersion = 1
 // (rows retained from an interrupted run, rows committed). Durations are
 // integers with their unit in the name.
 type Report struct {
-	ReportVersion int        `json:"report_version"`
-	Build         Build      `json:"build"`
-	Invocation    Invocation `json:"invocation"`
-	Outcome       Outcome    `json:"outcome"`
-	Timings       Timings    `json:"timings"`
-	Output        Output     `json:"output"`
-	Resources     Resources  `json:"resources"`
+	ReportVersion int   `json:"report_version"`
+	Build         Build `json:"build"`
+	// Attempt is the invocation this report accounts for (Config.Attempt).
+	Attempt    *Attempt   `json:"attempt,omitempty"`
+	Invocation Invocation `json:"invocation"`
+	Outcome    Outcome    `json:"outcome"`
+	Timings    Timings    `json:"timings"`
+	Output     Output     `json:"output"`
+	Resources  Resources  `json:"resources"`
 	// Source is the provider's account of the listing, under its name.
 	Source *SourceStats `json:"source,omitempty"`
 
 	report *source.Report
+}
+
+// Attempt identifies one invocation: its report and the outcome the command
+// records in the output (error.json) carry the same one, so a reader holding
+// this invocation's report can tell a stale outcome file, left by an earlier
+// attempt whose successor could not write its own, from a current one.
+type Attempt struct {
+	ID      string    `json:"id"`      // random, 128 bits, hex
+	Started time.Time `json:"started"` // when the invocation began (UTC)
+}
+
+// Unstarted is the report of an invocation that stopped before a run began
+// (a resume refused on its journal): what was asked, and the failure.
+func Unstarted(argv []string, out string, attempt *Attempt, err error) Report {
+	r := Report{ReportVersion: ReportVersion, Build: build(), Attempt: attempt,
+		Invocation: Invocation{Argv: argv, Out: out}, Outcome: Outcome{Status: "failed"}}
+	if err != nil {
+		r.Outcome.Error = err.Error()
+	}
+	now := time.Now().UTC()
+	r.Timings.StartedAt, r.Timings.FinishedAt = now, now
+	if attempt != nil {
+		r.Timings.StartedAt = attempt.Started
+		r.Timings.WallMs = now.Sub(attempt.Started).Milliseconds()
+	}
+	return r
 }
 
 // Build names the binary.

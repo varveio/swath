@@ -75,7 +75,7 @@ that is the commit. The run reports follow it.
 
 ## Resume
 
-`swath resume DIR` (it replays the command recorded in the journal header; only the runtime flags `--workers`, `--encoders`, `--memory`, `--spill-*` and `--report-format` may change):
+`swath resume DIR` (it replays the command recorded in the journal header; only the runtime flags `--workers`, `--encoders`, `--memory`, `--spill-*`, `--report-format`, `--report`, `--max-duration` and `--stall-timeout` may change):
 
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the
@@ -128,6 +128,20 @@ A journaled run that fails with an ordinary error (not a crash) leaves its tempo
 may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.
 `swath resume` on a complete dataset returns `ErrComplete`; on a directory without a journal (an empty
 workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `-overwrite`.
+
+## The outcome of an attempt
+
+The durable output says what was committed; how an attempt ended is a separate record. Each invocation gets an
+attempt (`listing.Attempt`: a random 128-bit id and its start time). The report a supervisor names with
+`--report FILE` (outside the output, a fresh path per attempt) is written when the attempt ends, on every
+outcome, refusals before the run included, and carries the attempt and the outcome; `error.json` in the output
+carries the same attempt and outcome when the attempt could record it under the lock. The contract for a
+supervisor is therefore the exit code plus that report; `error.json` is the dataset-local convenience, current
+only when its attempt id is the report's. An attempt that cannot write `error.json` (the storage refuses the
+write, another process owns the output, or the run changed before this process held the lock) leaves the
+previous file in place, perhaps with the same class and exit code, and says why in the report's
+`outcome.unrecorded` and on stderr (`TestAttemptIdentifiesTheOutcome`). Nothing can promise a new file on
+storage that refuses writes: without a report, only the exit code is current.
 
 ## Why splits need no transaction
 

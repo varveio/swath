@@ -10,9 +10,11 @@ swath --version                          print the build (tool, module version, 
 
 SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `swath list` writes a dataset to `--output` (`-o`)
 ([internals/parquet-output.md](internals/parquet-output.md)), or with `--count-only` only lists. It prints one
-line, or the run report (`run.json`) with `--report-format json`. `swath resume DIR` replays the command the
-journal recorded; only the runtime flags (`--workers`, `--encoders`, `--memory`, `--spill-max`,
-`--spill-reserve`, `--spill-compress`, `--report-format`) may be given again, anything else is a usage error.
+line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
+FILE when the attempt ends, on failure too. `swath resume DIR` replays the command the journal recorded; only
+the runtime flags (`--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
+`--report-format`, `--report`, `--max-duration`, `--stall-timeout`) may be given again, anything else is a
+usage error.
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
@@ -78,6 +80,8 @@ usage: swath list SOURCE --output DIR [flags]
     	S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
   -region string
     	S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
+  -report file
+    	also write the run report (JSON, with the outcome and the attempt id) to this file when the attempt ends, on failure too
   -report-format text
     	text (one line) or json (the run report, as in run.json) (default "text")
   -request-payer
@@ -98,7 +102,7 @@ usage: swath list SOURCE --output DIR [flags]
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, max-duration, stall-timeout may change.
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, report, max-duration, stall-timeout may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -166,6 +170,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
   -region string
     	S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
+  -report file
+    	also write the run report (JSON, with the outcome and the attempt id) to this file when the attempt ends, on failure too
   -report-format text
     	text (one line) or json (the run report, as in run.json) (default "text")
   -request-payer
@@ -192,7 +198,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, max-duration, stall-timeout may change.
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, report, max-duration, stall-timeout may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -225,9 +231,17 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Resume:** an S3 run keeps a journal in `DIR/.swath/` with the command that started it; after a crash or
   interruption, `swath resume DIR` continues it ([internals/durability.md](internals/durability.md)).
   `swath diag list --no-journal` turns it off (parts are then published only at the end).
-- **Exit status and outcome.** A supervisor reads the exit code and, for a run that did not complete,
-  `DIR/error.json` (`class`, `exit_code`, `message`, `resumable`, and `cause`: the provider's failure class such
-  as `throttle` or `access_denied`, or `no_space` for a full disk); it never needs stderr. `error.json` and the
+- **Exit status and outcome.** A supervisor's outcome of record is the exit code plus the report at the path
+  it names with `--report` (outside the output directory, a fresh path per attempt, or removed before the
+  attempt starts): `outcome` (`class`, `exit_code`, `resumable`, `cause`, `unrecorded`) and `attempt` (`id`,
+  random, and `started`). For a run that did not complete, `DIR/error.json` holds the same outcome in the
+  dataset (`class`, `exit_code`, `message`, `resumable`, `cause`: the provider's failure class such as
+  `throttle` or `access_denied`, or `no_space` for a full disk; and the same `attempt`); it never needs stderr.
+  `error.json` is a convenience: it is current only when its `attempt.id` is the report's. No program can
+  promise a new file on storage that refuses writes, so an attempt whose `error.json` write fails leaves the
+  previous one in place, possibly with the same class and exit code; its report names another attempt and says
+  why in `outcome.unrecorded`. With no report (it could not be written either; a usage error, exit 2, before
+  the flags were read), only the exit code is current. `error.json` and the
   progress file are written only while the run holds the output lock, and `error.json` is removed when a later
   run or resume completes. `error.json` is always the last attempt's outcome: a resume (or `--overwrite`) that
   fails before it runs (credentials that do not load, a damaged journal, a failed recovery) takes the lock and

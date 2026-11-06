@@ -62,7 +62,10 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	// The run a refusal below is about, as read now: it is settled only
 	// if it is still that run once this process holds the lock.
 	seen := journal.Witness(dir)
-	stop := func(err error) error { return refuse(dir, seen, err) }
+	att := newAttempt()
+	stop := func(err error) error {
+		return refuse(dir, seen, err, att, o.report, append([]string{"resume"}, args...))
+	}
 	if dataset.Committed(dir) {
 		return stop(listing.ErrComplete)
 	}
@@ -100,7 +103,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		cmd = append(cmd, a)
 	}
 	cmd = append(append(cmd, overrides...), "--output", dir)
-	return runWith(ctx, cmd, stdout, diag, argv, true)
+	return runWith(ctx, cmd, stdout, diag, argv, true, att)
 }
 
 // refuse settles a resume that stopped before it could run: its outcome
@@ -108,12 +111,18 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 // a supervisor never acts on a stale one; a committed dataset, a directory
 // without a run, an output another process owns and a run that changed
 // since seen (its journal.Witness) keep theirs, and the outcome goes to
-// stderr.
-func refuse(dir, seen string, err error) error {
+// stderr. The report (--report, if given) holds it in every case.
+func refuse(dir, seen string, err error, att *listing.Attempt, report string, argv []string) error {
 	o := classify(err, nil, dir)
-	if recorded, why := settleOutside(dir, seen, o); !recorded {
+	o.Attempt = att
+	recorded, why := settleOutside(dir, seen, o)
+	if !recorded {
 		reportUnrecorded(dir, o, why)
 	}
+	r := listing.Unstarted(argv, dir, att, err)
+	r.Invocation.Resume = true
+	r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Resumable, r.Outcome.Cause, r.Outcome.Unrecorded = o.Class, o.ExitCode, o.Resumable, o.Cause, why
+	writeReport(report, r)
 	return &exitError{err, o.ExitCode}
 }
 

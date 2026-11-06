@@ -55,6 +55,9 @@ type outcome struct {
 	// Cause is the provider's error class when one is known (S3: auth,
 	// access_denied, throttle, ...).
 	Cause string `json:"cause,omitempty"`
+	// Attempt is the invocation this outcome belongs to; the report
+	// (--report) carries the same one.
+	Attempt *listing.Attempt `json:"attempt,omitempty"`
 }
 
 // classify maps a command's error (and the cause its context was

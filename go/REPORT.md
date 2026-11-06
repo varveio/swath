@@ -1957,7 +1957,7 @@ classified from stderr). By reading the adapter, what it expects and this tool d
 
 | Runner expects (Java CLI contract) | This tool |
 |---|---|
-| `swath list URI --format parquet -o DIR --report PATH --sort` | `swath list URI -o DIR`; no `--format`, `--report` or `--sort` (output is always sorted Parquet; the report is `DIR/run.json`) |
+| `swath list URI --format parquet -o DIR --report PATH --sort` | `swath list URI -o DIR --report PATH`; no `--format` or `--sort` (output is always sorted Parquet); `--report` writes the run report when the attempt ends, on failure too (`DIR/run.json` after a commit as well) |
 | `--concurrency N`, `--no-sign-request`, `--requester-pays requester`, `--engine-toggle NAME=on\|off` | `--workers N`, `--anonymous`, `--request-payer`; policy toggles only as `swath diag list` flags |
 | `--max-duration D` ends with exit 0 and a summary `completed: false` (a truncated `_SAMPLE`) | exit 124, resumable, `error.json` class `deadline` |
 | a summary JSON at `--report` (and `_swath_summary.json` in the dataset after `swath resume`) with `completed`, live `objects` rewritten during the run, `sort.merge_progress_units`, `output.compressed_size_bytes` and `sort.segment_bytes` for disk sizing, and `cost`/`efficiency` blocks | `run.json` after the commit (`outcome.complete`, `output.rows_listed`, `output.bytes`; no cost or efficiency); live progress in `.swath/progress.json` (`objects`, `advance`) |
@@ -1965,6 +1965,7 @@ classified from stderr). By reading the adapter, what it expects and this tool d
 | `swath --version` first line | works: `swath-go <version> (<revision>)` |
 | `swath resume DIR` | works (same form) |
 | exit 75 resumable, 124 not resumable as a sample | 75 and 124 both resumable |
+| the outcome from the exit code and the summary | the exit code plus the report at `--report` (`outcome`, and `attempt`: a random id and start time); `DIR/error.json` carries the same outcome and attempt and is current only when its attempt id is the report's: an attempt that cannot write it leaves the previous one, and says why in `outcome.unrecorded` |
 | parts under `data/*.parquet` (renumbered on upload), the runner's own manifest | matches |
 
 ## Probe default off
