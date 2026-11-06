@@ -182,20 +182,3 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		}
 	}
 }
-
-// sameParts requires out's data/ to hold ref's parts byte for byte.
-func sameParts(t *testing.T, at, ref, out string) {
-	t.Helper()
-	parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
-	got, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))
-	if len(parts) == 0 || len(got) != len(parts) {
-		t.Fatalf("%s: %d parts, want %d", at, len(got), len(parts))
-	}
-	for _, p := range parts {
-		a, _ := os.ReadFile(p)
-		g, _ := os.ReadFile(filepath.Join(out, "data", filepath.Base(p)))
-		if !bytes.Equal(a, g) {
-			t.Fatalf("%s: %s differs", at, filepath.Base(p))
-		}
-	}
-}

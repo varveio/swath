@@ -5,8 +5,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +22,8 @@ import (
 
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
+
+	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 )
 
 // TestExitCodes: every outcome has its exit code and, for a run that did
@@ -161,5 +166,86 @@ func TestExitCodes(t *testing.T) {
 	}
 	if b, err := os.ReadFile(filepath.Join(stuck, progressName)); err != nil || !bytes.Contains(b, []byte(`"advance"`)) {
 		t.Fatalf("progress file: %v %s", err, b)
+	}
+}
+
+// TestGCSOutageThenResume: a GCS bucket that starts answering 503 to
+// every request three quarters through a run stops the run as stuck (75,
+// resumable: retry exhaustion requeues, it never fails the run); once the
+// outage ends, swath resume completes it with the dataset of an
+// uninterrupted run byte for byte.
+func TestGCSOutageThenResume(t *testing.T) {
+	h := gcstest.Handler(gcstest.Keys(20000), 20*time.Millisecond)
+	var served, failed, after atomic.Int64 // after: the outage begins after this many requests (0: never)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n := served.Add(1); after.Load() > 0 && n > after.Load() {
+			failed.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(503)
+			fmt.Fprint(w, `{"error":{"code":503,"message":"Backend Error"}}`)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	args := func(out string) []string {
+		return []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "4",
+			"--part-size", "4KiB", "--memory", "1MiB", "--stall-timeout", "1s", "-o", out}
+	}
+	ctx := context.Background()
+	ref := filepath.Join(t.TempDir(), "ref")
+	if err := run(ctx, args(ref), io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	total := served.Load()
+	// The outage begins three quarters through the requests a run makes.
+	served.Store(0)
+	after.Store(total * 3 / 4)
+	out := filepath.Join(t.TempDir(), "ds")
+	err := run(ctx, args(out), io.Discard, false)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != exitStuck {
+		t.Fatalf("outage: %v, want exit %d", err, exitStuck)
+	}
+	var o outcome
+	b, _ := os.ReadFile(filepath.Join(out, errorName))
+	if json.Unmarshal(b, &o) != nil || o.Class != "stuck" || !o.Resumable {
+		t.Fatalf("outage outcome: %s", b)
+	}
+	if _, err := os.Stat(filepath.Join(out, "manifest.json")); err == nil {
+		t.Skip("the run finished before the outage")
+	}
+	if failed.Load() == 0 {
+		t.Fatal("no request met the outage")
+	}
+	retained, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))
+	if len(retained) == 0 {
+		t.Fatal("no part was published before the outage")
+	}
+	after.Store(0)
+	if err := resume(ctx, []string{out}, io.Discard); err != nil {
+		t.Fatalf("resume after the outage: %v", err)
+	}
+	sameParts(t, "after the outage", ref, out)
+	if _, err := os.Stat(filepath.Join(out, errorName)); !os.IsNotExist(err) {
+		t.Fatal("error.json left after the resume completed")
+	}
+	t.Logf("a run makes %d requests; %d met the outage; %d parts retained", total, failed.Load(), len(retained))
+}
+
+// sameParts requires out's data/ to hold ref's parts byte for byte.
+func sameParts(t *testing.T, at, ref, out string) {
+	t.Helper()
+	parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
+	got, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))
+	if len(parts) == 0 || len(got) != len(parts) {
+		t.Fatalf("%s: %d parts, want %d", at, len(got), len(parts))
+	}
+	for _, p := range parts {
+		a, _ := os.ReadFile(p)
+		g, _ := os.ReadFile(filepath.Join(out, "data", filepath.Base(p)))
+		if !bytes.Equal(a, g) {
+			t.Fatalf("%s: %s differs", at, filepath.Base(p))
+		}
 	}
 }
