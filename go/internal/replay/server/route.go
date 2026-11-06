@@ -47,6 +47,9 @@ func requestTarget(r *http.Request) (path, query string) {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	arrived := time.Now()
 	path, rawQuery := requestTarget(r)
+	if s.serveOtherRoute(w, r, path, rawQuery) {
+		return
+	}
 	// The request ceiling queues a request beyond it, as a full worker
 	// pool would; shutdown releases the queue with a refusal.
 	select {
