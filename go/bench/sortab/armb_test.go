@@ -108,7 +108,8 @@ type BStats struct {
 	PeakBuffered   int64 `json:"peak_buffered_bytes"`
 	TailRows       int64 `json:"tail_rows"` // rows merged from memory
 	PeakNodes      int64 `json:"peak_nodes"`
-	PeakReaders    int64 `json:"peak_readers"` // runs open in the merge
+	PeakReaders    int64 `json:"peak_readers"` // runs open in one merge (at most maxFanIn)
+	Cascades       int   `json:"cascades"`     // intermediate merges (fan-in above maxFanIn)
 	SealWaitNs     int64 `json:"seal_wait_ns"` // emitters waiting for the run being written
 	SortNs         int64 `json:"sort_ns"`      // in-memory sorting, all buffers
 	ListingMs      int64 `json:"listing_ms"`
@@ -404,8 +405,13 @@ func runB(ctx context.Context, p *Provider, out, dir string, lim Limits, resume 
 	}
 	st.ListingMs = time.Since(start).Milliseconds()
 
-	// Merge: the runs and the in-memory tail, into the router.
+	// Merge: the runs and the in-memory tail, into the router; first,
+	// cascade the runs down to the fan-in (Java's cascade; sortout merged
+	// every run at once).
 	t := time.Now()
+	if err := cascade(s, &st); err != nil {
+		return st, err
+	}
 	tail := SortPtrs(pointers(s.buf), runtime.GOMAXPROCS(0))
 	st.SortNs += int64(time.Since(t))
 	st.TailRows = int64(len(tail))
@@ -452,7 +458,7 @@ func runB(ctx context.Context, p *Provider, out, dir string, lim Limits, resume 
 		readers = append(readers, rr)
 		sources = append(sources, rr)
 	}
-	st.Runs, st.PeakReaders = len(ck.Runs), int64(len(readers))
+	st.Runs, st.PeakReaders = len(ck.Runs), max(st.PeakReaders, int64(len(readers)))
 	next2 := mergeSources(sources)
 	var n int64
 	for {
@@ -506,6 +512,89 @@ func runB(ctx context.Context, p *Provider, out, dir string, lim Limits, resume 
 }
 
 var _ source.Emitter[Range, s3.Object] = (*bEmitter)(nil)
+
+// maxFanIn bounds the runs one merge reads at once (each an open file, a
+// 64 KiB buffer and one decoded frame of up to frameRows rows).
+var maxFanIn = 64
+
+// cascade merges the oldest maxFanIn runs into one until at most
+// maxFanIn-1 remain (the tail is the merge's last input). Each merged run
+// is synced and checkpointed before its inputs are removed, so a crash
+// keeps either the inputs or the merged run.
+func cascade(s *sorter, st *BStats) error {
+	for len(s.ck.Runs) > maxFanIn-1 {
+		in := s.ck.Runs[:maxFanIn]
+		var readers []*runReader
+		closeAll := func() {
+			for _, rr := range readers {
+				rr.Close()
+			}
+		}
+		var srcs []mergeSource
+		for _, r := range in {
+			rr, err := openRun(filepath.Join(s.dir, r.Name), s.s.Codec, &st.RunBytesRead)
+			if err != nil {
+				closeAll()
+				return err
+			}
+			readers = append(readers, rr)
+			srcs = append(srcs, rr)
+		}
+		st.PeakReaders = max(st.PeakReaders, int64(len(readers)))
+		name := fmt.Sprintf("run-%05d.bin", s.next)
+		s.next++
+		rw, err := createRun(filepath.Join(s.dir, name), s.s.Codec)
+		if err != nil {
+			closeAll()
+			return err
+		}
+		next := mergeSources(srcs)
+		for {
+			r, err := next()
+			if err == nil && r != nil {
+				err = rw.add(r)
+			}
+			if err != nil {
+				rw.f.Close()
+				closeAll()
+				return err
+			}
+			if r == nil {
+				break
+			}
+		}
+		closeAll()
+		if err := rw.close(); err != nil {
+			return err
+		}
+		if err := dataset.SyncDir(s.dir); err != nil {
+			return err
+		}
+		st.RunBytesWrote += rw.n
+		st.Cascades++
+		var inBytes int64
+		for _, r := range in {
+			inBytes += r.Bytes
+		}
+		s.live += rw.n
+		st.PeakStaging = max(st.PeakStaging, s.live)
+		s.ck.Runs = append([]runFile{{Name: name, Rows: rw.rows, Bytes: rw.n}}, s.ck.Runs[maxFanIn:]...)
+		b, err := json.Marshal(s.ck)
+		if err != nil {
+			return err
+		}
+		if err := saveCheckpoint(s.dir, b); err != nil {
+			return err
+		}
+		for _, r := range in {
+			if err := os.Remove(filepath.Join(s.dir, r.Name)); err != nil {
+				return err
+			}
+		}
+		s.live -= inBytes
+	}
+	return nil
+}
 
 func msDuration(ms int64) time.Duration { return time.Duration(ms) * time.Millisecond }
 

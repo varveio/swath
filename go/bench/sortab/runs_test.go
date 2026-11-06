@@ -31,46 +31,83 @@ var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
 type row = schema.Row[s3.Object]
 
+// runWriter writes ascending rows to a run, a frame per frameRows rows.
+type runWriter struct {
+	f       *os.File
+	w       *bufio.Writer
+	codec   schema.Codec[s3.Object]
+	payload []byte
+	k       int   // rows in the open frame
+	n       int64 // bytes written
+	rows    int64
+}
+
+func createRun(path string, codec schema.Codec[s3.Object]) (*runWriter, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	return &runWriter{f: f, w: bufio.NewWriterSize(f, 1<<20), codec: codec}, nil
+}
+
+func (rw *runWriter) add(r *row) error {
+	rw.payload = schema.AppendString(rw.payload, r.Key)
+	rw.payload = rw.codec.Append(rw.payload, &r.Data)
+	rw.k++
+	rw.rows++
+	if rw.k == frameRows {
+		return rw.flush()
+	}
+	return nil
+}
+
+func (rw *runWriter) flush() error {
+	if rw.k == 0 {
+		return nil
+	}
+	body := binary.AppendUvarint(nil, uint64(rw.k))
+	body = append(body, rw.payload...)
+	var hdr [8]byte
+	binary.LittleEndian.PutUint32(hdr[:4], uint32(len(body)))
+	binary.LittleEndian.PutUint32(hdr[4:], crc32.Checksum(body, castagnoli))
+	if _, err := rw.w.Write(hdr[:]); err != nil {
+		return err
+	}
+	if _, err := rw.w.Write(body); err != nil {
+		return err
+	}
+	rw.n += int64(len(hdr) + len(body))
+	rw.payload, rw.k = rw.payload[:0], 0
+	return nil
+}
+
+// close flushes, syncs and closes the run.
+func (rw *runWriter) close() error {
+	err := rw.flush()
+	if err == nil {
+		err = rw.w.Flush()
+	}
+	if err == nil {
+		err = rw.f.Sync()
+	}
+	return errors.Join(err, rw.f.Close())
+}
+
 // writeRun writes ascending rows to path and syncs it; it returns the
 // bytes written.
 func writeRun(path string, rows []*row, codec schema.Codec[s3.Object]) (int64, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	rw, err := createRun(path, codec)
 	if err != nil {
 		return 0, err
 	}
-	w := bufio.NewWriterSize(f, 1<<20)
-	var n int64
-	var payload []byte
-	for len(rows) > 0 {
-		k := min(frameRows, len(rows))
-		payload = binary.AppendUvarint(payload[:0], uint64(k))
-		for _, r := range rows[:k] {
-			payload = schema.AppendString(payload, r.Key)
-			payload = codec.Append(payload, &r.Data)
+	for _, r := range rows {
+		if err := rw.add(r); err != nil {
+			rw.f.Close()
+			return rw.n, err
 		}
-		rows = rows[k:]
-		var hdr [8]byte
-		binary.LittleEndian.PutUint32(hdr[:4], uint32(len(payload)))
-		binary.LittleEndian.PutUint32(hdr[4:], crc32.Checksum(payload, castagnoli))
-		if _, err := w.Write(hdr[:]); err != nil {
-			f.Close()
-			return n, err
-		}
-		if _, err := w.Write(payload); err != nil {
-			f.Close()
-			return n, err
-		}
-		n += int64(len(hdr) + len(payload))
 	}
-	if err := w.Flush(); err != nil {
-		f.Close()
-		return n, err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return n, err
-	}
-	return n, f.Close()
+	err = rw.close()
+	return rw.n, err
 }
 
 // runReader reads a run frame by frame; decoded strings view the frame,
@@ -90,7 +127,7 @@ func openRun(path string, codec schema.Codec[s3.Object], read *int64) (*runReade
 	if err != nil {
 		return nil, err
 	}
-	rr := &runReader{f: f, r: bufio.NewReaderSize(f, 256<<10), codec: codec, read: read}
+	rr := &runReader{f: f, r: bufio.NewReaderSize(f, 64<<10), codec: codec, read: read}
 	if err := rr.fill(); err != nil {
 		f.Close()
 		return nil, err
