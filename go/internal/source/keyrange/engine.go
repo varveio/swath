@@ -161,6 +161,7 @@ type Options struct {
 	Floors      bool    // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
 	PageSize    int     // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
 	Limiter     bool    // the provider's client runs an adaptive limiter (its counters, feature "limiter")
+	RequestRate float64 // the provider's client caps attempts per second (its counters, feature "request_rate"; 0: none)
 
 	// Test hooks: SplitCoin replaces the demand gate; Trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].

@@ -65,6 +65,8 @@ type Config struct {
 	HTTPClient      *http.Client
 	// Limiter, if set, admits every attempt (objhttp.Limiter).
 	Limiter *objhttp.Limiter
+	// Rate, if set, caps attempts per second (objhttp.Rate).
+	Rate *objhttp.Rate
 	// TokenSource overrides the credential lookup (tests).
 	TokenSource oauth2.TokenSource
 }
@@ -182,7 +184,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		u.Path += "/"
 	}
 	c := &Client{cfg: cfg, base: u, http: cfg.HTTPClient, source: "anonymous",
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter}}
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
 	c.retry.Defaults()
 	if c.http == nil {
 		t := http.DefaultTransport.(*http.Transport).Clone()
@@ -341,6 +343,7 @@ func (c *Client) Answered() int64 { return c.counts.Answered() }
 func (c *Client) Counters() Counters {
 	n := c.counts.Load()
 	n.Limiter = c.retry.Limiter.Counts()
+	n.Rate = c.retry.Rate.Counts()
 	return n
 }
 

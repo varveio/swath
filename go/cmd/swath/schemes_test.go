@@ -71,7 +71,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		}
 		return r
 	}
-	defaults := map[string]bool{"floors": false, "limiter": true, "max_keys": false, "probe": false, "resume": false,
+	defaults := map[string]bool{"floors": false, "limiter": true, "max_keys": false, "probe": false, "request_rate": false, "resume": false,
 		"seed": false, "split": true, "structure": false}
 	for name, src := range schemes {
 		r := runJSON(false, src...)

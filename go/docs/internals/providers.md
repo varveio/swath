@@ -175,6 +175,11 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   during a backoff, and admission waits are not latency samples. A permit is returned however the attempt ends,
   a panic included. The rules and constants are Java swath's
   `ConcurrencyGauge`; Java's slow start (from 4, doubling per second) is not ported. Counters `limiter.*`.
+- *Rate cap* (`objhttp.Rate`, `--request-rate N`, off by default): after its permit every attempt takes a token
+  from a bucket of one, refilled every 1/N, so attempts are spaced at least 1/N apart whatever the limit
+  (`TestRateCapsAttempts`: 60 attempts with retries from 8 callers take at least 59/N, and with 2 permits never
+  more than 2 in flight). A wait that the caller cancels gives its token back. Counters `rate.*` (feature
+  `request_rate`).
 - *Error classes* (`client.Classify`, one table test covers each): `auth`, `access_denied`, `no_such_bucket`,
   `redirect`, `throttle`, `timeout`, `server`, `transport`, `parse` (a body that does not parse),
   `invalid_page` (a page that breaks the listing contract: out of order, truncated without a token or a key

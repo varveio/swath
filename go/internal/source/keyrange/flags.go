@@ -5,6 +5,8 @@ package keyrange
 
 import (
 	"flag"
+	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -21,12 +23,15 @@ type Policy struct {
 	// Limiter: the provider's client admits its HTTP attempts through an
 	// adaptive limiter (objhttp.Limiter) of at most Workers permits.
 	Limiter bool
+	// RequestRate caps the client's HTTP attempts per second
+	// (objhttp.Rate); 0: no cap.
+	RequestRate float64
 }
 
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedDescent: p.SeedDescent, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors, Limiter: p.Limiter}
+		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors, Limiter: p.Limiter, RequestRate: p.RequestRate}
 }
 
 // Flags registers the engine's policy flags on f and returns the Policy
@@ -48,6 +53,7 @@ func Flags(f *flag.FlagSet, diag bool) *Policy {
 	p := &Policy{SeedDescent: true, Limiter: true}
 	bf := func(v *bool, name, usage string) { f.Var(&boolFlag{p: p, v: v}, name, usage) }
 	bf(&p.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
+	f.Var((*rateFlag)(&p.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; 0: no cap")
 	bf(&p.Seed, "seed", "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
 	if diag {
 		bf(&p.Structure, "structure", "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
@@ -80,6 +86,23 @@ func (b *boolFlag) Set(s string) error {
 		return err
 	}
 	*b.v = v
+	return nil
+}
+
+type rateFlag float64
+
+func (r *rateFlag) String() string {
+	if r == nil || *r == 0 {
+		return "0"
+	}
+	return strconv.FormatFloat(float64(*r), 'g', -1, 64)
+}
+func (r *rateFlag) Set(s string) error {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("want a positive, finite number of requests per second, or 0 for no cap")
+	}
+	*r = rateFlag(v)
 	return nil
 }
 

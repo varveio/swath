@@ -135,6 +135,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
 | `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
 | `limiter.depth` | max | permits | limiter | most permits the limit stood below the worker count |
+| `rate.waits` | count | attempts | request_rate | attempts that waited for a --request-rate token |
+| `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |
 <!-- s3:end -->
 
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active

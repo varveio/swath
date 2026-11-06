@@ -88,6 +88,8 @@ usage: swath list SOURCE --output DIR [flags]
     	text (one line) or json (the run report, as in run.json) (default "text")
   -request-payer
     	S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
+  -request-rate N
+    	requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; 0: no cap
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
@@ -178,6 +180,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	text (one line) or json (the run report, as in run.json) (default "text")
   -request-payer
     	S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
+  -request-rate N
+    	requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; 0: no cap
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
@@ -221,7 +225,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that
   starts at `--workers`, falls by 0.7 on each throttle answer and grows back by one per second after 10 s
   without one (Java swath's rules; [internals/providers.md](internals/providers.md)); `--limiter=false` keeps a
-  fixed `--workers` requests in flight.
+  fixed `--workers` requests in flight. `--request-rate N` (S3 and GCS, default 0: none) also caps the run's
+  HTTP attempts at N per second, every attempt counted (pages, probes, client retries, engine requeues): a token
+  bucket of one token, taken after the limiter's permit, so k attempts take at least (k-1)/N seconds, as with
+  Java's `--request-rate`; a quota shared across a fleet is the use. Counters `rate.waits`, `rate.wait_ns`.
 - **Requester pays:** `--request-payer` sends `x-amz-request-payer: requester` (signed) on every request, so
   a requester-pays bucket can be listed at the caller's charge.
 - **S3 credentials:** `--anonymous` sends unsigned requests whatever the environment holds. Otherwise the AWS

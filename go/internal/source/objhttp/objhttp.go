@@ -197,6 +197,9 @@ type Retry struct {
 	MaxBackoff  time.Duration // default 5 s
 	// Limiter, if set, admits every attempt (Limiter); nil admits all.
 	Limiter *Limiter
+	// Rate, if set, caps attempts per second (Rate): each takes a token
+	// after its permit.
+	Rate *Rate
 }
 
 // Defaults fills the zero values.
@@ -222,7 +225,7 @@ func (r *Retry) Defaults() {
 func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
 	var zero T
 	for n := 1; ; n++ {
-		v, admitted, err := admit(ctx, r.Limiter, attempt)
+		v, admitted, err := admit(ctx, r.Limiter, r.Rate, attempt)
 		if err == nil {
 			c.answered.Add(1)
 			return v, nil
@@ -255,17 +258,25 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 	}
 }
 
-// admit runs one attempt under l's admission (none when l is nil);
-// admitted is false when the caller's context ended while it waited.
-func admit[T any](ctx context.Context, l *Limiter, attempt func() (T, error)) (v T, admitted bool, err error) {
+// admit runs one attempt under l's admission (none when l is nil), then
+// rt's cap (none when nil); admitted is false when the caller's context
+// ended while it waited.
+func admit[T any](ctx context.Context, l *Limiter, rt *Rate, attempt func() (T, error)) (v T, admitted bool, err error) {
 	if l == nil {
+		if err := rt.Wait(ctx); err != nil {
+			return v, false, err
+		}
 		v, err = attempt()
 		return v, true, err
 	}
 	if err := l.Acquire(ctx); err != nil {
 		return v, false, err
 	}
-	t0 := time.Now()
+	if err := rt.Wait(ctx); err != nil {
+		l.Release(Ignored, 0)
+		return v, false, err
+	}
+	t0 := time.Now() // after the waits: admission is not latency
 	// The permit goes back however the attempt ends, a panic included
 	// (as Ignored: no signal); a recovered caller keeps a working limiter.
 	o := Ignored
@@ -300,6 +311,8 @@ type Counts struct {
 	InflightNs  int64 `json:"inflight_ns"`
 	// Limiter is the admission's engagements (zero without a limiter).
 	Limiter LimiterCounts `json:"limiter"`
+	// Rate is the --request-rate cap's (zero without one).
+	Rate RateCounts `json:"rate"`
 }
 
 // Counters accumulate Counts; safe for concurrent use.
@@ -327,7 +340,6 @@ func (c *Counters) Attempt() (done func()) {
 // attempt that returned no error): the run's liveness between rows, not
 // part of Counts.
 func (c *Counters) Answered() int64 { return c.answered.Load() }
-
 
 // ParseFailure counts a 200 whose body did not parse.
 func (c *Counters) ParseFailure() { c.parseFailures.Add(1) }
@@ -363,17 +375,20 @@ func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 		{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"},
 		{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"},
 		{Key: "limiter.depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"},
+		{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: "request_rate", Help: "attempts that waited for a --request-rate token"},
+		{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: "request_rate", Help: "time those attempts waited, summed"},
 	}
 }
 
 // NumCounters is len(CounterDefs(...)).
-const NumCounters = 17
+const NumCounters = 19
 
 // Store writes n into set at the IDs of CounterDefs, the first at first.
 func (n Counts) Store(set *counters.Set, first counters.ID) {
 	l := n.Limiter
 	for i, v := range [NumCounters]int64{n.Attempts, n.Retries, n.Throttles, n.Timeouts, n.ParseFailures, n.InflightMax, n.InflightNs,
-		l.Decreases, l.FloorThrottles, l.Increases, l.Cooldown, l.LatencyFrozen, l.TimeoutFrozen, l.Valve, l.Waits, l.WaitNs, l.Depth} {
+		l.Decreases, l.FloorThrottles, l.Increases, l.Cooldown, l.LatencyFrozen, l.TimeoutFrozen, l.Valve, l.Waits, l.WaitNs, l.Depth,
+		n.Rate.Waits, n.Rate.WaitNs} {
 		set.Set(first+counters.ID(i), v)
 	}
 }

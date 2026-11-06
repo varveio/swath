@@ -205,6 +205,9 @@ func (p *Engine[P]) disabled() []string {
 	if !p.opt.Limiter {
 		off = append(off, "limiter")
 	}
+	if p.opt.RequestRate <= 0 {
+		off = append(off, "request_rate")
+	}
 	return off
 }
 

@@ -38,6 +38,8 @@ type Config struct {
 	Now            func() time.Time // signing clock; default time.Now
 	// Limiter, if set, admits every attempt (objhttp.Limiter).
 	Limiter *objhttp.Limiter
+	// Rate, if set, caps attempts per second (objhttp.Rate).
+	Rate *objhttp.Rate
 }
 
 // Counters are what the client did, for the run summary.
@@ -72,7 +74,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: joinNotes(anonymousNote(cfg), a.note),
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter}}
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
 	c.retry.Defaults()
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
@@ -110,6 +112,7 @@ func (c *Client) Answered() int64 { return c.counts.Answered() }
 func (c *Client) Counters() Counters {
 	n := c.counts.Load()
 	n.Limiter = c.retry.Limiter.Counts()
+	n.Rate = c.retry.Rate.Counts()
 	return n
 }
 
