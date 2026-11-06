@@ -376,3 +376,34 @@ func TestRefusesMalformedFooterCounts(t *testing.T) {
 		})
 	}
 }
+
+// TestCountsRowTypesForCapacity counts the OBJECT and other rows the
+// arrays are sized from: groups proven all OBJECT and all COMMON_PREFIX
+// by their statistics, and a mixed group counted from its row_type
+// column. The object array is then allocated for the objects alone.
+func TestCountsRowTypesForCapacity(t *testing.T) {
+	kind := func(row sortedparquettest.Row, rowType string) sortedparquettest.Row {
+		row.RowType = rowType
+		return row
+	}
+	rows := []sortedparquettest.Row{
+		obj("a", 0), obj("b", 1), obj("c", 2), // all OBJECT
+		kind(obj("d/", 3), "COMMON_PREFIX"), kind(obj("e/", 4), "COMMON_PREFIX"), // none
+		obj("f", 5), kind(obj("g", 6), "DELETE_MARKER"), obj("h", 7), // mixed
+	}
+	dir := filepath.Join(t.TempDir(), "capture")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := sortedparquettest.Write(filepath.Join(dir, "c.parquet"), sortedparquettest.Part{Rows: rows, Groups: []int{3, 2, 3}}); err != nil {
+		t.Fatal(err)
+	}
+	objects, others, err := countRows(context.Background(), []string{filepath.Join(dir, "c.parquet")})
+	if err != nil || objects != 5 || others != 3 {
+		t.Fatalf("counted %d objects, %d others: %v", objects, others, err)
+	}
+	stats, err := Run(context.Background(), Options{Capture: dir, Output: filepath.Join(t.TempDir(), "o")}, nil)
+	if err != nil || stats.Objects != 5 || stats.Skipped != 3 {
+		t.Fatalf("run: %+v %v", stats, err)
+	}
+}

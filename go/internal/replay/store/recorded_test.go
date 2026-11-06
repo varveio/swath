@@ -8,15 +8,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/parquet-go/parquet-go"
+
 	"github.com/varveio/swath/go/internal/replay/sortfixture"
+	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // recordedRoot returns the fixture root named by SWATH_REPLAY_FIXTURES, or
@@ -229,30 +234,94 @@ func residentKiB() int64 {
 	return 0
 }
 
-// TestSortFixtureMemory sorts the synthetic 1M-row capture and bounds the
-// heap the process obtained from the system: one capture-sized array
-// (about 300 bytes a row here, sortfixture's package doc) fits; a second
-// copy of the rows, which the sort once made, does not. Run it alone
-// (-run TestSortFixtureMemory) so no other test's heap counts.
+// memoryChild names, in a child process, the capture TestSortFixtureMemory
+// sorts there, so the heap measured is the sort's alone.
+const memoryChild = "SWATH_SORT_MEMORY_CHILD"
+
+// TestSortFixtureMemory sorts two 1M-row captures, each in a child process,
+// and bounds the heap the child obtained from the system:
+//
+//   - the synthetic capture (all OBJECT rows): one object array, about 300
+//     bytes a row (sortfixture's package doc), fits 450 MiB; a second copy
+//     of the rows, which the sort once made, does not;
+//   - a capture of 1M COMMON_PREFIX rows, written here: the other rows'
+//     keys fit 100 MiB; an object array sized from every capture row, as
+//     the sort once allocated, does not.
 func TestSortFixtureMemory(t *testing.T) {
+	if capture := os.Getenv(memoryChild); capture != "" {
+		sortForMemory(t, capture)
+		return
+	}
 	root := recordedRoot(t)
+	prefixes := filepath.Join(t.TempDir(), "prefixes")
+	writePrefixCapture(t, prefixes, 1_000_000)
+	for _, c := range []struct {
+		name, capture string
+		limitMiB      uint64
+	}{
+		{"synthetic-1m", filepath.Join(root, "fixtures", "synthetic-1m", "capture"), 450},
+		{"common-prefix-1m", prefixes, 100},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestSortFixtureMemory$", "-test.v", "-test.count=1")
+			cmd.Env = append(os.Environ(), memoryChild+"="+c.capture)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("child: %v\n%s", err, out)
+			}
+			var heap uint64
+			for _, line := range strings.Split(string(out), "\n") {
+				if _, rest, ok := strings.Cut(line, "heap_sys_mib="); ok {
+					_, _ = fmt.Sscan(rest, &heap)
+					t.Log(strings.TrimSpace(line))
+				}
+			}
+			if heap == 0 || heap > c.limitMiB {
+				t.Fatalf("heap obtained %d MiB, limit %d MiB\n%s", heap, c.limitMiB, out)
+			}
+		})
+	}
+}
+
+// sortForMemory is the child: it sorts capture and logs its heap.
+func sortForMemory(t *testing.T, capture string) {
 	runtime.GC()
-	out := filepath.Join(t.TempDir(), "sorted")
 	start := time.Now()
-	stats, err := sortfixture.Run(context.Background(), sortfixture.Options{
-		Capture: filepath.Join(root, "fixtures", "synthetic-1m", "capture"), Output: out,
-	}, io.Discard)
+	stats, err := sortfixture.Run(context.Background(), sortfixture.Options{Capture: capture, Output: filepath.Join(t.TempDir(), "sorted")}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	t.Logf("sorted %d objects in %v; heap obtained %d MiB, resident %d KiB (GOMAXPROCS %d)",
-		stats.Objects, time.Since(start).Round(time.Millisecond), ms.HeapSys>>20, residentKiB(), runtime.GOMAXPROCS(0))
-	if stats.Objects != 1_000_000 {
-		t.Fatalf("sorted %d objects", stats.Objects)
+	t.Logf("rows=%d objects=%d wall=%v resident_kib=%d gomaxprocs=%d heap_sys_mib=%d",
+		stats.CaptureRows, stats.Objects, time.Since(start).Round(time.Millisecond), residentKiB(), runtime.GOMAXPROCS(0), ms.HeapSys>>20)
+}
+
+// writePrefixCapture writes n distinct COMMON_PREFIX rows as one unsorted
+// capture part, in batches so the writer holds few at once.
+func writePrefixCapture(t *testing.T, dir string, n int) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if limit := uint64(450 << 20); ms.HeapSys > limit {
-		t.Fatalf("heap obtained %d MiB, over %d MiB", ms.HeapSys>>20, limit>>20)
+	f, err := os.Create(filepath.Join(dir, "part-00000.parquet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	w := parquet.NewGenericWriter[sortedparquettest.Row](f)
+	batch := make([]sortedparquettest.Row, 0, 10_000)
+	for i := range n {
+		// Descending, so the part is not already sorted.
+		batch = append(batch, sortedparquettest.Row{Key: fmt.Sprintf("logs/p%07d/", n-i), RowType: "COMMON_PREFIX"})
+		if len(batch) == cap(batch) || i == n-1 {
+			if _, err := w.Write(batch); err != nil {
+				t.Fatal(err)
+			}
+			batch = batch[:0]
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
