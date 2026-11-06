@@ -587,6 +587,6 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   Java's (which covered the listing scope only). `outcome.stop_source` says what stopped a stopped run:
   `sigint`, `sigterm`, `liveness_watchdog` (`--stall-timeout`), `timebox` (`--max-duration`), with
   `+forced_exit` when it did not stop within the grace (`forced_exit` alone if it came first); `error.json`
-  carries it too. A hosted runner keeps reading the live `objects` from `progress.json`.
+  carries it too. A supervisor can read the live `objects` count from `progress.json`.
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;
   `SWATH_LOCALFS_ENGINE=portable` selects the portable filesystem engine; `SWATH_SPLIT_TRACE` traces S3 splits.

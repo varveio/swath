@@ -638,15 +638,15 @@ buffer.
 **Downstream reader.** A temporary test in a scratch copy of the downstream reader (private at the time of
 writing; nothing changed in its checkout) opened the datasets:
 
-| Dataset | Open | Eligibility | Flat List | Delimiter List | Stream |
-|---|---|---|---|---|---|
-| whole bucket, 1 part | ok | eligible, no reasons | ok | root → `data/ home/ projects/`; `projects/proj-00-` → `projects/proj-00-model/` | 971,927 objects = manifest, ascending |
-| whole bucket, 7 parts (`-seed`, 4 MB parts) | ok | eligible | ok | same | 971,927, ascending |
-| `s3://bench/home/` (prefix) | refused: the run summary contradicts whole-bucket coverage | | | | |
-| local `out-realistic` | refused: the manifest does not describe a bucket dataset | | | | |
+| Dataset | Result |
+|---|---|
+| whole bucket, 1 part | opened; 971,927 objects streamed in ascending order, equal to the manifest; prefix listings match the tree |
+| whole bucket, 7 parts (`-seed`, 4 MB parts) | the same |
+| `s3://bench/home/` (prefix) | refused: not a whole-bucket listing |
+| local `out-realistic` | refused: not a bucket dataset |
 
-The S3 dataset passes every check that the local one failed: the bucket match, the run summary, and the four
-S3 columns `version_id`, `is_latest`, `is_delete_marker` and `row_type` with their pure-object statistics.
+The S3 dataset meets the format-1 contract that the local one does not: a matching bucket, a run summary that
+covers it, and the four S3 columns `version_id`, `is_latest`, `is_delete_marker` and `row_type`.
 
 The prefix refusal is correct, not a bug: that reader treats a dataset as a whole-bucket listing, and the run
 summary says this one is not.
@@ -1866,8 +1866,8 @@ Every run exited 0 with a committed dataset. Readings:
 **Default.** Off. The written acceptance criteria held for completion, the drop, the recovery bound (68 s
 measured against 75 s), the bounded rate and baseline parity, and failed for the rate cap ("served rate near
 R": 0.23-0.53 R measured). On replay the rules trade 1.5-3.5x wall in a storm for 11-38 % fewer requests;
-whether that is right for real S3 has no evidence here: in a private corpus of about 2,700 hosted listings, 25 met any 503, all at concurrency
-256-512.
+whether that is right for real S3 has no evidence here: in a private set of hosted runs, about 1 % met any 503, all at
+256-512 workers.
 
 **Default since the owner's decision (2026-11-06): on**, for S3 and GCS through the command (`--limiter=false`
 turns it off; a library caller's zero `Policy` leaves it off): the measured `on` arms above are the shipped
@@ -1878,10 +1878,10 @@ default against 4.71 / 4.72 s off (requests 1,590 / 1,589 against 1,596 / 1,588)
 0 except one pansurg rep (277, at the start, as in the table above). The default is within about 0.8 s of off
 on these two recordings; one slower rep in each pair, so at 2 reps a cost under 10 % cannot be excluded.
 
-**Live (single run, labelled as such).** `noaa-hrrr-bdp-pds` (a bucket that returned SlowDown in that corpus),
+**Live (single run, labelled as such).** `noaa-hrrr-bdp-pds` (a public bucket known to throttle at 256-512 workers),
 prefix `hrrr.202401`, anonymous, 64 workers, `--seed --limiter`, build `acc3f88`: 1,279,184 objects in 5.96 s,
 1,683 attempts, no retry, no throttle, no limiter decrease. A run at 64 workers did not reach the request rate
-that throttled the corpus runs (256-512 workers on the whole bucket).
+that throttles it (256-512 workers on the whole bucket).
 
 **Slow start (2026-11-06, `--limiter-slow-start`, off by default).** Java's ramp, ported for the case Java
 wrote it for: a run, or a resume after a stall, that starts at the full width into a throttling endpoint
@@ -2117,8 +2117,8 @@ with the upgrade guide applied, and that reader's own tests.
    UTF-8 are listed with their exact bytes (format 1 skipped them and their subtrees; `invalid_utf8_names`
    is gone). S3 keys stay STRING. Manifest and journal part bounds are `min_key_base64`/`max_key_base64`
    (`dataset.Key`, compared as bytes); journal version 4. Tests: `TestKeysAreBytes` (end to end, manifest
-   bytes), the filesystem oracle now includes the non-UTF-8 names. downstream reader probe: the decoder reads the two
-   base64 fields into `[]byte` (two lines changed; the diff stays 4 files, +117/−5). Same-build byte identity holds;
+   bytes), the filesystem oracle now includes the non-UTF-8 names. The downstream reader probe passes with the
+   base64 bounds decoded as bytes. Same-build byte identity holds;
    the local parts' bytes change (key and link target lose STRING), the S3 column content does not.
 
 7. **Typed rows.** `schema.Row[P]` is a key and the producer's payload: `fs.Entry` (the filesystem fields)
@@ -2234,10 +2234,8 @@ with the upgrade guide applied, and that reader's own tests.
 
 ## Hosted listing runner gate (2026-11-06)
 
-The hosted runner that drives the Java CLI was tried against this build: it depends on the Java command-line
-surface and summary fields, so the Go tool does not pass it as a drop-in. The adapter work is scheduled for
-the cutover; the Go tool's own contract for a supervisor is in [docs/cli.md](docs/cli.md) ("What a hosted
-runner needs").
+A supervisor written for the Java CLI's flags and summary fields needs changes to drive this tool. The
+contract for a supervisor is in [docs/cli.md](docs/cli.md) ("What a hosted runner needs").
 
 ## Probe default off
 
@@ -2446,8 +2444,8 @@ bytes, not skipped; ids are unsigned; encoding is parallel; S3 and GCS runs resu
   gzip and zstd), the seven filters (Go RE2 regular expressions, not Java's), the stderr progress display and
   statistics, `-v`/`-q`/`--color`, bearer-token authentication, the report's `cost`, `efficiency`,
   `args_hash`, `session_ms` and `stop_source`, and `--part-rotation-max-rows` are covered by unit and command
-  tests against fakes; none has been run against a live bucket or at scale, and the cloud importer and hosted
-  runner have not been run against the new report fields.
+  tests against fakes; none has been run against a live bucket or at scale, and no consumer of the report (the
+  cloud importer included) has been run against the new fields.
 - **Platforms.** Windows runs hold the output lock but have no directory sync, so journaled runs are refused there ([docs/internals/durability.md](docs/internals/durability.md));
   Windows and macOS builds were compiled, not run.
 - **Scale.** Billions of keys, runs of hours and 256 or more workers are unmeasured; the replay recordings and
@@ -2487,17 +2485,16 @@ same part MD5.
 ## Downstream reader compatibility
 
 **Format 2 (current).** The changes in [docs/upgrade.md](docs/upgrade.md) were applied to a scratch copy of
-the downstream reader (private at the time of writing; its checkout untouched): a format-2 manifest decoder
-that requires whole-bucket coverage and fails closed, dispatch on the manifest's `format` before any marker
-check, the current-object schema treated as all current objects, and the `swath.profile` stamp accepted with
-no `row_type` statistics check for that schema. A small change, a few dozen lines.
+the downstream reader (private at the time of writing; its checkout untouched): the reader accepts a format-2
+dataset by the manifest's coverage (whole bucket, fails closed), dispatches on the manifest's `format` first,
+and reads the current-object schema and the `swath.profile` stamp.
 
-The probe read a 20,000-key fake bucket (synthetic, `keys.tsv` from a fixed generator) through open, stream,
-eligibility and a delimiter list:
+The probe read a 20,000-key fake bucket (synthetic, `keys.tsv` from a fixed generator) by opening it,
+streaming it and listing one prefix:
 
 | Dataset | Result |
 |---|---|
-| format 2, `-sequential` | opened; 20,000 objects in strict order; eligible; `d05/` lists 5 prefixes |
+| format 2, `-sequential` | opened; 20,000 objects in strict order; `d05/` lists 5 prefixes |
 | format 2, parallel `-seed` | the same |
 | format 1 (the pre-change binary, ec23ff8) | the same: the legacy path still works |
 | format 2, prefix `s3://eq/d03/` | refused: "dataset does not cover the whole bucket" |

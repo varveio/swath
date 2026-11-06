@@ -15,7 +15,7 @@ A reader dispatches on `manifest.json`, before looking for anything else:
 | `fileFormat`, `files`, `schemaId` (camelCase) | 1 | `_SUCCESS` exists, and the run summary covers the target (the legacy rule) |
 | neither | – | never: not a dataset |
 
-A format-2 manifest never falls into a reader's thin-manifest (legacy) fallback.
+A format-2 manifest is never read by the format-1 rule.
 
 ## Files
 
@@ -214,8 +214,8 @@ does, stated as the contract rather than as its code:
 - **Schema id.** Each schema id defines the exact columns by name and type; the reader dispatches on it
   (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, the local schema) and checks `source.kind` and the
   container against what it was asked to open. The Java-era `version_id`, `is_latest`, `is_delete_marker`
-  and `row_type` columns are absent in format 2, not read as null, so the current-object row check and the
-  `row_type` statistics rule apply to format 1 only.
+  and `row_type` columns are absent in format 2, not read as null; checks on those columns apply to format 1
+  only.
 - **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.
 - **Part footers.** Every part carries `swath.profile`, `swath.profile_version` 2, a `swath.schema_id` equal
   to the manifest's, and `key` ascending as the first sorting column.
@@ -229,7 +229,7 @@ does, stated as the contract rather than as its code:
 
 - **DuckDB:** `bench/diffds.py` (row sets both ways with the projection above, strict ascending order within
   and across parts, min/max keys, counts).
-- **Downstream reader:** opens, streams and browses format-2 datasets of every schema (section above);
+- **Downstream reader:** opens and streams format-2 datasets of every schema (section above);
   the earlier probe is in REPORT.md, "Downstream reader compatibility".
 - **Dropped:** "the Java reader opens Go output". Java stays the producer oracle (replay differential), not
   a reader.
