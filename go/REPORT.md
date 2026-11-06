@@ -1111,6 +1111,15 @@ hand-rolled.
 | hand-rolled client and auth (step 1b as first committed) | 15,655,074 |
 | hand-rolled client, SDK auth modules (`config`, `credentials`, `sso`, `ssooidc`, `sts`, `imds`, `signer/v4`) | **19,464,354** |
 | no S3 at all (pre-S3 local lister; "Binary size" above) | about 13.3 MB |
+| with GCS, 2026-11-06 (`0f1cb91`; protobuf 1.36.12) | **17,731,746** |
+
+The GCS provider (`587b8d9`) added `golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata` and, through
+`go mod tidy`, raised `google.golang.org/protobuf` (parquet-go's dependency, linked into the binary) from 1.34.2 to
+1.36.12. Measured on 2026-11-06, linux/amd64, `CGO_ENABLED=0`, unstripped / stripped: `7a742ff` (before GCS)
+29,004,324 / 20,033,698 B; `7a742ff` with only protobuf raised to 1.36.12 24,716,804 / 17,051,810 B;
+`587b8d9` (GCS) 25,690,984 / 17,723,554 B. So the protobuf upgrade alone removes 4.3 MB unstripped (3.0 MB
+stripped) and GCS adds 1.0 MB (0.7 MB stripped); the stripped binary with GCS is smaller than the 19.5 MB one
+because of the upgrade.
 
 `go version -m` on the new binary lists no `service/s3`; the SDK's `service/s3` is a test-only dependency
 (the oracle). Client CPU per object is unchanged: signing was never measurable in the profile, and the
