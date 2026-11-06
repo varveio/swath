@@ -14,11 +14,11 @@ a row.
 below against a dedicated GCS bucket and Azure container. A row is `OBSERVED` when its
 sanitized capture is in the [evidence archive](#evidence-archive) and `REPLAY_MATCH` only
 when replay, serving the same corpus and walked with its own tokens, matched that capture
-and an archived receipt records the match. Every other observed row is a pinned replay
-discrepancy, except 62 Azure rows that replay now matches. Those rows stay `OBSERVED` until
-their receipts are archived; [Evidence archive](#evidence-archive) explains how the test
-derives each expectation from the archive's `<provider>/replay-expectations.json`. The GCS
-and Azure profiles stay provisional until the remaining rows match. S3 is out of scope for
+and an archived receipt records the match. That holds for 77 GCS rows and 5 Azure rows.
+Every other observed row is a pinned replay discrepancy, except 57 Azure rows that replay
+matches at `2026-06-06` but that also name `2026-10-06`, whose capture is folded;
+[Evidence archive](#evidence-archive) explains why they stay `OBSERVED`. The GCS and Azure
+profiles stay provisional until the remaining rows match. S3 is out of scope for
 this evidence: the S3 campaign stopped before it completed, so no S3 capture is published
 and every S3 row stays `UNMEASURED`. Promotion requires a COMPLETE campaign receipt. Each row is one case: one request shape that
 settles one question. Azure rows name their service versions, and each version is
@@ -570,30 +570,23 @@ a temporary directory and replays every capture against replay serving the same 
 each outcome must equal its pinned expectation. The Python tests validate the ledger and
 this matrix against the archive and check that it rebuilds byte for byte.
 
-The archive changes only with a re-capture, so the test derives the expectation for each
-capture from its archived pin by two rules, both in `NativeEvidenceReplayTest.expectations`.
-First, the Azure pins were written while replay omitted the UTF-8 BOM, and each pin that
-names the BOM also records what the comparison found with the BOM restored. Replay now
-sends the BOM, so such a pin expects that remainder: `match` when nothing else differed,
-otherwise the remaining mismatch. Second,
-[`replay-provider-expectations.json`](replay-provider-expectations.json) records, by
-provider and capture as in the archive, each outcome that a later replay change altered:
-`match`, or the remaining mismatch. An entry replaces whatever the first rule left for its
-capture, and the test fails on an entry for a capture the archive does not have or one that
-repeats that expectation. The file holds the 11 Azure captures that match since replay lists
-Azure in UTF-16 code-unit order and serves `startFrom` with a delimiter: `azure-04b` to
-`azure-04e`, `azure-04l`, `azure-04m`, `azure-06a`, `azure-06b`, `azure-06e`, `azure-06f`
-and `azure-10a`. Of the 103 Azure captures, 62 now expect `match`: 51 by the first rule and
-11 by the second.
+Each capture's pin in `<provider>/replay-expectations.json` is `match` or the start of the
+mismatch replay reports for it. `-PproviderReport=DIR` writes each capture's outcome to
+`DIR/<provider>-outcomes.json`, and the current pins were written from that report.
+`azure-09h` and `azure-09j` pin the marker mismatch only up to the replay token, which
+differs on every run. Replay matches 77 GCS and 62 Azure captures, and the archive holds a
+receipt for each. The five single-version rows `azure-01`, `azure-02`, `azure-10a`,
+`azure-10b` and `azure-10c` are `REPLAY_MATCH`. The other 57 Azure matches are
+`2026-06-06` captures whose rows also name `2026-10-06`, whose capture is folded, so they
+stay `OBSERVED` as described above.
 
-The archive holds no receipts for those 62 matches, so their rows stay `OBSERVED`. Writing
-the receipts and rebuilding the archive, as in steps 2 and 3 below, promotes the five
-single-version rows `azure-01`, `azure-02`, `azure-10a`, `azure-10b` and `azure-10c` to
-`REPLAY_MATCH`. The other 57 also name `2026-10-06`, whose capture is folded, so they stay
-`OBSERVED` as described above. `-PproviderReport=DIR` writes each capture's outcome to
-`DIR/<provider>-outcomes.json`, from which a rebuild can write current expectations. A
-rebuilt archive pins replay as it then is, so neither rule applies to it: remove the BOM rule
-and `replay-provider-expectations.json` in the same change.
+`NativeEvidenceReplayTest.expectations` still applies two adjustments that served the
+archive before these pins. A pin that opens with the archived Azure BOM mismatch expects
+what the comparison found with the BOM restored, and an entry in
+[`replay-provider-expectations.json`](replay-provider-expectations.json) replaces the pin
+for its capture. The current archive has no BOM pin and the file has no entries, so neither
+changes an expectation. Removing them changes the test source, which every receipt binds,
+so that change needs new receipts written on a commit that contains it.
 
 `scripts/provider-conformance/evidence_archive.py` builds the archive from an evidence
 directory with sorted entries, zero timestamps and owners, mode 0644, and gzip level 9
