@@ -49,7 +49,7 @@ type Attempt struct {
 // (a resume refused on its journal): what was asked, and the failure.
 func Unstarted(argv []string, out string, attempt *Attempt, err error) Report {
 	r := Report{ReportVersion: ReportVersion, Build: build(), Attempt: attempt,
-		Invocation: Invocation{Argv: argv, Out: out}, Outcome: Outcome{Status: "failed"}}
+		Invocation: Invocation{Argv: argv, Out: out}, Outcome: Outcome{Status: StatusFailed}}
 	if err != nil {
 		r.Outcome.Error = err.Error()
 	}
@@ -83,10 +83,36 @@ type Invocation struct {
 	PartSizeBytes int64    `json:"part_size_bytes"`
 }
 
+// The outcome vocabulary, in one place. Three separate dimensions:
+//   - Status: what became of the output (publication);
+//   - Class (with ExitCode and Resumable): how the invocation ended, the
+//     command's classification; StopReason follows it for a run that did
+//     not commit, and holds the coverage's reason for one that did;
+//   - Cause: the underlying failure's class, the provider's (objhttp.Class:
+//     auth, throttle, ...) or the command's (stuck_*, no_space, protocol).
+//
+// Error is the human message; the outcome file (error.json) carries the
+// same text as "message".
+const (
+	StatusCommitted = "committed" // the dataset was published
+	StatusListed    = "listed"    // a dry run finished
+	StatusFailed    = "failed"    // nothing was published
+
+	ClassCompleted   = "completed"
+	ClassFatal       = "fatal"
+	ClassIncomplete  = "incomplete"
+	ClassUsage       = "usage"
+	ClassRefused     = "refused"
+	ClassDiskFull    = "disk_full"
+	ClassStuck       = "stuck"
+	ClassDeadline    = "deadline"
+	ClassInterrupted = "interrupted"
+	ClassTerminated  = "terminated"
+)
+
 // Outcome is how the run ended.
 type Outcome struct {
-	// Status is "committed" (the dataset was published), "listed" (a dry
-	// run finished) or "failed".
+	// Status is StatusCommitted, StatusListed or StatusFailed.
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 	Complete   bool   `json:"complete"`              // the listing reached the end of its scope

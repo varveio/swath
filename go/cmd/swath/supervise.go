@@ -76,7 +76,7 @@ func (e *signalError) Error() string { return "stopped by " + e.sig.String() }
 
 // outcome is how a command ended: its class and exit code.
 type outcome struct {
-	Class     string `json:"class"` // completed, fatal, incomplete, usage, refused, disk_full, stuck, deadline, interrupted, terminated
+	Class     string `json:"class"` // listing.Class*: completed, fatal, incomplete, usage, refused, disk_full, stuck, deadline, interrupted, terminated
 	ExitCode  int    `json:"exit_code"`
 	Message   string `json:"message,omitempty"`
 	Resumable bool   `json:"resumable"` // swath resume DIR can continue it
@@ -92,7 +92,7 @@ type outcome struct {
 // cancelled with) to an outcome. dir is the output directory, if any.
 func classify(err, cause error, dir string) outcome {
 	if err == nil {
-		return outcome{Class: "completed", ExitCode: exitCompleted}
+		return outcome{Class: listing.ClassCompleted, ExitCode: exitCompleted}
 	}
 	resumable := dir != "" && !dataset.Committed(dir) && hasJournal(dir)
 	o := outcome{Message: err.Error(), Resumable: resumable}
@@ -101,50 +101,50 @@ func classify(err, cause error, dir string) outcome {
 	var ue *journal.UnresumableError
 	switch {
 	case errors.As(err, &u), errors.Is(err, flag.ErrHelp):
-		o.Class, o.ExitCode, o.Resumable = "usage", exitUsage, false
+		o.Class, o.ExitCode, o.Resumable = listing.ClassUsage, exitUsage, false
 	case refusal(err):
 		// The caller's to fix (another output, --overwrite, the original
 		// settings): nothing ran, and the output is as it was, so
 		// Resumable still says whether swath resume can continue a run
 		// there.
-		o.Class, o.ExitCode = "refused", exitUsage
+		o.Class, o.ExitCode = listing.ClassRefused, exitUsage
 	case errors.Is(err, source.ErrProtocol), errors.As(err, &ue):
 		// The service broke the listing contract: never resumable, and
 		// it outranks a stop cause (a resumable 75, 124, 130 or 143), as
 		// Java's; the journal marks the run unresumable.
-		o.Class, o.ExitCode, o.Resumable, o.Cause = "fatal", exitFatal, false, "protocol"
+		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "protocol"
 	case errors.Is(err, errIncomplete):
-		o.Class, o.ExitCode, o.Resumable = "incomplete", exitFatal, false
+		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitFatal, false
 	case errors.Is(cause, errStuck):
-		o.Class, o.ExitCode = "stuck", exitStuck
+		o.Class, o.ExitCode = listing.ClassStuck, exitStuck
 		var st *stuckError
 		if errors.As(cause, &st) {
 			o.Cause = st.cause
 		}
 	case errors.Is(cause, errDeadline):
-		o.Class, o.ExitCode = "deadline", exitDeadline
+		o.Class, o.ExitCode = listing.ClassDeadline, exitDeadline
 	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
-		o.Class, o.ExitCode = "terminated", exitTerminated
+		o.Class, o.ExitCode = listing.ClassTerminated, exitTerminated
 	case errors.As(cause, &se):
-		o.Class, o.ExitCode = "interrupted", exitInterrupted
+		o.Class, o.ExitCode = listing.ClassInterrupted, exitInterrupted
 	case errors.Is(err, listing.ErrComplete):
 		// swath resume on a committed dataset has nothing to do: it is
 		// idempotent, exit 0, as Java's, when the dataset covers its
 		// scope; one committed with partial coverage stays incomplete.
 		o.Resumable = false
 		if c, ok := committedCoverage(dir); ok && c.Complete {
-			o.Class, o.ExitCode = "completed", exitCompleted
+			o.Class, o.ExitCode = listing.ClassCompleted, exitCompleted
 		} else {
-			o.Class, o.ExitCode = "incomplete", exitFatal
+			o.Class, o.ExitCode = listing.ClassIncomplete, exitFatal
 		}
 	case errors.Is(err, syscall.ENOSPC):
 		// A full disk stops the run (a part, a journal append, spill or
 		// the manifest cannot be written) but loses nothing durable:
 		// resumable once there is space, when the journal is intact. Its
 		// own code lets a runner retry with a larger workspace.
-		o.Class, o.ExitCode, o.Cause = "disk_full", exitDiskFull, "no_space"
+		o.Class, o.ExitCode, o.Cause = listing.ClassDiskFull, exitDiskFull, "no_space"
 	default:
-		o.Class, o.ExitCode, o.Resumable = "fatal", exitFatal, false
+		o.Class, o.ExitCode, o.Resumable = listing.ClassFatal, exitFatal, false
 		var ce interface{ Class() string }
 		if errors.As(err, &ce) {
 			o.Cause = ce.Class()
@@ -192,7 +192,7 @@ func account(r *listing.Outcome, o outcome) {
 	if o.ExitCode != exitCompleted && o.Message != "" {
 		r.Error = o.Message
 	}
-	if o.ExitCode != exitCompleted && o.Class != "incomplete" {
+	if o.ExitCode != exitCompleted && o.Class != listing.ClassIncomplete {
 		r.Complete, r.StopReason = false, o.Class
 	}
 }
@@ -201,7 +201,7 @@ func account(r *listing.Outcome, o outcome) {
 // committed (listing.ErrComplete) the dataset's status and the manifest's
 // coverage.
 func committedAccount(dir string, r *listing.Report) {
-	r.Outcome.Status = "committed"
+	r.Outcome.Status = listing.StatusCommitted
 	if c, ok := committedCoverage(dir); ok {
 		r.Outcome.Complete, r.Outcome.StopReason = c.Complete, c.StopReason
 	}

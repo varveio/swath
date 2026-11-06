@@ -235,7 +235,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 func run(ctx context.Context, cfg Config) (Report, error) {
 	start := time.Now()
 	sum := Report{ReportVersion: ReportVersion, Build: build(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: start.UTC()},
-		Outcome: Outcome{Status: "failed"}}
+		Outcome: Outcome{Status: StatusFailed}}
 	asked := cfg.Limits.Encoders
 	if err := cfg.resolve(); err != nil {
 		return sum.failed(err)
@@ -527,7 +527,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		return fail(err)
 	}
 	if router == nil {
-		sum.Outcome.Status = "listed"
+		sum.Outcome.Status = StatusListed
 		sum.finish()
 		return sum, nil
 	}
@@ -556,7 +556,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		pr.parts.Add(int64(sum.Output.PartsWritten))
 	}
 	// Committed: the report follows and can no longer revoke the dataset.
-	sum.Outcome.Status, sum.Outcome.Class = "committed", "completed"
+	sum.Outcome.Status, sum.Outcome.Class = StatusCommitted, ClassCompleted
 	sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
 	sum.Output.RowsDurable = sum.Output.RowsCommitted
 	sum.finish()
@@ -582,7 +582,7 @@ func reconcile(listed, received, ordered, routed int64) error {
 
 // failed records err as the outcome and returns the report with it.
 func (r Report) failed(err error) (Report, error) {
-	r.Outcome.Status, r.Outcome.Error = "failed", err.Error()
+	r.Outcome.Status, r.Outcome.Error = StatusFailed, err.Error()
 	r.finish()
 	return r, err
 }
