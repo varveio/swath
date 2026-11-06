@@ -301,6 +301,7 @@ type options struct {
 	compression            string
 	text                   *textout.Config // resolved: a text run's destination
 	filter                 filter.Spec
+	partMaxRows            int64
 }
 
 // runtimeFlags may change on swath resume: they do not change the output
@@ -369,6 +370,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f.StringVar(&o.report, "report", "", "also write the run report (JSON, with the outcome and the attempt id) to this `file` when the attempt ends, on failure too")
 	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
 	f.DurationVar(&o.stall, "stall-timeout", 10*time.Minute, "stop the run as stuck after this long without progress (exit 75; resumable); 0: never")
+	f.Int64Var(&o.partMaxRows, "part-rotation-max-rows", 0, "also close a part at `N` rows (Java's flag; 0: by size and --part-interval only); part of the resume identity")
 	o.term.register(f)
 	f.StringVar(&o.filter.Include, "include", "", "keep keys in which this `regex` (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix")
 	f.StringVar(&o.filter.Exclude, "exclude", "", "drop keys in which this `regex` (Go RE2 syntax) matches anywhere")
@@ -483,6 +485,9 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	if err := o.term.validate(); err != nil {
 		return o, "", usageError{err}
 	}
+	if o.partMaxRows < 0 {
+		return o, "", usageError{fmt.Errorf("--part-rotation-max-rows %d: negative", o.partMaxRows)}
+	}
 	if err := o.filter.Validate(); err != nil {
 		return o, "", usageError{err}
 	}
@@ -530,7 +535,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
-		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize), PartInterval: o.partInterval,
+		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
 			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,

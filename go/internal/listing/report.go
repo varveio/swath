@@ -254,6 +254,9 @@ type Resources struct {
 	// PartTimeCuts counts parts closed by the part interval, not by size:
 	// with any, part boundaries depended on timing.
 	PartTimeCuts int64 `json:"part_time_cuts"`
+	// PartRowCuts counts parts closed by --part-rotation-max-rows before
+	// their size target (deterministic, unlike time cuts).
+	PartRowCuts int64 `json:"part_row_cuts"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

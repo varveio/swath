@@ -116,6 +116,8 @@ usage: swath list SOURCE --output DIR [flags]
     	replace a previous dataset in --output
   -part-interval duration
     	close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 30s)
+  -part-rotation-max-rows N
+    	also close a part at N rows (Java's flag; 0: by size and --part-interval only); part of the resume identity
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
@@ -259,6 +261,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	replace a previous dataset in --output
   -part-interval duration
     	close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 30s)
+  -part-rotation-max-rows N
+    	also close a part at N rows (Java's flag; 0: by size and --part-interval only); part of the resume identity
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style

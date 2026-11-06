@@ -64,6 +64,12 @@ type Options struct {
 	// one relative to the directory it locked, so a pathname replaced
 	// after Verify cannot receive the part.
 	Open func(path string) (*os.File, error)
+	// MaxRows, if positive, also closes a part once it holds that many rows
+	// (Java's --part-rotation-max-rows). Such a cut depends only on the
+	// rows, so boundaries stay deterministic (it is part of the resume
+	// identity); a part it closes does not calibrate the size ratio, as a
+	// time cut does not: only a part closed by size does.
+	MaxRows int64
 	// Cut, if set, fixes one part's boundary: the part with that ordinal
 	// is closed after exactly that many rows, neither by size nor by the
 	// interval. A resume sets it to reproduce a claimed part whose record
@@ -123,6 +129,7 @@ type Router[P any] struct {
 	tickStop context.CancelFunc // ends a part-0 cut the ticker waits on
 	ticked   sync.WaitGroup
 	timeCuts atomic.Int64 // parts closed by the interval
+	rowCuts  atomic.Int64 // parts closed by MaxRows
 }
 
 type part[P any] struct {
@@ -203,6 +210,9 @@ func (r *Router[P]) stop() {
 	r.mu.Lock()
 }
 
+// RowCuts is the number of parts MaxRows closed (before their size target).
+func (r *Router[P]) RowCuts() int64 { return r.rowCuts.Load() }
+
 // TimeCuts is the number of parts the interval closed.
 func (r *Router[P]) TimeCuts() int64 { return r.timeCuts.Load() }
 
@@ -250,6 +260,9 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 			if r.cur.logical >= target {
 				r.full = true // cut before the next row
 				r.cur.bySize = true
+			} else if r.opt.MaxRows > 0 && r.cur.n >= r.opt.MaxRows {
+				r.full = true
+				r.rowCuts.Add(1)
 			}
 		}
 		if start < len(seg) {
@@ -559,6 +572,7 @@ type Encoder interface {
 	Abort()
 	EncoderWait() time.Duration
 	TimeCuts() int64
+	RowCuts() int64
 	// Routed is the rows this run routed into parts: after listing it
 	// must equal the rows the order stage handed on.
 	Routed() int64

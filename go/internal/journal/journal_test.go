@@ -327,3 +327,14 @@ func TestFiltersAreIdentity(t *testing.T) {
 		t.Fatal("hash")
 	}
 }
+
+// TestPartMaxRowsIsIdentity: the row bound fixes part boundaries, so a
+// resume with another one is refused; 0 keeps an unbounded identity's hash.
+func TestPartMaxRowsIsIdentity(t *testing.T) {
+	a := Identity{Tool: "t", Provider: "s3", PartMaxRows: 1000}
+	b := a
+	b.PartMaxRows = 0
+	if Check(a, a) != nil || Check(a, b) == nil || a.Hash() == b.Hash() || b.Hash() != (Identity{Tool: "t", Provider: "s3"}).Hash() {
+		t.Fatal("part max rows not frozen")
+	}
+}

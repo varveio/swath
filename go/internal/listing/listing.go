@@ -112,7 +112,10 @@ type Limits struct {
 	// boundaries independent of timing; the command's default is
 	// DefaultPartInterval, resolved at its flag, not here.
 	PartInterval time.Duration
-	Spill        SpillLimits
+	// PartMaxRows, if positive, closes a part at that many rows as well
+	// (frozen for a resume: boundaries depend on it).
+	PartMaxRows int64
+	Spill       SpillLimits
 }
 
 // SpillLimits bound spill.
@@ -339,7 +342,7 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 // what the source names (source.Identified).
 func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
 	id := journal.Identity{Tool: "swath-go", Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.WriterID,
-		PartSize: cfg.Limits.PartSize, Provider: src.Locator().Kind, Filters: cfg.Filter.Descriptions()}
+		PartSize: cfg.Limits.PartSize, PartMaxRows: cfg.Limits.PartMaxRows, Provider: src.Locator().Kind, Filters: cfg.Filter.Descriptions()}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()
 		id.Provider = sid.Provider
@@ -413,7 +416,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	}
 	if cfg.Output.Dir != "" {
 		ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add,
-			Interval: max(0, cfg.Limits.PartInterval)}
+			Interval: max(0, cfg.Limits.PartInterval), MaxRows: cfg.Limits.PartMaxRows}
 		jr.routerOptions(&ropt)
 		jr.verifyOption(&ropt)
 		if pr := cfg.Progress; pr != nil {
@@ -551,6 +554,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		w := int64(router.EncoderWait())
 		sum.Resources.EncoderWaitNs = &w
 		sum.Resources.PartTimeCuts = router.TimeCuts()
+		sum.Resources.PartRowCuts = router.RowCuts()
 	}
 	listed := time.Now()
 	sum.Timings.ListingFinishedAt, sum.Timings.ListingMs = listed.UTC(), listed.Sub(sum.Timings.StartedAt).Milliseconds()

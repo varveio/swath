@@ -16,14 +16,16 @@ import (
 // freezes the schema, the writer, the part size and the key cap; the
 // source names the rest (Provider and Source, from source.Identified).
 type Identity struct {
-	Tool     string  `json:"tool"`      // "swath-go"
-	Format   int     `json:"format"`    // dataset format version (the journal's own is in the header)
-	SchemaID string  `json:"schema_id"` // output schema
-	KeyCap   int     `json:"key_cap"`   // the schema's key length limit (rows it refuses)
-	Writer   string  `json:"writer"`    // the writer recipe (parquetout.Recipe)
-	PartSize int64   `json:"part_size"` // part boundaries
-	Provider string  `json:"provider"`  // the source's provider ("s3")
-	Source   []Field `json:"source"`    // the provider's frozen settings, in report order
+	Tool     string `json:"tool"`      // "swath-go"
+	Format   int    `json:"format"`    // dataset format version (the journal's own is in the header)
+	SchemaID string `json:"schema_id"` // output schema
+	KeyCap   int    `json:"key_cap"`   // the schema's key length limit (rows it refuses)
+	Writer   string `json:"writer"`    // the writer recipe (parquetout.Recipe)
+	PartSize int64  `json:"part_size"` // part boundaries
+	// PartMaxRows is the row bound per part (0: none), a part boundary too.
+	PartMaxRows int64   `json:"part_max_rows,omitempty"`
+	Provider    string  `json:"provider"` // the source's provider ("s3")
+	Source      []Field `json:"source"`   // the provider's frozen settings, in report order
 	// Filters are the row filters' descriptions (package filter), in
 	// order; none for an unfiltered run.
 	Filters []string `json:"filters,omitempty"`
@@ -95,6 +97,8 @@ func Check(stored, requested Identity) error {
 		return &MismatchError{"writer", stored.Writer, requested.Writer}
 	case stored.PartSize != requested.PartSize:
 		return &MismatchError{"part size", stored.PartSize, requested.PartSize}
+	case stored.PartMaxRows != requested.PartMaxRows:
+		return &MismatchError{"part rotation max rows", stored.PartMaxRows, requested.PartMaxRows}
 	case !slices.Equal(stored.Filters, requested.Filters):
 		return &MismatchError{"filters", fmt.Sprintf("%q", stored.Filters), fmt.Sprintf("%q", requested.Filters)}
 	}
@@ -124,6 +128,9 @@ func (id Identity) Hash() string {
 	put("provider=", id.Provider)
 	for _, f := range id.Source {
 		put("source."+f.Name+"=", f.canon())
+	}
+	if id.PartMaxRows > 0 {
+		put("part_max_rows=", strconv.FormatInt(id.PartMaxRows, 10))
 	}
 	for _, f := range id.Filters {
 		put("filter=", f)
