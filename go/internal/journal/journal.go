@@ -167,11 +167,11 @@ func Create(out string, id Identity, argv []string) (*Journal, error) {
 		return nil, err
 	}
 	// The journal's entry in .swath, and .swath's entry in the output.
-	if err := syncDir(filepath.Join(out, Dir)); err != nil {
+	if err := dataset.SyncDir(filepath.Join(out, Dir)); err != nil {
 		j.Close()
 		return nil, err
 	}
-	if err := syncDir(out); err != nil {
+	if err := dataset.SyncDir(out); err != nil {
 		j.Close()
 		return nil, err
 	}
@@ -281,6 +281,7 @@ func TakeLock(out string) (*Lock, error) {
 // Release releases the lock.
 func (l *Lock) Release() {
 	if l != nil && l.f != nil {
+		unlockFile(l.f)
 		l.f.Close()
 		l.f = nil
 	}

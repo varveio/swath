@@ -5,13 +5,15 @@
 
 package dataset
 
-import (
-	"errors"
-	"syscall"
-)
+// DirSyncEnforced reports whether syncDir makes a directory's entries
+// durable here.
+var DirSyncEnforced = false // a variable for tests
 
-// Windows cannot flush a directory handle opened read-only; that specific
-// refusal is not a durability failure.
-func dirSyncUnsupported(err error) bool {
-	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.Errno(6)) // ERROR_INVALID_HANDLE
-}
+// syncDir does nothing on Windows: the platform has no directory fsync
+// through the Go runtime (a read-only directory handle cannot be flushed).
+// A process crash loses nothing, since the system cache survives it; after
+// a power loss or a system crash, NTFS replays its metadata log to a
+// consistent state, which need not include the latest creations and
+// renames even when the files' data was synced. A journaled run relies on
+// those entries, so it is refused here (listing.ErrUnenforced).
+func syncDir(string) error { return nil }

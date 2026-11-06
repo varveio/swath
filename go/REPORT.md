@@ -2448,7 +2448,7 @@ bytes, not skipped; ids are unsigned; encoding is parallel; S3 and GCS runs resu
   `args_hash`, `session_ms` and `stop_source`, and `--part-rotation-max-rows` are covered by unit and command
   tests against fakes; none has been run against a live bucket or at scale, and the cloud importer and hosted
   runner have not been run against the new report fields.
-- **Platforms.** Windows runs have no output lock and no directory sync ([docs/internals/durability.md](docs/internals/durability.md));
+- **Platforms.** Windows runs hold the output lock but have no directory sync, so journaled runs are refused there ([docs/internals/durability.md](docs/internals/durability.md));
   Windows and macOS builds were compiled, not run.
 - **Scale.** Billions of keys, runs of hours and 256 or more workers are unmeasured; the replay recordings and
   live buckets in this report are the largest runs. The lazy scale fake and the measured-run script exist

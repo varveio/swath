@@ -8,7 +8,6 @@ import (
 
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -207,20 +206,8 @@ func writeJSON(dir, name string, v any) error {
 }
 
 // SyncDir fsyncs a directory, making the entries created or renamed in it
-// durable (a no-op where directories cannot be synced).
+// durable where DirSyncEnforced (a no-op on Windows).
 func SyncDir(dir string) error { return syncDir(dir) }
-
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	err = d.Sync()
-	if err != nil && dirSyncUnsupported(err) {
-		err = nil
-	}
-	return errors.Join(err, d.Close())
-}
 
 // PublishPart renames one closed part to its final name and syncs the data
 // directory: the early publication of a journaled run, after the part's

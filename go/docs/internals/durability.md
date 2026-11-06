@@ -283,9 +283,12 @@ tail as JSON lines.
   - recovery syncs the journal before renaming on its strength, and `data/` before removing temporary parts.
 
   Nothing tests this: SIGKILL cannot show power-loss behaviour.
-- **Refused on Windows:** directories cannot be synced and the lock is not enforced there
-  (`journal.Enforced` is false), so a journaled run and `swath resume` are refused with
+- **Refused on Windows:** the output lock is enforced (`LockFileEx`, exclusive and failing at once, with the
+  same identity checks as on Unix), but directories cannot be synced (`dataset.DirSyncEnforced` is false;
+  `syncDir` is a no-op there). A process crash loses nothing; after a power loss NTFS replays its metadata
+  log to a consistent state that need not include the latest creations and renames, so an acknowledged
+  part could lose its name. A journaled run and `swath resume` are therefore refused with
   `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
-  What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable, with a
-  warning that nothing stops a second run from writing the same output directory. The Windows build is
-  cross-compiled in the tests (`TestWindowsBuild`), never run natively.
+  What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable. The
+  Windows build and the journal's tests (`TestWindowsLock` included) are cross-compiled in the tests
+  (`TestWindowsBuild`), never run natively.

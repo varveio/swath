@@ -3,10 +3,25 @@
 
 package journal
 
-import "os"
+import (
+	"os"
 
-// Enforced reports whether the output lock and directory syncs hold here.
-var Enforced = false // a variable for tests
+	"golang.org/x/sys/windows"
+)
 
-// lockFile is not enforced on Windows yet.
-func lockFile(*os.File) error { return nil }
+// LockEnforced reports whether the output lock holds here.
+var LockEnforced = true // a variable for tests
+
+// lockFile takes an exclusive lock on the lock file's first byte, failing
+// at once if another handle holds it; Windows releases it when the handle
+// closes, so a killed run never leaves a stale lock.
+func lockFile(f *os.File) error {
+	return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, new(windows.Overlapped))
+}
+
+// unlockFile releases the lock before the handle closes: Windows releases
+// a closed handle's locks only when its resources allow, so an explicit
+// unlock frees the output for the next run at once.
+func unlockFile(f *os.File) {
+	windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, new(windows.Overlapped))
+}

@@ -271,8 +271,9 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
 
 ## Known limits
 
-- **Windows:** a journaled (object-store) run and `swath resume` are refused: there is no output lock and no
-  directory sync. Filesystem runs work but are not resumable. Built, never run natively.
+- **Windows:** a journaled (object-store) run and `swath resume` are refused: there is no directory sync, so
+  a power loss could lose acknowledged parts. The output lock holds. Filesystem runs work but are not
+  resumable. Built, never run natively.
 - **macOS:** builds; not run.
 - **Power loss or a kernel crash:** recovery relies on the filesystem honouring `fsync` on files and directories
   (ext4, XFS, APFS do). Process crashes are tested at every crash point; power loss is not.

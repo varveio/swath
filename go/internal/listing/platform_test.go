@@ -12,18 +12,18 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/dataset"
 )
 
-// TestUnenforcedPlatformRefusesJournal (Astra register row 42): where the
-// output lock and directory syncs are not enforced (Windows), a journaled
+// TestUnenforcedPlatformRefusesJournal (Astra register row 42): where
+// directory syncs are not enforced (Windows), a journaled
 // run and a resume are refused with ErrUnenforced before the output is
 // created or touched; a --no-journal run of a resumable source and a local
 // (never journaled) run still work. Before, the journaled run went ahead
 // with a warning and no lock.
 func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
-	journal.Enforced = false
-	defer func() { journal.Enforced = true }()
+	dataset.DirSyncEnforced = false
+	defer func() { dataset.DirSyncEnforced = true }()
 	keys := []string{"a", "b", "c"}
 	out := filepath.Join(t.TempDir(), "ds")
 	for _, resume := range []bool{false, true} {
@@ -50,7 +50,8 @@ func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
 }
 
 // TestWindowsBuild cross-builds the command for Windows, where the
-// refusal above is the behaviour (journal.Enforced is false there).
+// refusal above is the behaviour (dataset.DirSyncEnforced is false there),
+// and compiles the journal's tests, its Windows lock test included.
 func TestWindowsBuild(t *testing.T) {
 	if testing.Short() {
 		t.Skip("cross-build")
@@ -61,5 +62,11 @@ func TestWindowsBuild(t *testing.T) {
 	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("windows build: %v\n%s", err, b)
+	}
+	cmd = exec.Command(gobin, "test", "-c", "-o", os.DevNull, "./internal/journal")
+	cmd.Dir = filepath.Join("..", "..")
+	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("windows journal tests: %v\n%s", err, b)
 	}
 }

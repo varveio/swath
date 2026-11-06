@@ -30,10 +30,11 @@ var (
 	ErrInterrupted     = errors.New("it holds an interrupted run")
 	ErrNothingToResume = errors.New("nothing to resume: no interrupted run in the output directory")
 	ErrComplete        = errors.New("the run in the output directory is already complete")
-	// ErrUnenforced: a journaled or resumed run where the output lock and
-	// directory syncs are not enforced (Windows): two processes could both
-	// own the output, and a power loss could lose acknowledged records.
-	ErrUnenforced = errors.New("journaled output is not supported on this platform: the output lock and directory syncs are not enforced here; use --no-journal (not resumable) or run on Linux or macOS")
+	// ErrUnenforced: a journaled or resumed run where directory syncs are
+	// not available (Windows): after a power loss the journal or a
+	// published part's name may be missing although its record was
+	// acknowledged.
+	ErrUnenforced = errors.New("journaled output is not supported on this platform: directories cannot be synced here, so a power loss could lose acknowledged parts; use --no-journal (not resumable) or run on Linux or macOS")
 	// ErrAmbiguousTail: the journal's last record reads as torn, so its
 	// part was set aside (DIR/.swath/suspect), and the source no longer
 	// reproduces that part. The record may have been acknowledged and
@@ -135,7 +136,7 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 	}
 	path := src.Locator().Path
 	switch {
-	case !journal.Enforced && (cfg.Output.Resume || (resumable && !cfg.Output.NoJournal)):
+	case !dataset.DirSyncEnforced && (cfg.Output.Resume || (resumable && !cfg.Output.NoJournal)):
 		return nil, ErrUnenforced
 	case cfg.Output.Resume && !resumable:
 		return nil, fmt.Errorf("resume: a %s source cannot resume", src.Locator().Kind)
@@ -153,7 +154,7 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 			return nil, prepareError(cfg.Output.Dir, err)
 		}
 	}
-	if !journal.Enforced && cfg.Warn != nil {
+	if !journal.LockEnforced && cfg.Warn != nil {
 		cfg.Warn("the output lock is not enforced on this platform: nothing stops a second run from writing the same output directory")
 	}
 	// Ownership first: nothing in the output is read, removed or renamed

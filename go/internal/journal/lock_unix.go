@@ -10,9 +10,12 @@ import (
 	"syscall"
 )
 
+// LockEnforced reports whether the output lock holds here.
+var LockEnforced = true // a variable for tests
+
 // lockFile takes an exclusive advisory lock; the kernel releases it when
 // the process dies, so a killed run never leaves a stale lock.
-// Enforced reports whether the output lock and directory syncs hold here.
-var Enforced = true // a variable for tests
-
 func lockFile(f *os.File) error { return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) }
+
+// unlockFile: closing the descriptor releases the lock at once.
+func unlockFile(*os.File) {}
