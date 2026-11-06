@@ -106,7 +106,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	var secrets []string // secret flags the run had, whose values were not recorded
 	for _, a := range base {
 		n := strings.TrimLeft(a, "-")
-		if a != n && (n == "overwrite" || n == "overwrite=true") {
+		if name, v, _ := strings.Cut(n, "="); a != n && (name == "overwrite" || name == "force") && (v == "" || v == "true") {
 			continue
 		}
 		if name, v, ok := strings.Cut(n, "="); a != n && ok && v == redacted && slices.Contains(secretFlags, name) {

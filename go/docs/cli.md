@@ -66,6 +66,8 @@ usage: swath list SOURCE --output DIR [flags]
     	S3: fill owner_id and owner_display_name
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  -force
+    	Java swath's name for --overwrite
   -format string
     	auto, table, tsv, jsonl (text: stdout or one file; auto is a table on a terminal, TSV otherwise) or parquet (the dataset; the default for a directory)
   -gcs-anonymous
@@ -205,6 +207,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
   -floors
     	ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
+  -force
+    	Java swath's name for --overwrite
   -format string
     	auto, table, tsv, jsonl (text: stdout or one file; auto is a table on a terminal, TSV otherwise) or parquet (the dataset; the default for a directory)
   -gcs-anonymous

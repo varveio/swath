@@ -354,6 +354,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f.StringVar(&o.outputType, "output-type", "", "file or dir: what -o names when its extension does not say (file: one text file without a .tsv or .jsonl name)")
 	f.StringVar(&o.compression, "compression", "", "text output: none, gzip or zstd (default: from a .gz or .zst name, else none)")
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in --output")
+	f.BoolVar(&o.overwrite, "force", false, "Java swath's name for --overwrite")
 	o.partSize = listing.DefaultPartSize
 	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB)")
 	o.memory = listing.DefaultMemory

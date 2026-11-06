@@ -46,6 +46,9 @@ func TestRun(t *testing.T) {
 	if err := run(context.Background(), []string{src, "--output", out, "--overwrite"}, &buf, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := run(context.Background(), []string{src, "--output", out, "--force"}, &buf, false); err != nil {
+		t.Fatalf("--force (Java's alias of --overwrite): %v", err)
+	}
 	if err := run(context.Background(), []string{src, "--output", src, "--overwrite"}, &buf, false); err == nil || !strings.HasPrefix(err.Error(), "--output:") {
 		t.Fatalf("out == root: %v", err)
 	}
