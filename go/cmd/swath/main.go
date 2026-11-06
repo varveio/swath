@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/signal"
 	"runtime"
@@ -366,7 +365,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in --output")
 	f.BoolVar(&o.overwrite, "force", false, "Java swath's name for --overwrite")
 	o.partSize = listing.DefaultPartSize
-	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB)")
+	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md)")
 	o.rowBudget = listing.DefaultRowBudget
 	f.Var(&o.rowBudget, "row-budget", "`bytes` of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory")
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default 64, whatever the CPU count)")
@@ -826,7 +825,8 @@ func profile() (stop func(), err error) {
 	}, nil
 }
 
-// size is a byte count flag accepting binary and decimal suffixes.
+// size is a byte count flag, positive, parsed as the size filters are
+// (filter.ParseSize: binary units, any case, an exact decimal quantity).
 type size int64
 
 // zsize is a size that may also be 0 (off).
@@ -835,35 +835,25 @@ type zsize size
 func (s *zsize) String() string { return (*size)(s).String() }
 
 func (s *zsize) Set(v string) error {
-	if strings.TrimSpace(v) == "0" {
-		*s = 0
-		return nil
+	n, err := filter.ParseSize(v)
+	if err != nil {
+		return err
 	}
-	return (*size)(s).Set(v)
+	*s = zsize(n)
+	return nil
 }
 
 func (s *size) String() string { return strconv.FormatInt(int64(*s), 10) }
 
 func (s *size) Set(v string) error {
-	units := []struct {
-		suffix string
-		mult   int64
-	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"KB", 1e3}, {"MB", 1e6}, {"GB", 1e9}, {"B", 1}}
-	mult := int64(1)
-	for _, u := range units {
-		if n, ok := strings.CutSuffix(v, u.suffix); ok {
-			v, mult = n, u.mult
-			break
-		}
+	n, err := filter.ParseSize(v)
+	if err != nil {
+		return err
 	}
-	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-	if err != nil || n <= 0 {
-		return fmt.Errorf("invalid size %q", v)
+	if n <= 0 {
+		return fmt.Errorf("invalid size %q: must be positive", v)
 	}
-	if n > math.MaxInt64/mult {
-		return fmt.Errorf("invalid size %q: too large", v)
-	}
-	*s = size(n * mult)
+	*s = size(n)
 	return nil
 }
 

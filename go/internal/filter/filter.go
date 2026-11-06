@@ -221,7 +221,8 @@ func (s *Spec) NarrowPrefix(scope string) string {
 	return scope
 }
 
-// ParseSize is Java's SizeParser: a non-negative decimal number and an
+// ParseSize is Java's SizeParser, swath's one size syntax (the filters and
+// the resource and part sizes): a non-negative decimal number and an
 // optional binary unit (b; k, kb, kib; m, mb, mib; g, gb, gib; t, tb,
 // tib; case-insensitive) that must come to a whole number of bytes.
 func ParseSize(text string) (int64, error) {

@@ -124,7 +124,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
   -part-rotation-max-rows N
     	also close a part at N rows (Java's flag; 0: by size and --part-interval only); part of the resume identity
   -part-size bytes
-    	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
+    	target bytes per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md) (default 67108864)
   -path-style
     	S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   -profile profile
@@ -263,7 +263,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -part-rotation-max-rows N
     	also close a part at N rows (Java's flag; 0: by size and --part-interval only); part of the resume identity
   -part-size bytes
-    	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
+    	target bytes per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md) (default 67108864)
   -path-style
     	S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   -profile profile
@@ -328,7 +328,11 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 ## Semantics worth stating
 
-- **Sizes** accept `KiB`, `MiB`, `GiB` and `KB`, `MB`, `GB` suffixes.
+- **Sizes** (`--part-size`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--min-size`, `--max-size`) have
+  one syntax, Java's: a decimal number and an optional unit, `b`, `k`/`kb`/`kib`, `m`/`mb`/`mib`, `g`/`gb`/`gib`
+  or `t`/`tb`/`tib`, in any case and all binary (`64MB` is 64 MiB), coming to a whole number of bytes (`1.5g`,
+  not `1.3b`). Earlier Go builds read `KB`, `MB` and `GB` as decimal for the resource sizes; a run started that
+  way and resumed by this build sees a different part size and is refused.
 - **Provider flags** (`S3:` and `GCS:` in the list, and the range-engine flags both object stores share) apply
   to their own sources only: one given for another source (`gs://... --anonymous`, where GCS takes
   `--gcs-anonymous`; `--endpoint` against `--gcs-endpoint`; an S3 flag on a local tree) is refused (exit 2)
