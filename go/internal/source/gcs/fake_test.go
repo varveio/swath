@@ -28,13 +28,17 @@ import (
 // tokens to their request may answer. With empty set, every empty-th page
 // is an empty page with a token (the API documents them); with short set,
 // nonempty pages are cut short at varying lengths; cap lowers the page
-// size limit. Every object carries the full metadata resource, sizes and
-// generations as strings, as on the wire.
+// size limit; shortIf cuts the selected requests' pages to one entry.
+// Every object carries the full metadata resource, sizes and generations
+// as strings, as on the wire.
 type fakeGCS struct {
-	keys     []string
-	empty    int64
-	short    bool
-	cap      int
+	keys  []string
+	empty int64
+	short bool
+	cap   int
+	// shortIf, when set, cuts the pages of the requests it selects to one
+	// entry (a service may cut any page short).
+	shortIf  func(url.Values) bool
 	requests atomic.Int64
 	empties  atomic.Int64
 	last     atomic.Value // the last request's query
@@ -139,6 +143,9 @@ func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.short {
 		max = 1 + int(serial)%max
+	}
+	if f.shortIf != nil && f.shortIf(q) {
+		max = 1
 	}
 	var items []any
 	var prefixes []string
