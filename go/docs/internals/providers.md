@@ -131,7 +131,8 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   is held while three or more attempt timeouts fell in the last 10 s, or while the EWMA of successful attempts'
   latency exceeds twice its baseline (a rolling minimum re-floored every minute), with one step per 30 s let
   through when there is progress. Its only inputs are the attempts' own latency and answers; no permit is held
-  during a backoff, and admission waits are not latency samples. The rules and constants are Java swath's
+  during a backoff, and admission waits are not latency samples. A permit is returned however the attempt ends,
+  a panic included. The rules and constants are Java swath's
   `ConcurrencyGauge`; Java's slow start (from 4, doubling per second) is not ported. Counters `limiter.*`.
 - *Error classes* (`client.Classify`, one table test covers each): `auth`, `access_denied`, `no_such_bucket`,
   `redirect`, `throttle`, `timeout`, `server`, `transport`, `parse` (a body that does not parse),

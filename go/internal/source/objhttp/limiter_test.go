@@ -150,3 +150,76 @@ func (l *Limiter) waiting() int {
 	defer l.mu.Unlock()
 	return len(l.waiters)
 }
+
+func (l *Limiter) held() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inflight
+}
+
+// TestLimiterPanicReturnsPermit: an attempt that panics still returns its
+// permit, so a caller that recovers keeps a working limiter (at one permit
+// the leak would block every later attempt; Sol, fifth review, Part 2).
+func TestLimiterPanicReturnsPermit(t *testing.T) {
+	l := NewLimiter(1)
+	var c Counters
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the attempt's panic was swallowed")
+			}
+		}()
+		_, _ = Do(context.Background(), Retry{MaxAttempts: 1, Limiter: l}, &c, func() (int, error) { panic("attempt") })
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := l.Acquire(ctx); err != nil {
+		t.Fatalf("the panicking attempt kept its permit: %v", err)
+	}
+	if n := l.held(); n != 1 {
+		t.Fatalf("%d permits in flight, want 1", n)
+	}
+}
+
+// TestLimiterGrantCancelRace: a waiter whose context ends at the moment a
+// permit is granted to it, both ready before it looks: whichever it sees,
+// the permit is either its own (it returns nil and releases it) or given
+// back (it returns the context's error); never lost, never doubled. The
+// clock hook runs inside Acquire after the waiter is queued and before it
+// waits, so both events are in place every time.
+func TestLimiterGrantCancelRace(t *testing.T) {
+	var armed func()
+	l := newLimiter(1, func() time.Time {
+		if f := armed; f != nil {
+			armed = nil
+			f()
+		}
+		return time.Unix(0, 0)
+	})
+	granted, cancelled := 0, 0
+	for range 500 {
+		if err := l.Acquire(context.Background()); err != nil { // the one permit, held
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		armed = func() {
+			cancel()
+			l.Release(Ignored, 0) // grants the queued waiter
+		}
+		switch err := l.Acquire(ctx); {
+		case err == nil:
+			granted++
+			l.Release(Ignored, 0)
+		case errors.Is(err, context.Canceled):
+			cancelled++
+		default:
+			t.Fatal(err)
+		}
+		if n, w := l.held(), l.waiting(); n != 0 || w != 0 {
+			t.Fatalf("after the race: %d in flight, %d waiting", n, w)
+		}
+	}
+	if granted == 0 || cancelled == 0 {
+		t.Fatalf("one side of the race never ran: granted %d, cancelled %d", granted, cancelled)
+	}
+}

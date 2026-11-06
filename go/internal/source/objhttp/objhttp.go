@@ -264,19 +264,21 @@ func admit[T any](ctx context.Context, l *Limiter, attempt func() (T, error)) (v
 		return v, false, err
 	}
 	t0 := time.Now()
+	// The permit goes back however the attempt ends, a panic included
+	// (as Ignored: no signal); a recovered caller keeps a working limiter.
+	o := Ignored
+	defer func() { l.Release(o, time.Since(t0)) }()
 	v, err = attempt()
-	o := Success
-	if err != nil {
-		switch _, throttle, timeout := retryable(err); {
-		case throttle:
-			o = Throttled
-		case timeout:
-			o = TimedOut
-		default:
-			o = Ignored
-		}
+	if err == nil {
+		o = Success
+		return v, true, nil
 	}
-	l.Release(o, time.Since(t0))
+	switch _, throttle, timeout := retryable(err); {
+	case throttle:
+		o = Throttled
+	case timeout:
+		o = TimedOut
+	}
 	return v, true, err
 }
 
