@@ -82,7 +82,7 @@ that is the commit. The run reports follow it.
 
 ## Resume
 
-`swath resume DIR` (it replays the command recorded in the journal header; only the runtime flags `--workers`, `--encoders`, `--memory`, `--spill-*`, `--report-format`, `--report`, `--max-duration` and `--stall-timeout` may change):
+`swath resume DIR` (it replays the command recorded in the journal header; only the runtime flags `--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`, `--part-interval`, `--report-format`, `--report`, `--max-duration` and `--stall-timeout`, and the operational ones (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`, `--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--request-rate`) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
 
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the
