@@ -181,7 +181,8 @@ func committedCoverage(dir string) (dataset.Coverage, bool) {
 	return m.Coverage, true
 }
 
-// account applies the frozen classification o to a report's outcome. The
+// account applies the frozen classification o to a report's outcome (its
+// message is the report's error, unless the run completed). The
 // completion fields follow it: a run that did not commit is not complete
 // and its stop reason is its class (fatal, stuck, deadline, ...), whatever
 // the source reported (a source's coverage says complete once its listing
@@ -189,6 +190,9 @@ func committedCoverage(dir string) (dataset.Coverage, bool) {
 // which the manifest's coverage holds too (an incomplete one included).
 func account(r *listing.Outcome, o outcome) {
 	r.Class, r.ExitCode, r.Resumable, r.Cause = o.Class, o.ExitCode, o.Resumable, o.Cause
+	if o.ExitCode != exitCompleted && o.Message != "" {
+		r.Error = o.Message
+	}
 	if o.ExitCode != exitCompleted && o.Class != "incomplete" {
 		r.Complete, r.StopReason = false, o.Class
 	}
@@ -417,34 +421,24 @@ func forcedAccount(f *forensicTarget, code int, why string) {
 	go func() {
 		defer close(done)
 		err := fmt.Errorf("forced exit: still stopping (%s) after %s", why, shutdownGrace)
-		var o outcome
-		if fr := f.frozen.Load(); fr != nil {
-			// The run was classified already (its accounts may be
-			// written): the forced exit keeps that classification.
-			o = *fr
-			o.Message = err.Error() + ": " + fr.Message
-		} else {
+		// The run's terminal report once it was classified (its accounts
+		// may be written): the forced exit keeps that result, a committed
+		// run included; else a minimal report classified now.
+		o, frozen := f.t.frozen()
+		if !frozen {
 			o = classify(err, context.Cause(f.ctx), f.dir)
+		} else if o.ExitCode != exitCompleted {
+			o.Message = err.Error() + ": " + o.Message
+		}
+		r, ok := f.t.report()
+		if !ok {
+			r = listing.Unstarted(f.argv, f.dir, f.att, err)
 		}
 		o.ExitCode, o.Attempt = code, f.att
-		if f.dir != "" {
-			f.pr.Owned(func() {
-				if o.ExitCode == exitCompleted {
-					_ = writeOutcome(f.dir, o) // a stale one goes
-				} else {
-					_ = writeFileAtomic(filepath.Join(f.dir, errorName), o)
-				}
-			})
-		}
-		// The report as the run last accounted it (its status, coverage and
-		// statistics), when it got that far; else a minimal one.
-		var r listing.Report
-		if b := f.final.Load(); b == nil || json.Unmarshal(*b, &r) != nil {
-			r = listing.Unstarted(f.argv, f.dir, f.att, err)
-		} else if o.ExitCode != exitCompleted {
-			r.Outcome.Error = o.Message
-		}
 		account(&r.Outcome, o)
+		if f.dir != "" {
+			f.pr.Owned(func() { _ = writeOutcome(f.dir, outcomeOf(r)) })
+		}
 		writeReport(f.report, r)
 	}()
 	select {

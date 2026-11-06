@@ -60,11 +60,7 @@ type forensicTarget struct {
 	report string // --report
 	argv   []string
 	att    *listing.Attempt
-	frozen atomic.Pointer[outcome] // the run's classification, once made
-	// final is the run's report as last accounted (Finalize), JSON: a
-	// forced exit after the classification writes it, not an unstarted
-	// one, so a committed run keeps its status and coverage.
-	final atomic.Pointer[[]byte]
+	t      *terminal // the run's terminal result
 }
 
 func main() {
@@ -86,7 +82,7 @@ func main() {
 				if f == nil {
 					f = &forensicTarget{}
 				}
-				if fr := f.frozen.Load(); fr != nil {
+				if fr, ok := f.t.frozen(); ok {
 					code = fr.ExitCode // the run's classification stands
 				}
 				time.AfterFunc(forcedAllowance, func() { os.Exit(code) })
@@ -125,13 +121,6 @@ func main() {
 		os.Exit(exitUsage)
 	}
 	os.Exit(exitFatal)
-}
-
-// settled is a run's frozen classification: the error as classified and
-// its outcome.
-type settled struct {
-	err error
-	out outcome
 }
 
 // classifyRun is the terminal classification of a run's result: a
@@ -477,45 +466,17 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
-	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att})
-	// The outcome: error.json is written while the run still owns the
-	// output (Settle), and never by a run that did not own it.
-	// One frozen classification: the first computation (Finalize, before
-	// any account is written) is reused by Settle, the command's return
-	// and a forced exit, so a stop cause that arrives later (the deadline
-	// passing while the run settles) cannot reclassify a run whose
-	// error.json is written.
-	var frozenMu sync.Mutex
-	var frozen *settled
-	settle := func(sum listing.Report, err error) (error, outcome) {
-		frozenMu.Lock()
-		defer frozenMu.Unlock()
-		if frozen != nil {
-			return frozen.err, frozen.out
-		}
-		err, out := classifyRun(ctx, cfg.Output.Dir, pf.Classify, sum, err)
-		out.Attempt = att
-		frozen = &settled{err, out}
-		if f := forensics.Load(); f != nil {
-			f.frozen.Store(&out)
-		}
-		return err, out
-	}
-	// One terminal account: the classification is applied to the report
-	// before run.json, error.json (Settle) or --report is written.
-	cfg.Finalize = func(r *listing.Report, err error) {
-		_, out := settle(*r, err)
-		account(&r.Outcome, out)
-		if b, jerr := json.Marshal(r); jerr == nil {
-			if f := forensics.Load(); f != nil {
-				f.final.Store(&b)
-			}
-		}
-	}
+	term := &terminal{ctx: ctx, dir: cfg.Output.Dir, provider: pf.Classify, att: att}
+	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att, t: term})
+	// One terminal result (terminal): the classification is applied to the
+	// report before run.json, error.json (Settle) or --report is written,
+	// and every one of them derives from it. error.json is written while
+	// the run still owns the output (Settle), never by a run that did not.
+	cfg.Finalize = term.account
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
-		_, out := settle(sum, err)
-		if werr := writeOutcome(cfg.Output.Dir, out); werr != nil {
+		term.account(&sum, err) // a no-op for the accounted report Settle gets
+		if werr := writeOutcome(cfg.Output.Dir, outcomeOf(sum)); werr != nil {
 			unrecorded = "write " + errorName + ": " + werr.Error()
 		} else {
 			settled = true
@@ -526,7 +487,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
 	stopProfile()
-	err, out := settle(sum, err)
+	err, out := term.classify(sum, err)
 	if err != nil && out.ExitCode == exitCompleted {
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
