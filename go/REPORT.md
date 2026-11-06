@@ -1540,6 +1540,39 @@ The Astra architecture review's deferred items, and the Sol durability review, a
 Not done: EIO injection beyond ENOSPC (no portable way to make a write return EIO without a fault-injecting
 filesystem); power-loss behaviour stays untested (SIGKILL cannot show it).
 
+## GCS provider (2026-11-06)
+
+`gs://bucket[/prefix]` lists through the JSON API's `objects.list` on the shared range engine
+(`internal/source/gcs`, [providers.md](docs/internals/providers.md#gcs-internalsourcegcs)). Before it, the
+engine's seam was changed so that a second provider fits without special cases: empty continuing pages are
+followed by their token on every path (a repeated token is an invalid page); the provider's bound predicate
+(`AcceptBound`, the pivot alphabet only by default and for S3) guards every request, resume's start and the
+seed top-up included; a token chain keeps its logical bounds and the adapter maps them; the engine requires a
+byte-ordered listing (`Capabilities.Order`); one configured page size; the engine's policy flags are one
+shared group. Two engine defects surfaced on the way and are fixed with regression tests: a resumed range
+that split before its cursor passed the resume key re-published keys up to it (reachable with a key outside
+the pivot alphabet), and the inclusive-bound drop was skipped when a chain began with empty pages.
+
+**Correctness, measured.** Unit and fake-server tests: a fake JSON server whose page tokens are bound to
+their chain's parameters and which serves empty continuing pages lists exactly at 1, 8, 16 and 64 workers
+(sequential, demand splits, seed descent with structure probes and 1-key probes, resume); a test-only oracle
+against `google.golang.org/api/storage/v1` reads the same pages field for field. Replay (swath-replay
+serving one recording on both its S3 and GCS routes, same Go build `587b8d9`, `--seed`, default workers,
+one run each): the GCS route's dataset equals the S3 route's, keys and sizes, ascending:
+
+| recording | rows | S3 requests | GCS requests | S3 overfetched keys | GCS overfetched keys |
+|---|---|---|---|---|---|
+| noaa-eri-pds | 845,693 | 1,113 | 1,140 | 219,160 | 0 |
+| pansurg-curation-raw-open-data | 501,262 | 687 | 734 | 136,437 | 0 |
+| noaa-nws-fourcastnetgfs-pds | 4,081,170 | 4,892 | 5,225 | 761,821 | 0 |
+
+GCS sends `endOffset`, so a bounded range reads no key past its end; it sent 2-7 % more requests here.
+
+**Speed: unmeasured.** swath-replay injects latency (`--inject-latency worker_page=…`) in its S3 handler
+only; its GCS handler is built without the latency function (`ReplayServer`: `new GcsHandler(bucket, store,
+identity, metrics)`), so the two routes' wall times on replay are not comparable, and no live GCS bucket was
+listed.
+
 ## Layering: provider registry
 
 The pipeline no longer knows which providers exist. Before this change, `listing` imported both providers, held
