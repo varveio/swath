@@ -20,10 +20,10 @@ import (
 // reference for the provider's concurrent walk.
 func serialSeed(t *testing.T, api lister, prefix string, workers int) *seedResult {
 	t.Helper()
-	d := newDescent(prefix, workers, Safe)
+	d := newDescent(prefix, workers, PageKeys, Safe)
 	q, res := d.start()
 	for res == nil {
-		out, err := api.List(context.Background(), &keyrangetest.ListInput{Prefix: q.prefix, StartAfter: q.after, Delimiter: seedDelimiter, MaxKeys: seedPage})
+		out, err := api.List(context.Background(), &keyrangetest.ListInput{Prefix: q.prefix, StartAfter: q.after, Delimiter: seedDelimiter, MaxKeys: PageKeys})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -82,6 +82,7 @@ const (
 	cSplitPivotStructure
 	cEmptyPages
 	cSeedTopUnsafe
+	cPrefixesNormalized
 	numCounters
 )
 
@@ -163,6 +164,7 @@ var Counters = []counters.Def{
 	d("split.pivot_structure", counters.Count, "pivots", "pivots on a folder boundary from a structure probe (else midpoint, density or reflection)", "structure"),
 	d("empty_pages", counters.Count, "pages", "continuing pages with no entry, followed by their token (also counted in requests)"),
 	d("seed.top_paginated_declined.unsafe", counters.Count, "probes", "top-up probes not sent: the top page's last entry is not a bound the provider accepts", "seed"),
+	d("prefixes_normalized", counters.Count, "pages", "pages whose common prefixes came unsorted or repeated, sorted and deduplicated"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {

@@ -73,12 +73,12 @@ func spanIn(x, y, lo, hi string) float64 {
 // prefix its consumed share underflows to zero, the keys drop out, and the
 // remaining-estimate floor refused every split of a range holding most of
 // a bucket.
-func estRemaining(c, lo, hi string, keys int64) float64 {
+func estRemaining(c, lo, hi string, keys, page int64) float64 {
 	if c >= hi {
 		return 0
 	}
 	g := math.Min(anchorBand, math.Max(anchorMin, anchoredGeometry(c, lo, hi)))
-	return float64(max(keys, PageKeys)) * g
+	return float64(max(keys, page)) * g
 }
 
 // anchoredGeometry is the remaining span over the consumed span, read from
@@ -137,17 +137,17 @@ func (d *density) ratio(c, lo, hi string, keys int64) float64 {
 }
 
 // belowRemainingFloor: the range is not worth splitting.
-func belowRemainingFloor(est float64) bool {
-	return est <= remainingFloorPages*PageKeys
+func belowRemainingFloor(est float64, page int64) bool {
+	return est <= remainingFloorPages*float64(page)
 }
 
 // tailBelowFloor: the child past a pivot at fraction f of the remaining
 // span would realize at most tailFloorPages pages, crediting it with
 // est·max(1/16, min(1, ratio) − f) keys (Java
 // StealMath.childTailBelowObservedMassFloor, reach_floored).
-func tailBelowFloor(est, f, ratio float64) bool {
+func tailBelowFloor(est, f, ratio float64, page int64) bool {
 	reach := math.Min(1, ratio) - f
-	return est*math.Max(tailReachMin, reach) <= tailFloorPages*PageKeys
+	return est*math.Max(tailReachMin, reach) <= tailFloorPages*float64(page)
 }
 
 // pivotFraction is where m lies in the remaining span (c, hi], read in the

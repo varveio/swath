@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,7 +57,7 @@ type Query struct {
 // Page is one listing page, in listing order.
 type Page[P any] struct {
 	Rows      []schema.Row[P]
-	Prefixes  []string // common prefixes, with a delimiter
+	Prefixes  []string // common prefixes, with a delimiter; the engine sorts and deduplicates them
 	Truncated bool
 	Token     string // the continuation token when Truncated
 }
@@ -158,6 +159,7 @@ type Options struct {
 	Resume      *Resume // continue after a journaled run's last published key
 	Probe       bool    // check each split's upper child with a 1-key request first (off by default)
 	Floors      bool    // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
+	PageSize    int     // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
 
 	// Test hooks: SplitCoin replaces the demand gate; Trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].
@@ -170,7 +172,7 @@ type Resume struct {
 	After string // the last published key: every key <= After is in the dataset
 }
 
-// PageKeys is the listing page size.
+// PageKeys is the default nominal page size (Options.PageSize).
 const PageKeys = 1000
 
 // Stats is what a listing did: the time-weighted mean of ranges in Expand
@@ -208,6 +210,9 @@ func New[P any](opt Options, d Description[P], fetch Fetch[P]) (*Engine[P], erro
 	}
 	if opt.Workers < 1 {
 		opt.Workers = 1
+	}
+	if opt.PageSize <= 0 {
+		opt.PageSize = PageKeys
 	}
 	now := time.Now()
 	p := &Engine[P]{opt: opt, d: d, fetch: fetch, running: map[uint64]*running{}, start: now, areaAt: now}
@@ -258,6 +263,12 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 				out.Rows = out.Rows[1:]
 			}
 			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 {
+				if !strictlyAscending(out.Prefixes) {
+					out.Prefixes = slices.Compact(slices.Sorted(slices.Values(out.Prefixes)))
+					p.mu.Lock()
+					p.c.Inc(cPrefixesNormalized)
+					p.mu.Unlock()
+				}
 				return out, nil
 			}
 			if out.Token == "" {
@@ -303,6 +314,16 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 		}
 		return nil, fmt.Errorf("list %s: %w", p.d.Target, err)
 	}
+}
+
+// strictlyAscending: s is sorted without duplicates.
+func strictlyAscending(s []string) bool {
+	for i := 1; i < len(s); i++ {
+		if s[i] <= s[i-1] {
+			return false
+		}
+	}
+	return true
 }
 
 // requeueBase and requeueMax bound the backoff before a page whose
@@ -386,7 +407,7 @@ func (p *Engine[P]) emit(rows []schema.Row[P], e source.Emitter[Range, P]) error
 
 // query is the request for the engine's scope.
 func (p *Engine[P]) query() *Query {
-	return &Query{Prefix: p.opt.Prefix, Max: PageKeys}
+	return &Query{Prefix: p.opt.Prefix, Max: p.opt.PageSize}
 }
 
 // Listed is the number of objects emitted so far.

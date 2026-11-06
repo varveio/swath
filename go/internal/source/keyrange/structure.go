@@ -108,7 +108,7 @@ func (p *Engine[P]) probeStructure(ctx context.Context, c, hi string) structure 
 	for i, pre := range prefixes {
 		wg.Go(func() {
 			in := p.query()
-			in.Prefix, in.After, in.Delimiter, in.Max, in.Probe = pre, c, "/", structureKeys, true
+			in.Prefix, in.After, in.Delimiter, in.Max, in.Probe = pre, c, "/", min(structureKeys, p.opt.PageSize), true
 			p.mu.Lock()
 			p.c.Inc(cStructureRequests)
 			p.mu.Unlock()

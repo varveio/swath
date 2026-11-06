@@ -289,8 +289,8 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 	// unbounded): counted per page, before demand, as Java does.
 	est := math.Inf(1)
 	if p.opt.Floors && !r.open {
-		est = estRemaining(c, r.lo, r.hi, st.keys)
-		if belowRemainingFloor(est) {
+		est = estRemaining(c, r.lo, r.hi, st.keys, int64(p.opt.PageSize))
+		if belowRemainingFloor(est, int64(p.opt.PageSize)) {
 			p.c.Inc(cSkippedRemainingFloor)
 			return
 		}
@@ -367,7 +367,7 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 	// Child-tail floor: the upper child must realize more than two pages.
 	if p.opt.Floors && !r.open {
 		f := pivotFraction(c, m, r.lo, r.hi)
-		if tailBelowFloor(est, f, st.dens.ratio(c, r.lo, r.hi, st.keys)) {
+		if tailBelowFloor(est, f, st.dens.ratio(c, r.lo, r.hi, st.keys), int64(p.opt.PageSize)) {
 			p.c.Inc(cSkippedTailFloor)
 			return "", false, false
 		}
@@ -530,7 +530,7 @@ func (p *Engine[P]) expandSeedPage(ctx context.Context, e source.Emitter[Range, 
 			p.c.Inc(cSeedUnsafe)
 		}
 	}
-	if limit := min(1000, 4*p.opt.Workers); len(cuts) > limit {
+	if limit := min(maxSeeds, 4*p.opt.Workers); len(cuts) > limit {
 		picked := make([]string, 0, limit)
 		for i := range limit {
 			picked = append(picked, cuts[(i*len(cuts)+limit/2)/limit])

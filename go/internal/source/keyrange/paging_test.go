@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -156,6 +158,104 @@ func TestByteOrderIsAPrerequisite(t *testing.T) {
 		}
 		if err := p.Expand(context.Background(), r, &direct{&collect{}}); !errors.Is(err, ErrInvalidPage) {
 			t.Fatalf("sequential=%v: UTF-16 order across pages accepted: %v", seq, err)
+		}
+	}
+}
+
+// TestPageSize: one configured page size feeds the data and seed requests
+// and the floors. At page sizes 1, 7, 1,000 and 5,000, with full and
+// short continuing pages, every configuration lists the keyspace exactly;
+// the sequential chain asks ceil(n / page) requests on full pages, and no
+// request asks for more than the page size.
+func TestPageSize(t *testing.T) {
+	keys := slices.Compact(slices.Sorted(slices.Values(keyspaces()["deepTree"])))
+	keys = append(keys, "d1/", "d2/e3/") // folder markers on seed cuts
+	slices.Sort(keys)
+	for _, page := range []int{1, 7, 1000, 5000} {
+		for _, short := range []bool{false, true} {
+			for i, opt := range []Options{
+				{Sequential: true},
+				{Workers: 8},
+				{Workers: 8, Seed: true, SeedDescent: true, Floors: true, Structure: true},
+				{Workers: 8, Seed: true, Probe: true},
+			} {
+				what := fmt.Sprintf("page=%d short=%v opt %d", page, short, i)
+				f := newSorted(keys, short, int64(page))
+				var mu sync.Mutex
+				over := 0
+				fetch := fetchFrom(f)
+				opt.PageSize = page
+				p, err := New(opt, Description[Object]{Target: "test", Listing: Listing}, func(ctx context.Context, q *Query) (*Page[Object], error) {
+					if q.Max > page {
+						mu.Lock()
+						over++
+						mu.Unlock()
+					}
+					return fetch(ctx, q)
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				col := &collect{}
+				if _, err := order.Run[Range, Object](context.Background(), p, col, &Schema, order.Options{Workers: max(1, opt.Workers), Budget: 1 << 22}); err != nil {
+					t.Fatalf("%s: %v", what, err)
+				}
+				if got := keysOf(col.rows); !slices.Equal(got, keys) {
+					t.Fatalf("%s: %d keys, want %d", what, len(got), len(keys))
+				}
+				st := p.Stats()
+				if mu.Lock(); over > 0 {
+					t.Fatalf("%s: %d requests above the page size", what, over)
+				}
+				mu.Unlock()
+				if want := int64((len(keys) + page - 1) / page); opt.Sequential && !short && st.Get(cRequests) != want {
+					t.Fatalf("%s: %d requests, want %d", what, st.Get(cRequests), want)
+				}
+			}
+		}
+	}
+}
+
+// TestPrefixesNormalized: common prefixes that come unsorted or repeated
+// are sorted and deduplicated once, for the seed page and the seed
+// descent alike: the tiles and the output equal those from a provider
+// that returns them in order.
+func TestPrefixesNormalized(t *testing.T) {
+	keys := slices.Compact(slices.Sorted(slices.Values(keyspaces()["deepTree"])))
+	keys = append(keys, "d1/", "d3/e0/")
+	slices.Sort(keys)
+	for _, opt := range []Options{{Seed: true}, {Seed: true, SeedDescent: true}} {
+		var tiles [2][]string
+		for j, scramble := range []bool{false, true} {
+			fetch := fetchFrom(newSorted(keys, false, 1))
+			opt := opt
+			opt.Workers = 1 // one range at a time: the tiling is the seed's
+			opt.SplitCoin = func() bool { return false }
+			opt.Trace = func(lo, hi string, open bool) { tiles[j] = append(tiles[j], fmt.Sprintf("%q %q %v", lo, hi, open)) }
+			p, _ := New(opt, Description[Object]{Target: "test", Listing: Listing}, func(ctx context.Context, q *Query) (*Page[Object], error) {
+				out, err := fetch(ctx, q)
+				if err == nil && scramble && len(out.Prefixes) > 1 {
+					s := slices.Clone(out.Prefixes)
+					slices.Reverse(s)
+					out.Prefixes = append(s, s[0], s[len(s)/2])
+				}
+				return out, err
+			})
+			col := &collect{}
+			if _, err := order.Run[Range, Object](context.Background(), p, col, &Schema, order.Options{Workers: 1, Budget: 1 << 22}); err != nil {
+				t.Fatal(err)
+			}
+			if got := keysOf(col.rows); !slices.Equal(got, keys) {
+				t.Fatalf("scramble=%v: %d keys, want %d", scramble, len(got), len(keys))
+			}
+			if st := p.Stats(); scramble != (st.Get(cPrefixesNormalized) > 0) {
+				t.Fatalf("scramble=%v: normalized %d pages", scramble, st.Get(cPrefixesNormalized))
+			}
+		}
+		slices.Sort(tiles[0])
+		slices.Sort(tiles[1])
+		if !slices.Equal(tiles[0], tiles[1]) {
+			t.Fatalf("%+v: tiles differ:\n%q\n%q", opt, tiles[0], tiles[1])
 		}
 	}
 }

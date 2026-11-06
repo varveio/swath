@@ -15,21 +15,21 @@ import (
 func TestFloorArithmetic(t *testing.T) {
 	// The keys produced, adjusted by the anchored geometry: (a, e] with the
 	// cursor at b has consumed a quarter, so 3x the 1,000 keys remain.
-	if est := estRemaining("b", "a", "e", 1000); math.Abs(est-3000) > 1e-6 {
+	if est := estRemaining("b", "a", "e", 1000, PageKeys); math.Abs(est-3000) > 1e-6 {
 		t.Fatalf("est %v, want 3000", est)
 	}
 	// The geometry lifts at most 16x and cuts at most to a quarter; a range
 	// with fewer than a page produced counts a page; a cursor at hi is done.
-	if est := estRemaining("a\x01", "a", "z", 1000); est != 16_000 {
+	if est := estRemaining("a\x01", "a", "z", 1000, PageKeys); est != 16_000 {
 		t.Fatalf("lift: est %v, want 16000", est)
 	}
-	if est := estRemaining("y", "a", "z", 1000); est != 250 {
+	if est := estRemaining("y", "a", "z", 1000, PageKeys); est != 250 {
 		t.Fatalf("cut: est %v, want 250", est)
 	}
-	if est := estRemaining("b", "a", "e", 10); math.Abs(est-3*PageKeys) > 1e-6 {
+	if est := estRemaining("b", "a", "e", 10, PageKeys); math.Abs(est-3*PageKeys) > 1e-6 {
 		t.Fatalf("page floor: est %v", est)
 	}
-	if est := estRemaining("e", "a", "e", 1000); est != 0 {
+	if est := estRemaining("e", "a", "e", 1000, PageKeys); est != 0 {
 		t.Fatalf("at hi: est %v", est)
 	}
 	// A deep shared prefix: a range (lo, hi] whose keys all share 20 bytes
@@ -38,7 +38,7 @@ func TestFloorArithmetic(t *testing.T) {
 	// moves, and a range that has produced 100,000 keys is never worth "a
 	// few pages": the geometry reads 0.02 here and the estimate keeps a quarter.
 	deep := "dataset/ufs/atmos/train/"
-	if est := estRemaining(deep+"ufs-replay_1999", "", "fcngfs", 100_000); est != 100_000/4 {
+	if est := estRemaining(deep+"ufs-replay_1999", "", "fcngfs", 100_000, PageKeys); est != 100_000/4 {
 		t.Fatalf("deep prefix: est %v", est)
 	}
 	if spanIn("", deep+"ufs-replay_1999", "", "fcngfs") != spanIn("", deep+"ufs-replay_2019", "", "fcngfs") {
@@ -56,7 +56,7 @@ func TestFloorArithmetic(t *testing.T) {
 		{10_000, 0.5, 0.1, true},           // thinning: credited 1/16 = 625
 		{40_000, 0.5, 0.1, false},          // 2,500 even at the 1/16 reach
 	} {
-		got := tailBelowFloor(c.est, c.f, c.ratio)
+		got := tailBelowFloor(c.est, c.f, c.ratio, PageKeys)
 		if c.est == 4_000 {
 			// est·0.5 = 2,000 is at the floor: <= blocks.
 			if !got {
@@ -68,7 +68,7 @@ func TestFloorArithmetic(t *testing.T) {
 			t.Fatalf("tailBelowFloor(%v, %v, %v) = %v", c.est, c.f, c.ratio, got)
 		}
 	}
-	if !belowRemainingFloor(4000) || belowRemainingFloor(4001) {
+	if !belowRemainingFloor(4000, PageKeys) || belowRemainingFloor(4001, PageKeys) {
 		t.Fatal("remaining floor is 4 pages, inclusive")
 	}
 }

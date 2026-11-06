@@ -19,7 +19,7 @@ import (
 
 const (
 	seedDelimiter = "/"
-	seedPage      = 1000 // a probe is one page, never paginated
+	maxSeeds      = 1000 // the most cuts a seed makes
 	// sampleWidth children of an ambiguous truncated folder are probed to
 	// tell a heavy subtree from a one-object-per-folder explosion.
 	sampleWidth = 3
@@ -121,13 +121,14 @@ type descent struct {
 	currentWeight string
 
 	safe func(string) bool // the provider's bound predicate: a start-after the walk may send
+	page int               // the nominal page size: a probe is one page, never paginated
 }
 
-func newDescent(prefix string, workers int, safe func(string) bool) *descent {
+func newDescent(prefix string, workers, page int, safe func(string) bool) *descent {
 	w := max(1, workers)
-	target := min(seedPage, 4*w)
+	target := min(maxSeeds, 4*w)
 	d := &descent{prefix: prefix, workers: w, targetSeeds: target, maxProbes: min(256, max(1, target)),
-		marks: map[string]int{}, safe: safe}
+		marks: map[string]int{}, safe: safe, page: page}
 	d.topCeil = scopeCeiling(prefix)
 	return d
 }
@@ -420,7 +421,7 @@ func (d *descent) nextWeight() (seedProbe, *seedResult) {
 }
 
 func (d *descent) onWeightSample(o seedOutcome) (seedProbe, *seedResult) {
-	w := int64(seedPage)
+	w := int64(d.page) // a capped sample holds at least a page
 	if !o.capped {
 		w = int64(len(o.prefixes) + o.objects)
 	}

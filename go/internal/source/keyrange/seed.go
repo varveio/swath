@@ -34,7 +34,7 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 		go func() {
 			defer close(f.done)
 			in := p.query()
-			in.Prefix, in.After, in.Delimiter, in.Max, in.Probe = q.prefix, q.after, seedDelimiter, seedPage, true
+			in.Prefix, in.After, in.Delimiter, in.Max, in.Probe = q.prefix, q.after, seedDelimiter, p.opt.PageSize, true
 			out, err := p.list(ctx, in)
 			if err != nil {
 				f.err = err
@@ -57,7 +57,7 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 		}()
 		return f
 	}
-	d := newDescent(p.opt.Prefix, p.opt.Workers, p.safe)
+	d := newDescent(p.opt.Prefix, p.opt.Workers, p.opt.PageSize, p.safe)
 	q, res := d.start()
 	used := map[seedProbe]bool{}
 	for res == nil {
