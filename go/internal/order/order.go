@@ -115,6 +115,7 @@ type run[R, P any] struct {
 	drain    *sync.Cond // drainer and blocked emitters
 	stack    []*node[R, P]
 	buffered int64
+	markers  int64 // the part of buffered held by spill markers
 	max      int64
 	frontier time.Duration // Stats.FrontierWait (under mu)
 	budget   time.Duration // Stats.BudgetWait (under mu)
@@ -148,6 +149,12 @@ func (o *run[R, P]) dispose() {
 
 // Test hooks that widen race windows; nil in production.
 var hookBeforeDrain, hookAfterExpand func()
+
+// hookMarkers sees the marker bytes held after each publish, hookDrained
+// the bytes and marker bytes still counted when the drain ends (tests;
+// mu held).
+var hookMarkers func(markers int64)
+var hookDrained func(buffered, markers int64)
 
 // countRows makes the budget count rows instead of bytes (tests).
 var countRows bool
@@ -463,7 +470,7 @@ func (e *emitter[R, P]) publish() error {
 			err := e.spill()
 			o.mu.Lock()
 			if err == nil {
-				break
+				continue // the markers left pass admission too (below)
 			}
 			if err != errSpillFull {
 				return err
@@ -473,8 +480,14 @@ func (e *emitter[R, P]) publish() error {
 			// may have marked this node awaited meanwhile).
 			refused = true
 			continue
-		} else if o.sp != nil && e.rows == 0 && len(e.items) > 0 { // only children: never block
-			break
+		} else if o.sp != nil && e.rows == 0 && len(e.items) > 0 {
+			// Only children and spill markers: admitted without a wait
+			// unless the markers in memory would by themselves fill the
+			// budget, so spilling keeps workers busy and the markers stay
+			// bounded.
+			if o.markers+e.units < o.opt.Budget {
+				break
+			}
 		}
 		t := time.Now()
 		o.drain.Wait()
@@ -486,6 +499,14 @@ func (e *emitter[R, P]) publish() error {
 	}
 	if len(e.items) == 0 {
 		return nil
+	}
+	for i := range e.items {
+		if e.items[i].spill != nil {
+			o.markers += e.items[i].units
+		}
+	}
+	if hookMarkers != nil {
+		hookMarkers(o.markers)
 	}
 	e.n.items = append(e.n.items, e.items...)
 	e.n.pending = append(e.n.pending, e.kids...)
@@ -534,14 +555,17 @@ func (o *run[R, P]) replay(f *spillFile) error {
 // drainTree walks the tree depth-first from root, streaming rows to sink.
 func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	var st Stats
-	var released int64
+	// released: bytes drained but still counted; releasedMarkers: the
+	// part of it held by spill markers.
+	var released, releasedMarkers int64
 	release := func() { // mu held
 		if released == 0 {
 			return
 		}
 		full := o.full()
 		o.buffered -= released
-		released = 0
+		o.markers -= releasedMarkers
+		released, releasedMarkers = 0, 0
 		if full && !o.full() {
 			o.work.Broadcast()
 			o.drain.Broadcast()
@@ -578,7 +602,14 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 					break
 				}
 				if it.spill != nil {
+					released += it.units
+					releasedMarkers += it.units
 					err = o.replay(it.spill)
+					if released >= releaseEvery {
+						o.mu.Lock()
+						release()
+						o.mu.Unlock()
+					}
 					continue
 				}
 				released += it.units
@@ -613,6 +644,10 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			}
 			if it.spill != nil {
 				released += it.units
+				releasedMarkers += it.units
+				if released >= releaseEvery {
+					release()
+				}
 				o.mu.Unlock()
 				err := o.replay(it.spill)
 				o.mu.Lock()
@@ -680,6 +715,9 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		}
 	}
 	release()
+	if hookDrained != nil {
+		hookDrained(o.buffered, o.markers)
+	}
 	o.mu.Unlock()
 	return st, o.flush()
 }

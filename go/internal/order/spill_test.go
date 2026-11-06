@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -257,4 +258,44 @@ func TestSpillReadFailures(t *testing.T) {
 	if f.f != nil {
 		t.Fatal("close left a spill reader open")
 	}
+}
+
+// TestSpillMarkersInByteMode: with the budget in bytes (the CLI's mode;
+// every other order test counts rows, where a marker costs nothing), spill
+// markers behind a stalled frontier pass admission (their bytes never
+// exceed the budget by more than one publish batch) and every marker's
+// bytes are released when its frame is replayed, on the finished-node and
+// the expanding-node drain paths alike: the drain ends with nothing
+// counted.
+func TestSpillMarkersInByteMode(t *testing.T) {
+	countRows = false
+	defer func() { countRows = true }()
+	f := &frontier{slowPages: 30, siblings: 40, sibPages: 11, rows: 100, slowDelay: 5 * time.Millisecond, sibDelay: time.Millisecond}
+	want := f.keys()
+	budget := 24 * markerUnits() // a few publish batches of markers, far less than one page of rows
+	var mu sync.Mutex
+	var peak, leftBytes, leftMarkers int64 = 0, -1, -1
+	hookMarkers = func(m int64) { mu.Lock(); peak = max(peak, m); mu.Unlock() }
+	hookDrained = func(b, m int64) { mu.Lock(); leftBytes, leftMarkers = b, m; mu.Unlock() }
+	defer func() { hookMarkers, hookDrained = nil, nil }()
+	c := &collect{}
+	st, err := Run[fr, tp](context.Background(), f, c, &testSchema, Options{Workers: 8, Budget: budget, SpillDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.keys, want) {
+		t.Fatalf("%d keys, want %d", len(c.keys), len(want))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if st.SpillFrames == 0 {
+		t.Fatal("nothing spilled")
+	}
+	if leftBytes != 0 || leftMarkers != 0 {
+		t.Fatalf("the drain ended with %d bytes, %d of markers, still counted", leftBytes, leftMarkers)
+	}
+	if limit := budget + 2*publishRows/int64(f.rows)*markerUnits(); peak > limit {
+		t.Fatalf("marker bytes peaked at %d, budget %d (limit %d)", peak, budget, limit)
+	}
+	t.Logf("%d frames, marker peak %d of budget %d, budget wait %v", st.SpillFrames, peak, budget, st.BudgetWait)
 }
