@@ -1282,6 +1282,9 @@ The spill counters (then `spill_rows`, `spill_bytes`, `spill_ranges`; now the `s
 
 ## Step 5a: pivot and probe
 
+*The Go numbers in this section, "Gate-chain floors" and "Seed descent" were measured with the order-stage
+budget-wait bug fixed in `b3e6ddc` and are invalid as policy evidence; see "Step 5b".*
+
 **Change (5833103).** The pivot defaults to the spec pivot (`between(c, hi)`, or a forward reflection on the
 open frontier). Density extrapolation is used only when it lands below the spec pivot, or when the spec pivot
 is within one page span of the cursor (clamped refinement). Java's 1-key probe is ported:
@@ -1422,6 +1425,101 @@ One rep each, so a direction, not a result: the descent costs its 256 probes and
 gain nothing from it (their tiles are already small; the seed ranges' final pages add overfetch), while on
 fourcastnetgfs it raises concurrency. Note the one-page arm's 47 s on fourcastnetgfs against 403–426 s in
 the step 5a table: single runs of this shape vary widely with where the first splits land.
+
+## Step 5b: the deep-hierarchy gap
+
+**Two port defects, not missing policy, made the Go baseline slow on deep hierarchies; both are fixed, and
+every Go policy number measured before them is invalid.**
+
+- **Order stage (`b3e6ddc`).** A worker whose range ended right after a publish batch called `publish` with
+  nothing to publish and waited on the full row budget. On a deep bucket the budget stays full of rows far
+  ahead of the frontier, so every worker blocked at its range end, nobody took the queued ranges, and the
+  drainer listed the frontier alone. nara-1950-census on the build before the fix: 1,725 s, mean active 1.4
+  of 64, budget wait summed over goroutines 108,919 s. This bug invalidates every Go number in "Step 5a",
+  "Gate-chain floors", "Seed descent" and the first stage D block (build `143096b`): those arms measured
+  how often workers blocked, which varied run to run (fourcastnetgfs baseline 30–106 s on one build).
+- **Floors estimate (`d147e21`).** The Go floors port used Swath's window estimate
+  (`StealMath.estRemaining`) and had missed that Swath steers on `RateAnchoredEstimator` by default
+  (`rate_anchored_sensing`, on since 0.2.0). On a deep shared prefix the window estimate's consumed share
+  underflows to 0, the estimate falls below one key, and the remaining floor refused every split:
+  fourcastnetgfs with `--floors` took 392 s with 0 splits in 4,128 requests on every rep. In Swath the window
+  estimate only gated the owner's carve while thieves still split; the Go engine splits only at the owner,
+  so the floors gate every split. The floors now read the rate-anchored estimate (docs/internals/providers.md
+  "Floors").
+
+**Measurement.** Replay at each recording's p50 page latency, 64 workers, `--seed`, probe off, build
+`d147e21`, 3 interleaved reps per recording (Java defaults interleaved with the Go arms), one session on
+2026-11-06; median (min–max). Arms: `go-base` is `swath diag list --seed-descent=false`; `go-floors` adds
+`--floors`; `go-descent` is the seed descent alone; `go-structure` adds `--structure`; `go-all` is
+`--floors --structure` with the descent. Java is the Java CLI's `swath list --format parquet --sort` at its
+defaults. Harness `bench/policy_replay.sh`, table `bench/policy_table.py`.
+
+**noaa-eri-pds (99 ms)**
+
+| Arm | n | Wall s | Requests | Splits | Empty children | Overfetched keys | Probes | Mean active |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| java-default | 3 | 43.4 (43.0–43.5) | 1,353 (1,352–1,355) | 94 (93–96) | 100 (99–100) | 148,904 (148,904–149,904) | 352 (352–354) | 7.7 (7.5–7.7) |
+| go-base | 3 | 3.7 (3.7–3.8) | 1,228 (1,224–1,242) | 466 (460–479) | 150 (141–159) | 378,597 (374,597–392,130) | 0 (0–0) | 35.6 (35.1–37.4) |
+| go-floors | 3 | 4.1 (4.0–4.2) | 1,196 (1,179–1,216) | 428 (412–450) | 129 (127–154) | 346,597 (329,597–366,130) | 0 (0–0) | 31.5 (31.2–33.3) |
+| go-descent | 3 | 4.3 (4.2–4.7) | 1,591 (1,587–1,597) | 535 (528–538) | 173 (173–181) | 499,133 (494,136–504,136) | 256 (256–256) | 33.8 (32.4–33.9) |
+| go-structure | 3 | 3.1 (2.9–3.3) | 2,066 (2,000–2,075) | 346 (329–356) | 108 (107–122) | 276,597 (271,130–289,597) | 936 (879–940) | 41.0 (39.8–42.6) |
+| go-all | 3 | 5.9 (5.7–6.0) | 2,079 (2,068–2,100) | 255 (250–263) | 78 (74–90) | 290,615 (284,615–301,615) | 952 (947–962) | 21.5 (20.7–21.5) |
+
+**pansurg-curation-raw-open-data (164 ms)**
+
+| Arm | n | Wall s | Requests | Splits | Empty children | Overfetched keys | Probes | Mean active |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| java-default | 3 | 66.4 (66.1–68.8) | 1,174 (1,173–1,182) | 77 (77–78) | 99 (98–99) | 310,056 (305,056–310,056) | 346 (344–358) | 6.8 (6.3–6.9) |
+| go-base | 3 | 6.0 (5.1–6.2) | 803 (773–809) | 395 (370–401) | 168 (151–170) | 298,042 (268,042–304,042) | 0 (0–0) | 22.9 (22.3–25.8) |
+| go-floors | 3 | 6.2 (6.1–6.3) | 709 (701–710) | 281 (271–283) | 122 (117–125) | 204,042 (196,042–205,042) | 0 (0–0) | 19.5 (19.1–19.6) |
+| go-descent | 3 | 6.6 (6.3–6.9) | 1,280 (1,278–1,310) | 323 (308–342) | 128 (124–143) | 509,057 (507,057–539,057) | 256 (256–256) | 27.7 (26.0–28.4) |
+| go-structure | 3 | 4.3 (4.2–4.4) | 1,584 (1,563–1,636) | 326 (325–340) | 134 (129–141) | 246,439 (230,438–250,439) | 832 (828–880) | 30.5 (29.6–31.2) |
+| go-all | 3 | 26.7 (26.7–26.7) | 1,444 (1,431–1,456) | 99 (96–102) | 53 (50–56) | 365,056 (363,056–369,056) | 565 (554–573) | 5.6 (5.6–5.6) |
+
+**noaa-nws-fourcastnetgfs-pds (99 ms)**
+
+| Arm | n | Wall s | Requests | Splits | Empty children | Overfetched keys | Probes | Mean active |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| java-default | 3 | 83.2 (80.8–92.4) | 4,913 (4,909–5,011) | 296 (276–301) | 55 (53–60) | 171,414 (169,414–185,414) | 655 (638–749) | 8.3 (7.0–8.7) |
+| go-base | 3 | 14.8 (14.6–15.6) | 5,803 (5,714–5,915) | 2,337 (2,267–2,472) | 1,106 (995–1,192) | 1,720,578 (1,631,578–1,832,578) | 0 (0–0) | 43.6 (41.6–43.7) |
+| go-floors | 3 | 15.9 (15.7–17.0) | 5,663 (5,600–5,709) | 2,021 (1,940–2,049) | 1,089 (1,008–1,120) | 1,580,578 (1,517,578–1,626,578) | 0 (0–0) | 38.2 (36.2–39.7) |
+| go-descent | 3 | 16.0 (15.6–16.6) | 6,083 (6,025–6,097) | 2,434 (2,351–2,444) | 1,073 (1,047–1,114) | 1,756,569 (1,698,569–1,770,569) | 256 (256–256) | 40.3 (39.1–41.5) |
+| go-structure | 3 | 14.7 (14.4–15.0) | 10,383 (10,254–10,581) | 1,969 (1,919–2,018) | 894 (868–950) | 1,460,578 (1,426,578–1,513,578) | 4,840 (4,745–4,985) | 43.4 (42.5–44.5) |
+| go-all | 3 | 28.4 (27.6–28.7) | 9,704 (9,160–10,202) | 1,590 (1,444–1,754) | 845 (745–946) | 1,276,070 (1,145,070–1,421,070) | 4,358 (3,945–4,711) | 21.3 (21.0–21.8) |
+
+**nara-1950-census (103 ms)**
+
+| Arm | n | Wall s | Requests | Splits | Empty children | Overfetched keys | Probes | Mean active |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| java-default | 3 | 109.4 (108.8–111.3) | 14,942 (14,920–14,956) | 994 (981–1,029) | 170 (165–175) | 715,051 (707,051–718,051) | 685 (672–697) | 19.6 (19.1–20.2) |
+| go-base | 3 | 57.2 (55.9–58.1) | 20,928 (20,558–20,956) | 9,847 (9,478–9,873) | 4,504 (4,172–4,520) | 7,383,588 (7,013,588–7,411,326) | 0 (0–0) | 40.4 (39.8–41.1) |
+| go-floors | 3 | 59.0 (56.5–60.6) | 18,448 (18,320–18,968) | 6,844 (6,685–7,419) | 2,662 (2,532–3,043) | 4,903,622 (4,775,326–5,422,326) | 0 (0–0) | 35.2 (33.4–35.7) |
+| go-descent | 3 | 57.8 (52.1–63.3) | 19,664 (19,032–19,758) | 7,681 (7,010–7,820) | 3,461 (2,892–3,557) | 5,898,656 (5,266,656–5,990,656) | 224 (224–224) | 37.0 (34.1–39.8) |
+| go-structure | 3 | 41.0 (38.4–42.2) | 34,535 (28,943–34,720) | 5,451 (3,978–5,503) | 1,371 (907–1,463) | 3,746,030 (2,674,246–3,853,576) | 17,245 (12,725–17,322) | 49.1 (47.6–49.1) |
+| go-all | 3 | 43.1 (42.1–46.0) | 28,433 (26,602–28,743) | 3,642 (3,160–3,675) | 776 (669–885) | 2,554,360 (2,188,360–2,590,360) | 12,300 (10,871–12,646) | 42.7 (39.8–43.4) |
+
+Java with its engine policies off (`--engine-toggle ...=off` for each policy toggle), from the earlier
+stage D session on the same host (Java is unaffected by the Go bug): fourcastnetgfs 391.7 / 388.0 / 391.2 s
+(about 8.0k requests), nara 769.8 s (17,244 requests, 1 rep); Java defaults in that session 82.8 / 76.9 /
+94.7 s and 111.8 s, matching this session's.
+
+**Readings.**
+- The Go baseline closes the deep gap on its own: 5.6x faster than Java defaults on fourcastnetgfs and 1.9x on
+  nara, and 12x and 11x on the shallow recordings, at 40 of 64 ranges active where Java runs 8–20. It makes
+  more requests on the deep recordings (+18 % and +40 %) and overfetches far more keys (1.7M and 7.4M against
+  Java's 0.17M and 0.72M): ranges end on full pages trimmed at their bound. That is the next inefficiency;
+  at replay latency it costs requests, not wall.
+- Floors: 2–12 % fewer requests and 8–34 % fewer overfetched keys, at 3–11 % more wall everywhere.
+- Seed descent: no gain on any recording; 30–60 % more requests on the shallow ones.
+- Structure probes: the fastest arm on three of four recordings (nara 41.0 s against 57.2 s; noaa-eri-pds
+  3.1 s; pansurg 4.3 s; fourcastnetgfs equal) at 1.6–2.0x the requests (probes are delimiter requests).
+- All three together: slower than structure probes alone on every recording, and than any single feature on
+  the shallow and fourcastnetgfs recordings (pansurg 26.7 s, mean active 5.6).
+
+**Defaults (the rule: a feature is on by default only if it closes the deep gap without regressing shallow
+buckets).** The gap is closed by the baseline, so no feature is needed to close it: `--floors`, the seed
+descent and `--structure` stay off. Structure probes trade requests for wall on every shape; on replay
+requests cost nothing and nothing throttles, so they are not turned on from this table.
 
 ## Review items
 
