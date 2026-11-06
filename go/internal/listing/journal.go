@@ -186,6 +186,11 @@ const (
 	unrecordedComplete = "the dataset in the output is complete"
 	unrecordedNoRun    = "the output holds no unfinished run this invocation continues or replaces"
 	unrecordedLocked   = "another process owns the output"
+	// UnrecordedComplete, UnrecordedNoRun and UnrecordedNoOutput, for the
+	// command's own refusals before a run.
+	UnrecordedComplete = unrecordedComplete
+	UnrecordedNoRun    = unrecordedNoRun
+	UnrecordedNoOutput = "the invocation has no output directory"
 	unrecordedRefused  = "refused before owning the output, which is left as it was"
 )
 

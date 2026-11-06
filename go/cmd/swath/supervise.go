@@ -204,10 +204,15 @@ var errOut io.Writer = os.Stderr
 // lock. A committed dataset, a directory without a journal (nothing is
 // created there, not even the lock), an output another process owns and a
 // run another process completed, replaced or continued since are left as
-// they are: unrecorded says why, empty when there was nothing to replace.
+// they are: unrecorded says why, never empty.
 func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded string) {
-	if dir == "" || seen == "" || dataset.Committed(dir) {
-		return false, ""
+	switch {
+	case dir == "":
+		return false, listing.UnrecordedNoOutput
+	case dataset.Committed(dir):
+		return false, listing.UnrecordedComplete
+	case seen == "":
+		return false, listing.UnrecordedNoRun
 	}
 	if err := faults.At("settle-lock"); err != nil {
 		return false, err.Error()

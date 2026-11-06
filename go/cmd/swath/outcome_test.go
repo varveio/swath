@@ -448,3 +448,29 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 		t.Fatalf("refusal: report %+v %+v", rep.Attempt, rep.Outcome)
 	}
 }
+
+// TestEarlyRefusalSaysWhy: a swath resume refused before any run (the
+// dataset is complete; the directory holds no run) puts why its outcome
+// is not in error.json into the report and on stderr (Sol, seventh
+// review, P2). Before, outcome.unrecorded was empty for these.
+func TestEarlyRefusalSaysWhy(t *testing.T) {
+	stderr := captureStderr(t)
+	ctx := context.Background()
+	srv := gcstest.Bucket(t, gcstest.Keys(50), 0)
+	done := filepath.Join(t.TempDir(), "done")
+	if err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv, "--gcs-anonymous", "-o", done}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	empty := t.TempDir()
+	for _, c := range []struct{ dir, why string }{{done, listing.UnrecordedComplete}, {empty, listing.UnrecordedNoRun}} {
+		report := filepath.Join(t.TempDir(), "report.json")
+		if err := dispatch(ctx, []string{"resume", "--report", report, c.dir}, io.Discard); err == nil {
+			t.Fatalf("resume of %s accepted", c.dir)
+		}
+		var rep listing.Report
+		readJSON(t, report, &rep)
+		if rep.Outcome.Unrecorded != c.why || !strings.Contains(stderr.String(), c.why) {
+			t.Fatalf("unrecorded %q, want %q; stderr %s", rep.Outcome.Unrecorded, c.why, stderr)
+		}
+	}
+}
