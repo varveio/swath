@@ -34,8 +34,9 @@ type scripted struct {
 	chunk  int
 	after  *string
 	listed atomic.Int64
-	slow   time.Duration // before every range after the first: lets parts publish early
-	big    string        // this key's row is larger than any part: a part boundary follows it
+	slow   time.Duration             // before every range after the first: lets parts publish early
+	slowAt func(i int) time.Duration // if set, before the range at key i instead of slow
+	big    string                    // this key's row is larger than any part: a part boundary follows it
 }
 
 type scriptedRange struct{ i int } // -1: the root; else the range starting at key i
@@ -51,7 +52,9 @@ func (s *scripted) Expand(ctx context.Context, r scriptedRange, e source.Emitter
 		}
 		return nil
 	}
-	if r.i > 0 && s.slow > 0 {
+	if s.slowAt != nil {
+		time.Sleep(s.slowAt(r.i))
+	} else if r.i > 0 && s.slow > 0 {
 		time.Sleep(s.slow)
 	}
 	var rows []schema.Row[s3.Object]

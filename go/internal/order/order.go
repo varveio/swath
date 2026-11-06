@@ -59,6 +59,11 @@ type Options struct {
 	// free space spill leaves on its filesystem (0: none). Past either, an
 	// emitter waits on the budget instead of spilling.
 	SpillMax, SpillReserve int64
+	// SpillVerify, if set, is called before the spill directory is created
+	// and before each spill file is created, appended to or removed: a
+	// spill directory inside the output must still be in the directory
+	// the run owns (journal.Lock.Verify).
+	SpillVerify func() error
 	// Gauges, if set, receives the stage's live resource counts.
 	Gauges *Gauges
 	// After, if set, is a resume's last published key: every row must sort
@@ -456,12 +461,19 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		o.mu.Unlock()
 	}
 	if opt.SpillDir != "" {
-		sp, err := newSpiller(s.Codec, opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
+		var sp *spiller[P]
+		err := error(nil)
+		if opt.SpillVerify != nil {
+			err = opt.SpillVerify()
+		}
+		if err == nil {
+			sp, err = newSpiller(s.Codec, opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
+		}
 		if err != nil {
 			cancel(nil)
 			return nil, nil, err
 		}
-		sp.wake = wake
+		sp.wake, sp.verify = wake, opt.SpillVerify
 		sp.g = o.g
 		o.sp = sp
 	}

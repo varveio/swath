@@ -117,7 +117,7 @@ func openJournal(ctx context.Context, cfg Config, src registry.Source, id journa
 	if err != nil {
 		return nil, err
 	}
-	cfg.Progress.own(true)
+	cfg.Progress.own(lock)
 	var jr *runJournal
 	if resumable {
 		jr, err = openLocked(ctx, cfg, path, id, lock)
@@ -627,7 +627,7 @@ func (jr *runJournal) release(cfg Config) {
 		_ = jr.j.Close()
 		jr.j = nil
 	}
-	cfg.Progress.own(false)
+	cfg.Progress.own(nil)
 	jr.lock.Release()
 }
 

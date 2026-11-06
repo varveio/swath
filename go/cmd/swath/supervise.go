@@ -220,6 +220,9 @@ func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded strin
 	if dataset.Committed(dir) || journal.Witness(dir) != seen {
 		return false, listing.UnrecordedChanged
 	}
+	if err := lock.Verify(); err != nil {
+		return false, err.Error()
+	}
 	if err := writeOutcome(dir, o); err != nil {
 		return false, "write " + errorName + ": " + err.Error()
 	}

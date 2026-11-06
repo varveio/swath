@@ -58,6 +58,7 @@ type spiller[P any] struct {
 	refused  atomic.Int64 // frames refused by the disk budget
 	full     atomic.Bool  // the last frame was refused; cleared when a file is deleted
 	wake     func()       // rouses the run's waiters (credit returned); nil in tests
+	verify   func() error // Options.SpillVerify; nil in tests
 	g        *Gauges      // live bytes and open readers (nil in tests)
 	seq      atomic.Uint64
 	enc      sync.Pool // *zstd.Encoder
@@ -101,7 +102,18 @@ func (s *spiller[P]) close() {
 	if s.dec != nil {
 		s.dec.Close()
 	}
-	_ = os.RemoveAll(s.dir)
+	if s.check() == nil { // else the pathname names another directory now
+		_ = os.RemoveAll(s.dir)
+	}
+}
+
+// check is the output's identity check (Options.SpillVerify) before a
+// spill file is created, appended to or removed: nil without one.
+func (s *spiller[P]) check() error {
+	if s.verify == nil {
+		return nil
+	}
+	return s.verify()
 }
 
 // closeFile closes f's reader and forgets it.
@@ -235,14 +247,19 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 	if !s.admit(n, final) {
 		return errSpillFull
 	}
-	fh, err := os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	// Each frame opens the file by name: the output must still be the
+	// directory the run owns (two stats per frame).
+	err := s.check()
 	if err == nil {
-		_, err = fh.Write(buf)
-		if err != nil && errors.Is(err, syscall.ENOSPC) && fh.Truncate(f.size) == nil {
-			err = errSpillFull // the torn frame is gone: back off as if refused
-		}
-		if cerr := fh.Close(); err == nil {
-			err = cerr
+		var fh *os.File
+		if fh, err = os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+			_, err = fh.Write(buf)
+			if err != nil && errors.Is(err, syscall.ENOSPC) && fh.Truncate(f.size) == nil {
+				err = errSpillFull // the torn frame is gone: back off as if refused
+			}
+			if cerr := fh.Close(); err == nil {
+				err = cerr
+			}
 		}
 	}
 	if err != nil {
@@ -357,7 +374,10 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		if k <= 0 || int64(n) != f.read {
 			return nil, fmt.Errorf("spill: %s holds %d rows, trailer says %d", f.path, f.read, n)
 		}
-		err := os.Remove(f.path)
+		err := s.check()
+		if err == nil {
+			err = os.Remove(f.path)
+		}
 		s.release(f)
 		return nil, err
 	case 'Z':

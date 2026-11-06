@@ -101,12 +101,20 @@ that is the commit. The run reports follow it.
    Replacing a previous run empties `.swath/` except the lock, so a live owner's lock is never unlinked.
    A lock on an inode does not prove the pathname still names that directory: the lock records the output
    directory's and the lock file's identity (device and inode, `os.SameFile`) and `Lock.Verify` checks both
-   immediately before every destructive or publishing step (each part file created, the claim and the rename
-   into `data/`, recovery's renames and removals, cleanup of temporary parts and spill, the manifest, the
-   report and the outcome file). A directory moved or replaced during the run stops it with
-   `journal.ErrOutputReplaced` and is never written into; the moved directory resumes at its new path
-   (`TestReplacedOutputIsNeverTouched`). A replacement between a check and its action is not excluded: no
-   portable directory-relative rename exists.
+   before each operation that creates, writes, renames or removes something in the output by its pathname:
+   the router's parts directory and each part file created, the claim and the rename into `data/`,
+   recovery's renames and removals, cleanup of temporary parts, the spill directory and each spill file
+   created, appended to (a frame opens the file by name: two stats per frame) or removed, the spill cleanup,
+   the manifest, the run report, the outcome file (also a refused command's, `settleOutside`), and the
+   command's writers through `Progress.Owned` (`progress.json` every 2 s, goroutine dumps, a forced exit's
+   outcome). Writes through a descriptor already open (the journal, a part being encoded) go to the locked
+   inode, so into the moved directory, never its replacement. A directory moved or replaced during the run
+   stops it with `journal.ErrOutputReplaced`, and the moved directory resumes at its new path
+   (`TestReplacedOutputIsNeverTouched`; `TestReplacedOutputWithLiveWriters`, where the replacement is a copy
+   holding the run's own spill and progress files, rewritten every millisecond). What is not excluded: a
+   replacement between a check and its action (no portable directory-relative rename exists), and helpers
+   of several steps (preparation, recovery of a part, a publication's rename and directory sync, the
+   manifest's write and rename) check once before they start, so that window spans the helper.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
    pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that

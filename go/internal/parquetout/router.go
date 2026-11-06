@@ -141,6 +141,11 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	if opt.PartSize <= 0 || opt.Encoders < 1 || s == nil {
 		return nil, errors.New("parquet router: part size, encoders and schema are required")
 	}
+	if opt.Verify != nil {
+		if err := opt.Verify(); err != nil {
+			return nil, fmt.Errorf("parquet router: %w", err)
+		}
+	}
 	if err := os.MkdirAll(filepath.Join(opt.Out, dataset.Workspace, dataset.PartsDir), 0o755); err != nil {
 		return nil, fmt.Errorf("parquet router: %w", err)
 	}

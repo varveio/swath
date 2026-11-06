@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
 )
 
@@ -30,31 +31,37 @@ type Progress struct {
 	verified atomic.Int64 // bytes of retained parts read by a resume's verification
 	gauges   atomic.Pointer[order.Gauges]
 
-	mu    sync.Mutex // held across an owned write and across a change of ownership
-	owner bool       // the run holds the output's lock
+	mu    sync.Mutex    // held across an owned write and across a change of ownership
+	owner *journal.Lock // the output's lock while the run holds it, else nil
 }
 
-// Owned calls write while the run owns its output directory and reports
-// whether it did. Ownership cannot end during write, so a process whose run
-// was refused, or has released the output, never writes into it.
+// Owned calls write while the run owns its output directory and its
+// pathname still names the directory the run locked (journal.Lock.Verify),
+// and reports whether it did. Ownership cannot end during write, so a
+// process whose run was refused, or has released the output, never writes
+// into it, and a run whose output was moved or replaced does not write
+// into what the pathname names now (a replacement between the check and
+// the write is not excluded; see Verify).
 func (p *Progress) Owned(write func()) bool {
 	if p == nil {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.owner {
-		write()
+	if p.owner == nil || p.owner.Verify() != nil {
+		return false
 	}
-	return p.owner
+	write()
+	return true
 }
 
-func (p *Progress) own(v bool) {
+// own records the output's lock while the run holds it (nil: released).
+func (p *Progress) own(l *journal.Lock) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
-	p.owner = v
+	p.owner = l
 	p.mu.Unlock()
 }
 

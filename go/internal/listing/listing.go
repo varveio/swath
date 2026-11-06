@@ -458,6 +458,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		}
 		if !cfg.Limits.Spill.Off {
 			oopt.SpillDir = spill
+			if jr != nil && jr.lock != nil {
+				oopt.SpillVerify = jr.lock.Verify
+			}
 		}
 	} else if !cfg.Limits.Spill.Off {
 		oopt.SpillDir = os.TempDir()
