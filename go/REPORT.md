@@ -799,6 +799,9 @@ samples under the SDK, `s3/client` or `net/http`):
 | of which response parsing | 8.30 s, 8.5 µs/object | 0.59 s, 0.61 µs/object |
 | process CPU (user + sys, median of 3) | 12.05 s, 12.4 µs/object | 4.59 s, 4.7 µs/object |
 
+The same comparison for GCS (Google's generated JSON client against ours, 1,000,000 fake objects) gives 3.1 vs
+2.5 µs/object client CPU and 10,100 vs 5,100 allocations per page: a small gain ("GCS provider", client cost).
+
 **Fake-bucket wall table.** These numbers are synthetic: `bench/s3fake` serves the 971,927 keys of the
 `realistic` tree (gofakes3, in memory, localhost), so they measure client CPU and coordination, not S3 latency.
 The two binaries ran interleaved in one session (`bench/client_gate.sh`), median of 3; raw data is in
@@ -1587,6 +1590,31 @@ variation of the split timing).
 only; its GCS handler is built without the latency function (`ReplayServer`: `new GcsHandler(bucket, store,
 identity, metrics)`), so the two routes' wall times on replay are not comparable, and no live GCS bucket was
 listed.
+
+**Client cost against Google's generated client (2026-11-06): the GCS gain is small.** The hand-rolled
+`objects.list` client (`internal/source/gcs/client`) against Google's generated JSON client
+(`google.golang.org/api/storage/v1`, the test-only oracle) behind the same provider seam (a test-only `API`
+adapter), on one in-process fake bucket of 1,000,000 objects (`gcstest`, full responses, 1,000 per page,
+1,000 pages), build `2b7da98`, 4 cores, median of 3 interleaved repetitions
+(`SWATH_CLIENT_COST=1000000 go test -run TestListClientCost ./internal/source/gcs/`). Synthetic: the fake
+runs in the measured process, so process CPU includes it; a baseline arm that issues the same requests and
+only reads the bodies is subtracted, and "client" below is the rest (parsing, conversion, the engine).
+
+| arm | process CPU µs/object | client CPU µs/object (over baseline) | client allocs/page | client KiB allocated/page |
+|---|---:|---:|---:|---:|
+| baseline (read bodies) | 8.09 | – | – | – |
+| ours, list loop | 10.61 | 2.52 | 5,061 | 1,048 |
+| Google client, list loop | 11.23 | 3.14 | 10,132 | 1,195 |
+| ours, through the range engine (1 worker) | 10.79 | 2.70 | 5,070 | 1,195 |
+| Google client, through the range engine | 11.31 | 3.22 | 10,140 | 1,341 |
+
+So about 0.5-0.6 µs per object (some 20 % of client CPU) and half the allocations per page; with the fake's
+cost in the same process the difference is about 5 % of process CPU, within reach of noise at 3 repetitions.
+For comparison, S3's SDK client cost 8.7 µs/object against our 1.0 (section "Step 1: custom S3 client"), 70 %
+of it in the REST-XML deserializer; Google's JSON decoding has no such cost. **Binary size** (stripped
+linux/amd64, `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w'`, the generated client referenced from the
+command): 17,801,378 → 26,124,450 bytes (+47 %), 28 → 47 modules (`google.golang.org/api`, `grpc`,
+OpenTelemetry, `s2a-go`, `x/net`, `x/crypto`, among others).
 
 ## Overfetch on the deep recordings (2026-11-06)
 
