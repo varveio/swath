@@ -259,17 +259,22 @@ func writeOutcome(dir string, o outcome) error {
 	return writeFileAtomic(path, o)
 }
 
-func writeFileAtomic(path string, v any) error { return writeFileAtomicAs(path, ".tmp", v) }
-
-// writeFileAtomicAs writes through path+suffix, so two writers of one path
-// never share a temporary file.
-func writeFileAtomicAs(path, suffix string, v any) error {
+// writeFileAtomic replaces path with v as indented JSON through a unique
+// temporary file beside it, so concurrent writers of one path (the
+// graceful and the forced account of an attempt) never share or remove
+// each other's temporary file. No sync: these are operational files.
+func writeFileAtomic(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + suffix
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = faults.Write(f, append(b, '\n'))
+	if err = errors.Join(err, f.Chmod(0o644), f.Close()); err != nil {
 		os.Remove(tmp)
 		return err
 	}
@@ -427,7 +432,7 @@ func forcedAccount(f *forensicTarget, code int, why string) {
 				if o.ExitCode == exitCompleted {
 					_ = writeOutcome(f.dir, o) // a stale one goes
 				} else {
-					_ = writeFileAtomicAs(filepath.Join(f.dir, errorName), ".forced.tmp", o)
+					_ = writeFileAtomic(filepath.Join(f.dir, errorName), o)
 				}
 			})
 		}

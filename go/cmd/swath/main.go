@@ -166,13 +166,24 @@ func cfgOut(o options) string {
 	return o.out
 }
 
+// reported holds the attempts whose terminal report is claimed.
+var reported sync.Map
+
 // writeReport writes the run report to path (--report), atomically, when
 // the attempt ends. That file, at a path the supervisor names outside the
 // output, is the attempt's outcome of record; a failure to write it goes to
 // stderr and the exit code stands alone.
+//
+// An attempt has one terminal report: the first of its writers (the
+// graceful path or the forced exit) claims it and a later one leaves it.
 func writeReport(path string, r listing.Report) {
 	if path == "" {
 		return
+	}
+	if r.Attempt != nil {
+		if _, taken := reported.LoadOrStore(r.Attempt.ID, true); taken {
+			return
+		}
 	}
 	if err := writeFileAtomic(path, r); err != nil {
 		// The attempt is named, so a supervisor never takes an older

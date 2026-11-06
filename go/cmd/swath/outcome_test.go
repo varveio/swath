@@ -140,7 +140,7 @@ func TestOutcomeIsCurrent(t *testing.T) {
 	if s := stderr.String(); !strings.Contains(s, "is not recorded") || !strings.Contains(s, `"cause":"auth"`) {
 		t.Fatalf("failed write: stderr %q", s)
 	}
-	if _, err := os.Stat(errorFile + ".tmp"); err == nil {
+	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) > 0 {
 		t.Fatal("failed write left its temporary file")
 	}
 	// The same through a refusal before the run.
@@ -418,7 +418,8 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 	}
 	stale, _ := os.ReadFile(errorFile)
 
-	os.MkdirAll(filepath.Join(errorFile+".tmp", "x"), 0o755)
+	restoreIO := failOutcomeWrites()
+	defer restoreIO()
 	r2 := filepath.Join(reports, "2.json")
 	if c := exitCode(t, resume(ctx, []string{dir, "--report", r2}, io.Discard)); c != exitStuck {
 		t.Fatalf("second attempt: exit %d", c)

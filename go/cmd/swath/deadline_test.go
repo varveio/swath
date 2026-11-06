@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 )
@@ -169,7 +171,7 @@ func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
 	if old.Attempt == nil || old.ExitCode != exitStuck {
 		t.Fatalf("first attempt: error.json %+v", old)
 	}
-	os.MkdirAll(filepath.Join(dir, errorName+".tmp", "x"), 0o755) // error.json cannot be replaced
+	defer failOutcomeWrites()() // error.json cannot be replaced
 	notDir := filepath.Join(t.TempDir(), "file")
 	os.WriteFile(notDir, nil, 0o644)
 	report := filepath.Join(notDir, "report.json") // nor the report written
@@ -250,4 +252,15 @@ func TestDeadlineExitsAfterGrace(t *testing.T) {
 	if o.Class != "deadline" || o.ExitCode != exitDeadline {
 		t.Fatalf("error.json after the forced exit: %+v", o)
 	}
+}
+
+// failOutcomeWrites fails every write of error.json's temporary file
+// until the returned restore.
+func failOutcomeWrites() (restore func()) {
+	return faults.SetIO(func(op, name string, b []byte) (int, error) {
+		if op == "write" && strings.HasPrefix(filepath.Base(name), "."+errorName+".") {
+			return 0, errors.New("injected: error.json cannot be written")
+		}
+		return 0, nil
+	})
 }
