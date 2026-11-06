@@ -27,6 +27,7 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
@@ -237,6 +238,60 @@ func TestGCSOutageThenResume(t *testing.T) {
 		t.Fatal("error.json left after the resume completed")
 	}
 	t.Logf("a run makes %d requests; %d met the outage; %d parts retained", total, failed.Load(), len(retained))
+}
+
+// TestDiskFullExits74: a full disk on a part, a journal record or the
+// manifest exits 74 (class disk_full, cause no_space, resumable), in the
+// exit code, error.json and the report, so a runner can retry with a
+// larger workspace on the code alone; swath resume then completes the
+// dataset of an uninterrupted run (before: exit 1, class fatal).
+func TestDiskFullExits74(t *testing.T) {
+	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
+	t.Cleanup(srv.Close)
+	args := func(out string, extra ...string) []string {
+		return append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "4",
+			"--part-size", "4KiB", "--memory", "1MiB", "--part-interval", "0", "-o", out}, extra...)
+	}
+	ctx := context.Background()
+	ref := filepath.Join(t.TempDir(), "ref")
+	if err := run(ctx, args(ref), io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	for target, match := range map[string]func(string) bool{
+		"part":     func(n string) bool { return strings.HasSuffix(n, ".parquet") },
+		"journal":  func(n string) bool { return filepath.Base(n) == "journal" },
+		"manifest": func(n string) bool { return filepath.Base(n) == dataset.ManifestName+".tmp" },
+	} {
+		out := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		nth := map[string]int64{"part": 4, "journal": 3, "manifest": 1}[target]
+		var n atomic.Int64
+		restore := faults.SetIO(func(op, file string, b []byte) (int, error) {
+			if op == "write" && match(file) && n.Add(1) == nth {
+				return len(b) / 2, syscall.ENOSPC
+			}
+			return 0, nil
+		})
+		err := run(ctx, args(out, "--report", report), io.Discard, false)
+		restore()
+		if c := exitCode(t, err); c != exitDiskFull {
+			t.Fatalf("%s: exit %d (%v), want %d", target, c, err, exitDiskFull)
+		}
+		var o outcome
+		readJSON(t, filepath.Join(out, errorName), &o)
+		if o.Class != "disk_full" || o.ExitCode != exitDiskFull || o.Cause != "no_space" || !o.Resumable {
+			t.Fatalf("%s: error.json %+v", target, o)
+		}
+		var rep listing.Report
+		readJSON(t, report, &rep)
+		if rep.Outcome.Class != "disk_full" || rep.Outcome.ExitCode != exitDiskFull || rep.Outcome.Cause != "no_space" || !rep.Outcome.Resumable {
+			t.Fatalf("%s: report outcome %+v", target, rep.Outcome)
+		}
+		if err := resume(ctx, []string{out}, io.Discard); err != nil {
+			t.Fatalf("%s: resume: %v", target, err)
+		}
+		sameParts(t, target, ref, out)
+	}
 }
 
 // sameParts requires out's data/ to hold ref's parts byte for byte.

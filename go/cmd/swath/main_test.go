@@ -145,7 +145,7 @@ func TestDiskFullIsResumable(t *testing.T) {
 	}
 	j.Close()
 	o := classify(fmt.Errorf("journal: %w", syscall.ENOSPC), nil, dir)
-	if o.ExitCode != exitFatal || !o.Resumable || o.Cause != "no_space" {
+	if o.ExitCode != exitDiskFull || o.Class != "disk_full" || !o.Resumable || o.Cause != "no_space" {
 		t.Fatalf("journal ENOSPC: %+v", o)
 	}
 	if o := classify(fmt.Errorf("journal: %w", syscall.ENOSPC), nil, t.TempDir()); o.Resumable {

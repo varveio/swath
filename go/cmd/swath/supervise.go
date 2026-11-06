@@ -28,6 +28,7 @@ const (
 	exitCompleted   = 0   // the dataset is committed (or a dry run finished)
 	exitFatal       = 1   // a cause that a resume will not fix
 	exitUsage       = 2   // a malformed command line
+	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR); resumable when the journal is intact
 	exitStuck       = 75  // no progress for the stall timeout; resumable when the journal is intact
 	exitDeadline    = 124 // --max-duration reached with the output unfinished; resumable
 	exitInterrupted = 130 // SIGINT
@@ -75,7 +76,7 @@ func (e *signalError) Error() string { return "stopped by " + e.sig.String() }
 
 // outcome is how a command ended: its class and exit code.
 type outcome struct {
-	Class     string `json:"class"` // completed, fatal, usage, stuck, deadline, interrupted, terminated
+	Class     string `json:"class"` // completed, fatal, incomplete, usage, disk_full, stuck, deadline, interrupted, terminated
 	ExitCode  int    `json:"exit_code"`
 	Message   string `json:"message,omitempty"`
 	Resumable bool   `json:"resumable"` // swath resume DIR can continue it
@@ -115,10 +116,11 @@ func classify(err, cause error, dir string) outcome {
 	case errors.As(cause, &se):
 		o.Class, o.ExitCode = "interrupted", exitInterrupted
 	case errors.Is(err, syscall.ENOSPC):
-		// A full disk stops the run (a journal append or a part cannot be
-		// written) but loses nothing durable: resumable once there is
-		// space, when the journal is intact.
-		o.Class, o.ExitCode, o.Cause = "fatal", exitFatal, "no_space"
+		// A full disk stops the run (a part, a journal append, spill or
+		// the manifest cannot be written) but loses nothing durable:
+		// resumable once there is space, when the journal is intact. Its
+		// own code lets a runner retry with a larger workspace.
+		o.Class, o.ExitCode, o.Cause = "disk_full", exitDiskFull, "no_space"
 	default:
 		o.Class, o.ExitCode, o.Resumable = "fatal", exitFatal, false
 		var ce interface{ Class() string }

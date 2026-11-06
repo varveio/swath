@@ -307,8 +307,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
   | 0 | `completed` | the dataset is committed (or a dry run finished) | – |
-  | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0; a full disk (`cause` `no_space`) is `fatal` too | no; `no_space`: yes, journal intact, once there is space |
+  | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
   | 2 | `usage` | a malformed command line | no |
+  | 74 | `disk_full` | a part, a journal record or the manifest could not be written: its filesystem is full (`cause` `no_space`; spill waits instead of failing) | yes, journal intact, once there is space |
   | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace); `cause` names what rose meanwhile: `stuck_throttle` (throttle answers), `stuck_timeouts` (attempts past the request timeout, no throttle) or `stuck_no_rows` (neither: failing or hung requests, or a stopped pipeline) | yes, journal intact |
   | 124 | `deadline` | `--max-duration` reached with the output unfinished (also after the 15 s shutdown grace) | yes |
   | 130 | `interrupted` | SIGINT (also after the 15 s shutdown grace) | yes |
@@ -337,7 +338,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **What a hosted runner needs.** A finite `--max-duration` on every attempt (the default, 0, has no limit, and
   only the deadline stops a service that answers forever without rows), and its own process deadline above
   `--max-duration` plus 20 s, which kills the process (that attempt's report may then be missing: it is treated
-  as unavailable, never replaced by an older `error.json`). Exit 75 is retried with `swath resume`. Exit 124 is a
+  as unavailable, never replaced by an older `error.json`). Exit 75 is retried with `swath resume`. Exit 74:
+  retry with a larger workspace (`swath resume` on the same output, moved to a larger disk or given space). Exit 124 is a
   bounded stop: the run is resumable but did not finish in the time given, so it is retried only under a
   separate budget (a count of attempts or a total time), and past that budget it needs a person: a source that
   keeps the run alive without rows hits 124 on every attempt.

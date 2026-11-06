@@ -73,7 +73,7 @@ decision to add it later).
 | `--no-sort` (unsorted Parquet, direct dataset) | none | removed | no decision recorded |
 | Sorted parts key-disjoint in unsigned byte order, named in key order | the same, every run | kept | – |
 | Staging under `_staging/`, k-way merge, finalization | ordered emission with disposable spill under `.swath/spill/` | removed | staging and external sort not ported, 2026-11-05 |
-| Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-max`, `--spill-reserve`; a full disk stops the run with cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
+| Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-max`, `--spill-reserve`; a full disk stops the run with exit 74, cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
 | `--tune sort.*` (sixteen settings) | none | removed | sort settings are code constants, 2026-11-05 |
 | `--parquet-part-size SIZE` (256 MB) | `--part-size` (64 MiB) | renamed | – |
 | `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (60 s; 0 off) | renamed | – |
@@ -149,9 +149,9 @@ decision to add it later).
 | Java | Go | Status | Decision |
 |---|---|---|---|
 | 0: success, empty result, already-complete resume, closed stdout | 0 `completed`; an already-complete resume is 1 | kept (narrower) | – |
-| 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (resumable only with cause `no_space`) or `incomplete` (partial coverage) | kept | – |
+| 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (not resumable) or `incomplete` (partial coverage); a full disk is 74 | kept | – |
 | 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage`: malformed command line only; changed identity and output refusals are 1 | kept (narrower) | – |
-| 74: output filesystem full | 1, cause `no_space`, resumable | removed | no decision recorded |
+| 74: output filesystem full | 74 `disk_full`, cause `no_space`, resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason) |
 | 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows` | kept (causes renamed) | – |
 | 124: `--max-duration` elapsed | 124 `deadline` | kept | – |
 | 130: SIGINT | 130 `interrupted` | kept | – |
