@@ -84,7 +84,7 @@ usage: swath list SOURCE --output DIR [flags]
   -overwrite
     	replace a previous dataset in --output
   -part-interval duration
-    	close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 1m0s)
+    	close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 30s)
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
@@ -179,7 +179,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -overwrite
     	replace a previous dataset in --output
   -part-interval duration
-    	close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 1m0s)
+    	close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 30s)
   -part-size bytes
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
@@ -270,7 +270,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Encoders:** `--encoders` (default GOMAXPROCS) is a ceiling: each encoder is admitted against the half of
   `--memory` outside the row budget (one writer's working set each) and the descriptor limit (after the spill
   readers, the workers' connections and a reserve), never fewer than one; a warning names the shortfall.
-- **Durable-progress age:** `--part-interval` (default 60 s; 0: off) closes an open part that holds rows once
+- **Durable-progress age:** `--part-interval` (default 30 s, Java's rotation interval; 0: off) closes an open part that holds rows once
   it is that old, although not full, so the journal's recovery point (what a resume keeps) is never older than
   about that on a slow frontier; with 0, parts close by `--part-size` only and their boundaries do not depend on
   timing. It may change on `swath resume`.

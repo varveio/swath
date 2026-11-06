@@ -76,7 +76,7 @@ decision to add it later).
 | Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-max`, `--spill-reserve`; a full disk stops the run with exit 74, cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
 | `--tune sort.*` (sixteen settings) | none | removed | sort settings are code constants, 2026-11-05 |
 | `--parquet-part-size SIZE` (256 MB) | `--part-size` (64 MiB) | renamed | – |
-| `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (60 s; 0 off) | renamed | – |
+| `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle) |
 | `--part-rotation-max-rows N` (2,000,000) | none | removed | no decision recorded |
 | Same input and configuration give the same parts at any encoder count | the same; with `--part-interval` cuts (`resources.part_time_cuts` > 0) boundaries depend on timing | kept | – |
 

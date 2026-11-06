@@ -46,7 +46,7 @@ refusal) with it on, where parts are closed by time (a trickling source in `Test
 with a 1 ms interval in `TestSIGKILLAtEveryPoint`).
 
 **The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size
-target or, on a slow frontier, once it has been open for the part interval (default 60 s,
+target or, on a slow frontier, once it has been open for the part interval (default 30 s,
 [parquet-output.md](parquet-output.md)). `progress.json` reports the age (`part_age_ms`: since the last part
 was published, or since the start). What a crash loses is not bounded by that age: rows listed past the
 frontier (in memory or spill) and parts encoded after a gap in the ordinals are listed again too.

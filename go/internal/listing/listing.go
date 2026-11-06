@@ -144,10 +144,9 @@ func spillMax(l SpillLimits, dir string) int64 {
 const (
 	DefaultMemory   = 256 << 20
 	DefaultPartSize = 64 << 20
-	// DefaultPartInterval is the default part age bound. Java rotated
-	// parts every 30 s; a cut closes a part far below its target size, so
-	// the default is twice that.
-	DefaultPartInterval = 60 * time.Second
+	// DefaultPartInterval is the default part age bound: Java's rotation
+	// interval (30 s), its proven value.
+	DefaultPartInterval = 30 * time.Second
 	// minMemory is the smallest budget accepted.
 	minMemory = 256 << 10
 )

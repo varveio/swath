@@ -13,8 +13,10 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/listing"
 )
 
 func TestRun(t *testing.T) {
@@ -150,5 +152,23 @@ func TestDiskFullIsResumable(t *testing.T) {
 	}
 	if o := classify(fmt.Errorf("journal: %w", syscall.ENOSPC), nil, t.TempDir()); o.Resumable {
 		t.Fatalf("ENOSPC without a journal is resumable: %+v", o)
+	}
+}
+
+// TestPartIntervalDefault: --part-interval defaults to Java's rotation
+// interval, 30 s (before: 60 s), on swath list and swath resume.
+func TestPartIntervalDefault(t *testing.T) {
+	for _, diag := range []bool{false, true} {
+		var o options
+		f := newFlags(&o, diag)
+		if err := f.Parse(nil); err != nil {
+			t.Fatal(err)
+		}
+		if o.partInterval != 30*time.Second || f.Lookup("part-interval").DefValue != "30s" {
+			t.Fatalf("diag %v: --part-interval default %s", diag, o.partInterval)
+		}
+	}
+	if listing.DefaultPartInterval != 30*time.Second {
+		t.Fatalf("listing.DefaultPartInterval %s", listing.DefaultPartInterval)
 	}
 }
