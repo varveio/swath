@@ -158,8 +158,10 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
 - *Retry exhaustion never fails a run.* After its attempts, the client returns a `*client.ExhaustedError`; the
   provider asks the same page again after a jittered backoff (2 s doubling, capped at 60 s), for as long as
   the run lives, and counts `requeues`. Only the command's watchdog decides that a run cannot go on (no
-  progress and no answered request for `--stall-timeout`: exit 75, resumable; `objhttp.Counters.Answered`,
-  through `source.Live`, counts the attempts that returned a usable answer, never a failed one). Every request, including probes and the seed page,
+  progress in key space for `--stall-timeout`: exit 75, resumable; the engine's `Frontier`, through
+  `source.Advancing`, counts the pages that held an entry or ended a chain and empty continuing pages within
+  the first 1,024 of their run, never a failed request; `objhttp.Counters.Answered`, through `source.Live`, is
+  the fallback for a source without it). Every request, including probes and the seed page,
   goes through the same path.
 - *Shared with GCS* (`internal/source/objhttp`): the retry loop (`objhttp.Do`: attempts, backoff, exhaustion),
   the class vocabulary, transport classification, `CredentialError` (an S3 credential refresh that fails is one:

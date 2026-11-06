@@ -135,6 +135,9 @@ func (o *opened) Listed() int64 { return o.p.Listed() }
 
 func (o *opened) Answered() int64 { return o.p.Answered() }
 
+// Frontier is the engine's key-space progress (source.Advancing).
+func (o *opened) Frontier() (advanced, emptyChained int64) { return o.p.Frontier() }
+
 // Requests is the live request account (source.Requested).
 func (o *opened) Requests() source.Requests { return o.p.Requests() }
 

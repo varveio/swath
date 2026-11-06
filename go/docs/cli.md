@@ -491,7 +491,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | 1 | `fatal`, `incomplete` | a run failure a resume will not fix (access denied, no such bucket, an invariant, another process owning the output; a protocol violation, `cause` `protocol`, which outranks a stop cause and which the journal records, so `swath resume` refuses the run), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
   | 2 | `usage`, `refused` | `usage`: a malformed command line or an unknown scheme; `refused`: a refusal that is the caller's to fix, before anything ran: a non-empty `--output` without `--overwrite`, `--overwrite` on a directory that is not this tool's dataset, a new run over an interrupted one, an output that is the listed root (or inside it, replaced), a resume whose identity changed, a resume with nothing to resume, an S3 directory bucket | `usage`: no; `refused`: the output is as it was, so yes when it holds an interrupted run |
   | 74 | `disk_full` | a part, a journal record or the manifest could not be written: its filesystem is full (`cause` `no_space`; spill waits instead of failing) | yes, journal intact, once there is space |
-  | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace); `cause` names what rose meanwhile: `stuck_throttle` (throttle answers), `stuck_timeouts` (attempts past the request timeout, no throttle) or `stuck_no_rows` (neither: failing or hung requests, or a stopped pipeline) | yes, journal intact |
+  | 75 | `stuck` | no progress (Liveness, below) for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace); `cause` names what rose meanwhile: `stuck_empty_chain` (empty continuing pages past the first 1,024 of their run), `stuck_throttle` (throttle answers), `stuck_timeouts` (attempts past the request timeout, no throttle) or `stuck_no_rows` (none of these: failing or hung requests, or a stopped pipeline) | yes, journal intact |
   | 124 | `deadline` | `--max-duration` reached with the output unfinished (also after the 15 s shutdown grace) | yes |
   | 130 | `interrupted` | SIGINT (also after the 15 s shutdown grace) | yes |
   | 143 | `terminated` | SIGTERM, a graceful stop (also after the 15 s shutdown grace) | yes |
@@ -499,14 +499,19 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   "Resumable" holds when the output has an intact journal (S3); a filesystem run starts over. A source that
   stops early (a key limit) never exits 0 with a partial manifest unless its coverage says so.
 - **Liveness.** The command alone decides that a run cannot go on: its watchdog watches the run's progress
-  (rows listed, ordered, encoded, parts published) and the requests the service answered usably (pages without
-  rows and probes included); a rise in either counts, and it stops the run as stuck after `--stall-timeout`
-  without one. So work queued behind a low request limit, or a stretch of empty continuing pages, is alive while
-  the service answers; a source that hangs, or only fails or throttles, is stuck. Nothing in the pipeline gives
-  up on a slow source (S3 requeues a page after its retries). As with Java swath, a service that answers forever
-  without rows keeps a run alive; `--max-duration` bounds it. A run of empty continuing pages must not repeat
-  any of its last 1,024 tokens (an invalid page: exit 1, `cause` `protocol`, the run marked unresumable); a chain of ever fresh tokens is followed in bounded
-  memory until the deadline. A stop (a signal, `--max-duration`, `--stall-timeout`) is graceful, and the process
+  in key space (rows listed, ordered, encoded, parts published, and the listing's pages: a page that held an
+  entry or ended a chain, probes included) and stops the run as stuck after `--stall-timeout` without a rise.
+  So work queued behind a low request limit is alive while the service answers pages; a source that hangs, or
+  only fails or throttles, is stuck. An empty continuing page (S3 and GCS may return them) counts only within
+  the first 1,024 of its run (`keyrange.EmptyChainLive`, the token window below): a service that answers
+  forever with empty pages and fresh tokens stops as stuck, `cause` `stuck_empty_chain`, about 1,024 pages
+  plus `--stall-timeout` after the run of them began, without `--max-duration`. A legitimate run of empty
+  pages longer than that is still followed while anything else progresses, and is stopped only if nothing
+  does for the stall timeout. A source without the range engine (a supplied client) is live by its answered
+  requests instead. Nothing in the pipeline gives up on a slow source (S3 requeues a page after its retries).
+  With the watchdog off (`--stall-timeout 0`), only `--max-duration` bounds such a service. A run of empty
+  continuing pages must not repeat any of its last 1,024 tokens (an invalid page: exit 1, `cause` `protocol`,
+  the run marked unresumable); a cycle longer than that window is not detected, and is bounded as above. A stop (a signal, `--max-duration`, `--stall-timeout`) is graceful, and the process
   exits with its code 15 s later if the run has not stopped by then (I/O that does not return, say), first
   writing (bounded at 2 s, as the dump below) the same outcome the graceful stop would have to `error.json` and a
   minimal report without the run's statistics, its `message` naming the forced exit. The exit does not wait for
@@ -516,14 +521,16 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   exit, every goroutine's stack and the progress counts are written whole to
   `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time) while the run owns the output,
   else, or when that write fails or blocks for 2 s, to stderr, cut at 1 MiB.
-- **What a hosted runner needs.** A finite `--max-duration` on every attempt (the default, 0, has no limit, and
-  only the deadline stops a service that answers forever without rows), and its own process deadline above
+- **What a hosted runner needs.** A finite `--max-duration` on every attempt (the default, 0, has no limit:
+  the watchdog stops a service that answers forever with empty pages, but not one that keeps returning rows
+  or pages forever, nor anything with `--stall-timeout 0`), and its own process deadline above
   `--max-duration` plus 20 s, which kills the process (that attempt's report may then be missing: it is treated
   as unavailable, never replaced by an older `error.json`). Exit 75 is retried with `swath resume`. Exit 74:
   retry with a larger workspace (`swath resume` on the same output, moved to a larger disk or given space). Exit 124 is a
   bounded stop: the run is resumable but did not finish in the time given, so it is retried only under a
   separate budget (a count of attempts or a total time), and past that budget it needs a person: a source that
-  keeps the run alive without rows hits 124 on every attempt.
+  keeps the run alive without finishing hits 124 on every attempt. Exit 75 with `cause` `stuck_empty_chain` on
+  every attempt is the same: the service no longer moves past a point in the key space.
 - **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename
   (the terminal display, `--progress`, samples the same snapshot, every second while it redraws)
   (while the run holds the output). This is its one schema (`listing.ProgressSnapshot`; `TestProgressSchemaDoc`
@@ -536,7 +543,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | `parts` | parts published |
   | `verified_bytes` | a resume's bytes of retained parts checked so far |
   | `advance` | the sum of the above; rises in every phase |
-  | `answered` | requests the service answered usably (liveness, not progress) |
+  | `answered` | requests the service answered usably (a sign the service is up, not progress) |
+  | `frontier` | the listing's pages: those that held an entry or ended a chain, and empty continuing pages within the first 1,024 of their run (the watchdog's liveness with `advance`) |
+  | `empty_chain_pages` | empty continuing pages past the first 1,024 of their run: answered, followed, not progress |
   | `throttles`, `timeouts` | throttle answers; attempts past the request timeout |
   | `part_age_ms` | time since the last part was published (or since the start): the recovery point's age |
   | `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |

@@ -56,6 +56,7 @@ const (
 	cStructureLate
 	cSplitPivotStructure
 	cEmptyPages
+	cEmptyChainPages
 	cPrefixesNormalized
 	cBoundDrops
 	cMutexWait
@@ -115,6 +116,7 @@ var Counters = table([numCounters]counters.Def{
 	cStructureLate:              d("structure.late", counters.Count, "decisions", "split decisions taken while the range's probe was still in flight", "structure"),
 	cSplitPivotStructure:        d("split.pivot_structure", counters.Count, "pivots", "pivots on a folder boundary from a structure probe (else midpoint, density or reflection)", "structure"),
 	cEmptyPages:                 d("empty_pages", counters.Count, "pages", "continuing pages with no entry, followed by their token (also counted in requests)"),
+	cEmptyChainPages:            d("empty_chain_pages", counters.Count, "pages", "empty continuing pages past the 1,024th of their run: followed, but not progress for the watchdog (also in empty_pages)"),
 	cPrefixesNormalized:         d("prefixes_normalized", counters.Count, "pages", "pages whose common prefixes came unsorted or repeated, sorted and deduplicated"),
 	cBoundDrops:                 d("bound_drops", counters.Count, "keys", "keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys)"),
 	cMutexWait:                  d("mutex.wait_ns", counters.Count, "ns", "time goroutines spent waiting for the engine's decision mutex (summed over goroutines)"),

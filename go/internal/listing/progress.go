@@ -25,6 +25,7 @@ type Progress struct {
 	started  atomic.Int64 // unix nanoseconds
 	listed   atomic.Pointer[func() int64]
 	answered atomic.Pointer[func() int64]
+	frontier atomic.Pointer[func() (int64, int64)]
 	faults   atomic.Pointer[func() (int64, int64)]
 	// contention reads the engine's decision mutex (source.Contended).
 	contention atomic.Pointer[func() (time.Duration, time.Duration)]
@@ -87,6 +88,14 @@ type ProgressSnapshot struct {
 	// Answered counts requests the source's service answered usably (pages
 	// without rows included): it shows the run is alive while no row moves.
 	Answered int64 `json:"answered"`
+	// Frontier counts the source's key-space progress (source.Advancing):
+	// pages that held an entry or ended a chain, and empty continuing
+	// pages within the first 1,024 of their run; EmptyChain the empty
+	// pages past that bound. The watchdog takes Frontier in place of
+	// Answered when the source counts it.
+	Frontier   int64 `json:"frontier"`
+	EmptyChain int64 `json:"empty_chain_pages"`
+	advancing  bool  // the source counts Frontier
 	// Throttles and Timeouts count the service's throttle answers and the
 	// attempts past the request timeout (source.Faulted; 0 otherwise).
 	Throttles int64 `json:"throttles"`
@@ -137,6 +146,10 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	if f := p.answered.Load(); f != nil {
 		s.Answered = (*f)()
 	}
+	if f := p.frontier.Load(); f != nil {
+		s.Frontier, s.EmptyChain = (*f)()
+		s.advancing = true
+	}
 	if f := p.faults.Load(); f != nil {
 		s.Throttles, s.Timeouts = (*f)()
 	}
@@ -169,4 +182,16 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 		s.PartAgeMs = now.Sub(time.Unix(0, lp)).Milliseconds()
 	}
 	return s
+}
+
+// Liveness is what the watchdog watches rise: Advance, plus the source's
+// key-space progress (Frontier) when it counts it, else the requests its
+// service answered (Answered). An answered empty continuing page past the
+// first 1,024 of its run is in Answered but not in Frontier: it shows the
+// service is up, not that the listing moves.
+func (s ProgressSnapshot) Liveness() int64 {
+	if s.advancing {
+		return s.Advance + s.Frontier
+	}
+	return s.Advance + s.Answered
 }
