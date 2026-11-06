@@ -173,12 +173,16 @@ func writeOutcome(dir string, o outcome) error {
 	return writeFileAtomic(path, o)
 }
 
-func writeFileAtomic(path string, v any) error {
+func writeFileAtomic(path string, v any) error { return writeFileAtomicAs(path, ".tmp", v) }
+
+// writeFileAtomicAs writes through path+suffix, so two writers of one path
+// never share a temporary file.
+func writeFileAtomicAs(path, suffix string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
+	tmp := path + suffix
 	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
 		os.Remove(tmp)
 		return err
@@ -272,6 +276,37 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 	}
 	fmt.Fprintf(errOut, "%s%s\n", head, buf)
 	return "stderr"
+}
+
+// forcedAccount writes the outcome of a run forced to exit (it did not
+// stop within the shutdown grace) where the graceful path would have:
+// DIR/error.json while the run owns the output, and the report
+// (--report), a minimal one without the run's statistics. The class,
+// cause and resumability are the graceful path's for the same stop; the
+// exit code is the one the process exits with. Bounded by stacksWait: a
+// disk that blocks the run may block these writes too.
+func forcedAccount(f *forensicTarget, code int, why string) {
+	if f.ctx == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		err := fmt.Errorf("forced exit: still stopping (%s) after %s", why, shutdownGrace)
+		o := classify(err, context.Cause(f.ctx), f.dir)
+		o.ExitCode, o.Attempt = code, f.att
+		if f.dir != "" {
+			f.pr.Owned(func() { _ = writeFileAtomicAs(filepath.Join(f.dir, errorName), ".forced.tmp", o) })
+		}
+		r := listing.Unstarted(f.argv, f.dir, f.att, err)
+		r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Resumable, r.Outcome.Cause = o.Class, o.ExitCode, o.Resumable, o.Cause
+		writeReport(f.report, r)
+	}()
+	select {
+	case <-done:
+	case <-time.After(stacksWait):
+		fmt.Fprintln(errOut, "swath: the forced exit's outcome could not be written in time")
+	}
 }
 
 // progressName is the live progress file, inside the private workspace:

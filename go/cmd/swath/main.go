@@ -47,13 +47,17 @@ const shutdownGrace = 15 * time.Second
 // timeout. main sets it; tests run the command in process and leave it nil.
 var exitAfterGrace func(code int, why string)
 
-// forensics is the running attempt's output and progress, for the
-// goroutine dump at a forced exit.
+// forensics is the running attempt, for the goroutine dump and the
+// outcome written at a forced exit.
 var forensics atomic.Pointer[forensicTarget]
 
 type forensicTarget struct {
-	dir string
-	pr  *listing.Progress
+	ctx    context.Context // the run's: its cause is why it stopped
+	dir    string
+	pr     *listing.Progress
+	report string // --report
+	argv   []string
+	att    *listing.Attempt
 }
 
 func main() {
@@ -68,12 +72,12 @@ func main() {
 			case <-finished:
 			case <-time.After(shutdownGrace):
 				fmt.Fprintf(os.Stderr, "swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace)
-				var dir string
-				var pr *listing.Progress
-				if f := forensics.Load(); f != nil {
-					dir, pr = f.dir, f.pr
+				f := forensics.Load()
+				if f == nil {
+					f = &forensicTarget{}
 				}
-				dumpStacks(dir, pr, "forced-exit", why, pr.Snapshot())
+				dumpStacks(f.dir, f.pr, "forced-exit", why, f.pr.Snapshot())
+				forcedAccount(f, code, why)
 				os.Exit(code)
 			}
 		}()
@@ -378,7 +382,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
-	forensics.Store(&forensicTarget{cfg.Output.Dir, cfg.Progress})
+	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att})
 	// The outcome: error.json is written while the run still owns the
 	// output (Settle), and never by a run that did not own it.
 	settle := func(sum listing.Report, err error) (error, outcome) {
@@ -395,6 +399,12 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		out := classify(err, context.Cause(ctx), cfg.Output.Dir)
 		out.Attempt = att
 		return err, out
+	}
+	// One terminal account: the classification is applied to the report
+	// before run.json, error.json (Settle) or --report is written.
+	cfg.Finalize = func(r *listing.Report, err error) {
+		_, out := settle(*r, err)
+		r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Resumable, r.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
 	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {

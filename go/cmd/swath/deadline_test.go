@@ -220,7 +220,8 @@ func TestDeadlineExitsAfterGrace(t *testing.T) {
 	}
 	s := newRowlessService(t)
 	var stderr bytes.Buffer
-	cmd := exec.Command(bin, append([]string{"list"}, s.args(filepath.Join(t.TempDir(), "ds"), "--max-duration", "1s")...)...)
+	dir := filepath.Join(t.TempDir(), "ds")
+	cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--max-duration", "1s")...)...)
 	cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=journal-sync:1")
 	cmd.Stderr = &stderr
 	start := time.Now()
@@ -243,5 +244,10 @@ func TestDeadlineExitsAfterGrace(t *testing.T) {
 	}
 	if d := time.Since(start); d < shutdownGrace || !strings.Contains(stderr.String(), "still stopping (--max-duration)") {
 		t.Fatalf("exited after %s without the forced exit: %s", d, stderr.String())
+	}
+	var o outcome
+	readJSON(t, filepath.Join(dir, errorName), &o)
+	if o.Class != "deadline" || o.ExitCode != exitDeadline {
+		t.Fatalf("error.json after the forced exit: %+v", o)
 	}
 }

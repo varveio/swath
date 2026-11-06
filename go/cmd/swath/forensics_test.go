@@ -14,9 +14,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/johannesboyne/gofakes3"
+	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/listing"
@@ -73,7 +77,8 @@ func TestStuckCause(t *testing.T) {
 // TestForcedExitCode: a run whose journal sync never returns cannot stop
 // gracefully after a signal; shutdownGrace later the process exits with
 // the signal's own code (143 after SIGTERM, 130 after SIGINT; it was 130
-// for both), and writes the goroutine dump to DIR/.swath. The graceful
+// for both), writes the goroutine dump to DIR/.swath, and records the
+// outcome in error.json and the report (it wrote neither). The graceful
 // codes are TestExitCodes'.
 func TestForcedExitCode(t *testing.T) {
 	if testing.Short() {
@@ -88,8 +93,9 @@ func TestForcedExitCode(t *testing.T) {
 		t.Run(sig.String(), func(t *testing.T) {
 			t.Parallel()
 			dir := filepath.Join(t.TempDir(), "ds")
+			report := filepath.Join(t.TempDir(), "report.json")
 			var stderr bytes.Buffer
-			cmd := exec.Command(bin, append([]string{"list"}, s.args(dir)...)...)
+			cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--report", report)...)...)
 			cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=journal-sync:1")
 			cmd.Stderr = &stderr
 			if err := cmd.Start(); err != nil {
@@ -119,6 +125,99 @@ func TestForcedExitCode(t *testing.T) {
 			if err != nil || !bytes.Contains(b, []byte("goroutine ")) || !bytes.Contains(b, []byte(sig.String())) {
 				t.Fatalf("stacks: %v %.200s", err, b)
 			}
+			var o outcome
+			readJSON(t, filepath.Join(dir, errorName), &o)
+			var rep listing.Report
+			readJSON(t, report, &rep)
+			if o.ExitCode != want || rep.Outcome.ExitCode != want || o.Class != rep.Outcome.Class || o.Attempt == nil ||
+				rep.Attempt == nil || o.Attempt.ID != rep.Attempt.ID || !strings.Contains(o.Message, "forced exit") {
+				t.Fatalf("error.json %+v and report %+v %+v", o, rep.Attempt, rep.Outcome)
+			}
 		})
 	}
+}
+
+// TestOneTerminalAccount: run.json, the external report (--report) and
+// error.json carry the same outcome. A committed dataset with partial
+// coverage (a key limit) is "incomplete", exit 1, in all three (run.json
+// said "completed", exit 0, before the command classified it); a run that
+// fails after journaling parts reports those durable parts, their bytes
+// and rows (they were reported as none).
+func TestOneTerminalAccount(t *testing.T) {
+	captureStderr(t)
+	ctx := context.Background()
+	same := func(t *testing.T, name string, a, b listing.Outcome) {
+		t.Helper()
+		if a.Class != b.Class || a.ExitCode != b.ExitCode || a.Resumable != b.Resumable || a.Cause != b.Cause {
+			t.Fatalf("%s %+v disagrees with the report %+v", name, a, b)
+		}
+	}
+	t.Run("partial coverage", func(t *testing.T) {
+		b := s3mem.New()
+		b.CreateBucket("bkt")
+		for i := range 300 {
+			k := fmt.Sprintf("k%04d", i)
+			b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
+		}
+		srv := httptest.NewServer(gofakes3.New(b).Server())
+		t.Cleanup(srv.Close)
+		dir := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		err := run(ctx, []string{"s3://bkt", "--endpoint", srv.URL, "--path-style", "--anonymous", "--sequential", "--max-keys", "10",
+			"--report", report, "-o", dir}, io.Discard, true)
+		if c := exitCode(t, err); c != exitFatal {
+			t.Fatalf("exit %d (%v)", c, err)
+		}
+		var rep, rj listing.Report
+		readJSON(t, report, &rep)
+		readJSON(t, filepath.Join(dir, dataset.ReportName), &rj)
+		var o outcome
+		readJSON(t, filepath.Join(dir, errorName), &o)
+		if rep.Outcome.Class != "incomplete" || rep.Outcome.ExitCode != exitFatal {
+			t.Fatalf("report outcome %+v", rep.Outcome)
+		}
+		same(t, "run.json", rj.Outcome, rep.Outcome)
+		same(t, "error.json", listing.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
+		if rj.Output.RowsDurable != 10 || rep.Output.RowsDurable != 10 {
+			t.Fatalf("durable rows: run.json %d, report %d", rj.Output.RowsDurable, rep.Output.RowsDurable)
+		}
+	})
+	t.Run("failed after parts", func(t *testing.T) {
+		h := gcstest.Handler(gcstest.Keys(20000), 0)
+		var n atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if n.Add(1) > 12 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(403)
+				fmt.Fprint(w, `{"error":{"code":403,"message":"denied","errors":[{"reason":"forbidden"}]}}`)
+				return
+			}
+			h.ServeHTTP(w, r)
+		}))
+		t.Cleanup(srv.Close)
+		dir := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
+			"--part-size", "4KiB", "--memory", "1MiB", "--report", report, "-o", dir}, io.Discard, false)
+		if c := exitCode(t, err); c != exitFatal {
+			t.Fatalf("exit %d (%v)", c, err)
+		}
+		var rep listing.Report
+		readJSON(t, report, &rep)
+		var o outcome
+		readJSON(t, filepath.Join(dir, errorName), &o)
+		same(t, "error.json", listing.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
+		kept, _ := filepath.Glob(filepath.Join(dir, dataset.DataDir, "*.parquet"))
+		var size int64
+		for _, p := range kept {
+			fi, _ := os.Stat(p)
+			size += fi.Size()
+		}
+		if len(kept) == 0 || rep.Output.PartsWritten != len(kept) || rep.Output.Bytes != size || rep.Output.RowsDurable <= 0 {
+			t.Fatalf("report output %+v; %d parts of %d bytes kept", rep.Output, len(kept), size)
+		}
+		if _, err := os.Stat(filepath.Join(dir, dataset.ReportName)); err == nil {
+			t.Fatal("run.json for an uncommitted run")
+		}
+	})
 }

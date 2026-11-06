@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -49,6 +50,17 @@ type Config struct {
 	// never owned (refused before the lock as unusable, complete or
 	// empty; locked by another process; no output directory).
 	Settle func(Report, error)
+	// Finalize, if set, applies the caller's terminal account of the run
+	// (the outcome's class, exit code, resumable, cause) to its report
+	// before any account of it is written: run.json, Settle (the outcome
+	// file) and the report Run returns, so all of them agree.
+	Finalize func(*Report, error)
+}
+
+func (cfg *Config) finalize(r *Report, err error) {
+	if cfg.Finalize != nil {
+		cfg.Finalize(r, err)
+	}
 }
 
 // SourceConfig is what to list.
@@ -202,6 +214,12 @@ const fdReserve = 32
 // are removed (a journaled run keeps them for -resume); the error is the
 // cause (ctx.Err() on cancellation).
 func Run(ctx context.Context, cfg Config) (Report, error) {
+	rep, err := run(ctx, cfg)
+	cfg.finalize(&rep, err)
+	return rep, err
+}
+
+func run(ctx context.Context, cfg Config) (Report, error) {
 	start := time.Now()
 	sum := Report{ReportVersion: ReportVersion, Build: build(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: start.UTC()},
 		Outcome: Outcome{Status: "failed"}}
@@ -244,6 +262,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		// invocation would have continued or replaced is recorded too, so
 		// an earlier one is never left standing as current.
 		rep, err := sum.failed(err)
+		cfg.finalize(&rep, err)
 		rep.Outcome.Unrecorded = settleUnowned(cfg, seen, rep, err)
 		return rep, err
 	}
@@ -257,6 +276,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		// a dataset completed or a run gone by the time the lock was held:
 		// another process's outcome stands.
 		rep, err := sum.failed(err)
+		cfg.finalize(&rep, err)
 		if errors.Is(err, ErrComplete) || errors.Is(err, ErrNothingToResume) {
 			jr.release(cfg)
 		} else {
@@ -268,6 +288,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		return rep, err
 	}
 	rep, err := owned(ctx, cfg, sum, src, s, jr)
+	cfg.finalize(&rep, err)
 	jr.close(cfg, rep, err)
 	return rep, err
 }
@@ -325,6 +346,9 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 // pipeline runs provider → order → router → publish. p is src, or Empty
 // when a resume has nothing left to list.
 func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, s schema.Info, jr *runJournal) (Report, error) {
+	var published struct {
+		parts, bytes, rows atomic.Int64
+	}
 	// One shared cause: the first asynchronous failure (an encoder, the
 	// disk, the journal) cancels listing at once, and is what Run returns.
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -356,21 +380,46 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		jr.routerOptions(&ropt)
 		if pr := cfg.Progress; pr != nil {
 			ropt.Encoded = &pr.encoded
-			if pub := ropt.Publish; pub != nil {
-				ropt.Publish = func(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
-					p, err := pub(ordinal, p, limit, rows, final)
-					if err == nil {
+		}
+		if pub := ropt.Publish; pub != nil {
+			// Each part published here is durable (journaled): a failed
+			// run reports them (durable).
+			ropt.Publish = func(ordinal int, p dataset.Part, limit, rows int64, final bool) (dataset.Part, error) {
+				p, err := pub(ordinal, p, limit, rows, final)
+				if err == nil {
+					published.parts.Add(1)
+					published.bytes.Add(p.Bytes)
+					published.rows.Store(rows)
+					if pr := cfg.Progress; pr != nil {
 						pr.parts.Add(1)
 						pr.lastPart.Store(time.Now().UnixNano())
 					}
-					return p, err
 				}
+				return p, err
 			}
 		}
 		ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
 		env.Router = &ropt
 	}
 	var router parquetout.Encoder
+	// durable puts the parts that stay in the output after a failure (the
+	// recovered ones and those journaled by this invocation) in the
+	// report; a run without a journal keeps none.
+	durable := func() {
+		if !jr.journaled() {
+			return
+		}
+		sum.Output.PartsWritten, sum.Output.Bytes = int(published.parts.Load()), published.bytes.Load()
+		sum.Output.RowsDurable = sum.Output.RowsRetained
+		if r := published.rows.Load(); r > 0 {
+			sum.Output.RowsDurable = r
+		}
+		if jr.state != nil {
+			for _, rec := range jr.state.Records {
+				sum.Output.Bytes += rec.Part.Bytes
+			}
+		}
+	}
 	fail := func(err error) (Report, error) {
 		if router != nil {
 			router.Abort()
@@ -381,6 +430,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 				dataset.Cleanup(cfg.Output.Dir)
 			}
 		}
+		durable()
 		return sum.failed(err)
 	}
 	gauges := &order.Gauges{}
@@ -471,6 +521,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() {
 			dataset.Cleanup(cfg.Output.Dir)
 		}
+		durable()
 		return sum.failed(fmt.Errorf("publish: %w", err))
 	}
 	if pr := cfg.Progress; pr != nil && !jr.journaled() {
@@ -479,7 +530,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// Committed: the report follows and can no longer revoke the dataset.
 	sum.Outcome.Status, sum.Outcome.Class = "committed", "completed"
 	sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
+	sum.Output.RowsDurable = sum.Output.RowsCommitted
 	sum.finish()
+	cfg.finalize(&sum, nil)
 	if err := dataset.WriteReport(cfg.Output.Dir, sum); err != nil && cfg.Warn != nil {
 		cfg.Warn(err.Error())
 	}

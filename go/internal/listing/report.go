@@ -121,7 +121,11 @@ type Output struct {
 	RowsListed    int64 `json:"rows_listed"`    // listed and ordered by this invocation
 	RowsRetained  int64 `json:"rows_retained"`  // kept from the interrupted run (resume)
 	RowsCommitted int64 `json:"rows_committed"` // in the committed dataset (0 unless committed)
-	PartsWritten  int   `json:"parts_written"`  // written by this invocation
+	// RowsDurable is the rows in parts that stay in the output: the
+	// committed dataset's, or after a failure the journaled parts' (kept
+	// for swath resume; 0 without a journal).
+	RowsDurable   int64 `json:"rows_durable"`
+	PartsWritten  int   `json:"parts_written"` // written by this invocation (after a failure: journaled, durable)
 	PartsRetained int   `json:"parts_retained"`
 	Bytes         int64 `json:"bytes"` // the dataset's part bytes
 }
