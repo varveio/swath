@@ -11,16 +11,26 @@
 // --capture is one capture part or a directory of *.parquet parts (not
 // recursed) in the 13-column canonical schema; --output is a new or empty
 // directory the dataset is published into; --key-limit, at most 4,096,
-// admits object keys longer than 1,024 bytes (see Options.KeyLimit).
+// raises the key cap from 1,024 bytes (see Options.KeyLimit).
 //
-// The capture is read whole into memory and sorted there: about 150 bytes
-// per row plus its key and value bytes, so a few million rows is the
+// The dataset's schema id is always SchemaID: the nine columns of the S3
+// current-object schema under an id of its own, since a converted capture
+// is not a listing by the Go lister.
+//
+// The capture is read whole into one array, sized from the footers, sorted
+// in place and written from it in batches: 136 bytes per object row on a
+// 64-bit platform plus its key and string values (each its own allocation,
+// rounded up to the allocator's size class), the key of every other row,
+// and the writer's buffers. Measured on the synthetic 1M-row capture of
+// go/bench/replay/make-fixtures.sh (44-byte keys, a 32-byte etag and a
+// storage class per row; linux/amd64, GOMAXPROCS 4, 4 vCPU): 309 MiB peak
+// resident, about 300 bytes per row, 3 s. A few million rows is the
 // intended scope. The Go lister writes sorted datasets directly; this
 // command exists for captures recorded before it.
 package sortfixture
 
 import (
-	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -34,17 +44,22 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/s3"
 	"github.com/varveio/swath/go/sortedparquet/javaera"
 )
 
-// ReplaySchemaID is the schema id of datasets whose object keys exceed the
-// S3 schema's 1,024 bytes: the S3 current-object columns with a key cap of
-// Options.KeyLimit. Azure blob names reach 1,024 characters, up to about
-// 2,000 UTF-8 bytes, which the S3 schema cannot hold.
-const ReplaySchemaID = "swath-replay/objects/v1"
+// SchemaID is the schema id of every dataset Run writes: key, size,
+// last_modified, etag, storage_class, owner_id, owner_display_name,
+// checksum_algorithm and checksum_type, as the S3 current-object schema,
+// with a key cap of DefaultKeyLimit or Options.KeyLimit. Azure blob names
+// reach 1,024 characters, up to about 2,000 UTF-8 bytes, which a 1,024-byte
+// cap cannot hold.
+const SchemaID = "swath-replay/objects/v1"
+
+// DefaultKeyLimit is the key cap without Options.KeyLimit: the S3 limit.
+const DefaultKeyLimit = 1024
 
 // MaxKeyLimit is the largest Options.KeyLimit.
 const MaxKeyLimit = 4096
@@ -58,10 +73,8 @@ type Options struct {
 	Capture string
 	// Output is the dataset directory; it must not exist or be empty.
 	Output string
-	// KeyLimit, when positive (at most MaxKeyLimit), allows object keys up
-	// to that many bytes: a capture with a key over 1,024 bytes is then
-	// written with ReplaySchemaID and that cap. Zero allows 1,024 bytes,
-	// the S3 schema's limit.
+	// KeyLimit, when positive (at most MaxKeyLimit), is the key cap in
+	// bytes; zero is DefaultKeyLimit.
 	KeyLimit int
 }
 
@@ -86,20 +99,35 @@ var ErrVersioned = errors.New("sort-fixture: versioned capture")
 // ErrKeyTooLong reports an object key over the allowed length.
 var ErrKeyTooLong = errors.New("sort-fixture: key too long")
 
-// row is one capture row kept for sorting: its key, whether it is a
-// current object, and the object's facts.
-type row struct {
-	object bool
-	schema.Row[s3.Object]
+// ErrRowType reports a capture row whose row_type is null or not one of
+// rowTypes: the canonical schema's values, spelled as the Java tool writes
+// them and parses them back, strictly.
+var ErrRowType = errors.New("sort-fixture: invalid row_type")
+
+// ErrNoParts reports a capture directory without *.parquet parts. A part
+// that holds no rows is a capture of an empty listing; no part at all is a
+// wrong path.
+var ErrNoParts = errors.New("sort-fixture: no *.parquet parts")
+
+// rowTypes are the canonical row_type values; only objectRowType rows are
+// written.
+var rowTypes = [...]string{objectRowType, "COMMON_PREFIX", "DELETE_MARKER"}
+
+const objectRowType = "OBJECT"
+
+// captured is a capture held for sorting: its objects, which are written,
+// and the keys of its other rows, which only the duplicate rule reads.
+type captured struct {
+	objects []schema.Row[Object]
+	others  []string
 }
 
-// Run reads the capture, keeps its OBJECT rows, refuses a capture with a
-// versioned row (ErrVersioned) or two rows of any type with one key
-// (ErrDuplicateKey), sorts the objects by unsigned key bytes and writes
-// them as a format-2 dataset with the S3 current-object schema, or the
-// replay-owned schema under KeyLimit. A null size or modification time is
-// written as 0, which the replay routes render as they render a null. It
-// writes one summary line to log.
+// Run reads the capture, keeps its OBJECT rows, refuses a capture with no
+// parts (ErrNoParts), a row whose row_type is not OBJECT, COMMON_PREFIX or
+// DELETE_MARKER (ErrRowType), a versioned row (ErrVersioned) or two rows of
+// any type with one key (ErrDuplicateKey), sorts the objects by unsigned key bytes and writes
+// them as a format-2 dataset of SchemaID, nulls intact. It writes one
+// summary line to log.
 func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	start := time.Now()
 	stats := Stats{}
@@ -109,43 +137,49 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	if opts.Capture == "" || opts.Output == "" {
 		return stats, errors.New("sort-fixture: a capture and an output are required")
 	}
+	// Refuse an output that is not new or empty before the capture is
+	// read; the check is repeated under the output lock.
+	if _, err := dataset.Usable(opts.Output, "", SchemaID, false); err != nil {
+		return stats, fmt.Errorf("sort-fixture: output: %w", err)
+	}
 	files, err := javaera.Resolve(opts.Capture)
 	if err != nil {
 		return stats, fmt.Errorf("sort-fixture: capture: %w", err)
 	}
-	var rows []row
+	if len(files) == 0 {
+		return stats, fmt.Errorf("%w in %s", ErrNoParts, opts.Capture)
+	}
+	// One array, sized from the footers: the rows are sorted in place and
+	// written from it in batches, never copied whole.
+	total, err := countRows(files)
+	if err != nil {
+		return stats, fmt.Errorf("sort-fixture: %w", err)
+	}
+	c := captured{objects: make([]schema.Row[Object], 0, total)}
 	for _, file := range files {
-		if rows, err = readCapture(ctx, file, rows); err != nil {
+		if err := readCapture(ctx, file, &c); err != nil {
 			return stats, fmt.Errorf("sort-fixture: %s: %w", file, err)
 		}
 	}
-	stats.CaptureRows = int64(len(rows))
-	slices.SortFunc(rows, func(a, b row) int { return strings.Compare(a.Key, b.Key) })
-	objects := make([]schema.Row[s3.Object], 0, len(rows))
+	objects := c.objects
+	stats.CaptureRows = int64(len(objects) + len(c.others))
+	stats.Objects, stats.Skipped = int64(len(objects)), int64(len(c.others))
+	slices.SortFunc(objects, func(a, b schema.Row[Object]) int { return strings.Compare(a.Key, b.Key) })
+	slices.Sort(c.others)
+	if key, ok := duplicate(objects, c.others); ok {
+		return stats, fmt.Errorf("%w '%s'", ErrDuplicateKey, key)
+	}
+	c.others = nil
 	longest := 0
-	for i := range rows {
-		if i > 0 && rows[i].Key == rows[i-1].Key {
-			return stats, fmt.Errorf("%w '%s'", ErrDuplicateKey, rows[i].Key)
-		}
-		if !rows[i].object {
-			stats.Skipped++
-			continue
-		}
-		longest = max(longest, len(rows[i].Key))
-		objects = append(objects, rows[i].Row)
+	for i := range objects {
+		longest = max(longest, len(objects[i].Key))
 	}
-	rows = nil
-	stats.Objects = int64(len(objects))
 
-	sch := &s3.Schema
-	if longest > s3.Schema.MaxKeyBytes {
-		if opts.KeyLimit == 0 || longest > opts.KeyLimit {
-			return stats, fmt.Errorf("%w: an object key is %d bytes (limit %d; --key-limit admits up to %d)", ErrKeyTooLong, longest, max(opts.KeyLimit, s3.Schema.MaxKeyBytes), MaxKeyLimit)
-		}
-		replay := s3.Schema
-		replay.ID, replay.MaxKeyBytes = ReplaySchemaID, opts.KeyLimit
-		sch = &replay
+	limit := cmp.Or(opts.KeyLimit, DefaultKeyLimit)
+	if longest > limit {
+		return stats, fmt.Errorf("%w: an object key is %d bytes (limit %d; --key-limit raises it up to %d)", ErrKeyTooLong, longest, limit, MaxKeyLimit)
 	}
+	sch := newSchema(limit)
 	stats.SchemaID = sch.ID
 	parts, err := write(ctx, opts, sch, objects, start)
 	if err != nil {
@@ -164,27 +198,51 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	return stats, nil
 }
 
-// write publishes objects, sorted, through the dataset writer.
-func write(ctx context.Context, opts Options, sch *schema.Schema[s3.Object], objects []schema.Row[s3.Object], start time.Time) ([]dataset.Part, error) {
+// write publishes objects, sorted, through the dataset writer. It owns
+// the output as the lister does: nothing in it is created, removed or
+// renamed before this process holds the output lock (journal.TakeLock),
+// each removal and the publication follow a check that the output is still
+// the directory locked, and the lock file stays in the workspace, as the
+// lister leaves it. An output another process owns is refused
+// (journal.ErrLocked) without a change.
+func write(ctx context.Context, opts Options, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
+	lock, err := journal.TakeLock(opts.Output)
+	if err != nil {
+		return nil, fmt.Errorf("sort-fixture: %w", err)
+	}
+	defer lock.Release()
+	if err := lock.Verify(); err != nil {
+		return nil, fmt.Errorf("sort-fixture: %w", err)
+	}
 	if err := dataset.Prepare(opts.Output, "", sch.ID, false); err != nil {
 		return nil, fmt.Errorf("sort-fixture: output: %w", err)
 	}
+	// Unpublished parts go when the output is still the one locked.
+	cleanup := func() {
+		if lock.Verify() == nil {
+			dataset.Cleanup(opts.Output)
+		}
+	}
 	router, err := parquetout.NewRouter(parquetout.Options{Out: opts.Output, PartSize: partSize, Encoders: 1}, sch)
 	if err != nil {
+		cleanup()
 		return nil, fmt.Errorf("sort-fixture: %w", err)
 	}
 	const batch = 4096
 	for i := 0; i < len(objects); i += batch {
-		if err := router.Write(ctx, [][]schema.Row[s3.Object]{objects[i:min(i+batch, len(objects))]}); err != nil {
+		if err := router.Write(ctx, [][]schema.Row[Object]{objects[i:min(i+batch, len(objects))]}); err != nil {
 			router.Abort()
-			dataset.Cleanup(opts.Output)
+			cleanup()
 			return nil, fmt.Errorf("sort-fixture: write: %w", err)
 		}
 	}
 	parts, err := router.Close()
 	if err != nil {
-		dataset.Cleanup(opts.Output)
+		cleanup()
 		return nil, fmt.Errorf("sort-fixture: write: %w", err)
+	}
+	if err := lock.Verify(); err != nil {
+		return nil, fmt.Errorf("sort-fixture: %w", err)
 	}
 	capture, _ := filepath.Abs(opts.Capture)
 	meta := dataset.Meta{
@@ -194,11 +252,60 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[s3.Object], obj
 		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: start.UTC(), ListingFinishedAt: time.Now().UTC()},
 	}
 	if err := dataset.Publish(opts.Output, meta, parts, nil); err != nil {
-		dataset.Cleanup(opts.Output)
+		cleanup()
 		return nil, fmt.Errorf("sort-fixture: publish: %w", err)
 	}
-	_ = os.RemoveAll(filepath.Join(opts.Output, dataset.Workspace))
+	cleanup()
 	return parts, nil
+}
+
+// countRows returns the rows the parts' footers declare.
+func countRows(files []string) (int64, error) {
+	var total int64
+	for _, name := range files {
+		f, err := os.Open(name)
+		if err != nil {
+			return 0, err
+		}
+		info, err := f.Stat()
+		if err == nil {
+			var file *parquet.File
+			if file, err = parquet.OpenFile(f, info.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true)); err == nil {
+				total += file.NumRows()
+			}
+		}
+		_ = f.Close()
+		if err != nil {
+			return 0, fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	return total, nil
+}
+
+// duplicate returns a key two rows share: adjacent sorted objects, adjacent
+// sorted other rows, or an object and another row.
+func duplicate(objects []schema.Row[Object], others []string) (string, bool) {
+	for i := 1; i < len(objects); i++ {
+		if objects[i].Key == objects[i-1].Key {
+			return objects[i].Key, true
+		}
+	}
+	for i := 1; i < len(others); i++ {
+		if others[i] == others[i-1] {
+			return others[i], true
+		}
+	}
+	for i, j := 0, 0; i < len(objects) && j < len(others); {
+		switch order := strings.Compare(objects[i].Key, others[j]); {
+		case order == 0:
+			return others[j], true
+		case order < 0:
+			i++
+		default:
+			j++
+		}
+	}
+	return "", false
 }
 
 // captureColumns are the canonical columns a capture row is read from;
@@ -220,20 +327,20 @@ const (
 	cRowType
 )
 
-// readCapture appends the rows of one capture part.
-func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
+// readCapture adds the rows of one capture part to c.
+func readCapture(ctx context.Context, name string, c *captured) error {
 	f, err := os.Open(name)
 	if err != nil {
-		return rows, err
+		return err
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
-		return rows, err
+		return err
 	}
 	file, err := parquet.OpenFile(f, info.Size())
 	if err != nil {
-		return rows, err
+		return err
 	}
 	index := make([]int, len(captureColumns))
 	for i, column := range captureColumns {
@@ -243,7 +350,7 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 		}
 	}
 	if index[cKey] < 0 || index[cRowType] < 0 {
-		return rows, errors.New("not a capture part: key and row_type columns are required")
+		return errors.New("not a capture part: key and row_type columns are required")
 	}
 	byColumn := make(map[int]int, len(index))
 	for i, column := range index {
@@ -257,7 +364,7 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 	values := make([]parquet.Value, len(captureColumns))
 	for {
 		if err := ctx.Err(); err != nil {
-			return rows, err
+			return err
 		}
 		n, readErr := reader.ReadRows(buffer)
 		for _, r := range buffer[:n] {
@@ -271,35 +378,45 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 			}
 			key := values[cKey].ByteArray()
 			if !values[cVersion].IsNull() {
-				return rows, fmt.Errorf("%w: key '%s' carries version_id '%s'", ErrVersioned, key, values[cVersion].ByteArray())
+				return fmt.Errorf("%w: key '%s' carries version_id '%s'", ErrVersioned, key, values[cVersion].ByteArray())
 			}
-			kept := row{object: bytes.Equal(values[cRowType].ByteArray(), []byte("OBJECT"))}
-			kept.Key = string(key)
-			if kept.object {
-				kept.Data = s3.Object{
-					Size:              values[cSize].Int64(),
-					Mtime:             values[cModified].Int64(),
-					ETag:              text(values[cETag]),
-					StorageClass:      text(values[cStorageClass]),
-					OwnerID:           text(values[cOwnerID]),
-					OwnerDisplayName:  text(values[cOwnerDisplayName]),
-					ChecksumAlgorithm: text(values[cChecksumAlgorithm]),
-					ChecksumType:      text(values[cChecksumType]),
-				}
+			rowType := values[cRowType]
+			if rowType.IsNull() || !slices.Contains(rowTypes[:], string(rowType.ByteArray())) {
+				return fmt.Errorf("%w: key '%s' has row_type %s", ErrRowType, key, describeValue(rowType))
 			}
-			rows = append(rows, kept)
+			if string(rowType.ByteArray()) != objectRowType {
+				c.others = append(c.others, string(key))
+				continue
+			}
+			c.objects = append(c.objects, schema.Row[Object]{Key: string(key), Data: Object{
+				Size: values[cSize].Int64(), HasSize: !values[cSize].IsNull(),
+				Mtime: values[cModified].Int64(), HasMtime: !values[cModified].IsNull(),
+				ETag:              text(values[cETag]),
+				StorageClass:      text(values[cStorageClass]),
+				OwnerID:           text(values[cOwnerID]),
+				OwnerDisplayName:  text(values[cOwnerDisplayName]),
+				ChecksumAlgorithm: text(values[cChecksumAlgorithm]),
+				ChecksumType:      text(values[cChecksumType]),
+			}})
 		}
 		if errors.Is(readErr, io.EOF) || n == 0 && readErr == nil {
-			return rows, nil
+			return nil
 		}
 		if readErr != nil {
-			return rows, readErr
+			return readErr
 		}
 	}
 }
 
-// text returns a string column's value, "" (null in the S3 schema) when
-// null.
+// describeValue spells a string value for an error: quoted, or null.
+func describeValue(v parquet.Value) string {
+	if v.IsNull() {
+		return "null"
+	}
+	return fmt.Sprintf("%q", v.ByteArray())
+}
+
+// text returns a string column's value, "" (null in the schema) when null.
 func text(v parquet.Value) string {
 	if v.IsNull() {
 		return ""

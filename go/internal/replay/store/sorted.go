@@ -38,6 +38,9 @@ type Counters struct {
 	// Reseeks counts key cursor moves through the page index past at
 	// least one undecoded page.
 	Reseeks atomic.Int64
+	// DisorderRefusals counts reads that failed because a row group's
+	// keys do not ascend strictly (Refusal reports row_group_disorder).
+	DisorderRefusals atomic.Int64
 }
 
 // Sorted is the Store over a sorted-Parquet fixture. Besides the Store
@@ -100,10 +103,19 @@ func (s *Sorted) ReadRows(ctx context.Context, from []byte, fromInclusive bool, 
 	defer release()
 	var stats sortedparquet.Stats
 	defer s.record(&stats)
-	return s.reader.Read(ctx, sortedparquet.Range{
+	rows, err := s.reader.Read(ctx, sortedparquet.Range{
 		From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
 		Limit: limit, Columns: columns,
 	}, &stats)
+	return rows, s.failed(err)
+}
+
+// failed counts a read error the replay server classifies, and returns it.
+func (s *Sorted) failed(err error) error {
+	if sortedparquet.ReasonOf(err) == sortedparquet.ReasonRowGroupDisorder {
+		s.counters.DisorderRefusals.Add(1)
+	}
+	return err
 }
 
 // RollupRows is DelimitedRollup returning the reader's entries with the
@@ -126,10 +138,10 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 	defer s.record(&stats)
 	entries, err := s.reader.RollupRead(ctx, sortedparquet.Rollup{
 		From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
-		Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: int(min(int64(limit)+1, math.MaxInt)),
+		Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: saturatingIncrement(limit),
 		SuppressAtOrBeforeFrom: suppressPrefixAtOrBeforeFloor, Columns: columns,
 	}, &stats)
-	return entries, true, err
+	return entries, true, s.failed(err)
 }
 
 // Rows implements Store with the Object projection.
@@ -175,8 +187,8 @@ type objectProjection struct {
 }
 
 // s3Objects is the projection of the S3-shaped schemas: the Java-era
-// canonical schema, the S3 current-object schema and its replay-owned
-// long-key variant.
+// canonical schema, the S3 current-object schema, and the replay-owned
+// schema sort-fixture writes (the same columns under its own id).
 var s3Objects = objectProjection{
 	size: "size", lastModified: "last_modified", etag: "etag", storageClass: "storage_class",
 	ownerID: "owner_id", ownerDisplayName: "owner_display_name",
@@ -251,4 +263,13 @@ func text(row *sortedparquet.Row, name string) *string {
 	}
 	s := string(v.ByteArray())
 	return &s
+}
+
+// saturatingIncrement returns n+1, or n at math.MaxInt: the rollup reads
+// one entry past the limit to tell the caller the listing is truncated.
+func saturatingIncrement(n int) int {
+	if n < math.MaxInt {
+		return n + 1
+	}
+	return n
 }

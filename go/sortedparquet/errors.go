@@ -40,6 +40,10 @@ const (
 	// ReasonNoPageIndex: a non-empty row group's key column lacks a
 	// ColumnIndex or an OffsetIndex, so it cannot be seeked by page.
 	ReasonNoPageIndex = "no_page_index"
+	// ReasonRowGroupDisorder: a read found a row group whose own keys are
+	// not in strictly ascending unsigned order (a *DisorderError). Open
+	// cannot see it, since it decodes only each group's first key.
+	ReasonRowGroupDisorder = "row_group_disorder"
 )
 
 // RefusalError reports a set of parts that cannot be served sorted. Reason
@@ -58,14 +62,40 @@ func Refuse(reason, format string, args ...any) error {
 	return &RefusalError{Reason: reason, Detail: fmt.Sprintf(format, args...)}
 }
 
-// ReasonOf returns err's refusal reason, or "" when err is not a refusal.
+// ReasonOf returns err's refusal reason: a *RefusalError's Reason,
+// ReasonRowGroupDisorder for a *DisorderError, or "" for any other error.
 func ReasonOf(err error) string {
 	var refusal *RefusalError
 	if errors.As(err, &refusal) {
 		return refusal.Reason
 	}
+	var disorder *DisorderError
+	if errors.As(err, &disorder) {
+		return ReasonRowGroupDisorder
+	}
 	return ""
 }
+
+// DisorderError reports a row group whose keys do not ascend strictly,
+// found where its rows are read. It wraps ErrCorrupt; its reason is
+// ReasonRowGroupDisorder, the replay server's classification of such a
+// fixture, so a caller counts and reports it without matching messages.
+type DisorderError struct {
+	// Part names the part; RowGroup is the physical row group in it.
+	Part     string
+	RowGroup int
+	// Row is the 0-based row within the row group whose key is at or
+	// below its predecessor's.
+	Row    int64
+	Detail string
+}
+
+func (e *DisorderError) Error() string {
+	return fmt.Sprintf("sortedparquet: row group %d of %s is not in strictly ascending unsigned key order: %s", e.RowGroup, e.Part, e.Detail)
+}
+
+// Unwrap returns ErrCorrupt.
+func (e *DisorderError) Unwrap() error { return ErrCorrupt }
 
 // ErrCorrupt reports a part whose decoded keys contradict its indexes or the
 // order the reader established at Open.

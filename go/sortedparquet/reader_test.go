@@ -4,7 +4,6 @@
 package sortedparquet_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -130,7 +130,7 @@ func TestReadDecodesOnlyNamedColumns(t *testing.T) {
 	}
 }
 
-// TestFormat2Refusals mutates a copy of a Go tool dataset once per refusal.
+// TestFormat2Refusals mutates a generated dataset once per refusal.
 func TestFormat2Refusals(t *testing.T) {
 	cases := []struct {
 		reason string
@@ -152,7 +152,7 @@ func TestFormat2Refusals(t *testing.T) {
 	}
 	for i, c := range cases {
 		t.Run(fmt.Sprintf("%d-%s", i, c.reason), func(t *testing.T) {
-			dir := copyDataset(t, filepath.Join("testdata", "go-s3"))
+			dir := writeDataset(t)
 			raw, _ := os.ReadFile(filepath.Join(dir, format2.ManifestName))
 			var m map[string]any
 			if err := json.Unmarshal(raw, &m); err != nil {
@@ -169,7 +169,7 @@ func TestFormat2Refusals(t *testing.T) {
 			}
 		})
 	}
-	if _, err := format2.Open(context.Background(), copyDataset(t, filepath.Join("testdata", "go-s3")), nil); err != nil {
+	if _, err := format2.Open(context.Background(), writeDataset(t), nil); err != nil {
 		t.Fatalf("unchanged copy: %v", err)
 	}
 }
@@ -178,32 +178,71 @@ func part(m map[string]any, i int) map[string]any {
 	return m["parts"].([]any)[i].(map[string]any)
 }
 
-func copyDataset(t *testing.T, src string) string {
-	t.Helper()
-	dst := t.TempDir()
-	if err := os.CopyFS(dst, os.DirFS(src)); err != nil {
-		t.Fatal(err)
+// datasetKeys are the keys of the generated format-2 dataset: edge cases
+// of byte order (a key that is a prefix of the next, an empty segment,
+// percent text, two spellings of é, a 4-byte UTF-8 rune) and a bulk run.
+func datasetKeys() []string {
+	keys := []string{"a", "a/", "a/b", "a/b/", "a/b/x", "a//c", "a/%2F", "e\u0301", "\u00e9", "\U00010000"}
+	for i := range 1100 {
+		keys = append(keys, fmt.Sprintf("bulk/k%04d", i))
 	}
-	return dst
+	slices.SortFunc(keys, strings.Compare)
+	return keys
 }
 
-// TestJavaToolFixtures reads the Java tool's own parts end to end.
-func TestJavaToolFixtures(t *testing.T) {
-	fixture, err := javaera.Open(context.Background(), filepath.Join("testdata", "java-small"), nil)
-	if err != nil {
+// writeDataset writes datasetKeys as a two-part format-2 dataset, split
+// after the 1,061st key, and returns its directory.
+func writeDataset(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	rows := rowsOf(datasetKeys())
+	if _, err := sortedparquettest.WriteFormat2(dir, sortedparquettest.Dataset{Parts: []sortedparquettest.Part{
+		{Rows: rows[:1061], PageBytes: 2048, GroupRows: 400},
+		{Rows: rows[1061:]},
+	}}); err != nil {
 		t.Fatal(err)
 	}
-	defer fixture.Reader.Close()
-	rows, err := fixture.Reader.Read(context.Background(), sortedparquet.Range{Limit: 100, Columns: []string{"size", "last_modified"}}, nil)
-	if err != nil {
-		t.Fatal(err)
+	return dir
+}
+
+// TestFormat2RequiresBounds refuses a manifest whose non-empty part lacks
+// an exact key bound. Without the check, a first part holding a..z with no
+// bounds and a second holding m opened, and a read from n routed to the
+// second part and lost z.
+func TestFormat2RequiresBounds(t *testing.T) {
+	cases := map[string]func(m map[string]any){
+		"no minimum": func(m map[string]any) { delete(part(m, 0), "min_key_base64") },
+		"no maximum": func(m map[string]any) { delete(part(m, 0), "max_key_base64") },
+		"neither":    func(m map[string]any) { delete(part(m, 0), "min_key_base64"); delete(part(m, 0), "max_key_base64") },
+		"null":       func(m map[string]any) { part(m, 0)["max_key_base64"] = nil },
 	}
-	if len(rows) != 15 || fixture.Reader.Parts() != 2 {
-		t.Fatalf("%d rows over %d parts", len(rows), fixture.Reader.Parts())
-	}
-	for i := 1; i < len(rows); i++ {
-		if bytes.Compare(rows[i-1].Key, rows[i].Key) >= 0 {
-			t.Fatal("rows out of order")
-		}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if _, err := sortedparquettest.WriteFormat2(dir, sortedparquettest.Dataset{Parts: []sortedparquettest.Part{
+				{Rows: rowsOf([]string{"a", "z"})}, {Rows: rowsOf([]string{"m"})},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := os.ReadFile(filepath.Join(dir, format2.ManifestName))
+			var m map[string]any
+			if err := json.Unmarshal(raw, &m); err != nil {
+				t.Fatal(err)
+			}
+			mutate(m)
+			raw, _ = json.Marshal(m)
+			if err := os.WriteFile(filepath.Join(dir, format2.ManifestName), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			dataset, err := format2.Open(context.Background(), dir, nil)
+			if got := sortedparquet.ReasonOf(err); got != sortedparquet.ReasonInvalidManifest {
+				if err == nil {
+					rows, _ := dataset.Reader.Read(context.Background(), sortedparquet.Range{From: []byte("n"), FromInclusive: true, Limit: 1}, nil)
+					_ = dataset.Reader.Close()
+					t.Fatalf("opened; a read from n returned %d rows", len(rows))
+				}
+				t.Fatalf("refusal %q (%v), want invalid_manifest", got, err)
+			}
+		})
 	}
 }
