@@ -4,6 +4,7 @@
 package listing
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -173,4 +174,76 @@ func TestRecoveryKeepsRegularLayout(t *testing.T) {
 	if err := lr.resume(t); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestRecoveryRefusesLinkedJournal: .swath/journal replaced by a link to a
+// copy elsewhere, with a valid header and one byte of an incomplete frame
+// (a torn tail): the resume refuses before it opens the journal for
+// writing, and the copy keeps its byte (tenth durability review: recovery
+// read the journal through the link and truncated the external file).
+func TestRecoveryRefusesLinkedJournal(t *testing.T) {
+	lr := newLayoutRun(t, 0)
+	jpath := journal.Path(lr.out)
+	b, err := os.ReadFile(jpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = append(b, 0x01)
+	outside := filepath.Join(lr.foreign, "journal")
+	if err := os.WriteFile(outside, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(jpath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, jpath); err != nil {
+		t.Fatal(err)
+	}
+	err = lr.resume(t)
+	if got, rerr := os.ReadFile(outside); rerr != nil || !bytes.Equal(got, b) {
+		t.Errorf("the journal outside the output changed: %d bytes, want %d (%v)", len(got), len(b), rerr)
+	}
+	requireRefusedAndKept(t, err, outside)
+}
+
+// TestLockRefusesLinkedWorkspace: an output whose .swath is a link to a
+// directory elsewhere is refused before the lock file is created there.
+func TestLockRefusesLinkedWorkspace(t *testing.T) {
+	base := t.TempDir()
+	out, foreign := filepath.Join(base, "dataset"), filepath.Join(base, "unrelated")
+	for _, d := range []string{filepath.Join(out, dataset.DataDir), foreign} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(foreign, filepath.Join(out, dataset.Workspace)); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := journal.TakeLock(out)
+	if err == nil {
+		lock.Release()
+	}
+	if ents, _ := os.ReadDir(foreign); len(ents) != 0 {
+		t.Errorf("the lock created %v outside the output", ents)
+	}
+	if !errors.Is(err, ErrUnsafeLayout) {
+		t.Fatalf("TakeLock error %v, want a refusal with ErrUnsafeLayout", err)
+	}
+}
+
+// TestRestartRefusesLinkedParts: a journal whose header never became
+// durable restarts the run, which empties the workspace; a linked parts
+// directory is refused first, as recovery would.
+func TestRestartRefusesLinkedParts(t *testing.T) {
+	lr := newLayoutRun(t, 0)
+	if err := os.WriteFile(journal.Path(lr.out), nil, 0o644); err != nil { // the header never durable
+		t.Fatal(err)
+	}
+	keep := lr.sentinel(t, "keep-me.txt")
+	parts := filepath.Join(lr.out, dataset.Workspace, dataset.PartsDir)
+	os.RemoveAll(parts)
+	if err := os.Symlink(lr.foreign, parts); err != nil {
+		t.Fatal(err)
+	}
+	requireRefusedAndKept(t, lr.resume(t), keep)
 }

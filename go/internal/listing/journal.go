@@ -302,16 +302,45 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 	if dataset.Committed(cfg.Output.Dir) {
 		return nil, ErrComplete
 	}
-	st, err := journal.Read(cfg.Output.Dir)
+	// Recovery reads the journal and acts through the output root, opened
+	// and then checked to be the directory the lock is on (as
+	// runJournal.rooted); the run keeps it. The workspace's layout is
+	// checked before the journal is read.
+	r, err := os.OpenRoot(cfg.Output.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("resume: %w", err)
+	}
+	if err := lock.Verify(); err != nil {
+		r.Close()
+		return nil, err
+	}
+	jr, err := recoverLocked(ctx, cfg, r, id, lock)
+	if err != nil || jr == nil {
+		r.Close()
+	}
+	if jr == nil && err == nil {
+		// A journal file whose header never became durable: the run
+		// published nothing, so it starts over (its layout checked by
+		// checkWorkspace before preparation removes anything).
+		fresh := cfg
+		fresh.Output.Resume, fresh.Output.Replace = false, true
+		return openLocked(ctx, fresh, path, id, lock)
+	}
+	return jr, err
+}
+
+// recoverLocked is a resume's recovery through r: nil, nil when the
+// journal's header never became durable (the run starts over).
+func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Identity, lock *journal.Lock) (*runJournal, error) {
+	if err := checkWorkspace(r); err != nil {
+		return nil, err
+	}
+	st, err := journal.ReadIn(r)
 	if errors.Is(err, journal.ErrNoJournal) {
 		if !dataset.Resumable(cfg.Output.Dir) {
 			return nil, ErrNothingToResume
 		}
-		// A journal file whose header never became durable: the run
-		// published nothing, so it starts over.
-		fresh := cfg
-		fresh.Output.Resume, fresh.Output.Replace = false, true
-		return openLocked(ctx, fresh, path, id, lock)
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
@@ -322,97 +351,44 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 	if err := journal.Check(st.Header.Identity, id); err != nil {
 		return nil, err
 	}
-	// Recovery acts through the output root, opened and then checked to be
-	// the directory the lock is on (as runJournal.rooted); the run keeps it.
-	r, err := os.OpenRoot(cfg.Output.Dir)
-	if err != nil {
-		return nil, fmt.Errorf("resume: %w", err)
-	}
-	if err := lock.Verify(); err != nil {
-		r.Close()
-		return nil, err
-	}
 	sus, err := recoverParts(verifier{ctx, cfg.Progress}, r, cfg.Output.Dir, st, lock)
 	if err != nil {
-		r.Close()
 		return nil, err
 	}
-	j, err := journal.Reopen(cfg.Output.Dir, st)
+	j, err := journal.ReopenIn(r, st)
 	if err != nil {
-		r.Close()
 		return nil, err
 	}
 	return &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st, suspect: sus, root: r}, nil
 }
 
-// ErrUnsafeLayout: a path resume recovery reads, renames or removes is not
-// what swath made there: data/, the workspace, its parts or suspect
-// directory is a symbolic link or not a directory, or a retained or claimed
-// part is a symbolic link or not a regular file. Recovery checks every such
-// path without following links before it changes anything, and refuses
-// (exit 1, class fatal, not resumable) with the output left as it was; the
-// operator inspects it, or starts over with --overwrite. The refusal is a
-// *LayoutError.
-var ErrUnsafeLayout = errors.New("the output's layout is not one swath made")
+// ErrUnsafeLayout is dataset.ErrUnsafeLayout: recovery checks every path
+// it acts on without following links before it changes anything, and
+// refuses an output whose layout swath did not make (exit 1, class fatal,
+// not resumable); the operator inspects it, or starts over with
+// --overwrite. The refusal is a *LayoutError.
+var ErrUnsafeLayout = dataset.ErrUnsafeLayout
 
-// LayoutError is a refusal by ErrUnsafeLayout: Path, relative to the
-// output, is Got where recovery needs Want.
-type LayoutError struct {
-	Path, Want, Got string
-}
+// LayoutError is dataset.LayoutError.
+type LayoutError = dataset.LayoutError
 
-func (e *LayoutError) Error() string {
-	return fmt.Sprintf("resume: %s is %s, not %s; refusing to recover: %v", e.Path, e.Got, e.Want, ErrUnsafeLayout)
-}
-
-func (e *LayoutError) Unwrap() error { return ErrUnsafeLayout }
-
-// kind names a file mode for a LayoutError.
-func kind(m fs.FileMode) string {
-	switch {
-	case m&fs.ModeSymlink != 0:
-		return "a symbolic link"
-	case m.IsDir():
-		return "a directory"
-	case m.IsRegular():
-		return "a regular file"
-	}
-	return "a special file (" + m.Type().String() + ")"
-}
-
-// need checks rel (relative to r) without following a link: a directory
-// when dir, else a regular file. A missing path is nil, nil when optional.
+// need is dataset.NeedIn with its other errors marked as the resume's.
 func need(r *os.Root, rel string, dir, optional bool) (fs.FileInfo, error) {
-	fi, err := r.Lstat(rel)
-	switch {
-	case optional && errors.Is(err, fs.ErrNotExist):
-		return nil, nil
-	case err != nil:
-		return nil, fmt.Errorf("resume: %w", err)
-	case dir && !fi.Mode().IsDir():
-		return nil, &LayoutError{Path: rel, Want: "a directory", Got: kind(fi.Mode())}
-	case !dir && !fi.Mode().IsRegular():
-		return nil, &LayoutError{Path: rel, Want: "a regular file", Got: kind(fi.Mode())}
+	fi, err := dataset.NeedIn(r, rel, dir, optional)
+	if err != nil && !errors.Is(err, ErrUnsafeLayout) {
+		err = fmt.Errorf("resume: %w", err)
 	}
-	return fi, nil
+	return fi, err
 }
 
-// openPart opens part file rel through r, refusing anything but the regular
-// file need found there (a link swapped in between the two is refused too).
+// openPart opens part file rel through r for reading
+// (dataset.OpenRegularIn: a regular file, the inode its lstat found).
 func openPart(r *os.Root, rel string) (*os.File, error) {
-	fi, err := need(r, rel, false, false)
-	if err != nil {
-		return nil, err
+	f, err := dataset.OpenRegularIn(r, rel, os.O_RDONLY)
+	if err != nil && !errors.Is(err, ErrUnsafeLayout) {
+		err = fmt.Errorf("resume: %w", err)
 	}
-	f, err := r.Open(rel)
-	if err != nil {
-		return nil, fmt.Errorf("resume: %w", err)
-	}
-	if got, err := f.Stat(); err != nil || !os.SameFile(fi, got) {
-		f.Close()
-		return nil, &LayoutError{Path: rel, Want: "the regular file found there", Got: "another file once opened"}
-	}
-	return f, nil
+	return f, err
 }
 
 // Paths recovery acts on, relative to the output root.
@@ -423,6 +399,26 @@ var (
 
 func partRel(i int) string  { return filepath.Join(dataset.DataDir, dataset.PartName(i)) }
 func claimRel(i int) string { return filepath.Join(partsRel, dataset.PartName(i)+dataset.ClaimSuffix) }
+
+// checkWorkspace is a resume's first check, before the journal is read
+// (and before a run whose journal header never became durable is prepared
+// again, which removes the workspace's entries): the workspace, data/ and
+// the parts and suspect directories are directories where they exist, and
+// the journal a regular file, all by lstat (a link is refused whatever it
+// names; the lock, the workspace and the lock file were checked by
+// journal.TakeLock).
+func checkWorkspace(r *os.Root) error {
+	for _, d := range []struct {
+		rel      string
+		optional bool
+	}{{dataset.Workspace, false}, {dataset.DataDir, true}, {partsRel, true}, {suspectRel, true}} {
+		if _, err := need(r, d.rel, true, d.optional); err != nil {
+			return err
+		}
+	}
+	_, err := need(r, filepath.Join(journal.Dir, journal.Name), false, true)
+	return err
+}
 
 // checkLayout is recovery's first step, before anything is renamed or
 // removed: every directory it acts in is a directory, and every part it may
@@ -435,13 +431,8 @@ func claimRel(i int) string { return filepath.Join(partsRel, dataset.PartName(i)
 // leaves the output is refused by the root, and a link inside it is the
 // pathname-replacement window durability.md documents.
 func checkLayout(r *os.Root, st *journal.State) error {
-	for _, d := range []struct {
-		rel      string
-		optional bool
-	}{{dataset.Workspace, false}, {dataset.DataDir, false}, {partsRel, true}, {suspectRel, true}} {
-		if _, err := need(r, d.rel, true, d.optional); err != nil {
-			return err
-		}
+	if _, err := need(r, dataset.DataDir, true, false); err != nil {
+		return err
 	}
 	n := len(st.Records)
 	for i := range n {
@@ -608,7 +599,7 @@ func checkParts(v verifier, r *os.Root, out string, st *journal.State, lock *jou
 	// The accepted frames are acted on below (a part is renamed because of
 	// its record), so they must be durable first: a whole frame that
 	// survived a crash may never have been synced.
-	if err := journal.Sync(out); err != nil {
+	if err := journal.SyncIn(r); err != nil {
 		return fmt.Errorf("resume: %w", err)
 	}
 	keep := map[string]bool{}

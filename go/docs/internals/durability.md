@@ -146,15 +146,21 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    row budget, `-seed` and
    credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
-3. Recovers `data/`. Every path it acts on is checked first by lstat, never following a link: `data/`,
-   `.swath/`, `.swath/parts/` and `.swath/suspect/` must be directories, every retained part, a claimed part
-   and the suspect read must be regular files. Anything else (an interrupted output whose `data/` became a
-   link to an unrelated directory, whose files cleanup would remove) is refused before anything is read,
-   renamed or removed, with `listing.ErrUnsafeLayout` (a `*listing.LayoutError` naming the path; exit 1,
-   class `fatal`, not resumable), the output left as it was (`TestRecoveryRefusesSymlinkedData`,
-   `TestRecoveryRefusesSymlinkedSuspectDir`, `TestRecoveryRefusesNonRegularPart`). Recovery then reads,
-   renames, removes and syncs through the output root (`os.Root`), as part creation does; an unrecorded
-   entry of `data/` that is a link is removed itself, never what it names.
+3. Recovers `data/`. Every path it acts on is checked first by lstat, never following a link. Before the
+   lock is taken, an existing `.swath/` must be a directory and an existing lock file a regular file
+   (`journal.TakeLock`, so the lock file is never created through a link). Before the journal is read,
+   `.swath/` must be a directory, `data/`, `.swath/parts/` and `.swath/suspect/` directories where they
+   exist, and `.swath/journal` a regular file (this also precedes the restart of a run whose journal header
+   never became durable, which empties the workspace). Before recovery renames or removes anything, `data/`
+   must exist as a directory and every retained part, a claimed part and the suspect read must be regular
+   files. Anything else (an interrupted output whose `data/` or journal became a link to something
+   elsewhere, which cleanup would delete from or the reopen would truncate) is refused with
+   `dataset.ErrUnsafeLayout` (`listing.ErrUnsafeLayout`; a `*LayoutError` naming the path; exit 1, class
+   `fatal`, not resumable) (`TestRecoveryRefusesSymlinkedData`, `TestRecoveryRefusesSymlinkedSuspectDir`,
+   `TestRecoveryRefusesNonRegularPart`, `TestRecoveryRefusesLinkedJournal`, `TestLockRefusesLinkedWorkspace`,
+   `TestRestartRefusesLinkedParts`). Recovery then reads, syncs and reopens the journal and reads, renames,
+   removes and syncs parts through the output root (`os.Root`), as part creation does; an unrecorded entry of
+   `data/` that is a link is removed itself, never what it names.
    The journal is synced first (its accepted frames are acted on). Every retained part
    must match its record's size and MD5 (`ErrPartAltered` otherwise). A part whose record is durable but whose
    rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, the
