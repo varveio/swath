@@ -418,6 +418,22 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	return f
 }
 
+// nonNegativeDurations refuses a negative value of any duration flag given
+// (the command's and every provider's): a negative deadline or timeout
+// would otherwise read as "off". Zero keeps its documented meaning.
+func nonNegativeDurations(f *flag.FlagSet) (err error) {
+	f.Visit(func(fl *flag.Flag) {
+		g, ok := fl.Value.(flag.Getter)
+		if !ok {
+			return
+		}
+		if d, ok := g.Get().(time.Duration); ok && d < 0 && err == nil {
+			err = fmt.Errorf("--%s %s: negative", fl.Name, d)
+		}
+	})
+	return err
+}
+
 // rateFitsStall refuses a --request-rate whose spacing between attempts
 // exceeds half the stall timeout: the watchdog sees no answered request
 // while an attempt waits for its token, so a healthy listing at that rate
@@ -487,6 +503,9 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 		return o, "", usageError{errors.New("missing SOURCE")}
 	case o.reportFormat != "text" && o.reportFormat != "json":
 		return o, "", usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
+	}
+	if err := nonNegativeDurations(f); err != nil {
+		return o, "", usageError{err}
 	}
 	if err := rateFitsStall(f, o.stall); err != nil {
 		return o, "", usageError{err}

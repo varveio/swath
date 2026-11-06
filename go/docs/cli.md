@@ -329,6 +329,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 ## Semantics worth stating
 
 - **Sizes** accept `KiB`, `MiB`, `GiB` and `KB`, `MB`, `GB` suffixes.
+- **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag;
+  `0` turns off `--max-duration`, `--stall-timeout` and `--part-interval`'s time cut.
 - **`--row-budget`** bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder
   queues); it is not a cap on resident memory. See [internals/ordering.md](internals/ordering.md).
 - **`--output`** is refused when non-empty unless `--overwrite` (or Java's alias `--force`), which replaces only
