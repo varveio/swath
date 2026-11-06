@@ -348,6 +348,27 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	return f
 }
 
+// rateFitsStall refuses a --request-rate whose spacing between attempts
+// exceeds half the stall timeout: the watchdog sees no answered request
+// while an attempt waits for its token, so a healthy listing at that rate
+// would stop as stuck (exit 75). Half leaves the other half for the
+// request itself.
+func rateFitsStall(f *flag.FlagSet, stall time.Duration) error {
+	fl := f.Lookup("request-rate")
+	if fl == nil || stall <= 0 {
+		return nil
+	}
+	rate, err := strconv.ParseFloat(fl.Value.String(), 64)
+	if err != nil || rate <= 0 {
+		return nil
+	}
+	if every := time.Duration(float64(time.Second) / rate); every > stall/2 {
+		return fmt.Errorf("--request-rate %g spaces attempts %s apart, more than half of --stall-timeout %s: a healthy run would stop as stuck; raise the rate or the stall timeout",
+			rate, every.Round(time.Millisecond), stall)
+	}
+	return nil
+}
+
 // usage prints the flags generated from the flag set itself.
 func usage(w io.Writer, f *flag.FlagSet, diag bool) {
 	if diag {
@@ -401,6 +422,9 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	}
 	if !o.countOnly && o.out == "" {
 		return usageError{errors.New("--output is required unless --count-only")}
+	}
+	if err := rateFitsStall(f, o.stall); err != nil {
+		return usageError{err}
 	}
 	if o.reportFormat != "text" && o.reportFormat != "json" {
 		return usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}

@@ -101,7 +101,7 @@ usage: swath list SOURCE --output DIR [flags]
   -request-payer
     	S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
   -request-rate N
-    	requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; 0: no cap
+    	requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
@@ -198,7 +198,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -request-payer
     	S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
   -request-rate N
-    	requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; 0: no cap
+    	requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
   -request-timeout duration
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed

@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"io"
 	"path/filepath"
 	"testing"
@@ -39,6 +41,19 @@ func TestRequestRateFlag(t *testing.T) {
 	if n < 10 || el < time.Duration(n-1)*time.Second/20 || !c.Features["request_rate"] || c.Values["rate.waits"] == 0 {
 		t.Fatalf("%d attempts in %s at 20/s; features %v, rate.waits %d", n, el, c.Features, c.Values["rate.waits"])
 	}
+	// B4: a rate whose spacing exceeds half the stall timeout is refused
+	// (before, the run started and the watchdog stopped it as stuck while
+	// an attempt waited for its token); without a stall timeout it is not.
+	var u usageError
+	if err := run(context.Background(), s.args(filepath.Join(t.TempDir(), "z"), "--request-rate", "0.2", "--stall-timeout", "3s"), io.Discard, false); !errors.As(err, &u) {
+		t.Fatalf("a rate slower than the stall timeout: %v, want a usage error", err)
+	}
+	if err := rateFitsStall(newFlagsWith(t, "--request-rate", "0.001", "--stall-timeout", "0"), 0); err != nil {
+		t.Fatalf("no stall timeout: %v", err)
+	}
+	if err := rateFitsStall(newFlagsWith(t, "--request-rate", "0.001"), 10*time.Minute); err == nil {
+		t.Fatal("the minimum rate was accepted with the default stall timeout")
+	}
 	if err := run(context.Background(), s.args(filepath.Join(t.TempDir(), "x"), "--request-rate", "-1"), io.Discard, false); err == nil {
 		t.Fatal("a negative rate was accepted")
 	}
@@ -47,4 +62,15 @@ func TestRequestRateFlag(t *testing.T) {
 	if err := run(context.Background(), s.args(filepath.Join(t.TempDir(), "y"), "--request-rate", "1e-12"), io.Discard, false); err == nil {
 		t.Fatal("a rate below the minimum was accepted")
 	}
+}
+
+// newFlagsWith is the list flag set parsed from args.
+func newFlagsWith(t *testing.T, args ...string) *flag.FlagSet {
+	t.Helper()
+	var o options
+	f := newFlags(&o, false)
+	if err := f.Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return f
 }

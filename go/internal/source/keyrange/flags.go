@@ -59,7 +59,7 @@ func Flags(f *flag.FlagSet, diag bool) *Policy {
 	bf := func(v *bool, name, usage string) { f.Var(&boolFlag{p: p, v: v}, name, usage) }
 	bf(&p.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
 	bf(&p.LimiterSlowStart, "limiter-slow-start", "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
-	f.Var((*rateFlag)(&p.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; 0: no cap")
+	f.Var((*rateFlag)(&p.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
 	bf(&p.Seed, "seed", "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
 	if diag {
 		bf(&p.Structure, "structure", "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
