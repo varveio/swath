@@ -52,7 +52,7 @@ target or, on a slow frontier, once it has been open for the part interval (defa
 was published, or since the start). What a crash loses is not bounded by that age: rows listed past the
 frontier (in memory or spill) and parts encoded after a gap in the ordinals are listed again too.
 
-**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the 64 MiB default and about 30 bytes per row that is roughly 200 billion objects, or 35 days of continuous 30-second time cuts; the ceiling is reachable only with a small `--part-size` or `--part-rotation-max-rows`. A run that reaches it publishes and records every
+**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-rotation-max-rows` reaches it. A run that reaches it publishes and records every
 part up to 99,999 and stops (exit 1, `cause` `part_limit`, not resumable: the part size and row cap are in
 the identity, so a resume would stop at the same part); its journal and parts are kept, and the run starts
 over with a larger `--part-size` ([parquet-output.md](parquet-output.md)).
@@ -130,12 +130,14 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    create; under a load average of 13-20 `TestReplacedOutputIsNeverTouched` had seen a part created by
    pathname in the impostor's `.swath/parts`). Resume recovery (step 3) opens a root before it reads the
    journal and does through it: the journal's read, sync and reopen; the lstat, open and verification of
-   parts; the renames into `data/` and into `.swath/suspect/`, with the data directory's sync after each
-   (`dataset.PublishPartIn`); the removal of unrecorded entries and stale suspects; the removal and
-   re-creation of `.swath/parts/`; and its directory syncs. Still by pathname, each after an identity check:
-   taking the lock (after lstat checks of `.swath/` and the lock file), a fresh run's preparation and the
-   restart of a run whose journal header never became durable, the journal's creation for a fresh run and
-   `journal.Witness` (a read), the live run's claim-directory sync and the data directory's sync after each
+   parts; the renames into `data/`, each followed by the data directory's sync (`dataset.PublishPartIn`), and
+   into `.swath/suspect/`, followed by syncs of `.swath/suspect/` and `.swath/`; the removal of unrecorded
+   entries and stale suspects; the removal and re-creation of `.swath/parts/`; and its directory syncs. Still by pathname with no identity check before
+   them (nothing is locked yet, or the lock's identities are not yet compared): taking the lock (after lstat
+   checks of `.swath/`, the journal and the lock file) and `journal.Witness` (a read, before the lock and in
+   the settlement before its identity check). Still by pathname, each after an identity check: a fresh run's
+   preparation and the restart of a run whose journal header never became durable, the journal's creation
+   for a fresh run, the live run's claim-directory sync and the data directory's sync after each
    live publication, the final publication of a run without a journal, the manifest, the run report and the
    outcome file (`dataset.Replace`), the workspace and spill cleanup, and `progress.json` and stack dumps
    under `Progress.Owned`. What is not excluded: a replacement between a check and its action for those
@@ -163,19 +165,23 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
 3. Recovers `data/`. Every path it acts on is checked first by lstat, never following a link. Before the
-   lock is taken, an existing `.swath/` must be a directory and an existing lock file a regular file
-   (`journal.TakeLock`, so the lock file is never created through a link). Before the journal is read,
+   lock is taken, for the run or for a refusal's settlement, an existing `.swath/` must be a directory and an
+   existing journal and lock file regular files (`journal.TakeLock`, so the lock file is never created through
+   a link, nor in an output refused for its journal: `TestLockRefusesLinkedJournal`); a journal read types
+   `.swath/` before the journal (`TestReadRefusesLinkedWorkspace`). Before the journal is read,
    `.swath/` must be a directory, `data/`, `.swath/parts/` and `.swath/suspect/` directories where they
    exist, and `.swath/journal` a regular file (this also precedes the restart of a run whose journal header
-   never became durable, which empties the workspace). Before recovery renames or removes anything, `data/`
+   never became durable, which empties the workspace; that restart also requires every entry of
+   `.swath/suspect/` and `.swath/parts/` to be a regular file first, `TestRestartRefusesLinkedSuspect`). Before recovery renames or removes anything, `data/`
    must exist as a directory and every retained part, a claimed part and every entry of `.swath/suspect/`
    (the one read and the ones removed) must be regular files (`TestRecoveryRefusesLinkedSuspectUnchanged`). Anything else (an interrupted output whose `data/` or journal became a link to something
    elsewhere, which cleanup would delete from or the reopen would truncate) is refused with
    `dataset.ErrUnsafeLayout` (`listing.ErrUnsafeLayout`; a `*LayoutError` naming the path; exit 1, class
    `fatal`, `cause` `unsafe_layout`, not resumable, whatever stop cause was selected meanwhile,
-   `TestTerminalCausesOutrankStops`; the outcome and report files are still written) (`TestRecoveryRefusesSymlinkedData`, `TestRecoveryRefusesSymlinkedSuspectDir`,
+   `TestTerminalCausesOutrankStops`; the report is written, and `error.json` when the settlement can take the
+   lock, which a refused workspace or journal prevents) (`TestRecoveryRefusesSymlinkedData`, `TestRecoveryRefusesSymlinkedSuspectDir`,
    `TestRecoveryRefusesNonRegularPart`, `TestRecoveryRefusesLinkedJournal`, `TestLockRefusesLinkedWorkspace`,
-   `TestRestartRefusesLinkedParts`). Recovery then reads, syncs and reopens the journal and reads, renames,
+   `TestRestartRefusesLinkedParts`, `TestRestartRefusesLinkedSuspect`). Recovery then reads, syncs and reopens the journal and reads, renames,
    removes and syncs parts through the output root (`os.Root`), as part creation does; an unrecorded entry of
    `data/` that is a link is removed itself, never what it names.
    The journal is synced first (its accepted frames are acted on). Every retained part

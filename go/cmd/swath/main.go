@@ -694,7 +694,7 @@ func explain(err error) error {
 	case errors.Is(err, dataset.ErrPartLimit):
 		return fmt.Errorf("%w (the published parts stay, but a resume would stop at the same limit: start over with --overwrite and a larger --part-size, or without --part-rotation-max-rows)", err)
 	case errors.Is(err, listing.ErrUnsafeLayout):
-		return fmt.Errorf("%w (refused before swath created, renamed or removed anything through that path; parts, journal and suspects are as they were, and the outcome is still recorded in error.json and the report; inspect the output, or start over with swath list --overwrite)", err)
+		return fmt.Errorf("%w (refused before swath created, renamed or removed anything through that path; parts, journal and suspects are as they were, and the outcome is in the report, and in error.json when swath could take the output lock to settle it (a refused workspace or journal can leave error.json as it was, so --report carries the refusal); inspect the output, or start over with swath list --overwrite)", err)
 	case errors.Is(err, listing.ErrInterrupted):
 		return fmt.Errorf("%w (swath resume DIR continues it; --overwrite starts over)", err)
 	case errors.Is(err, dataset.ErrNotEmpty):
