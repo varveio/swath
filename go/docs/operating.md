@@ -243,8 +243,8 @@ when no reader uses it.
 
 ```text
 DIR/
-  data/part-NNNNN.parquet   key-sorted, disjoint parts, ordinal order == key order (the manifest lists them in order; name order
-                            agrees only below part-100000)
+  data/part-NNNNN.parquet   key-sorted, disjoint parts, name order == key order; at most 100,000 parts
+                            (exit 1, `cause` `part_limit` past that: start over with a larger `--part-size`)
   manifest.json             the commit: written last, names every part with exact key bounds and coverage
   run.json                  the run report (after the commit)
   error.json                the outcome of an attempt that did not complete

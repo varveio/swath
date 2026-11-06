@@ -69,6 +69,11 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
 The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`, unless the
 part interval cuts (below).
 
+**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the 64 MiB default and about 30 bytes per row that is roughly 200 billion objects, or 35 days of continuous 30-second time cuts; the ceiling is reachable only with a small `--part-size` or `--part-rotation-max-rows`. The router refuses to open part 100,000
+(`dataset.ErrPartLimit`, checked when it would open the part) after the parts before it are published, so the
+journal's last record is part 99,999; the command exits 1, `cause` `part_limit`, not resumable
+(`TestRouterRefusesPartPastLimit`). `dataset.PartOrdinal` refuses a six-digit name.
+
 **The part interval** (`listing.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) bounds the
 age of the recovery point on a slow frontier: a part open that long with rows is closed although not full,
 and a journaled run publishes it, so a crash loses at most about that long of frontier progress instead of a
@@ -112,8 +117,8 @@ cancellation removes the unpublished parts and writes no manifest.
 
 ```text
 out/
-  data/part-00000.parquet ...   dense, zero-based, >= 5 digits; ordinal order == key order (name order only below
-                                part-100000: the manifest's part list is the order); parts strictly disjoint
+  data/part-00000.parquet ...   dense, zero-based, five digits (at most 100,000 parts); name order == ordinal
+                                order == key order (the manifest's part list is the order); parts strictly disjoint
   manifest.json                 format 2: source, scope, coverage, ordered parts with exact bounds (the commit)
   run.json                      the run report (operational, written after the commit)
   error.json                    the outcome of a run that did not complete (removed when one completes)

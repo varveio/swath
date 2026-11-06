@@ -123,6 +123,10 @@ func classify(err, cause error, dir string) outcome {
 		// it outranks a stop cause (a resumable 75, 124, 130 or 143), as
 		// Java's; the journal marks the run unresumable.
 		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "protocol"
+	case errors.Is(err, dataset.ErrPartLimit):
+		// The part size and row cap are frozen in the identity, so a
+		// resume would reach the limit again; it outranks a stop cause.
+		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "part_limit"
 	case errors.Is(err, errIncomplete):
 		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitFatal, false
 	case errors.Is(cause, errStuck):
