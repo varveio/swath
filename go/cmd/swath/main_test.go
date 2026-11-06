@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 )
@@ -155,6 +156,33 @@ func TestDiskFullIsResumable(t *testing.T) {
 	}
 	if o := classify(fmt.Errorf("journal: %w", syscall.ENOSPC), nil, t.TempDir()); o.Resumable {
 		t.Fatalf("ENOSPC without a journal is resumable: %+v", o)
+	}
+}
+
+// TestTerminalCausesOutrankStops: an unsafe output layout and the part
+// limit classify fatal, exit 1, not resumable, whatever stop cause was
+// selected meanwhile (tenth durability review: a stall, the deadline or a
+// signal made an unsafe-layout failure resumable).
+func TestTerminalCausesOutrankStops(t *testing.T) {
+	dir := t.TempDir()
+	j, err := journal.Create(dir, journal.Identity{Tool: "swath-go"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	for _, c := range []struct {
+		err   error
+		cause string
+	}{
+		{fmt.Errorf("resume: %w", &dataset.LayoutError{Path: "data", Want: "a directory", Got: "a symbolic link"}), "unsafe_layout"},
+		{fmt.Errorf("router: %w", dataset.ErrPartLimit), "part_limit"},
+	} {
+		for _, stop := range []error{nil, &stuckError{stuckNoRows}, errDeadline, &signalError{syscall.SIGTERM}, &signalError{os.Interrupt}} {
+			o := classify(c.err, stop, dir)
+			if o.Class != "fatal" || o.ExitCode != exitFatal || o.Resumable || o.Cause != c.cause {
+				t.Errorf("%v under %v: %+v, want fatal, %d, not resumable, cause %s", c.err, stop, o, exitFatal, c.cause)
+			}
+		}
 	}
 }
 

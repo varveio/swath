@@ -161,7 +161,8 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    (the one read and the ones removed) must be regular files (`TestRecoveryRefusesLinkedSuspectUnchanged`). Anything else (an interrupted output whose `data/` or journal became a link to something
    elsewhere, which cleanup would delete from or the reopen would truncate) is refused with
    `dataset.ErrUnsafeLayout` (`listing.ErrUnsafeLayout`; a `*LayoutError` naming the path; exit 1, class
-   `fatal`, not resumable) (`TestRecoveryRefusesSymlinkedData`, `TestRecoveryRefusesSymlinkedSuspectDir`,
+   `fatal`, `cause` `unsafe_layout`, not resumable, whatever stop cause was selected meanwhile,
+   `TestTerminalCausesOutrankStops`; the outcome and report files are still written) (`TestRecoveryRefusesSymlinkedData`, `TestRecoveryRefusesSymlinkedSuspectDir`,
    `TestRecoveryRefusesNonRegularPart`, `TestRecoveryRefusesLinkedJournal`, `TestLockRefusesLinkedWorkspace`,
    `TestRestartRefusesLinkedParts`). Recovery then reads, syncs and reopens the journal and reads, renames,
    removes and syncs parts through the output root (`os.Root`), as part creation does; an unrecorded entry of
