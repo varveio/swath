@@ -251,8 +251,10 @@ func crashRun(t *testing.T, args []string, nth int64) {
 // it saw is still there once it holds the lock. Paused just before the
 // lock while another process completes the run, or replaces it with a new
 // interrupted one, and then continued, it must leave the directory exactly
-// as the other process left it; its outcome goes to stderr (Sol, fifth
-// review, M4).
+// as the other process left it; its outcome goes to stderr, and the report
+// (--report) names this attempt with the reason in outcome.unrecorded (Sol,
+// fifth review, M4; sixth review: the source that does not open gave no
+// reason).
 func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 	good, broken := fakeADC(t)
 	stderr := captureStderr(t)
@@ -281,8 +283,9 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 				}
 				return nil
 			})
+			report := filepath.Join(t.TempDir(), "report.json")
 			done := make(chan error, 1)
-			go func() { done <- resume(ctx, []string{dir}, io.Discard) }()
+			go func() { done <- resume(ctx, []string{dir, "--report", report}, io.Discard) }()
 			select {
 			case <-paused:
 			case err := <-done:
@@ -309,8 +312,24 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 			if got := dirTree(t, dir); !maps.Equal(want, got) {
 				t.Fatalf("%s: the directory changed:\nbefore %v\nafter  %v", name, want, got)
 			}
-			if !strings.Contains(stderr.String(), "swath: outcome: {") {
-				t.Fatalf("%s: the outcome is not on stderr: %q", name, stderr.String())
+			if !strings.Contains(stderr.String(), "swath: outcome: {") || !strings.Contains(stderr.String(), listing.UnrecordedChanged) {
+				t.Fatalf("%s: the outcome and its reason are not on stderr: %q", name, stderr.String())
+			}
+			// The report is this attempt's, and says why error.json does
+			// not hold it; an error.json the other process left names
+			// another attempt.
+			var rep listing.Report
+			if b, err := os.ReadFile(report); err != nil || json.Unmarshal(b, &rep) != nil {
+				t.Fatalf("%s: report: %v %q", name, err, b)
+			}
+			if rep.Attempt == nil || rep.Attempt.ID == "" || rep.Outcome.ExitCode != exitFatal || rep.Outcome.Unrecorded != listing.UnrecordedChanged {
+				t.Fatalf("%s: report %+v %+v", name, rep.Attempt, rep.Outcome)
+			}
+			if b, err := os.ReadFile(filepath.Join(dir, errorName)); err == nil {
+				var o outcome
+				if json.Unmarshal(b, &o) != nil || o.Attempt == nil || o.Attempt.ID == rep.Attempt.ID {
+					t.Fatalf("%s: error.json %q names this attempt", name, b)
+				}
 			}
 		}
 	}

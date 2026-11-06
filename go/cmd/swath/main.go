@@ -358,10 +358,14 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	stopProfile()
 	err, out := settle(sum, err)
 	if cfg.Output.Dir != "" && !settled && (err != nil || unrecorded != "") {
-		// Refused before ownership (another owner's outcome stands), or
-		// the write failed: the outcome goes to stderr instead.
-		if unrecorded == "" && errors.Is(err, journal.ErrLocked) {
-			unrecorded = "another process owns the output"
+		// Refused before ownership (another owner's outcome stands, the
+		// run changed meanwhile, or there is none to settle), or the write
+		// failed: the outcome goes to stderr instead, with the reason.
+		if unrecorded == "" {
+			unrecorded = sum.Outcome.Unrecorded
+		}
+		if unrecorded == "" {
+			unrecorded = "stopped before owning the output"
 		}
 		reportUnrecorded(cfg.Output.Dir, out, unrecorded)
 	}

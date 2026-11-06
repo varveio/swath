@@ -249,8 +249,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   `error.json` unchanged) and the dataset still uncommitted once it holds the lock. An attempt that cannot
   record it (another process owns the output, whose outcome stands; another process completed or replaced the
   run first; a refusal that leaves the directory as it was, such as a complete dataset, a directory without a
-  journal, where nothing is created, or an unusable output; a failed write) prints it on stderr as one line, `swath: outcome: {...}`, with the reason
-  when it should have been recorded; the JSON report carries the reason as `outcome.unrecorded`.
+  journal, where nothing is created, or an unusable output; a failed write) prints it on stderr as one line, `swath: outcome: {...}`, after the
+  reason; the JSON report carries the reason as `outcome.unrecorded`, which is never empty when the outcome is
+  not in `error.json`.
 
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|

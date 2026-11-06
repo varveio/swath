@@ -140,7 +140,8 @@ supervisor is therefore the exit code plus that report; `error.json` is the data
 only when its attempt id is the report's. An attempt that cannot write `error.json` (the storage refuses the
 write, another process owns the output, or the run changed before this process held the lock) leaves the
 previous file in place, perhaps with the same class and exit code, and says why in the report's
-`outcome.unrecorded` and on stderr (`TestAttemptIdentifiesTheOutcome`). Nothing can promise a new file on
+`outcome.unrecorded` (never empty then) and on stderr (`TestAttemptIdentifiesTheOutcome`,
+`TestOutcomeSettlementAfterConcurrentCommit`). Nothing can promise a new file on
 storage that refuses writes: without a report, only the exit code is current.
 
 ## Why splits need no transaction

@@ -130,25 +130,60 @@ func openJournal(cfg Config, src registry.Source, id journal.Identity) (*runJour
 // the dataset is still uncommitted and the witness unchanged; an output
 // another process owns, or whose run another process completed, replaced
 // or continued meanwhile, is left as it is (the caller reports the outcome
-// itself).
-func settleUnowned(cfg Config, seen string, rep Report, err error) {
+// itself). It returns why it did not settle ("" when it did, or when
+// there is no output or no settlement to make).
+func settleUnowned(cfg Config, seen string, rep Report, err error) string {
 	dir := cfg.Output.Dir
-	if cfg.Settle == nil || dir == "" || seen == "" || !(cfg.Output.Resume || cfg.Output.Replace) || dataset.Committed(dir) {
-		return
+	switch {
+	case cfg.Settle == nil || dir == "":
+		return ""
+	case dataset.Committed(dir):
+		return unrecordedComplete
+	case seen == "" || !(cfg.Output.Resume || cfg.Output.Replace):
+		return unrecordedNoRun
 	}
 	if err := faults.At("settle-lock"); err != nil {
-		return
+		return err.Error()
 	}
 	lock, lerr := journal.TakeLock(dir)
 	if lerr != nil {
-		return
+		return lerr.Error()
 	}
 	jr := &runJournal{out: dir, lock: lock}
 	if dataset.Committed(dir) || journal.Witness(dir) != seen {
 		jr.release(cfg)
-		return
+		return UnrecordedChanged
 	}
 	jr.close(cfg, rep, err)
+	return ""
+}
+
+// Reasons an invocation's outcome is not in the output's outcome file
+// (Outcome.Unrecorded) when no settlement was attempted.
+const (
+	// UnrecordedChanged: the run this invocation saw was completed,
+	// replaced or continued by another process before it held the lock.
+	UnrecordedChanged  = "another process completed or replaced the run before this one held the lock"
+	unrecordedComplete = "the dataset in the output is complete"
+	unrecordedNoRun    = "the output holds no unfinished run this invocation continues or replaces"
+	unrecordedLocked   = "another process owns the output"
+	unrecordedRefused  = "refused before owning the output, which is left as it was"
+)
+
+// unowned is why an invocation whose output could not be opened (err, from
+// openJournal; jr nil when the lock was never taken) did not settle.
+func unowned(jr *runJournal, err error) string {
+	switch {
+	case errors.Is(err, ErrComplete):
+		return unrecordedComplete
+	case errors.Is(err, ErrNothingToResume):
+		return unrecordedNoRun
+	case errors.Is(err, journal.ErrLocked):
+		return unrecordedLocked
+	case jr == nil:
+		return unrecordedRefused
+	}
+	return ""
 }
 
 // prepareError names an interrupted run when the output refused is one.

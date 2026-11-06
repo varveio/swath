@@ -184,7 +184,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		// invocation would have continued or replaced is recorded too, so
 		// an earlier one is never left standing as current.
 		rep, err := sum.failed(err)
-		settleUnowned(cfg, seen, rep, err)
+		rep.Outcome.Unrecorded = settleUnowned(cfg, seen, rep, err)
 		return rep, err
 	}
 	s, loc := src.Schema(), src.Locator()
@@ -201,6 +201,9 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 			jr.release(cfg)
 		} else {
 			jr.close(cfg, rep, err)
+		}
+		if cfg.Settle != nil {
+			rep.Outcome.Unrecorded = unowned(jr, err)
 		}
 		return rep, err
 	}

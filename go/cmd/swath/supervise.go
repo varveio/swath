@@ -183,7 +183,7 @@ func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded strin
 	}
 	defer lock.Release()
 	if dataset.Committed(dir) || journal.Witness(dir) != seen {
-		return false, "another process completed or replaced the run before this one held the lock"
+		return false, listing.UnrecordedChanged
 	}
 	if err := writeOutcome(dir, o); err != nil {
 		return false, "write " + errorName + ": " + err.Error()
