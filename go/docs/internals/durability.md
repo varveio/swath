@@ -81,12 +81,15 @@ that is the commit. The run reports follow it.
    pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that
    is the provider, the source (bucket and prefix), the effective route and `-fetch-owner`. The route is
-   what the client resolved, not what was asked: the endpoint requests go to (`--endpoint`, or the regional
-   AWS host with its partition, FIPS and dual-stack variant) and the signing region, so a resume in an
-   environment or profile that resolves another region is refused even when neither flag was given. A field
-   added, dropped or changed is a typed `*journal.MismatchError`. The S3 endpoint's canonical form is
-   `s3.NormalizeEndpoint` (scheme and host case, a trailing slash), the only equivalences allowed: another
-   endpoint may serve another bucket of the same name. Workers, encoders, memory, `-seed`, `-probe` and
+   what the client builds, not what was asked: the URL the bucket's requests go to (`--endpoint` or the
+   regional AWS host with its partition, FIPS and dual-stack variant; the endpoint's path bytes; path-style or
+   virtual-host addressing) and the signing region, so a resume in an environment or profile that resolves
+   another region is refused even when neither flag was given. A field added, dropped or changed is a typed
+   `*journal.MismatchError`. The route's canonical form is `s3.CanonicalRoute` (scheme and host case), the only
+   equivalence allowed beyond the client's own folding of one trailing endpoint slash: another endpoint, path
+   or addressing style may serve another bucket of the same name. A library caller's supplied
+   `s3.Options.Client` must name its route (`s3.Routed`), or the run declines resume. Workers, encoders,
+   memory, `-seed`, `-probe` and
    credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
 3. Recovers `data/`. The journal is synced first (its accepted frames are acted on). Every retained part

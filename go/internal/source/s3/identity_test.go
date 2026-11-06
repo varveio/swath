@@ -39,22 +39,69 @@ func TestIdentityFreezesEffectiveRoute(t *testing.T) {
 		return m
 	}
 	us, cn := ident("us-west-2", Options{}), ident("cn-north-1", Options{})
-	if us["endpoint"] != "https://s3.us-west-2.amazonaws.com" || us["region"] != "us-west-2" {
+	if us["route"] != "https://bkt.s3.us-west-2.amazonaws.com/" || us["region"] != "us-west-2" {
 		t.Fatalf("us-west-2 identity: %v", us)
 	}
-	if cn["endpoint"] != "https://s3.cn-north-1.amazonaws.com.cn" || cn["region"] != "cn-north-1" {
+	if cn["route"] != "https://bkt.s3.cn-north-1.amazonaws.com.cn/" || cn["region"] != "cn-north-1" {
 		t.Fatalf("cn-north-1 identity: %v", cn)
 	}
-	if fips := ident("us-west-2", Options{FIPS: true}); fips["endpoint"] == us["endpoint"] {
+	if fips := ident("us-west-2", Options{FIPS: true}); fips["route"] == us["route"] {
 		t.Fatalf("the FIPS route has the plain route's identity: %v", fips)
 	}
+	if dual := ident("us-west-2", Options{DualStack: true}); dual["route"] == us["route"] {
+		t.Fatalf("the dual-stack route has the plain route's identity: %v", dual)
+	}
 	// An explicit endpoint is recorded as the client uses it; the region is
-	// still the resolved one.
+	// still the resolved one. Scheme and host case do not matter.
 	ep := ident("eu-west-1", Options{Endpoint: "HTTP://Example.COM:9000/"})
-	if ep["endpoint"] != "http://example.com:9000" || ep["region"] != "eu-west-1" {
+	if ep["route"] != "http://bkt.example.com:9000/" || ep["region"] != "eu-west-1" {
 		t.Fatalf("explicit endpoint identity: %v", ep)
 	}
+	// The addressing style is part of the route: https://store/bkt and
+	// https://bkt.store/ can be different namespaces.
+	path := ident("eu-west-1", Options{Endpoint: "https://store.example", PathStyle: true})
+	if path["route"] != "https://store.example/bkt" || path["route"] == ident("eu-west-1", Options{Endpoint: "https://store.example"})["route"] {
+		t.Fatalf("path-style identity: %v", path)
+	}
+	// Endpoint paths are kept byte for byte past the client's own trailing
+	// slash folding: /base and /base/ request the same URLs, /base// does not.
+	route := func(e string) string { return ident("eu-west-1", Options{Endpoint: e, PathStyle: true})["route"] }
+	if a, b, c := route("http://store/base"), route("http://store/base/"), route("http://store/base//"); a != b || b == c || a != "http://store/base/bkt" {
+		t.Fatalf("endpoint paths: %q %q %q", a, b, c)
+	}
 }
+
+// TestSuppliedClientIdentity: a supplied client that names its route is
+// identified by it; one that does not declines resume, so two unrelated
+// clients never share an identity.
+func TestSuppliedClientIdentity(t *testing.T) {
+	anon, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: &Options{Client: &stub{}}, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anon.(source.Capable).Capabilities().Resume {
+		t.Fatal("a supplied client without a route declares resume")
+	}
+	named, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: &Options{Client: routed{&stub{}, "https://elsewhere/"}}, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !named.(source.Capable).Capabilities().Resume {
+		t.Fatal("a supplied client with a route declines resume")
+	}
+	for _, f := range named.(source.Identified).Identity().Fields {
+		if f.Name == "route" && f.Value != "https://elsewhere/bkt" {
+			t.Fatalf("route %q", f.Value)
+		}
+	}
+}
+
+type routed struct {
+	*stub
+	base string
+}
+
+func (r routed) Route(bucket string) string { return r.base + bucket }
 
 // TestCappedRunCannotResume: an object-count cap counts what one process
 // listed, so a capped run declares no resume (it keeps no journal).

@@ -138,7 +138,7 @@ func TestResumeChecksIdentity(t *testing.T) {
 	}
 	cfg = crashConfig(url, out, true)
 	cfg.Source.Options.(*S3Config).Endpoint = strings.Replace(url, "127.0.0.1", "localhost", 1) // another route, maybe another bucket
-	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "endpoint" {
+	if _, err := Run(context.Background(), cfg); !errors.As(err, &mm) || mm.Field != "route" {
 		t.Fatalf("changed endpoint accepted: %v", err)
 	}
 	cfg = crashConfig(url, out, true)

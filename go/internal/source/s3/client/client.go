@@ -117,11 +117,6 @@ func (c *Client) Note() string { return c.note }
 // Region is the signing region.
 func (c *Client) Region() string { return c.region }
 
-// Endpoint is the base URL requests go to: the configured endpoint, or
-// the regional AWS endpoint the resolved region selects (its partition's
-// domain, FIPS and dual-stack variants).
-func (c *Client) Endpoint() string { return c.base.String() }
-
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
 	return Counters{c.attempts.Load(), c.retries.Load(), c.throttles.Load(), c.timeouts.Load(), c.parseFailures.Load()}
@@ -199,16 +194,31 @@ func retryable(err error, timeout *bool) (retry, throttle bool) {
 		errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "connection reset"), false
 }
 
+// route is the URL a bucket's requests go to, before the query: the bucket
+// in the path (path-style, a bucket that is not virtual-hostable, an IP
+// host) or in the host (virtual-host style).
+func (c *Client) route(bucket string) url.URL {
+	u := *c.base
+	if c.cfg.PathStyle || !virtualHostable(bucket) || net.ParseIP(hostname(u.Host)) != nil {
+		u.Path += "/" + bucket
+	} else {
+		u.Host = bucket + "." + u.Host
+		u.Path += "/"
+	}
+	return u
+}
+
+// Route is the URL a bucket's listing requests go to, before the query:
+// it fixes the endpoint, its path bytes and the addressing style.
+func (c *Client) Route(bucket string) string {
+	u := c.route(bucket)
+	return u.String()
+}
+
 // url builds the request URL with the canonical query string (sorted keys,
 // SigV4 encoding), so the signature covers exactly what is sent.
 func (c *Client) url(in *ListInput) *url.URL {
-	u := *c.base
-	if c.cfg.PathStyle || !virtualHostable(in.Bucket) || net.ParseIP(hostname(u.Host)) != nil {
-		u.Path += "/" + in.Bucket
-	} else {
-		u.Host = in.Bucket + "." + u.Host
-		u.Path += "/"
-	}
+	u := c.route(in.Bucket)
 	var q strings.Builder
 	add := func(k, v string) {
 		if q.Len() > 0 {

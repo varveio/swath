@@ -30,6 +30,12 @@ type API interface {
 	ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error)
 }
 
+// Routed is implemented by clients that can name the route a bucket's
+// requests go to (client.Client.Route). A supplied client that cannot is
+// listed, but the run declines resume: nothing would tell its route from
+// another's.
+type Routed interface{ Route(bucket string) string }
+
 // counted is implemented by clients that count their requests.
 type counted interface{ Counters() client.Counters }
 
@@ -103,7 +109,7 @@ type Provider struct {
 	anonymous bool
 	creds     string
 	region    string // the resolved signing region ("" with a supplied Client)
-	endpoint  string // the resolved base URL ("" with a supplied Client)
+	route     string // the URL the bucket's requests go to ("" with a supplied Client that is not Routed)
 }
 
 // Range is the engine's unit of listing work.
@@ -129,8 +135,11 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		if n := c.Note(); n != "" && opt.Warn != nil {
 			opt.Warn(n)
 		}
-		p.client, p.region, p.endpoint = c, c.Region(), c.Endpoint()
+		p.client, p.region = c, c.Region()
 		p.creds, p.anonymous = c.Credentials()
+	}
+	if r, ok := p.client.(Routed); ok {
+		p.route = r.Route(opt.Bucket)
 	}
 	var resume *keyrange.Resume
 	if opt.Resume != nil {
