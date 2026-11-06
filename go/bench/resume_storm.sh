@@ -15,11 +15,13 @@
 #   bench/faultproxy), RECORDINGS (default /home/user/bench-data/recordings), KILL_AT (s, default 30),
 #   PHASE (s from the first request, default KILL_AT+120), FRACTION (default 0.2), LIST_FLAGS (extra
 #   `swath list` flags, default "--seed --part-interval 10s"), PIN (a command prefix such as
-#   "taskset -c 0", default none).
+#   "taskset -c 0", default none), TARGET (an S3 listing endpoint URL such as a bench scale fake: no replay
+#   server is started, LATENCY_MS is then unused and BUCKET names the fake's bucket).
 # Writes OUTDIR/arms.tsv (one line per run), OUTDIR/BUCKET-W-ARM-REP.{tsv,json,log,proxy,times};
 # tabulate with resume_storm_table.py OUTDIR.
 set -u
-source "${REPLAY_ENV:?path to the replay env.sh}"
+TARGET=${TARGET:-}
+[ -n "$TARGET" ] || source "${REPLAY_ENV:?path to the replay env.sh}"
 B=$1 LAT=$2 PORT=$3 REPS=$4 W=$5
 shift 5
 WORKERS=("$@")
@@ -34,12 +36,17 @@ ARMS=${ARMS:-shipped slowstart off}
 PIN=${PIN:-}
 MP=$((PORT + 100)) PP=$((PORT + 1))
 mkdir -p "$W"
-swath-replay serve --fixture "$REC/$B/dataset/data" --bucket "$B" --host 127.0.0.1 --port "$PORT" \
-  --serving-mode sorted --metrics-port "$MP" --parquet-connections 8 --max-concurrent-requests 1024 \
-  --inject-latency "worker_page=${LAT}ms,pivot_probe=${LAT}ms,structure_probe=${LAT}ms" > "$W/replay.log" 2>&1 &
-SRV=$!
-trap 'kill $SRV 2>/dev/null' EXIT
-until curl -sf "http://127.0.0.1:$MP/healthz" > /dev/null; do sleep 1; done
+if [ -n "$TARGET" ]; then
+  UP=$TARGET
+else
+  UP=http://127.0.0.1:$PORT
+  swath-replay serve --fixture "$REC/$B/dataset/data" --bucket "$B" --host 127.0.0.1 --port "$PORT" \
+    --serving-mode sorted --metrics-port "$MP" --parquet-connections 8 --max-concurrent-requests 1024 \
+    --inject-latency "worker_page=${LAT}ms,pivot_probe=${LAT}ms,structure_probe=${LAT}ms" > "$W/replay.log" 2>&1 &
+  SRV=$!
+  trap 'kill $SRV 2>/dev/null' EXIT
+  until curl -sf "http://127.0.0.1:$MP/healthz" > /dev/null; do sleep 1; done
+fi
 ms() { date +%s%3N; }
 for rep in $(seq 1 "$REPS"); do
   for w in "${WORKERS[@]}"; do
@@ -52,7 +59,7 @@ for rep in $(seq 1 "$REPS"); do
       esac
       id=$B-$w-$arm-$rep out=$W/out
       rm -rf "$out"
-      "$FP" -target "http://127.0.0.1:$PORT" -listen "127.0.0.1:$PP" -timeline "$W/$id.tsv" \
+      "$FP" -target "$UP" -listen "127.0.0.1:$PP" -timeline "$W/$id.tsv" \
         -window "throttle:0s-${PHASE}s:$FRACTION" > "$W/$id.proxy" 2>&1 &
       FPID=$!
       until (: < "/dev/tcp/127.0.0.1/$PP") 2> /dev/null; do sleep 0.2; done
