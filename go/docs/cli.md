@@ -13,8 +13,12 @@ SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `
 line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. `swath resume DIR` replays the command the journal recorded; only
 the runtime flags (`--workers`, `--encoders`, `--memory`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
-`--report-format`, `--report`, `--max-duration`, `--stall-timeout`) may be given again, anything else is a
-usage error.
+`--report-format`, `--report`, `--max-duration`, `--stall-timeout`) and the operational ones, how requests are
+authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`,
+`--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--request-rate`), may be given again (the last value
+wins: `--anonymous=false` undoes a recorded `--anonymous`); anything else is a usage error. The source and output
+identity stays frozen: a resume whose overrides resolve another route (a profile with another region, say) is
+refused by the identity check.
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
@@ -106,7 +110,8 @@ usage: swath list SOURCE --output DIR [flags]
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, report, max-duration, stall-timeout may change.
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, report, max-duration, stall-timeout (runtime) and
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, request-rate (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -204,7 +209,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, report, max-duration, stall-timeout may change.
+only workers, encoders, memory, spill-max, spill-reserve, spill-compress, report-format, report, max-duration, stall-timeout (runtime) and
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, request-rate (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.

@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -242,8 +243,18 @@ type options struct {
 	sources                map[string]any // each provider's options value, by scheme
 }
 
-// runtimeFlags may change on swath resume: they do not change the output.
+// runtimeFlags may change on swath resume: they do not change the output
+// (resources, reporting, time limits) ...
 var runtimeFlags = []string{"workers", "encoders", "memory", "spill-max", "spill-reserve", "spill-compress", "report-format", "report", "max-duration", "stall-timeout"}
+
+// ... nor do operationalFlags, how requests are authenticated, timed and
+// admitted, which no identity holds: the source and output identity (the
+// route, the scope, the schema) is checked on resume and refuses a change,
+// such as another region resolved from a new profile.
+var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "request-rate"}
+
+// resumeFlags are the flags swath resume accepts.
+var resumeFlags = append(slices.Clone(runtimeFlags), operationalFlags...)
 
 func newFlags(o *options, diag bool) *flag.FlagSet {
 	f := flag.NewFlagSet("list", flag.ContinueOnError)
@@ -291,7 +302,8 @@ func usage(w io.Writer, f *flag.FlagSet, diag bool) {
 	f.PrintDefaults()
 	f.SetOutput(io.Discard)
 	fmt.Fprintln(w, "\nswath resume DIR [--workers N ...] continues an interrupted run with its recorded command;")
-	fmt.Fprintln(w, "only "+strings.Join(runtimeFlags, ", ")+" may change.")
+	fmt.Fprintln(w, "only "+strings.Join(runtimeFlags, ", ")+" (runtime) and")
+	fmt.Fprintln(w, strings.Join(operationalFlags, ", ")+" (operational) may change.")
 	fmt.Fprintln(w, "swath show [--journal] DIR shows a dataset or an interrupted run.")
 	fmt.Fprintln(w, "\nProfiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.")
 }

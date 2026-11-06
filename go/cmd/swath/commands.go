@@ -32,7 +32,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	f.SetOutput(io.Discard)
 	all := newFlags(&o, true)
 	all.VisitAll(func(fl *flag.Flag) {
-		if slices.Contains(runtimeFlags, fl.Name) {
+		if slices.Contains(resumeFlags, fl.Name) {
 			f.Var(fl.Value, fl.Name, fl.Usage)
 		}
 	})
@@ -42,10 +42,10 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		before := len(rest)
 		if err := f.Parse(rest); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
-				fmt.Fprintln(stdout, "usage: swath resume DIR [--"+strings.Join(runtimeFlags, " ... --")+" ...]")
+				fmt.Fprintln(stdout, "usage: swath resume DIR [--"+strings.Join(resumeFlags, " ... --")+" ...]")
 				return err
 			}
-			return usageError{fmt.Errorf("resume: %w (only %s may change)", err, strings.Join(runtimeFlags, ", "))}
+			return usageError{fmt.Errorf("resume: %w (only %s may change)", err, strings.Join(resumeFlags, ", "))}
 		}
 		overrides = append(overrides, rest[:before-len(f.Args())]...)
 		if f.NArg() == 0 {
