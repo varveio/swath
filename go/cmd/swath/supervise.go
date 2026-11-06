@@ -181,14 +181,35 @@ func committedCoverage(dir string) (dataset.Coverage, bool) {
 	return m.Coverage, true
 }
 
+// account applies the frozen classification o to a report's outcome. The
+// completion fields follow it: a run that did not commit is not complete
+// and its stop reason is its class (fatal, stuck, deadline, ...), whatever
+// the source reported (a source's coverage says complete once its listing
+// loop ends, also after a failure); a committed run keeps the source's,
+// which the manifest's coverage holds too (an incomplete one included).
+func account(r *listing.Outcome, o outcome) {
+	r.Class, r.ExitCode, r.Resumable, r.Cause = o.Class, o.ExitCode, o.Resumable, o.Cause
+	if o.ExitCode != exitCompleted && o.Class != "incomplete" {
+		r.Complete, r.StopReason = false, o.Class
+	}
+}
+
+// committedAccount gives the report of an invocation that found its output
+// committed (listing.ErrComplete) the dataset's status and the manifest's
+// coverage.
+func committedAccount(dir string, r *listing.Report) {
+	r.Outcome.Status = "committed"
+	if c, ok := committedCoverage(dir); ok {
+		r.Outcome.Complete, r.Outcome.StopReason = c.Complete, c.StopReason
+	}
+}
+
 // alreadyComplete accounts for a resume that found its output committed
 // and complete (exit 0): the report says so from the manifest's coverage,
 // and the text report says it in one line.
 func alreadyComplete(stdout io.Writer, format, dir string, r *listing.Report) {
-	r.Outcome.Status, r.Outcome.Error, r.Outcome.Unrecorded = "committed", "", listing.UnrecordedComplete
-	if c, ok := committedCoverage(dir); ok {
-		r.Outcome.Complete, r.Outcome.StopReason = c.Complete, c.StopReason
-	}
+	r.Outcome.Error, r.Outcome.Unrecorded = "", listing.UnrecordedComplete
+	committedAccount(dir, r)
 	if format != "json" {
 		fmt.Fprintf(stdout, "%s is already complete: nothing to resume\n", dir)
 	}
@@ -403,7 +424,7 @@ func forcedAccount(f *forensicTarget, code int, why string) {
 			f.pr.Owned(func() { _ = writeFileAtomicAs(filepath.Join(f.dir, errorName), ".forced.tmp", o) })
 		}
 		r := listing.Unstarted(f.argv, f.dir, f.att, err)
-		r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Resumable, r.Outcome.Cause = o.Class, o.ExitCode, o.Resumable, o.Cause
+		account(&r.Outcome, o)
 		writeReport(f.report, r)
 	}()
 	select {

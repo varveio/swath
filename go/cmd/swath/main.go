@@ -186,7 +186,7 @@ func writeReport(path string, r listing.Report) {
 func stopEarly(report string, argv []string, dir string, att *listing.Attempt, err error) error {
 	o := classify(err, nil, "")
 	r := listing.Unstarted(argv, dir, att, err)
-	r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Cause = o.Class, o.ExitCode, o.Cause
+	account(&r.Outcome, o)
 	writeReport(report, r)
 	return &exitError{err, o.ExitCode}
 }
@@ -466,7 +466,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	// before run.json, error.json (Settle) or --report is written.
 	cfg.Finalize = func(r *listing.Report, err error) {
 		_, out := settle(*r, err)
-		r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Resumable, r.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
+		account(&r.Outcome, out)
 	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
@@ -486,7 +486,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	if err != nil && out.ExitCode == exitCompleted {
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
-		sum.Outcome.Class, sum.Outcome.ExitCode, sum.Outcome.Resumable, sum.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
+		account(&sum.Outcome, out)
 		alreadyComplete(stdout, o.reportFormat, cfg.Output.Dir, &sum)
 		writeReport(o.report, sum)
 		if o.reportFormat == "json" {
@@ -508,7 +508,10 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		}
 		reportUnrecorded(cfg.Output.Dir, out, unrecorded)
 	}
-	sum.Outcome.Class, sum.Outcome.ExitCode, sum.Outcome.Resumable, sum.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
+	account(&sum.Outcome, out)
+	if errors.Is(err, listing.ErrComplete) {
+		committedAccount(cfg.Output.Dir, &sum)
+	}
 	sum.Outcome.Unrecorded = unrecorded
 	writeReport(o.report, sum)
 	if o.reportFormat == "json" {

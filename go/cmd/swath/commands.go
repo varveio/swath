@@ -123,7 +123,10 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 	o.Attempt = att
 	r := listing.Unstarted(argv, dir, att, err)
 	r.Invocation.Resume = true
-	r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Resumable, r.Outcome.Cause = o.Class, o.ExitCode, o.Resumable, o.Cause
+	account(&r.Outcome, o)
+	if errors.Is(err, listing.ErrComplete) {
+		committedAccount(dir, &r)
+	}
 	done := o.ExitCode == exitCompleted
 	if done {
 		alreadyComplete(stdout, format, dir, &r)

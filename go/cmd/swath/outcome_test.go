@@ -591,3 +591,78 @@ func TestRefusalsExit2(t *testing.T) {
 		t.Fatalf("resume after the refusals: %v", err)
 	}
 }
+
+// TestReportCompletionFollowsOutcome: the report's completion fields follow
+// the frozen classification. A GCS run that fails on a 403 or a 401 after
+// published parts reports complete false and its class as the stop reason,
+// with the provider's cause, in --report and in the JSON on stdout; a
+// committed run's report, its run.json and the manifest agree on complete
+// and stop_reason, full coverage or partial (a key limit). Before, a failed
+// run's report said complete true and stop_reason completed (the source's
+// coverage, final once its listing loop ended).
+func TestReportCompletionFollowsOutcome(t *testing.T) {
+	captureStderr(t)
+	ctx := context.Background()
+	for status, cause := range map[int]string{403: "access_denied", 401: "auth"} {
+		h := gcstest.Handler(gcstest.Keys(20000), 0)
+		var n atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if n.Add(1) > 12 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				fmt.Fprintf(w, `{"error":{"code":%d,"message":"denied","errors":[{"reason":"forbidden"}]}}`, status)
+				return
+			}
+			h.ServeHTTP(w, r)
+		}))
+		dir := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		var out bytes.Buffer
+		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
+			"--part-size", "4KiB", "--memory", "1MiB", "--report", report, "--report-format", "json", "-o", dir}, &out, false)
+		srv.Close()
+		if c := exitCode(t, err); c != exitFatal {
+			t.Fatalf("%d: exit %d (%v)", status, c, err)
+		}
+		var rep, printed listing.Report
+		readJSON(t, report, &rep)
+		if json.Unmarshal(out.Bytes(), &printed) != nil {
+			t.Fatalf("%d: stdout %q", status, out.String())
+		}
+		for how, o := range map[string]listing.Outcome{"report": rep.Outcome, "stdout": printed.Outcome} {
+			if o.Complete || o.StopReason != "fatal" || o.Status != "failed" || o.Class != "fatal" || o.Cause != cause {
+				t.Fatalf("%d %s: outcome %+v", status, how, o)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(dir, dataset.ManifestName)); err == nil {
+			t.Fatalf("%d: a manifest after the failure", status)
+		}
+	}
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	for name, extra := range map[string][]string{"complete": nil, "key limit": {"--sequential", "--max-keys", "10"}} {
+		dir := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, extra...), io.Discard, true)
+		if (err == nil) != (extra == nil) {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var rep, rj listing.Report
+		var m dataset.Manifest
+		readJSON(t, report, &rep)
+		readJSON(t, filepath.Join(dir, dataset.ReportName), &rj)
+		readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
+		for how, o := range map[string]listing.Outcome{"report": rep.Outcome, "run.json": rj.Outcome} {
+			if o.Status != "committed" || o.Complete != m.Coverage.Complete || o.StopReason != m.Coverage.StopReason || o.Complete != (extra == nil) {
+				t.Fatalf("%s %s: outcome %+v, manifest coverage %+v", name, how, o, m.Coverage)
+			}
+		}
+		// swath resume of the committed dataset reports the same coverage.
+		report = filepath.Join(t.TempDir(), "report.json")
+		_ = resume(ctx, []string{"--report", report, dir}, io.Discard)
+		rep = listing.Report{}
+		readJSON(t, report, &rep)
+		if o := rep.Outcome; o.Status != "committed" || o.Complete != m.Coverage.Complete || o.StopReason != m.Coverage.StopReason {
+			t.Fatalf("%s resume: outcome %+v, manifest coverage %+v", name, o, m.Coverage)
+		}
+	}
+}

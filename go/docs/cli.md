@@ -279,7 +279,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   `swath diag list --no-journal` turns it off (parts are then published only at the end).
 - **Exit status and outcome.** A supervisor's outcome of record is the exit code plus the report at the path
   it names with `--report` (outside the output directory, a fresh path per attempt, or removed before the
-  attempt starts): `outcome` (`class`, `exit_code`, `resumable`, `cause`, `unrecorded`) and `attempt` (`id`,
+  attempt starts): `outcome` (`class`, `exit_code`, `resumable`, `cause`, `unrecorded`; `status`, `complete` and
+  `stop_reason` follow the class: a run that did not commit is `complete` false with its class as the
+  `stop_reason`, and a committed run's agree with the manifest's `coverage`) and `attempt` (`id`,
   random, and `started`). For a run that did not complete, `DIR/error.json` holds the same outcome in the
   dataset (`class`, `exit_code`, `message`, `resumable`, `cause`: the provider's failure class such as
   `throttle` or `access_denied`, or `no_space` for a full disk; and the same `attempt`); it never needs stderr.
