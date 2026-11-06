@@ -22,8 +22,8 @@ import (
 // TestBothSchemesThroughTheCommand: one command line, with every
 // provider's flags registered on one flag set, selects S3 or GCS by the
 // source's scheme, and each provider gets its own defaults and the shared
-// engine flags: by default no seed, splits on, no structure probes, floors,
-// probe or limiter; -seed reaches the selected provider, with the default
+// engine flags: by default no seed, splits on, the limiter on, no structure
+// probes, floors or probe; -seed reaches the selected provider, with the default
 // descent (seed.levels.*), and diag's -seed-descent=false turns the descent
 // off for either (Astra, kernel-seam follow-up, item 7).
 func TestBothSchemesThroughTheCommand(t *testing.T) {
@@ -71,7 +71,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		}
 		return r
 	}
-	defaults := map[string]bool{"floors": false, "limiter": false, "max_keys": false, "probe": false, "resume": false,
+	defaults := map[string]bool{"floors": false, "limiter": true, "max_keys": false, "probe": false, "resume": false,
 		"seed": false, "split": true, "structure": false}
 	for name, src := range schemes {
 		r := runJSON(false, src...)

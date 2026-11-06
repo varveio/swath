@@ -1685,7 +1685,7 @@ once on resume). At the default 64 MiB parts, 10,000 parts is about 640 GB of da
 **What was built.** `objhttp.Limiter` (`acc3f88`) admits every HTTP attempt of the S3 and GCS clients (pages,
 probes, retries, requeues); a throttle answer multiplies the limit by 0.7, growth returns at +1 per second after
 10 s without one (Java's `ConcurrencyGauge` rules and constants, no slow start). It is behind
-`swath diag list --limiter` and **stays off by default** (below). `bench/faultproxy` (`60df745`, test-only)
+`swath diag list --limiter` and stayed off by default (below) until the owner made it the default (see "Default"). `bench/faultproxy` (`60df745`, test-only)
 injected the faults.
 
 **Configuration.** Replay (swath-replay, sorted mode, injected page latency at each recording's p50: 99, 164,
@@ -1753,6 +1753,15 @@ measured against 75 s), the bounded rate and baseline parity, and failed for the
 R": 0.23-0.53 R measured). On replay the rules trade 1.5-3.5x wall in a storm for 11-38 % fewer requests;
 whether that is right for real S3 has no evidence here: 25 of 2,702 stage runs met any 503, all at concurrency
 256-512.
+
+**Default since the owner's decision (2026-11-06): on**, for S3 and GCS through the command (`--limiter=false`
+turns it off; a library caller's zero `Policy` leaves it off): the measured `on` arms above are the shipped
+default. Parity re-run with the default build: same replay configuration, no faults, one
+binary in two arms (default, `--limiter=false`), 2 interleaved reps, walls rep 1 / rep 2: noaa-eri-pds 5.50 / 4.79 s
+default against 4.71 / 4.72 s off (requests 1,590 / 1,589 against 1,596 / 1,588); pansurg 7.37 / 6.57 s against
+6.98 / 6.27 s (requests 1,298 / 1,285 against 1,274 / 1,277). No throttle, no limiter decrease; admission waits
+0 except one pansurg rep (277, at the start, as in the table above). The default is within about 0.8 s of off
+on these two recordings; one slower rep in each pair, so at 2 reps a cost under 10 % cannot be excluded.
 
 **Live (single run, labelled as such).** `noaa-hrrr-bdp-pds` (a bucket with SlowDown in the stage corpus),
 prefix `hrrr.202401`, anonymous, 64 workers, `--seed --limiter`, build `acc3f88`: 1,279,184 objects in 5.96 s,

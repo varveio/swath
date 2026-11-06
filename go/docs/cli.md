@@ -56,6 +56,8 @@ usage: swath list SOURCE --output DIR [flags]
     	GCS: per-request timeout; a request that exceeds it is retried (default 30s)
   -gcs-user-project project
     	GCS: bill a requester-pays bucket's requests to this project
+  -limiter
+    	requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight (default true)
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -memory bytes
@@ -137,7 +139,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -gcs-user-project project
     	GCS: bill a requester-pays bucket's requests to this project
   -limiter
-    	requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one
+    	requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight (default true)
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -max-keys N
@@ -216,6 +218,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **S3 modes.** The default is the parallel core; `--seed` tiles the scope from one delimiter page first;
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
   dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` and `--path-style` select S3-compatible stores.
+- **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that
+  starts at `--workers`, falls by 0.7 on each throttle answer and grows back by one per second after 10 s
+  without one (Java swath's rules; [internals/providers.md](internals/providers.md)); `--limiter=false` keeps a
+  fixed `--workers` requests in flight.
 - **Requester pays:** `--request-payer` sends `x-amz-request-payer: requester` (signed) on every request, so
   a requester-pays bucket can be listed at the caller's charge.
 - **S3 credentials:** `--anonymous` sends unsigned requests whatever the environment holds. Otherwise the AWS

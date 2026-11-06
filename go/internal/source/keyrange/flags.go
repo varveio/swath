@@ -33,7 +33,7 @@ func (p Policy) Options() Options {
 // they fill when f is parsed. Every provider on the engine calls it from
 // its own flag group; the flags are registered once per flag set and later
 // callers get the same Policy. The policy toggles and comparison modes are
-// diagnostic (swath diag list).
+// diagnostic (swath diag list); -seed and -limiter are on swath list too.
 func Flags(f *flag.FlagSet, diag bool) *Policy {
 	if fl := f.Lookup("seed"); fl != nil {
 		if b, ok := fl.Value.(*boolFlag); ok {
@@ -41,15 +41,19 @@ func Flags(f *flag.FlagSet, diag bool) *Policy {
 		}
 		panic("keyrange: flag -seed is registered by something other than the range engine")
 	}
-	p := &Policy{SeedDescent: true}
+	// The command's defaults: the seed descends, and the client admits its
+	// requests through the adaptive limiter (Java's gauge rules);
+	// --limiter=false turns it off. A library caller's zero Policy has
+	// neither.
+	p := &Policy{SeedDescent: true, Limiter: true}
 	bf := func(v *bool, name, usage string) { f.Var(&boolFlag{p: p, v: v}, name, usage) }
+	bf(&p.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
 	bf(&p.Seed, "seed", "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
 	if diag {
 		bf(&p.Structure, "structure", "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
 		bf(&p.SeedDescent, "seed-descent", "ranges: with -seed, walk the folder hierarchy (false: one delimiter page)")
 		bf(&p.Floors, "floors", "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		bf(&p.Sequential, "sequential", "ranges: list with one continuation-token chain (no ranges; the reference)")
-		bf(&p.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one")
 		bf(&p.Probe, "probe", "ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")
 		f.Var((*int64Flag)(&p.MaxKeys), "max-keys", "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
 	}

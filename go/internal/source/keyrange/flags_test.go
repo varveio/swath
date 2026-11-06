@@ -18,17 +18,17 @@ func TestFlagsRegisteredOnce(t *testing.T) {
 		if a != b {
 			t.Fatal("a second registration made a second policy")
 		}
-		if !a.SeedDescent || a.Seed || a.Floors {
+		if !a.SeedDescent || !a.Limiter || a.Seed || a.Floors {
 			t.Fatalf("defaults: %+v", *a)
 		}
 		args := []string{"-seed"}
 		if diag {
-			args = append(args, "-floors", "-seed-descent=false", "-sequential", "-max-keys", "9")
+			args = append(args, "-floors", "-seed-descent=false", "-sequential", "-max-keys", "9", "-limiter=false")
 		}
 		if err := f.Parse(args); err != nil {
 			t.Fatal(err)
 		}
-		want := Policy{Seed: true, SeedDescent: true}
+		want := Policy{Seed: true, SeedDescent: true, Limiter: true}
 		if diag {
 			want = Policy{Seed: true, Floors: true, Sequential: true, MaxKeys: 9}
 		}
