@@ -398,7 +398,9 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 // forcedAccount writes the outcome of a run forced to exit (it did not
 // stop within the shutdown grace) where the graceful path would have:
 // DIR/error.json while the run owns the output, and the report
-// (--report), a minimal one without the run's statistics. The class,
+// (--report): the run's last accounted report once it was classified (a
+// committed run stays committed and complete), else a minimal one without
+// the run's statistics. The class,
 // cause and resumability are the graceful path's for the same stop; the
 // exit code is the one the process exits with. Bounded by stacksWait: a
 // disk that blocks the run may block these writes too.
@@ -421,9 +423,22 @@ func forcedAccount(f *forensicTarget, code int, why string) {
 		}
 		o.ExitCode, o.Attempt = code, f.att
 		if f.dir != "" {
-			f.pr.Owned(func() { _ = writeFileAtomicAs(filepath.Join(f.dir, errorName), ".forced.tmp", o) })
+			f.pr.Owned(func() {
+				if o.ExitCode == exitCompleted {
+					_ = writeOutcome(f.dir, o) // a stale one goes
+				} else {
+					_ = writeFileAtomicAs(filepath.Join(f.dir, errorName), ".forced.tmp", o)
+				}
+			})
 		}
-		r := listing.Unstarted(f.argv, f.dir, f.att, err)
+		// The report as the run last accounted it (its status, coverage and
+		// statistics), when it got that far; else a minimal one.
+		var r listing.Report
+		if b := f.final.Load(); b == nil || json.Unmarshal(*b, &r) != nil {
+			r = listing.Unstarted(f.argv, f.dir, f.att, err)
+		} else if o.ExitCode != exitCompleted {
+			r.Outcome.Error = o.Message
+		}
 		account(&r.Outcome, o)
 		writeReport(f.report, r)
 	}()

@@ -153,6 +153,9 @@ func (e *ReportError) Unwrap() error { return e.Err }
 // WriteReport writes the run report (ReportName) beside a committed
 // dataset. A failure is a *ReportError: the dataset stands.
 func WriteReport(out string, v any) error {
+	if err := faults.At("run-report"); err != nil { // tests: a run blocked while it reports
+		return &ReportError{err}
+	}
 	if err := writeJSON(out, ReportName, v); err != nil {
 		return &ReportError{err}
 	}

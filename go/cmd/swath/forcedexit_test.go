@@ -109,3 +109,72 @@ func TestForcedExitWithFullStderr(t *testing.T) {
 		})
 	}
 }
+
+// TestForcedExitAfterCommit (B2): a run that committed its dataset and
+// then blocks writing run.json is stopped by SIGTERM and forced out after
+// the grace. Its classification (completed) stands: the process exits 0,
+// the report (--report) says committed and complete with the run's
+// statistics, and no error.json is left. Before, the forced path built an
+// unstarted report (status failed, complete false) and wrote error.json.
+func TestForcedExitAfterCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := filepath.Join(t.TempDir(), "swath")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	s := newRowlessService(t)
+	dir := filepath.Join(t.TempDir(), "ds")
+	report := filepath.Join(t.TempDir(), "report.json")
+	cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--report", report)...)...)
+	cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=run-report:1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cmd.Process.Kill()
+			<-done
+			t.Fatal("no commit within 30 s")
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // into the blocked report write
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(shutdownGrace + forcedAllowance + 10*time.Second):
+		cmd.Process.Kill()
+		<-done
+		t.Fatal("still running after the forced exit's limit")
+	}
+	if err != nil {
+		t.Fatalf("exit %v, want 0 (the run committed and is complete)", err)
+	}
+	var r struct {
+		Outcome struct {
+			Status, Class, Error string
+			Complete             bool
+			ExitCode             int `json:"exit_code"`
+		}
+		Output struct {
+			RowsCommitted int64 `json:"rows_committed"`
+		}
+	}
+	readJSON(t, report, &r)
+	if r.Outcome.Status != "committed" || !r.Outcome.Complete || r.Outcome.Class != "completed" || r.Outcome.ExitCode != 0 ||
+		r.Outcome.Error != "" || r.Output.RowsCommitted != 20000 {
+		t.Fatalf("report after the forced exit: %+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
+		t.Fatalf("error.json after a completed run's forced exit: %v", err)
+	}
+}

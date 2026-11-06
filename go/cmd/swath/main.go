@@ -61,6 +61,10 @@ type forensicTarget struct {
 	argv   []string
 	att    *listing.Attempt
 	frozen atomic.Pointer[outcome] // the run's classification, once made
+	// final is the run's report as last accounted (Finalize), JSON: a
+	// forced exit after the classification writes it, not an unstarted
+	// one, so a committed run keeps its status and coverage.
+	final atomic.Pointer[[]byte]
 }
 
 func main() {
@@ -467,6 +471,11 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	cfg.Finalize = func(r *listing.Report, err error) {
 		_, out := settle(*r, err)
 		account(&r.Outcome, out)
+		if b, jerr := json.Marshal(r); jerr == nil {
+			if f := forensics.Load(); f != nil {
+				f.final.Store(&b)
+			}
+		}
 	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
