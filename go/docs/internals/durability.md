@@ -38,7 +38,7 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | manifest installed (`manifest`) | committed; `swath resume` reports `ErrComplete`. The run reports are written after the commit and cannot revoke it |
 
 Every boundary in the left column is a named crash point (`internal/faults`). `TestCrashMatrix` stops the run
-there without cleanup, and `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself there. Both then
+there without cleanup, and `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself there, for S3 and GCS. Both then
 resume and compare with an uninterrupted run.
 
 **The promise:**

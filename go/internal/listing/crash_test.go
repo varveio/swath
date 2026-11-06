@@ -72,49 +72,60 @@ func crashConfig(url, out string, resume bool) Config {
 // TestCrashMatrix kills the run (an injected crash that skips all cleanup,
 // as a kill would) at every crash point, at its first and a later
 // occurrence, then resumes; the final dataset must be byte-identical to an
-// uninterrupted run. It is the step-2 gate (contracts I1, I5, I6).
+// uninterrupted run. It is the step-2 gate (contracts I1, I5, I6), for each
+// journaled provider (spill is provider-neutral: S3 runs it both ways).
 func TestCrashMatrix(t *testing.T) {
-	url := crashBucket(t)
-	ref := filepath.Join(t.TempDir(), "ref")
-	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
-		t.Fatal(err)
-	}
-	for _, spill := range []bool{false, true} {
-		for _, point := range faults.Points {
-			for _, nth := range []int64{1, 4, 12} {
-				t.Run(fmt.Sprintf("spill=%v/%s#%d", spill, point, nth), func(t *testing.T) {
-					out := filepath.Join(t.TempDir(), "ds")
-					var seen atomic.Int64
-					restore := faults.Set(func(p string) error {
-						if p == point && seen.Add(1) == nth {
-							return faults.ErrCrash
+	s3url, gcsep := crashBucket(t), gcsBucket(t, 8000)
+	for _, prov := range []struct {
+		name   string
+		config func(out string, resume bool) Config
+		spill  []bool
+		nth    []int64 // occurrences to crash at, within each run (the GCS run has fewer parts and requests)
+	}{
+		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []int64{1, 4, 12}},
+		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []int64{1, 3, 7}},
+	} {
+		ref := filepath.Join(t.TempDir(), "ref")
+		if _, err := Run(context.Background(), prov.config(ref, false)); err != nil {
+			t.Fatal(err)
+		}
+		for _, spill := range prov.spill {
+			for _, point := range faults.Points {
+				for _, nth := range prov.nth {
+					t.Run(fmt.Sprintf("%s/spill=%v/%s#%d", prov.name, spill, point, nth), func(t *testing.T) {
+						out := filepath.Join(t.TempDir(), "ds")
+						var seen atomic.Int64
+						restore := faults.Set(func(p string) error {
+							if p == point && seen.Add(1) == nth {
+								return faults.ErrCrash
+							}
+							return nil
+						})
+						cfg := prov.config(out, false)
+						cfg.Limits.Spill.Off = !spill
+						_, err := Run(context.Background(), cfg)
+						restore()
+						if seen.Load() < nth {
+							if err != nil {
+								t.Fatal(err)
+							}
+							t.Skipf("%s reached %d times only", point, seen.Load())
 						}
-						return nil
+						if !errors.Is(err, faults.ErrCrash) {
+							t.Fatalf("crash not injected: %v", err)
+						}
+						sum, err := Run(context.Background(), prov.config(out, true))
+						if point == "manifest" {
+							if !errors.Is(err, ErrComplete) {
+								t.Fatalf("resume after the manifest: %v", err)
+							}
+						} else if err != nil {
+							t.Fatalf("resume: %v", err)
+						}
+						sameDataset(t, point, ref, out)
+						t.Logf("resumed %d parts (%d rows), listed %d more rows", sum.Output.PartsRetained, sum.Output.RowsRetained, sum.Output.RowsListed)
 					})
-					cfg := crashConfig(url, out, false)
-					cfg.Limits.Spill.Off = !spill
-					_, err := Run(context.Background(), cfg)
-					restore()
-					if seen.Load() < nth {
-						if err != nil {
-							t.Fatal(err)
-						}
-						t.Skipf("%s reached %d times only", point, seen.Load())
-					}
-					if !errors.Is(err, faults.ErrCrash) {
-						t.Fatalf("crash not injected: %v", err)
-					}
-					sum, err := Run(context.Background(), crashConfig(url, out, true))
-					if point == "manifest" {
-						if !errors.Is(err, ErrComplete) {
-							t.Fatalf("resume after the manifest: %v", err)
-						}
-					} else if err != nil {
-						t.Fatalf("resume: %v", err)
-					}
-					sameDataset(t, point, ref, out)
-					t.Logf("resumed %d parts (%d rows), listed %d more rows", sum.Output.PartsRetained, sum.Output.RowsRetained, sum.Output.RowsListed)
-				})
+				}
 			}
 		}
 	}

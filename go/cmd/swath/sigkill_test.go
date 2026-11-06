@@ -19,6 +19,8 @@ import (
 
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
+
+	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 )
 
 // TestSIGKILLResume kills a real swath process with SIGKILL once parts are
@@ -108,7 +110,8 @@ func TestSIGKILLResume(t *testing.T) {
 
 // TestSIGKILLAtEveryPoint makes the real process SIGKILL itself at each
 // crash point (response read, encoding, journal append and sync, rename,
-// publication, ...), resumes, and compares with an uninterrupted run.
+// publication, ...), resumes, and compares with an uninterrupted run, for
+// each journaled provider.
 func TestSIGKILLAtEveryPoint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -127,55 +130,72 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	}
 	srv := httptest.NewServer(gofakes3.New(b).Server())
 	t.Cleanup(srv.Close)
-	args := func(out string, extra ...string) []string {
-		return append([]string{"list", "s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous", "-workers", "8",
-			"-part-size", "4KiB", "-memory", "1MiB", "-o", out}, extra...)
-	}
-	ref := filepath.Join(t.TempDir(), "ref")
-	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
-		t.Fatalf("reference: %v\n%s", err, out)
-	}
-	for _, point := range []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append", "journal-sync",
-		"recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"} {
-		for _, nth := range []string{"1", "5"} {
-			out := filepath.Join(t.TempDir(), "ds")
-			cmd := exec.Command(bin, args(out)...)
-			cmd.Env = append(os.Environ(), "SWATH_TEST_KILL_AT="+point+":"+nth)
-			err := cmd.Run()
-			if err == nil {
-				t.Logf("%s:%s not reached; run completed", point, nth)
-				continue
-			}
-			if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
-				t.Fatalf("%s:%s: not killed: %v", point, nth, err)
-			}
-			if o, err := exec.Command(bin, "resume", out).CombinedOutput(); err != nil {
-				switch {
-				case point == "manifest" && bytes.Contains(o, []byte("already complete")):
-					// Killed after the commit: the dataset is complete,
-					// which is what swath resume reports.
-				case bytes.Contains(o, []byte("before recording its command")):
-					// Killed before the journal header was durable:
-					// nothing was published; the run starts over.
-					if o, err := exec.Command(bin, args(out, "--overwrite")...).CombinedOutput(); err != nil {
-						t.Fatalf("%s:%s rerun: %v\n%s", point, nth, err, o)
+	gcs := gcstest.Bucket(t, gcstest.Keys(4000), 0)
+	common := []string{"-workers", "8", "-part-size", "4KiB", "-memory", "1MiB"}
+	for _, prov := range []struct {
+		name string
+		src  []string
+	}{
+		{"s3", []string{"s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous"}},
+		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}},
+	} {
+		args := func(out string, extra ...string) []string {
+			a := append(append(append([]string{"list"}, prov.src...), common...), "-o", out)
+			return append(a, extra...)
+		}
+		ref := filepath.Join(t.TempDir(), "ref")
+		if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
+			t.Fatalf("%s reference: %v\n%s", prov.name, err, out)
+		}
+		for _, point := range []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append", "journal-sync",
+			"recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"} {
+			for _, nth := range []string{"1", "5"} {
+				at := prov.name + " " + point + ":" + nth
+				out := filepath.Join(t.TempDir(), "ds")
+				cmd := exec.Command(bin, args(out)...)
+				cmd.Env = append(os.Environ(), "SWATH_TEST_KILL_AT="+point+":"+nth)
+				err := cmd.Run()
+				if err == nil {
+					t.Logf("%s not reached; run completed", at)
+					continue
+				}
+				if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+					t.Fatalf("%s: not killed: %v", at, err)
+				}
+				if o, err := exec.Command(bin, "resume", out).CombinedOutput(); err != nil {
+					switch {
+					case point == "manifest" && bytes.Contains(o, []byte("already complete")):
+						// Killed after the commit: the dataset is complete,
+						// which is what swath resume reports.
+					case bytes.Contains(o, []byte("before recording its command")):
+						// Killed before the journal header was durable:
+						// nothing was published; the run starts over.
+						if o, err := exec.Command(bin, args(out, "--overwrite")...).CombinedOutput(); err != nil {
+							t.Fatalf("%s rerun: %v\n%s", at, err, o)
+						}
+					default:
+						t.Fatalf("%s resume: %v\n%s", at, err, o)
 					}
-				default:
-					t.Fatalf("%s:%s resume: %v\n%s", point, nth, err, o)
 				}
+				sameParts(t, at, ref, out)
 			}
-			parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
-			got, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))
-			if len(got) != len(parts) {
-				t.Fatalf("%s:%s: %d parts, want %d", point, nth, len(got), len(parts))
-			}
-			for _, p := range parts {
-				a, _ := os.ReadFile(p)
-				g, _ := os.ReadFile(filepath.Join(out, "data", filepath.Base(p)))
-				if !bytes.Equal(a, g) {
-					t.Fatalf("%s:%s: %s differs", point, nth, filepath.Base(p))
-				}
-			}
+		}
+	}
+}
+
+// sameParts requires out's data/ to hold ref's parts byte for byte.
+func sameParts(t *testing.T, at, ref, out string) {
+	t.Helper()
+	parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
+	got, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))
+	if len(parts) == 0 || len(got) != len(parts) {
+		t.Fatalf("%s: %d parts, want %d", at, len(got), len(parts))
+	}
+	for _, p := range parts {
+		a, _ := os.ReadFile(p)
+		g, _ := os.ReadFile(filepath.Join(out, "data", filepath.Base(p)))
+		if !bytes.Equal(a, g) {
+			t.Fatalf("%s: %s differs", at, filepath.Base(p))
 		}
 	}
 }
