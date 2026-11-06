@@ -8,6 +8,8 @@
 #        SHAPE       scalefake shape flags (default "-fanout 32,32,32,8 -skew 1": deep, skewed)
 #        LATENCY     injected per-page latency (default 30ms; JITTER default 20ms; FAIL503 default 0)
 #        SWATH_FLAGS extra swath list flags (default none: the shipped defaults)
+#        SWATH_WRAP  a command prefix for swath only, not the fake (e.g. "prlimit --nofile=256:256" or
+#                    "systemd-run --user --scope -p MemoryMax=1536M"); RSS is sampled from swath's own pid
 #        INTERVAL    sampling period in seconds (default 10)
 #        DATA        the output dataset directory (default OUTDIR/out; removed at the end unless KEEP=1)
 # Writes OUTDIR/meta.txt (the fake's shape line, argv, host), samples.jsonl (one line per INTERVAL: RSS,
@@ -44,15 +46,22 @@ ARGV+=(${SWATH_FLAGS:-})
 {
   echo "synthetic: $(head -1 "$OUT/fake.log")"
   echo "latency=$LATENCY jitter=$JITTER fail503=$FAIL503 interval=${INTERVAL}s"
-  echo "argv: $SWATH ${ARGV[*]}"
+  echo "argv: ${SWATH_WRAP:-}${SWATH_WRAP:+ }$SWATH ${ARGV[*]}"
   echo "host: $(nproc) cores, $(free -g | awk '/Mem:/{print $2}') GiB, $(uname -r), $("$SWATH" --version 2>&1 | head -1)"
   echo "revision: $(git -C "$HERE" rev-parse --short HEAD)$(git -C "$HERE" diff --quiet HEAD -- . || echo -dirty)"
   echo "started: $(date -u +%FT%TZ)"
 } > "$OUT/meta.txt"
 curl -sf "$EP/__scalefake/stats?reset=1" > /dev/null
-"$SWATH" "${ARGV[@]}" > "$OUT/stdout.json" 2> "$OUT/swath.log" < /dev/null &
+# shellcheck disable=SC2086
+${SWATH_WRAP:-} "$SWATH" "${ARGV[@]}" > "$OUT/stdout.json" 2> "$OUT/swath.log" < /dev/null &
 PID=$!
-python3 "$HERE/scale_sample.py" "$PID" "$DATA/.swath/progress.json" "$EP/__scalefake/stats" "$INTERVAL" > "$OUT/samples.jsonl" &
+if [ -n "${SWATH_WRAP:-}" ]; then # sample swath itself, not the wrapper
+  for _ in $(seq 50); do
+    P=$(pgrep -n -f -- "$SWATH list s3://bkt --endpoint $EP") && { [ "$P" = "$PID" ] || PID_RSS=$P; break; } # an exec keeps the pid
+    sleep 0.1
+  done
+fi
+python3 "$HERE/scale_sample.py" "${PID_RSS:-$PID}" "$DATA/.swath/progress.json" "$EP/__scalefake/stats" "$INTERVAL" > "$OUT/samples.jsonl" &
 SAMPLER=$!
 wait $PID
 RC=$?
