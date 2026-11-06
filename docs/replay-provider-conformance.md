@@ -14,11 +14,11 @@ a row.
 below against a dedicated GCS bucket and Azure container. A row is `OBSERVED` when its
 sanitized capture is in the [evidence archive](#evidence-archive) and `REPLAY_MATCH` only
 when replay, serving the same corpus and walked with its own tokens, matched that capture
-and an archived receipt records the match. Every other observed row is a pinned replay
-discrepancy, except 62 Azure rows that replay now matches. Those rows stay `OBSERVED` until
-their receipts are archived; [Evidence archive](#evidence-archive) explains how the test
-derives each expectation from the archive's `<provider>/replay-expectations.json`. The GCS
-and Azure profiles stay provisional until the remaining rows match. S3 is out of scope for
+and an archived receipt records the match. That holds for 77 GCS rows and 5 Azure rows.
+Every other observed row is a pinned replay discrepancy, except 57 Azure rows that replay
+matches at `2026-06-06` but that also name `2026-10-06`, whose capture is folded;
+[Evidence archive](#evidence-archive) explains why they stay `OBSERVED`. The GCS and Azure
+profiles stay provisional until the remaining rows match. S3 is out of scope for
 this evidence: the S3 campaign stopped before it completed, so no S3 capture is published
 and every S3 row stays `UNMEASURED`. Promotion requires a COMPLETE campaign receipt. Each row is one case: one request shape that
 settles one question. Azure rows name their service versions, and each version is
@@ -137,8 +137,8 @@ evidenced separately.
 | gcs-11h | GCS JSON v1 | `softDeleted=true` with soft delete disabled | Named defaults and transport forms only; other options refused | json-v1:415e98e73f8a380ed7833204ca24e5ea53ef03c0161e42dcd8a2892c5fdf704b | `json-v1:gcsNativeCapturesMatchReplay` | REPLAY_MATCH |
 | gcs-11i | GCS JSON v1 | `includeFoldersAsPrefixes=true` on a flat bucket | Named defaults and transport forms only; other options refused | json-v1:1337d2d3b41450fa0093837e796f6345bc685542a2a6f92d28ffb53e518b2749 | — | OBSERVED |
 | gcs-11j | GCS JSON v1 | Named false forms of boolean options | Named defaults and transport forms only; other options refused | json-v1:243de8cfd1b61bed5b4c314a61822364c7b2beb948700c1b2c5d4791131a7e08 | `json-v1:gcsNativeCapturesMatchReplay` | REPLAY_MATCH |
-| azure-01 | Azure Blob XML `2026-06-06` | Account accepts service version and echoes it | Explicit version only | 2026-06-06:46e7d0c7acb2a1abe5c6b5f81834a78d2613e0719e1ec0901683605dd9ab701d | — | OBSERVED |
-| azure-02 | Azure Blob XML `2026-10-06` | Account rollout and version echo | Version individually gated | 2026-10-06:1367fce98f1fdaa8c86e015d4e631923f8f5a42ac3addd3d7a3e23d6ad832c0c | — | OBSERVED |
+| azure-01 | Azure Blob XML `2026-06-06` | Account accepts service version and echoes it | Explicit version only | 2026-06-06:46e7d0c7acb2a1abe5c6b5f81834a78d2613e0719e1ec0901683605dd9ab701d | `2026-06-06:azureNativeCapturesMatchReplay` | REPLAY_MATCH |
+| azure-02 | Azure Blob XML `2026-10-06` | Account rollout and version echo | Version individually gated | 2026-10-06:1367fce98f1fdaa8c86e015d4e631923f8f5a42ac3addd3d7a3e23d6ad832c0c | `2026-10-06:azureNativeCapturesMatchReplay` | REPLAY_MATCH |
 | azure-03a | Azure Blob XML | `startFrom` equal to an existing name is inclusive | Provisional flat list | 2026-06-06:d0fb8d97bbb83c94077de3b161478a3c98272a69242a292fc29d220afe11a99a; 2026-10-06:d0fb8d97bbb83c94077de3b161478a3c98272a69242a292fc29d220afe11a99a | — | OBSERVED |
 | azure-03b | Azure Blob XML | `startFrom` in a gap between names | Provisional flat list | 2026-06-06:9128e1ec99de085e2871e0cb2f4f106370316c539d9930b461034f0ed6b188ea; 2026-10-06:9128e1ec99de085e2871e0cb2f4f106370316c539d9930b461034f0ed6b188ea | — | OBSERVED |
 | azure-03c | Azure Blob XML | `startFrom` before the prefix | Provisional flat list | 2026-06-06:bf7205bf68765aa8162a96546645aa8b211dd7fc28162a42e50dcd17d0696219; 2026-10-06:bf7205bf68765aa8162a96546645aa8b211dd7fc28162a42e50dcd17d0696219 | — | OBSERVED |
@@ -227,9 +227,9 @@ evidenced separately.
 | azure-09t | Azure Blob XML | `marker` with a prefix matching only names before it | Complete native-marker walk required | 2026-06-06:08ce82a18fd6635be4891124e962ad785f5082bcfd7db899e86dcd35dfacb69d; 2026-10-06:08ce82a18fd6635be4891124e962ad785f5082bcfd7db899e86dcd35dfacb69d | — | OBSERVED |
 | azure-09u | Azure Blob XML | `marker` with an `endBefore` excluding every remaining name | Complete native-marker walk required | 2026-06-06:e21e85f6c90c5104901407544bf6c13cdfeedebce0c9a913375ee2cab425d5aa; 2026-10-06:e21e85f6c90c5104901407544bf6c13cdfeedebce0c9a913375ee2cab425d5aa | — | OBSERVED |
 | azure-09v | Azure Blob XML | Issued `marker` with one decoded byte changed and re-encoded | Complete native-marker walk required | 2026-06-06:b5a9df543b99f34d5bd6897f04abe8d58ca5e1cfbf17b8f2d08fd51fa2e0f9a3; 2026-10-06:b5a9df543b99f34d5bd6897f04abe8d58ca5e1cfbf17b8f2d08fd51fa2e0f9a3 | — | OBSERVED |
-| azure-10a | Azure Blob XML `2026-06-06` | Java SDK flat auto-pagination | Must run unmodified with endpoint override | 2026-06-06:9e0d4678efdb3340652df3dab3c2a5e524c1dd33375f62f281f9c1c9442a9d19 | — | OBSERVED |
-| azure-10b | Azure Blob XML `2026-06-06` | Java SDK hierarchy auto-pagination | Must run unmodified with endpoint override | 2026-06-06:ddfd9880d0701307467685fa9b12d3ba0f807b24dff8fca78aecd90adf2333e1 | — | OBSERVED |
-| azure-10c | Azure Blob XML `2026-06-06` | Java SDK `setStartFrom` auto-pagination | Must run unmodified with endpoint override | 2026-06-06:84d7ef26e23232a3ac8c39a17b4ebffbfa53fc590ecc39200eb58a750b7a6c7c | — | OBSERVED |
+| azure-10a | Azure Blob XML `2026-06-06` | Java SDK flat auto-pagination | Must run unmodified with endpoint override | 2026-06-06:9e0d4678efdb3340652df3dab3c2a5e524c1dd33375f62f281f9c1c9442a9d19 | `2026-06-06:azureNativeCapturesMatchReplay` | REPLAY_MATCH |
+| azure-10b | Azure Blob XML `2026-06-06` | Java SDK hierarchy auto-pagination | Must run unmodified with endpoint override | 2026-06-06:ddfd9880d0701307467685fa9b12d3ba0f807b24dff8fca78aecd90adf2333e1 | `2026-06-06:azureNativeCapturesMatchReplay` | REPLAY_MATCH |
+| azure-10c | Azure Blob XML `2026-06-06` | Java SDK `setStartFrom` auto-pagination | Must run unmodified with endpoint override | 2026-06-06:84d7ef26e23232a3ac8c39a17b4ebffbfa53fc590ecc39200eb58a750b7a6c7c | `2026-06-06:azureNativeCapturesMatchReplay` | REPLAY_MATCH |
 | azure-10d | Azure Blob XML `2026-10-06` | Java SDK auto-pagination at 2026-10-06 | Requires a pinned SDK that names the version | — | — | UNMEASURED |
 | azure-11 | Azure Blob XML | Retry-disabled one-attempt errors; normal SDK retries | Separate request counts | — | — | UNMEASURED |
 | azure-12a | Azure Blob XML | Listing of length and segment creation-probe names | Provisional 1,024 UTF-16 units and 254 segments; native creation probes required | 2026-06-06:2d9ffa102d78ec617f7911149c0d67f52bec6868f2c53d992a72878579ba7519; 2026-10-06:2d9ffa102d78ec617f7911149c0d67f52bec6868f2c53d992a72878579ba7519 | — | OBSERVED |
@@ -570,30 +570,23 @@ a temporary directory and replays every capture against replay serving the same 
 each outcome must equal its pinned expectation. The Python tests validate the ledger and
 this matrix against the archive and check that it rebuilds byte for byte.
 
-The archive changes only with a re-capture, so the test derives the expectation for each
-capture from its archived pin by two rules, both in `NativeEvidenceReplayTest.expectations`.
-First, the Azure pins were written while replay omitted the UTF-8 BOM, and each pin that
-names the BOM also records what the comparison found with the BOM restored. Replay now
-sends the BOM, so such a pin expects that remainder: `match` when nothing else differed,
-otherwise the remaining mismatch. Second,
-[`replay-provider-expectations.json`](replay-provider-expectations.json) records, by
-provider and capture as in the archive, each outcome that a later replay change altered:
-`match`, or the remaining mismatch. An entry replaces whatever the first rule left for its
-capture, and the test fails on an entry for a capture the archive does not have or one that
-repeats that expectation. The file holds the 11 Azure captures that match since replay lists
-Azure in UTF-16 code-unit order and serves `startFrom` with a delimiter: `azure-04b` to
-`azure-04e`, `azure-04l`, `azure-04m`, `azure-06a`, `azure-06b`, `azure-06e`, `azure-06f`
-and `azure-10a`. Of the 103 Azure captures, 62 now expect `match`: 51 by the first rule and
-11 by the second.
+Each capture's pin in `<provider>/replay-expectations.json` is `match` or the start of the
+mismatch replay reports for it. `-PproviderReport=DIR` writes each capture's outcome to
+`DIR/<provider>-outcomes.json`, and the current pins were written from that report.
+`azure-09h` and `azure-09j` pin the marker mismatch only up to the replay token, which
+differs on every run. Replay matches 77 GCS and 62 Azure captures, and the archive holds a
+receipt for each. The five single-version rows `azure-01`, `azure-02`, `azure-10a`,
+`azure-10b` and `azure-10c` are `REPLAY_MATCH`. The other 57 Azure matches are
+`2026-06-06` captures whose rows also name `2026-10-06`, whose capture is folded, so they
+stay `OBSERVED` as described above.
 
-The archive holds no receipts for those 62 matches, so their rows stay `OBSERVED`. Writing
-the receipts and rebuilding the archive, as in steps 2 and 3 below, promotes the five
-single-version rows `azure-01`, `azure-02`, `azure-10a`, `azure-10b` and `azure-10c` to
-`REPLAY_MATCH`. The other 57 also name `2026-10-06`, whose capture is folded, so they stay
-`OBSERVED` as described above. `-PproviderReport=DIR` writes each capture's outcome to
-`DIR/<provider>-outcomes.json`, from which a rebuild can write current expectations. A
-rebuilt archive pins replay as it then is, so neither rule applies to it: remove the BOM rule
-and `replay-provider-expectations.json` in the same change.
+`NativeEvidenceReplayTest.expectations` still applies two adjustments that served the
+archive before these pins. A pin that opens with the archived Azure BOM mismatch expects
+what the comparison found with the BOM restored, and an entry in
+[`replay-provider-expectations.json`](replay-provider-expectations.json) replaces the pin
+for its capture. The current archive has no BOM pin and the file has no entries, so neither
+changes an expectation. Removing them changes the test source, which every receipt binds,
+so that change needs new receipts written on a commit that contains it.
 
 `scripts/provider-conformance/evidence_archive.py` builds the archive from an evidence
 directory with sorted entries, zero timestamps and owners, mode 0644, and gzip level 9
