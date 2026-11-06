@@ -1729,20 +1729,12 @@ reps; median (min-max). Requests and throttles are the proxy's counts; attempts/
 | noaa-eri-pds | on | 4.6 (4.5-4.8) | 1,592 (1,587-1,602) | 0 (0-0) | 342.8 (331.7-355.4) | 0 (0-0) | 0 (0-50) |
 | noaa-eri-pds | head-storm | 9.5 (7.9-10.8) | 2,655 (2,643-2,688) | 1,044 (999-1,053) | 280.4 (245.6-339.0) | - | - |
 | noaa-eri-pds | on-storm | 29.8 (29.8-30.0) | 1,634 (1,630-1,640) | 52 (51-52) | 54.6 (54.5-55.0) | 9 (9-9) | 1,229 (1,189-1,233) |
-| noaa-eri-pds | head-sus | 6.6 (6.1-6.7) | 2,002 (1,982-2,005) | 399 (396-400) | 299.8 (297.5-328.2) | - | - |
-| noaa-eri-pds | on-sus | 159.0 (158.4-159.9) | 2,000 (1,980-2,000) | 399 (395-399) | 12.5 (12.5-12.6) | 9 (9-9) | 1,938 (1,925-1,962) |
-| noaa-eri-pds | head-cap | 10.9 (10.2-11.3) | 2,514 (2,435-2,533) | 886 (783-975) | 230.4 (223.6-237.6) | - | - |
-| noaa-eri-pds | on-cap | 27.0 (27.0-27.1) | 1,682 (1,682-1,693) | 92 (89-96) | 62.2 (62.2-62.8) | 9 (9-9) | 1,371 (1,367-1,395) |
 | noaa-eri-pds | head-infl | 8.4 (8.3-8.6) | 1,591 (1,588-1,595) | 0 (0-0) | 190.3 (185.4-190.4) | - | - |
 | noaa-eri-pds | on-infl | 8.4 (8.4-8.7) | 1,586 (1,586-1,589) | 0 (0-0) | 188.0 (182.1-189.5) | 0 (0-0) | 0 (0-0) |
 | pansurg | head | 6.7 (6.4-7.6) | 1,295 (1,291-1,296) | 0 (0-0) | 193.6 (169.6-203.3) | - | - |
 | pansurg | on | 6.8 (6.5-6.9) | 1,281 (1,270-1,288) | 0 (0-0) | 188.3 (183.3-197.7) | 0 (0-0) | 213 (0-256) |
 | pansurg | head-storm | 9.5 (9.3-9.6) | 1,915 (1,759-1,994) | 653 (465-684) | 202.4 (182.5-214.4) | - | - |
 | pansurg | on-storm | 33.5 (33.4-34.2) | 1,333 (1,329-1,349) | 40 (39-61) | 39.8 (39.0-40.2) | 9 (9-9) | 1,019 (994-1,033) |
-| pansurg | head-sus | 8.2 (7.9-8.5) | 1,606 (1,574-1,619) | 317 (313-321) | 198.7 (185.4-202.5) | - | - |
-| pansurg | on-sus | 211.4 (209.1-212.2) | 1,608 (1,594-1,620) | 317 (317-321) | 7.6 (7.6-7.6) | 9 (9-9) | 1,561 (1,548-1,574) |
-| pansurg | head-cap | 10.7 (8.8-10.9) | 1,833 (1,765-1,961) | 537 (493-657) | 179.4 (165.1-207.6) | - | - |
-| pansurg | on-cap | 29.2 (29.2-29.3) | 1,322 (1,317-1,327) | 24 (24-24) | 45.3 (45.1-45.3) | 9 (9-9) | 1,063 (1,031-1,063) |
 | pansurg | head-infl | 10.1 (10.0-10.3) | 1,276 (1,271-1,293) | 0 (0-0) | 125.4 (125.3-128.1) | - | - |
 | pansurg | on-infl | 10.1 (10.1-10.3) | 1,277 (1,275-1,283) | 0 (0-0) | 126.0 (123.9-126.8) | 0 (0-0) | 222 (0-255) |
 | fourcastnetgfs | head | 16.3 (15.6-18.2) | 6,081 (6,028-6,183) | 0 (0-0) | 372.8 (339.5-387.4) | - | - |
@@ -1767,12 +1759,50 @@ Every run exited 0 with a committed dataset (exit codes in the harness's `arms.t
   nara, in-flight requests at the server were back at 58 or more 68.1 s (67.7-68.5) after the storm ended, and
   the limit made all 63 steps back. The price is wall: 3.1-3.5x head on the shallow recordings, 2.7x on
   fourcastnetgfs, 1.5x on nara, because recovery takes longer than the rest of the run.
-- **Sustained 20 %:** the limit sits at 1 (no 10 s window is ever throttle-free), so the run is a serial
-  listing: 12.5 and 7.6 attempts/s against 300 and 199 for head, 24-26x the wall, the same request count.
-- **Rate cap 200/s:** head exceeds the cap by retrying (fourcastnetgfs: 10,923 requests, 4,725 throttled); with
-  the limiter 6,207 requests and 102 throttled, but only 45-107 attempts/s are served, a quarter to a half of
-  the cap, and the wall is 1.5-2.7x head. Per-throttle decreases (several concurrent 503s each multiply the
-  limit) and the 10 s cool-down keep the limit far under what the cap allows.
+- **Sustained 20 % and rate cap 200/s:** measured again after the floor re-arm fix; table and readings below.
+  The fourcastnetgfs `cap` rows above are the original build's.
+- **Rate cap 200/s (fourcastnetgfs, original build):** head exceeds the cap by retrying (10,923 requests,
+  4,725 throttled); with the limiter 6,207 requests and 102 throttled, at 107 attempts/s, about half the cap.
+
+**Rerun after the floor re-arm fix (2026-11-06).** Astra's decision register found that a throttle answer at a
+limit of 1 re-armed the 10 s cool-down (Java suppresses it), the suspected cause of the sustained arm's
+collapse to serial, which voided those rows. Same harness and replay configuration as above (recording p50
+latency, 64 workers, `--seed`, fresh proxy per arm), replay build from swath-replay `main` with GCS latency
+injection; 3 interleaved reps; median (min-max). Arms, one binary each: `off` = the fixed build (`9a96bf9`) with `--limiter=false`; `old` = `5e49148` (limiter on, before both limiter fixes); `on` = the fixed
+build, limiter on (the default). `sus` and `cap` as above. Requests, throttles and in-flight peak are the
+proxy's; decreases, floor throttles (answers at a limit of 1, now without a re-arm) and increases are the
+limiter's counters.
+
+| recording | arm | wall s | requests | throttled | attempts/s | decreases | floor throttles | increases | max in flight |
+|---|---|---|---|---|---|---|---|---|---|
+| noaa-eri-pds | off-sus | 6.8 (6.8-8.3) | 2,006 (1,978-2,021) | 400 (395-402) | 291.7 (241.7-297.6) | - | - | - | 62 |
+| noaa-eri-pds | old-sus | 160.4 (160.3-163.1) | 2,005 (2,001-2,037) | 400 (399-406) | 12.5 (12.5-12.5) | 9 | - | 0 | 42 (37-42) |
+| noaa-eri-pds | on-sus | 158.3 (158.0-158.4) | 1,999 (1,996-2,019) | 399 (399-402) | 12.7 (12.6-12.7) | 24 | 375 (375-378) | 15 | 42 |
+| noaa-eri-pds | off-cap | 13.9 (12.3-15.1) | 2,606 (2,598-2,691) | 1,014 (953-1,076) | 186.9 (172.6-218.4) | - | - | - | 64 (64-65) |
+| noaa-eri-pds | old-cap | 27.0 (26.6-27.1) | 1,673 (1,671-1,676) | 88 (80-91) | 62.1 (61.6-62.9) | 9 | - | 15 (15-16) | 64 |
+| noaa-eri-pds | on-cap | 26.3 (26.1-26.5) | 1,668 (1,645-1,669) | 82 (50-85) | 63.5 (62.1-63.9) | 9 | 73 (41-76) | 16 (15-16) | 64 |
+| pansurg | off-sus | 8.6 (8.0-9.4) | 1,606 (1,593-1,607) | 317 | 185.9 (170.4-200.5) | - | - | - | 64 |
+| pansurg | old-sus | 207.5 (207.5-211.5) | 1,583 (1,580-1,611) | 314 (314-318) | 7.6 | 9 | - | 0 | 26 |
+| pansurg | on-sus | 202.9 (201.8-206.4) | 1,584 (1,580-1,608) | 314 (314-317) | 7.8 | 29 (28-29) | 286 (285-288) | 20 (19-20) | 26 (19-26) |
+| pansurg | off-cap | 9.1 (8.8-9.6) | 1,779 (1,767-1,838) | 508 (496-569) | 194.0 (191.3-201.7) | - | - | - | 64 |
+| pansurg | old-cap | 29.4 (29.4-29.6) | 1,320 (1,320-1,322) | 24 (23-24) | 44.9 (44.5-45.0) | 9 | - | 18 (18-19) | 64 |
+| pansurg | on-cap | 29.5 (29.4-29.5) | 1,319 (1,311-1,331) | 23 | 44.8 (44.4-45.1) | 9 | 14 | 19 (18-19) | 64 |
+
+Every run exited 0 with a committed dataset. Readings:
+
+- **The collapse to serial was not this bug.** With the fix the limit leaves 1 after each clean window (15 and
+  20 increases instead of 0), but at 20 % throttled answers the next throttle comes within a few attempts and
+  takes it back (24 and 29 decreases instead of 9), so the limit spends the run at 1-2: wall 158.3 against
+  160.4 s and 202.9 against 207.5 s, 1-2 % faster, still 23x the limiter-off wall. The cause is the rule
+  itself under sustained throttling (x0.7 per throttle answer, growth only after 10 s without one), which is
+  Java's gauge; Java was not run under this fault.
+- **Rate cap 200/s: unchanged** (26.3 vs 27.0 s; 29.5 vs 29.4 s). The limit falls 64 to 1 in the first burst
+  (9 decreases) and spends the rest of the short run growing back at +1 per second after the 10 s window;
+  floor answers fall inside that first window (14-76 of them), where a re-arm cost little. Served rate stays at
+  a quarter to a third of the cap; `--request-rate` (below) is the fixed-rate alternative.
+- **Without the limiter** both faults cost little on replay (6.8 and 8.6 s sustained, 13.9 and 9.1 s capped)
+  at 25-60 % more requests: the replay answers a throttle instantly, so retrying is cheap here; real S3 is not
+  measured.
 - **Latency inflation:** no effect at the maximum (the latency freeze only holds growth below it).
 
 **Default.** Off. The written acceptance criteria held for completion, the drop, the recovery bound (68 s
@@ -1794,6 +1824,40 @@ on these two recordings; one slower rep in each pair, so at 2 reps a cost under 
 prefix `hrrr.202401`, anonymous, 64 workers, `--seed --limiter`, build `acc3f88`: 1,279,184 objects in 5.96 s,
 1,683 attempts, no retry, no throttle, no limiter decrease. A run at 64 workers did not reach the request rate
 that throttled the corpus runs (256-512 workers on the whole bucket).
+
+## Confirmed defects and lost protections, environment and contract (2026-11-06)
+
+From the decision registers' confirmed defects (each a separate commit with a test that fails on the code
+before it):
+
+- **Limiter floor re-arm** (`f385434`): a throttle answer at a limit of 1 no longer re-arms the 10 s
+  cool-down (Java's `ConcurrencyGaugeFloorRearmSuppressionTest`); counter `limiter.floor_throttles`. Found
+  while porting its test: counting a held-back step consumed the growth pace, so the first step after a
+  cool-down waited up to 1 s (`9a96bf9`, Java grows at once). Measured in "Throttle handling" above: neither
+  was the cause of the collapse to serial.
+- **Credentials fail closed** (`2bab83c`): only an empty chain goes anonymous; a configured source that is slow
+  is waited for (30 s), one refused is exit 1 `auth`, one transiently down keeps the source and is retried
+  per request. GCS keeps the compute metadata source on a Google Cloud machine whose metadata server was not
+  detected in time.
+- **Exit and forensics** (`97b9e34`): the forced exit after the 15 s grace keeps the signal's code (143 after
+  SIGTERM; it was 130); 75 carries a cause (`stuck_throttle`, `stuck_timeouts`, `stuck_no_rows`); a goroutine
+  dump (at most 1 MiB) goes to `DIR/.swath/stacks-stuck.txt` at the stall and `stacks-forced-exit.txt` at a
+  forced exit, else stderr.
+- **Counters** (`b3faf9c`): `attempts` is the request economics (every HTTP request, retries and requeues);
+  `throttles` and `timeouts` count every such attempt, the last of an exhausted call included; new
+  `inflight.max` and `inflight.ns` measure attempts in flight (send to body read), apart from active ranges.
+- **One terminal account** (`a3eca11`): the outcome is classified before run.json, error.json or `--report`
+  is written, so they agree (a partial-coverage dataset is `incomplete`, exit 1, in all three); a failed
+  journaled run reports its durable parts, bytes and `rows_durable`; a forced exit writes error.json and a
+  minimal report.
+- **`--request-rate N`** (`094e72a`): a token bucket over every attempt of the client, after the limiter's
+  permit.
+- **Resume overrides** (`ab066ff`): `swath resume` accepts the operational flags (profile, anonymous,
+  request timeouts, GCS credentials, limiter, request rate); a change that moves the route is refused by the
+  identity check.
+
+- **On the command** (`722c303`): `--part-interval` (default 60 s), the `--spill-max` default and encoder
+  admission in the help.
 
 ## Layering: provider registry
 
