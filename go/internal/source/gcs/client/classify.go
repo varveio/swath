@@ -29,6 +29,8 @@ func answer(err error) (objhttp.Class, bool) {
 		return objhttp.ClassTimeout, true
 	case se.Status >= 500:
 		return objhttp.ClassServer, true
+	case se.Status/100 == 3:
+		return objhttp.ClassRedirect, true
 	case se.Status == 401:
 		return objhttp.ClassAuth, true
 	case se.Status == 403:

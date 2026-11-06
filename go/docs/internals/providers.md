@@ -174,7 +174,7 @@ local token endpoint). The scope is `devstorage.read_only`. The binary links
 `google.golang.org/api/storage/v1` is a test dependency only (`TestClientPagesMatchGoogleClient` compares
 pages against it). Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
 (100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Classification* (`client.Classify`, S3's
-vocabulary): `auth` (401, a `CredentialError` that will not pass; a token endpoint outage or timeout is `transport` or `timeout`, so its exhaustion is requeued), `access_denied` (403), `no_such_bucket` (404), `throttle` (429,
+vocabulary): `auth` (401, a `CredentialError` that will not pass; a token endpoint outage or timeout is `transport` or `timeout`, so its exhaustion is requeued), `access_denied` (403), `no_such_bucket` (404), `redirect` (any 3xx: redirects are never followed, also through a supplied HTTP client, because the resume identity freezes the route; `TestGCSRedirectCannotChangeResumeSource`), `throttle` (429,
 `rateLimitExceeded`, `userRateLimitExceeded`), `timeout` (an attempt past the request timeout, 408), `server`
 (another 5xx), `transport`, `parse` (a 200 that does not parse), `invalid_page` (a parsed page that breaks the
 contract: `client.ErrInvalidPage`, which the engine wraps), `canceled`, `other`; the class is the run

@@ -179,7 +179,14 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
 		c.http = &http.Client{Transport: t}
+	} else {
+		hc := *c.http
+		c.http = &hc
 	}
+	// Redirects are answers, never followed, also through a supplied HTTP
+	// client: the resume identity freezes the route the requests go to (as
+	// S3's client does).
+	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	// The token source keeps this context for every refresh: it must
 	// outlive New's caller's deadline, and its HTTP client bounds each token
 	// exchange (the attempt deadline bounds the wait, token below).
@@ -372,6 +379,9 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		e := responseError(resp.StatusCode, body)
+		if loc := resp.Header.Get("Location"); e.Status/100 == 3 && e.Message == "" {
+			e.Message = "redirect to " + loc + " (not followed)"
+		}
 		if e.Status == http.StatusBadRequest {
 			e.Query = req.URL.RawQuery // a malformed request names itself
 		}

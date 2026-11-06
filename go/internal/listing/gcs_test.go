@@ -5,12 +5,17 @@ package listing
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -21,6 +26,8 @@ import (
 
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
+	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // gcsBucket serves objects.list over n names with 1 ms per request: a
@@ -151,4 +158,82 @@ func TestGCSInterruptedResume(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGCSRedirectCannotChangeResumeSource: endpoint A serves namespace B
+// until a run is interrupted with parts retained, then redirects to
+// namespace C. The resume through the unchanged endpoint is refused with
+// cause redirect, no manifest appears and the retained files are untouched;
+// a fresh run through a redirecting endpoint is refused the same way.
+func TestGCSRedirectCannotChangeResumeSource(t *testing.T) {
+	b, c := gcsBucket(t, 8000), gcsBucket(t, 5000)
+	var redirect atomic.Bool
+	bu, _ := url.Parse(b)
+	cu, _ := url.Parse(c)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if redirect.Load() {
+			http.Redirect(w, r, "http://"+cu.Host+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+			return
+		}
+		httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: bu.Host}).ServeHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+	ep := front.URL + "/storage/v1/"
+	out := filepath.Join(t.TempDir(), "ds")
+	var seen atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "renamed" && seen.Add(1) == 2 {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	_, err := Run(context.Background(), gcsConfig(ep, out, false))
+	restore()
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("crash not injected: %v", err)
+	}
+	before := tree(t, out)
+	redirect.Store(true)
+	_, err = Run(context.Background(), gcsConfig(ep, out, true))
+	if gcsclient.Classify(err) != objhttp.ClassRedirect {
+		t.Fatalf("resume through a redirect: %v (class %q), want redirect", err, gcsclient.Classify(err))
+	}
+	if after := tree(t, out); !maps.Equal(before, after) {
+		t.Fatalf("retained files changed:\nbefore %v\nafter  %v", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(out, "manifest.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest after a refused resume: %v", err)
+	}
+	fresh := filepath.Join(t.TempDir(), "fresh")
+	if _, err := Run(context.Background(), gcsConfig(ep, fresh, false)); gcsclient.Classify(err) != objhttp.ClassRedirect {
+		t.Fatalf("fresh run through a redirect: %v, want redirect", err)
+	}
+}
+
+// tree maps the retained files under dir (the journal and the published
+// parts; not the lock, the outcome or unrecorded temporary parts, which a
+// resume may discard) to their size and content hash.
+func tree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	m := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		name := d.Name()
+		if strings.Contains(name, "lock") || strings.HasSuffix(name, "error.json") || filepath.Base(filepath.Dir(p)) == "parts" {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		m[rel] = fmt.Sprintf("%d/%x", len(b), md5.Sum(b))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }

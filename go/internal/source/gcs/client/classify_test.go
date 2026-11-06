@@ -56,6 +56,8 @@ func TestClassify(t *testing.T) {
 			case <-time.After(5 * time.Second):
 			case <-r.Context().Done():
 			}
+		case "redirect":
+			http.Redirect(w, r, "/storage/v1/b/other/o", http.StatusTemporaryRedirect)
 		case "cut":
 			hj, _ := w.(http.Hijacker)
 			conn, _, _ := hj.Hijack()
@@ -85,6 +87,7 @@ func TestClassify(t *testing.T) {
 		{"garbled", objhttp.ClassParse, true},
 		{"slow", objhttp.ClassTimeout, true},
 		{"cut", objhttp.ClassTransport, true},
+		{"redirect", objhttp.ClassRedirect, false},
 	} {
 		_, err := c.List(context.Background(), &ListInput{Bucket: "b", Prefix: x.prefix})
 		var ex *ExhaustedError
