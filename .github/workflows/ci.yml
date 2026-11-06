@@ -294,7 +294,8 @@ jobs:
   # going red.
   # Go port (go/, see AGENTS.md "Go port"): vet, race tests and static cross-builds. The
   # job always runs but does its work only when go/** or this workflow changed (or on manual
-  # dispatch), so Java-only changes pay a checkout and nothing else. It does not feed ci-gate.
+  # dispatch), so Java-only changes pay a checkout and nothing else. It feeds ci-gate: a job that
+  # did its work and failed, or one skipped on a pull request, fails the gate.
   go:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -349,14 +350,14 @@ jobs:
           "$RUNNER_TEMP/swath-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
 
   ci-gate:
-    needs: [fast-tests, integration-tests, docker-check]
+    needs: [fast-tests, integration-tests, docker-check, go]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # A skipped dependency passes the gate only OFF pull_request, where jobs are legitimately
       # event-gated (docker-check is PR-only, so it skips on every main merge). On a pull request
-      # all three dependencies run, so there `skipped` is not a pass: that is what stops a future
+      # all four dependencies run, so there `skipped` is not a pass: that is what stops a future
       # `if:` from quietly removing a tier from the gate while the check stays green.
       - name: Every gating job passed
         env:
