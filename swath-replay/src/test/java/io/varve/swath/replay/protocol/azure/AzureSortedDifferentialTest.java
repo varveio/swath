@@ -62,9 +62,13 @@ class AzureSortedDifferentialTest {
                     }
                 }
             }
-            for (String start : List.of("root/a/", "root/a/175", "root/b/", "root/c/349")) {
+            for (String start : List.of("root/a/", "root/a/175", "root/b/", "root/c/349", "root/c/350")) {
                 AzureListRequest request = request("root/", null, start, null, 17);
                 assertThat(walk(indexed, request)).isEqualTo(walk(ranged, request));
+                for (int pageSize : List.of(1, 2)) {
+                    AzureListRequest hierarchy = request("root/", "/", start, null, pageSize);
+                    assertThat(walk(indexed, hierarchy)).isEqualTo(walk(ranged, hierarchy));
+                }
             }
         }
     }

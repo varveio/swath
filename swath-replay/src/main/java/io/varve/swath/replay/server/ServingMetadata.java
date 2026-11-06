@@ -16,7 +16,14 @@ record ServingMetadata(List<String> protocols, String bucket, String azureAccoun
                        long chargedResponseBytes, long peakChargedResponseBytes, int activeResponses,
                        long stopTimeoutMs, long idleTimeoutMs, long writeTimeoutMs,
                        String latencyInjection, String paginationProfile, Map<String, String> profiles) {
+    /** Fixture order, page boundaries and every route but Azure's. */
     static final String ORDERING_PROFILE = "unsigned-utf8-byte-order";
+    /** The Azure route serves the same fixture in UTF-16 code-unit order. */
+    static final String AZURE_ORDERING = "azure=utf16-code-unit-order";
+
+    static String orderingProfile(List<String> protocols) {
+        return protocols.contains("azure") ? ORDERING_PROFILE + ";" + AZURE_ORDERING : ORDERING_PROFILE;
+    }
 
     static ServingMetadata legacy(String mode) {
         return new ServingMetadata(List.of("s3"), "unknown", null, "unknown", ORDERING_PROFILE,

@@ -314,7 +314,7 @@ public final class ReplayServer implements AutoCloseable {
             });
         }
         return new ServingMetadata(protocols, serveConfig.bucket(), serveConfig.azureAccount(),
-                fixtureIdentity, ServingMetadata.ORDERING_PROFILE, "fixture-plus-synthetic",
+                fixtureIdentity, ServingMetadata.orderingProfile(protocols), "fixture-plus-synthetic",
                 serveConfig.maxConcurrentRequests(), serveConfig.maxResponses(), readPermitLimit,
                 serveConfig.responseBufferBudget(), serveConfig.maxResponseBytes(),
                 BudgetedOutput.configuredChunkBytes(),

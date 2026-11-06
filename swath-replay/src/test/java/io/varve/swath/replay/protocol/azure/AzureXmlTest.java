@@ -30,7 +30,7 @@ class AzureXmlTest {
             AzureXml.write(page, "http://127.0.0.1:1234/replay/", out);
             byte[] bytes = OwnedBodyBytes.copy(out.body());
             String xml = new String(bytes, StandardCharsets.UTF_8);
-            assertThat(xml).startsWith("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+            assertThat(xml).startsWith("\uFEFF<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
             assertThat(xml).contains("<Last-Modified>Wed, 31 Dec 1969 23:59:59 GMT</Last-Modified>");
             assertThat(xml).contains("<Content-Length>12</Content-Length>");
             assertThat(xml).contains("<Marker>opaque-request</Marker>");

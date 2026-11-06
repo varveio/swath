@@ -87,7 +87,7 @@ class ReplayAllProtocolsTest {
             assertThat(server.servingMetadata().protocols()).containsExactly("azure", "gcs", "s3");
             assertThat(server.servingMetadata().fixtureIdentity()).isNotEqualTo("unknown");
             assertThat(server.servingMetadata().orderingProfile())
-                    .isEqualTo(ServingMetadata.ORDERING_PROFILE);
+                    .isEqualTo("unsigned-utf8-byte-order;azure=utf16-code-unit-order");
             List<String> paths = List.of("/bucket?list-type=2", "/storage/v1/b/bucket/o",
                     "/replay/bucket?restype=container&comp=list");
             try (var workers = Executors.newVirtualThreadPerTaskExecutor()) {

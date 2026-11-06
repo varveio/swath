@@ -11,7 +11,6 @@ import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.PaginationTestProfile;
 import io.varve.swath.replay.protocol.Successor;
-import io.varve.swath.replay.protocol.UpperBound;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import java.nio.charset.StandardCharsets;
@@ -19,7 +18,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** Flat Azure XML listing over one shared range-only store. */
+/**
+ * Azure XML listing over one shared range-only store, in Azure's UTF-16 code-unit order. The fixture
+ * stays byte-sorted; {@link AzureOrderedCursor} reads it in provider order.
+ */
 public final class AzureListPager {
     private final ListingStore store;
     private final String fixtureIdentity;
@@ -39,9 +41,6 @@ public final class AzureListPager {
     }
 
     public AzureListResult list(AzureListRequest request) {
-        if (request.startFrom() != null && request.delimiter() != null) {
-            throw new IllegalArgumentException("startFrom with delimiter is unmeasured");
-        }
         byte[] prefix = request.prefix() == null ? new byte[0] : bytes(request.prefix());
         byte[] delimiter = request.delimiter() == null ? new byte[0] : bytes(request.delimiter());
         byte[] binding = AzureToken.binding(request, fixtureIdentity, profile.bindingName());
@@ -52,7 +51,8 @@ public final class AzureListPager {
         if (request.marker() != null && request.startFrom() != null) {
             record("marker_with_start_from", "matching_scope");
         }
-        Boundary lower = new Boundary(prefix.length == 0 ? null : prefix, true);
+        // Bounds compare in provider order (AzureOrder), not in the fixture's byte order.
+        Boundary lower = new Boundary(prefix, true);
         lower = max(lower, new Boundary(bytes(request.startFrom()), true));
         int progress = 0;
         if (request.marker() != null) {
@@ -60,20 +60,20 @@ public final class AzureListPager {
             lower = max(lower, new Boundary(marker.boundary(), marker.inclusive()));
             progress = marker.injectionProgress();
         }
-        byte[] upper = switch (ByteKeys.prefixUpper(prefix)) {
-            case UpperBound.Bounded(ByteKey key) -> key.toByteArray();
-            case UpperBound.Open() -> null;
-        };
         if (profile.emptyFirstPage() && progress == 0) {
             record("injected_empty", "test_profile");
-            byte[] key = lower.key() == null ? new byte[0] : lower.key();
-            return new AzureListResult(request, List.of(), AzureToken.encode(lower.inclusive(), key, binding, 1));
+            return new AzureListResult(request, List.of(),
+                    AzureToken.encode(lower.inclusive(), lower.key(), binding, 1));
         }
         int pageSize = profile.effectivePageSize(request.pageSize());
         if (pageSize < request.pageSize()) record("short_page", "test_profile");
+        if (!ByteKeys.startsWith(lower.key(), prefix)) {
+            // At or after the prefix in provider order but outside it: past the whole window.
+            return new AzureListResult(request, List.of(), null);
+        }
         return delimiter.length == 0
-                ? flat(request, lower, upper, binding, pageSize, progress)
-                : delimited(request, prefix, delimiter, lower, upper, binding, pageSize, progress);
+                ? flat(request, prefix, lower, binding, pageSize, progress)
+                : delimited(request, prefix, delimiter, lower, binding, pageSize, progress);
     }
 
     /** Validate an opaque replay marker before shared admission and page reads. */
@@ -83,88 +83,163 @@ public final class AzureListPager {
         }
     }
 
-    private AzureListResult flat(AzureListRequest request, Boundary lower, byte[] upper, byte[] binding,
+    private AzureListResult flat(AzureListRequest request, byte[] prefix, Boundary lower, byte[] binding,
                                  int pageSize, int progress) {
         record("flat", request.startFrom() == null ? "prefix_window" : "start_from");
-        List<ListedObject> rows = rows(lower, upper, pageSize + 1);
-        int count = Math.min(pageSize, rows.size());
-        List<AzureListResult.Entry> entries = new ArrayList<>(count);
-        for (int i = 0; i < count; i++) entries.add(new AzureListResult.Entry.Blob(rows.get(i)));
-        String next = rows.size() > count
-                ? AzureToken.encode(false, rows.get(count - 1).key(), binding, progress) : null;
+        AzureOrderedCursor cursor = new AzureOrderedCursor(this::rowItems, this::firstKey,
+                AzureOrder.rangesFrom(lower.key(), lower.inclusive(), prefix));
+        return page(request, List.of(), cursor, binding, pageSize, progress);
+    }
+
+    /**
+     * A lower bound inside a rolled prefix (a {@code startFrom} below a subtree) lists that prefix
+     * only when one of its names is at or after the bound, then continues after the subtree. Every
+     * byte range read later then holds whole rolled subtrees, so no prefix is listed twice.
+     */
+    private AzureListResult delimited(AzureListRequest request, byte[] prefix, byte[] delimiter,
+                                      Boundary lower, byte[] binding, int pageSize, int progress) {
+        List<AzureOrderedCursor.Item> leading = new ArrayList<>(1);
+        byte[] from = lower.key();
+        boolean inclusive = lower.inclusive();
+        for (byte[] holder; from != null && (holder = rollup(from, prefix, delimiter)) != null;) {
+            AzureOrderedCursor names = new AzureOrderedCursor(this::rowItems, this::firstKey,
+                    AzureOrder.rangesFrom(from, inclusive, holder));
+            boolean listed = names.next(1) != null;
+            record("delimiter_lower_in_prefix", listed ? "prefix_listed" : "prefix_skipped");
+            if (listed) leading.add(AzureOrderedCursor.Item.prefix(holder));
+            from = AzureOrder.upperOf(holder);
+            inclusive = true;
+            if (from != null && !ByteKeys.startsWith(from, prefix)) from = null;
+        }
+        AzureOrderedCursor cursor = from == null ? null : new AzureOrderedCursor(rollups(prefix, delimiter),
+                this::firstKey, AzureOrder.rangesFrom(from, inclusive, prefix));
+        return page(request, leading, cursor, binding, pageSize, progress);
+    }
+
+    /**
+     * Takes one page: {@code leading} entries first, then the cursor's. Continuation resumes after a
+     * Blob's name, or at the provider-order upper bound of a BlobPrefix so its subtree is skipped.
+     */
+    private AzureListResult page(AzureListRequest request, List<AzureOrderedCursor.Item> leading,
+                                 AzureOrderedCursor cursor, byte[] binding, int pageSize, int progress) {
+        List<AzureListResult.Entry> entries = new ArrayList<>(Math.min(pageSize, 1024));
+        AzureOrderedCursor.Item last = null;
+        boolean more = false;
+        int index = 0;
+        while (true) {
+            AzureOrderedCursor.Item item = index < leading.size() ? leading.get(index++)
+                    : cursor == null ? null : cursor.next(pageSize + 1 - entries.size());
+            if (item == null) break;
+            if (entries.size() == pageSize) {
+                more = true;
+                break;
+            }
+            entries.add(item.isPrefix() ? new AzureListResult.Entry.BlobPrefix(item.name())
+                    : new AzureListResult.Entry.Blob(item.object()));
+            last = item;
+        }
+        if (cursor != null && cursor.splits() > 0) record("utf16_order", "branch_swapped");
+        String next = null;
+        if (more) {
+            next = last.isPrefix()
+                    ? AzureToken.encode(true, AzureOrder.upperOf(last.name()), binding, progress)
+                    : AzureToken.encode(false, last.name(), binding, progress);
+        }
         return new AzureListResult(request, entries, next);
     }
 
-    private AzureListResult delimited(AzureListRequest request, byte[] prefix, byte[] delimiter,
-                                      Boundary lower, byte[] upper, byte[] binding, int pageSize, int progress) {
-        List<ListingStore.DelimitedEntry> indexed = store.delimitedRollup(
-                lower.key() == null ? null : ByteKey.copyOf(lower.key()), lower.inclusive(),
-                upper == null ? null : ByteKey.copyOf(upper), prefix, delimiter, pageSize, Projection.of(false));
-        if (indexed != null) {
-            record("delimiter_indexed", "native_skip_scan");
-            return indexedPage(request, indexed, binding, pageSize, progress);
-        }
-        record("delimiter_walk", "store_declined");
-        List<AzureListResult.Entry> entries = new ArrayList<>();
-        Boundary cursor = lower;
-        Boundary last = null;
-        while (true) {
-            List<ListedObject> batch = rows(cursor, upper,
-                    Math.min(4096, pageSize - entries.size() + 1));
-            if (batch.isEmpty()) return new AzureListResult(request, entries, null);
-            for (int i = 0; i < batch.size();) {
+    /**
+     * Byte-ordered Blob and BlobPrefix entries of one range: the store's native rollup when it has
+     * one, else a walk of its rows that seeks past each rolled prefix. A rolled prefix is returned
+     * when any name of the range rolls up to it, so the range bounds decide membership, not the
+     * prefix spelling.
+     */
+    private AzureOrderedCursor.Source rollups(byte[] prefix, byte[] delimiter) {
+        // 0: not yet asked, 1: the store answers rollups, 2: it declined and rows are walked.
+        int[] path = {0};
+        return (from, inclusive, upper, limit) -> {
+            if (path[0] != 2) {
+                List<ListingStore.DelimitedEntry> indexed = store.delimitedRollup(key(from, inclusive), inclusive,
+                        upper == null ? null : ByteKey.copyOf(upper), prefix, delimiter, limit - 1,
+                        Projection.of(false), false);
+                if (indexed != null) {
+                    if (path[0] == 0) record("delimiter_indexed", "native_skip_scan");
+                    path[0] = 1;
+                    List<AzureOrderedCursor.Item> items = new ArrayList<>(indexed.size());
+                    for (ListingStore.DelimitedEntry entry : indexed) {
+                        items.add(entry.isCommonPrefix() ? AzureOrderedCursor.Item.prefix(entry.commonPrefix())
+                                : AzureOrderedCursor.Item.blob(entry.object()));
+                    }
+                    return items;
+                }
+                path[0] = 2;
+                record("delimiter_walk", "store_declined");
+            }
+            return walk(from, inclusive, upper, limit, prefix, delimiter);
+        };
+    }
+
+    private List<AzureOrderedCursor.Item> walk(byte[] from, boolean inclusive, byte[] upper, int limit,
+                                               byte[] prefix, byte[] delimiter) {
+        List<AzureOrderedCursor.Item> items = new ArrayList<>();
+        byte[] cursor = from;
+        boolean cursorInclusive = inclusive;
+        while (items.size() < limit) {
+            int wanted = Math.min(4096, limit - items.size() + 1);
+            List<ListedObject> batch = rows(cursor, cursorInclusive, upper, wanted);
+            int i = 0;
+            while (i < batch.size() && items.size() < limit) {
                 ListedObject object = batch.get(i);
                 byte[] rolled = rollup(object.key(), prefix, delimiter);
-                if (entries.size() == pageSize) {
-                    return new AzureListResult(request, entries,
-                            AzureToken.encode(last.inclusive(), last.key(), binding, progress));
-                }
                 if (rolled == null) {
-                    entries.add(new AzureListResult.Entry.Blob(object));
-                    cursor = new Boundary(object.key(), false);
+                    items.add(AzureOrderedCursor.Item.blob(object));
+                    cursor = object.key();
+                    cursorInclusive = false;
                     i++;
-                } else {
-                    entries.add(new AzureListResult.Entry.BlobPrefix(rolled));
-                    cursor = switch (ByteKeys.successor(rolled)) {
-                        case Successor.Key(ByteKey successor) -> new Boundary(successor.toByteArray(), true);
-                        case Successor.EndOfKeyspace() -> null;
-                    };
-                    do {
-                        i++;
-                    } while (i < batch.size() && ByteKeys.startsWith(batch.get(i).key(), rolled));
+                    continue;
                 }
-                last = cursor;
-                if (cursor == null) return new AzureListResult(request, entries, null);
+                items.add(AzureOrderedCursor.Item.prefix(rolled));
+                cursor = byteSuccessor(rolled);
+                if (cursor == null) return items;
+                cursorInclusive = true;
+                // Stay within this batch for a short subtree; a longer one seeks to its successor.
+                do {
+                    i++;
+                } while (i < batch.size() && ByteKeys.startsWith(batch.get(i).key(), rolled));
             }
+            if (batch.size() < wanted) return items;
         }
+        return items;
     }
 
-    private static AzureListResult indexedPage(AzureListRequest request, List<ListingStore.DelimitedEntry> indexed,
-                                               byte[] binding, int pageSize, int progress) {
-        List<AzureListResult.Entry> entries = new ArrayList<>();
-        Boundary last = null;
-        int count = Math.min(pageSize, indexed.size());
-        for (int i = 0; i < count; i++) {
-            ListingStore.DelimitedEntry entry = indexed.get(i);
-            if (entry.isCommonPrefix()) {
-                entries.add(new AzureListResult.Entry.BlobPrefix(entry.commonPrefix()));
-                last = switch (ByteKeys.successor(entry.commonPrefix())) {
-                    case Successor.Key(ByteKey successor) -> new Boundary(successor.toByteArray(), true);
-                    case Successor.EndOfKeyspace() -> null;
-                };
-            } else {
-                entries.add(new AzureListResult.Entry.Blob(entry.object()));
-                last = new Boundary(entry.object().key(), false);
-            }
-        }
-        String next = indexed.size() > count && last != null
-                ? AzureToken.encode(last.inclusive(), last.key(), binding, progress) : null;
-        return new AzureListResult(request, entries, next);
+    private List<AzureOrderedCursor.Item> rowItems(byte[] from, boolean inclusive, byte[] upper, int limit) {
+        List<ListedObject> rows = rows(from, inclusive, upper, limit);
+        List<AzureOrderedCursor.Item> items = new ArrayList<>(rows.size());
+        for (ListedObject row : rows) items.add(AzureOrderedCursor.Item.blob(row));
+        return items;
     }
 
-    private List<ListedObject> rows(Boundary lower, byte[] upper, int limit) {
-        return store.rows(lower.key() == null ? null : ByteKey.copyOf(lower.key()), lower.inclusive(),
-                upper == null ? null : ByteKey.copyOf(upper), limit, Projection.of(false));
+    private byte[] firstKey(byte[] from, boolean inclusive) {
+        List<ListedObject> first = rows(from, inclusive, null, 1);
+        return first.isEmpty() ? null : first.get(0).key();
+    }
+
+    private List<ListedObject> rows(byte[] from, boolean inclusive, byte[] upper, int limit) {
+        return store.rows(key(from, inclusive), inclusive, upper == null ? null : ByteKey.copyOf(upper), limit,
+                Projection.of(false));
+    }
+
+    /** An inclusive empty lower bound is the open start of the keyspace. */
+    private static ByteKey key(byte[] from, boolean inclusive) {
+        return from.length == 0 && inclusive ? null : ByteKey.copyOf(from);
+    }
+
+    /** The byte-order resume point after every name under a rolled prefix, or {@code null} at the end. */
+    static byte[] byteSuccessor(byte[] rolled) {
+        return switch (ByteKeys.successor(rolled)) {
+            case Successor.Key(ByteKey successor) -> successor.toByteArray();
+            case Successor.EndOfKeyspace() -> null;
+        };
     }
 
     private static byte[] rollup(byte[] key, byte[] prefix, byte[] delimiter) {
@@ -180,8 +255,7 @@ public final class AzureListPager {
 
     private static Boundary max(Boundary a, Boundary b) {
         if (b.key() == null) return a;
-        if (a.key() == null) return b;
-        int cmp = ByteKeys.compareUnsigned(a.key(), b.key());
+        int cmp = AzureOrder.compare(a.key(), b.key());
         if (cmp > 0) return a;
         if (cmp < 0) return b;
         return new Boundary(a.key(), a.inclusive() && b.inclusive());
