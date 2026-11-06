@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package gcs
+package gcstest
 
 import (
 	"crypto/rand"
@@ -17,9 +17,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
-// fakeGCS serves objects.list over keys (sorted by bytes) as the JSON API
+// Strict serves objects.list over keys (sorted by bytes) as the JSON API
 // defines it: prefix, delimiter, startOffset (inclusive), endOffset
 // (exclusive), pageToken, maxResults (default and cap 1,000), and a
 // partial-response fields selector. Page tokens are opaque (random), bound
@@ -31,14 +32,20 @@ import (
 // size limit; shortIf cuts the selected requests' pages to one entry.
 // Every object carries the full metadata resource, sizes and generations
 // as strings, as on the wire.
-type fakeGCS struct {
+type Strict struct {
 	keys  []string
-	empty int64
-	short bool
-	cap   int
-	// shortIf, when set, cuts the pages of the requests it selects to one
+	Empty int64
+	Short bool
+	Cap   int
+	// ShortIf, when set, cuts the pages of the requests it selects to one
 	// entry (a service may cut any page short).
-	shortIf  func(url.Values) bool
+	ShortIf func(url.Values) bool
+	// Delay is waited before each answer.
+	Delay time.Duration
+	// Lean sends objects with only name, size, updated, generation and
+	// etag: the protocol is the same, and a run-level test that does not
+	// read the rest of the metadata lists and encodes less.
+	Lean     bool
 	requests atomic.Int64
 	empties  atomic.Int64
 	last     atomic.Value // the last request's query
@@ -60,19 +67,36 @@ func chainOf(q url.Values) string {
 	return string(b)
 }
 
-func newFake(t testing.TB, keys []string) (*fakeGCS, string) {
-	f := &fakeGCS{keys: append([]string(nil), keys...), tokens: map[string]position{}}
+// NewStrict is the strict fake over keys, in any order.
+func NewStrict(keys []string) *Strict {
+	f := &Strict{keys: append([]string(nil), keys...), tokens: map[string]position{}}
 	_, _ = rand.Read(f.secret[:])
 	sort.Strings(f.keys)
+	return f
+}
+
+// Serve serves f and returns its endpoint (…/storage/v1/), closed at the
+// test's end.
+func (f *Strict) Serve(t testing.TB) string {
+	t.Helper()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	return f, srv.URL + "/storage/v1/"
+	return srv.URL + Path
+}
+
+// Requests is the number of requests received; Empties the empty pages
+// sent; Last the last request's query.
+func (f *Strict) Requests() int64 { return f.requests.Load() }
+func (f *Strict) Empties() int64  { return f.empties.Load() }
+func (f *Strict) Last() url.Values {
+	q, _ := f.last.Load().(url.Values)
+	return q
 }
 
 // issue returns the opaque token for pos: a keyed hash, so one position
 // always gets the same token (the oracle compares tokens) and nothing in
 // it can be parsed back.
-func (f *fakeGCS) issue(pos position) string {
+func (f *Strict) issue(pos position) string {
 	h := sha256.Sum256([]byte(string(f.secret[:]) + pos.chain + "\x00" + pos.after + "\x00" + pos.nonce))
 	t := "CgR" + hex.EncodeToString(h[:12])
 	f.mu.Lock()
@@ -81,26 +105,37 @@ func (f *fakeGCS) issue(pos position) string {
 	return t
 }
 
-// sent is every query received so far.
-func (f *fakeGCS) sent() []url.Values {
+// Sent is every query received so far.
+func (f *Strict) Sent() []url.Values {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]url.Values(nil), f.queries...)
 }
 
-// object is the objects resource as the JSON API sends it, with fields the
+// Object is the objects resource as the JSON API sends it, with fields the
 // listing does not read.
-func object(i int, k string) map[string]any {
-	return map[string]any{
+func Object(i int, k string) map[string]any {
+	o := leanObject(i, k)
+	for name, v := range map[string]any{
 		"kind": "storage#object", "id": "bkt/" + k + "/17", "selfLink": "https://example.invalid/" + url.PathEscape(k),
-		"name": k, "bucket": "bkt", "size": strconv.Itoa(len(k)), "updated": "2026-11-06T01:02:03.456789Z",
-		"timeCreated": "2026-11-05T00:00:00Z", "etag": "e" + strconv.Itoa(i), "generation": strconv.Itoa(1700000000000000 + i),
+		"bucket": "bkt", "timeCreated": "2026-11-05T00:00:00Z",
 		"metageneration": strconv.Itoa(1 + i%3), "storageClass": []string{"STANDARD", "NEARLINE", "ARCHIVE"}[i%3],
 		"md5Hash": "md5-" + strconv.Itoa(i) + "==", "crc32c": "c" + strconv.Itoa(i), "contentType": "application/x-" + strconv.Itoa(i%5),
+	} {
+		o[name] = v
 	}
+	return o
 }
 
-func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// leanObject is Object's listing fields: name, size, updated, generation
+// and etag.
+func leanObject(i int, k string) map[string]any {
+	return map[string]any{"name": k, "size": strconv.Itoa(len(k)), "updated": "2026-11-06T01:02:03.456789Z",
+		"etag": "e" + strconv.Itoa(i), "generation": strconv.Itoa(1700000000000000 + i)}
+}
+
+func (f *Strict) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	time.Sleep(f.Delay)
 	serial := f.requests.Add(1)
 	q := r.URL.Query()
 	f.last.Store(q)
@@ -124,7 +159,7 @@ func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		token = pos.after
 	}
 	resp := map[string]any{}
-	if f.empty > 0 && serial%f.empty == 0 {
+	if f.Empty > 0 && serial%f.Empty == 0 {
 		// An empty page that still makes progress: a new token that
 		// continues from the request's own position.
 		f.empties.Add(1)
@@ -132,25 +167,29 @@ func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.write(w, q, resp)
 		return
 	}
-	max := 1000
-	if f.cap > 0 {
-		max = f.cap
+	limit := 1000
+	if f.Cap > 0 {
+		limit = f.Cap
 	}
 	if s := q.Get("maxResults"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n > 0 && n < max {
-			max = n
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n < limit {
+			limit = n
 		}
 	}
-	if f.short {
-		max = 1 + int(serial)%max
+	if f.Short {
+		limit = 1 + int(serial)%limit
 	}
-	if f.shortIf != nil && f.shortIf(q) {
-		max = 1
+	if f.ShortIf != nil && f.ShortIf(q) {
+		limit = 1
 	}
 	var items []any
 	var prefixes []string
 	n, lastOut := 0, ""
-	for i := sort.SearchStrings(f.keys, prefix); i < len(f.keys); i++ {
+	// Names below the prefix, startOffset or the token's position are
+	// never listed (a name's rolled-up prefix is not above the name), so
+	// the scan starts at the greatest of them: a request costs its page,
+	// not the keyspace before it.
+	for i := sort.SearchStrings(f.keys, max(prefix, start, token)); i < len(f.keys); i++ {
 		k := f.keys[i]
 		if !strings.HasPrefix(k, prefix) {
 			break
@@ -167,7 +206,7 @@ func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if n == max {
+		if n == limit {
 			resp["nextPageToken"] = f.issue(position{chainOf(q), lastOut, ""})
 			break
 		}
@@ -176,7 +215,7 @@ func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if isPrefix {
 			prefixes = append(prefixes, out)
 		} else {
-			items = append(items, object(i, k))
+			items = append(items, f.object(i, k))
 		}
 	}
 	if items != nil {
@@ -190,7 +229,7 @@ func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // write sends resp, reduced to the fields selector when the request has
 // one (fields=a,b,items(c,d)).
-func (f *fakeGCS) write(w http.ResponseWriter, q url.Values, resp map[string]any) {
+func (f *Strict) write(w http.ResponseWriter, q url.Values, resp map[string]any) {
 	if sel := q.Get("fields"); sel != "" {
 		top, sub := parseFields(sel)
 		for k := range resp {
@@ -210,6 +249,15 @@ func (f *fakeGCS) write(w http.ResponseWriter, q url.Values, resp map[string]any
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// object is key i (k) as this fake sends it: Object, or with Lean its
+// listing fields only.
+func (f *Strict) object(i int, k string) map[string]any {
+	if f.Lean {
+		return leanObject(i, k)
+	}
+	return Object(i, k)
 }
 
 // parseFields reads a one-level partial-response selector.

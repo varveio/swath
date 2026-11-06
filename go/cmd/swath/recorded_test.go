@@ -8,19 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // TestResumeRefusesRemovedFlag: a journal whose recorded command names a
@@ -31,12 +26,12 @@ import (
 // another's runs.
 func TestResumeRefusesRemovedFlag(t *testing.T) {
 	captureStderr(t)
-	srv := slowBucket(t)
+	url := slowBucket(t)
 	ctx := context.Background()
 	for _, removed := range []string{"--probe", "--seed-descent=false", "--memory=1MiB"} {
 		t.Run(removed, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
-			args := []string{"s3://bkt", "--endpoint", srv.URL, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
+			args := []string{"s3://bkt", "--endpoint", url, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
 			// The command an earlier build recorded: the same run with a
 			// flag since removed.
 			recorded := append([]string{"diag", "list", removed}, args...)
@@ -58,20 +53,8 @@ func TestResumeRefusesRemovedFlag(t *testing.T) {
 
 // slowBucket is an S3 fake of 3,000 keys in 7 folders whose every answer
 // takes 50 ms, so a 200 ms deadline interrupts a run with parts published.
-func slowBucket(t *testing.T) *httptest.Server {
-	b := s3mem.New()
-	b.CreateBucket("bkt")
-	for i := range 3000 {
-		k := fmt.Sprintf("p%02d/obj-%06d", i%7, i)
-		b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
-	}
-	h := gofakes3.New(b).Server()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(50 * time.Millisecond)
-		h.ServeHTTP(w, r)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+func slowBucket(t *testing.T) string {
+	return s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 7))), 50*time.Millisecond))
 }
 
 // TestResumeTakesDiagnosticDiskFlags: a swath list run resumes with the
@@ -79,10 +62,10 @@ func slowBucket(t *testing.T) *httptest.Server {
 // report states the reserve in effect.
 func TestResumeTakesDiagnosticDiskFlags(t *testing.T) {
 	captureStderr(t)
-	srv := slowBucket(t)
+	url := slowBucket(t)
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "ds")
-	args := []string{"s3://bkt", "--endpoint", srv.URL, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
+	args := []string{"s3://bkt", "--endpoint", url, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
 	if c := exitCode(t, run(ctx, append(args, "--max-duration", "200ms"), io.Discard, false)); c != exitDeadline {
 		t.Fatalf("first attempt: exit %d", c)
 	}

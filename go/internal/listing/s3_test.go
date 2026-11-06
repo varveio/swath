@@ -8,44 +8,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
+// fakeS3 serves n keys in 17 folders under logs/, without the host's
+// AWS credentials.
 func fakeS3(t *testing.T, n int) string {
 	t.Helper()
-	t.Setenv("AWS_PROFILE", "")
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	t.Setenv("AWS_SESSION_TOKEN", "")
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
+	s3test.NoCredentials(t)
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("logs/%02d/obj-%05d", i%17, i)
 	}
-	for i := range n {
-		k := fmt.Sprintf("logs/%02d/obj-%05d", i%17, i)
-		if _, err := b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	srv := httptest.NewServer(gofakes3.New(b).Server())
-	t.Cleanup(srv.Close)
-	return srv.URL
+	return s3test.Bucket(t, keys)
 }
 
 func TestS3Dataset(t *testing.T) {
@@ -107,35 +91,18 @@ func readJSON(t *testing.T, path string, v any) {
 // provider's (Parquet parts and manifest, apart from its creation time) on
 // the same static bucket with request latency.
 func TestS3ParallelEqualsSequential(t *testing.T) {
-	t.Setenv("AWS_PROFILE", "")
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	t.Setenv("AWS_SESSION_TOKEN", "")
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
-	for i := range 12000 {
-		k := fmt.Sprintf("d%02d/sub%d/obj-%06d", i%7, i%3, i)
+	s3test.NoCredentials(t)
+	keys := make([]string, 12000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("d%02d/sub%d/obj-%06d", i%7, i%3, i)
 		if i%500 == 0 {
-			k = fmt.Sprintf("flat-%05d", i)
-		}
-		if _, err := b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil); err != nil {
-			t.Fatal(err)
+			keys[i] = fmt.Sprintf("flat-%05d", i)
 		}
 	}
-	h := gofakes3.New(b).Server()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(5 * time.Millisecond)
-		h.ServeHTTP(w, r)
-	}))
-	t.Cleanup(srv.Close)
+	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, keys)), 5*time.Millisecond))
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
-		s3cfg.Endpoint, s3cfg.PathStyle = srv.URL, true
+		s3cfg.Endpoint, s3cfg.PathStyle = url, true
 		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 64 << 10, Workers: workers}})
 		if err != nil {
 			t.Fatal(err)

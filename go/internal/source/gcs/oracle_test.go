@@ -17,6 +17,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
+	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 )
 
 // redirect sends requests addressed to Google's endpoint to the fake, so
@@ -75,7 +76,7 @@ func TestClientPagesMatchGoogleClient(t *testing.T) {
 					t.Fatal(err)
 				}
 				if name == "production fields" {
-					if sel := f.last.Load().(url.Values).Get("fields"); sel == "" {
+					if sel := f.Last().Get("fields"); sel == "" {
 						t.Fatal("no fields selector on Google's endpoint")
 					}
 				}
@@ -133,7 +134,7 @@ func TestRowsCarryEveryField(t *testing.T) {
 	updated := time.Date(2026, 11, 6, 1, 2, 3, 456789000, time.UTC).UnixMicro()
 	for _, r := range c.rows {
 		i := slices.Index(keys, r.Key)
-		w := object(i, r.Key)
+		w := gcstest.Object(i, r.Key)
 		gen, _ := strconv.ParseInt(w["generation"].(string), 10, 64)
 		meta, _ := strconv.ParseInt(w["metageneration"].(string), 10, 64)
 		want := Object{Size: int64(len(r.Key)), Mtime: updated, ETag: w["etag"].(string), Generation: gen, Metageneration: meta,

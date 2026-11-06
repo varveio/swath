@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
+	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
@@ -119,7 +119,7 @@ func TestBoundsAtExactKeys(t *testing.T) {
 	if !slices.Equal(got, keys[i:j+1]) {
 		t.Fatalf("(a/x, b/c]: got %q", got)
 	}
-	q := f.last.Load().(url.Values)
+	q := f.Last()
 	if q.Get("startOffset") != "a/x" || q.Get("endOffset") != "b/c\x00" {
 		t.Fatalf("offsets sent: %q %q", q.Get("startOffset"), q.Get("endOffset"))
 	}
@@ -152,7 +152,7 @@ func TestTokenChainsAndEmptyPages(t *testing.T) {
 	keys := append(testKeys(), "ctl\x01", "ctl\x01\x01", "ctl\x02", "ctl\x1f/x")
 	slices.Sort(keys)
 	f, ep := newFake(t, keys)
-	f.empty, f.short = 3, true
+	f.Empty, f.Short = 3, true
 	for _, c := range []struct {
 		opt     Options
 		workers int
@@ -230,7 +230,7 @@ func TestEndOffsetOmitted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q := f.last.Load().(url.Values)
+	q := f.Last()
 	if _, sent := q["endOffset"]; sent || q.Get("startOffset") != stem+"a" {
 		t.Fatalf("endOffset sent (%d bytes) or startOffset wrong", len(q.Get("endOffset")))
 	}
@@ -241,9 +241,9 @@ func TestEndOffsetOmitted(t *testing.T) {
 		t.Fatalf("the page ends at %q: nothing past the end to trim", last)
 	}
 
-	f.cap = 3 // short pages: every range continues, and idle workers split it
+	f.Cap = 3 // short pages: every range continues, and idle workers split it
 	for _, workers := range []int{4, 16, 64} {
-		before := len(f.sent())
+		before := len(f.Sent())
 		got, st := list(t, Options{Bucket: "bkt", Endpoint: ep}, workers)
 		if !slices.Equal(got, keys) {
 			t.Fatalf("%d workers: %d keys, want %d", workers, len(got), len(keys))
@@ -254,7 +254,7 @@ func TestEndOffsetOmitted(t *testing.T) {
 				omitted, st.Counters.Value("overfetch_keys"), st.Counters.Value("split.accepted_bounded")+st.Counters.Value("split.accepted_frontier"))
 		}
 		var without int64
-		for _, q := range f.sent()[before:] {
+		for _, q := range f.Sent()[before:] {
 			e, sent := q["endOffset"]
 			if sent && len(e[0]) > 1024 {
 				t.Fatalf("an endOffset of %d bytes was sent", len(e[0]))
@@ -277,7 +277,7 @@ func TestEndOffsetOmitted(t *testing.T) {
 func TestDelimiterBoundaries(t *testing.T) {
 	keys := []string{"a", "a-b", "a.b", "a/", "a/b/", "a/b/c", "a/x", "a/y/z", "a0", "a0/", "a0/q", "b"}
 	f, ep := newFake(t, keys)
-	f.cap = 1
+	f.Cap = 1
 	for _, c := range []struct {
 		name    string
 		pol     keyrange.Policy
@@ -288,13 +288,13 @@ func TestDelimiterBoundaries(t *testing.T) {
 		{"seed, structure", keyrange.Policy{Seed: true, Structure: true}, 8},
 		{"one-page seed, structure", keyrange.Policy{Seed: true, Structure: true}, 64},
 	} {
-		before := len(f.sent())
+		before := len(f.Sent())
 		got, _ := list(t, Options{Bucket: "bkt", Endpoint: ep, Policy: c.pol}, c.workers)
 		if !slices.Equal(got, keys) {
 			t.Fatalf("%s: %q, want %q", c.name, got, keys)
 		}
 		delimited := 0
-		for _, q := range f.sent()[before:] {
+		for _, q := range f.Sent()[before:] {
 			if q.Get("delimiter") != "" {
 				delimited++
 			}
@@ -482,4 +482,10 @@ func TestInvalidPageClass(t *testing.T) {
 	if classify(err) != "invalid_page" || client.Classify(err) == objhttp.ClassParse {
 		t.Fatalf("err %v class %q, want invalid_page", err, classify(err))
 	}
+}
+
+// newFake serves the strict objects.list fake (gcstest.Strict) over keys.
+func newFake(t testing.TB, keys []string) (*gcstest.Strict, string) {
+	f := gcstest.NewStrict(keys)
+	return f, f.Serve(t)
 }

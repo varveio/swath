@@ -4,11 +4,9 @@
 package s3
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -16,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // clock gives every put its own, increasing modification time.
@@ -35,18 +33,9 @@ func (c *clock) Since(t time.Time) time.Duration { return c.t.Sub(t) }
 // requests fail with 503 Slow Down.
 func fakeBucket(t testing.TB, keys []string, fail503 int) (url string) {
 	t.Helper()
-	backend := s3mem.New(s3mem.WithTimeSource(&clock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}))
-	if err := backend.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
-	for _, k := range keys {
-		if _, err := backend.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := gofakes3.New(backend).Server()
+	h := s3test.Handler(s3test.Backend(t, keys, s3mem.WithTimeSource(&clock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})))
 	var n atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if n.Add(1) <= int64(fail503) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>slow down</Message></Error>`)
@@ -54,8 +43,6 @@ func fakeBucket(t testing.TB, keys []string, fail503 int) (url string) {
 		}
 		h.ServeHTTP(w, r)
 	}))
-	t.Cleanup(srv.Close)
-	return srv.URL
 }
 
 func testKeys() []string {

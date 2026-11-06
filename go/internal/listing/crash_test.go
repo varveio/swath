@@ -4,13 +4,10 @@
 package listing
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,12 +17,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // crashBucket serves 8,000 keys with 1 ms per request, enough for many
@@ -39,28 +37,11 @@ func crashBucket(t *testing.T) string {
 // crashBackend is crashBucket with its backend, to change the source.
 func crashBackend(t *testing.T) (string, *s3mem.Backend) {
 	t.Helper()
-	for _, k := range []string{"AWS_PROFILE", "AWS_SESSION_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_DEFAULT_REGION"} {
-		t.Setenv(k, "")
-	}
-	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
-	b := s3mem.New(s3mem.WithTimeSource(&step{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}))
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
-	for i := range 8000 {
-		k := fmt.Sprintf("d%02d/sub%d/obj+%06d", i%9, i%4, i)
-		if _, err := b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := gofakes3.New(b).Server()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(time.Millisecond)
-		h.ServeHTTP(w, r)
-	}))
-	t.Cleanup(srv.Close)
-	return srv.URL, b
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	b := s3test.Backend(t, gcstest.Keys(8000), s3mem.WithTimeSource(&step{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}))
+	return s3test.Serve(t, s3test.Delayed(s3test.Handler(b), time.Millisecond)), b
 }
 
 func crashConfig(url, out string, resume bool) Config {

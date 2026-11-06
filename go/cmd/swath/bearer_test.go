@@ -16,11 +16,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // TestBearerToken: --bearer-token-command authenticates every request
@@ -29,14 +27,7 @@ import (
 // message (exit 2) and continues with it; a failing command fails the run
 // closed, class auth.
 func TestBearerToken(t *testing.T) {
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
-	for _, k := range gcstest.Keys(3000) {
-		b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
-	}
-	fake := gofakes3.New(b).Server()
+	fake := s3test.Handler(s3test.Backend(t, gcstest.Keys(3000)))
 	var mu sync.Mutex
 	auths := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

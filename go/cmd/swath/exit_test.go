@@ -23,14 +23,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // TestExitCodes: every outcome has its exit code and, for a run that did
@@ -44,17 +42,7 @@ func TestExitCodes(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
-	for i := range 3000 {
-		k := fmt.Sprintf("p%02d/obj-%06d", i%11, i)
-		if _, err := b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := gofakes3.New(b).Server()
+	h := s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 11)))
 	var hang atomic.Bool // after the first request, hold every request (no progress)
 	var served atomic.Int64
 	var slow atomic.Bool // 300 ms per request: a run long enough to signal

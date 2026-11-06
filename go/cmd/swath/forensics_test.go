@@ -20,13 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // TestStuckCause: a run stopped as stuck (75) names what rose while
@@ -155,17 +153,14 @@ func TestOneTerminalAccount(t *testing.T) {
 		}
 	}
 	t.Run("partial coverage", func(t *testing.T) {
-		b := s3mem.New()
-		b.CreateBucket("bkt")
-		for i := range 300 {
-			k := fmt.Sprintf("k%04d", i)
-			b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
+		keys := make([]string, 300)
+		for i := range keys {
+			keys[i] = fmt.Sprintf("k%04d", i)
 		}
-		srv := httptest.NewServer(gofakes3.New(b).Server())
-		t.Cleanup(srv.Close)
+		url := s3test.Bucket(t, keys)
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(ctx, []string{"s3://bkt", "--endpoint", srv.URL, "--path-style", "--anonymous", "--sequential", "--max-keys", "10",
+		err := run(ctx, []string{"s3://bkt", "--endpoint", url, "--path-style", "--anonymous", "--sequential", "--max-keys", "10",
 			"--report", report, "-o", dir}, io.Discard, true)
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("exit %d (%v)", c, err)

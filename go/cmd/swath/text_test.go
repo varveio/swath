@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,26 +18,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 func textBucket(t *testing.T, n int) (args []string, keys []string) {
 	t.Helper()
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
 	keys = gcstest.Keys(n)
 	slices.Sort(keys)
-	for _, k := range keys {
-		b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
-	}
-	srv := httptest.NewServer(gofakes3.New(b).Server())
-	t.Cleanup(srv.Close)
-	return []string{"s3://bkt", "--endpoint", srv.URL, "--anonymous"}, keys
+	return []string{"s3://bkt", "--endpoint", s3test.Bucket(t, keys), "--anonymous"}, keys
 }
 
 // TestTextOutput: rows on stdout by default (TSV off a terminal, the

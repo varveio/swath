@@ -4,10 +4,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,10 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // TestResumeOperationalOverrides: swath resume accepts the operational
@@ -44,13 +40,7 @@ func TestResumeOperationalOverrides(t *testing.T) {
 	os.WriteFile(filepath.Join(dir0, "credentials"), []byte("[a]\naws_access_key_id = AKA\naws_secret_access_key = s\n"+
 		"[b]\naws_access_key_id = AKB\naws_secret_access_key = s\n[c]\naws_access_key_id = AKC\naws_secret_access_key = s\n"), 0o600)
 	os.WriteFile(filepath.Join(dir0, "config"), []byte("[profile c]\nregion = eu-west-2\n"), 0o600)
-	b := s3mem.New()
-	b.CreateBucket("bkt")
-	for i := range 20000 {
-		k := fmt.Sprintf("p%02d/obj-%06d", i%7, i)
-		b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
-	}
-	h := gofakes3.New(b).Server()
+	h := s3test.Handler(s3test.Backend(t, s3test.Keys(20000, 7)))
 	var mu sync.Mutex
 	keys := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

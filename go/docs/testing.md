@@ -143,6 +143,15 @@ go run ./bench/s3fake -keys keys.tsv -bucket bench -addr 127.0.0.1:9000 &   # TS
 `bench/s3_parallel.sh` runs the sequential and parallel wall table on it. Fake-bucket numbers are synthetic:
 they measure client CPU and coordination, not S3 latency.
 
+**Test fixtures.** Tests build their buckets from two shared packages: `internal/source/s3/s3test` (a
+gofakes3 bucket `bkt` whose bodies are the keys: `Backend` populates, `Handler` serves, `Delayed` adds
+latency, `Serve` owns the server's lifecycle, `NoCredentials` hides the host's AWS credentials) and
+`internal/source/gcs/gcstest` (`Strict`, the objects.list fake with opaque page tokens bound to their query,
+empty and short pages and a fields selector, which the GCS provider's protocol tests run against; `Bucket`
+and `Handler` serve it for run-level tests). A test that injects faults wraps the handler; protocol oracles
+and malformed-response handlers stay in their tests. `keyrangetest` (engine laws), `scalefake` (lazy large
+keyspaces) and `faulttest` (transport disturbance) keep their own purposes.
+
 ## Fault injection
 
 `internal/source/objhttp/faulttest` is a fault-injecting HTTP proxy for tests and benchmarks (never linked

@@ -9,14 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // TestBothSchemesThroughTheCommand: one command line, with every
@@ -27,19 +24,11 @@ import (
 // counted), on swath list and swath diag list alike (Astra, kernel-seam
 // follow-up, item 7).
 func TestBothSchemesThroughTheCommand(t *testing.T) {
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
 	keys := gcstest.Keys(3000)
-	for _, k := range keys {
-		b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
-	}
-	s3srv := httptest.NewServer(gofakes3.New(b).Server())
-	t.Cleanup(s3srv.Close)
+	s3url := s3test.Bucket(t, keys)
 	gcs := gcstest.Bucket(t, keys, 0)
 	schemes := map[string][]string{
-		"s3":  {"s3://bkt", "--endpoint", s3srv.URL, "--path-style", "--anonymous"},
+		"s3":  {"s3://bkt", "--endpoint", s3url, "--path-style", "--anonymous"},
 		"gcs": {"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"},
 	}
 	type report struct {

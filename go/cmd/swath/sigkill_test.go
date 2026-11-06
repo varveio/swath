@@ -8,9 +8,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,12 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // TestSIGKILLResume kills a real swath process with SIGKILL once parts are
@@ -38,24 +34,10 @@ func TestSIGKILLResume(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
-	for i := range 6000 {
-		k := fmt.Sprintf("p%02d/obj-%06d", i%11, i)
-		if _, err := b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := gofakes3.New(b).Server()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(20 * time.Millisecond) // slow enough to kill mid-run
-		h.ServeHTTP(w, r)
-	}))
-	t.Cleanup(srv.Close)
+	// Slow enough to kill mid-run.
+	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, s3test.Keys(6000, 11))), 20*time.Millisecond))
 	args := func(out string, extra ...string) []string {
-		return append([]string{"list", "s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous", "-workers", "8",
+		return append([]string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "8",
 			"-part-size", "4KiB", "-row-budget", "512KiB", "-o", out}, extra...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -127,22 +109,9 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
-	for i := range 4000 {
-		k := fmt.Sprintf("p%02d/obj-%06d", i%7, i)
-		b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
-	}
-	srv := httptest.NewServer(gofakes3.New(b).Server())
-	t.Cleanup(srv.Close)
-	h := gofakes3.New(b).Server()
-	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(3 * time.Millisecond)
-		h.ServeHTTP(w, r)
-	}))
-	t.Cleanup(slow.Close)
+	b := s3test.Backend(t, s3test.Keys(4000, 7))
+	url := s3test.Serve(t, s3test.Handler(b))
+	slowURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 3*time.Millisecond))
 	gcs := gcstest.Bucket(t, gcstest.Keys(4000), 0)
 	common := []string{"-workers", "8", "-part-size", "4KiB", "-row-budget", "512KiB"}
 	for _, prov := range []struct {
@@ -150,9 +119,9 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		src     []string
 		runtime []string // also given to swath resume
 	}{
-		{"s3", []string{"s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous"}, nil},
+		{"s3", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous"}, nil},
 		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}, nil},
-		{"s3-interval", []string{"s3://bkt", "-endpoint", slow.URL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}},
+		{"s3-interval", []string{"s3://bkt", "-endpoint", slowURL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}},
 	} {
 		args := func(out string, extra ...string) []string {
 			a := append(append(append(append([]string{"list"}, prov.src...), common...), prov.runtime...), "-o", out)

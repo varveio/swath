@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,10 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 func snap() listing.ProgressSnapshot {
@@ -187,15 +184,7 @@ func TestStatsBlock(t *testing.T) {
 // another prefix); --stats prints the block on stderr, the summary line
 // stays on stdout, and progress.json carries the request account.
 func TestReportContinuity(t *testing.T) {
-	b := s3mem.New()
-	if err := b.CreateBucket("bkt"); err != nil {
-		t.Fatal(err)
-	}
-	for _, k := range []string{"a/1", "a/2", "b/1"} {
-		b.PutObject("bkt", k, nil, bytes.NewReader([]byte(k)), int64(len(k)), nil)
-	}
-	srv := httptest.NewServer(gofakes3.New(b).Server())
-	t.Cleanup(srv.Close)
+	url := s3test.Bucket(t, []string{"a/1", "a/2", "b/1"})
 	stderr := captureStderr(t)
 	type rep struct {
 		ArgsHash string `json:"args_hash"`
@@ -217,7 +206,7 @@ func TestReportContinuity(t *testing.T) {
 		t.Helper()
 		var out bytes.Buffer
 		file := filepath.Join(t.TempDir(), "r.json")
-		args := append([]string{src, "--endpoint", srv.URL, "--path-style", "--anonymous", "-o", filepath.Join(t.TempDir(), "ds"), "--report", file}, extra...)
+		args := append([]string{src, "--endpoint", url, "--path-style", "--anonymous", "-o", filepath.Join(t.TempDir(), "ds"), "--report", file}, extra...)
 		if err := run(context.Background(), args, &out, false); err != nil {
 			t.Fatal(err)
 		}
