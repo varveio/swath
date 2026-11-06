@@ -162,9 +162,11 @@ func WriteReport(out string, v any) error {
 
 // Publish commits parts (already gated): each part not yet published is
 // renamed into data/, data/ is synced, and manifest.json is installed by an
-// atomic rename and a directory sync. That rename is the commit; the run
-// report follows (WriteReport).
-func Publish(out string, meta Meta, parts []Part) error {
+// atomic rename and a directory sync. That installation is the commit; the
+// run report follows (WriteReport). commit, if set, runs the installation
+// (install) as the caller's commit step: the caller accounts the commit in
+// the same step, or refuses it (an error without calling install).
+func Publish(out string, meta Meta, parts []Part, commit func(install func() error) error) error {
 	data := filepath.Join(out, DataDir)
 	m := Manifest{Format: Format, FormatVersion: FormatVersion, SchemaID: meta.SchemaID,
 		Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
@@ -189,7 +191,11 @@ func Publish(out string, meta Meta, parts []Part) error {
 		return err
 	}
 	m.PublishedAt = time.Now().UTC()
-	if err := writeJSON(out, ManifestName, m); err != nil {
+	install := func() error { return writeJSON(out, ManifestName, m) }
+	if commit == nil {
+		commit = func(install func() error) error { return install() }
+	}
+	if err := commit(install); err != nil {
 		return err
 	}
 	return faults.At("manifest")

@@ -191,10 +191,19 @@ previous file in place, perhaps with the same class and exit code, and says why 
 `TestOutcomeSettlementAfterConcurrentCommit`). Nothing can promise a new file on
 storage that refuses writes: without a report, only the exit code is current. A report that cannot be written
 is named with its attempt id on stderr. A stop (a signal, `--max-duration`, `--stall-timeout`) that the run does
-not finish within 15 s (I/O that does not return) ends the process with its exit code, after writing the
-forced outcome (`error.json` and a minimal report) if that takes at most 2 s; the exit comes at most 5 s after
-the grace whatever blocks, a full stderr pipe included (`TestDeadlineExitsAfterGrace`,
-`TestForcedExitWithFullStderr`). A supervisor's own process deadline covers a process that cannot even do that.
+not finish within 15 s (I/O that does not return) ends the process. Its exit timer is armed first, before any
+lock, file or diagnostic, so the exit comes at most 5 s after the grace whatever blocks, a full stderr pipe or a
+classification on a disk that does not return included (`TestDeadlineExitsAfterGrace`,
+`TestForcedExitWithFullStderr`, `TestForcedExitBackstopFirst`). The forced exit takes one snapshot of the
+terminal result, waiting at most 2 s, and its exit code, `error.json` and report all derive from it: the run's
+classification once made, else the forced one, frozen then so nothing later reclassifies the run. The commit is
+one step with its account: the manifest's durable installation and the freezing of the committed result happen
+under one gate, so a forced exit sees either a run not committed (and a commit after it is refused) or the
+committed result (complete exits 0; partial coverage stays incomplete and nonzero) (`TestForcedExitAtCommit`,
+`TestForcedSnapshotIsTheResult`). A snapshot that cannot be taken in time writes no outcome and exits with the
+stop's code, or with the result's if it arrives before the exit. A manifest renamed into place whose directory
+sync then fails is visible but not committed: the run fails, and `swath resume` finds the dataset complete. A
+supervisor's own process deadline covers a process that cannot even do that.
 
 ## Why splits need no transaction
 

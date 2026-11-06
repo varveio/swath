@@ -484,7 +484,7 @@ func runB(ctx context.Context, p *Provider, out, dir string, lim Limits, resume 
 	now := time.Now()
 	meta := dataset.Meta{SchemaID: s3.Schema.ID, Source: dataset.Source{Kind: "sortab", URI: "sortab://" + p.l.Name}, Scope: dataset.Scope{Kind: "whole"},
 		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: start.UTC(), ListingFinishedAt: now.UTC()}}
-	if err := dataset.Publish(out, meta, ps); err != nil {
+	if err := dataset.Publish(out, meta, ps, nil); err != nil {
 		return st, err
 	}
 	st.MergeMs = time.Since(t).Milliseconds()

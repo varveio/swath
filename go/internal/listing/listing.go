@@ -65,6 +65,12 @@ type Config struct {
 	// run.json), at a failure (before Settle), or as Run returns for a run
 	// that stopped before either.
 	Finalize func(*Report, error)
+	// Commit, if set, runs step, the commit: the manifest's durable
+	// installation and, once it is installed, the committed report's
+	// Finalize, so the caller can order the commit against its other
+	// terminal accounts (cmd/swath's forced exit). An error returned
+	// without running step means not committed. nil runs step.
+	Commit func(step func() error) error
 }
 
 // finalize applies Finalize to r once: the first call on a terminal report
@@ -700,22 +706,39 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	}
 	meta := manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed)
 	meta.Coverage.Filters = append(meta.Coverage.Filters, cfg.Filter.Descriptions()...)
-	if err := dataset.Publish(cfg.Output.Dir, meta, parts); err != nil {
+	// Committed once the manifest is installed: the terminal account is
+	// frozen then, in the same step, before anything that can block or
+	// fail; the report follows and can no longer revoke the dataset.
+	committed := false
+	step := func(install func() error) error {
+		if err := install(); err != nil {
+			return err
+		}
+		committed = true
+		if pr := cfg.Progress; pr != nil && !jr.journaled() {
+			pr.parts.Add(int64(sum.Output.PartsWritten))
+		}
+		sum.Outcome.Status, sum.Outcome.Class = StatusCommitted, ClassCompleted
+		sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
+		sum.Output.RowsDurable = sum.Output.RowsCommitted
+		sum.finish()
+		cfg.finalize(sum, nil)
+		return nil
+	}
+	commit := step
+	if cfg.Commit != nil {
+		commit = func(install func() error) error { return cfg.Commit(func() error { return step(install) }) }
+	}
+	if err := dataset.Publish(cfg.Output.Dir, meta, parts, commit); err != nil {
+		if committed { // only an injected crash follows the commit
+			return *sum, err
+		}
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 			dataset.Cleanup(cfg.Output.Dir)
 		}
 		a.durable()
 		return sum.failed(fmt.Errorf("publish: %w", err))
 	}
-	if pr := cfg.Progress; pr != nil && !jr.journaled() {
-		pr.parts.Add(int64(sum.Output.PartsWritten))
-	}
-	// Committed: the report follows and can no longer revoke the dataset.
-	sum.Outcome.Status, sum.Outcome.Class = StatusCommitted, ClassCompleted
-	sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
-	sum.Output.RowsDurable = sum.Output.RowsCommitted
-	sum.finish()
-	cfg.finalize(sum, nil)
 	if err := jr.verify(); err != nil {
 		if cfg.Warn != nil {
 			cfg.Warn("run report not written: " + err.Error())

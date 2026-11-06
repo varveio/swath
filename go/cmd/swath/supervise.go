@@ -388,33 +388,49 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 	return "stderr"
 }
 
-// forcedAccount writes the outcome of a run forced to exit (it did not
-// stop within the shutdown grace) where the graceful path would have:
-// DIR/error.json while the run owns the output, and the report
-// (--report): the run's last accounted report once it was classified (a
-// committed run stays committed and complete), else a minimal one without
-// the run's statistics. The class,
-// cause and resumability are the graceful path's for the same stop; the
-// exit code is the one the process exits with. Bounded by stacksWait: a
-// disk that blocks the run may block these writes too.
-func forcedAccount(f *forensicTarget, code int, why string) {
+// forcedErr is the error of a run forced to exit (it did not stop within
+// the shutdown grace).
+func forcedErr(why string) error {
+	return fmt.Errorf("forced exit: still stopping (%s) after %s", why, shutdownGrace)
+}
+
+// forcedSnapshot takes the forced exit's one snapshot of the terminal
+// result (terminal.claim): the run's classification once made (a committed
+// run stays committed and complete), else the forced one, classified as
+// the graceful path classifies the same stop, with exit code code. ok
+// false: none within stacksWait (a commit or a classification holds the
+// result, perhaps on a disk that does not return); late gets it if it
+// comes after all.
+func forcedSnapshot(f *forensicTarget, code int, why string, late func(snapshot)) (snapshot, bool) {
+	if f.ctx == nil {
+		return snapshot{}, false
+	}
+	return f.t.claim(func() outcome {
+		o := classify(forcedErr(why), context.Cause(f.ctx), f.dir)
+		o.ExitCode = code
+		return o
+	}, stacksWait, late)
+}
+
+// forcedAccount writes a forced exit's outcome, from its snapshot s, where
+// the graceful path would have: DIR/error.json while the run owns the
+// output, and the report (--report): the run's last accounted report once
+// it was classified, else a minimal one without the run's statistics. The
+// exit code is the snapshot's. Bounded by stacksWait: a disk that blocks
+// the run may block these writes too.
+func forcedAccount(f *forensicTarget, s snapshot, why string) {
 	if f.ctx == nil {
 		return
 	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		err := fmt.Errorf("forced exit: still stopping (%s) after %s", why, shutdownGrace)
-		// The run's terminal report once it was classified (its accounts
-		// may be written): the forced exit keeps that result, a committed
-		// run included; else a minimal report classified now.
-		o, frozen := f.t.frozen()
-		if !frozen {
-			o = classify(err, context.Cause(f.ctx), f.dir)
-		} else if o.ExitCode != exitCompleted {
+		err := forcedErr(why)
+		o := s.out
+		if s.run && o.ExitCode != exitCompleted {
 			o.Message = err.Error() + ": " + o.Message
 		}
-		r, ok := f.t.report()
+		r, ok := s.report()
 		if !ok {
 			r = listing.Unstarted(f.argv, f.dir, f.att, err)
 		}
@@ -425,7 +441,7 @@ func forcedAccount(f *forensicTarget, code int, why string) {
 		} else {
 			o.StopSource = "forced_exit"
 		}
-		o.ExitCode, o.Attempt = code, f.att
+		o.Attempt = f.att
 		account(&r.Outcome, o)
 		if f.dir != "" {
 			f.pr.Owned(func() { _ = writeOutcome(f.dir, outcomeOf(r)) })

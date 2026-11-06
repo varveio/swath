@@ -83,22 +83,33 @@ func main() {
 			select {
 			case <-finished:
 			case <-time.After(shutdownGrace):
-				// The exit does not depend on the diagnostics: whatever
-				// blocks below (a full stderr pipe nobody drains, a disk
-				// that does not return), the process exits within
-				// forcedAllowance.
+				// The backstop is armed first, before any lock, file,
+				// snapshot or diagnostic: whatever blocks below (a
+				// classification on a disk that does not return, a full
+				// stderr pipe nobody drains), the process exits within
+				// forcedAllowance, with the code chosen so far.
+				var exit atomic.Int64
+				exit.Store(int64(code))
+				time.AfterFunc(forcedAllowance, func() { os.Exit(int(exit.Load())) })
 				f := forensics.Load()
 				if f == nil {
 					f = &forensicTarget{}
 				}
-				if fr, ok := f.t.frozen(); ok {
-					code = fr.ExitCode // the run's classification stands
+				// One snapshot for the exit code and every file written;
+				// one that comes late (a commit that was under way) still
+				// sets the code the run's own accounts carry.
+				s, ok := forcedSnapshot(f, code, why, func(s snapshot) { exit.Store(int64(s.out.ExitCode)) })
+				if ok {
+					exit.Store(int64(s.out.ExitCode)) // the run's classification stands
 				}
-				time.AfterFunc(forcedAllowance, func() { os.Exit(code) })
 				note(errOut, fmt.Sprintf("swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace))
+				if ok {
+					forcedAccount(f, s, why)
+				} else {
+					note(errOut, "swath: the run's result could not be read in time; no outcome is written\n")
+				}
 				dumpStacks(f.dir, f.pr, "forced-exit", why, f.pr.Snapshot())
-				forcedAccount(f, code, why)
-				os.Exit(code)
+				os.Exit(int(exit.Load()))
 			}
 		}()
 	}
@@ -586,6 +597,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		}
 		term.account(r, err)
 	}
+	cfg.Commit = term.commit // the commit and its account, one step against a forced exit
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
 		term.account(&sum, err) // a no-op for the accounted report Settle gets
