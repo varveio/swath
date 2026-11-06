@@ -19,7 +19,7 @@ public record ServeConfig(Path fixture, String host, int port, String bucket,
                           long responseBufferBudget, int maxResponseBytes,
                           Duration stopTimeout, Duration idleTimeout, Duration writeTimeout,
                           String advertisedHost,
-                          BiFunction<S3ListRequest, S3ListResult, Duration> s3Latency) {
+                          BiFunction<S3ListRequest, S3ListResult, Duration> latency) {
     public static final long DEFAULT_RESPONSE_BUFFER_BUDGET = 256L * 1024 * 1024;
     public static final int DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 

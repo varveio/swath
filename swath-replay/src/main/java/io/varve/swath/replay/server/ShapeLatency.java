@@ -5,6 +5,8 @@
  */
 package io.varve.swath.replay.server;
 
+import io.varve.swath.replay.metrics.ListingObservation;
+import io.varve.swath.replay.metrics.ObservationShape;
 import io.varve.swath.replay.metrics.RequestShape;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
@@ -114,25 +116,48 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
 
     @Override
     public Duration apply(S3ListRequest req, S3ListResult result) {
-        Delay delay = switch (classify(req)) {
+        return delay(classify(req), result == null ? 0 : commonPrefixCount(result), requestHash(req));
+    }
+
+    /**
+     * The profile's delay for a native GCS or Azure page, which has no {@link S3ListRequest}. The
+     * route classifies its request by the same rules (its {@link ObservationShape}), reports the
+     * prefixes it returned for the {@code /cp} term, and passes a hash of its request fields as the
+     * jitter key, so the same request again gets the same delay.
+     */
+    public Duration apply(ListingObservation observation, long requestKey) {
+        return delay(shapeOf(observation.shape()), observation.prefixes(), requestKey);
+    }
+
+    /** The request shape a native route's observation shape stands for. */
+    public static RequestShape shapeOf(ObservationShape shape) {
+        return switch (shape) {
+            case DELIMITER -> RequestShape.STRUCTURE_PROBE;
+            case SEEK -> RequestShape.PIVOT_PROBE;
+            case PAGE, UNKNOWN -> RequestShape.WORKER_PAGE;
+        };
+    }
+
+    private Duration delay(RequestShape shape, long commonPrefixes, long requestKey) {
+        Delay delay = switch (shape) {
             case STRUCTURE_PROBE -> structureProbe;
             case PIVOT_PROBE -> pivotProbe;
             case WORKER_PAGE -> workerPage;
         };
         Duration base = delay.base();
-        if (!delay.perCommonPrefix().isZero() && result != null) {
-            base = base.plus(delay.perCommonPrefix().multipliedBy(commonPrefixCount(result)));
+        if (!delay.perCommonPrefix().isZero()) {
+            base = base.plus(delay.perCommonPrefix().multipliedBy(commonPrefixes));
         }
         if (base.isZero() || jitter == 0.0) {
             return base;
         }
         // Deterministic jitter in [-jitter, +jitter], keyed off the request so a given request always
-        // sees the same delay (reproducible, unlike Math.random). mix64 avalanches requestHash before
+        // sees the same delay (reproducible, unlike Math.random). mix64 avalanches requestKey before
         // the low bits are dropped below: successive continuation tokens within one walk are base64
         // encodings of nearby boundary keys, so their plain polynomial hashCodes can land close
         // together (even one apart) — and >>> 11 would otherwise discard exactly that difference,
         // silently re-flattening jitter back into a per-walk constant.
-        long h = mix64(requestHash(req));
+        long h = mix64(requestKey);
         double signed = ((h >>> 11) * 0x1.0p-53) * 2.0 - 1.0;   // a stable double in [-1, 1)
         long scaledNanos = (long) (base.toNanos() * (1.0 + jitter * signed));
         return Duration.ofNanos(Math.max(0, scaledNanos));

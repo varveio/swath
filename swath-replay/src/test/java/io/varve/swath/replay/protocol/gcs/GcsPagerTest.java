@@ -14,12 +14,14 @@ import io.varve.swath.replay.metrics.ReplayMetrics;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.PaginationTestProfile;
 import io.varve.swath.replay.server.ListingHttpRequest;
+import io.varve.swath.replay.server.ShapeLatency;
 import io.varve.swath.replay.testkit.FakeListingStore;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -71,6 +73,24 @@ class GcsPagerTest {
             assertThat(seek.shape()).isEqualTo(ObservationShape.SEEK);
             assertThat(seek.objects()).isEqualTo(1);
             assertThat(seek.prefixes()).isZero();
+        }
+    }
+
+    @Test
+    void injectedLatencyIsKeyedByTheSameRequestShapesAsS3() {
+        ShapeLatency latency = ShapeLatency.parse(
+                "worker_page=100ms,pivot_probe=20ms,structure_probe=50ms+5ms/cp", 0.0, ShapeLatency.UNSCALED);
+        try (FakeListingStore store = FakeListingStore.ofKeys("a/1", "a/2", "b/1", "c")) {
+            GcsHandler handler = new GcsHandler("bucket", store, "fixture", null, latency);
+            assertThat(handler.parse(new ListingHttpRequest("GET", "/storage/v1/b/bucket/o", "", Map.of()))
+                    .page().injectedLatency()).isEqualTo(Duration.ofMillis(100));
+            assertThat(handler.parse(new ListingHttpRequest("GET", "/storage/v1/b/bucket/o", "maxResults=1",
+                    Map.of())).page().injectedLatency()).isEqualTo(Duration.ofMillis(20));
+            // Two prefixes (a/, b/) returned: the /cp term charges for each.
+            assertThat(handler.parse(new ListingHttpRequest("GET", "/storage/v1/b/bucket/o", "delimiter=%2F",
+                    Map.of())).page().injectedLatency()).isEqualTo(Duration.ofMillis(60));
+            assertThat(new GcsHandler("bucket", store, "fixture").parse(new ListingHttpRequest("GET",
+                    "/storage/v1/b/bucket/o", "", Map.of())).page().injectedLatency()).isZero();
         }
     }
 

@@ -427,7 +427,9 @@ swath-replay serve ... \
 
 A delimiter request is a `structure_probe`; a delimiter-free `max-keys<=1` request is a
 `pivot_probe`; other requests are `worker_page`. The optional `/cp` term charges for each
-returned common prefix, which a network proxy cannot infer. Jitter is derived from request
+returned common prefix, which a network proxy cannot infer. The GCS and Azure routes take the
+same profile, classified the same way (`delimiter`; `maxResults`/`maxresults` of 1; anything
+else), so one `--inject-latency` delays every enabled route. Jitter is derived from request
 bytes, so the same request gets the same delay. `prod-commoncrawl` is a built-in reference
 profile. Injection is off by default.
 

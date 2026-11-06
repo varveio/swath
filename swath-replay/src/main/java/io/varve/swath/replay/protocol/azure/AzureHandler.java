@@ -17,15 +17,19 @@ import io.varve.swath.replay.server.Protocol;
 import io.varve.swath.replay.server.RenderedResponse;
 import io.varve.swath.replay.server.ReplayFailure;
 import io.varve.swath.replay.server.ReplayRequestException;
+import io.varve.swath.replay.server.ShapeLatency;
 import io.varve.swath.replay.store.ListingStore;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 
 /** Native Azure flat List Blobs XML route, profile and errors. */
@@ -39,14 +43,18 @@ public final class AzureHandler implements ListingProtocolHandler {
     private final Supplier<String> endpointBase;
     private final AzureListPager pager;
     private final ReplayMetrics metrics;
+    private final ShapeLatency latency;
 
+    /** {@code latency} is the {@code --inject-latency} profile, or {@code null} when injection is off. */
     public AzureHandler(String account, String container, Supplier<String> endpointBase,
-                        ListingStore store, String fixtureIdentity, ReplayMetrics metrics) {
+                        ListingStore store, String fixtureIdentity, ReplayMetrics metrics,
+                        ShapeLatency latency) {
         this.account = account;
         this.container = container;
         this.endpointBase = endpointBase;
         this.pager = new AzureListPager(store, fixtureIdentity, PaginationTestProfile.NONE, metrics);
         this.metrics = metrics;
+        this.latency = latency;
     }
 
     @Override
@@ -98,9 +106,23 @@ public final class AzureHandler implements ListingProtocolHandler {
                         : parsed.pageSize() == 1 ? ObservationShape.SEEK : ObservationShape.PAGE;
                 ListingObservation observation = new ListingObservation(shape,
                         result.entries().size() - prefixes, prefixes);
+                // The client request id is left out of the jitter key: it changes per call, not per page.
+                Duration delay = latency == null ? Duration.ZERO : latency.apply(observation,
+                        Objects.hash(parsed.prefix(), parsed.delimiter(), parsed.startFrom(),
+                                parsed.marker(), parsed.pageSize()));
                 return new PreparedPage() {
                     @Override
                     public ListingObservation observation() { return observation; }
+
+                    @Override
+                    public Duration injectedLatency() { return delay; }
+
+                    @Override
+                    public LongConsumer injectionOverrunRecorder() {
+                        return nanos -> {
+                            if (metrics != null) metrics.recordInjectionOverrun(ShapeLatency.shapeOf(shape), nanos);
+                        };
+                    }
 
                     @Override
                     public int initialOutputBytesHint() {
