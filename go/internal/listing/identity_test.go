@@ -12,10 +12,12 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 )
 
@@ -253,4 +255,54 @@ func TestReplacedOutputWithLiveWriters(t *testing.T) {
 		t.Fatalf("resume at the moved path: %v", err)
 	}
 	sameDataset(t, "moved", clean, moved)
+}
+
+// TestReplacedAfterCheckGetsNoPart: the output is replaced between the
+// router's identity check and its creation of a part file (the fault point
+// part-create), the window a loaded host opened in
+// TestReplacedOutputIsNeverTouched. The part file is created relative to
+// the directory the run locked (os.Root), so it lands in the moved
+// directory, never in the impostor; the run stops with ErrOutputReplaced
+// at its next check. Before, the file was created by pathname, in the
+// impostor's .swath/parts.
+func TestReplacedAfterCheckGetsNoPart(t *testing.T) {
+	var keys []string
+	for i := range 20000 {
+		keys = append(keys, fmt.Sprintf("k%06d", i))
+	}
+	base := t.TempDir()
+	imp := filepath.Join(base, "impostor")
+	if _, err := runScripted(t, &scripted{keys: keys[:3000], chunk: 1000}, imp, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(imp, dataset.Workspace, dataset.PartsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := fileTree(t, imp)
+	out, moved := filepath.Join(base, "out"), filepath.Join(base, "moved")
+	var n atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "part-create" && n.Add(1) == 3 {
+			if err := os.Rename(out, moved); err != nil {
+				return err
+			}
+			return os.Rename(imp, out)
+		}
+		return nil
+	})
+	defer restore()
+	scriptMu.Lock()
+	scriptNext = &scripted{keys: keys, chunk: 1000}
+	scriptMu.Unlock()
+	_, err := Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out},
+		Limits: Limits{PartSize: 2 << 10, Workers: 4, Encoders: 1, Memory: 256 << 10, PartInterval: -1}})
+	if n.Load() < 3 {
+		t.Fatalf("part-create reached %d times", n.Load())
+	}
+	if !errors.Is(err, journal.ErrOutputReplaced) {
+		t.Fatalf("err = %v, want ErrOutputReplaced", err)
+	}
+	if after := fileTree(t, out); !maps.Equal(before, after) {
+		t.Fatalf("the impostor changed:\nbefore %v\nafter  %v", before, after)
+	}
 }

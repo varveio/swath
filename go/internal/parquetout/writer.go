@@ -109,12 +109,17 @@ type writer[P any] struct {
 }
 
 // create opens path for part ordinal (0-based).
-func create[P any](path string, s *schema.Schema[P], ordinal, maxColumns int, columns func() int) (*writer[P], error) {
+func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], ordinal, maxColumns int, columns func() int) (*writer[P], error) {
 	c, err := newCodec(max(1, maxColumns))
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if open == nil {
+		open = func(path string) (*os.File, error) {
+			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		}
+	}
+	f, err := open(path)
 	if err != nil {
 		c.Close()
 		return nil, fmt.Errorf("create part: %w", err)

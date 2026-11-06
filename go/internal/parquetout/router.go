@@ -59,6 +59,11 @@ type Options struct {
 	// Verify, if set, is called before each part file is created: the
 	// output's pathname must still name the directory the run owns.
 	Verify func() error
+	// Open, if set, creates a part file (write-only, truncated) at its
+	// path; nil opens it by pathname. A caller that owns the output passes
+	// one relative to the directory it locked, so a pathname replaced
+	// after Verify cannot receive the part.
+	Open func(path string) (*os.File, error)
 	// Cut, if set, fixes one part's boundary: the part with that ordinal
 	// is closed after exactly that many rows, neither by size nor by the
 	// interval. A resume sets it to reproduce a claimed part whose record
@@ -338,9 +343,12 @@ func (r *Router[P]) encode(p *part[P]) {
 	if r.opt.Verify != nil {
 		err = r.opt.Verify()
 	}
+	if err == nil {
+		err = faults.At("part-create") // tests: the output replaced after the check
+	}
 	var w *writer[P]
 	if err == nil {
-		w, err = create(dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.Encoders, columns)
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.Encoders, columns)
 	}
 	if err != nil {
 		p.err = err

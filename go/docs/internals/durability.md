@@ -111,10 +111,16 @@ that is the commit. The run reports follow it.
    inode, so into the moved directory, never its replacement. A directory moved or replaced during the run
    stops it with `journal.ErrOutputReplaced`, and the moved directory resumes at its new path
    (`TestReplacedOutputIsNeverTouched`; `TestReplacedOutputWithLiveWriters`, where the replacement is a copy
-   holding the run's own spill and progress files, rewritten every millisecond). What is not excluded: a
-   replacement between a check and its action (no portable directory-relative rename exists), and helpers
-   of several steps (preparation, recovery of a part, a publication's rename and directory sync, the
-   manifest's write and rename) check once before they start, so that window spans the helper.
+   holding the run's own spill and progress files, rewritten every millisecond). The part files are created,
+   claimed and renamed into `data/` relative to the locked directory (an `os.Root` opened after a check,
+   before the router starts), so a replacement between a check and those actions cannot reach the impostor
+   (`TestReplacedAfterCheckGetsNoPart`, the fault point `part-create` between the router's check and the
+   create; under a load average of 13-20 `TestReplacedOutputIsNeverTouched` had seen a part created by
+   pathname in the impostor's `.swath/parts`). What is not excluded: a replacement between a check and its
+   action for the other pathname operations (the spill files, recovery, cleanup, the manifest, the reports,
+   the outcome and progress files), and helpers of several steps (preparation, recovery of a part, the
+   publication's directory sync, the manifest's write and rename) check once before they start, so that
+   window spans the helper.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
    pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that

@@ -254,11 +254,18 @@ func syncDir(dir string) error {
 // directory: the early publication of a journaled run, after the part's
 // journal record is durable. It returns the part with its final path.
 func PublishPart(out string, ordinal int, p Part) (Part, error) {
+	return PublishPartWith(os.Rename, out, ordinal, p)
+}
+
+// PublishPartWith is PublishPart renaming with rename (one relative to the
+// directory the caller locked, so a replaced pathname is never renamed
+// into).
+func PublishPartWith(rename func(old, new string) error, out string, ordinal int, p Part) (Part, error) {
 	final := filepath.Join(out, DataDir, PartName(ordinal))
 	if err := faults.At("rename"); err != nil {
 		return p, err
 	}
-	if err := os.Rename(p.Path, final); err != nil {
+	if err := rename(p.Path, final); err != nil {
 		return p, fmt.Errorf("publish part %d: %w", ordinal, err)
 	}
 	if err := faults.At("renamed-unsynced"); err != nil { // between the rename and its directory sync

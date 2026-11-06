@@ -58,6 +58,45 @@ type runJournal struct {
 	acked struct {
 		parts, bytes, rows atomic.Int64
 	}
+	// root is the locked output directory, opened once its identity was
+	// verified: part files are created and renamed relative to it, never
+	// by a pathname that may name another directory by then.
+	root *os.Root
+}
+
+// rooted opens jr.root (once, before the router starts) and checks the
+// identity after: the root is then the directory the lock is on.
+func (jr *runJournal) rooted() (*os.Root, error) {
+	if jr.root != nil {
+		return jr.root, nil
+	}
+	r, err := os.OpenRoot(jr.out)
+	if err != nil {
+		return nil, err
+	}
+	if err := jr.lock.Verify(); err != nil {
+		r.Close()
+		return nil, err
+	}
+	jr.root = r
+	return r, nil
+}
+
+// rel is path relative to the output (a path the run made under jr.out).
+func (jr *runJournal) rel(path string) string {
+	r, err := filepath.Rel(jr.out, path)
+	if err != nil {
+		return path
+	}
+	return r
+}
+
+// rename renames within the locked output directory.
+func (jr *runJournal) rename(old, new string) error {
+	if jr.root == nil {
+		return os.Rename(old, new)
+	}
+	return jr.root.Rename(jr.rel(old), jr.rel(new))
 }
 
 // suspect is a temporary part set aside by recovery because its record
@@ -551,6 +590,14 @@ func (jr *runJournal) routerOptions(o *parquetout.Options) {
 func (jr *runJournal) verifyOption(o *parquetout.Options) {
 	if jr != nil && jr.lock != nil {
 		o.Verify = jr.lock.Verify
+		// Opened here, before any encoder runs (they share it).
+		r, err := jr.rooted()
+		o.Open = func(path string) (*os.File, error) {
+			if err != nil {
+				return nil, err
+			}
+			return r.OpenFile(jr.rel(path), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		}
 	}
 }
 
@@ -574,7 +621,7 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	if err := jr.verify(); err != nil {
 		return p, err
 	}
-	if err := os.Rename(p.Path, claim); err != nil {
+	if err := jr.rename(p.Path, claim); err != nil {
 		return p, fmt.Errorf("claim part %d: %w", ordinal, err)
 	}
 	p.Path = claim
@@ -599,7 +646,7 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	if err := jr.verify(); err != nil {
 		return p, err
 	}
-	p, err := dataset.PublishPart(jr.out, ordinal, p)
+	p, err := dataset.PublishPartWith(jr.rename, jr.out, ordinal, p)
 	if err != nil {
 		return p, err
 	}
@@ -652,6 +699,10 @@ func (jr *runJournal) release(cfg Config) {
 		jr.j = nil
 	}
 	cfg.Progress.own(nil)
+	if jr.root != nil {
+		jr.root.Close()
+		jr.root = nil
+	}
 	jr.lock.Release()
 }
 
