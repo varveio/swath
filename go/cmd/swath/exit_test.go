@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,9 @@ import (
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
+	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 )
 
@@ -334,5 +338,46 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		if !errors.As(err, &ee) || ee.code != exitStuck {
 			t.Fatalf("%s source: %v, want exit %d", m, err, exitStuck)
 		}
+	}
+}
+
+// TestGCSCappedRunIsIncomplete: a GCS run capped by --max-keys commits a
+// dataset whose coverage says incomplete, exits 1 with class incomplete
+// (not resumable), keeps no journal, and swath resume refuses it as
+// complete and leaves it as it is (S3: TestExitCodes, partial; Sol P2-8).
+func TestGCSCappedRunIsIncomplete(t *testing.T) {
+	captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	dir := filepath.Join(t.TempDir(), "ds")
+	ctx := context.Background()
+	err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--sequential", "--max-keys", "10",
+		"--part-size", "4KiB", "-o", dir}, io.Discard, true)
+	if c := exitCode(t, err); c != exitFatal {
+		t.Fatalf("capped run: exit %d (%v)", c, err)
+	}
+	var o outcome
+	if b, err := os.ReadFile(filepath.Join(dir, errorName)); err != nil || json.Unmarshal(b, &o) != nil || o.Class != "incomplete" || o.Resumable {
+		t.Fatalf("capped run: error.json %v %+v", err, o)
+	}
+	var m dataset.Manifest
+	if b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName)); err != nil || json.Unmarshal(b, &m) != nil {
+		t.Fatalf("capped run: no manifest: %v", err)
+	}
+	var rows int64
+	for _, p := range m.Parts {
+		rows += p.Rows
+	}
+	if m.Coverage.Complete || rows != 10 {
+		t.Fatalf("capped run: coverage complete %v, %d rows", m.Coverage.Complete, rows)
+	}
+	if _, err := os.Stat(journal.Path(dir)); !os.IsNotExist(err) {
+		t.Fatalf("capped run kept a journal: %v", err)
+	}
+	want := dirTree(t, dir)
+	if err := resume(ctx, []string{dir}, io.Discard); !errors.Is(err, listing.ErrComplete) {
+		t.Fatalf("resume of a capped run: %v", err)
+	}
+	if got := dirTree(t, dir); !maps.Equal(want, got) {
+		t.Fatalf("resume changed the capped dataset:\nbefore %v\nafter  %v", want, got)
 	}
 }
