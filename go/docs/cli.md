@@ -114,7 +114,7 @@ usage: swath list SOURCE --output DIR [flags]
   -stall-timeout duration
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
   -workers int
-    	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
+    	listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
 only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout (runtime) and
@@ -217,7 +217,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -structure
     	ranges: structure probes: pivot on folder boundaries listed alongside a range's pages
   -workers int
-    	listing goroutines (default min(64, max(4, 3*GOMAXPROCS)))
+    	listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
 only workers, encoders, memory, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout (runtime) and
@@ -240,6 +240,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
   dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` and `--path-style` select S3-compatible stores. S3 directory buckets (Express One Zone, names ending in
   `--x-s3`) are refused before any request (exit 2, class `refused`).
+- **Workers:** `--workers` (default 64 whatever the CPU count, Java's default; listing waits on the service,
+  not the CPU) is the listing goroutines and the request limiter's start; `--encoders` stays CPU-derived.
 - **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that
   starts at `--workers`, falls by 0.7 on each throttle answer and grows back by one per second after 10 s
   without one (Java swath's rules; [internals/providers.md](internals/providers.md)); `--limiter=false` keeps a

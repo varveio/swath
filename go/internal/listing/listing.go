@@ -80,7 +80,7 @@ type OutputConfig struct {
 
 // Limits are the execution limits; none changes the dataset's content.
 type Limits struct {
-	Workers  int   // listing goroutines; default min(64, max(4, 3*GOMAXPROCS))
+	Workers  int   // listing goroutines; default DefaultWorkers
 	Encoders int   // Parquet encoders; default GOMAXPROCS, admitted against memory and descriptors (admitEncoders)
 	Memory   int64 // budget in bytes for rows held between listing and encoding; default 256 MiB
 	PartSize int64 // target bytes per part; default 64 MiB (frozen for a resume)
@@ -142,7 +142,11 @@ func spillMax(l SpillLimits, dir string) int64 {
 
 // Defaults.
 const (
-	DefaultMemory   = 256 << 20
+	DefaultMemory = 256 << 20
+	// DefaultWorkers is the default listing concurrency, whatever the CPU
+	// count: Java's proven default (--concurrency 64). Listing waits on
+	// the service, not the CPU.
+	DefaultWorkers  = 64
 	DefaultPartSize = 64 << 20
 	// DefaultPartInterval is the default part age bound: Java's rotation
 	// interval (30 s), its proven value.
@@ -170,7 +174,7 @@ func (c *Config) resolve() error {
 		return bad("replace needs an output directory")
 	}
 	if l.Workers == 0 {
-		l.Workers = min(64, max(4, 3*runtime.GOMAXPROCS(0)))
+		l.Workers = DefaultWorkers
 	}
 	if l.Memory == 0 {
 		l.Memory = DefaultMemory

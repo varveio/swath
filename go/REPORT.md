@@ -84,7 +84,8 @@ Design details and flags: [README.md](README.md).
   and on `deep` they are close (0.67 vs 0.72 s). `strace -c` (deep, w4) shows both make exactly one
   `newfstatat` per entry. `os.OpenFile`/`os.Open` adds 4 `fcntl` per directory (66,698 for 16,678 dirs), which
   the raw path avoids, and `ReadDir` allocates a `DirEntry` per entry.
-- **Default workers `min(64, max(4, 3*GOMAXPROCS))` = 12** (research note). Warm-cache scaling flattens at
+- **Default workers `min(64, max(4, 3*GOMAXPROCS))` = 12** (research note; superseded 2026-11-06 by the
+  owner: the default is 64 whatever the CPU count, Java's). Warm-cache scaling flattens at
   GOMAXPROCS. `realistic`/getdents: w1 3.57, w2 1.90, w4 1.20, w8 1.23, w12 1.18 s. Cold-cache gains from more
   workers are small: `realistic`/getdents cold w4 5.50, w12 5.24, w32 5.08 s (single runs).
 - **Sorter takes ownership of worker batches** (no copy) and sorts a `[]*Row` permutation. The first version
@@ -1908,10 +1909,12 @@ measurement-campaign requirements.
 ### Defaults measured (harness only; measurement deferred)
 
 `bench/defaults_replay.sh` (tabulated by `bench/defaults_table.py`): the default argv (`swath list` with no
-policy flags: no `--seed`, workers min(64, max(4, 3*GOMAXPROCS)), the limiter on) against the measured argv
+policy flags: no `--seed`, the default 64 workers (since 2026-11-06, the owner's decision; before, min(64,
+max(4, 3*GOMAXPROCS))), the limiter on) against the measured argv
 (`--seed --workers 64`) and Java's defaults, interleaved, at the host's CPU count and emulating smaller hosts
 (`taskset` plus `GOMAXPROCS`); wall, CPU time, requests and requests per 1k keys. Smoke run only, as above;
-the campaign and the decisions it settles (the workers rule, `--seed`) are in the same requirements note.
+the campaign and the decisions it settles (`--seed`; the workers default is decided: 64) are in the same
+requirements note. With the default at 64 the default arm's workers no longer follow the emulated CPU count.
 
 ## Confirmed defects and lost protections, environment and contract (2026-11-06)
 

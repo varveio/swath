@@ -22,7 +22,7 @@ import (
 // TestBothSchemesThroughTheCommand: one command line, with every
 // provider's flags registered on one flag set, selects S3 or GCS by the
 // source's scheme, and each provider gets its own defaults and the shared
-// engine flags: by default no seed, splits on, the limiter on, no structure
+// engine flags: by default 64 workers whatever the CPU count, no seed, splits on, the limiter on, no structure
 // probes, floors or probe; -seed reaches the selected provider, with the default
 // descent (seed.levels.*), and diag's -seed-descent=false turns the descent
 // off for either (Astra, kernel-seam follow-up, item 7).
@@ -43,8 +43,9 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		"gcs": {"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"},
 	}
 	type report struct {
-		Outcome struct{ Status string }
-		Output  struct {
+		Invocation struct{ Workers int }
+		Outcome    struct{ Status string }
+		Output     struct {
 			RowsListed int64 `json:"rows_listed"`
 		}
 		Source struct {
@@ -78,6 +79,9 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		if r.Outcome.Status != "committed" || r.Output.RowsListed != int64(len(keys)) || r.Source.Name != name || !r.Source.Stats.Anonymous {
 			t.Fatalf("%s: %+v", name, r)
 		}
+		if r.Invocation.Workers != 64 {
+			t.Fatalf("%s: default workers %d, want 64", name, r.Invocation.Workers)
+		}
 		if f := r.Source.Stats.Counters.Features; !maps.Equal(f, defaults) {
 			t.Fatalf("%s defaults: features %v, want %v", name, f, defaults)
 		}
@@ -94,6 +98,9 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 			t.Fatalf("%s --seed: features %v, the descent ran %v", name, r.Source.Stats.Counters.Features, descended(r))
 		}
 		r = runJSON(true, append([]string{"--seed", "--seed-descent=false"}, src...)...)
+		if r.Invocation.Workers != 64 {
+			t.Fatalf("%s diag: default workers %d, want 64", name, r.Invocation.Workers)
+		}
 		if !r.Source.Stats.Counters.Features["seed"] || descended(r) {
 			t.Fatalf("%s --seed --seed-descent=false: features %v, the descent ran %v", name, r.Source.Stats.Counters.Features, descended(r))
 		}

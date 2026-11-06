@@ -110,7 +110,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default `min(64, max(4, 3*GOMAXPROCS))`) | renamed | default: no decision recorded |
+| `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count) | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
 | Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on), the same rule; `--limiter=false` fixes `--workers` in flight | kept | – |
 | Slow start from 4, doubling per second | none; the limit starts at `--workers` | removed | no decision recorded |

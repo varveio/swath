@@ -161,7 +161,9 @@ Launch scripts change as follows: `swath list SOURCE -out DIR` → `swath list S
 rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath show --journal DIR`; `-json` →
 `--report-format json`; `-fields` → `--metadata`; `-sequential`, `-probe`, `-max-keys`, `-no-journal`,
 `-no-spill` → `swath diag list …`; `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
-`SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`.
+`SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
+is `--workers`, default 64 as Java's, whatever the CPU count (an earlier Go build derived it from the CPU
+count, `min(64, max(4, 3*GOMAXPROCS))`); `--encoders` stays CPU-derived.
 The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
 ## Gates

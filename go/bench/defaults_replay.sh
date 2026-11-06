@@ -6,11 +6,11 @@
 # usage: defaults_replay.sh BUCKET LATENCY_MS PORT REPS OUTDIR
 #   Per rep, per CPU setting (CPUS, default "all 1"), the arms (ARMS, default "default measured java")
 #   run in order:
-#     default   swath list with no policy flags: no --seed, the CPU-derived workers, the limiter on
+#     default   swath list with no policy flags: no --seed, the default 64 workers, the limiter on
 #     measured  swath list --seed --workers 64 (every headline arm's argv)
 #     java      Java swath list with no tuning flags (--concurrency defaults to 64)
 #   A CPU setting N other than "all" runs each arm under `taskset -c 0-(N-1)` and, for Go, GOMAXPROCS=N
-#   (the default arm's workers then follow min(64, max(4, 3*N))). Every arm lists s3://BUCKET anonymous,
+#   (the default arm's workers stay 64; only the encoders follow N). Every arm lists s3://BUCKET anonymous,
 #   path-style, into a sorted Parquet dataset; extra Go flags in GO_FLAGS, extra Java flags in JAVA_FLAGS.
 # Environment: REPLAY_ENV (the replay oracle's env.sh), SWATH (Go binary), JAVA_SWATH (the Java CLI's
 #   bin/swath), RECORDINGS (default /home/user/bench-data/recordings).
