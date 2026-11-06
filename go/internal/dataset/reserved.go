@@ -19,27 +19,26 @@ func Reserved(name string) bool {
 	return strings.EqualFold(name, Workspace) || slices.ContainsFunc(ownEntries, func(e string) bool { return strings.EqualFold(e, name) })
 }
 
-// Managed reports whether dir holds this tool's output: a workspace with a
-// lock or a journal, a manifest of this tool (a dataset of any format), or
-// an earlier layout's _SUCCESS beside data/. A manifest.json of something
-// else is not one.
+// Managed reports whether dir holds this tool's output, by a heuristic
+// that errs toward an unrelated directory: a workspace with this tool's
+// lock or journal (an interrupted or running run), or a manifest.json that
+// parses as this tool's (format swath-dataset and a coverage object: a
+// committed dataset). A manifest of anything else, an earlier layout's
+// marks (a schemaId manifest, _SUCCESS beside data/) and a data/ directory
+// alone are not this tool's.
 func Managed(dir string) bool {
 	for _, mark := range []string{filepath.Join(Workspace, LockName), filepath.Join(JournalDir, "journal")} {
 		if _, err := os.Lstat(filepath.Join(dir, mark)); err == nil {
 			return true
 		}
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, ManifestName)); err == nil {
-		var m struct {
-			Format   string `json:"format"`
-			SchemaID string `json:"schema_id"`
-			Legacy   string `json:"schemaId"`
-		}
-		if json.Unmarshal(b, &m) == nil && (m.Format == Format || m.SchemaID != "" || m.Legacy != "") {
-			return true
-		}
+	b, err := os.ReadFile(filepath.Join(dir, ManifestName))
+	if err != nil {
+		return false
 	}
-	_, e1 := os.Lstat(filepath.Join(dir, legacySuccess))
-	fi, e2 := os.Stat(filepath.Join(dir, DataDir))
-	return e1 == nil && e2 == nil && fi.IsDir()
+	var m struct {
+		Format   string          `json:"format"`
+		Coverage json.RawMessage `json:"coverage"`
+	}
+	return json.Unmarshal(b, &m) == nil && m.Format == Format && len(m.Coverage) > 0 && m.Coverage[0] == '{'
 }

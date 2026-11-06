@@ -14,9 +14,15 @@ SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `
 below), or with `--count-only` only lists. It prints one
 line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. FILE may not land on managed output (exit 2, checked before the
-source is opened, after resolving symbolic links): the text output file, the dataset directory's own entries
+source is opened, and by `swath resume` before it settles anything): the text output file, the dataset directory's own entries
 (`manifest.json`, `data/`, `run.json`, `error.json`, `.swath/` with the lock and journal) or anything below them,
-or anything inside another dataset or run of this tool; an ordinary name such as `OUT/report.json` is fine. The
+or anything inside another dataset or run of this tool; an ordinary name such as `OUT/report.json` is fine. FILE
+is resolved once and written where it was checked: its directory's symbolic links are resolved before a `..`
+after them applies (as an open climbs from a link's target), its own name is checked as the entry it is even
+while a symbolic link there points elsewhere, and the output is found by file identity (on a case-insensitive
+filesystem `out/` is `OUT/`). Another dataset or run is recognized by a heuristic: a `.swath/lock` or
+`.swath/journal`, or a `manifest.json` with this tool's `format` and a `coverage` object; an earlier layout's
+marks (`_SUCCESS` beside `data/`, a `schemaId` manifest) and other tools' manifests are not. The
 `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` files are checked the same way. `swath resume DIR` replays the command the journal recorded; only
 the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, the diagnostic `--spill-reserve` and `--spill-compress`,
 `--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and the terminal flags

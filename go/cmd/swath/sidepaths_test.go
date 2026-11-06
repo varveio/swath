@@ -421,3 +421,35 @@ func TestSidePathsCaseInsensitiveAlias(t *testing.T) {
 		t.Fatalf("an ordinary report in the output, other case: %v", err)
 	}
 }
+
+// TestSidePathsBesideUnrelatedDirectories: a directory is refused as
+// another dataset only by this tool's marks; a report inside a directory
+// with _SUCCESS and an unrelated data/, or another tool's manifest with a
+// schema id, is written.
+func TestSidePathsBesideUnrelatedDirectories(t *testing.T) {
+	src := t.TempDir()
+	base := t.TempDir()
+	spark, other := filepath.Join(base, "spark"), filepath.Join(base, "other")
+	for _, f := range []struct{ path, body string }{
+		{filepath.Join(spark, "_SUCCESS"), ""},
+		{filepath.Join(spark, "data", "part-0"), "x"},
+		{filepath.Join(other, "manifest.json"), `{"schema_id":"other/v1"}`},
+	} {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f.path, []byte(f.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf bytes.Buffer
+	for _, dir := range []string{spark, other} {
+		report := filepath.Join(dir, "report.json")
+		if err := run(context.Background(), []string{src, "--count-only", "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
+			t.Fatalf("--report %s: %v", report, err)
+		}
+		if _, err := os.Stat(report); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
