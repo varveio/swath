@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/varveio/swath/go/internal/dataset"
 )
@@ -64,7 +65,7 @@ func checkSidePath(o options, path string) (string, error) {
 func checkDest(o options, p string) error {
 	if o.text != nil && o.text.Path != "" {
 		td, tt := sideDest(o.text.Path)
-		if samePath(p, td) || samePath(p, tt) {
+		if samePlace(p, td) || samePlace(p, tt) {
 			return fmt.Errorf("is the text output file")
 		}
 	}
@@ -72,20 +73,29 @@ func checkDest(o options, p string) error {
 	if o.text == nil && !o.countOnly && o.out != "" {
 		out = resolvePath(o.out)
 	}
-	if out != "" {
-		if rel, err := filepath.Rel(out, p); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// The output and its entries are found by identity (samePlace), not by
+	// spelling: on a case-insensitive filesystem base/out is base/OUT.
+	isOut := func(d string) bool { return out != "" && samePlace(d, out) }
+	var below []string // the names of p below the output, if p is in it
+	for d := p; ; d = filepath.Dir(d) {
+		if isOut(d) {
 			switch {
-			case rel == ".":
+			case len(below) == 0:
 				return fmt.Errorf("is the output directory")
-			case strings.ContainsRune(rel, filepath.Separator):
-				return fmt.Errorf("is inside the output's %s: only an ordinary name directly in the output directory may be written there", strings.SplitN(rel, string(filepath.Separator), 2)[0])
-			case dataset.Reserved(rel):
-				return fmt.Errorf("is the output's own %s", rel)
+			case len(below) > 1:
+				return fmt.Errorf("is inside the output's %s: only an ordinary name directly in the output directory may be written there", below[0])
+			case dataset.Reserved(below[0]):
+				return fmt.Errorf("is the output's own %s", below[0])
 			}
+			break
 		}
+		if filepath.Dir(d) == d {
+			break
+		}
+		below = append([]string{filepath.Base(d)}, below...)
 	}
 	for d := filepath.Dir(p); ; d = filepath.Dir(d) {
-		if d != out && dataset.Managed(d) {
+		if !isOut(d) && dataset.Managed(d) {
 			return fmt.Errorf("is inside %s, a dataset or run of this tool that this run does not own", d)
 		}
 		if filepath.Dir(d) == d {
@@ -94,16 +104,94 @@ func checkDest(o options, p string) error {
 	}
 }
 
-// samePath reports whether a and b (resolved) name one file: the same
-// path, or, when both exist, the same file by identity (a hard link, or a
-// case-insensitive filesystem's other spelling).
-func samePath(a, b string) bool {
+// samePlace reports whether a and b (resolved, absolute) name one place:
+// the same path; the same existing file by identity (a hard link, or a
+// case-insensitive filesystem's other spelling); or, below the same
+// existing directory, the same names yet to be created, compared without
+// case where that directory ignores it (foldsCase). A symbolic link is
+// compared as itself, not its target: a rename replaces the link.
+func samePlace(a, b string) bool {
 	if a == b {
 		return true
 	}
-	fa, ea := os.Stat(a)
-	fb, eb := os.Stat(b)
-	return ea == nil && eb == nil && os.SameFile(fa, fb)
+	pa, ra := existingPrefix(a)
+	pb, rb := existingPrefix(b)
+	if len(ra) != len(rb) {
+		return false
+	}
+	if pa != pb {
+		fa, ea := os.Lstat(pa)
+		fb, eb := os.Lstat(pb)
+		if ea != nil || eb != nil || !os.SameFile(fa, fb) {
+			return false
+		}
+	}
+	fold := len(ra) > 0 && foldsCase(pa)
+	for i := range ra {
+		if ra[i] != rb[i] && !(fold && strings.EqualFold(ra[i], rb[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+// existingPrefix splits p into its longest existing prefix and the names
+// below it.
+func existingPrefix(p string) (string, []string) {
+	var rest []string
+	for {
+		if _, err := os.Lstat(p); err == nil {
+			return p, rest
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return p, rest
+		}
+		rest = append([]string{filepath.Base(p)}, rest...)
+		p = parent
+	}
+}
+
+// foldsCase reports whether dir looks names up without case: an entry of
+// dir (or dir itself, in its parent) with a letter, respelled in the other
+// case, reaches the same file. With no name to try it answers true, the
+// answer that refuses. A variable for tests.
+var foldsCase = func(dir string) bool {
+	try := func(parent, name string) (answer, known bool) {
+		other := swapCase(name)
+		if other == name {
+			return false, false
+		}
+		fa, ea := os.Lstat(filepath.Join(parent, name))
+		fb, eb := os.Lstat(filepath.Join(parent, other))
+		if ea != nil {
+			return false, false
+		}
+		return eb == nil && os.SameFile(fa, fb), true
+	}
+	if f, err := os.Open(dir); err == nil {
+		names, _ := f.Readdirnames(64)
+		f.Close()
+		for _, n := range names {
+			if answer, known := try(dir, n); known {
+				return answer
+			}
+		}
+	}
+	if answer, known := try(filepath.Dir(dir), filepath.Base(dir)); known {
+		return answer
+	}
+	return true
+}
+
+// swapCase is name with each letter's case swapped.
+func swapCase(name string) string {
+	return strings.Map(func(r rune) rune {
+		if u := unicode.ToUpper(r); u != r {
+			return u
+		}
+		return unicode.ToLower(r)
+	}, name)
 }
 
 // seps are the path separators of this platform.

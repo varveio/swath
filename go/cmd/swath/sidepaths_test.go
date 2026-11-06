@@ -299,3 +299,125 @@ func TestReservedSlotRefusedWhateverItsLinkTarget(t *testing.T) {
 		t.Fatalf("the link's target changed")
 	}
 }
+
+// TestSamePlace: the comparison the side-path check finds the output and
+// its entries by. Identity decides for what exists (a hard link is the
+// same file, another directory is not); for names yet to be created below
+// the same existing directory, case counts only where that directory
+// ignores it.
+func TestSamePlace(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "OUT")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(base, "OTHER")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "f")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hard := filepath.Join(base, "hard")
+	if err := os.Link(file, hard); err != nil {
+		t.Fatal(err)
+	}
+	fold := false
+	defer func(f func(string) bool) { foldsCase = f }(foldsCase)
+	foldsCase = func(string) bool { return fold }
+	for _, tc := range []struct {
+		a, b      string
+		plain, ci bool
+	}{
+		{dir, dir, true, true},
+		{file, hard, true, true},
+		{dir, other, false, false},
+		{filepath.Join(base, "NEW", "x"), filepath.Join(base, "new", "x"), false, true},
+		{filepath.Join(base, "NEW", "x"), filepath.Join(base, "NEW", "X"), false, true},
+		{filepath.Join(base, "NEW", "x"), filepath.Join(base, "NEW"), false, false},
+		{filepath.Join(base, "NEW"), filepath.Join(other, "NEW"), false, false},
+		{filepath.Join(dir, "x"), filepath.Join(other, "x"), false, false},
+	} {
+		for _, f := range []bool{false, true} {
+			fold = f
+			want := tc.plain
+			if f {
+				want = tc.ci
+			}
+			if got := samePlace(tc.a, tc.b); got != want {
+				t.Errorf("samePlace(%s, %s) with fold %v = %v, want %v", tc.a, tc.b, f, got, want)
+			}
+		}
+	}
+	// The check finds a fresh output by this comparison: base/new/manifest.json
+	// is the manifest of the output base/NEW where base ignores case.
+	o := options{out: filepath.Join(base, "NEW")}
+	for _, f := range []bool{false, true} {
+		fold = f
+		if _, err := checkSidePath(o, filepath.Join(base, "new", "manifest.json")); (err != nil) != f {
+			t.Errorf("a fresh output's manifest, other case, fold %v: %v", f, err)
+		}
+		if _, err := checkSidePath(o, filepath.Join(base, "new", "report.json")); err != nil {
+			t.Errorf("an ordinary report, fold %v: %v", f, err)
+		}
+	}
+	if got := swapCase("Ab-1é"); got != "aB-1É" {
+		t.Errorf("swapCase: %q", got)
+	}
+}
+
+// TestSidePathsCaseInsensitiveAlias (R8): on a case-insensitive
+// filesystem base/out is the output base/OUT. A report onto its manifest
+// spelled so, existing or not yet, is refused; an ordinary report in it so
+// spelled is not taken for another dataset's. Skipped where the
+// filesystem of the temporary directory distinguishes case.
+func TestSidePathsCaseInsensitiveAlias(t *testing.T) {
+	captureStderr(t)
+	base := t.TempDir()
+	if err := os.Mkdir(filepath.Join(base, "Probe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fa, ea := os.Stat(filepath.Join(base, "Probe"))
+	fb, eb := os.Stat(filepath.Join(base, "probe"))
+	if ea != nil || eb != nil || !os.SameFile(fa, fb) {
+		t.Skip("the temporary directory's filesystem distinguishes case")
+	}
+	if !foldsCase(base) {
+		t.Fatal("foldsCase: false on a case-insensitive directory")
+	}
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(base, "OUT")
+	var buf bytes.Buffer
+	if err := run(context.Background(), []string{src, "-o", out, "--no-progress", "--no-stats"}, &buf, false); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(out, "manifest.json")
+	committed, _ := os.ReadFile(manifest)
+	fresh := filepath.Join(base, "FRESH")
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"the manifest, other case", []string{src, "-o", out, "--overwrite", "--report", filepath.Join(base, "out", "manifest.json")}},
+		{"the output, other case", []string{src, "-o", out, "--overwrite", "--report", filepath.Join(base, "out")}},
+		{"a fresh output's manifest, other case", []string{src, "-o", fresh, "--report", filepath.Join(base, "fresh", "manifest.json")}},
+	} {
+		if c := exitOf(run(context.Background(), tc.args, &buf, false)); c != exitUsage {
+			t.Errorf("%s: exit %d, want %d", tc.name, c, exitUsage)
+		}
+	}
+	if b, _ := os.ReadFile(manifest); !bytes.Equal(b, committed) {
+		t.Fatal("the manifest changed")
+	}
+	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
+		t.Fatalf("the refused run wrote %s: %v", fresh, err)
+	}
+	report := filepath.Join(base, "out", "report.json")
+	if err := run(context.Background(), []string{src, "-o", out, "--overwrite", "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
+		t.Fatalf("an ordinary report in the output, other case: %v", err)
+	}
+}
