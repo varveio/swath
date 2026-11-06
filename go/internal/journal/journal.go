@@ -267,13 +267,18 @@ func (l *Lock) Verify() error {
 }
 
 // TakeLock creates out if needed and takes its lock (non-blocking). An
-// existing workspace must be a directory and an existing lock file a
-// regular file, neither a link (dataset.ErrUnsafeLayout): nothing is
-// created through a link to somewhere else. A replacement after that check
-// is not excluded.
+// existing workspace must be a directory, and an existing journal and lock
+// file regular files, none a link (dataset.ErrUnsafeLayout), all checked
+// before anything is created: nothing is created through a link to
+// somewhere else, and an output a resume or a settlement would refuse for
+// its journal gets no lock file. A replacement after that check is not
+// excluded.
 func TakeLock(out string) (*Lock, error) {
 	if _, err := dataset.Need(out, dataset.Workspace, true, true); err != nil {
 		return nil, fmt.Errorf("output: %w", err)
+	}
+	if _, err := dataset.Need(out, rel, false, true); err != nil {
+		return nil, fmt.Errorf("output journal: %w", err)
 	}
 	if _, err := dataset.Need(out, LockName, false, true); err != nil {
 		return nil, fmt.Errorf("output lock: %w", err)
@@ -464,9 +469,19 @@ func Read(out string) (*State, error) {
 	return ReadIn(r)
 }
 
-// ReadIn is Read through r, the output root: the journal must be a
-// regular file, never a link (dataset.ErrUnsafeLayout otherwise).
+// ReadIn is Read through r, the output root: the workspace must be a
+// directory, checked first, and the journal a regular file, neither a link
+// (dataset.ErrUnsafeLayout otherwise, whatever the link names).
 func ReadIn(r *os.Root) (*State, error) {
+	fi, err := dataset.NeedIn(r, dataset.Workspace, true, true)
+	switch {
+	case err != nil && !errors.Is(err, dataset.ErrUnsafeLayout):
+		return nil, fmt.Errorf("journal: %w", err)
+	case err != nil:
+		return nil, err
+	case fi == nil:
+		return nil, ErrNoJournal
+	}
 	f, err := openIn(r, os.O_RDONLY)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNoJournal

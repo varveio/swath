@@ -407,7 +407,7 @@ func claimRel(i int) string { return filepath.Join(partsRel, dataset.PartName(i)
 // the parts and suspect directories are directories where they exist, and
 // the journal a regular file, all by lstat (a link is refused whatever it
 // names; the lock, the workspace and the lock file were checked by
-// journal.TakeLock).
+// journal.TakeLock, with the journal).
 func checkWorkspace(r *os.Root) error {
 	for _, d := range []struct {
 		rel      string

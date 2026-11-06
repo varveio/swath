@@ -234,6 +234,83 @@ func TestLockRefusesLinkedWorkspace(t *testing.T) {
 	}
 }
 
+// TestLockRefusesLinkedJournal: a real workspace with no lock file whose
+// journal is a link to a file elsewhere: taking the lock, for a run or for
+// the refusal's settlement, is refused for the journal before the lock
+// file is created (eleventh durability review: TakeLock typed the
+// workspace and the lock leaf only, so a lock was created and taken before
+// the resume refused the journal).
+func TestLockRefusesLinkedJournal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links need privileges on Windows")
+	}
+	base := t.TempDir()
+	out, foreign := filepath.Join(base, "dataset"), filepath.Join(base, "unrelated")
+	for _, d := range []string{filepath.Join(out, dataset.Workspace), foreign} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := filepath.Join(foreign, "journal")
+	if err := os.WriteFile(outside, []byte("not this output's journal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, journal.Path(out)); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(out, journal.LockName)
+	lock, err := journal.TakeLock(out)
+	if err == nil {
+		lock.Release()
+	}
+	if _, serr := os.Lstat(lockPath); serr == nil {
+		t.Errorf("TakeLock created %s before refusing the journal", lockPath)
+	}
+	var le *LayoutError
+	if !errors.As(err, &le) || le.Path != filepath.Join(journal.Dir, journal.Name) {
+		t.Fatalf("TakeLock error %v, want a refusal naming the journal", err)
+	}
+	why := SettleUnfinished(out, "an unfinished run", func() error {
+		t.Error("the settlement wrote its outcome")
+		return nil
+	})
+	if _, serr := os.Lstat(lockPath); serr == nil {
+		t.Errorf("the settlement created %s before refusing the journal", lockPath)
+	}
+	if !strings.Contains(why, ErrUnsafeLayout.Error()) {
+		t.Fatalf("settlement unrecorded %q, want the layout refusal", why)
+	}
+}
+
+// TestReadRefusesLinkedWorkspace: the early journal read (the command's,
+// before any lock) of an output whose .swath is a link to a directory
+// elsewhere holding a journal refuses with ErrUnsafeLayout naming the
+// workspace (eleventh durability review: the journal leaf was opened first
+// and the root's escape error surfaced, not the unsafe_layout cause).
+func TestReadRefusesLinkedWorkspace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links need privileges on Windows")
+	}
+	base := t.TempDir()
+	out, foreign := filepath.Join(base, "dataset"), filepath.Join(base, "unrelated")
+	for _, d := range []string{out, foreign} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(foreign, journal.Name), []byte("a journal elsewhere"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(foreign, filepath.Join(out, dataset.Workspace)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := journal.Read(out)
+	var le *LayoutError
+	if !errors.As(err, &le) || le.Path != dataset.Workspace {
+		t.Fatalf("journal.Read error %v, want a refusal with ErrUnsafeLayout naming %s", err, dataset.Workspace)
+	}
+}
+
 // TestRestartRefusesLinkedParts: a journal whose header never became
 // durable restarts the run, which empties the workspace; a linked parts
 // directory is refused first, as recovery would.
