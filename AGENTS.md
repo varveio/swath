@@ -85,7 +85,7 @@ The contributor reference is
   [`go/docs/`](go/docs/) is the source of truth for the Go code (architecture, its
   statement of the invariants, ordering, Parquet output, providers, testing, CLI); a change
   to `go/` is not done until its page there is current. Measurements are recorded in
-  [`go/REPORT.md`](go/REPORT.md).
+  [`go/docs/measurements.md`](go/docs/measurements.md).
 - Test it with `cd go && go vet ./... && go test -race ./...`. Static builds use
   `CGO_ENABLED=0`.
 - A commit that touches `go/` needs the `go` CI job green (vet, race tests, cross-builds
