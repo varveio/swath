@@ -126,7 +126,7 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 	defer s.record(&stats)
 	entries, err := s.reader.RollupRead(ctx, sortedparquet.Rollup{
 		From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
-		Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: int(min(int64(limit)+1, math.MaxInt)),
+		Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: saturatingIncrement(limit),
 		SuppressAtOrBeforeFrom: suppressPrefixAtOrBeforeFloor, Columns: columns,
 	}, &stats)
 	return entries, true, err
@@ -251,4 +251,13 @@ func text(row *sortedparquet.Row, name string) *string {
 	}
 	s := string(v.ByteArray())
 	return &s
+}
+
+// saturatingIncrement returns n+1, or n at math.MaxInt: the rollup reads
+// one entry past the limit to tell the caller the listing is truncated.
+func saturatingIncrement(n int) int {
+	if n < math.MaxInt {
+		return n + 1
+	}
+	return n
 }

@@ -279,7 +279,7 @@ func TestDelimitedRollupMatchesRangeWalk(t *testing.T) {
 func rangeWalk(next func(cursor []byte, inclusive bool) (Object, bool), from []byte, inclusive bool, prefix []byte, limit int, suppress bool) []DelimitedEntry {
 	var out []DelimitedEntry
 	cursor, incl := from, inclusive
-	for len(out) < limit+1 {
+	for len(out) <= limit { // limit+1 entries without overflowing at math.MaxInt
 		o, ok := next(cursor, incl)
 		if !ok {
 			break
