@@ -61,7 +61,7 @@ func fetchFrom(api lister) Fetch[Object] {
 
 // newTest is an engine over a fake API.
 func newTest(api lister, opt Options) (*Engine[Object], error) {
-	return New(opt, Description[Object]{Target: "test", Size: func(o *Object) int64 { return o.Size }}, fetchFrom(api))
+	return New(opt, Description[Object]{Target: "test", Listing: Listing, Size: func(o *Object) int64 { return o.Size }}, fetchFrom(api))
 }
 
 type collect struct {

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // script is a provider that answers a fixed chain of pages: the first
@@ -78,7 +80,7 @@ func TestEmptyContinuingPages(t *testing.T) {
 				if c.after != "" {
 					opt.Resume = &Resume{After: c.after}
 				}
-				p, err := New(opt, Description[Object]{Target: "test", StartInclusive: c.inclusive}, s.fetch)
+				p, err := New(opt, Description[Object]{Target: "test", Listing: Listing, StartInclusive: c.inclusive}, s.fetch)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -104,7 +106,7 @@ func TestEmptyContinuingPages(t *testing.T) {
 	}
 	// The truncated page with no entry no longer fails a range.
 	s := &script{pages: []Page[Object]{more(), last()}}
-	p, _ := New(Options{Workers: 1}, Description[Object]{Target: "test"}, s.fetch)
+	p, _ := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, s.fetch)
 	if err := p.Expand(context.Background(), Range{open: true, id: 1}, &direct{&collect{}}); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +117,7 @@ func TestEmptyContinuingPages(t *testing.T) {
 // then the key past the pivot; the split is taken.
 func TestInclusiveOneKeyProbe(t *testing.T) {
 	s := &script{pages: []Page[Object]{more("m"), more(), more("n")}}
-	p, _ := New(Options{Workers: 1, Probe: true}, Description[Object]{Target: "test", StartInclusive: true}, s.fetch)
+	p, _ := New(Options{Workers: 1, Probe: true}, Description[Object]{Target: "test", Listing: Listing, StartInclusive: true}, s.fetch)
 	m, ok, err := p.probe(context.Background(), Range{lo: "a", hi: "z"}, "c", "m")
 	st := p.Stats()
 	if err != nil || !ok || m != "m" || s.calls != 3 || st.Get(cRequests) != 3 || st.Get(cProbeRequests) != 1 || st.Get(cEmptyPages) != 2 {
@@ -123,9 +125,37 @@ func TestInclusiveOneKeyProbe(t *testing.T) {
 	}
 	// The key past the pivot lies beyond hi: the upper child is empty.
 	s = &script{pages: []Page[Object]{more("m"), more(), last("zz")}}
-	p, _ = New(Options{Workers: 1, Probe: true}, Description[Object]{Target: "test", StartInclusive: true}, s.fetch)
+	p, _ = New(Options{Workers: 1, Probe: true}, Description[Object]{Target: "test", Listing: Listing, StartInclusive: true}, s.fetch)
 	_, _, err = p.probe(context.Background(), Range{lo: "a", hi: "z"}, "l", "m")
 	if st = p.Stats(); err != nil || st.Get(cProbeUpperEmpty) == 0 || s.calls < 3 {
 		t.Fatalf("empty upper child: err=%v calls=%d %+v", err, s.calls, st.Counters)
+	}
+}
+
+// TestByteOrderIsAPrerequisite: the engine applies only to byte-ordered
+// listings. The UTF-16 counterexample: a listing in UTF-16 code-unit
+// order returns U+10000 (a surrogate pair, D800 DC00) before U+E000, the
+// reverse of byte order; on two pages, no pivot veto or per-page sort can
+// repair that. A provider declaring that order is refused at New, and the
+// byte-order check still rejects the pages if one claims byte order.
+func TestByteOrderIsAPrerequisite(t *testing.T) {
+	pages := []Page[Object]{more("\U00010000"), last("")}
+	utf16 := Listing
+	utf16.Order = source.OrderOther
+	if _, err := New(Options{Workers: 1}, Description[Object]{Target: "utf16", Listing: utf16}, (&script{pages: pages}).fetch); err == nil {
+		t.Fatal("a UTF-16-ordered listing was accepted by the range engine")
+	}
+	for _, seq := range []bool{false, true} {
+		p, err := New(Options{Workers: 1, Sequential: seq}, Description[Object]{Target: "test", Listing: Listing}, (&script{pages: pages}).fetch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := Range{open: true, id: 1}
+		if seq {
+			r = p.Root()
+		}
+		if err := p.Expand(context.Background(), r, &direct{&collect{}}); !errors.Is(err, ErrInvalidPage) {
+			t.Fatalf("sequential=%v: UTF-16 order across pages accepted: %v", seq, err)
+		}
 	}
 }

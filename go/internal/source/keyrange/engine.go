@@ -68,6 +68,10 @@ type Fetch[P any] func(ctx context.Context, q *Query) (*Page[P], error)
 type Description[P any] struct {
 	// Target names the listing in errors (the listed URL).
 	Target string
+	// Listing is the provider's native listing: the engine applies only
+	// where Listing.RangeEngine() holds (a fabricable seek, byte-ordered
+	// pages, no rank oracle); New refuses any other.
+	Listing source.Capabilities
 	// StartInclusive: the provider's start bound lists keys >= After
 	// (an inclusive start offset), not > After (an exclusive start-after).
 	StartInclusive bool
@@ -93,6 +97,9 @@ type Description[P any] struct {
 	// (Engine.ID maps their index).
 	Counters []counters.Def
 }
+
+// Listing is the native listing of a provider the engine applies to.
+var Listing = source.Capabilities{Seek: source.SeekFabricable, Order: source.OrderBytes}
 
 // ErrInvalidPage: a page broke the listing contract.
 var ErrInvalidPage = errors.New("invalid listing page")
@@ -196,6 +203,9 @@ func New[P any](opt Options, d Description[P], fetch Fetch[P]) (*Engine[P], erro
 	if !opt.Sequential && opt.MaxKeys > 0 {
 		return nil, errors.New("a key limit needs the sequential listing")
 	}
+	if !d.Listing.RangeEngine() {
+		return nil, fmt.Errorf("%s: the range engine needs a fabricable seek, byte-ordered pages and no rank oracle (%+v)", d.Target, d.Listing)
+	}
 	if opt.Workers < 1 {
 		opt.Workers = 1
 	}
@@ -231,7 +241,7 @@ func (p *Engine[P]) Stats() Stats {
 
 // list fetches one page that holds an entry, or the chain's last page.
 // A provider with an inclusive start bound gets After as is; a key equal to
-// it is dropped here. A continuing page with no entry (GCS documents them;
+// it is dropped here. A continuing page with no entry (object stores may return them;
 // also the page that held only the key at an inclusive bound) is followed
 // by its token here, for every path (ranges, the sequential chain, the
 // probes): each token of such a run must be new, or the page is invalid.

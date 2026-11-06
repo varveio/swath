@@ -1,13 +1,18 @@
 # Providers
 
 **Does the range engine apply?** Dynamic range splitting (ranges, owner-side splits at synthesized pivots,
-seeding) applies to a source only when both hold: it has **no rank oracle** (nothing can say how many keys
-precede a key, which would allow an exact partition instead) and it has a **fabricable seek** (a listing can
-start after any key the caller makes up, as S3's `start-after`). A source with a token-only seek is listed as
-one sequential chain per root; one with no seek reads each range whole and sorts it inside the provider. Each
-provider declares this in `source.Capabilities` (`Seek`: `fabricable`, `token_only`, `none`; `RankOracle`;
-`RangeEngine()` is the test): S3 is fabricable without a rank oracle (`token_only` with `--sequential`); the
-filesystem has no seek (a directory is a range, read whole and sorted).
+seeding) applies to a source only when all three hold: it has **no rank oracle** (nothing can say how many
+keys precede a key, which would allow an exact partition instead), it has a **fabricable seek** (a listing can
+start after any key the caller makes up, as S3's `start-after`), and its pages are **byte-ordered** (every
+page ascends in unsigned byte order and continues the last). A listing sorted in another order (UTF-16 code
+units put U+10000 before U+E000, the reverse of byte order, and the disorder can cross pages) or unsorted does
+not qualify, even if the provider sorts its output: it normalizes behind `source.Provider` instead. A source
+with a token-only seek is listed as one sequential chain per root; one with no seek reads each range whole and
+sorts it inside the provider. Each provider declares this in `source.Capabilities` (`Seek`: `fabricable`,
+`token_only`, `none`; `Order`: `bytes`, `other`, `none`; `RankOracle`; `RangeEngine()` is the test, and
+`keyrange.New` refuses a `Description.Listing` that fails it): S3 is fabricable and byte-ordered without a
+rank oracle (`token_only` with `--sequential`); the filesystem has no seek and no order (a directory is a
+range, read whole and sorted).
 
 ## The contract (`internal/source`)
 

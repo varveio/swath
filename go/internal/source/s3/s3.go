@@ -147,6 +147,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		Floors: opt.Floors, SplitCoin: opt.splitCoin, Trace: opt.trace,
 	}, keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
+		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
 		Requeue:     requeue,
 		InvalidPage: client.ErrInvalidPage,

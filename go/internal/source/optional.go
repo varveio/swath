@@ -59,7 +59,24 @@ type Capabilities struct {
 	// index); it can be partitioned exactly, so dynamic splitting is not
 	// the right tool.
 	RankOracle bool
+	// Order is the order the native listing returns keys in.
+	Order Order
 }
+
+// Order is the order of a source's native listing.
+type Order string
+
+const (
+	// OrderBytes: every page ascends in unsigned byte order and each page
+	// continues after the last (S3).
+	OrderBytes Order = "bytes"
+	// OrderOther: sorted, but not in byte order (UTF-16 code-unit order
+	// puts U+10000 before U+E000, the reverse of byte order), so the
+	// disorder can cross pages; the provider normalizes.
+	OrderOther Order = "other"
+	// OrderNone: unsorted (a directory read, Drive); the provider sorts.
+	OrderNone Order = "none"
+)
 
 // Seek is how a listing can start at a key.
 type Seek string
@@ -77,8 +94,11 @@ const (
 )
 
 // RangeEngine reports whether dynamic range splitting applies: no rank
-// oracle and a fabricable seek, both.
-func (c Capabilities) RangeEngine() bool { return !c.RankOracle && c.Seek == SeekFabricable }
+// oracle, a fabricable seek and byte-ordered pages, all three. A provider
+// that sorts its output itself (OrderOther, OrderNone) does not qualify.
+func (c Capabilities) RangeEngine() bool {
+	return !c.RankOracle && c.Seek == SeekFabricable && c.Order == OrderBytes
+}
 
 // Excluder sources can contain the output directory (a local tree); after
 // the output is prepared, the pipeline asks them to leave it out.

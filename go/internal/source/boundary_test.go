@@ -89,14 +89,17 @@ func TestImportBoundary(t *testing.T) {
 }
 
 // TestRangeEngineApplicability: the range engine applies only with no rank
-// oracle and a fabricable seek.
+// oracle, a fabricable seek and byte-ordered pages.
 func TestRangeEngineApplicability(t *testing.T) {
 	for _, c := range []struct {
 		caps source.Capabilities
 		want bool
 	}{
-		{source.Capabilities{Seek: source.SeekFabricable}, true},
-		{source.Capabilities{Seek: source.SeekFabricable, RankOracle: true}, false},
+		{source.Capabilities{Seek: source.SeekFabricable, Order: source.OrderBytes}, true},
+		{source.Capabilities{Seek: source.SeekFabricable, Order: source.OrderBytes, RankOracle: true}, false},
+		{source.Capabilities{Seek: source.SeekFabricable, Order: source.OrderOther}, false}, // UTF-16 order
+		{source.Capabilities{Seek: source.SeekFabricable, Order: source.OrderNone}, false},
+		{source.Capabilities{Seek: source.SeekFabricable}, false},
 		{source.Capabilities{Seek: source.SeekTokenOnly}, false},
 		{source.Capabilities{Seek: source.SeekNone}, false},
 		{source.Capabilities{}, false},

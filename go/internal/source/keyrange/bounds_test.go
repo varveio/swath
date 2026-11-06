@@ -123,7 +123,7 @@ func TestBoundsAtExactKeys(t *testing.T) {
 						s.PageCap = pageCap
 						fetch = fetchFrom(s)
 					}
-					p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", StartInclusive: incl}, fetch)
+					p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing, StartInclusive: incl}, fetch)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -165,7 +165,7 @@ func TestInclusiveProviderMatchesKeyspace(t *testing.T) {
 		} {
 			for _, vetoed := range []bool{false, true} {
 				f := &inclusive{keys: want, bounded: i != 2, pageCap: 7 + 6*i}
-				d := Description[Object]{Target: "test", StartInclusive: true}
+				d := Description[Object]{Target: "test", Listing: Listing, StartInclusive: true}
 				if vetoed {
 					d.AcceptBound = veto
 				}
@@ -271,7 +271,7 @@ func TestBoundsStableAcrossTokenChain(t *testing.T) {
 				inner = fetchFrom(s)
 			}
 			c := &chained{next: inner}
-			p, err := New(opt, Description[Object]{Target: "test", StartInclusive: incl}, c.fetch)
+			p, err := New(opt, Description[Object]{Target: "test", Listing: Listing, StartInclusive: incl}, c.fetch)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -328,7 +328,7 @@ func TestProviderBoundPolicy(t *testing.T) {
 			rng := rand.New(rand.NewSource(int64(i)))
 			var mu sync.Mutex
 			opt.SplitCoin = func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(2) == 0 }
-			p, err := New(opt, Description[Object]{Target: "test", StartInclusive: true, AcceptBound: accept}, f.fetch)
+			p, err := New(opt, Description[Object]{Target: "test", Listing: Listing, StartInclusive: true, AcceptBound: accept}, f.fetch)
 			if err != nil {
 				t.Fatal(err)
 			}

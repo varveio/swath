@@ -131,7 +131,7 @@ func NormalizeEndpoint(e string) string {
 // nor tell a capped final part from a complete one. Such a run keeps no
 // journal, and a resume of one is refused.
 func (o *opened) Capabilities() source.Capabilities {
-	c := source.Capabilities{Resume: o.p.opt.MaxKeys == 0, Seek: source.SeekFabricable}
+	c := source.Capabilities{Resume: o.p.opt.MaxKeys == 0, Seek: source.SeekFabricable, Order: source.OrderBytes}
 	if o.p.opt.Sequential {
 		c.Seek = source.SeekTokenOnly
 	}

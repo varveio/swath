@@ -106,7 +106,7 @@ func (o *opened) Report() source.Report {
 // Capabilities: a directory is read whole and sorted; there is no seek and
 // no resume.
 func (o *opened) Capabilities() source.Capabilities {
-	return source.Capabilities{Seek: source.SeekNone}
+	return source.Capabilities{Seek: source.SeekNone, Order: source.OrderNone}
 }
 
 var (
