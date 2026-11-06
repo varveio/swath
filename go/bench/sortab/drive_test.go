@@ -231,11 +231,7 @@ func attempt(bin string, cfg childConfig, cfgPath string) (Attempt, error) {
 	if st == nil {
 		return at, err
 	}
-	if ru, ok := st.SysUsage().(*syscall.Rusage); ok {
-		at.UserMs = ru.Utime.Sec*1000 + int64(ru.Utime.Usec)/1000
-		at.SysMs = ru.Stime.Sec*1000 + int64(ru.Stime.Usec)/1000
-		at.RuMaxRSS = ru.Maxrss
-	}
+	usage(st, &at)
 	if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
 		at.Killed = true
 	}

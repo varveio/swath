@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/varveio/swath/go/internal/schema"
@@ -307,7 +306,9 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 			got = 0
 		}
 		if p.KillAt > 0 && got >= p.KillAt {
-			_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+			if self, err := os.FindProcess(os.Getpid()); err == nil {
+				_ = self.Kill() // SIGKILL on unix
+			}
 			select {} // the signal is on its way
 		}
 		if err := e.Rows(rows); err != nil {
