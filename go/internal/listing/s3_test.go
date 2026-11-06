@@ -1,0 +1,208 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package listing
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/s3"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
+)
+
+// fakeS3 serves n keys in 17 folders under logs/, without the host's
+// AWS credentials.
+func fakeS3(t *testing.T, n int) string {
+	t.Helper()
+	s3test.NoCredentials(t)
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("logs/%02d/obj-%05d", i%17, i)
+	}
+	return s3test.Bucket(t, keys)
+}
+
+func TestS3Dataset(t *testing.T) {
+	url := fakeS3(t, 3000)
+	for _, tc := range []struct {
+		root, target string
+		seed         bool
+	}{{"s3://bkt", "s3://bkt", false}, {"s3://bkt", "s3://bkt", true}, {"s3://bkt/logs/03/", "s3://bkt/logs/03/", false}} {
+		out := filepath.Join(t.TempDir(), "ds")
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: tc.root, Options: &S3Config{Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Seed: tc.seed}}}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 16 << 10}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s3Stats(sum) == nil || sum.Output.RowsListed != s3Stats(sum).Counters.Value("objects") || sum.Output.RowsListed == 0 {
+			t.Fatalf("%+v", sum)
+		}
+		var m dataset.Manifest
+		readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
+		var rows int64
+		for _, p := range m.Parts {
+			rows += p.Rows
+		}
+		scope := dataset.Scope{Kind: "whole"}
+		if tc.root != "s3://bkt" {
+			scope = dataset.Scope{Kind: "prefix", Prefix: "logs/03/"}
+		}
+		if m.Source != (dataset.Source{Kind: "s3", URI: tc.root, Container: "bkt"}) || m.Scope != scope || m.SchemaID != s3.Schema.ID ||
+			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Output.RowsListed ||
+			m.Coverage.ListingStartedAt.IsZero() || m.Coverage.ListingFinishedAt.Before(m.Coverage.ListingStartedAt) {
+			t.Fatalf("manifest %+v", m)
+		}
+		var run Report
+		readJSON(t, filepath.Join(out, dataset.ReportName), &run)
+		if run.ReportVersion != ReportVersion || run.Outcome.Status != "committed" || !run.Outcome.Complete || run.Invocation.Source != tc.target ||
+			run.Output.RowsListed != sum.Output.RowsListed || run.Output.RowsCommitted != rows || run.Output.PartsWritten != len(m.Parts) ||
+			run.Source == nil || run.Source.Name != "s3" || run.Timings.WallMs < run.Timings.ListingMs {
+			t.Fatalf("run report %+v", run)
+		}
+	}
+	for _, c := range s3.Schema.Columns {
+		if slices.Contains([]string{"version_id", "is_latest", "is_delete_marker", "row_type"}, c.Name) {
+			t.Fatalf("the current-object schema has %s", c.Name)
+		}
+	}
+}
+
+func readJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// T5: the parallel provider's dataset is byte-identical to the sequential
+// provider's (Parquet parts and manifest, apart from its creation time) on
+// the same static bucket with request latency.
+func TestS3ParallelEqualsSequential(t *testing.T) {
+	s3test.NoCredentials(t)
+	keys := make([]string, 12000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("d%02d/sub%d/obj-%06d", i%7, i%3, i)
+		if i%500 == 0 {
+			keys[i] = fmt.Sprintf("flat-%05d", i)
+		}
+	}
+	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, keys)), 5*time.Millisecond))
+	build := func(s3cfg S3Config, workers int) string {
+		out := filepath.Join(t.TempDir(), "ds")
+		s3cfg.Endpoint, s3cfg.PathStyle = url, true
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 64 << 10, Workers: workers}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%+v counters=%s", s3cfg, mustJSON(s3Stats(sum).Counters))
+		return out
+	}
+	ref := build(S3Config{Policy: keyrange.Policy{Sequential: true}}, 1)
+	for _, tc := range []S3Config{{}, {Policy: keyrange.Policy{Seed: true}}} {
+		got := build(tc, 16)
+		parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
+		if len(parts) < 2 {
+			t.Fatalf("want several parts, got %d", len(parts))
+		}
+		for _, p := range parts {
+			a, _ := os.ReadFile(p)
+			b, err := os.ReadFile(filepath.Join(got, "data", filepath.Base(p)))
+			if err != nil || !bytes.Equal(a, b) {
+				t.Fatalf("%+v: %s differs (%v)", tc, filepath.Base(p), err)
+			}
+		}
+		if more, _ := filepath.Glob(filepath.Join(got, "data", "*.parquet")); len(more) != len(parts) {
+			t.Fatalf("%+v: %d parts, want %d", tc, len(more), len(parts))
+		}
+		strip := func(dir string) map[string]any {
+			var m map[string]any
+			readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
+			delete(m, "published_at")
+			delete(m["coverage"].(map[string]any), "listing_started_at")
+			delete(m["coverage"].(map[string]any), "listing_finished_at")
+			return m
+		}
+		if fmt.Sprint(strip(ref)) != fmt.Sprint(strip(got)) {
+			t.Fatalf("%+v: manifests differ", tc)
+		}
+	}
+}
+
+// TestSummaryDistinguishesOffFromZero: a policy turned off is listed under
+// "disabled" and its counters are absent; a policy that was on reports its
+// counters even when they are zero.
+func TestSummaryDistinguishesOffFromZero(t *testing.T) {
+	url := fakeS3(t, 300)
+	run := func(cfg Config) map[string]any {
+		t.Helper()
+		cfg.Source.URI, cfg.Source.Options.(*S3Config).Endpoint, cfg.Source.Options.(*S3Config).PathStyle = "s3://bkt", url, true
+		sum, err := Run(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(sum)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	has := func(m map[string]any, path ...string) bool {
+		var v any = m
+		for _, p := range path {
+			mm, ok := v.(map[string]any)
+			if !ok {
+				return false
+			}
+			if v, ok = mm[p]; !ok {
+				return false
+			}
+		}
+		return true
+	}
+	feat := func(m map[string]any, path ...string) map[string]any {
+		var v any = m
+		for _, p := range path {
+			v = v.(map[string]any)[p]
+		}
+		return v.(map[string]any)
+	}
+	vals := []string{"source", "stats", "counters", "values"}
+	on := run(Config{Source: SourceConfig{Options: &S3Config{Policy: keyrange.Policy{Seed: true, Floors: true}}}, Output: OutputConfig{Dir: filepath.Join(t.TempDir(), "ds")}, Limits: Limits{Workers: 4}})
+	if !has(on, append(vals, "split.skipped.tail_floor")...) || !has(on, append(vals, "seed.cuts")...) || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
+		t.Fatalf("enabled policies must report their counters: %v", on)
+	}
+	if f := feat(on, "source", "stats", "counters", "features"); f["floors"] != true || f["seed"] != true || f["split"] != true || f["resume"] != false || f["max_keys"] != false {
+		t.Fatalf("features = %v", f)
+	}
+	if f := feat(on, "resources", "features"); f["spill"] != true {
+		t.Fatalf("pipeline features = %v", f)
+	}
+	cfg := Config{Source: SourceConfig{Options: &S3Config{}}, Limits: Limits{Workers: 4, Spill: SpillLimits{Off: true}}}
+	m := run(cfg)
+	if has(m, append(vals, "split.skipped.tail_floor")...) || has(m, append(vals, "seed.cuts")...) || has(m, "resources", "spill") || has(m, "resources", "encoder_wait_ns") {
+		t.Fatalf("disabled policies must not report counters: %v", m)
+	}
+	if f := feat(m, "source", "stats", "counters", "features"); f["floors"] != false || f["seed"] != false || f["split"] != true {
+		t.Fatalf("features = %v", f)
+	}
+	if f := feat(m, "resources", "features"); f["spill"] != false {
+		t.Fatalf("pipeline features = %v", f)
+	}
+}

@@ -292,15 +292,72 @@ jobs:
   # `if: always()` is not optional. Without it a failed dependency SKIPS this job, a skipped
   # required check never reports a conclusion, and the pull request waits forever instead of
   # going red.
+  # Go port (go/, see AGENTS.md "Go port"): vet, race tests and static cross-builds. The
+  # job always runs but does its work only when go/** or this workflow changed (or on manual
+  # dispatch), so Java-only changes pay a checkout and nothing else. It feeds ci-gate: a job that
+  # did its work and failed, or one skipped on a pull request, fails the gate.
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Go changes
+        id: changes
+        working-directory: .
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE" HEAD | grep -qE '^(go/|\.github/workflows/ci\.yml$)'; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go (version from go/go.mod)
+        if: steps.changes.outputs.go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: go vet
+        if: steps.changes.outputs.go == 'true'
+        run: go vet ./...
+
+      - name: go test -race
+        if: steps.changes.outputs.go == 'true'
+        run: go test -race ./...
+
+      - name: Static cross-builds (CGO_ENABLED=0)
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            echo "building $target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" SWATH_REVISION="$GITHUB_SHA" ./build.sh -o "$RUNNER_TEMP/swath-${target%/*}-${target#*/}"
+          done
+          # The CI build names its commit (build.sh stamps it).
+          "$RUNNER_TEMP/swath-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+
   ci-gate:
-    needs: [fast-tests, integration-tests, docker-check]
+    needs: [fast-tests, integration-tests, docker-check, go]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # A skipped dependency passes the gate only OFF pull_request, where jobs are legitimately
       # event-gated (docker-check is PR-only, so it skips on every main merge). On a pull request
-      # all three dependencies run, so there `skipped` is not a pass: that is what stops a future
+      # all four dependencies run, so there `skipped` is not a pass: that is what stops a future
       # `if:` from quietly removing a tier from the gate while the check stays green.
       - name: Every gating job passed
         env:

@@ -1,0 +1,170 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+// Package parquet writes listing rows as Swath-layout sorted Parquet parts:
+// the file writer, the schema binding and the part router.
+package parquetout
+
+import (
+	"fmt"
+	"reflect"
+
+	pq "github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
+
+	"github.com/varveio/swath/go/internal/schema"
+)
+
+// nodeOf builds the Parquet schema for s: the key column, then s.Columns in
+// declaration order. The key column is delta-encoded with an ascending
+// single-page index, and integer columns carry the standard INT annotation
+// (signed or not).
+func nodeOf[P any](s *schema.Schema[P]) *pq.Schema {
+	specs := s.Specs()
+	delta := make([]bool, len(specs))
+	fields := make([]reflect.StructField, len(specs))
+	for i, c := range specs {
+		var t reflect.Type
+		tag := c.Name
+		switch c.Type {
+		case schema.String:
+			t = reflect.TypeFor[string]()
+		case schema.Int32:
+			t = reflect.TypeFor[int32]()
+		case schema.Int64:
+			t = reflect.TypeFor[int64]()
+		case schema.Uint32:
+			t = reflect.TypeFor[uint32]()
+		case schema.Uint64:
+			t = reflect.TypeFor[uint64]()
+		case schema.TimestampMicros:
+			t, tag = reflect.TypeFor[int64](), tag+",timestamp(microsecond:utc)"
+		case schema.Bool:
+			t = reflect.TypeFor[bool]()
+		case schema.Binary:
+			t = reflect.TypeFor[[]byte]()
+		}
+		if i == 0 {
+			tag += ",delta"
+		} else {
+			delta[i] = s.Columns[i-1].Delta
+		}
+		if !c.Required {
+			t = reflect.PointerTo(t)
+			tag = insertOptional(tag)
+		}
+		fields[i] = reflect.StructField{Name: fmt.Sprintf("C%d", i), Type: t, Tag: reflect.StructTag(fmt.Sprintf("parquet:%q", tag))}
+	}
+	node := pq.SchemaOf(reflect.New(reflect.StructOf(fields)).Interface())
+	return pq.NewSchema(s.Name, root{node, delta})
+}
+
+// insertOptional adds "optional" right after the column name in a tag.
+func insertOptional(tag string) string {
+	for i := range tag {
+		if tag[i] == ',' {
+			return tag[:i] + ",optional" + tag[i:]
+		}
+	}
+	return tag + ",optional"
+}
+
+type root struct {
+	pq.Node
+	delta []bool // per field: DELTA_BYTE_ARRAY (schema.Column.Delta)
+}
+
+func (r root) Fields() []pq.Field {
+	fields := append([]pq.Field(nil), r.Node.Fields()...)
+	for i, f := range fields {
+		if i == 0 {
+			fields[i] = ascendingKey{f}
+		}
+		if r.delta[i] {
+			fields[i] = encoded{fields[i], &pq.DeltaByteArray}
+		}
+	}
+	return fields
+}
+
+// encoded overrides a field's encoding.
+type encoded struct {
+	pq.Field
+	enc encoding.Encoding
+}
+
+func (f encoded) Encoding() encoding.Encoding { return f.enc }
+
+// ascendingKey stamps BoundaryOrder ASCENDING on a one-page column index
+// (accepted by older Java readers); multi-page indexes are untouched.
+type ascendingKey struct{ pq.Field }
+
+func (f ascendingKey) Type() pq.Type { return ascendingType{f.Field.Type()} }
+
+type ascendingType struct{ pq.Type }
+
+func (t ascendingType) NewColumnIndexer(sizeLimit int) pq.ColumnIndexer {
+	return ascendingIndexer{t.Type.NewColumnIndexer(sizeLimit)}
+}
+
+type ascendingIndexer struct{ pq.ColumnIndexer }
+
+func (ix ascendingIndexer) ColumnIndex() format.ColumnIndex {
+	index := ix.ColumnIndexer.ColumnIndex()
+	if len(index.NullPages) == 1 {
+		index.BoundaryOrder = format.Ascending
+	}
+	return index
+}
+
+// fillKey writes the key column (column 0) of rows into dst.
+func fillKey[P any](dst []pq.Value, rows []schema.Row[P]) {
+	for i := range rows {
+		dst[i] = pq.ByteArrayValue(unsafeBytes(rows[i].Key)).Level(0, 0, 0)
+	}
+}
+
+// fill writes column c (c >= 1; schema column c-1) of rows into dst as
+// parquet values: the single row-to-column mapping, driven by the schema's
+// accessors.
+func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row[P]) {
+	def := 1
+	if c.Required {
+		def = 0
+	}
+	switch {
+	case c.Str != nil:
+		for i := range rows {
+			if v, ok := c.Str(&rows[i].Data); ok {
+				dst[i] = pq.ByteArrayValue(unsafeBytes(v)).Level(0, def, col)
+			} else {
+				dst[i] = pq.NullValue().Level(0, 0, col)
+			}
+		}
+	case c.Type == schema.Int32 || c.Type == schema.Uint32:
+		for i := range rows {
+			if v, ok := c.Int(&rows[i].Data); ok {
+				dst[i] = pq.Int32Value(int32(v)).Level(0, def, col)
+			} else {
+				dst[i] = pq.NullValue().Level(0, 0, col)
+			}
+		}
+	case c.Bool != nil:
+		for i := range rows {
+			if v, ok := c.Bool(&rows[i].Data); ok {
+				dst[i] = pq.BooleanValue(v).Level(0, def, col)
+			} else {
+				dst[i] = pq.NullValue().Level(0, 0, col)
+			}
+		}
+	default:
+		for i := range rows {
+			if v, ok := c.Int(&rows[i].Data); ok {
+				dst[i] = pq.Int64Value(v).Level(0, def, col)
+			} else {
+				dst[i] = pq.NullValue().Level(0, 0, col)
+			}
+		}
+	}
+}

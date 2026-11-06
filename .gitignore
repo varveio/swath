@@ -58,3 +58,8 @@ __pycache__/
 # site/data/media.json). A local fetch drops them here; committing one would put ~1.5 MB of
 # binary back into history for every re-record, which is what the release indirection avoids.
 site/assets/*.mp4
+
+# Go build output (go/build.sh -o swath, cross builds -o swath-<os>-<arch>, Windows .exe)
+/go/swath
+/go/swath-*
+/go/swath.exe

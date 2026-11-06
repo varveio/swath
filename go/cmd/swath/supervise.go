@@ -1,0 +1,529 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime/pprof"
+	"syscall"
+	"time"
+
+	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
+)
+
+// Exit codes: the outcome a supervising process acts on without reading
+// stderr (error.json carries the same, with the cause).
+const (
+	exitCompleted   = 0   // the dataset is committed (or a dry run finished)
+	exitFatal       = 1   // a cause that a resume will not fix
+	exitUsage       = 2   // a malformed command line, or a refusal that is the caller's to fix
+	exitDiskFull    = 74  // a write found its filesystem full (EX_IOERR); resumable when the journal is intact
+	exitStuck       = 75  // no progress for the stall timeout; resumable when the journal is intact
+	exitDeadline    = 124 // --max-duration reached with the output unfinished; resumable
+	exitInterrupted = 130 // SIGINT
+	exitTerminated  = 143 // SIGTERM, a graceful stop; resumable
+)
+
+// Causes the command cancels a run with.
+var (
+	errStuck    = errors.New("stuck: no progress within the stall timeout")
+	errDeadline = errors.New("deadline: --max-duration reached")
+	// errIncomplete: the dataset is committed, but its coverage is partial.
+	errIncomplete = errors.New("the dataset is committed with partial coverage (see the manifest's coverage)")
+)
+
+// Stuck causes (error.json and the report's outcome cause on 75): what
+// rose while neither a row nor an answered request did.
+const (
+	stuckThrottle = "stuck_throttle" // the service answered only with throttles
+	stuckTimeouts = "stuck_timeouts" // attempts ran past the request timeout (no throttle)
+	stuckNoRows   = "stuck_no_rows"  // neither: failing or hung requests, or a pipeline that stopped
+)
+
+// stuckError is errStuck with its cause.
+type stuckError struct{ cause string }
+
+func (e *stuckError) Error() string        { return errStuck.Error() + " (" + e.cause + ")" }
+func (e *stuckError) Is(target error) bool { return target == errStuck }
+
+// stuckCause names what rose in the stalled window: from the counts at
+// the last progress (at) to now.
+func stuckCause(at, now listing.ProgressSnapshot) string {
+	switch {
+	case now.Throttles > at.Throttles:
+		return stuckThrottle
+	case now.Timeouts > at.Timeouts:
+		return stuckTimeouts
+	}
+	return stuckNoRows
+}
+
+// signalError is a run stopped by a signal.
+type signalError struct{ sig os.Signal }
+
+func (e *signalError) Error() string { return "stopped by " + e.sig.String() }
+
+// outcome is how a command ended: its class and exit code.
+type outcome struct {
+	Class     string `json:"class"` // listing.Class*: completed, fatal, incomplete, usage, refused, disk_full, stuck, deadline, interrupted, terminated
+	ExitCode  int    `json:"exit_code"`
+	Message   string `json:"message,omitempty"`
+	Resumable bool   `json:"resumable"` // swath resume DIR can continue it
+	// Cause is the provider's error class when one is known (S3: auth,
+	// access_denied, throttle, ...).
+	Cause string `json:"cause,omitempty"`
+	// StopSource is what stopped the run, when something did (stopSource).
+	StopSource string `json:"stop_source,omitempty"`
+	// Attempt is the invocation this outcome belongs to; the report
+	// (--report) carries the same one.
+	Attempt *listing.Attempt `json:"attempt,omitempty"`
+}
+
+// classify maps a command's error (and the cause its context was
+// cancelled with) to an outcome. dir is the output directory, if any.
+func classify(err, cause error, dir string) outcome {
+	if err == nil {
+		return outcome{Class: listing.ClassCompleted, ExitCode: exitCompleted}
+	}
+	resumable := dir != "" && !dataset.Committed(dir) && hasJournal(dir)
+	o := outcome{Message: err.Error(), Resumable: resumable, StopSource: stopSource(cause)}
+	var u usageError
+	var se *signalError
+	var ue *journal.UnresumableError
+	switch {
+	case errors.As(err, &u), errors.Is(err, flag.ErrHelp):
+		o.Class, o.ExitCode, o.Resumable = listing.ClassUsage, exitUsage, false
+	case refusal(err):
+		// The caller's to fix (another output, --overwrite, the original
+		// settings): nothing ran, and the output is as it was, so
+		// Resumable still says whether swath resume can continue a run
+		// there.
+		o.Class, o.ExitCode = listing.ClassRefused, exitUsage
+	case errors.Is(err, source.ErrProtocol), errors.As(err, &ue):
+		// The service broke the listing contract: never resumable, and
+		// it outranks a stop cause (a resumable 75, 124, 130 or 143), as
+		// Java's; the journal marks the run unresumable.
+		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "protocol"
+	case errors.Is(err, errIncomplete):
+		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitFatal, false
+	case errors.Is(cause, errStuck):
+		o.Class, o.ExitCode = listing.ClassStuck, exitStuck
+		var st *stuckError
+		if errors.As(cause, &st) {
+			o.Cause = st.cause
+		}
+	case errors.Is(cause, errDeadline):
+		o.Class, o.ExitCode = listing.ClassDeadline, exitDeadline
+	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
+		o.Class, o.ExitCode = listing.ClassTerminated, exitTerminated
+	case errors.As(cause, &se):
+		o.Class, o.ExitCode = listing.ClassInterrupted, exitInterrupted
+	case errors.Is(err, listing.ErrComplete):
+		// swath resume on a committed dataset has nothing to do: it is
+		// idempotent, exit 0, as Java's, when the dataset covers its
+		// scope; one committed with partial coverage stays incomplete.
+		o.Resumable = false
+		if c, ok := committedCoverage(dir); ok && c.Complete {
+			o.Class, o.ExitCode = listing.ClassCompleted, exitCompleted
+		} else {
+			o.Class, o.ExitCode = listing.ClassIncomplete, exitFatal
+		}
+	case errors.Is(err, syscall.ENOSPC):
+		// A full disk stops the run (a part, a journal append, spill or
+		// the manifest cannot be written) but loses nothing durable:
+		// resumable once there is space, when the journal is intact. Its
+		// own code lets a runner retry with a larger workspace.
+		o.Class, o.ExitCode, o.Cause = listing.ClassDiskFull, exitDiskFull, "no_space"
+	default:
+		o.Class, o.ExitCode, o.Resumable = listing.ClassFatal, exitFatal, false
+		var ce interface{ Class() string }
+		if errors.As(err, &ce) {
+			o.Cause = ce.Class()
+		}
+	}
+	return o
+}
+
+// stopSource names what cancelled a run (Java's stop_source tags): a
+// signal, the liveness watchdog (--stall-timeout) or the timebox
+// (--max-duration); "" when nothing did.
+func stopSource(cause error) string {
+	var se *signalError
+	switch {
+	case cause == nil:
+		return ""
+	case errors.Is(cause, errStuck):
+		return "liveness_watchdog"
+	case errors.Is(cause, errDeadline):
+		return "timebox"
+	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
+		return "sigterm"
+	case errors.As(cause, &se):
+		return "sigint"
+	}
+	return ""
+}
+
+// refusal tells a refusal that is the caller's fault, as Java's exit 2
+// (its guarded refusals): an output that is not this tool's to write
+// without --overwrite (not empty, another tool's, an interrupted run) or
+// that overlaps the listed root, a resume whose identity changed, and a
+// resume with nothing to resume; and a source refused before any request
+// (an S3 directory bucket).
+func refusal(err error) bool {
+	var mm *journal.MismatchError
+	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume, source.ErrUnsupported} {
+		if errors.Is(err, r) {
+			return true
+		}
+	}
+	return errors.As(err, &mm)
+}
+
+// committedCoverage is the coverage in dir's manifest (ok false without a
+// readable one).
+func committedCoverage(dir string) (dataset.Coverage, bool) {
+	var m dataset.Manifest
+	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		return dataset.Coverage{}, false
+	}
+	return m.Coverage, true
+}
+
+// account applies the frozen classification o to a report's outcome (its
+// message is the report's error, unless the run completed). The
+// completion fields follow it: a run that did not commit is not complete
+// and its stop reason is its class (fatal, stuck, deadline, ...), whatever
+// the source reported (a source's coverage says complete once its listing
+// loop ends, also after a failure); a committed run keeps the source's,
+// which the manifest's coverage holds too (an incomplete one included).
+func account(r *listing.Outcome, o outcome) {
+	r.Class, r.ExitCode, r.Resumable, r.Cause, r.StopSource = o.Class, o.ExitCode, o.Resumable, o.Cause, o.StopSource
+	if o.ExitCode != exitCompleted && o.Message != "" {
+		r.Error = o.Message
+	}
+	if o.ExitCode != exitCompleted && o.Class != listing.ClassIncomplete {
+		r.Complete, r.StopReason = false, o.Class
+	}
+}
+
+// committedAccount gives the report of an invocation that found its output
+// committed (listing.ErrComplete) the dataset's status and the manifest's
+// coverage.
+func committedAccount(dir string, r *listing.Report) {
+	r.Outcome.Status = listing.StatusCommitted
+	if c, ok := committedCoverage(dir); ok {
+		r.Outcome.Complete, r.Outcome.StopReason = c.Complete, c.StopReason
+	}
+}
+
+// alreadyComplete accounts for a resume that found its output committed
+// and complete (exit 0): the report says so from the manifest's coverage,
+// and the text report says it in one line.
+func alreadyComplete(stdout io.Writer, format, dir string, r *listing.Report) {
+	r.Outcome.Error, r.Outcome.Unrecorded = "", listing.UnrecordedComplete
+	committedAccount(dir, r)
+	if format != "json" {
+		fmt.Fprintf(stdout, "%s is already complete: nothing to resume\n", dir)
+	}
+}
+
+// classified is an error with the provider's class of its cause.
+type classified struct {
+	error
+	class string
+}
+
+func (c *classified) Class() string { return c.class }
+func (c *classified) Unwrap() error { return c.error }
+
+// exitError carries the exit code main uses.
+type exitError struct {
+	error
+	code int
+}
+
+func (e *exitError) Unwrap() error { return e.error }
+
+func hasJournal(dir string) bool {
+	_, err := journal.Read(dir)
+	return err == nil
+}
+
+// errorName is the outcome file written beside the report when a run does
+// not complete.
+const errorName = dataset.ErrorName
+
+// writeOutcome records a failed run's outcome (an incomplete committed
+// dataset included) in DIR/error.json (durable replace), so a supervisor
+// never parses stderr; a completed run removes a stale one. The caller
+// owns the output (listing.Config.Settle, settleOutside).
+func writeOutcome(dir string, o outcome) error {
+	if dir == "" {
+		return nil
+	}
+	path := filepath.Join(dir, errorName)
+	if o.ExitCode == exitCompleted {
+		err := os.Remove(path)
+		switch {
+		case os.IsNotExist(err):
+			return nil
+		case err != nil:
+			return err
+		}
+		// A removal that a power loss undid would leave a stale failure
+		// beside the committed dataset.
+		return dataset.SyncDir(dir)
+	}
+	return dataset.ReplaceJSON(path, o, dataset.Durable)
+}
+
+// errOut is where the command reports an outcome its output does not hold.
+var errOut io.Writer = os.Stderr
+
+// settleOutside records o in dir's error.json for a command that stopped
+// before any run owned the output (a resume refused on a damaged journal),
+// over the unfinished run the command read (seen, its journal.Witness):
+// listing.SettleUnfinished, whose unrecorded says why not, never empty.
+func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded string) {
+	why := listing.SettleUnfinished(dir, seen, func() error {
+		if err := writeOutcome(dir, o); err != nil {
+			return fmt.Errorf("write %s: %w", errorName, err)
+		}
+		return nil
+	})
+	return why == "", why
+}
+
+// reportUnrecorded puts on stderr, as one JSON line, an outcome that the
+// output's error.json does not hold (another owner's outcome stands there,
+// or the write failed), with the reason.
+func reportUnrecorded(dir string, o outcome, why string) {
+	if why != "" {
+		fmt.Fprintf(errOut, "swath: the outcome is not recorded in %s: %s\n", filepath.Join(dir, errorName), why)
+	}
+	b, _ := json.Marshal(o)
+	fmt.Fprintf(errOut, "swath: outcome: %s\n", b)
+}
+
+// diagWait bounds one diagnostic write to stderr: a pipe nobody drains
+// must not hold a stopping run, the watchdog or the forced exit.
+const diagWait = 250 * time.Millisecond
+
+// forcedAllowance bounds the forced exit after shutdownGrace: the dump
+// (stacksWait), the outcome (stacksWait) and the diagnostic lines
+// (diagWait each) fit in it; os.Exit follows at the latest then.
+const forcedAllowance = 5 * time.Second
+
+// note writes s to w, waiting at most diagWait; past that the line is
+// dropped (the write goes on in the background, and is lost at exit).
+func note(w io.Writer, s string) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.WriteString(w, s)
+	}()
+	select {
+	case <-done:
+	case <-time.After(diagWait):
+	}
+}
+
+// stacksMax bounds a goroutine dump on stderr (the file holds it whole).
+const stacksMax = 1 << 20
+
+// stacksWait bounds the dump's write: a disk that blocks the run may block
+// it too, and a forced exit must not wait for it.
+const stacksWait = 2 * time.Second
+
+// dumpStacks writes every goroutine's stack with the progress counts, for
+// a run stopped as stuck or forced to exit: whole to
+// DIR/.swath/stacks-WHY.txt while the run owns the output, else (no
+// output, not owned, or a write that fails or blocks past stacksWait) to
+// stderr, cut at stacksMax bytes. The stacks are taken on entry, as the
+// goroutines are then. It returns where the dump went.
+func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.ProgressSnapshot) string {
+	var stacks bytes.Buffer
+	_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2) // runtime.Stack's format, never truncated
+	buf := stacks.Bytes()
+	sj, _ := json.Marshal(s)
+	head := fmt.Sprintf("swath goroutine dump: %s (%s) at %s\nprogress: %s\n\n", why, detail, time.Now().UTC().Format(time.RFC3339Nano), sj)
+	if dir != "" {
+		path := filepath.Join(dir, dataset.Workspace, "stacks-"+why+".txt")
+		done := make(chan bool, 1)
+		go func() {
+			ok := false
+			pr.Owned(func() {
+				ok = os.MkdirAll(filepath.Dir(path), 0o755) == nil &&
+					os.WriteFile(path, append([]byte(head), buf...), 0o644) == nil
+			})
+			done <- ok
+		}()
+		select {
+		case ok := <-done:
+			if ok {
+				note(errOut, fmt.Sprintf("swath: goroutine dump written to %s\n", path))
+				return path
+			}
+		case <-time.After(stacksWait):
+		}
+	}
+	if len(buf) > stacksMax {
+		buf = append(buf[:stacksMax:stacksMax], "\n... (cut at 1 MiB)"...)
+	}
+	note(errOut, head+string(buf)+"\n")
+	return "stderr"
+}
+
+// forcedErr is the error of a run forced to exit (it did not stop within
+// the shutdown grace).
+func forcedErr(why string) error {
+	return fmt.Errorf("forced exit: still stopping (%s) after %s", why, shutdownGrace)
+}
+
+// forcedSnapshot takes the forced exit's one snapshot of the terminal
+// result (terminal.claim): the run's classification once made (a committed
+// run stays committed and complete), else the forced one, classified as
+// the graceful path classifies the same stop, with exit code code. ok
+// false: none within stacksWait (a commit or a classification holds the
+// result, perhaps on a disk that does not return); late gets it if it
+// comes after all.
+func forcedSnapshot(f *forensicTarget, code int, why string, late func(snapshot)) (snapshot, bool) {
+	if f.ctx == nil {
+		return snapshot{}, false
+	}
+	return f.t.claim(func() outcome {
+		o := classify(forcedErr(why), context.Cause(f.ctx), f.dir)
+		o.ExitCode = code
+		return o
+	}, stacksWait, late)
+}
+
+// forcedAccount writes a forced exit's outcome, from its snapshot s, where
+// the graceful path would have: DIR/error.json while the run owns the
+// output, and the report (--report): the run's last accounted report once
+// it was classified, else a minimal one without the run's statistics. The
+// exit code is the snapshot's. Bounded by stacksWait: a disk that blocks
+// the run may block these writes too.
+func forcedAccount(f *forensicTarget, s snapshot, why string) {
+	if f.ctx == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		err := forcedErr(why)
+		o := s.out
+		if s.run && o.ExitCode != exitCompleted {
+			o.Message = err.Error() + ": " + o.Message
+		}
+		r, ok := s.report()
+		if !ok {
+			r = listing.Unstarted(f.argv, f.dir, f.att, err)
+		}
+		// The escalation is part of the provenance: the stop that began
+		// it, and the forced exit that ended it.
+		if o.StopSource != "" {
+			o.StopSource += "+forced_exit"
+		} else {
+			o.StopSource = "forced_exit"
+		}
+		o.Attempt = f.att
+		account(&r.Outcome, o)
+		if f.dir != "" {
+			f.pr.Owned(func() { _ = writeOutcome(f.dir, outcomeOf(r)) })
+		}
+		writeReport(f.report, r)
+	}()
+	select {
+	case <-done:
+	case <-time.After(stacksWait):
+		note(errOut, "swath: the forced exit's outcome could not be written in time\n")
+	}
+}
+
+// progressName is the live progress file, inside the private workspace:
+// rewritten (atomic replace) every progressEvery while a run goes.
+var progressName = filepath.Join(dataset.Workspace, "progress.json")
+
+const progressEvery = 2 * time.Second
+
+// supervise runs list with the run's liveness owner: it rewrites the
+// progress file, and cancels the run as stuck when neither Progress.Advance
+// (rows in any phase, parts) nor Progress.Answered (requests the service
+// answered usably) has risen for stall (half of it earns a warning first).
+// An answered request keeps the clock alive although no row moved (queued
+// work at a low limit, empty continuing pages); a failed or throttled one,
+// or one that never returns, does not, so a total outage or a hung source
+// still stops as stuck. It is the only place that decides a run cannot go
+// on; nothing in the pipeline gives up on a slow source.
+func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, warn func(string), d *display) (stop func()) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		// The file's cadence; the terminal display (Java's 1 s redraw) may
+		// sample more often, from the same snapshot.
+		every := min(progressEvery, max(stall/4, 10*time.Millisecond))
+		tick := every
+		if d != nil {
+			tick = min(tick, d.interval)
+		}
+		t := time.NewTicker(tick)
+		defer t.Stop()
+		var written time.Time
+		last, since, warned := int64(-1), time.Now(), false
+		var at listing.ProgressSnapshot // the counts at the last progress
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				s := pr.Snapshot()
+				d.offer(s)
+				if dir != "" && now.Sub(written) >= every-tick/2 {
+					// Only while the run owns the output: a refused run
+					// never overwrites its owner's progress.
+					written = now
+					pr.Owned(func() { _ = dataset.ReplaceJSON(filepath.Join(dir, progressName), s, dataset.Atomic) })
+				}
+				if live := s.Advance + s.Answered; live != last {
+					last, since, warned, at = live, now, false, s
+					continue
+				}
+				if stall <= 0 {
+					continue
+				}
+				idle := now.Sub(since)
+				switch {
+				case idle >= stall:
+					cause := stuckCause(at, s)
+					warn(fmt.Sprintf("no progress for %s (%s): stopping the run as stuck", idle.Round(time.Second), cause))
+					// The goroutines as they hung, before the cancel moves them.
+					dumpStacks(dir, pr, "stuck", cause, s)
+					cancel(&stuckError{cause})
+					return
+				case idle >= stall/2 && !warned:
+					warned = true
+					warn(fmt.Sprintf("no progress for %s (the run is stopped as stuck at %s)", idle.Round(time.Second), stall))
+				}
+			}
+		}
+	}()
+	return func() { close(done); <-finished }
+}

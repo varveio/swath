@@ -1,0 +1,183 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package dataset
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/varveio/swath/go/internal/faults"
+)
+
+func part(i int, lo, hi string, n int64) Part {
+	return Part{Path: TempPath("/x", i), PartInfo: PartInfo{MinKey: Key(lo), MaxKey: Key(hi), Rows: n}}
+}
+
+func TestCheck(t *testing.T) {
+	if err := Check([]Part{part(0, "a", "c", 2), part(1, "d", "f", 3)}, 5); err != nil {
+		t.Fatal(err)
+	}
+	for name, parts := range map[string][]Part{
+		"overlap":  {part(0, "a", "d", 2), part(1, "d", "f", 3)},
+		"gap":      {part(0, "a", "c", 2), part(2, "d", "f", 3)},
+		"rowcount": {part(0, "a", "c", 2), part(1, "d", "f", 2)},
+		"inverted": {part(0, "c", "a", 2), part(1, "d", "f", 3)},
+	} {
+		var ie *InvariantError
+		if err := Check(parts, 5); !errors.As(err, &ie) {
+			t.Errorf("%s: gate passed", name)
+		}
+	}
+}
+
+func touch(t *testing.T, p string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func exists(t *testing.T, paths ...string) {
+	t.Helper()
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s should survive: %v", p, err)
+		}
+	}
+}
+
+const id = "swath-local/v0"
+
+func TestPrepareNeverDeletesTheTree(t *testing.T) {
+	T := t.TempDir()
+	src := filepath.Join(T, "src")
+	keep := filepath.Join(src, "keep", "file.txt")
+	touch(t, keep)
+	for name, tc := range map[string]struct {
+		out     string
+		replace bool
+		want    error
+	}{
+		"ancestor":            {T, true, ErrOutIsRoot},
+		"root":                {src, true, ErrOutIsRoot},
+		"inside, new":         {filepath.Join(src, "out"), true, ErrInsideRoot},
+		"inside, not empty":   {filepath.Join(src, "keep"), false, ErrNotEmpty},
+		"foreign, replace":    {filepath.Join(T, "foreign"), true, ErrNotDataset},
+		"foreign, no replace": {filepath.Join(T, "foreign"), false, ErrNotEmpty},
+	} {
+		touch(t, filepath.Join(T, "foreign", "precious.txt"))
+		err := Prepare(tc.out, src, id, tc.replace)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
+		}
+		exists(t, keep, filepath.Join(T, "foreign", "precious.txt"))
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(T, alias); err == nil {
+		if err := Prepare(T, filepath.Join(alias, "src"), id, true); !errors.Is(err, ErrOutIsRoot) {
+			t.Errorf("ancestor via alias: %v", err)
+		}
+		exists(t, keep)
+	}
+}
+
+func TestReplaceRemovesOnlyOwnEntries(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "ds")
+	for _, f := range []string{"data/part-00000.parquet", ManifestName, legacySuccess, legacySymlink, ".swath/journal", ".swath/lock", "notes.txt"} {
+		touch(t, filepath.Join(out, f))
+	}
+	if err := Prepare(out, t.TempDir(), id, true); err != nil {
+		t.Fatal(err)
+	}
+	exists(t, filepath.Join(out, "notes.txt"), filepath.Join(out, DataDir), filepath.Join(out, ".swath/lock"))
+	for _, gone := range []string{"data/part-00000.parquet", ManifestName, legacySuccess, legacySymlink, ".swath/journal"} {
+		if _, err := os.Stat(filepath.Join(out, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s survived", gone)
+		}
+	}
+}
+
+// TestPublishFailureLeavesNoManifest: the manifest is the commit; a failed
+// publication has none.
+func TestPublishFailureLeavesNoManifest(t *testing.T) {
+	out := t.TempDir()
+	touch(t, filepath.Join(out, DataDir, "x"))
+	touch(t, TempPath(out, 0))
+	// A non-empty directory where manifest.json goes makes the commit fail.
+	touch(t, filepath.Join(out, ManifestName, "blocker"))
+	err := Publish(out, Meta{SchemaID: id}, []Part{{Path: TempPath(out, 0), PartInfo: PartInfo{Rows: 1, MinKey: "a", MaxKey: "a"}}}, nil)
+	if err == nil {
+		t.Fatal("publish succeeded")
+	}
+	if Committed(out) {
+		t.Fatal("a failed publish committed")
+	}
+}
+
+// TestOverwriteRemovesTheCommitFirst (review item 43): --overwrite
+// is a destructive replacement, and its first durable step is to remove the
+// previous dataset's commit record: a crash part way through the removal
+// leaves a directory with no dataset (and its old parts), never a manifest
+// naming parts already removed. Before, data/ went first.
+func TestOverwriteRemovesTheCommitFirst(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "ds")
+	for _, f := range []string{"data/part-00000.parquet", ManifestName, legacySuccess, ".swath/lock"} {
+		touch(t, filepath.Join(out, f))
+	}
+	restore := faults.Set(func(p string) error {
+		if p == "overwrite-uncommitted" {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	err := Prepare(out, t.TempDir(), id, true)
+	restore()
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("the crash point was not reached: %v", err)
+	}
+	if Committed(out) {
+		t.Fatal("the manifest outlived the start of the overwrite")
+	}
+	if _, err := os.Stat(filepath.Join(out, legacySuccess)); !os.IsNotExist(err) {
+		t.Fatal("the earlier layout's commit marker outlived the start of the overwrite")
+	}
+	exists(t, filepath.Join(out, "data/part-00000.parquet"))
+}
+
+// TestOverwriteInterruptedUnjournaled: an unjournaled run (a local
+// listing) stopped before its commit leaves data/, error.json and the
+// output lock; --overwrite replaces that output (the lock and the outcome
+// file are this tool's marks), where before it refused it as not a
+// dataset while swath resume found nothing to resume. data/ without a mark
+// of ours is still refused.
+func TestOverwriteInterruptedUnjournaled(t *testing.T) {
+	out := t.TempDir()
+	for _, d := range []string{DataDir, Workspace} {
+		if err := os.MkdirAll(filepath.Join(out, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(out, DataDir, "part-00000.parquet"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(out, ErrorName), []byte(`{"class":"deadline"}`), 0o644)
+	os.WriteFile(filepath.Join(out, Workspace, LockName), nil, 0o644)
+	if Resumable(out) {
+		t.Fatal("an unjournaled run reads as resumable")
+	}
+	if err := Prepare(out, "", "swath/local-files/v1", true); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, ErrorName)); !os.IsNotExist(err) {
+		t.Fatal("error.json kept")
+	}
+	foreign := t.TempDir()
+	os.MkdirAll(filepath.Join(foreign, DataDir), 0o755)
+	if err := Prepare(foreign, "", "swath/local-files/v1", true); !errors.Is(err, ErrNotDataset) {
+		t.Fatalf("data/ without a mark of ours: %v, want ErrNotDataset", err)
+	}
+}
