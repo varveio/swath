@@ -104,7 +104,10 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
 	s.set("empty")
-	err := run(ctx, s.args(dir, "--stall-timeout", stall.String(), "--max-duration", "3s", "--report", report), io.Discard, false)
+	// The deadline leaves room for slow data pages (the race detector on
+	// a shared CI runner took 1.2 s for them) before over twice the stall
+	// timeout of empty pages.
+	err := run(ctx, s.args(dir, "--stall-timeout", stall.String(), "--max-duration", "6s", "--report", report), io.Discard, false)
 	if c := exitCode(t, err); c != exitDeadline {
 		t.Fatalf("exit %d (%v), want %d", c, err, exitDeadline)
 	}
