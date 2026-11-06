@@ -29,7 +29,7 @@ func (f *Fields) Set(s string) error {
 	return err
 }
 
-func flags(f *flag.FlagSet, _ bool) any {
+func flags(f *flag.FlagSet, _ bool, _ any) any {
 	o := &Options{LinkTarget: true}
 	f.Var(&o.Fields, "metadata", "local: metadata `tier` per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)")
 	f.BoolVar(&o.NoDirs, "no-dirs", false, "local: omit kind=DIR rows")

@@ -37,61 +37,34 @@ func (p Policy) Options() Options {
 		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors}
 }
 
-// Flags registers the engine's policy flags on f and returns the Policy
-// they fill when f is parsed. Every provider on the engine calls it from
-// its own flag group; the flags are registered once per flag set and later
-// callers get the same Policy. The policy toggles and comparison modes are
-// diagnostic (swath diag list); -seed and -limiter are on swath list too.
+// FlagGroup names the engine's flag group (registry.Factory.Shared).
+const FlagGroup = "keyrange"
+
+// Flags registers the engine's flag group on f and returns the Common
+// value it fills when f is parsed: the command registers it once and
+// passes it to every provider's flag group (registry.Factory.Shared). The
+// policy toggles and comparison modes are diagnostic (swath diag list);
+// -seed and the admission flags are on swath list too.
 func Flags(f *flag.FlagSet, diag bool) *Common {
-	if fl := f.Lookup("seed"); fl != nil {
-		if b, ok := fl.Value.(*boolFlag); ok {
-			return b.c
-		}
-		panic("keyrange: flag -seed is registered by something other than the range engine")
-	}
 	// The command's defaults: the seed descends, and the client admits its
 	// requests through the adaptive limiter (Java's gauge rules);
-	// --limiter=false turns it off. A library caller's zero Policy has
-	// neither.
+	// --limiter=false turns it off. A library caller's zero Policy and
+	// Admission have neither.
 	c := &Common{Policy: Policy{SeedDescent: true}, Admission: objhttp.Admission{Limiter: true}}
 	p, a := &c.Policy, &c.Admission
-	bf := func(v *bool, name, usage string) { f.Var(&boolFlag{c: c, v: v}, name, usage) }
-	bf(&a.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
-	bf(&a.SlowStart, "limiter-slow-start", "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
+	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
+	f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
 	f.Var((*rateFlag)(&a.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
-	bf(&p.Seed, "seed", "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
+	f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
 	if diag {
-		bf(&p.Structure, "structure", "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
-		bf(&p.SeedDescent, "seed-descent", "ranges: with -seed, walk the folder hierarchy (false: one delimiter page)")
-		bf(&p.Floors, "floors", "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
-		bf(&p.Sequential, "sequential", "ranges: list with one continuation-token chain (no ranges; the reference)")
-		bf(&p.Probe, "probe", "ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")
+		f.BoolVar(&p.Structure, "structure", p.Structure, "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
+		f.BoolVar(&p.SeedDescent, "seed-descent", p.SeedDescent, "ranges: with -seed, walk the folder hierarchy (false: one delimiter page)")
+		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
+		f.BoolVar(&p.Sequential, "sequential", p.Sequential, "ranges: list with one continuation-token chain (no ranges; the reference)")
+		f.BoolVar(&p.Probe, "probe", p.Probe, "ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")
 		f.Var((*int64Flag)(&p.MaxKeys), "max-keys", "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
 	}
 	return c
-}
-
-// boolFlag is a bool flag that knows its Common, so that a second
-// registration on the same flag set finds it.
-type boolFlag struct {
-	c *Common
-	v *bool
-}
-
-func (b *boolFlag) IsBoolFlag() bool { return true }
-func (b *boolFlag) String() string {
-	if b == nil || b.v == nil {
-		return "false"
-	}
-	return strconv.FormatBool(*b.v)
-}
-func (b *boolFlag) Set(s string) error {
-	v, err := strconv.ParseBool(s)
-	if err != nil {
-		return err
-	}
-	*b.v = v
-	return nil
 }
 
 type rateFlag float64

@@ -115,14 +115,12 @@ func TestCappedRunCannotResume(t *testing.T) {
 	}
 }
 
-// TestEngineFlagsShared: S3 registers the range engine's flags through the
-// shared group, so a second engine provider registering it on the same
-// flag set (here the engine's own Flags, before S3's group) neither panics
-// nor splits the policy: S3 opens with the parsed policy.
+// TestEngineFlagsShared: S3 takes the range engine's flag group the command
+// registered once and passed to it, and opens with the parsed policy.
 func TestEngineFlagsShared(t *testing.T) {
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
 	other := keyrange.Flags(f, true)
-	v := flags(f, true)
+	v := flags(f, true, other)
 	if err := f.Parse([]string{"-seed", "-floors", "-anonymous", "-endpoint", "http://127.0.0.1:1"}); err != nil {
 		t.Fatal(err)
 	}

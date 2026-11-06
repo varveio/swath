@@ -328,10 +328,20 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
 		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
 	}
-	// Each provider owns its flag group.
+	// Each provider owns its flag group; a group several share (the range
+	// engine's) is registered once and passed to each of them.
 	o.sources = map[string]any{}
+	shared := map[string]any{}
 	for _, p := range registry.Factories() {
-		o.sources[p.Scheme] = p.Flags(f, diag)
+		var g any
+		if p.Shared != "" {
+			var ok bool
+			if g, ok = shared[p.Shared]; !ok {
+				g = p.SharedFlags(f, diag)
+				shared[p.Shared] = g
+			}
+		}
+		o.sources[p.Scheme] = p.Flags(f, diag, g)
 	}
 	f.SetOutput(io.Discard)
 	return f

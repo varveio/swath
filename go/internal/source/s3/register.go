@@ -18,7 +18,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{Classify: classify, Scheme: "s3", Flags: flags, Defaults: defaults, Open: open})
+	registry.Register(registry.Factory{Classify: classify, Scheme: "s3", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
 }
 
 // flagged is the S3 flag group's value: the S3 options and the range
@@ -28,12 +28,16 @@ type flagged struct {
 	common *keyrange.Common
 }
 
+// sharedFlags registers the range engine's flag group (keyrange.Flags).
+func sharedFlags(f *flag.FlagSet, diag bool) any { return keyrange.Flags(f, diag) }
+
 func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{SeedDescent: true}}} }
 
 // flags registers the S3 flag group and the shared engine flags; the
 // returned value is filled when the flag set is parsed.
-func flags(f *flag.FlagSet, diag bool) any {
-	o := &flagged{common: keyrange.Flags(f, diag)}
+func flags(f *flag.FlagSet, diag bool, shared any) any {
+	common, _ := shared.(*keyrange.Common)
+	o := &flagged{common: common}
 	f.StringVar(&o.Endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store")
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")

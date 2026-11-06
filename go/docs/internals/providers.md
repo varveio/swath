@@ -260,7 +260,7 @@ is exclusive and set to `ExclusiveEnd(Through, …)` when that bound is at most 
 without CR or LF: `%`, control characters and non-ASCII names are sent as start bounds (query-escaped).
 Every request of a token chain repeats its `startOffset`, `endOffset`, prefix and delimiter with the
 `pageToken`, and empty continuing pages are followed by the engine. The engine's policy flags are the shared
-ones (`keyrange.Flags`); the GCS flags are prefixed `--gcs-` because one flag set serves every provider.
+group (`keyrange.Flags`, registered once by the command); the GCS flags are prefixed `--gcs-` because one flag set serves every provider.
 
 **Schema** `swath/gcs-objects/v1`: the key (the object name), `size`, `last_modified` (`updated`, µs),
 `etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed) and
@@ -432,11 +432,13 @@ then marked incomplete).
 ## Registry and optional interfaces
 
 A provider registers a `registry.Factory` from `init`: its URL scheme (`s3`; the empty scheme takes local
-paths), its flag group (`Flags(*flag.FlagSet) any` returns the provider's options value, filled by the
-parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. A provider on the range engine registers the
-engine's policy flags (`--seed`, `--seed-descent`, `--structure`, `--floors`, `--probe`, `--sequential`,
-`--max-keys`) through `keyrange.Flags` from its flag group: the group is registered once per flag set and
-every such provider gets the same `keyrange.Policy`. The command imports providers only for that
+paths), its flag group (`Flags(fs, diag, shared) any` returns the provider's options value, filled by the
+parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. A provider on the range engine names the
+engine's shared flag group (`Shared: keyrange.FlagGroup`, `SharedFlags`: the policy flags `--seed`,
+`--seed-descent`, `--structure`, `--floors`, `--probe`, `--sequential`, `--max-keys` and the admission flags
+`--limiter`, `--limiter-slow-start`, `--request-rate`): the command registers each named group once and
+passes its value (`*keyrange.Common`: a `keyrange.Policy` and an `objhttp.Admission`) to every provider that
+names it. The command imports providers only for that
 registration and passes the options value for the root's scheme as `listing.Config.Source.Options`, opaque to the
 pipeline. `Open` validates the root without touching the output.
 

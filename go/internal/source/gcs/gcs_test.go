@@ -426,14 +426,13 @@ func TestSuppliedClientBilling(t *testing.T) {
 	}
 }
 
-// TestEngineFlagsShared: GCS takes the range engine's flags from the
-// shared group, so with another engine provider on the same flag set
-// (here the engine's own Flags first) nothing panics and GCS opens with
-// the parsed policy.
+// TestEngineFlagsShared: GCS takes the range engine's flag group the
+// command registered once and passed to it, and opens with the parsed
+// policy.
 func TestEngineFlagsShared(t *testing.T) {
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
 	other := keyrange.Flags(f, true)
-	v := flags(f, true)
+	v := flags(f, true, other)
 	if err := f.Parse([]string{"-seed", "-structure", "-gcs-anonymous", "-gcs-endpoint", "http://127.0.0.1:1/storage/v1/"}); err != nil {
 		t.Fatal(err)
 	}

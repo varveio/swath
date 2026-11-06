@@ -33,8 +33,15 @@ type Factory struct {
 	// value, which the flags fill when fs is parsed. The value is opaque to
 	// everything but the provider: it travels in Request.Options. diag adds
 	// the provider's diagnostic flags (comparison modes and policy toggles,
-	// for swath diag list only).
-	Flags func(fs *flag.FlagSet, diag bool) any
+	// for swath diag list only). shared is the value of the provider's
+	// shared flag group (Shared), nil without one.
+	Flags func(fs *flag.FlagSet, diag bool, shared any) any
+	// Shared, if set, names a flag group several providers share (the range
+	// engine's), which SharedFlags registers: the command registers each
+	// named group once, from the first provider naming it, and passes its
+	// value to every such provider's Flags.
+	Shared      string
+	SharedFlags func(fs *flag.FlagSet, diag bool) any
 	// Defaults returns the options value used when none was given.
 	Defaults func() any
 	// Open validates the root and returns a source ready to list. It must

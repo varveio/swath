@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{Classify: classify, Scheme: "gs", Flags: flags, Defaults: defaults, Open: open})
+	registry.Register(registry.Factory{Classify: classify, Scheme: "gs", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
 }
 
 // flagged is the GCS flag group's value: the GCS options and the range
@@ -27,12 +27,16 @@ type flagged struct {
 	common *keyrange.Common
 }
 
+// sharedFlags registers the range engine's flag group (keyrange.Flags).
+func sharedFlags(f *flag.FlagSet, diag bool) any { return keyrange.Flags(f, diag) }
+
 func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{SeedDescent: true}}} }
 
 // flags registers the GCS flag group and the shared engine flags. The GCS
 // flags are prefixed: one flag set serves every provider.
-func flags(f *flag.FlagSet, diag bool) any {
-	o := &flagged{common: keyrange.Flags(f, diag)}
+func flags(f *flag.FlagSet, diag bool, shared any) any {
+	common, _ := shared.(*keyrange.Common)
+	o := &flagged{common: common}
 	f.StringVar(&o.Endpoint, "gcs-endpoint", "", "GCS: JSON API base `URL` (default "+client.DefaultEndpoint+")")
 	f.BoolVar(&o.Anonymous, "gcs-anonymous", false, "GCS: send no credentials, ignoring any in the environment")
 	f.StringVar(&o.CredentialsFile, "gcs-credentials", "", "GCS: service-account or authorized-user JSON `file` (default: Application Default Credentials)")
