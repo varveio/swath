@@ -90,27 +90,6 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
 | `split.skipped.remaining_floor` | count | decisions | floors | bounded range with at most 4 pages of keys left by its estimate: not split |
 | `split.skipped.tail_floor` | count | decisions | floors | the child past the pivot would realize at most 2 pages of keys: not split |
-| `seed.probes` | count | requests | seed | probes the seed descent asked for (a probe asked twice is fetched once; also in requests) |
-| `seed.probes_unused` | count | requests | seed | probes fetched ahead that the descent did not ask for |
-| `seed.radix_bands` | count | cuts | seed | cuts synthesized after a dense flat folder ('!'..'~' without '%') |
-| `seed.top_paginated` | flag |  | seed | the top level was truncated and a second top page was read |
-| `seed.mass_weighted` | flag |  | seed | cuts were subsampled by sampled mass, not evenly |
-| `seed.sampled_levels` | count | levels | seed | ambiguous truncated folders sampled (up to 3 children each) |
-| `seed.explosions_confirmed` | count | levels | seed | sampled folders found one object per subfolder: left whole |
-| `seed.heavy_prior` | count | levels | seed | ambiguous folders classified from earlier samples (sample budget spent) |
-| `seed.frontier_continued` | count | levels | seed | the walk went on past a truncated folder |
-| `seed.flat_trivial` | flag |  | seed | no folders and a complete top page: one range |
-| `seed.sentinel_declined.no_prefix` | count | decisions | seed | sentinel declined: the top level has no folder |
-| `seed.sentinel_declined.no_greatest_item` | count | decisions | seed | sentinel declined: the top probe returned nothing |
-| `seed.sentinel_declined.no_spare_slot` | count | decisions | seed | sentinel declined: the cuts already fill min(1000, 4×workers) |
-| `seed.sentinel_declined.not_above_last_cut` | count | decisions | seed | sentinel declined: the ceiling is not above the last cut |
-| `seed.levels.narrow` | count | levels | seed | folders listed whole in one page: their subfolders are cuts and are walked |
-| `seed.levels.flat_wide` | count | levels | seed | truncated folders of objects only |
-| `seed.levels.fanout_tiled` | count | levels | seed | truncated folders of key=value partitions: up to workers of them are cuts |
-| `seed.levels.heavy_cut_banded` | count | levels | seed | truncated folders sampled heavy: up to workers subfolders are cuts |
-| `seed.levels.tiny_leaf_explosion` | count | levels | seed | truncated folders of one-object subfolders: left whole |
-| `seed.levels.dense_root_radix_banded` | count | levels | seed | the dense flat folder cut into radix bands |
-| `seed.levels.delimiter_seeded` | count | levels | seed | a complete top level whose folders seeded the tiles (nothing else engaged) |
 | `structure.requests` | count | requests | structure | delimiter probes (max-keys 32) after a cursor, one per folder level; also counted in requests |
 | `structure.zero_fanout` | count | probes | structure | probes that found no folder at any level |
 | `structure.no_boundary` | count | probes | structure | probes whose folders all lay outside the range |
@@ -119,10 +98,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `structure.late` | count | decisions | structure | split decisions taken while the range's probe was still in flight |
 | `split.pivot_structure` | count | pivots | structure | pivots on a folder boundary from a structure probe (else midpoint, density or reflection) |
 | `empty_pages` | count | pages |  | continuing pages with no entry, followed by their token (also counted in requests) |
-| `seed.top_paginated_declined.unsafe` | count | probes | seed | top-up probes not sent: the top page's last entry is not a bound the provider accepts |
 | `prefixes_normalized` | count | pages |  | pages whose common prefixes came unsorted or repeated, sorted and deduplicated |
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys) |
-| `seed.short_continuing_estimated` | count | samples | seed | continuing seed samples shorter than a nominal page, weighed (or classed dense) as a full page: an estimate |
 | `mutex.wait_ns` | count | ns |  | time goroutines spent waiting for the engine's decision mutex (summed over goroutines) |
 | `mutex.max_hold_ns` | max | ns |  | the longest single hold of the engine's decision mutex |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |

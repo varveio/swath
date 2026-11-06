@@ -189,7 +189,7 @@ func TestPageSize(t *testing.T) {
 			for i, opt := range []Options{
 				{Sequential: true},
 				{Workers: 8},
-				{Workers: 8, Seed: true, SeedDescent: true, Floors: true, Structure: true},
+				{Workers: 8, Seed: true, Floors: true, Structure: true},
 				{Workers: 8, Seed: true, Probe: true},
 			} {
 				what := fmt.Sprintf("page=%d short=%v opt %d", page, short, i)
@@ -230,14 +230,13 @@ func TestPageSize(t *testing.T) {
 }
 
 // TestPrefixesNormalized: common prefixes that come unsorted or repeated
-// are sorted and deduplicated once, for the seed page and the seed
-// descent alike: the tiles and the output equal those from a provider
-// that returns them in order.
+// are sorted and deduplicated once: the seed's tiles and the output equal
+// those from a provider that returns them in order.
 func TestPrefixesNormalized(t *testing.T) {
 	keys := slices.Compact(slices.Sorted(slices.Values(keyspaces()["deepTree"])))
 	keys = append(keys, "d1/", "d3/e0/")
 	slices.Sort(keys)
-	for _, opt := range []Options{{Seed: true}, {Seed: true, SeedDescent: true}} {
+	for _, opt := range []Options{{Seed: true}} {
 		var tiles [2][]string
 		for j, scramble := range []bool{false, true} {
 			fetch := fetchFrom(newSorted(keys, false, 1))

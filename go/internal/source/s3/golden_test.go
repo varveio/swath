@@ -63,14 +63,12 @@ func TestDecisionsGolden(t *testing.T) {
 		short   bool
 		pageCap int
 		coin    bool
-		workers int // the provider's worker count: split demand and the seed descent's width
+		workers int // the provider's worker count: split demand and the seed's cut limit
 	}
 	cfgs := []cfg{
 		{name: "coin", coin: true, short: true, workers: 1},
 		{name: "coin/seedpage/floors/probe", opt: Options{Policy: keyrange.Policy{Seed: true, Floors: true, Probe: true}}, coin: true, short: true, workers: 1},
 		{name: "demand8/seedpage/page=7", opt: Options{Policy: keyrange.Policy{Seed: true}}, workers: 8, pageCap: 7},
-		{name: "demand8/descent/floors/page=13", opt: Options{Policy: keyrange.Policy{Seed: true, SeedDescent: true, Floors: true}}, workers: 8, pageCap: 13},
-		{name: "coin/descent", opt: Options{Policy: keyrange.Policy{Seed: true, SeedDescent: true}}, coin: true, workers: 1},
 		{name: "sequential", opt: Options{Policy: keyrange.Policy{Sequential: true}}, short: true, workers: 1},
 	}
 	spaces := keyrangetest.Keyspaces()

@@ -52,27 +52,6 @@ const (
 	cRequeues
 	cSkippedRemainingFloor
 	cSkippedTailFloor
-	cSeedProbes
-	cSeedProbesUnused
-	cSeedRadixBands
-	cSeedTopPaginated
-	cSeedMassWeighted
-	cSeedSampledLevels
-	cSeedExplosions
-	cSeedHeavyPrior
-	cSeedFrontierContinued
-	cSeedFlatTrivial
-	cSentinelDeclinedNoPrefix
-	cSentinelDeclinedNoGreatest
-	cSentinelDeclinedNoSpare
-	cSentinelDeclinedNotAbove
-	cSeedLevelNarrow
-	cSeedLevelFlatWide
-	cSeedLevelFanout
-	cSeedLevelHeavy
-	cSeedLevelTinyLeaf
-	cSeedLevelRadix
-	cSeedLevelDelimiter
 	cStructureRequests
 	cStructureZero
 	cStructureNoBoundary
@@ -81,10 +60,8 @@ const (
 	cStructureLate
 	cSplitPivotStructure
 	cEmptyPages
-	cSeedTopUnsafe
 	cPrefixesNormalized
 	cBoundDrops
-	cSeedShortContinuing
 	cMutexWait
 	cMutexMaxHold
 	numCounters
@@ -138,27 +115,6 @@ var Counters = table([numCounters]counters.Def{
 	cRequeues:                   d("requeues", counters.Count, "requests", "pages asked again after the client's retries were exhausted (the run never fails on that)"),
 	cSkippedRemainingFloor:      d("split.skipped.remaining_floor", counters.Count, "decisions", "bounded range with at most 4 pages of keys left by its estimate: not split", "floors"),
 	cSkippedTailFloor:           d("split.skipped.tail_floor", counters.Count, "decisions", "the child past the pivot would realize at most 2 pages of keys: not split", "floors"),
-	cSeedProbes:                 d("seed.probes", counters.Count, "requests", "probes the seed descent asked for (a probe asked twice is fetched once; also in requests)", "seed"),
-	cSeedProbesUnused:           d("seed.probes_unused", counters.Count, "requests", "probes fetched ahead that the descent did not ask for", "seed"),
-	cSeedRadixBands:             d("seed.radix_bands", counters.Count, "cuts", "cuts synthesized after a dense flat folder ('!'..'~' without '%')", "seed"),
-	cSeedTopPaginated:           d("seed.top_paginated", counters.Flag, "", "the top level was truncated and a second top page was read", "seed"),
-	cSeedMassWeighted:           d("seed.mass_weighted", counters.Flag, "", "cuts were subsampled by sampled mass, not evenly", "seed"),
-	cSeedSampledLevels:          d("seed.sampled_levels", counters.Count, "levels", "ambiguous truncated folders sampled (up to 3 children each)", "seed"),
-	cSeedExplosions:             d("seed.explosions_confirmed", counters.Count, "levels", "sampled folders found one object per subfolder: left whole", "seed"),
-	cSeedHeavyPrior:             d("seed.heavy_prior", counters.Count, "levels", "ambiguous folders classified from earlier samples (sample budget spent)", "seed"),
-	cSeedFrontierContinued:      d("seed.frontier_continued", counters.Count, "levels", "the walk went on past a truncated folder", "seed"),
-	cSeedFlatTrivial:            d("seed.flat_trivial", counters.Flag, "", "no folders and a complete top page: one range", "seed"),
-	cSentinelDeclinedNoPrefix:   d("seed.sentinel_declined.no_prefix", counters.Count, "decisions", "sentinel declined: the top level has no folder", "seed"),
-	cSentinelDeclinedNoGreatest: d("seed.sentinel_declined.no_greatest_item", counters.Count, "decisions", "sentinel declined: the top probe returned nothing", "seed"),
-	cSentinelDeclinedNoSpare:    d("seed.sentinel_declined.no_spare_slot", counters.Count, "decisions", "sentinel declined: the cuts already fill min(1000, 4×workers)", "seed"),
-	cSentinelDeclinedNotAbove:   d("seed.sentinel_declined.not_above_last_cut", counters.Count, "decisions", "sentinel declined: the ceiling is not above the last cut", "seed"),
-	cSeedLevelNarrow:            d("seed.levels.narrow", counters.Count, "levels", "folders listed whole in one page: their subfolders are cuts and are walked", "seed"),
-	cSeedLevelFlatWide:          d("seed.levels.flat_wide", counters.Count, "levels", "truncated folders of objects only", "seed"),
-	cSeedLevelFanout:            d("seed.levels.fanout_tiled", counters.Count, "levels", "truncated folders of key=value partitions: up to workers of them are cuts", "seed"),
-	cSeedLevelHeavy:             d("seed.levels.heavy_cut_banded", counters.Count, "levels", "truncated folders sampled heavy: up to workers subfolders are cuts", "seed"),
-	cSeedLevelTinyLeaf:          d("seed.levels.tiny_leaf_explosion", counters.Count, "levels", "truncated folders of one-object subfolders: left whole", "seed"),
-	cSeedLevelRadix:             d("seed.levels.dense_root_radix_banded", counters.Count, "levels", "the dense flat folder cut into radix bands", "seed"),
-	cSeedLevelDelimiter:         d("seed.levels.delimiter_seeded", counters.Count, "levels", "a complete top level whose folders seeded the tiles (nothing else engaged)", "seed"),
 	cStructureRequests:          d("structure.requests", counters.Count, "requests", "delimiter probes (max-keys 32) after a cursor, one per folder level; also counted in requests", "structure"),
 	cStructureZero:              d("structure.zero_fanout", counters.Count, "probes", "probes that found no folder at any level", "structure"),
 	cStructureNoBoundary:        d("structure.no_boundary", counters.Count, "probes", "probes whose folders all lay outside the range", "structure"),
@@ -167,10 +123,8 @@ var Counters = table([numCounters]counters.Def{
 	cStructureLate:              d("structure.late", counters.Count, "decisions", "split decisions taken while the range's probe was still in flight", "structure"),
 	cSplitPivotStructure:        d("split.pivot_structure", counters.Count, "pivots", "pivots on a folder boundary from a structure probe (else midpoint, density or reflection)", "structure"),
 	cEmptyPages:                 d("empty_pages", counters.Count, "pages", "continuing pages with no entry, followed by their token (also counted in requests)"),
-	cSeedTopUnsafe:              d("seed.top_paginated_declined.unsafe", counters.Count, "probes", "top-up probes not sent: the top page's last entry is not a bound the provider accepts", "seed"),
 	cPrefixesNormalized:         d("prefixes_normalized", counters.Count, "pages", "pages whose common prefixes came unsorted or repeated, sorted and deduplicated"),
 	cBoundDrops:                 d("bound_drops", counters.Count, "keys", "keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys)"),
-	cSeedShortContinuing:        d("seed.short_continuing_estimated", counters.Count, "samples", "continuing seed samples shorter than a nominal page, weighed (or classed dense) as a full page: an estimate", "seed"),
 	cMutexWait:                  d("mutex.wait_ns", counters.Count, "ns", "time goroutines spent waiting for the engine's decision mutex (summed over goroutines)"),
 	cMutexMaxHold:               d("mutex.max_hold_ns", counters.Max, "ns", "the longest single hold of the engine's decision mutex"),
 })
@@ -211,38 +165,4 @@ func (p *Engine[P]) disabled() []string {
 		off = append(off, "max_keys")
 	}
 	return append(off, p.opt.ClientOff...)
-}
-
-// seedMarks maps the seed descent's engagements onto counters; the
-// run-level classifications are counted per level (seedLevels).
-var seedMarks = map[string]counters.ID{
-	"descent_cuts_subsampled":              cSeedSubsampled,
-	"top_truncated":                        cSeedTruncated,
-	"sentinel":                             cSeedSentinel,
-	"sentinel_declined.top_truncated":      cSentinelDeclinedTruncated,
-	"sentinel_declined.object_last":        cSentinelDeclinedObjectLast,
-	"sentinel_declined.no_ceiling":         cSentinelDeclinedNoCeiling,
-	"sentinel_declined.no_prefix":          cSentinelDeclinedNoPrefix,
-	"sentinel_declined.no_greatest_item":   cSentinelDeclinedNoGreatest,
-	"sentinel_declined.no_spare_slot":      cSentinelDeclinedNoSpare,
-	"sentinel_declined.not_above_last_cut": cSentinelDeclinedNotAbove,
-	"top_paginated":                        cSeedTopPaginated,
-	"top_paginated_declined.unsafe":        cSeedTopUnsafe,
-	"mass_weighted_subsample":              cSeedMassWeighted,
-	"heavy_cut_descended":                  cSeedSampledLevels,
-	"explosion_confirmed":                  cSeedExplosions,
-	"heavy_prior_applied":                  cSeedHeavyPrior,
-	"frontier_continued_past_explosion":    cSeedFrontierContinued,
-	"flat_trivial":                         cSeedFlatTrivial,
-	"short_continuing_estimated":           cSeedShortContinuing,
-}
-
-var seedLevels = map[string]counters.ID{
-	"narrow":                  cSeedLevelNarrow,
-	"flat_wide":               cSeedLevelFlatWide,
-	"fanout_tiled":            cSeedLevelFanout,
-	"heavy_cut_banded":        cSeedLevelHeavy,
-	"tiny_leaf_explosion":     cSeedLevelTinyLeaf,
-	"dense_root_radix_banded": cSeedLevelRadix,
-	"delimiter_seeded":        cSeedLevelDelimiter,
 }

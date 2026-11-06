@@ -104,7 +104,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	// have moved).
 	var cmd []string
 	var secrets []string // secret flags the run had, whose values were not recorded
-	for _, a := range base {
+	for _, a := range upgradeRecorded(base) {
 		n := strings.TrimLeft(a, "-")
 		if name, v, _ := strings.Cut(n, "="); a != n && (name == "overwrite" || name == "force") && (v == "" || v == "true") {
 			continue
@@ -245,4 +245,27 @@ func show(args []string, stdout io.Writer) error {
 func isFile(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && !fi.IsDir()
+}
+
+// removedFlags are boolean diagnostic flags a journal may have recorded
+// that this build no longer has: they chose request patterns, not the
+// output, so a resume drops them and lists with the remaining policy.
+var removedFlags = []string{"seed-descent"}
+
+// upgradeRecorded rewrites a recorded command written by an earlier build
+// into this build's flags (docs/upgrade.md): removed diagnostic switches
+// are dropped.
+func upgradeRecorded(argv []string) []string {
+	var out []string
+	for i, a := range argv {
+		if a == "--" { // the rest are arguments, not flags
+			return append(out, argv[i:]...)
+		}
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if strings.HasPrefix(a, "-") && slices.Contains(removedFlags, name) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }

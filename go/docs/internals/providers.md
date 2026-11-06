@@ -296,20 +296,16 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     (`Safe`: valid UTF-8 without C0, DEL, C1, `%`, surrogates or non-characters), which S3 declares
     explicitly (`s3.AcceptBound`). Synthesized pivots always use the pivot alphabet. The predicate guards
     every bound the engine sends: pivots (guard clause `unsafe_pivot`), cursors (`unsafe_cursor`), seed and structure
-    boundaries, the seed's top-up after the top page's last entry (not sent when vetoed,
-    `seed.top_paginated_declined.unsafe`) and a resume's start (K's longest accepted prefix);
+    boundaries and a resume's start (K's longest accepted prefix);
   - `Requeue` (which failures are asked again after a backoff instead of failing the run), `InvalidPage`
     (the error contract breaks wrap), `Size` (a row's bytes) and the provider's own `Counters`, reported
     after the engine's.
 
-The engine's options are the scope prefix, `Sequential`, `Seed`, `SeedDescent`, `Structure`, `Probe`,
+The engine's options are the scope prefix, `Sequential`, `Seed`, `Structure`, `Probe`,
 `Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size (default 1,000): data and
 seed requests ask for it, structure and 1-key probes for no more, and the floors count pages of it. The
 engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
-The seed reads a probe page as two facts, what it showed (prefixes and objects) and whether it continues: a
-sample is weighed and classed by what it showed, and a continuing sample that showed less than a nominal page
-(a provider may cut pages short) is taken as a full page, an estimate counted in
-`seed.short_continuing_estimated` (`TestSeedObservedVsContinuing` in the planner, `TestSeedShortContinuingThroughClient` through the GCS client); a continuing structure probe is a partial
+A continuing structure probe (a provider may cut pages short) is a partial
 sample whatever its length (its furthest folder is the pivot). Its tests (`internal/source/keyrange`) run on a fake listing
 API over a sorted key slice (`keyrange/keyrangetest`, with the fixture and hostile keyspaces).
 
@@ -324,34 +320,15 @@ whose last key equals `hi` ends the range without another request; a page that i
 page without a token, a truncated page with no key in range, or a key not after its predecessor is an error.
 
 **Root and seed.** The root is `(⊥, ⊤]`. With `-seed` the root is a seed that emits no rows and tiles the
-scope at cut points `(⊥,c1], …, (ck, ⊤]`. The seed is Swath's hybrid seed descent (`HybridSeedPlanner` at
-its defaults: mass-aware, fan-out tiling, radix bands), a walk of the folder hierarchy with delimiter
-pages (`/`, one page of 1,000 each, never paginated):
-- *Budget:* aims at `min(1000, 4 × workers)` tiles with at most `min(256, that)` probes, of which up to 32
-  are samples; the walk itself stops at the budget less the sample share.
-- *Top level:* its folders are cuts. A truncated top page is read once more from its last item; a top level
-  that still holds more than a page of folders is left whole (no descent). No folders and a truncated page:
-  the scope is one dense flat folder, cut into radix bands (below).
-- *Descent:* queued folders are probed shallowest first, then by the widest byte gap to the next cut. A
-  folder listed in one page adds its subfolders as cuts and queues them (`narrow`). A truncated folder is
-  classified: objects only (`flat_wide`, the first one is cut into radix bands); mostly `key=value`
-  subfolders (`fanout_tiled`: an even subsample of up to `workers` of them become cuts); otherwise 3
-  subfolders are sampled, and if at least half hold 8 or more objects, subfolders or a full page
-  (`heavy_cut_banded`), up to `workers` subfolders become cuts, else it is a one-object-per-folder explosion
-  left whole. Past the sample budget, the earlier samples' majority decides.
-- *Cuts:* more cuts than the target are subsampled evenly, or by mass when at least 8 cuts were sampled
-  for their weight (one sample probe each, a full page weighing 1,000). Radix bands: after a dense flat
-  folder `d`, cuts `d·b` for up to `min(93, max(8, target))` bytes `b` spread over `!`..`~` without `%`.
-  The closing sentinel `prefixCeil(pk)` is added when the top level was complete, ended with its greatest
-  folder `pk` and a tile slot is spare. Unusable start-after values are dropped (`seed.unsafe`).
-- *Probes in parallel:* the walk is a state machine fed one probe result at a time, so its plan is the one a
-  serial walk makes (`TestSeedDescentConcurrentEqualsSerial`). Where its next probes are known (the queued
-  folders of the depth being walked, the rest of a sample) they are fetched together, up to one per
-  worker; a probe fetched ahead and never asked for is counted (`seed.probes_unused`) and dropped.
+scope at cut points `(⊥,c1], …, (ck, ⊤]`. The seed is one delimiter page (`/`, 1,000 entries, never
+paginated): its common prefixes are the cuts, at most `min(1000, 4 × workers)` evenly subsampled
+(`seed.subsampled`), with the closing sentinel `(pk, prefixCeil(pk)], (prefixCeil(pk), ⊤]` when the page was
+complete and ended with its greatest prefix `pk`. Unusable start-after values are dropped (`seed.unsafe`).
 
-`swath diag list --seed-descent=false` keeps the single delimiter page instead: its common prefixes are the
-cuts, at most `min(1000, 4 × workers)` evenly subsampled, with the closing sentinel
-`(pk, prefixCeil(pk)], (prefixCeil(pk), ⊤]` when the page was complete and ended with a prefix.
+Swath's hybrid seed descent (`HybridSeedPlanner`: a walk of the folder hierarchy that classified truncated
+levels, sampled ambiguous folders and cut dense flat folders into radix bands) was ported, measured and
+deleted: no gain on any recording, 30-60 % more requests on the shallow ones (REPORT.md "Seed descent" and
+stage D). Git keeps it: `internal/source/keyrange/seedplan.go` and its tests, removed after `ba2abb2`.
 
 **Splits are owner-side.** A range's children become claimable only when its `Expand` returns, so there are
 no thieves. After each full page the owner takes the provider mutex and computes demand,
@@ -419,8 +396,7 @@ and the run used about 1 of 64 workers (REPORT.md "Step 5a").
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted
 bounded and frontier, rejected per guard clause, skipped for no demand, outranked or not continuing);
-`child_empty.{lower,upper}`; the floors' skips; the seed descent's probes, classifications and
-sentinel; structure probes and their pivots; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
+`child_empty.{lower,upper}`; the floors' skips; structure probes and their pivots; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
 sink-wait time.
 
 **Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is
@@ -436,7 +412,7 @@ A provider registers a `registry.Factory` from `init`: its URL scheme (`s3`; the
 paths), its flag group (`Flags(fs, diag, shared) any` returns the provider's options value, filled by the
 parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. A provider on the range engine names the
 engine's shared flag group (`Shared: keyrange.FlagGroup`, `SharedFlags`: the policy flags `--seed`,
-`--seed-descent`, `--structure`, `--floors`, `--probe`, `--sequential`, `--max-keys` and the admission flags
+`--structure`, `--floors`, `--probe`, `--sequential`, `--max-keys` and the admission flags
 `--limiter`, `--limiter-slow-start`, `--request-rate`): the command registers each named group once and
 passes its value (`*keyrange.Common`: a `keyrange.Policy` and an `objhttp.Admission`) to every provider that
 names it. The command imports providers only for that

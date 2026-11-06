@@ -30,7 +30,7 @@ type flagged struct {
 // sharedFlags registers the range engine's flag group (keyrange.Flags).
 func sharedFlags(f *flag.FlagSet, diag bool) any { return keyrange.Flags(f, diag) }
 
-func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{SeedDescent: true}}} }
+func defaults() any { return &flagged{} }
 
 // flags registers the GCS flag group and the shared engine flags. The GCS
 // flags are prefixed: one flag set serves every provider.

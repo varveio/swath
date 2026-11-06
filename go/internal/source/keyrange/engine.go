@@ -151,17 +151,16 @@ func ExclusiveEnd(through string, accept func(string) bool) (string, bool) {
 
 // Options configure an Engine.
 type Options struct {
-	Prefix      string  // the scope
-	Sequential  bool    // one continuation-token chain, no ranges (the oracle)
-	Seed        bool    // parallel: tile the scope from delimiter probes first
-	SeedDescent bool    // the seed walks the folder hierarchy (seedplan.go); else one delimiter page
-	Structure   bool    // pivot on folder boundaries from structure probes sent alongside pages
-	Workers     int     // parallel: the order stage's worker count (split demand)
-	MaxKeys     int64   // stop after this many objects (sequential only; 0 = all)
-	Resume      *Resume // continue after a journaled run's last published key
-	Probe       bool    // check each split's upper child with a 1-key request first (off by default)
-	Floors      bool    // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
-	PageSize    int     // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
+	Prefix     string  // the scope
+	Sequential bool    // one continuation-token chain, no ranges (the oracle)
+	Seed       bool    // parallel: tile the scope from delimiter probes first
+	Structure  bool    // pivot on folder boundaries from structure probes sent alongside pages
+	Workers    int     // parallel: the order stage's worker count (split demand)
+	MaxKeys    int64   // stop after this many objects (sequential only; 0 = all)
+	Resume     *Resume // continue after a journaled run's last published key
+	Probe      bool    // check each split's upper child with a 1-key request first (off by default)
+	Floors     bool    // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
+	PageSize   int     // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
 	// ClientOff names the features of the provider's HTTP client that are
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.

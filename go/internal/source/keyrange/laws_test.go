@@ -30,7 +30,7 @@ func TestHostileFixturesMatchSequential(t *testing.T) {
 // TestMetamorphicLaws: the listing is invariant to the page size, to the
 // range decomposition (seed on and off, 1, 4 and 64 workers, forced random
 // splits), to the memory budget and to the policy toggles (the probe, the
-// floors, the seed descent, structure probes). One
+// floors, the seed, structure probes). One
 // table, over the fixture keyspaces and the hostile ones; the reference is
 // the sorted keyspace itself.
 func TestMetamorphicLaws(t *testing.T) {
@@ -58,10 +58,9 @@ func TestMetamorphicLaws(t *testing.T) {
 		{name: "w16/seed/probe/short", opt: Options{Seed: true, Probe: true}, workers: 16, budget: 500, short: true},
 		{name: "w64/floors/page=13", opt: Options{Floors: true}, workers: 64, budget: 500, pageCap: 13},
 		{name: "w16/seed/floors/short", opt: Options{Seed: true, Floors: true}, workers: 16, budget: 500, short: true},
-		{name: "w64/descent/page=13", opt: Options{Seed: true, SeedDescent: true}, workers: 64, budget: 500, pageCap: 13},
-		{name: "w8/descent/forced-splits", opt: Options{Seed: true, SeedDescent: true}, workers: 8, budget: 500, coin: true},
+		{name: "w64/seed/page=13", opt: Options{Seed: true}, workers: 64, budget: 500, pageCap: 13},
 		{name: "w16/structure/short", opt: Options{Structure: true}, workers: 16, budget: 500, short: true},
-		{name: "w32/descent/structure/floors/page=7", opt: Options{Seed: true, SeedDescent: true, Structure: true, Floors: true}, workers: 32, budget: 500, pageCap: 7},
+		{name: "w32/seed/structure/floors/page=7", opt: Options{Seed: true, Structure: true, Floors: true}, workers: 32, budget: 500, pageCap: 7},
 	}
 	spaces := keyspaces()
 	for k, v := range hostile() {

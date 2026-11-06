@@ -20,7 +20,7 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 | safe pivots | `source/keyrange` T2 (pivot properties over adversarial bounds) |
 | guards | `source/keyrange` T3 (every clause) |
 | paging, trimming, truncation errors | `source/keyrange` T4; `source/s3` `TestOutOfOrderListingFails` |
-| the range engine's decisions, through S3 | `source/s3` `TestDecisionsGolden`: every fixture and hostile keyspace, six deterministic configurations (a serial driver, seeded coin or demand gate); the covered intervals, requests, output and non-zero counters hash to `testdata/decisions.golden`, generated before the engine moved to `keyrange` (`-args -update-golden` rewrites it) |
+| the range engine's decisions, through S3 | `source/s3` `TestDecisionsGolden`: every fixture and hostile keyspace, four deterministic configurations (a serial driver, seeded coin or demand gate); the covered intervals, requests, output and non-zero counters hash to `testdata/decisions.golden`, generated before the engine moved to `keyrange` (`-args -update-golden` rewrites it; the two seed-descent configurations were removed with the descent, every other line unchanged) |
 | split balance (synthetic) | `source/keyrange` T6 (`p/%07d`, 200k keys, 20 ms pages, 16 workers) |
 | order and memory bound | `order` `TestOrderedOutput`, `TestSinkFailureStopsPromptly`, `TestCancellation` |
 | deterministic output | `parquetout` `TestRouterIsDeterministicAcrossEncoders`, `TestColumnParallelEncodingIsByteIdentical` |

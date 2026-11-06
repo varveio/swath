@@ -56,7 +56,7 @@ func (b boolFunc) Set(s string) error {
 // sharedFlags registers the range engine's flag group (keyrange.Flags).
 func sharedFlags(f *flag.FlagSet, diag bool) any { return keyrange.Flags(f, diag) }
 
-func defaults() any { return &flagged{Options: Options{Policy: keyrange.Policy{SeedDescent: true}}} }
+func defaults() any { return &flagged{} }
 
 // flags registers the S3 flag group and the shared engine flags; the
 // returned value is filled when the flag set is parsed.

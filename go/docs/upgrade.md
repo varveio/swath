@@ -188,6 +188,12 @@ route, so its resume is refused by the identity check; start it over with `--ove
 Java's flags with Java's semantics, except that regular expressions are Go's RE2 ([cli.md](cli.md), "Filters").
 The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
+**Changes between Go builds.** `swath resume` replays a command recorded by an earlier Go build with this
+build's flags (`upgradeRecorded` in `cmd/swath`):
+- `swath diag list --seed-descent` was removed with the seed descent; `--seed` is the one delimiter page. A
+  recorded `--seed-descent[=…]` is dropped; the `seed.probes`, `seed.levels.*` and other descent counters
+  are gone.
+
 ## The downstream reader: dispatch on schema id
 
 The downstream reader reads format 2 for every provider; this tool is unchanged for it. What such a reader

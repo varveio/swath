@@ -14,13 +14,12 @@ import (
 // Policy is the engine's policy configuration, the same for every provider
 // on the engine: one flag group (Flags), one value a provider passes on.
 type Policy struct {
-	Sequential  bool  // one continuation-token chain, no ranges (the oracle)
-	Seed        bool  // parallel: tile the scope from delimiter probes first
-	SeedDescent bool  // the seed walks the folder hierarchy (seedplan.go); else one delimiter page
-	Structure   bool  // pivot on folder boundaries from structure probes sent alongside pages
-	MaxKeys     int64 // stop after this many objects (sequential only; 0 = all)
-	Probe       bool  // check each split's upper child with a 1-key request first (off by default)
-	Floors      bool  // the gate-chain floors (off by default)
+	Sequential bool  // one continuation-token chain, no ranges (the oracle)
+	Seed       bool  // parallel: tile the scope from delimiter probes first
+	Structure  bool  // pivot on folder boundaries from structure probes sent alongside pages
+	MaxKeys    int64 // stop after this many objects (sequential only; 0 = all)
+	Probe      bool  // check each split's upper child with a 1-key request first (off by default)
+	Floors     bool  // the gate-chain floors (off by default)
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -33,7 +32,7 @@ type Common struct {
 
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
-	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedDescent: p.SeedDescent, Structure: p.Structure,
+	return Options{Sequential: p.Sequential, Seed: p.Seed, Structure: p.Structure,
 		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors}
 }
 
@@ -46,11 +45,10 @@ const FlagGroup = "keyrange"
 // policy toggles and comparison modes are diagnostic (swath diag list);
 // -seed and the admission flags are on swath list too.
 func Flags(f *flag.FlagSet, diag bool) *Common {
-	// The command's defaults: the seed descends, and the client admits its
-	// requests through the adaptive limiter (Java's gauge rules);
-	// --limiter=false turns it off. A library caller's zero Policy and
-	// Admission have neither.
-	c := &Common{Policy: Policy{SeedDescent: true}, Admission: objhttp.Admission{Limiter: true}}
+	// The command's default: the client admits its requests through the
+	// adaptive limiter (Java's gauge rules); --limiter=false turns it off. A
+	// library caller's zero Admission has none.
+	c := &Common{Admission: objhttp.Admission{Limiter: true}}
 	p, a := &c.Policy, &c.Admission
 	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
 	f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
@@ -58,7 +56,6 @@ func Flags(f *flag.FlagSet, diag bool) *Common {
 	f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
 	if diag {
 		f.BoolVar(&p.Structure, "structure", p.Structure, "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
-		f.BoolVar(&p.SeedDescent, "seed-descent", p.SeedDescent, "ranges: with -seed, walk the folder hierarchy (false: one delimiter page)")
 		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		f.BoolVar(&p.Sequential, "sequential", p.Sequential, "ranges: list with one continuation-token chain (no ranges; the reference)")
 		f.BoolVar(&p.Probe, "probe", p.Probe, "ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")

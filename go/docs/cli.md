@@ -295,8 +295,6 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: per-request timeout; a request that exceeds it is retried (default 30s)
   -seed
     	ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting
-  -seed-descent
-    	ranges: with -seed, walk the folder hierarchy (false: one delimiter page) (default true)
   -sequential
     	ranges: list with one continuation-token chain (no ranges; the reference)
   -spill-compress

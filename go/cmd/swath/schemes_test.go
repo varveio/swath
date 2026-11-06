@@ -23,9 +23,9 @@ import (
 // provider's flags registered on one flag set, selects S3 or GCS by the
 // source's scheme, and each provider gets its own defaults and the shared
 // engine flags: by default 64 workers whatever the CPU count, no seed, splits on, the limiter on, no structure
-// probes, floors or probe; -seed reaches the selected provider, with the default
-// descent (seed.levels.*), and diag's -seed-descent=false turns the descent
-// off for either (Astra, kernel-seam follow-up, item 7).
+// probes, floors or probe; -seed reaches the selected provider (seed.prefixes
+// counted), on swath list and swath diag list alike (Astra, kernel-seam
+// follow-up, item 7).
 func TestBothSchemesThroughTheCommand(t *testing.T) {
 	b := s3mem.New()
 	if err := b.CreateBucket("bkt"); err != nil {
@@ -85,24 +85,20 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		if f := r.Source.Stats.Counters.Features; !maps.Equal(f, defaults) {
 			t.Fatalf("%s defaults: features %v, want %v", name, f, defaults)
 		}
-		descended := func(r report) bool {
-			for _, k := range []string{"seed.levels.narrow", "seed.levels.flat_wide", "seed.levels.fanout_tiled"} {
-				if v, _ := r.Source.Stats.Counters.Values[k].(float64); v > 0 {
-					return true
-				}
-			}
-			return false
+		seeded := func(r report) bool {
+			_, ok := r.Source.Stats.Counters.Values["seed.prefixes"]
+			return r.Source.Stats.Counters.Features["seed"] && ok
 		}
 		r = runJSON(false, append([]string{"--seed"}, src...)...)
-		if !r.Source.Stats.Counters.Features["seed"] || !descended(r) {
-			t.Fatalf("%s --seed: features %v, the descent ran %v", name, r.Source.Stats.Counters.Features, descended(r))
+		if !seeded(r) || r.Output.RowsListed != int64(len(keys)) {
+			t.Fatalf("%s --seed: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsListed)
 		}
-		r = runJSON(true, append([]string{"--seed", "--seed-descent=false"}, src...)...)
+		r = runJSON(true, append([]string{"--seed"}, src...)...)
 		if r.Invocation.Workers != 64 {
 			t.Fatalf("%s diag: default workers %d, want 64", name, r.Invocation.Workers)
 		}
-		if !r.Source.Stats.Counters.Features["seed"] || descended(r) {
-			t.Fatalf("%s --seed --seed-descent=false: features %v, the descent ran %v", name, r.Source.Stats.Counters.Features, descended(r))
+		if !seeded(r) || r.Output.RowsListed != int64(len(keys)) {
+			t.Fatalf("%s diag --seed: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsListed)
 		}
 		t.Logf("%s: %s", name, fmt.Sprint(r.Source.Stats.Counters.Features))
 	}

@@ -146,7 +146,7 @@ func TestBoundsAtExactKeys(t *testing.T) {
 	}
 }
 
-// TestInclusiveProviderMatchesKeyspace: the whole engine (seed descent,
+// TestInclusiveProviderMatchesKeyspace: the whole engine (seed,
 // structure probes, random and demand splits) over an inclusive-start,
 // end-bounded fake lists every keyspace exactly, and a provider veto on
 // bounds is honoured: no vetoed string is ever sent as a bound.
@@ -160,7 +160,7 @@ func TestInclusiveProviderMatchesKeyspace(t *testing.T) {
 		want := slices.Compact(slices.Sorted(slices.Values(keys)))
 		for i, opt := range []Options{
 			{Workers: 8},
-			{Workers: 16, Seed: true, SeedDescent: true, Structure: true},
+			{Workers: 16, Seed: true, Structure: true},
 			{Workers: 4, Seed: true, Floors: true},
 		} {
 			for _, vetoed := range []bool{false, true} {
@@ -248,7 +248,7 @@ func (c *chained) fetch(ctx context.Context, q *Query) (*Page[Object], error) {
 
 // TestBoundsStableAcrossTokenChain: the engine keeps a chain's logical
 // bounds (After, Through, prefix, delimiter) on every continuation, on
-// every path (ranges with splits and probes, the seed descent, structure
+// every path (ranges with splits and probes, the seed, structure
 // probes, resume, the sequential chain), under both start conventions.
 func TestBoundsStableAcrossTokenChain(t *testing.T) {
 	keys := slices.Compact(slices.Sorted(slices.Values(keyspaces()["deepTree"])))
@@ -257,7 +257,7 @@ func TestBoundsStableAcrossTokenChain(t *testing.T) {
 	}
 	for i, opt := range []Options{
 		{Workers: 8, Probe: true},
-		{Workers: 16, Seed: true, SeedDescent: true, Structure: true},
+		{Workers: 16, Seed: true, Structure: true},
 		{Workers: 4, Seed: true, Floors: true, Resume: &Resume{After: keys[len(keys)/3]}},
 		{Workers: 1, Sequential: true},
 	} {
@@ -318,7 +318,7 @@ func TestProviderBoundPolicy(t *testing.T) {
 	} {
 		for i, opt := range []Options{
 			{Workers: 8},
-			{Workers: 8, Seed: true, SeedDescent: true, Structure: true},
+			{Workers: 8, Seed: true, Structure: true},
 			{Workers: 8, Resume: &Resume{After: keys[len(keys)/4]}}, // a key holding '%'
 		} {
 			f := &inclusive{keys: keys, bounded: true, acceptEnd: c.acceptEnd, pageCap: 9,

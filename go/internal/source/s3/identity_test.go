@@ -129,12 +129,12 @@ func TestEngineFlagsShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := src.(*opened).p
-	if !other.Policy.Seed || !p.opt.Seed || !p.opt.Floors || !p.opt.SeedDescent || !p.opt.Anonymous || !p.Options().Floors {
+	if !other.Policy.Seed || !p.opt.Seed || !p.opt.Floors || !p.opt.Anonymous || !p.Options().Floors {
 		t.Fatalf("policy not shared: %+v", p.opt.Policy)
 	}
 	// Defaults (no flags parsed) hold the engine's defaults.
 	src, err = open(context.Background(), registry.Request{Root: "s3://bkt", Options: defaults(), Workers: 2})
-	if err != nil || src.(*opened).p.opt.Seed || !src.(*opened).p.opt.SeedDescent {
+	if err != nil || src.(*opened).p.opt.Seed {
 		t.Fatalf("defaults: %v", err)
 	}
 }

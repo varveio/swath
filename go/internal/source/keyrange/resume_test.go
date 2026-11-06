@@ -63,7 +63,7 @@ func TestResumeAfterKey(t *testing.T) {
 // TestBoundVetoOnEveryRequest: the provider's bound predicate guards every
 // request, not only pivots: a resume after "a5" with a provider vetoing
 // '5' starts at the accepted prefix "a" and drops keys up to "a5"; a capped
-// top seed page ending in the object "b5" sends no top-up after it. Every
+// top seed page ending in the object "b5" tiles at accepted bounds only. Every
 // transmitted bound is accepted and every unpublished key appears once.
 func TestBoundVetoOnEveryRequest(t *testing.T) {
 	veto := func(s string) bool { return !strings.ContainsRune(s, '5') }
@@ -76,7 +76,6 @@ func TestBoundVetoOnEveryRequest(t *testing.T) {
 	}{
 		{"resume/sequential", resumed, Options{Sequential: true, Resume: &Resume{After: "a5"}}},
 		{"resume/parallel", resumed, Options{Resume: &Resume{After: "a5"}}},
-		{"seed descent, capped top", seeded, Options{Seed: true, SeedDescent: true}},
 		{"seed page, capped top", seeded, Options{Seed: true}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -115,9 +114,6 @@ func TestBoundVetoOnEveryRequest(t *testing.T) {
 				if !veto(b) {
 					t.Fatalf("sent a vetoed bound %q (all: %q)", b, sent)
 				}
-			}
-			if st := p.Stats(); strings.HasPrefix(c.name, "seed descent") && st.Get(cSeedTopUnsafe) != 1 {
-				t.Fatalf("top-up not declined: unsafe=%d top_paginated=%d sent=%q", st.Get(cSeedTopUnsafe), st.Get(cSeedTopPaginated), sent)
 			}
 		})
 	}
