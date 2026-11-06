@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
+	"runtime/pprof"
 	"syscall"
 	"time"
 
@@ -346,21 +347,23 @@ func note(w io.Writer, s string) {
 	}
 }
 
-// stacksMax bounds a goroutine dump (runtime.Stack truncates at it).
+// stacksMax bounds a goroutine dump on stderr (the file holds it whole).
 const stacksMax = 1 << 20
 
 // stacksWait bounds the dump's write: a disk that blocks the run may block
 // it too, and a forced exit must not wait for it.
 const stacksWait = 2 * time.Second
 
-// dumpStacks writes every goroutine's stack (at most stacksMax bytes) with
-// the progress counts, for a run stopped as stuck or forced to exit: to
+// dumpStacks writes every goroutine's stack with the progress counts, for
+// a run stopped as stuck or forced to exit: whole to
 // DIR/.swath/stacks-WHY.txt while the run owns the output, else (no
 // output, not owned, or a write that fails or blocks past stacksWait) to
-// stderr. It returns where the dump went.
+// stderr, cut at stacksMax bytes. The stacks are taken on entry, as the
+// goroutines are then. It returns where the dump went.
 func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.ProgressSnapshot) string {
-	buf := make([]byte, stacksMax)
-	buf = buf[:runtime.Stack(buf, true)]
+	var stacks bytes.Buffer
+	_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2) // runtime.Stack's format, never truncated
+	buf := stacks.Bytes()
 	sj, _ := json.Marshal(s)
 	head := fmt.Sprintf("swath goroutine dump: %s (%s) at %s\nprogress: %s\n\n", why, detail, time.Now().UTC().Format(time.RFC3339Nano), sj)
 	if dir != "" {
@@ -382,6 +385,9 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 			}
 		case <-time.After(stacksWait):
 		}
+	}
+	if len(buf) > stacksMax {
+		buf = append(buf[:stacksMax:stacksMax], "\n... (cut at 1 MiB)"...)
 	}
 	note(errOut, head+string(buf)+"\n")
 	return "stderr"

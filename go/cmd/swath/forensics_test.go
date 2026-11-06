@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -68,7 +69,7 @@ func TestStuckCause(t *testing.T) {
 				t.Fatalf("error.json %+v, report cause %q: want cause %s", o, rep.Outcome.Cause, c.want)
 			}
 			b, err := os.ReadFile(filepath.Join(dir, dataset.Workspace, "stacks-stuck.txt"))
-			if err != nil || !bytes.Contains(b, []byte("goroutine ")) || !bytes.Contains(b, []byte(c.want)) || len(b) > stacksMax+4096 {
+			if err != nil || !bytes.Contains(b, []byte("goroutine ")) || !bytes.Contains(b, []byte(c.want)) {
 				t.Fatalf("stacks: %v, %d bytes", err, len(b))
 			}
 		})
@@ -267,4 +268,28 @@ func TestOneTerminalAccount(t *testing.T) {
 		}
 		same(t, "error.json", listing.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
 	})
+}
+
+// TestStacksWholeAndBounded: the goroutine dump is the whole profile (it
+// was cut at 1 MiB by runtime.Stack, which hundreds of workers exceed);
+// only its stderr fallback is cut at stacksMax.
+func TestStacksWholeAndBounded(t *testing.T) {
+	park := make(chan struct{})
+	defer close(park)
+	for range 10000 {
+		go func() { <-park }()
+	}
+	var whole bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&whole, 2); err != nil || whole.Len() <= stacksMax {
+		t.Fatalf("profile %d bytes (%v): too small to show the bound", whole.Len(), err)
+	}
+	var b bytes.Buffer
+	errOut = &b
+	t.Cleanup(func() { errOut = os.Stderr })
+	if where := dumpStacks("", nil, "stuck", "test", listing.ProgressSnapshot{}); where != "stderr" {
+		t.Fatalf("dump went to %s", where)
+	}
+	if b.Len() > stacksMax+4096 || !strings.Contains(b.String(), "cut at 1 MiB") {
+		t.Fatalf("stderr dump: %d bytes, cut marker %v", b.Len(), strings.Contains(b.String(), "cut at 1 MiB"))
+	}
 }

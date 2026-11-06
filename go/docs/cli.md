@@ -516,9 +516,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   any of that beyond 5 s after the grace (20 s after the stop in all): each line to stderr waits at most 250 ms
   and is dropped past it, so a stderr pipe nobody drains cannot hold the process (warnings are written the same
   way), and the process exits at that bound whatever still blocks. **Forensics:** at a stall, before the run is cancelled, and at a forced
-  exit, every goroutine's stack (at most 1 MiB) and the progress counts are written to
+  exit, every goroutine's stack and the progress counts are written whole to
   `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time) while the run owns the output,
-  else, or when that write fails or blocks for 2 s, to stderr.
+  else, or when that write fails or blocks for 2 s, to stderr, cut at 1 MiB.
 - **What a hosted runner needs.** A finite `--max-duration` on every attempt (the default, 0, has no limit, and
   only the deadline stops a service that answers forever without rows), and its own process deadline above
   `--max-duration` plus 20 s, which kills the process (that attempt's report may then be missing: it is treated
