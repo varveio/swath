@@ -195,15 +195,6 @@ func stopEarly(report string, argv []string, dir string, att *listing.Attempt, e
 	return &exitError{err, o.ExitCode}
 }
 
-// partInterval maps --part-interval (0: off) to listing.Limits (negative:
-// off; 0 would take the default).
-func partInterval(d time.Duration) time.Duration {
-	if d <= 0 {
-		return -1
-	}
-	return d
-}
-
 // usageError is a malformed command line.
 type usageError struct{ error }
 
@@ -449,7 +440,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal},
-		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize), PartInterval: partInterval(o.partInterval),
+		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize), PartInterval: o.partInterval,
 			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,

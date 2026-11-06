@@ -97,8 +97,9 @@ type Limits struct {
 	PartSize int64 // target bytes per part; default 64 MiB (frozen for a resume)
 	// PartInterval bounds the open part's age: a part open that long with
 	// rows is closed although not full, so durable progress advances on a
-	// slow frontier (0: DefaultPartInterval; negative: by size only, which
-	// keeps part boundaries independent of timing).
+	// slow frontier. Zero or negative: by size only, which keeps part
+	// boundaries independent of timing; the command's default is
+	// DefaultPartInterval, resolved at its flag, not here.
 	PartInterval time.Duration
 	Spill        SpillLimits
 }
@@ -195,9 +196,6 @@ func (c *Config) resolve() error {
 	}
 	if l.PartSize == 0 {
 		l.PartSize = DefaultPartSize
-	}
-	if l.PartInterval == 0 {
-		l.PartInterval = DefaultPartInterval
 	}
 	if l.Memory < minMemory {
 		return bad("memory budget %d is below %d bytes", l.Memory, minMemory)

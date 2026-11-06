@@ -102,8 +102,11 @@ func runA(ctx context.Context, p *Provider, out string, lim Limits, resume bool,
 		Limits: listing.Limits{Workers: lim.Workers, Memory: lim.Memory, Encoders: lim.Encoders, PartSize: lim.PartSize,
 			Spill: listing.SpillLimits{Max: lim.SpillMax, Reserve: lim.SpillReserve}},
 		Argv: []string{"sortab", "A", strconv.FormatBool(resume)}, Progress: pr}
-	if lim.PartIntervalMs != 0 {
+	switch {
+	case lim.PartIntervalMs > 0:
 		cfg.Limits.PartInterval = msDuration(lim.PartIntervalMs)
+	case lim.PartIntervalMs == 0:
+		cfg.Limits.PartInterval = listing.DefaultPartInterval
 	}
 	return listing.Run(ctx, cfg)
 }
