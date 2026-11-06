@@ -114,6 +114,13 @@ type Live interface {
 	Answered() int64
 }
 
+// Faulted sources count the throttle answers and the attempts past the
+// request timeout their service gave (retried or not): the watchdog names
+// a stuck run's cause from what rose while nothing progressed.
+type Faulted interface {
+	Faults() (throttles, timeouts int64)
+}
+
 // Reporter sources describe the listing for the run summary.
 type Reporter interface {
 	Report() Report

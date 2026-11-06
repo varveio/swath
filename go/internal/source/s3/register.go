@@ -87,6 +87,8 @@ func (o *opened) Listed() int64 { return o.p.Listed() }
 
 func (o *opened) Answered() int64 { return o.p.Answered() }
 
+func (o *opened) Faults() (throttles, timeouts int64) { return o.p.Faults() }
+
 func (o *opened) target() string {
 	t := "s3://" + o.p.opt.Bucket
 	if o.p.opt.Prefix != "" {

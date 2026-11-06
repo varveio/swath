@@ -72,6 +72,16 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 	return bucket, prefix, nil
 }
 
+// Faults are the throttle answers and attempt timeouts so far
+// (source.Faulted); 0 for a supplied client that does not count them.
+func (p *Provider) Faults() (throttles, timeouts int64) {
+	if c, ok := p.client.(counted); ok {
+		n := c.Counters()
+		return n.Throttles, n.Timeouts
+	}
+	return 0, 0
+}
+
 // Answered is the requests the service answered usably (source.Live); 0
 // for a supplied client that does not count them.
 func (p *Provider) Answered() int64 {

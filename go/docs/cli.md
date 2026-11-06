@@ -266,10 +266,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | 0 | `completed` | the dataset is committed (or a dry run finished) | – |
   | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0; a full disk (`cause` `no_space`) is `fatal` too | no; `no_space`: yes, journal intact, once there is space |
   | 2 | `usage` | a malformed command line | no |
-  | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace) | yes, journal intact |
+  | 75 | `stuck` | no progress and no answered request for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace); `cause` names what rose meanwhile: `stuck_throttle` (throttle answers), `stuck_timeouts` (attempts past the request timeout, no throttle) or `stuck_no_rows` (neither: failing or hung requests, or a stopped pipeline) | yes, journal intact |
   | 124 | `deadline` | `--max-duration` reached with the output unfinished (also after the 15 s shutdown grace) | yes |
   | 130 | `interrupted` | SIGINT (also after the 15 s shutdown grace) | yes |
-  | 143 | `terminated` | SIGTERM, a graceful stop | yes |
+  | 143 | `terminated` | SIGTERM, a graceful stop (also after the 15 s shutdown grace) | yes |
 
   "Resumable" holds when the output has an intact journal (S3); a filesystem run starts over. A source that
   stops early (a key limit) never exits 0 with a partial manifest unless its coverage says so.
@@ -283,7 +283,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   any of its last 1,024 tokens (an invalid page, exit 1); a chain of ever fresh tokens is followed in bounded
   memory until the deadline. A stop (a signal, `--max-duration`, `--stall-timeout`) is graceful, and the process
   exits with its code 15 s later if the run has not stopped by then (I/O that does not return, say), without
-  writing the report or `error.json`.
+  writing the report or `error.json`. **Forensics:** at a stall, before the run is cancelled, and at a forced
+  exit, every goroutine's stack (at most 1 MiB) and the progress counts are written to
+  `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time) while the run owns the output,
+  else, or when that write fails or blocks for 2 s, to stderr.
 - **What a hosted runner needs.** A finite `--max-duration` on every attempt (the default, 0, has no limit, and
   only the deadline stops a service that answers forever without rows), and its own process deadline above
   `--max-duration` plus 15 s, which kills the process (that attempt's report may then be missing: it is treated
@@ -293,7 +296,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   keeps the run alive without rows hits 124 on every attempt.
 - **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename:
   `objects` (rows listed so far), `ordered`, `encoded`, `parts`, `advance` (their sum, which rises in every
-  phase), `answered` (requests the service answered usably: liveness, not progress), `started_at`, `as_of`,
+  phase), `answered` (requests the service answered usably: liveness, not progress), `throttles` and
+  `timeouts` (throttle answers and attempts past the request timeout), `started_at`, `as_of`,
   `duration_ms`. A supervisor watches that file; `DIR/run.json` follows the
   commit. `--max-duration` and `--stall-timeout` are runtime flags: `swath resume` replays the recorded
   values unless given again.

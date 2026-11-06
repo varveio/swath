@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -40,6 +41,32 @@ var (
 	// errIncomplete: the dataset is committed, but its coverage is partial.
 	errIncomplete = errors.New("the dataset is committed with partial coverage (see the manifest's coverage)")
 )
+
+// Stuck causes (error.json and the report's outcome cause on 75): what
+// rose while neither a row nor an answered request did.
+const (
+	stuckThrottle = "stuck_throttle" // the service answered only with throttles
+	stuckTimeouts = "stuck_timeouts" // attempts ran past the request timeout (no throttle)
+	stuckNoRows   = "stuck_no_rows"  // neither: failing or hung requests, or a pipeline that stopped
+)
+
+// stuckError is errStuck with its cause.
+type stuckError struct{ cause string }
+
+func (e *stuckError) Error() string        { return errStuck.Error() + " (" + e.cause + ")" }
+func (e *stuckError) Is(target error) bool { return target == errStuck }
+
+// stuckCause names what rose in the stalled window: from the counts at
+// the last progress (at) to now.
+func stuckCause(at, now listing.ProgressSnapshot) string {
+	switch {
+	case now.Throttles > at.Throttles:
+		return stuckThrottle
+	case now.Timeouts > at.Timeouts:
+		return stuckTimeouts
+	}
+	return stuckNoRows
+}
 
 // signalError is a run stopped by a signal.
 type signalError struct{ sig os.Signal }
@@ -77,6 +104,10 @@ func classify(err, cause error, dir string) outcome {
 		o.Class, o.ExitCode, o.Resumable = "incomplete", exitFatal, false
 	case errors.Is(cause, errStuck):
 		o.Class, o.ExitCode = "stuck", exitStuck
+		var st *stuckError
+		if errors.As(cause, &st) {
+			o.Cause = st.cause
+		}
 	case errors.Is(cause, errDeadline):
 		o.Class, o.ExitCode = "deadline", exitDeadline
 	case errors.As(cause, &se) && se.sig == syscall.SIGTERM:
@@ -202,6 +233,47 @@ func reportUnrecorded(dir string, o outcome, why string) {
 	fmt.Fprintf(errOut, "swath: outcome: %s\n", b)
 }
 
+// stacksMax bounds a goroutine dump (runtime.Stack truncates at it).
+const stacksMax = 1 << 20
+
+// stacksWait bounds the dump's write: a disk that blocks the run may block
+// it too, and a forced exit must not wait for it.
+const stacksWait = 2 * time.Second
+
+// dumpStacks writes every goroutine's stack (at most stacksMax bytes) with
+// the progress counts, for a run stopped as stuck or forced to exit: to
+// DIR/.swath/stacks-WHY.txt while the run owns the output, else (no
+// output, not owned, or a write that fails or blocks past stacksWait) to
+// stderr. It returns where the dump went.
+func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.ProgressSnapshot) string {
+	buf := make([]byte, stacksMax)
+	buf = buf[:runtime.Stack(buf, true)]
+	sj, _ := json.Marshal(s)
+	head := fmt.Sprintf("swath goroutine dump: %s (%s) at %s\nprogress: %s\n\n", why, detail, time.Now().UTC().Format(time.RFC3339Nano), sj)
+	if dir != "" {
+		path := filepath.Join(dir, dataset.Workspace, "stacks-"+why+".txt")
+		done := make(chan bool, 1)
+		go func() {
+			ok := false
+			pr.Owned(func() {
+				ok = os.MkdirAll(filepath.Dir(path), 0o755) == nil &&
+					os.WriteFile(path, append([]byte(head), buf...), 0o644) == nil
+			})
+			done <- ok
+		}()
+		select {
+		case ok := <-done:
+			if ok {
+				fmt.Fprintf(errOut, "swath: goroutine dump written to %s\n", path)
+				return path
+			}
+		case <-time.After(stacksWait):
+		}
+	}
+	fmt.Fprintf(errOut, "%s%s\n", head, buf)
+	return "stderr"
+}
+
 // progressName is the live progress file, inside the private workspace:
 // rewritten (atomic replace) every progressEvery while a run goes.
 var progressName = filepath.Join(dataset.Workspace, "progress.json")
@@ -225,6 +297,7 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 		t := time.NewTicker(min(progressEvery, max(stall/4, 10*time.Millisecond)))
 		defer t.Stop()
 		last, since, warned := int64(-1), time.Now(), false
+		var at listing.ProgressSnapshot // the counts at the last progress
 		for {
 			select {
 			case <-done:
@@ -239,7 +312,7 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 					pr.Owned(func() { _ = writeFileAtomic(filepath.Join(dir, progressName), s) })
 				}
 				if live := s.Advance + s.Answered; live != last {
-					last, since, warned = live, now, false
+					last, since, warned, at = live, now, false, s
 					continue
 				}
 				if stall <= 0 {
@@ -248,8 +321,11 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 				idle := now.Sub(since)
 				switch {
 				case idle >= stall:
-					warn(fmt.Sprintf("no progress for %s: stopping the run as stuck", idle.Round(time.Second)))
-					cancel(errStuck)
+					cause := stuckCause(at, s)
+					warn(fmt.Sprintf("no progress for %s (%s): stopping the run as stuck", idle.Round(time.Second), cause))
+					// The goroutines as they hung, before the cancel moves them.
+					dumpStacks(dir, pr, "stuck", cause, s)
+					cancel(&stuckError{cause})
 					return
 				case idle >= stall/2 && !warned:
 					warned = true

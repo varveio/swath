@@ -22,6 +22,7 @@ type Progress struct {
 	started  atomic.Int64 // unix nanoseconds
 	listed   atomic.Pointer[func() int64]
 	answered atomic.Pointer[func() int64]
+	faults   atomic.Pointer[func() (int64, int64)]
 	ordered  atomic.Int64
 	encoded  atomic.Int64
 	parts    atomic.Int64
@@ -65,7 +66,11 @@ type ProgressSnapshot struct {
 	Advance int64 `json:"advance"` // the sum: it rises in every phase while the run progresses
 	// Answered counts requests the source's service answered usably (pages
 	// without rows included): it shows the run is alive while no row moves.
-	Answered   int64     `json:"answered"`
+	Answered int64 `json:"answered"`
+	// Throttles and Timeouts count the service's throttle answers and the
+	// attempts past the request timeout (source.Faulted; 0 otherwise).
+	Throttles  int64     `json:"throttles"`
+	Timeouts   int64     `json:"timeouts"`
 	StartedAt  time.Time `json:"started_at"`  // zero before the run starts
 	AsOf       time.Time `json:"as_of"`       //
 	DurationMs int64     `json:"duration_ms"` // since StartedAt
@@ -91,6 +96,9 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	}
 	if f := p.answered.Load(); f != nil {
 		s.Answered = (*f)()
+	}
+	if f := p.faults.Load(); f != nil {
+		s.Throttles, s.Timeouts = (*f)()
 	}
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Advance = s.Objects + s.Ordered + s.Encoded + s.Parts

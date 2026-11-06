@@ -47,6 +47,15 @@ const shutdownGrace = 15 * time.Second
 // timeout. main sets it; tests run the command in process and leave it nil.
 var exitAfterGrace func(code int, why string)
 
+// forensics is the running attempt's output and progress, for the
+// goroutine dump at a forced exit.
+var forensics atomic.Pointer[forensicTarget]
+
+type forensicTarget struct {
+	dir string
+	pr  *listing.Progress
+}
+
 func main() {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	sigs := make(chan os.Signal, 2)
@@ -59,6 +68,12 @@ func main() {
 			case <-finished:
 			case <-time.After(shutdownGrace):
 				fmt.Fprintf(os.Stderr, "swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace)
+				var dir string
+				var pr *listing.Progress
+				if f := forensics.Load(); f != nil {
+					dir, pr = f.dir, f.pr
+				}
+				dumpStacks(dir, pr, "forced-exit", why, pr.Snapshot())
 				os.Exit(code)
 			}
 		}()
@@ -68,7 +83,11 @@ func main() {
 		case <-finished:
 		case sig := <-sigs:
 			cancel(&signalError{sig}) // graceful: the run stops and cleans up
-			exitAfterGrace(exitInterrupted, sig.String())
+			code := exitInterrupted
+			if sig == syscall.SIGTERM {
+				code = exitTerminated
+			}
+			exitAfterGrace(code, sig.String())
 		}
 	}()
 	killAt(os.Getenv("SWATH_TEST_KILL_AT"), kill)
@@ -359,6 +378,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
+	forensics.Store(&forensicTarget{cfg.Output.Dir, cfg.Progress})
 	// The outcome: error.json is written while the run still owns the
 	// output (Settle), and never by a run that did not own it.
 	settle := func(sum listing.Report, err error) (error, outcome) {
