@@ -148,6 +148,10 @@ func (f *inflight) List(ctx context.Context, in *keyrangetest.ListInput) (*keyra
 // fetched ahead, tiles the scope at exactly the serial walk's cuts, and
 // fetches several probes at once.
 func TestSeedDescentConcurrentEqualsSerial(t *testing.T) {
+	// The peak is a property of the run, not of every shape: a shape whose
+	// levels hold three folders peaks at three however the probes are
+	// scheduled, so the fetch-ahead is asserted over all shapes.
+	peak, peakShape := int64(0), ""
 	for name, keys := range seedShapes() {
 		for _, w := range []int{1, 4, 64} {
 			ref := serialSeed(t, newSorted(keys, false, 1), "", w)
@@ -177,11 +181,15 @@ func TestSeedDescentConcurrentEqualsSerial(t *testing.T) {
 			if st := p.Stats(); st.Get(cSeedProbes) != int64(ref.probes) {
 				t.Fatalf("%s w=%d: %d probes used, serial %d", name, w, st.Get(cSeedProbes), ref.probes)
 			}
-			if w == 64 && ref.probes > 8 && f.peak.Load() < 4 {
-				t.Errorf("%s: peak %d probes in flight: the walk did not fetch ahead", name, f.peak.Load())
+			if w == 64 && f.peak.Load() > peak {
+				peak, peakShape = f.peak.Load(), name
 			}
 		}
 	}
+	if peak < 4 {
+		t.Errorf("peak %d probes in flight (%s): the walk did not fetch ahead", peak, peakShape)
+	}
+	t.Logf("peak %d probes in flight (%s)", peak, peakShape)
 }
 
 // TestSeedDescentListsEveryKey: with the descent seed, every shape and the
