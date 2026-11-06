@@ -1652,6 +1652,85 @@ parts; computed, not measured). Wall is about 1.3 ms per part (the record's and 
 the peak heap rises by about 4.4 KB per part (the router keeps every part's record; the journal state is read
 once on resume). At the default 64 MiB parts, 10,000 parts is about 640 GB of dataset.
 
+## Throttle handling and adaptive concurrency (2026-11-06)
+
+**What was built.** `objhttp.Limiter` (`acc3f88`) admits every HTTP attempt of the S3 and GCS clients (pages,
+probes, retries, requeues); a throttle answer multiplies the limit by 0.7, growth returns at +1 per second after
+10 s without one (Java's `ConcurrencyGauge` rules and constants, no slow start). It is behind
+`swath diag list --limiter` and **stays off by default** (below). `bench/faultproxy` (`60df745`, test-only)
+injected the faults.
+
+**Configuration.** Replay (swath-replay, sorted mode, injected page latency at each recording's p50: 99, 164,
+99 and 103 ms), 64 workers, `--seed`, sorted Parquet output, every arm through a fresh fault proxy (seed 1).
+Arms: `head` = build `afaf2a3`; `on` = build `acc3f88` with `--limiter`. Faults: `storm` = 50 % of requests
+answered 503 SlowDown from 1 s to 6 s after the first request; `sus` = 20 % 503 for the whole run; `cap` = 503
+for requests beyond 200 per trailing second; `infl` = +400 ms on every request from 1 s to 6 s. 3 interleaved
+reps; median (min-max). Requests and throttles are the proxy's counts; attempts/s = requests / wall. Harness
+`bench/fault_replay.sh`.
+
+| recording | arm | wall s | requests | throttled | attempts/s | limiter decreases | admission waits |
+|---|---|---|---|---|---|---|---|
+| noaa-eri-pds | head | 4.5 (4.4-5.7) | 1,586 (1,581-1,594) | 0 (0-0) | 354.2 (276.8-361.0) | - | - |
+| noaa-eri-pds | on | 4.6 (4.5-4.8) | 1,592 (1,587-1,602) | 0 (0-0) | 342.8 (331.7-355.4) | 0 (0-0) | 0 (0-50) |
+| noaa-eri-pds | head-storm | 9.5 (7.9-10.8) | 2,655 (2,643-2,688) | 1,044 (999-1,053) | 280.4 (245.6-339.0) | - | - |
+| noaa-eri-pds | on-storm | 29.8 (29.8-30.0) | 1,634 (1,630-1,640) | 52 (51-52) | 54.6 (54.5-55.0) | 9 (9-9) | 1,229 (1,189-1,233) |
+| noaa-eri-pds | head-sus | 6.6 (6.1-6.7) | 2,002 (1,982-2,005) | 399 (396-400) | 299.8 (297.5-328.2) | - | - |
+| noaa-eri-pds | on-sus | 159.0 (158.4-159.9) | 2,000 (1,980-2,000) | 399 (395-399) | 12.5 (12.5-12.6) | 9 (9-9) | 1,938 (1,925-1,962) |
+| noaa-eri-pds | head-cap | 10.9 (10.2-11.3) | 2,514 (2,435-2,533) | 886 (783-975) | 230.4 (223.6-237.6) | - | - |
+| noaa-eri-pds | on-cap | 27.0 (27.0-27.1) | 1,682 (1,682-1,693) | 92 (89-96) | 62.2 (62.2-62.8) | 9 (9-9) | 1,371 (1,367-1,395) |
+| noaa-eri-pds | head-infl | 8.4 (8.3-8.6) | 1,591 (1,588-1,595) | 0 (0-0) | 190.3 (185.4-190.4) | - | - |
+| noaa-eri-pds | on-infl | 8.4 (8.4-8.7) | 1,586 (1,586-1,589) | 0 (0-0) | 188.0 (182.1-189.5) | 0 (0-0) | 0 (0-0) |
+| pansurg | head | 6.7 (6.4-7.6) | 1,295 (1,291-1,296) | 0 (0-0) | 193.6 (169.6-203.3) | - | - |
+| pansurg | on | 6.8 (6.5-6.9) | 1,281 (1,270-1,288) | 0 (0-0) | 188.3 (183.3-197.7) | 0 (0-0) | 213 (0-256) |
+| pansurg | head-storm | 9.5 (9.3-9.6) | 1,915 (1,759-1,994) | 653 (465-684) | 202.4 (182.5-214.4) | - | - |
+| pansurg | on-storm | 33.5 (33.4-34.2) | 1,333 (1,329-1,349) | 40 (39-61) | 39.8 (39.0-40.2) | 9 (9-9) | 1,019 (994-1,033) |
+| pansurg | head-sus | 8.2 (7.9-8.5) | 1,606 (1,574-1,619) | 317 (313-321) | 198.7 (185.4-202.5) | - | - |
+| pansurg | on-sus | 211.4 (209.1-212.2) | 1,608 (1,594-1,620) | 317 (317-321) | 7.6 (7.6-7.6) | 9 (9-9) | 1,561 (1,548-1,574) |
+| pansurg | head-cap | 10.7 (8.8-10.9) | 1,833 (1,765-1,961) | 537 (493-657) | 179.4 (165.1-207.6) | - | - |
+| pansurg | on-cap | 29.2 (29.2-29.3) | 1,322 (1,317-1,327) | 24 (24-24) | 45.3 (45.1-45.3) | 9 (9-9) | 1,063 (1,031-1,063) |
+| pansurg | head-infl | 10.1 (10.0-10.3) | 1,276 (1,271-1,293) | 0 (0-0) | 125.4 (125.3-128.1) | - | - |
+| pansurg | on-infl | 10.1 (10.1-10.3) | 1,277 (1,275-1,283) | 0 (0-0) | 126.0 (123.9-126.8) | 0 (0-0) | 222 (0-255) |
+| fourcastnetgfs | head | 16.3 (15.6-18.2) | 6,081 (6,028-6,183) | 0 (0-0) | 372.8 (339.5-387.4) | - | - |
+| fourcastnetgfs | on | 16.7 (16.6-16.9) | 6,138 (6,103-6,172) | 0 (0-0) | 367.3 (362.2-372.5) | 0 (0-0) | 0 (0-126) |
+| fourcastnetgfs | head-storm | 18.9 (18.4-19.3) | 6,880 (6,743-6,947) | 795 (558-920) | 360.1 (357.2-374.3) | - | - |
+| fourcastnetgfs | on-storm | 50.4 (50.2-50.8) | 6,118 (6,115-6,245) | 49 (46-51) | 121.8 (121.3-123.0) | 9 (9-9) | 5,475 (5,457-5,520) |
+| fourcastnetgfs | head-cap | 37.8 (36.0-38.1) | 10,923 (10,486-11,581) | 4,725 (4,489-5,394) | 289.0 (275.4-321.9) | - | - |
+| fourcastnetgfs | on-cap | 58.1 (57.9-58.2) | 6,207 (6,177-6,236) | 102 (99-106) | 106.9 (106.8-107.2) | 11 (11-11) | 5,871 (5,863-5,912) |
+| nara | head | 56.0 (55.7-77.7) | 19,683 (19,210-19,983) | 0 (0-0) | 344.7 (257.1-351.5) | - | - |
+| nara | on | 57.2 (51.9-80.4) | 19,638 (18,787-19,862) | 0 (0-0) | 343.1 (247.1-362.3) | 0 (0-0) | 0 (0-3) |
+| nara | head-storm | 62.8 (56.4-65.1) | 19,339 (19,033-19,529) | 74 (63-75) | 303.1 (299.8-343.1) | - | - |
+| nara | on-storm | 96.0 (87.7-114.9) | 19,612 (18,979-20,151) | 37 (15-41) | 204.2 (175.3-216.4) | 9 (9-9) | 9,568 (9,265-11,282) |
+
+Every run exited 0 with a committed dataset (exit codes in the harness's `arms.tsv`). Readings:
+
+- **Unperturbed: no cost.** Median walls with the limiter on are within the reps' spread of head on all four
+  recordings (4.5 vs 4.6 s, 6.7 vs 6.8, 16.3 vs 16.7, 56.0 vs 57.2; spreads up to 22 s on nara from one slow rep
+  per arm); requests equal within the same spread. With no throttle the limit never moves.
+- **Storm: fewer requests, longer wall.** The 5 s storm drives the limit from 64 to 1 (9 decreases, depth 63) in
+  under 0.1 s; head keeps 64 in flight. The limiter sends 38 % (noaa-eri-pds), 30 % (pansurg) and 11 %
+  (fourcastnetgfs) fewer requests than head and draws 16-20x fewer throttle answers. Recovery is the 10 s throttle-free window plus +1 per second: on
+  nara, in-flight requests at the server were back at 58 or more 68.1 s (67.7-68.5) after the storm ended, and
+  the limit made all 63 steps back. The price is wall: 3.1-3.5x head on the shallow recordings, 2.7x on
+  fourcastnetgfs, 1.5x on nara, because recovery takes longer than the rest of the run.
+- **Sustained 20 %:** the limit sits at 1 (no 10 s window is ever throttle-free), so the run is a serial
+  listing: 12.5 and 7.6 attempts/s against 300 and 199 for head, 24-26x the wall, the same request count.
+- **Rate cap 200/s:** head exceeds the cap by retrying (fourcastnetgfs: 10,923 requests, 4,725 throttled); with
+  the limiter 6,207 requests and 102 throttled, but only 45-107 attempts/s are served, a quarter to a half of
+  the cap, and the wall is 1.5-2.7x head. Per-throttle decreases (several concurrent 503s each multiply the
+  limit) and the 10 s cool-down keep the limit far under what the cap allows.
+- **Latency inflation:** no effect at the maximum (the latency freeze only holds growth below it).
+
+**Default.** Off. The written acceptance criteria held for completion, the drop, the recovery bound (68 s
+measured against 75 s), the bounded rate and baseline parity, and failed for the rate cap ("served rate near
+R": 0.23-0.53 R measured). On replay the rules trade 1.5-3.5x wall in a storm for 11-38 % fewer requests;
+whether that is right for real S3 has no evidence here: 25 of 2,702 stage runs met any 503, all at concurrency
+256-512.
+
+**Live (single run, labelled as such).** `noaa-hrrr-bdp-pds` (a bucket with SlowDown in the stage corpus),
+prefix `hrrr.202401`, anonymous, 64 workers, `--seed --limiter`, build `acc3f88`: 1,279,184 objects in 5.96 s,
+1,683 attempts, no retry, no throttle, no limiter decrease. A run at 64 workers did not reach the request rate
+that throttled the corpus runs (256-512 workers on the whole bucket).
+
 ## Layering: provider registry
 
 The pipeline no longer knows which providers exist. Before this change, `listing` imported both providers, held
