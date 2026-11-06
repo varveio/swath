@@ -41,8 +41,7 @@ func TestMain(m *testing.M) {
 // fixtures builds the conformance fixtures once: a 10,000-key Java-era
 // fixture of three parts, the same keys sorted into a format-2 dataset by
 // sort-fixture, a format-2 dataset of keys longer than its 1,024-byte index
-// bound, and the Go tool's own S3 and local datasets from the reader's
-// testdata.
+// bound, and the Go lister's own S3 and local datasets (golister_test.go).
 func fixtures(t *testing.T) []fixture {
 	t.Helper()
 	fixturesOnce.Do(func() {
@@ -58,14 +57,12 @@ func fixtures(t *testing.T) []fixture {
 			long = append(long, fmt.Sprintf("%s/%s%04d", strings.Repeat("p", 1100), strings.Repeat("q", i%3*400), i))
 		}
 		slices.Sort(long)
-		testdata := filepath.Join("..", "..", "..", "sortedparquet", "testdata")
 		fixturesList = []fixture{
 			{"java-era-10k", writeJavaEra(t, filepath.Join(dir, "java"), keys, 3, 1500), KindJavaEra},
 			{"format2-10k", writeFormat2(t, filepath.Join(dir, "f2"), keys, 0), KindFormat2},
 			{"format2-long-keys", writeFormat2(t, filepath.Join(dir, "long"), long, 4096), KindFormat2},
-			{"go-tool-s3", filepath.Join(testdata, "go-s3"), KindFormat2},
-			{"go-tool-local", filepath.Join(testdata, "go-local"), KindFormat2},
-			{"java-tool-bulk", filepath.Join(testdata, "java-bulk"), KindJavaEra},
+			{"go-lister-s3", listS3(t, dir), KindFormat2},
+			{"go-lister-local", listLocal(t, dir), KindFormat2},
 		}
 	})
 	if fixturesErr != nil {

@@ -123,7 +123,7 @@ func TestProjection(t *testing.T) {
 		t.Fatalf("values: %+v", c)
 	}
 
-	gcs, meta, err := Open(context.Background(), filepath.Join("..", "..", "..", "sortedparquet", "testdata", "go-gcs"), Options{})
+	gcs, meta, err := Open(context.Background(), listGCS(t, t.TempDir()), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
