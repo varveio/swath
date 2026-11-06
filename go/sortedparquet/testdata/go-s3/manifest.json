@@ -1,0 +1,42 @@
+{
+  "format": "swath-dataset",
+  "format_version": 2,
+  "schema_id": "swath/s3-objects/v1",
+  "published_at": "2026-11-06T15:13:02.273695615Z",
+  "source": {
+    "kind": "s3",
+    "uri": "s3://fixture-bucket",
+    "container": "fixture-bucket"
+  },
+  "scope": {
+    "kind": "whole"
+  },
+  "coverage": {
+    "complete": true,
+    "stop_reason": "completed",
+    "skipped_entries": 0,
+    "exclusions": [],
+    "filters": [],
+    "snapshot": false,
+    "listing_started_at": "2026-11-06T15:13:02.175028437Z",
+    "listing_finished_at": "2026-11-06T15:13:02.267742001Z"
+  },
+  "parts": [
+    {
+      "path": "data/part-00000.parquet",
+      "rows": 1061,
+      "bytes": 22127,
+      "min_key_base64": "YQ==",
+      "max_key_base64": "YnVsay9rMTA1Mw==",
+      "md5": "035b0d88225a024b5d9282887452befa"
+    },
+    {
+      "path": "data/part-00001.parquet",
+      "rows": 56,
+      "bytes": 3538,
+      "min_key_base64": "YnVsay9rMTA1NA==",
+      "max_key_base64": "8JCAgA==",
+      "md5": "97483ae2c000be461def029241dd80a6"
+    }
+  ]
+}
