@@ -83,6 +83,7 @@ const (
 	cEmptyPages
 	cSeedTopUnsafe
 	cPrefixesNormalized
+	cBoundDrops
 	numCounters
 )
 
@@ -165,6 +166,7 @@ var Counters = []counters.Def{
 	d("empty_pages", counters.Count, "pages", "continuing pages with no entry, followed by their token (also counted in requests)"),
 	d("seed.top_paginated_declined.unsafe", counters.Count, "probes", "top-up probes not sent: the top page's last entry is not a bound the provider accepts", "seed"),
 	d("prefixes_normalized", counters.Count, "pages", "pages whose common prefixes came unsorted or repeated, sorted and deduplicated"),
+	d("bound_drops", counters.Count, "keys", "keys equal to an inclusive start bound, listed again and dropped (not in overfetch_keys)"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {

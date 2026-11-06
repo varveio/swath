@@ -34,11 +34,17 @@ func (s *script) fetch(_ context.Context, q *Query) (*Page[Object], error) {
 	}
 	out := s.pages[i]
 	out.Rows = slices.Clone(out.Rows)
-	if out.Truncated && out.Token == "" {
+	switch {
+	case out.Token == noToken:
+		out.Token = ""
+	case out.Truncated && out.Token == "":
 		out.Token = fmt.Sprintf("t%d", i+1)
 	}
 	return &out, nil
 }
+
+// noToken in a scripted page's Token sends a truncated page with no token.
+const noToken = "<none>"
 
 func rows(keys ...string) []Row {
 	out := make([]Row, len(keys))
@@ -63,18 +69,20 @@ func TestEmptyContinuingPages(t *testing.T) {
 		want      []string
 		requests  int64
 		empty     int64
+		drops     int64 // bound_drops
 		bad       bool
 	}{
 		{name: "empty, empty, data", pages: []Page[Object]{more(), more(), last("a", "b")}, want: []string{"a", "b"}, requests: 3, empty: 2},
-		{name: "boundary only, empty, data", inclusive: true, after: "a", pages: []Page[Object]{more("a"), more(), last("b", "c")}, want: []string{"b", "c"}, requests: 3, empty: 2},
-		{name: "empty, boundary and data", inclusive: true, after: "a", pages: []Page[Object]{more(), last("a", "b")}, want: []string{"b"}, requests: 2, empty: 1},
+		{name: "boundary only, empty, data", inclusive: true, after: "a", pages: []Page[Object]{more("a"), more(), last("b", "c")}, want: []string{"b", "c"}, requests: 3, empty: 2, drops: 1},
+		{name: "empty, boundary and data", inclusive: true, after: "a", pages: []Page[Object]{more(), last("a", "b")}, want: []string{"b"}, requests: 2, empty: 1, drops: 1},
 		{name: "data, empty, terminal empty", pages: []Page[Object]{more("a"), more(), last()}, want: []string{"a"}, requests: 3, empty: 1},
 		{name: "terminal empty", pages: []Page[Object]{last()}, requests: 1},
 		{name: "stuck token", pages: []Page[Object]{more("a"), {Truncated: true, Token: "t1"}}, bad: true},
 		{name: "token cycle", pages: []Page[Object]{more(), {Truncated: true, Token: "t0"}}, bad: true},
-		{name: "empty without token", pages: []Page[Object]{more("a"), {Truncated: true, Token: ""}, last()}, want: []string{"a"}, requests: 3, empty: 1},
+		{name: "empty with an assigned token", pages: []Page[Object]{more("a"), {Truncated: true, Token: ""}, last()}, want: []string{"a"}, requests: 3, empty: 1},
+		{name: "empty without token", pages: []Page[Object]{more("a"), {Truncated: true, Token: noToken}}, bad: true},
+		{name: "first page empty without token", pages: []Page[Object]{{Truncated: true, Token: noToken}}, bad: true},
 	}
-	cases[len(cases)-1].pages[1] = Page[Object]{Truncated: true} // the script assigns t2: progress
 	for _, c := range cases {
 		for _, mode := range []string{"range", "sequential"} {
 			t.Run(c.name+"/"+mode, func(t *testing.T) {
@@ -101,8 +109,10 @@ func TestEmptyContinuingPages(t *testing.T) {
 				}
 				st := p.Stats()
 				if err != nil || !slices.Equal(keysOf(col.rows), c.want) || st.Get(cRequests) != c.requests ||
-					st.Get(cEmptyPages) != c.empty || int64(s.calls) != c.requests {
-					t.Fatalf("err=%v keys=%q requests=%d calls=%d empty=%d", err, keysOf(col.rows), st.Get(cRequests), s.calls, st.Get(cEmptyPages))
+					st.Get(cEmptyPages) != c.empty || int64(s.calls) != c.requests || st.Get(cBoundDrops) != c.drops ||
+					st.Get(cOverfetchKeys) != 0 {
+					t.Fatalf("err=%v keys=%q requests=%d calls=%d empty=%d drops=%d overfetch=%d", err, keysOf(col.rows),
+						st.Get(cRequests), s.calls, st.Get(cEmptyPages), st.Get(cBoundDrops), st.Get(cOverfetchKeys))
 				}
 			})
 		}

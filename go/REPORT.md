@@ -1567,6 +1567,12 @@ one run each): the GCS route's dataset equals the S3 route's, keys and sizes, as
 | noaa-nws-fourcastnetgfs-pds | 4,081,170 | 4,892 | 5,225 | 761,821 | 0 |
 
 GCS sends `endOffset`, so a bounded range reads no key past its end; it sent 2-7 % more requests here.
+"Overfetched keys" counts keys listed past a range's end or at or below a resume key (`overfetch_keys`). It does
+not count the key equal to an inclusive `startOffset` that every GCS range and split child lists again and the
+engine drops; that is the separate counter `bound_drops`. Re-run of the GCS route with the build that added it
+(same recordings and flags, one run each): `bound_drops` 328 (noaa-eri-pds), 233 (pansurg), 1,585
+(fourcastnetgfs), `overfetch_keys` 0, `end_offset_omitted` 0; requests 1,117 / 732 / 5,027 (run-to-run
+variation of the split timing).
 
 **Speed: unmeasured.** swath-replay injects latency (`--inject-latency worker_page=…`) in its S3 handler
 only; its GCS handler is built without the latency function (`ReplayServer`: `new GcsHandler(bucket, store,

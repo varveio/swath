@@ -265,6 +265,9 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 		if err == nil {
 			if p.d.StartInclusive && chainStart && in.After != "" && len(out.Rows) > 0 && out.Rows[0].Key == in.After {
 				out.Rows = out.Rows[1:]
+				p.mu.Lock()
+				p.c.Inc(cBoundDrops)
+				p.mu.Unlock()
 			}
 			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 {
 				if !strictlyAscending(out.Prefixes) {
