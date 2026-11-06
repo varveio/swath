@@ -228,8 +228,11 @@ func (j *Journal) Close() error {
 	return j.f.Close()
 }
 
-// Version is the journal format this tool writes and reads.
-const Version = 5
+// Version is the journal format this tool writes and reads. Version 6
+// refuses version 5 journals, which a run with an object-count cap could
+// write and which record neither the cap nor the S3 route (see
+// durability.md).
+const Version = 6
 
 // frameCRC covers the length field and the payload, so a damaged length
 // cannot pass for a different frame boundary.

@@ -125,8 +125,11 @@ under the split mutex.
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 5 (version 3 made the identity provider-neutral, version 4 writes part
-bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest;
+the payload, and the payload (JSON); journal version 6 (version 3 made the identity provider-neutral, version 4 writes part
+bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest, version 6
+refuses version 5 journals: a run with `--max-keys` could write one, and neither its identity nor its records
+hold the cap or the S3 route, so through the library it could match an uncapped resume and a retained final
+record would skip listing;
 an older journal is refused, so an interrupted run of an older build is finished with that build or started
 over with `-overwrite`). The first frame is the header (tool, format, identity, creation time).
 Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after

@@ -187,14 +187,19 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 	if _, err := Read(out); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("interior corruption: %v", err)
 	}
-	j, _ = Create(out, Identity{}, nil)
-	j.Close()
-	b, _ = os.ReadFile(Path(out))
-	b2 := []byte(strings.Replace(string(b[8:]), fmt.Sprintf(`"version":%d`, Version), `"version":9`, 1))
-	binary.LittleEndian.PutUint32(b[4:8], frameCRC(b[:4], b2))
-	os.WriteFile(Path(out), append(b[:8], b2...), 0o644)
-	var ve *VersionError
-	if _, err := Read(out); !errors.As(err, &ve) || ve.Found != 9 {
-		t.Fatalf("unknown version: %v", err)
+	// A newer version, and version 5 (legacy: a capped run could write
+	// one, and its identity lacks the S3 route), are refused.
+	for _, v := range []int{9, 5} {
+		j, _ = Create(out, Identity{}, nil)
+		j.Close()
+		b, _ = os.ReadFile(Path(out))
+		b2 := []byte(strings.Replace(string(b[8:]), fmt.Sprintf(`"version":%d`, Version), fmt.Sprintf(`"version":%d`, v), 1))
+		binary.LittleEndian.PutUint32(b[0:4], uint32(len(b2)))
+		binary.LittleEndian.PutUint32(b[4:8], frameCRC(b[:4], b2))
+		os.WriteFile(Path(out), append(b[:8], b2...), 0o644)
+		var ve *VersionError
+		if _, err := Read(out); !errors.As(err, &ve) || ve.Found != v {
+			t.Fatalf("version %d: %v", v, err)
+		}
 	}
 }
