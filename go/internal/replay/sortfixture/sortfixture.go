@@ -11,7 +11,11 @@
 // --capture is one capture part or a directory of *.parquet parts (not
 // recursed) in the 13-column canonical schema; --output is a new or empty
 // directory the dataset is published into; --key-limit, at most 4,096,
-// admits object keys longer than 1,024 bytes (see Options.KeyLimit).
+// raises the key cap from 1,024 bytes (see Options.KeyLimit).
+//
+// The dataset's schema id is always SchemaID: the nine columns of the S3
+// current-object schema under an id of its own, since a converted capture
+// is not a listing by the Go lister.
 //
 // The capture is read whole into memory and sorted there: about 150 bytes
 // per row plus its key and value bytes, so a few million rows is the
@@ -21,6 +25,7 @@ package sortfixture
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -36,15 +41,19 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/s3"
 	"github.com/varveio/swath/go/sortedparquet/javaera"
 )
 
-// ReplaySchemaID is the schema id of datasets whose object keys exceed the
-// S3 schema's 1,024 bytes: the S3 current-object columns with a key cap of
-// Options.KeyLimit. Azure blob names reach 1,024 characters, up to about
-// 2,000 UTF-8 bytes, which the S3 schema cannot hold.
-const ReplaySchemaID = "swath-replay/objects/v1"
+// SchemaID is the schema id of every dataset Run writes: key, size,
+// last_modified, etag, storage_class, owner_id, owner_display_name,
+// checksum_algorithm and checksum_type, as the S3 current-object schema,
+// with a key cap of DefaultKeyLimit or Options.KeyLimit. Azure blob names
+// reach 1,024 characters, up to about 2,000 UTF-8 bytes, which a 1,024-byte
+// cap cannot hold.
+const SchemaID = "swath-replay/objects/v1"
+
+// DefaultKeyLimit is the key cap without Options.KeyLimit: the S3 limit.
+const DefaultKeyLimit = 1024
 
 // MaxKeyLimit is the largest Options.KeyLimit.
 const MaxKeyLimit = 4096
@@ -58,10 +67,8 @@ type Options struct {
 	Capture string
 	// Output is the dataset directory; it must not exist or be empty.
 	Output string
-	// KeyLimit, when positive (at most MaxKeyLimit), allows object keys up
-	// to that many bytes: a capture with a key over 1,024 bytes is then
-	// written with ReplaySchemaID and that cap. Zero allows 1,024 bytes,
-	// the S3 schema's limit.
+	// KeyLimit, when positive (at most MaxKeyLimit), is the key cap in
+	// bytes; zero is DefaultKeyLimit.
 	KeyLimit int
 }
 
@@ -90,16 +97,14 @@ var ErrKeyTooLong = errors.New("sort-fixture: key too long")
 // current object, and the object's facts.
 type row struct {
 	object bool
-	schema.Row[s3.Object]
+	schema.Row[Object]
 }
 
 // Run reads the capture, keeps its OBJECT rows, refuses a capture with a
 // versioned row (ErrVersioned) or two rows of any type with one key
 // (ErrDuplicateKey), sorts the objects by unsigned key bytes and writes
-// them as a format-2 dataset with the S3 current-object schema, or the
-// replay-owned schema under KeyLimit. A null size or modification time is
-// written as 0, which the replay routes render as they render a null. It
-// writes one summary line to log.
+// them as a format-2 dataset of SchemaID, nulls intact. It writes one
+// summary line to log.
 func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	start := time.Now()
 	stats := Stats{}
@@ -121,7 +126,7 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	}
 	stats.CaptureRows = int64(len(rows))
 	slices.SortFunc(rows, func(a, b row) int { return strings.Compare(a.Key, b.Key) })
-	objects := make([]schema.Row[s3.Object], 0, len(rows))
+	objects := make([]schema.Row[Object], 0, len(rows))
 	longest := 0
 	for i := range rows {
 		if i > 0 && rows[i].Key == rows[i-1].Key {
@@ -137,15 +142,11 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	rows = nil
 	stats.Objects = int64(len(objects))
 
-	sch := &s3.Schema
-	if longest > s3.Schema.MaxKeyBytes {
-		if opts.KeyLimit == 0 || longest > opts.KeyLimit {
-			return stats, fmt.Errorf("%w: an object key is %d bytes (limit %d; --key-limit admits up to %d)", ErrKeyTooLong, longest, max(opts.KeyLimit, s3.Schema.MaxKeyBytes), MaxKeyLimit)
-		}
-		replay := s3.Schema
-		replay.ID, replay.MaxKeyBytes = ReplaySchemaID, opts.KeyLimit
-		sch = &replay
+	limit := cmp.Or(opts.KeyLimit, DefaultKeyLimit)
+	if longest > limit {
+		return stats, fmt.Errorf("%w: an object key is %d bytes (limit %d; --key-limit raises it up to %d)", ErrKeyTooLong, longest, limit, MaxKeyLimit)
 	}
+	sch := newSchema(limit)
 	stats.SchemaID = sch.ID
 	parts, err := write(ctx, opts, sch, objects, start)
 	if err != nil {
@@ -165,7 +166,7 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 }
 
 // write publishes objects, sorted, through the dataset writer.
-func write(ctx context.Context, opts Options, sch *schema.Schema[s3.Object], objects []schema.Row[s3.Object], start time.Time) ([]dataset.Part, error) {
+func write(ctx context.Context, opts Options, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
 	if err := dataset.Prepare(opts.Output, "", sch.ID, false); err != nil {
 		return nil, fmt.Errorf("sort-fixture: output: %w", err)
 	}
@@ -175,7 +176,7 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[s3.Object], obj
 	}
 	const batch = 4096
 	for i := 0; i < len(objects); i += batch {
-		if err := router.Write(ctx, [][]schema.Row[s3.Object]{objects[i:min(i+batch, len(objects))]}); err != nil {
+		if err := router.Write(ctx, [][]schema.Row[Object]{objects[i:min(i+batch, len(objects))]}); err != nil {
 			router.Abort()
 			dataset.Cleanup(opts.Output)
 			return nil, fmt.Errorf("sort-fixture: write: %w", err)
@@ -276,9 +277,9 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 			kept := row{object: bytes.Equal(values[cRowType].ByteArray(), []byte("OBJECT"))}
 			kept.Key = string(key)
 			if kept.object {
-				kept.Data = s3.Object{
-					Size:              values[cSize].Int64(),
-					Mtime:             values[cModified].Int64(),
+				kept.Data = Object{
+					Size:              number(values[cSize]),
+					Mtime:             number(values[cModified]),
 					ETag:              text(values[cETag]),
 					StorageClass:      text(values[cStorageClass]),
 					OwnerID:           text(values[cOwnerID]),
@@ -298,8 +299,16 @@ func readCapture(ctx context.Context, name string, rows []row) ([]row, error) {
 	}
 }
 
-// text returns a string column's value, "" (null in the S3 schema) when
-// null.
+// number returns an integer column's value, nil when null.
+func number(v parquet.Value) *int64 {
+	if v.IsNull() {
+		return nil
+	}
+	n := v.Int64()
+	return &n
+}
+
+// text returns a string column's value, "" (null in the schema) when null.
 func text(v parquet.Value) string {
 	if v.IsNull() {
 		return ""

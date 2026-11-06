@@ -150,7 +150,7 @@ func TestSortsTheAzureEvidenceCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if n, _ := walk(t, s); n != 5_083 || stats.Objects != 5_083 || meta.SchemaID != sortfixture.ReplaySchemaID {
+	if n, _ := walk(t, s); n != 5_083 || stats.Objects != 5_083 || meta.SchemaID != sortfixture.SchemaID {
 		t.Fatalf("walk %d rows, sorted %d, schema %s", n, stats.Objects, meta.SchemaID)
 	}
 }

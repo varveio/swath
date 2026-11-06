@@ -35,19 +35,23 @@ func capture(t *testing.T, parts ...[]sortedparquettest.Row) string {
 
 func obj(key string, i int) sortedparquettest.Row { return sortedparquettest.Object(key, i) }
 
+// TestSortsTwoPartsIntoAFormat2Dataset sorts two capture parts, keeps only
+// OBJECT rows with their nulls, and writes the replay-owned schema.
 func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	marker := obj("p/", 9)
 	marker.RowType, marker.Size = "PREFIX", nil
 	deleted := obj("x", 8)
 	deleted.RowType, deleted.IsDeleteMarker = "DELETE_MARKER", true
-	in := capture(t, []sortedparquettest.Row{obj("m", 0), obj("b", 1), marker}, []sortedparquettest.Row{obj("a", 2), deleted, obj("p/q", 3)})
+	untimed := obj("m", 0)
+	untimed.Size, untimed.LastModified = nil, nil
+	in := capture(t, []sortedparquettest.Row{untimed, obj("b", 1), marker}, []sortedparquettest.Row{obj("a", 2), deleted, obj("p/q", 3)})
 	out := filepath.Join(t.TempDir(), "out")
 	var log bytes.Buffer
 	stats, err := Run(context.Background(), Options{Capture: in, Output: out}, &log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.CaptureRows != 6 || stats.Objects != 4 || stats.Skipped != 2 || stats.Parts != 1 || stats.SchemaID != "swath/s3-objects/v1" {
+	if stats.CaptureRows != 6 || stats.Objects != 4 || stats.Skipped != 2 || stats.Parts != 1 || stats.SchemaID != SchemaID {
 		t.Fatalf("stats %+v", stats)
 	}
 	if !strings.HasPrefix(log.String(), "sort_fixture rows=6 objects=4 skipped=2 parts=1 ") {
@@ -71,6 +75,9 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	}
 	if size, _ := rows[0].Value("size"); size.Int64() != 2 {
 		t.Fatalf("size of a: %v", size)
+	}
+	if size, _ := rows[2].Value("size"); !size.IsNull() {
+		t.Fatalf("a null size must stay null: %v", size)
 	}
 	if _, err := os.Stat(filepath.Join(out, ".swath")); !os.IsNotExist(err) {
 		t.Fatal("the workspace must not remain")
@@ -112,7 +119,7 @@ func TestKeyLimit(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "o")
 	stats, err := Run(context.Background(), Options{Capture: in, Output: out, KeyLimit: 4096}, nil)
-	if err != nil || stats.SchemaID != ReplaySchemaID {
+	if err != nil || stats.SchemaID != SchemaID {
 		t.Fatalf("with a key limit: %+v %v", stats, err)
 	}
 	dataset, err := format2.Open(context.Background(), out, nil)

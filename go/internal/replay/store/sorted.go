@@ -175,8 +175,8 @@ type objectProjection struct {
 }
 
 // s3Objects is the projection of the S3-shaped schemas: the Java-era
-// canonical schema, the S3 current-object schema and its replay-owned
-// long-key variant.
+// canonical schema, the S3 current-object schema, and the replay-owned
+// schema sort-fixture writes (the same columns under its own id).
 var s3Objects = objectProjection{
 	size: "size", lastModified: "last_modified", etag: "etag", storageClass: "storage_class",
 	ownerID: "owner_id", ownerDisplayName: "owner_display_name",
