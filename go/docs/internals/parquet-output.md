@@ -111,7 +111,8 @@ cancellation removes the unpublished parts and writes no manifest.
 
 ```text
 out/
-  data/part-00000.parquet ...   dense, zero-based %05d; name order == key order; parts strictly disjoint
+  data/part-00000.parquet ...   dense, zero-based, >= 5 digits; ordinal order == key order (name order only below
+                                part-100000: the manifest's part list is the order); parts strictly disjoint
   manifest.json                 format 2: source, scope, coverage, ordered parts with exact bounds (the commit)
   run.json                      the run report (operational, written after the commit)
   error.json                    the outcome of a run that did not complete (removed when one completes)

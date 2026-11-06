@@ -10,6 +10,8 @@ package dataset
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // Format identifies the dataset format in the manifest and the footers.
@@ -55,9 +57,31 @@ const (
 	StampIndexBound = "swath.index_bound_bytes"
 )
 
-// PartName is the published name of part ordinal i: dense, zero-based, %05d,
-// so lexical name order is key order.
+// PartName is the published name of part ordinal i: dense, zero-based, at
+// least five digits (%05d). Ordinal order is key order; name order is not
+// past 99,999 (part-100000 sorts before part-99999), so code compares
+// ordinals (PartOrdinal), and readers take the order from the manifest's
+// explicit part list.
 func PartName(i int) string { return fmt.Sprintf("part-%05d.parquet", i) }
+
+// PartOrdinal is the ordinal of a name PartName makes (ok false for any
+// other name: another shape, a sign, extra leading zeros).
+func PartOrdinal(name string) (i int, ok bool) {
+	digits, found := strings.CutPrefix(name, "part-")
+	if digits, found = strings.CutSuffix(digits, ".parquet"); !found || digits == "" {
+		return 0, false
+	}
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	i, err := strconv.Atoi(digits)
+	if err != nil || PartName(i) != name {
+		return 0, false
+	}
+	return i, true
+}
 
 // TempPath is where part i is written before publication.
 func TempPath(out string, i int) string {

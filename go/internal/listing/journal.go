@@ -515,7 +515,9 @@ func recoverParts(v verifier, r *os.Root, out string, st *journal.State, lock *j
 // boundary before it) leaves a clean end, the same as an append that never
 // began. Parts not claimed were never named by a record and are removed
 // with the rest. A suspect whose ordinal was recorded since was reproduced
-// (the record follows the check) and is removed.
+// (the record follows the check) and is removed. Suspects are compared by
+// ordinal (dataset.PartOrdinal), never by name: part-99999 precedes
+// part-100000; a name of another shape is corruption.
 func keepSuspect(v verifier, r *os.Root, out string, st *journal.State) (*suspect, error) {
 	dir := filepath.Join(out, suspectRel)
 	n := len(st.Records)
@@ -556,12 +558,13 @@ func keepSuspect(v verifier, r *os.Root, out string, st *journal.State) (*suspec
 	var sus *suspect
 	for _, e := range ents {
 		rel := filepath.Join(suspectRel, e.Name())
+		i, ok := dataset.PartOrdinal(e.Name())
 		switch {
-		case e.Name() < name: // recorded since: reproduced
+		case ok && i < n: // recorded since: reproduced
 			if err := r.Remove(rel); err != nil {
 				return nil, fmt.Errorf("resume: %w", err)
 			}
-		case e.Name() == name && !final:
+		case ok && i == n && !final:
 			if sus, err = measureSuspect(v, r, out, rel, n); err != nil {
 				return nil, err
 			}
