@@ -254,11 +254,13 @@ func (j *Journal) Close() error {
 	return j.f.Close()
 }
 
-// Version is the journal format this tool writes and reads. Version 6
-// refuses version 5 journals, which a run with an object-count cap could
-// write and which record neither the cap nor the S3 route (see
-// durability.md).
-const Version = 6
+// Version is the journal format this tool writes and reads. Version 7
+// marks the claimed-part protocol: the part about to be recorded is at
+// dataset.ClaimPath, and recovery protects only that name. A version 6
+// journal's acknowledged part may still be at dataset.TempPath, which
+// version 7 recovery would remove as unrecorded, so it is refused before
+// recovery touches anything (see durability.md).
+const Version = 7
 
 // frameCRC covers the length field and the payload, so a damaged length
 // cannot pass for a different frame boundary.

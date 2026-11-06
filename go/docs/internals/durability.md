@@ -152,13 +152,18 @@ under the split mutex.
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 6 (version 3 made the identity provider-neutral, version 4 writes part
+the payload, and the payload (JSON); journal version 7 (version 3 made the identity provider-neutral, version 4 writes part
 bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest, version 6
 refuses version 5 journals: a run with `--max-keys` could write one, and neither its identity nor its records
 hold the cap or the S3 route, so through the library it could match an uncapped resume and a retained final
-record would skip listing;
-an older journal is refused, so an interrupted run of an older build is finished with that build or started
-over with `-overwrite`). The first frame is the header (tool, format, identity, creation time).
+record would skip listing; version 7 marks the claimed-part protocol: a version 6 run left the part of its
+last record at the unclaimed temporary name until the rename into `data/`, and version 7 recovery protects
+only the claimed name, so it would remove that acknowledged part as unrecorded when the last record is torn or
+lost and could then commit a changed replacement; a version 6 journal is refused before recovery reads,
+moves or removes any part or touches the journal).
+An older or newer journal is refused with a `journal.VersionError` (exit 1, class `fatal`, not resumable by this build) and the directory's parts and journal
+are left as they are: an interrupted run of an older build is finished with that build or started over with
+`--overwrite`. The first frame is the header (tool, format, identity, creation time).
 Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after
 `fsync`; its one caller is the ordered committer.
 

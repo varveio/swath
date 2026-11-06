@@ -113,7 +113,8 @@ readers treat page bounds as conservative. Manifest bounds are exact.
 ## Versions
 
 Four versions move independently: the dataset format (`format_version` and `swath.profile_version`, 2), the
-logical schema (`schema_id`), the private journal (version 6, never read by readers) and the writer recipe
+logical schema (`schema_id`), the private journal (version 7, never read by readers; an interrupted run of an earlier build is finished
+with that build or started over with `--overwrite`) and the writer recipe
 (`parquetout.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
 parts are byte-identical within a build only.
 
