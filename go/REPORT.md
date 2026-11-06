@@ -1885,6 +1885,34 @@ prefix `hrrr.202401`, anonymous, 64 workers, `--seed --limiter`, build `acc3f88`
 1,683 attempts, no retry, no throttle, no limiter decrease. A run at 64 workers did not reach the request rate
 that throttled the corpus runs (256-512 workers on the whole bucket).
 
+**Slow start (2026-11-06, `--limiter-slow-start`, off by default).** Java's ramp, ported for the case Java
+wrote it for: a run, or a resume after a stall, that starts at the full width into a throttling endpoint
+storms it at once and then collapses x0.7 per answer. The limit starts at min(4, workers) and each paced
+growth step doubles it (the first on the first success, then at most one per second: 4 to 64 in 3 s) until the
+worker count or the first throttle answer or attempt timeout, which ends the ramp for good; counters
+`limiter.slow_start.{doubles,ns,end}`; fake-clock tests `TestSlowStart*` in `objhttp`, `TestSlowStartStartsNarrow`
+in `s3` (at most 8 in flight at the server in the first 100 ms at 32 workers). Its default waits for the
+"Resume into a storm" measurement below.
+
+### Resume into a storm (harness only; measurement deferred)
+
+`bench/resume_storm.sh` (tabulated by `bench/resume_storm_table.py`): a list through the fault proxy under a
+sustained 20 % 503 phase is SIGKILLed during the phase and resumed at once through the same proxy, with three
+interleaved arms (the limiter as shipped, `--limiter-slow-start`, `--limiter=false`) per worker count;
+readings on the resume: 503s in its first 60 s, requests, time to a steady limit, its wall and the list plus
+resume wall. By the owner's rule (2026-11-06) no long or scale run is made on the development host; only a
+smoke run (one recording, one rep, 16 workers) proved the script end to end, and its numbers are not evidence.
+The campaign (64, 256 and 512 workers, 3 reps, noaa-eri-pds and pansurg) and its gate are in the private
+measurement-campaign requirements.
+
+### Defaults measured (harness only; measurement deferred)
+
+`bench/defaults_replay.sh` (tabulated by `bench/defaults_table.py`): the default argv (`swath list` with no
+policy flags: no `--seed`, workers min(64, max(4, 3*GOMAXPROCS)), the limiter on) against the measured argv
+(`--seed --workers 64`) and Java's defaults, interleaved, at the host's CPU count and emulating smaller hosts
+(`taskset` plus `GOMAXPROCS`); wall, CPU time, requests and requests per 1k keys. Smoke run only, as above;
+the campaign and the decisions it settles (the workers rule, `--seed`) are in the same requirements note.
+
 ## Confirmed defects and lost protections, environment and contract (2026-11-06)
 
 From the decision registers' confirmed defects (each a separate commit with a test that fails on the code
@@ -2418,7 +2446,7 @@ bytes, not skipped; ids are unsigned; encoding is parallel; S3 and GCS runs resu
 - **Resume granularity.** S3 and GCS resume from the journal at part granularity: a resume lists again after
   the last published key, so the rows of the open part (at most 64 MiB, or 60 s of a slow frontier with
   `--part-interval`) are listed twice; Java resumed per range cursor.
-- **Throttling.** The limiter has no slow start (it starts at `--workers`); under sustained throttling (the
+- **Throttling.** The limiter starts at `--workers` unless `--limiter-slow-start` (off by default, unmeasured); under sustained throttling (the
   20 % arm in "Throttle handling") it holds the limit at 1-2 requests in flight for the whole run (Java's
   gauge rules; Java was not run under that fault here).
 - **Not built:** versions mode, filters beyond a prefix, text output (TSV, JSONL, table, stdout), Azure.
