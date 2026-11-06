@@ -76,17 +76,13 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.skipped.no_demand` | count | decisions | split | no idle worker (hunger <= 0) |
 | `split.skipped.outranked` | count | decisions | split | larger ranges took the demand |
 | `split.skipped.not_continuing` | count | decisions | split | the range's last page did not continue |
-| `child_empty.lower` | count | ranges | split | lower split children that listed no key (the cost of not probing) |
+| `child_empty.lower` | count | ranges | split | lower split children that listed no key |
 | `child_empty.upper` | count | ranges | split | upper split children that listed no key |
 | `resumed_ranges` | count | ranges | resume | ranges a resume started with: (K, ⊤] |
 | `max_active` | max | ranges |  | peak ranges in Expand at once |
 | `max_queued` | max | ranges | split | peak ranges queued for a worker |
 | `busy_ns` | count | ns |  | sum of Expand wall time |
 | `sink_wait_ns` | count | ns |  | time Expand spent handing rows to the order stage (backpressure) |
-| `probe.requests` | count | requests | probe | 1-key probes (max-keys=1 after a pivot), also counted in requests |
-| `probe.upper_empty` | count | probes | probe | probes that found no key past the pivot: an empty upper child avoided |
-| `probe.moved` | count | pivots | probe | pivots moved to the midpoint of (cursor, pivot] after an empty probe |
-| `split.rejected.probe_empty` | count | decisions | probe | splits skipped: probes found no key past any pivot tried |
 | `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
 | `split.skipped.remaining_floor` | count | decisions | floors | bounded range with at most 4 pages of keys left by its estimate: not split |
 | `split.skipped.tail_floor` | count | decisions | floors | the child past the pivot would realize at most 2 pages of keys: not split |

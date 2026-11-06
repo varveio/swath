@@ -248,7 +248,7 @@ func (c *chained) fetch(ctx context.Context, q *Query) (*Page[Object], error) {
 
 // TestBoundsStableAcrossTokenChain: the engine keeps a chain's logical
 // bounds (After, Through, prefix, delimiter) on every continuation, on
-// every path (ranges with splits and probes, the seed, structure
+// every path (ranges with splits, the seed, structure
 // probes, resume, the sequential chain), under both start conventions.
 func TestBoundsStableAcrossTokenChain(t *testing.T) {
 	keys := slices.Compact(slices.Sorted(slices.Values(keyspaces()["deepTree"])))
@@ -256,7 +256,7 @@ func TestBoundsStableAcrossTokenChain(t *testing.T) {
 		t.Fatalf("fixture: %d keys", len(keys))
 	}
 	for i, opt := range []Options{
-		{Workers: 8, Probe: true},
+		{Workers: 8},
 		{Workers: 16, Seed: true, Structure: true},
 		{Workers: 4, Seed: true, Floors: true, Resume: &Resume{After: keys[len(keys)/3]}},
 		{Workers: 1, Sequential: true},

@@ -303,7 +303,7 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
 
 The engine's options are the scope prefix, `Sequential`, `Seed`, `Structure`, `Probe`,
 `Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size (default 1,000): data and
-seed requests ask for it, structure and 1-key probes for no more, and the floors count pages of it. The
+seed requests ask for it, structure probes for no more, and the floors count pages of it. The
 engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
 A continuing structure probe (a provider may cut pages short) is a partial
 sample whatever its length (its furthest folder is the pivot). Its tests (`internal/source/keyrange`) run on a fake listing
@@ -363,13 +363,13 @@ that level's page was full; the byte pivot is used otherwise. A split never wait
 (`structure.late` counts decisions taken while one was in flight). A probe still in flight when its range's `Expand` returns is cancelled. Children inherit the boundaries inside
 their bounds, so one probe serves several generations of splits. Eight probes in a row that find no folder
 at any level stop probing in that range (`structure.suppressed`). Swath sends these probes serially, coarse
-to fine, after a 1-key probe found the upper child empty; here the levels go at once and nothing waits.
+to fine, after a 1-key probe found the upper child empty (Java); here the levels go at once and nothing waits.
 
 **Guards**, checked before any child and counted per clause: `done` (never after the page that ended the
 range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), `bound` (`m < hi`, or below
 `prefixCeil(scope)` on the frontier), `no_pivot` (the owner keeps listing).
 
-**Pivots.** Three steps:
+**Pivots.** Two steps:
 1. **The spec's pivot is the default:** swath's `ByteMidpoint`, i.e. the safe midpoint of `(c, hi]`, or
    `ForwardReflect` on the open frontier, with the 1,024-byte cap.
 2. **A density refinement from the last page.** Keys are read as numbers in the alphabet seen on that page.
@@ -377,17 +377,14 @@ range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), 
    that differs from `c`. It is taken only when it lies between the cursor and the spec pivot (nearer the
    cursor), or when the spec pivot is within one page span of the cursor. In that second case the spec
    pivot would leave the lower child empty: reflection from ⊥ moves only the last character.
-3. **The 1-key probe (Java's pivot probe; off by default, `-probe` turns it on).** Before the split is published,
-   one ListObjectsV2 with `max-keys=1` after the pivot checks that the upper child `(m, hi]` holds a key. If
-   it does not, the pivot moves to the safe midpoint of `(c, m]` and is probed again, up to 3 probes. Then
-   the split is skipped, and the range does not try again for 2, 4, … 64 pages.
+The split's demand slot is reserved in the same decision, so concurrent owners do not split for the same idle
+worker. Every pivot is safe (I12).
 
-The split's demand slot is reserved while it is probed, so concurrent owners do not split for the same idle
-worker. Every pivot is safe (I12). Without `-probe` the provider lists with the kernel alone.
-
-Measured on five replayed recordings (REPORT.md, "Step 5a"), the probe costs more than the empty children
-it saves: it is a serial round trip before each split, so it lowers concurrency, and runs were 1.4–2.2× slower
-than without it. Without it the refined pivot matches the old one. So the probe is off by default.
+Java's 1-key pivot probe (one `max-keys=1` request after the pivot, moving an empty upper child's pivot
+toward the cursor) was ported behind `-probe` and deleted: on five replayed recordings (REPORT.md, "Step
+5a") it cost more than the empty children it saved, a serial round trip before each split that lowered
+concurrency, 1.4–2.2× slower than without it. Git keeps it (`probe` in `keyrange/parallel.go`, removed after
+`ba2abb2`).
 
 **Why.** Before the probe, the density estimate was the first choice and could reach far past the data on
 skewed shapes. On a replay of noaa-nws-fourcastnetgfs-pds, 1,362 of 2,927 splits left an empty upper child,
@@ -396,7 +393,7 @@ and the run used about 1 of 64 workers (REPORT.md "Step 5a").
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted
 bounded and frontier, rejected per guard clause, skipped for no demand, outranked or not continuing);
-`child_empty.{lower,upper}`; the floors' skips; structure probes and their pivots; with `-probe`, `probe.{requests,upper_empty,moved}` and `split.rejected.probe_empty`; `max_active`, `max_queued`, `mean_active`; busy and
+`child_empty.{lower,upper}`; the floors' skips; structure probes and their pivots; `max_active`, `max_queued`, `mean_active`; busy and
 sink-wait time.
 
 **Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is
@@ -412,7 +409,7 @@ A provider registers a `registry.Factory` from `init`: its URL scheme (`s3`; the
 paths), its flag group (`Flags(fs, diag, shared) any` returns the provider's options value, filled by the
 parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. A provider on the range engine names the
 engine's shared flag group (`Shared: keyrange.FlagGroup`, `SharedFlags`: the policy flags `--seed`,
-`--structure`, `--floors`, `--probe`, `--sequential`, `--max-keys` and the admission flags
+`--structure`, `--floors`, `--sequential`, `--max-keys` and the admission flags
 `--limiter`, `--limiter-slow-start`, `--request-rate`): the command registers each named group once and
 passes its value (`*keyrange.Common`: a `keyrange.Policy` and an `objhttp.Admission`) to every provider that
 names it. The command imports providers only for that

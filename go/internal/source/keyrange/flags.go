@@ -18,7 +18,6 @@ type Policy struct {
 	Seed       bool  // parallel: tile the scope from delimiter probes first
 	Structure  bool  // pivot on folder boundaries from structure probes sent alongside pages
 	MaxKeys    int64 // stop after this many objects (sequential only; 0 = all)
-	Probe      bool  // check each split's upper child with a 1-key request first (off by default)
 	Floors     bool  // the gate-chain floors (off by default)
 }
 
@@ -33,7 +32,7 @@ type Common struct {
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors}
+		MaxKeys: p.MaxKeys, Floors: p.Floors}
 }
 
 // FlagGroup names the engine's flag group (registry.Factory.Shared).
@@ -58,7 +57,6 @@ func Flags(f *flag.FlagSet, diag bool) *Common {
 		f.BoolVar(&p.Structure, "structure", p.Structure, "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
 		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		f.BoolVar(&p.Sequential, "sequential", p.Sequential, "ranges: list with one continuation-token chain (no ranges; the reference)")
-		f.BoolVar(&p.Probe, "probe", p.Probe, "ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")
 		f.Var((*int64Flag)(&p.MaxKeys), "max-keys", "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
 	}
 	return c

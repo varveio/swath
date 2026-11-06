@@ -159,7 +159,7 @@ func TestTokenChainsAndEmptyPages(t *testing.T) {
 	}{
 		{Options{Policy: keyrange.Policy{Sequential: true}}, 1},
 		{Options{}, 8},
-		{Options{Policy: keyrange.Policy{Seed: true, Structure: true, Probe: true}}, 64},
+		{Options{Policy: keyrange.Policy{Seed: true, Structure: true}}, 64},
 		{Options{Resume: &Resume{After: keys[len(keys)/2]}}, 16},
 	} {
 		opt := c.opt
@@ -272,8 +272,7 @@ func TestEndOffsetOmitted(t *testing.T) {
 // TestDelimiterBoundaries: a folder marker ("a/"), its descendants, the
 // objects adjacent to it in byte order ("a-b", "a.b" below, "a0" above) and
 // a nested marker list exactly at page size one, through every policy that
-// sends delimiter requests (the seed, structure probes) and 1-key
-// probes; and a delimiter request whose inclusive startOffset is the
+// sends delimiter requests (the seed, structure probes); and a delimiter request whose inclusive startOffset is the
 // marker reports the folder as a prefix, never as an object.
 func TestDelimiterBoundaries(t *testing.T) {
 	keys := []string{"a", "a-b", "a.b", "a/", "a/b/", "a/b/c", "a/x", "a/y/z", "a0", "a0/", "a0/q", "b"}
@@ -286,7 +285,7 @@ func TestDelimiterBoundaries(t *testing.T) {
 	}{
 		{"sequential", keyrange.Policy{Sequential: true}, 1},
 		{"demand splits", keyrange.Policy{}, 8},
-		{"seed, structure, probes", keyrange.Policy{Seed: true, Structure: true, Probe: true}, 8},
+		{"seed, structure", keyrange.Policy{Seed: true, Structure: true}, 8},
 		{"one-page seed, structure", keyrange.Policy{Seed: true, Structure: true}, 64},
 	} {
 		before := len(f.sent())

@@ -59,8 +59,6 @@ type running struct {
 	continuing   bool // last page full and not at the bound
 	unsplittable bool
 	id           uint64
-	cooldown     int // pages to skip after a probe found no key past the pivot
-	probeFails   int
 	dens         density        // page density, for the floors
 	sb           structure      // known folder boundaries (structure probes)
 	pending      chan structure // a structure probe in flight
@@ -230,17 +228,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			page[i] = out.Rows[i].Key
 		}
 		if m, ext, ok := p.decide(st, r, page, c); ok {
-			m, ok, err := p.probe(ctx, r, c, m)
-			if err != nil {
-				p.commit(st, r, c, m, ext, false)
-				return err
-			}
-			lower, upper := p.commit(st, r, c, m, ext, ok)
-			if !ok {
-				in.Token = out.Token
-				p.maybeProbe(pctx, st, r, c)
-				continue
-			}
+			lower, upper := p.commit(st, r, c, m, ext)
 			if err := faults.At("split"); err != nil {
 				return err
 			}
@@ -267,17 +255,13 @@ func (p *Engine[P]) covered(lo, hi string, open bool) {
 // keys listed). The pivot is the spec's: the safe midpoint of (c, hi], or a
 // forward reflection for the open frontier, refined by the last page's
 // density (see below). On success the two children are
-// reserved in the demand count; the caller probes the pivot and then
+// reserved in the demand count; the caller then commits the split.
 // commits or releases the split.
 func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m string, extrapolated, ok bool) {
 	p.lock()
 	defer p.unlock()
 	st.continuing = true
 	if st.unsplittable {
-		return
-	}
-	if st.cooldown > 0 {
-		st.cooldown--
 		return
 	}
 	if coin := p.opt.SplitCoin; coin != nil {
@@ -372,59 +356,18 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 			return "", false, false
 		}
 	}
-	p.queued += 2 // reserved while the pivot is probed
+	p.queued += 2 // the children, reserved until commit hands them out
 	if structural {
 		p.c.Inc(cSplitPivotStructure)
 	}
 	return m, extrapolated, true
 }
 
-// maxProbes bounds the 1-key probes spent on one split.
-const maxProbes = 3
-
-// probe is Swath's 1-key probe: one request for 1 key after the
-// pivot tells whether the upper child (m, hi] holds a key. If it is empty
-// the pivot moves to the safe midpoint of (c, m] and is probed again, up to
-// maxProbes times; then the split is skipped. Called without mu.
-func (p *Engine[P]) probe(ctx context.Context, r Range, c, m string) (string, bool, error) {
-	if !p.opt.Probe {
-		return m, true, nil
-	}
-	for range maxProbes {
-		in := p.query()
-		in.After, in.Max, in.Probe = m, 1, true
-		p.c.Inc(cProbeRequests)
-		out, err := p.list(ctx, in)
-		if err != nil {
-			return "", false, err
-		}
-		if len(out.Rows) > 0 && (r.open || out.Rows[0].Key <= r.hi) {
-			return m, true, nil
-		}
-		p.c.Inc(cProbeUpperEmpty) // an empty child avoided
-		next, found := between(c, m)
-		if !found || !(c < next && next < m) || !p.safe(next) {
-			return "", false, nil
-		}
-		m = next
-		p.c.Inc(cProbeMoved)
-	}
-	return "", false, nil
-}
-
-// commit accepts a probed split (children, counters, boundaries for the
-// journal) or releases its reservation.
-func (p *Engine[P]) commit(st *running, r Range, c, m string, extrapolated, ok bool) (lower, upper Range) {
+// commit accepts a decided split: children, counters, boundaries for the
+// journal.
+func (p *Engine[P]) commit(st *running, r Range, c, m string, extrapolated bool) (lower, upper Range) {
 	p.lock()
 	defer p.unlock()
-	if !ok {
-		p.queued -= 2
-		p.c.Inc(cSplitRejectedProbe)
-		st.probeFails++
-		st.cooldown = 1 << min(st.probeFails, 6) // back off: 2, 4, … 64 pages
-		return
-	}
-	st.probeFails = 0
 	if extrapolated {
 		p.c.Inc(cSplitExtrapolated)
 	}

@@ -217,11 +217,11 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 		return v.(map[string]any)
 	}
 	vals := []string{"source", "stats", "counters", "values"}
-	on := run(Config{Source: SourceConfig{Options: &S3Config{Policy: keyrange.Policy{Seed: true, Probe: true}}}, Output: OutputConfig{Dir: filepath.Join(t.TempDir(), "ds")}, Limits: Limits{Workers: 4}})
-	if !has(on, append(vals, "probe.requests")...) || !has(on, append(vals, "seed.cuts")...) || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
+	on := run(Config{Source: SourceConfig{Options: &S3Config{Policy: keyrange.Policy{Seed: true, Floors: true}}}, Output: OutputConfig{Dir: filepath.Join(t.TempDir(), "ds")}, Limits: Limits{Workers: 4}})
+	if !has(on, append(vals, "split.skipped.tail_floor")...) || !has(on, append(vals, "seed.cuts")...) || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
 		t.Fatalf("enabled policies must report their counters: %v", on)
 	}
-	if f := feat(on, "source", "stats", "counters", "features"); f["probe"] != true || f["seed"] != true || f["split"] != true || f["resume"] != false || f["max_keys"] != false {
+	if f := feat(on, "source", "stats", "counters", "features"); f["floors"] != true || f["seed"] != true || f["split"] != true || f["resume"] != false || f["max_keys"] != false {
 		t.Fatalf("features = %v", f)
 	}
 	if f := feat(on, "resources", "features"); f["spill"] != true {
@@ -229,10 +229,10 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 	}
 	cfg := Config{Source: SourceConfig{Options: &S3Config{}}, Limits: Limits{Workers: 4, Spill: SpillLimits{Off: true}}}
 	m := run(cfg)
-	if has(m, append(vals, "probe.requests")...) || has(m, append(vals, "seed.cuts")...) || has(m, "resources", "spill") || has(m, "resources", "encoder_wait_ns") {
+	if has(m, append(vals, "split.skipped.tail_floor")...) || has(m, append(vals, "seed.cuts")...) || has(m, "resources", "spill") || has(m, "resources", "encoder_wait_ns") {
 		t.Fatalf("disabled policies must not report counters: %v", m)
 	}
-	if f := feat(m, "source", "stats", "counters", "features"); f["probe"] != false || f["seed"] != false || f["split"] != true {
+	if f := feat(m, "source", "stats", "counters", "features"); f["floors"] != false || f["seed"] != false || f["split"] != true {
 		t.Fatalf("features = %v", f)
 	}
 	if f := feat(m, "resources", "features"); f["spill"] != false {

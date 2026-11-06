@@ -140,7 +140,7 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    equivalence allowed beyond the client's own folding of one trailing endpoint slash: another endpoint, path
    or addressing style may serve another bucket of the same name. A library caller's supplied
    `s3.Options.Client` must name its route (`s3.Routed`), or the run declines resume. Workers, encoders,
-   memory, `-seed`, `-probe` and
+   memory, `-seed` and
    credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
 3. Recovers `data/`. The journal is synced first (its accepted frames are acted on). Every retained part

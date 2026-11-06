@@ -147,8 +147,7 @@ value differs from Java's listing-scope hash), and `stop_source` (under `outcome
 | `swath.in_flight.avg`, `engine.avg_in_flight` | `inflight.busy_ns` / (`timings.listing_ms` × 10⁶): attempts in flight, send to body read; `mean_active` is ranges in `Expand`, which includes backoffs and admission waits |
 | `engine.peak_in_flight` | `inflight.max_active` |
 | `swath.workers.active` | `max_active` (ranges in `Expand` at once) |
-| `swath.probe.fetches` | `probe.requests` |
-| `swath.probe.empty_upper_bisections` | `probe.moved` (an empty upper child found, the pivot moved toward the cursor) |
+| `swath.probe.fetches`, `swath.probe.empty_upper_bisections` | – (no 1-key probe; `child_empty.upper` counts the empty upper children it would have caught) |
 | `swath.steal_reason{PIVOT,midpoint}` | splits minus `split.pivot_extrapolated` |
 | `swath.steal_reason{PIVOT,extrapolate}` | `split.pivot_extrapolated` |
 | `swath.steal_reason{CHILD_MASS,empty}` | `child_empty.lower` + `child_empty.upper` |
@@ -165,7 +164,7 @@ policy was on and never fired ([internals/counters.md](internals/counters.md)).
 
 Launch scripts change as follows: `swath list SOURCE -out DIR` → `swath list SOURCE --output DIR` (`-o`);
 rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath show --journal DIR`; `-json` →
-`--report-format json`; `-fields` → `--metadata`; `-sequential`, `-probe`, `-max-keys`, `-no-journal`,
+`--report-format json`; `-fields` → `--metadata`; `-sequential`, `-max-keys`, `-no-journal`,
 `-no-spill` → `swath diag list …`; `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
 is `--workers`, default 64 as Java's, whatever the CPU count (an earlier Go build derived it from the CPU
@@ -193,6 +192,8 @@ build's flags (`upgradeRecorded` in `cmd/swath`):
 - `swath diag list --seed-descent` was removed with the seed descent; `--seed` is the one delimiter page. A
   recorded `--seed-descent[=…]` is dropped; the `seed.probes`, `seed.levels.*` and other descent counters
   are gone.
+- `swath diag list --probe` was removed with the 1-key probe; a recorded `--probe[=…]` is dropped, and the
+  `probe.*` counters and `split.rejected.probe_empty` are gone.
 
 ## The downstream reader: dispatch on schema id
 

@@ -29,7 +29,7 @@ true), so a supervisor may resume until exit 0; one committed with partial cover
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
-`list` flag plus the diagnostic ones: `--sequential`, `--probe`, `--floors`, `--max-keys` (range-engine sources), `--no-journal` and
+`list` flag plus the diagnostic ones: `--sequential`, `--floors`, `--max-keys` (range-engine sources), `--no-journal` and
 `--no-spill`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
@@ -268,8 +268,6 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	target bytes per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB) (default 67108864)
   -path-style
     	S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
-  -probe
-    	ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)
   -profile profile
     	S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
   -progress

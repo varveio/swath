@@ -45,10 +45,6 @@ const (
 	cMaxQueued
 	cBusyNs
 	cSinkWaitNs
-	cProbeRequests
-	cProbeUpperEmpty
-	cProbeMoved
-	cSplitRejectedProbe
 	cRequeues
 	cSkippedRemainingFloor
 	cSkippedTailFloor
@@ -101,17 +97,13 @@ var Counters = table([numCounters]counters.Def{
 	cSplitSkippedNoDemand:       d("split.skipped.no_demand", counters.Count, "decisions", "no idle worker (hunger <= 0)", "split"),
 	cSplitSkippedOutranked:      d("split.skipped.outranked", counters.Count, "decisions", "larger ranges took the demand", "split"),
 	cSplitSkippedNotContinuing:  d("split.skipped.not_continuing", counters.Count, "decisions", "the range's last page did not continue", "split"),
-	cChildEmptyLower:            d("child_empty.lower", counters.Count, "ranges", "lower split children that listed no key (the cost of not probing)", "split"),
+	cChildEmptyLower:            d("child_empty.lower", counters.Count, "ranges", "lower split children that listed no key", "split"),
 	cChildEmptyUpper:            d("child_empty.upper", counters.Count, "ranges", "upper split children that listed no key", "split"),
 	cResumedRanges:              d("resumed_ranges", counters.Count, "ranges", "ranges a resume started with: (K, ⊤]", "resume"),
 	cMaxActive:                  d("max_active", counters.Max, "ranges", "peak ranges in Expand at once"),
 	cMaxQueued:                  d("max_queued", counters.Max, "ranges", "peak ranges queued for a worker", "split"),
 	cBusyNs:                     d("busy_ns", counters.Count, "ns", "sum of Expand wall time"),
 	cSinkWaitNs:                 d("sink_wait_ns", counters.Count, "ns", "time Expand spent handing rows to the order stage (backpressure)"),
-	cProbeRequests:              d("probe.requests", counters.Count, "requests", "1-key probes (max-keys=1 after a pivot), also counted in requests", "probe"),
-	cProbeUpperEmpty:            d("probe.upper_empty", counters.Count, "probes", "probes that found no key past the pivot: an empty upper child avoided", "probe"),
-	cProbeMoved:                 d("probe.moved", counters.Count, "pivots", "pivots moved to the midpoint of (cursor, pivot] after an empty probe", "probe"),
-	cSplitRejectedProbe:         d("split.rejected.probe_empty", counters.Count, "decisions", "splits skipped: probes found no key past any pivot tried", "probe"),
 	cRequeues:                   d("requeues", counters.Count, "requests", "pages asked again after the client's retries were exhausted (the run never fails on that)"),
 	cSkippedRemainingFloor:      d("split.skipped.remaining_floor", counters.Count, "decisions", "bounded range with at most 4 pages of keys left by its estimate: not split", "floors"),
 	cSkippedTailFloor:           d("split.skipped.tail_floor", counters.Count, "decisions", "the child past the pivot would realize at most 2 pages of keys: not split", "floors"),
@@ -145,9 +137,7 @@ func d(key string, kind counters.Kind, unit, help string, feature ...string) cou
 func (p *Engine[P]) disabled() []string {
 	var off []string
 	if p.opt.Sequential {
-		off = append(off, "split", "probe")
-	} else if !p.opt.Probe {
-		off = append(off, "probe")
+		off = append(off, "split")
 	}
 	if p.opt.Sequential || !p.opt.Structure {
 		off = append(off, "structure")

@@ -127,26 +127,6 @@ func TestEmptyContinuingPages(t *testing.T) {
 	}
 }
 
-// TestInclusiveOneKeyProbe: a 1-key probe of an inclusive provider whose
-// first page holds only the pivot itself follows the token: an empty page,
-// then the key past the pivot; the split is taken.
-func TestInclusiveOneKeyProbe(t *testing.T) {
-	s := &script{pages: []Page[Object]{more("m"), more(), more("n")}}
-	p, _ := New(Options{Workers: 1, Probe: true}, Description[Object]{Target: "test", Listing: Listing, StartInclusive: true}, s.fetch)
-	m, ok, err := p.probe(context.Background(), Range{lo: "a", hi: "z"}, "c", "m")
-	st := p.Stats()
-	if err != nil || !ok || m != "m" || s.calls != 3 || st.Get(cRequests) != 3 || st.Get(cProbeRequests) != 1 || st.Get(cEmptyPages) != 2 {
-		t.Fatalf("m=%q ok=%v err=%v calls=%d %+v", m, ok, err, s.calls, st.Counters)
-	}
-	// The key past the pivot lies beyond hi: the upper child is empty.
-	s = &script{pages: []Page[Object]{more("m"), more(), last("zz")}}
-	p, _ = New(Options{Workers: 1, Probe: true}, Description[Object]{Target: "test", Listing: Listing, StartInclusive: true}, s.fetch)
-	_, _, err = p.probe(context.Background(), Range{lo: "a", hi: "z"}, "l", "m")
-	if st = p.Stats(); err != nil || st.Get(cProbeUpperEmpty) == 0 || s.calls < 3 {
-		t.Fatalf("empty upper child: err=%v calls=%d %+v", err, s.calls, st.Counters)
-	}
-}
-
 // TestByteOrderIsAPrerequisite: the engine applies only to byte-ordered
 // listings. The UTF-16 counterexample: a listing in UTF-16 code-unit
 // order returns U+10000 (a surrogate pair, D800 DC00) before U+E000, the
@@ -190,7 +170,7 @@ func TestPageSize(t *testing.T) {
 				{Sequential: true},
 				{Workers: 8},
 				{Workers: 8, Seed: true, Floors: true, Structure: true},
-				{Workers: 8, Seed: true, Probe: true},
+				{Workers: 8, Seed: true},
 			} {
 				what := fmt.Sprintf("page=%d short=%v opt %d", page, short, i)
 				f := newSorted(keys, short, int64(page))

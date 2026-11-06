@@ -173,7 +173,7 @@ decision to add it later).
 | `-v`, `-vv`, `-vvv` | `-v` (`-vv`, `-vvv` the same): a start line, progress as appended records | kept (one level) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `-q`, `--quiet` | `-q`, `--quiet` (no warnings, no automatic progress or statistics); `-qq` also no error line | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--probe`, `--floors`, `--structure`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
+| `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--floors`, `--structure`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
 | `--tune KEY=VALUE` (non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`seed.mode`, `summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
 | `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 | Bare `swath s3://…` is an error that suggests `swath list` | usage error, exit 2, prints the command list | kept | – |

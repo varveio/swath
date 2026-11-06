@@ -52,7 +52,7 @@ func (r *recorder) ListObjectsV2(ctx context.Context, in *client.ListInput) (*cl
 // TestDecisionsGolden pins the range engine's decisions: for every fixture
 // and hostile keyspace and each deterministic configuration (one
 // range expanded at a time by serialRun, a seeded coin or the demand gate,
-// no asynchronous probes), the
+// no structure probes), the
 // covered intervals, the requests sent, the output and the counters hash to
 // the value in testdata/decisions.golden. Moving the engine between
 // packages must leave every line unchanged.
@@ -67,7 +67,7 @@ func TestDecisionsGolden(t *testing.T) {
 	}
 	cfgs := []cfg{
 		{name: "coin", coin: true, short: true, workers: 1},
-		{name: "coin/seedpage/floors/probe", opt: Options{Policy: keyrange.Policy{Seed: true, Floors: true, Probe: true}}, coin: true, short: true, workers: 1},
+		{name: "coin/seedpage/floors", opt: Options{Policy: keyrange.Policy{Seed: true, Floors: true}}, coin: true, short: true, workers: 1},
 		{name: "demand8/seedpage/page=7", opt: Options{Policy: keyrange.Policy{Seed: true}}, workers: 8, pageCap: 7},
 		{name: "sequential", opt: Options{Policy: keyrange.Policy{Sequential: true}}, short: true, workers: 1},
 	}

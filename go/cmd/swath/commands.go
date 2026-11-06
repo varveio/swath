@@ -250,7 +250,7 @@ func isFile(path string) bool {
 // removedFlags are boolean diagnostic flags a journal may have recorded
 // that this build no longer has: they chose request patterns, not the
 // output, so a resume drops them and lists with the remaining policy.
-var removedFlags = []string{"seed-descent"}
+var removedFlags = []string{"seed-descent", "probe"}
 
 // upgradeRecorded rewrites a recorded command written by an earlier build
 // into this build's flags (docs/upgrade.md): removed diagnostic switches

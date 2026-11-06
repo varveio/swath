@@ -103,7 +103,7 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 }
 
 // TestOneAdmission: with one permit, the seed page, the
-// structure probes sent alongside pages, split probes, retries and
+// structure probes sent alongside pages, retries and
 // requeues never put two requests in flight at the server. The faults
 // span the whole run, so which requests get them depends on the request
 // number alone (seed 2: throttles at 2 and 3, a reset at 5), not on how
@@ -115,7 +115,7 @@ func TestOneAdmission(t *testing.T) {
 		{Fraction: 0.2, Fault: faulttest.Throttle},
 		{Fraction: 0.1, Fault: faulttest.Reset}}})
 	rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Workers: 1,
-		Policy: keyrange.Policy{Seed: true, Structure: true, Probe: true}, Admission: objhttp.Admission{Limiter: true}}, 8)
+		Policy: keyrange.Policy{Seed: true, Structure: true}, Admission: objhttp.Admission{Limiter: true}}, 8)
 	if !slices.Equal(keysOf(rows), keys) {
 		t.Fatalf("%d keys, want %d", len(rows), len(keys))
 	}
