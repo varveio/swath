@@ -113,7 +113,7 @@ decision to add it later).
 | `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count) | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
 | Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on), the same rule; `--limiter=false` fixes `--workers` in flight | kept | – |
-| Slow start from 4, doubling per second | none; the limit starts at `--workers` | removed | no decision recorded |
+| Slow start from 4, doubling per second | `--limiter-slow-start` (off by default until measured): the limit starts at 4 and doubles each second up to `--workers` until the first throttle or timeout; feature `slow_start` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `51ec3a7`) |
 | Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05 |
 
 ## Observability and reports
