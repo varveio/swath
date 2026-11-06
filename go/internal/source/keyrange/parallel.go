@@ -57,7 +57,7 @@ type running struct {
 	keys         int64
 	open         bool
 	continuing   bool // last page full and not at the bound
-	unsplittable bool
+	unsplittable bool // proven: no pivot exists above a safe cursor
 	id           uint64
 	dens         density        // page density, for the floors
 	sb           structure      // known folder boundaries (structure probes)
@@ -340,11 +340,18 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 	switch guard(c, m, found, ceil, bounded, false, p.safe) {
 	case clauseNoPivot:
 		p.c.Inc(cSplitRejectedNoPivot)
-		st.unsplittable = true
+		// No pivot after a safe cursor is a fact about the interval: a later
+		// cursor only narrows (c, hi]. After an unsafe one it is the
+		// cursor's, as below.
+		if p.safe(c) {
+			st.unsplittable = true
+		}
 		return
 	case clauseUnsafeCursor:
+		// The cursor cannot be the lower child's start-after: decline this
+		// page's split only. The next page ends at another key, usually a
+		// safe one, and is evaluated afresh.
 		p.c.Inc(cSplitRejectedUnsafeCursor)
-		st.unsplittable = true
 		return
 	case clauseCursor:
 		p.c.Inc(cSplitRejectedCursor)

@@ -366,7 +366,10 @@ to fine, after a 1-key probe found the upper child empty (Java); here the levels
 
 **Guards**, checked before any child and counted per clause: `done` (never after the page that ended the
 range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), `bound` (`m < hi`, or below
-`prefixCeil(scope)` on the frontier), `no_pivot` (the owner keeps listing).
+`prefixCeil(scope)` on the frontier), `no_pivot` (the owner keeps listing). Each declines only that page's
+split, and the next continuing page is evaluated afresh, except `no_pivot` after a safe cursor: a later cursor only
+narrows `(c, hi]`, so the range stops considering splits (`TestSingleUnsafeCursorDoesNotDisableLaterSplits`: one
+unsafe or vetoed page-ending key among 100,000 still leaves 98 splits).
 
 **Pivots.** Two steps:
 1. **The spec's pivot is the default:** swath's `ByteMidpoint`, i.e. the safe midpoint of `(c, hi]`, or
