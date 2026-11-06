@@ -110,9 +110,9 @@ func (p *Engine[P]) probeStructure(ctx context.Context, c, hi string) structure 
 		wg.Go(func() {
 			in := p.query()
 			in.Prefix, in.After, in.Delimiter, in.Max, in.Probe = pre, c, "/", min(structureKeys, p.opt.PageSize), true
-			p.mu.Lock()
+			p.lock()
 			p.c.Inc(cStructureRequests)
-			p.mu.Unlock()
+			p.unlock()
 			out, err := p.list(ctx, in)
 			if err != nil {
 				return // structure is advice: a failed probe is no folder
@@ -149,8 +149,8 @@ func (p *Engine[P]) maybeProbe(ctx context.Context, st *running, r Range, c stri
 	if !p.opt.Structure || r.open || !hierarchical(c, len(p.opt.Prefix)) || !p.safe(c) {
 		return
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lock()
+	defer p.unlock()
 	if st.pending != nil || len(within(st.sb.bounds, c, r.hi)) > 0 || p.opt.Workers-len(p.running)-p.queued <= 0 {
 		return
 	}

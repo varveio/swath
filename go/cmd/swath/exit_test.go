@@ -171,7 +171,7 @@ func TestExitCodes(t *testing.T) {
 	if o := outcome(stuck); o.Class != "stuck" || !o.Resumable {
 		t.Fatalf("stuck: %+v", o)
 	}
-	if b, err := os.ReadFile(filepath.Join(stuck, progressName)); err != nil || !bytes.Contains(b, []byte(`"advance"`)) {
+	if b, err := os.ReadFile(filepath.Join(stuck, progressName)); err != nil || !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"mutex_max_hold_ms"`)) {
 		t.Fatalf("progress file: %v %s", err, b)
 	}
 }

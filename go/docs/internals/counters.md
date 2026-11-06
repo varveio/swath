@@ -118,6 +118,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `prefixes_normalized` | count | pages |  | pages whose common prefixes came unsorted or repeated, sorted and deduplicated |
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys) |
 | `seed.short_continuing_estimated` | count | samples | seed | continuing seed samples shorter than a nominal page, weighed (or classed dense) as a full page: an estimate |
+| `mutex.wait_ns` | count | ns |  | time goroutines spent waiting for the engine's decision mutex (summed over goroutines) |
+| `mutex.max_hold_ns` | max | ns |  | the longest single hold of the engine's decision mutex |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |

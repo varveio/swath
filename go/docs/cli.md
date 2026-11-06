@@ -353,7 +353,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Progress file.** While a run goes, `DIR/.swath/progress.json` is rewritten every 2 s by an atomic rename:
   `objects` (rows listed so far), `ordered`, `encoded`, `parts`, `advance` (their sum, which rises in every
   phase), `answered` (requests the service answered usably: liveness, not progress), `throttles` and
-  `timeouts` (throttle answers and attempts past the request timeout), `started_at`, `as_of`,
+  `timeouts` (throttle answers and attempts past the request timeout), `mutex_wait_ms` and `mutex_max_hold_ms`
+  (S3 and GCS: the range engine's decision mutex, the goroutines' summed wait for it and its longest hold;
+  also the counters `mutex.wait_ns` and `mutex.max_hold_ns`), `started_at`, `as_of`,
   `duration_ms`. A supervisor watches that file; `DIR/run.json` follows the
   commit. `--max-duration` and `--stall-timeout` are runtime flags: `swath resume` replays the recorded
   values unless given again.

@@ -99,7 +99,7 @@ func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range,
 // It lists nothing itself.
 func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	after := p.opt.Resume.After
-	p.mu.Lock()
+	p.lock()
 	t := Range{lo: after, open: true, id: p.ids.Add(1), born: fromSeed}
 	// K is a real key and may not be a bound the provider accepts: start at
 	// its longest accepted prefix and drop keys up to K there.
@@ -109,7 +109,7 @@ func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	p.queued++
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.c.Set(cResumedRanges, 1)
-	p.mu.Unlock()
+	p.unlock()
 	return e.Child(t)
 }
 
@@ -120,8 +120,8 @@ func (p *Engine[P]) account(now time.Time) {
 }
 
 func (p *Engine[P]) enter(r Range) *running {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lock()
+	defer p.unlock()
 	p.account(time.Now())
 	if r.born != fromRoot {
 		p.queued--
@@ -133,8 +133,8 @@ func (p *Engine[P]) enter(r Range) *running {
 }
 
 func (p *Engine[P]) leave(r Range, st *running, start time.Time) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lock()
+	defer p.unlock()
 	p.account(time.Now())
 	delete(p.running, r.id)
 	p.c.Add(cBusyNs, int64(time.Since(start)))
@@ -160,9 +160,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	pctx, stop := context.WithCancel(ctx)
 	defer func() {
 		stop()
-		p.mu.Lock()
+		p.lock()
 		ch := st.pending
-		p.mu.Unlock()
+		p.unlock()
 		if ch != nil {
 			<-ch
 		}
@@ -186,9 +186,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			if n > 0 {
 				c, skipped = out.Rows[n-1].Key, n
 				out.Rows = out.Rows[n:]
-				p.mu.Lock()
+				p.lock()
 				p.c.Add(cOverfetchKeys, int64(n))
-				p.mu.Unlock()
+				p.unlock()
 			}
 		}
 		kept, reached := len(out.Rows), false
@@ -213,13 +213,13 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		if err := p.emit(out.Rows[:kept], e); err != nil {
 			return err
 		}
-		p.mu.Lock()
+		p.lock()
 		p.c.Add(cOverfetchKeys, int64(len(out.Rows)-kept))
 		st.keys += int64(kept)
 		if kept > 0 {
 			st.dens.observe(out.Rows[0].Key, out.Rows[kept-1].Key, r.lo, r.hi, kept)
 		}
-		p.mu.Unlock()
+		p.unlock()
 		done := reached || !truncated || (!r.open && kept > 0 && c == r.hi)
 		if done {
 			p.covered(r.lo, r.hi, r.open)
@@ -270,8 +270,8 @@ func (p *Engine[P]) covered(lo, hi string, open bool) {
 // reserved in the demand count; the caller probes the pivot and then
 // commits or releases the split.
 func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m string, extrapolated, ok bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lock()
+	defer p.unlock()
 	st.continuing = true
 	if st.unsplittable {
 		return
@@ -415,8 +415,8 @@ func (p *Engine[P]) probe(ctx context.Context, r Range, c, m string) (string, bo
 // commit accepts a probed split (children, counters, boundaries for the
 // journal) or releases its reservation.
 func (p *Engine[P]) commit(st *running, r Range, c, m string, extrapolated, ok bool) (lower, upper Range) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lock()
+	defer p.unlock()
 	if !ok {
 		p.queued -= 2
 		p.c.Inc(cSplitRejectedProbe)
@@ -517,7 +517,7 @@ func (p *Engine[P]) expandSeedPage(ctx context.Context, e source.Emitter[Range, 
 		return err
 	}
 	var cuts []string
-	p.mu.Lock()
+	p.lock()
 	p.c.Set(cSeedPrefixes, int64(len(out.Prefixes)))
 	seedTruncated := out.Truncated
 	if seedTruncated {
@@ -579,7 +579,7 @@ func (p *Engine[P]) expandSeedPage(ctx context.Context, e source.Emitter[Range, 
 	p.queued += len(tiles)
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.c.Inc(cPages)
-	p.mu.Unlock()
+	p.unlock()
 	for _, t := range tiles {
 		if err := e.Child(t); err != nil {
 			return err

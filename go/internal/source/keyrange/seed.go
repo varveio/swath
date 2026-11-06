@@ -51,9 +51,9 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 					f.out.last, f.out.hasLast = cp, true
 				}
 			}
-			p.mu.Lock()
+			p.lock()
 			p.c.Inc(cPages)
-			p.mu.Unlock()
+			p.unlock()
 		}()
 		return f
 	}
@@ -79,9 +79,9 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 			return f.err
 		}
 		if q.prefix == p.opt.Prefix && q.after == "" {
-			p.mu.Lock()
+			p.lock()
 			p.c.Set(cSeedPrefixes, int64(len(f.out.prefixes)))
-			p.mu.Unlock()
+			p.unlock()
 		}
 		used[q] = true
 		q, res = d.next(f.out)
@@ -91,7 +91,7 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 		<-f.done
 	}
 	var cuts []string
-	p.mu.Lock()
+	p.lock()
 	p.c.Set(cSeedProbes, int64(res.probes))
 	p.c.Set(cSeedProbesUnused, int64(len(fetches)-len(used)))
 	p.c.Set(cSeedRadixBands, int64(res.synthesized))
@@ -122,7 +122,7 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 	tiles = append(tiles, Range{lo: lo, open: true, id: p.ids.Add(1), born: fromSeed})
 	p.queued += len(tiles)
 	p.c.Max(cMaxQueued, int64(p.queued))
-	p.mu.Unlock()
+	p.unlock()
 	for _, t := range tiles {
 		if err := e.Child(t); err != nil {
 			return err

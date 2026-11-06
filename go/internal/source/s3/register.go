@@ -89,6 +89,10 @@ func (o *opened) Answered() int64 { return o.p.Answered() }
 
 func (o *opened) Faults() (throttles, timeouts int64) { return o.p.Faults() }
 
+// Contention is the engine's decision-mutex wait and longest hold
+// (source.Contended).
+func (o *opened) Contention() (wait, maxHold time.Duration) { return o.p.Contention() }
+
 func (o *opened) target() string {
 	t := "s3://" + o.p.opt.Bucket
 	if o.p.opt.Prefix != "" {

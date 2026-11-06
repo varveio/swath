@@ -196,8 +196,9 @@ type Engine[P any] struct {
 	ids     atomic.Uint64
 	start   time.Time
 
-	c       *counters.Set // the tally (Counters, then the provider's)
-	mu      sync.Mutex
+	c       *counters.Set       // the tally (Counters, then the provider's)
+	mu      sync.Mutex          // the decision mutex: taken through lock and unlock, which time it
+	held    time.Time           // when mu was last acquired; mu held
 	running map[uint64]*running // ranges in Expand
 	queued  int
 	area    float64 // ∫ active dt, for the mean
@@ -224,6 +225,26 @@ func New[P any](opt Options, d Description[P], fetch Fetch[P]) (*Engine[P], erro
 	return p, nil
 }
 
+// lock takes the decision mutex, counting the wait (mutex.wait_ns).
+func (p *Engine[P]) lock() {
+	t := time.Now()
+	p.mu.Lock()
+	p.held = time.Now()
+	p.c.Add(cMutexWait, int64(p.held.Sub(t)))
+}
+
+// unlock releases the decision mutex, raising mutex.max_hold_ns.
+func (p *Engine[P]) unlock() {
+	p.c.Max(cMutexMaxHold, int64(time.Since(p.held)))
+	p.mu.Unlock()
+}
+
+// Contention is the decision mutex's total wait and longest hold so far
+// (source.Contended).
+func (p *Engine[P]) Contention() (wait, maxHold time.Duration) {
+	return time.Duration(p.c.Load(cMutexWait)), time.Duration(p.c.Load(cMutexMaxHold))
+}
+
 // ID is the counter ID of the provider's i-th counter (Description.Counters).
 func (p *Engine[P]) ID(i int) counters.ID { return counters.ID(len(Counters) + i) }
 
@@ -238,8 +259,8 @@ func (p *Engine[P]) Options() Options { return p.opt }
 
 // Stats returns the counters so far.
 func (p *Engine[P]) Stats() Stats {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lock()
+	defer p.unlock()
 	p.account(time.Now())
 	s := Stats{Counters: p.c.Snapshot(p.disabled()...)}
 	if el := time.Since(p.start).Seconds(); el > 0 {
@@ -258,9 +279,9 @@ func (p *Engine[P]) Stats() Stats {
 // tokens forever is followed until the run's deadline (--max-duration), in
 // bounded memory.
 func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
-	p.mu.Lock()
+	p.lock()
 	p.c.Inc(cRequests)
-	p.mu.Unlock()
+	p.unlock()
 	var seen *tokenWindow // the recent tokens of a run of empty continuing pages
 	// chainStart: no page of this chain has held an entry yet, so its first
 	// row may be the key at an inclusive start bound (also after empty
@@ -285,17 +306,17 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 					dropped += n - len(out.Prefixes)
 				}
 				if dropped > 0 {
-					p.mu.Lock()
+					p.lock()
 					p.c.Add(cBoundDrops, int64(dropped))
-					p.mu.Unlock()
+					p.unlock()
 				}
 			}
 			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 {
 				if !strictlyAscending(out.Prefixes) {
 					out.Prefixes = slices.Compact(slices.Sorted(slices.Values(out.Prefixes)))
-					p.mu.Lock()
+					p.lock()
 					p.c.Inc(cPrefixesNormalized)
-					p.mu.Unlock()
+					p.unlock()
 				}
 				return out, nil
 			}
@@ -314,10 +335,10 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 			next := *in
 			next.Token = out.Token
 			in, wait = &next, requeueBase
-			p.mu.Lock()
+			p.lock()
 			p.c.Inc(cRequests)
 			p.c.Inc(cEmptyPages)
-			p.mu.Unlock()
+			p.unlock()
 			continue
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -398,11 +419,11 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 		if err := p.emit(rows, e); err != nil {
 			return err
 		}
-		p.mu.Lock()
+		p.lock()
 		if stop {
 			p.c.Set(cTruncated, 1)
 		}
-		p.mu.Unlock()
+		p.unlock()
 		if stop || !out.Truncated {
 			return nil
 		}
@@ -423,12 +444,12 @@ func (p *Engine[P]) emit(rows []schema.Row[P], e source.Emitter[Range, P]) error
 	}
 	t := time.Now()
 	err := e.Rows(rows)
-	p.mu.Lock()
+	p.lock()
 	p.c.Add(cSinkWaitNs, int64(time.Since(t)))
 	p.c.Inc(cPages)
 	p.c.Add(cObjects, int64(len(rows)))
 	p.c.Add(cBytes, bytes)
-	p.mu.Unlock()
+	p.unlock()
 	return err
 }
 

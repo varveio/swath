@@ -3,6 +3,8 @@
 
 package source
 
+import "time"
+
 // Locator says what a source lists, for the dataset's metadata.
 type Locator struct {
 	Kind      string // the dataset's source kind ("s3", "local-fs")
@@ -119,6 +121,12 @@ type Live interface {
 // a stuck run's cause from what rose while nothing progressed.
 type Faulted interface {
 	Faults() (throttles, timeouts int64)
+}
+
+// Contended sources time their engine's decision mutex: the goroutines'
+// total wait for it and its longest hold (progress.json; the scale gate).
+type Contended interface {
+	Contention() (wait, maxHold time.Duration)
 }
 
 // Reporter sources describe the listing for the run summary.

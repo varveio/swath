@@ -24,12 +24,14 @@ type Progress struct {
 	listed   atomic.Pointer[func() int64]
 	answered atomic.Pointer[func() int64]
 	faults   atomic.Pointer[func() (int64, int64)]
-	ordered  atomic.Int64
-	encoded  atomic.Int64
-	parts    atomic.Int64
-	lastPart atomic.Int64 // unix nanoseconds of the last part published
-	verified atomic.Int64 // bytes of retained parts read by a resume's verification
-	gauges   atomic.Pointer[order.Gauges]
+	// contention reads the engine's decision mutex (source.Contended).
+	contention atomic.Pointer[func() (time.Duration, time.Duration)]
+	ordered    atomic.Int64
+	encoded    atomic.Int64
+	parts      atomic.Int64
+	lastPart   atomic.Int64 // unix nanoseconds of the last part published
+	verified   atomic.Int64 // bytes of retained parts read by a resume's verification
+	gauges     atomic.Pointer[order.Gauges]
 
 	mu    sync.Mutex    // held across an owned write and across a change of ownership
 	owner *journal.Lock // the output's lock while the run holds it, else nil
@@ -80,11 +82,16 @@ type ProgressSnapshot struct {
 	Answered int64 `json:"answered"`
 	// Throttles and Timeouts count the service's throttle answers and the
 	// attempts past the request timeout (source.Faulted; 0 otherwise).
-	Throttles  int64     `json:"throttles"`
-	Timeouts   int64     `json:"timeouts"`
-	StartedAt  time.Time `json:"started_at"`  // zero before the run starts
-	AsOf       time.Time `json:"as_of"`       //
-	DurationMs int64     `json:"duration_ms"` // since StartedAt
+	Throttles int64 `json:"throttles"`
+	Timeouts  int64 `json:"timeouts"`
+	// MutexWaitMs and MutexMaxHoldMs are the range engine's decision
+	// mutex: the goroutines' total wait for it and its longest hold
+	// (source.Contended; 0 otherwise).
+	MutexWaitMs    float64   `json:"mutex_wait_ms"`
+	MutexMaxHoldMs float64   `json:"mutex_max_hold_ms"`
+	StartedAt      time.Time `json:"started_at"`  // zero before the run starts
+	AsOf           time.Time `json:"as_of"`       //
+	DurationMs     int64     `json:"duration_ms"` // since StartedAt
 	// Order is the order stage's live resources with their peaks:
 	// outstanding nodes, spill markers, open spill readers, live spill
 	// bytes (nil before the stage starts).
@@ -110,6 +117,10 @@ func (p *Progress) Snapshot() ProgressSnapshot {
 	}
 	if f := p.faults.Load(); f != nil {
 		s.Throttles, s.Timeouts = (*f)()
+	}
+	if f := p.contention.Load(); f != nil {
+		w, h := (*f)()
+		s.MutexWaitMs, s.MutexMaxHoldMs = float64(w)/1e6, float64(h)/1e6
 	}
 	s.Ordered, s.Encoded, s.Parts = p.ordered.Load(), p.encoded.Load(), p.parts.Load()
 	s.Verified = p.verified.Load()

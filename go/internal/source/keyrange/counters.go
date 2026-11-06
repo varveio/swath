@@ -85,6 +85,8 @@ const (
 	cPrefixesNormalized
 	cBoundDrops
 	cSeedShortContinuing
+	cMutexWait
+	cMutexMaxHold
 	numCounters
 )
 
@@ -169,6 +171,8 @@ var Counters = []counters.Def{
 	d("prefixes_normalized", counters.Count, "pages", "pages whose common prefixes came unsorted or repeated, sorted and deduplicated"),
 	d("bound_drops", counters.Count, "keys", "keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys)"),
 	d("seed.short_continuing_estimated", counters.Count, "samples", "continuing seed samples shorter than a nominal page, weighed (or classed dense) as a full page: an estimate", "seed"),
+	d("mutex.wait_ns", counters.Count, "ns", "time goroutines spent waiting for the engine's decision mutex (summed over goroutines)"),
+	d("mutex.max_hold_ns", counters.Max, "ns", "the longest single hold of the engine's decision mutex"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {

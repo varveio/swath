@@ -371,6 +371,10 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 			faults := f.Faults
 			pr.faults.Store(&faults)
 		}
+		if c, ok := src.(source.Contended); ok {
+			contention := c.Contention
+			pr.contention.Store(&contention)
+		}
 		env.Ordered = &pr.ordered
 	}
 	if cfg.Output.Dir != "" {
