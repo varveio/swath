@@ -50,9 +50,13 @@ type Sorted struct {
 	Short   bool
 	PageCap int // if set, no page holds more than this many entries
 	Latency time.Duration
-	mu      sync.Mutex
-	rng     *rand.Rand
-	Calls   int
+	// DelimLatency, if set, is a delimiter request's latency instead of
+	// Latency: a small delimiter page (a structure probe's 32 entries)
+	// answers faster than a full page of keys.
+	DelimLatency time.Duration
+	mu           sync.Mutex
+	rng          *rand.Rand
+	Calls        int
 }
 
 func NewSorted(keys []string, short bool, seed int64) *Sorted {
@@ -64,9 +68,13 @@ func NewSorted(keys []string, short bool, seed int64) *Sorted {
 var ErrBadStartAfter = errors.New("400 InvalidArgument: start-after")
 
 func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
-	if f.Latency > 0 {
+	lat := f.Latency
+	if in.Delimiter != "" && f.DelimLatency > 0 {
+		lat = f.DelimLatency
+	}
+	if lat > 0 {
 		select {
-		case <-time.After(f.Latency):
+		case <-time.After(lat):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}

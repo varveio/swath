@@ -98,7 +98,12 @@ func TestStructureNeverBlocksASplit(t *testing.T) {
 
 // TestStructurePivotsOnFolders: on a deep shared-prefix hierarchy with a
 // seed, structure probes supply folder pivots and the empty children fall;
-// the output is the keyspace either way.
+// the output is the keyspace either way. A probe's 32-entry delimiter pages
+// answer faster than a full page of keys (DelimLatency), as on a service;
+// with equal latencies the probe, started alongside the page, ties with it,
+// and a split never waits for it: under GOMAXPROCS=1 the probe's requests
+// start after the page's, every first-page split decision found it still in
+// flight (structure.late), and no split pivoted on a folder.
 func TestStructurePivotsOnFolders(t *testing.T) {
 	var keys []string
 	for i := range 20000 {
@@ -108,7 +113,7 @@ func TestStructurePivotsOnFolders(t *testing.T) {
 	var empty [2]int64
 	for i, on := range []bool{false, true} {
 		f := newSorted(keys, false, 1)
-		f.Latency = 2 * time.Millisecond
+		f.Latency, f.DelimLatency = 2*time.Millisecond, 500*time.Microsecond
 		got, st, leaves := runBudget(t, f, Options{Structure: on}, 16, 1<<20)
 		if !slices.Equal(got, want) {
 			t.Fatalf("structure=%v: %d keys, want %d", on, len(got), len(want))
