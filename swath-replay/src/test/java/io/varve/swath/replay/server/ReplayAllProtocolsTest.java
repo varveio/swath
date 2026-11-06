@@ -72,6 +72,33 @@ class ReplayAllProtocolsTest {
     }
 
     @Test
+    void injectedLatencyDelaysEveryEnabledRoute() throws Exception {
+        Path fixture = temp.resolve("latency.parquet");
+        try (var writer = ParquetFixtures.open(fixture)) {
+            writer.write(ObjectEntries.bare("a"));
+        }
+        Duration page = Duration.ofMillis(250);
+        ServeConfig config = new ServeConfig(fixture, "127.0.0.1", 0, "bucket", ServingMode.DUCKDB,
+                2, 16, Set.of(Protocol.S3, Protocol.GCS, Protocol.AZURE), "replay",
+                2L * 1024 * 1024, 64 * 1024, Duration.ofSeconds(10), Duration.ofSeconds(30),
+                Duration.ofSeconds(30), null, ShapeLatency.parse("worker_page=250ms", 0.0, ShapeLatency.UNSCALED));
+        try (ReplayServer server = ReplayServer.open(config);
+             HttpClient client = HttpClient.newHttpClient()) {
+            server.start();
+            assertThat(server.servingMetadata().latencyInjection()).isEqualTo("shape");
+            for (String path : List.of("/bucket?list-type=2", "/storage/v1/b/bucket/o",
+                    "/replay/bucket?restype=container&comp=list")) {
+                HttpRequest request = HttpRequest.newBuilder(URI.create(
+                        "http://127.0.0.1:" + server.port() + path)).header("x-ms-version", "2026-06-06").build();
+                long start = System.nanoTime();
+                assertThat(client.send(request, HttpResponse.BodyHandlers.ofString()).statusCode())
+                        .as(path).isEqualTo(200);
+                assertThat(Duration.ofNanos(System.nanoTime() - start)).as(path).isGreaterThanOrEqualTo(page);
+            }
+        }
+    }
+
+    @Test
     void allEnabledRoutesShareOneOpenedFixtureAndMakeConcurrentProgress() throws Exception {
         Path fixture = temp.resolve("part.parquet");
         try (var writer = ParquetFixtures.open(fixture)) {

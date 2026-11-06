@@ -12,8 +12,10 @@ import io.varve.swath.replay.metrics.ObservationShape;
 import io.varve.swath.replay.protocol.PaginationTestProfile;
 import io.varve.swath.replay.server.ListingHttpRequest;
 import io.varve.swath.replay.server.ReplayRequestException;
+import io.varve.swath.replay.server.ShapeLatency;
 import io.varve.swath.replay.testkit.FakeListingStore;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -134,10 +136,30 @@ class AzurePagerTest {
     }
 
     @Test
+    void injectedLatencyIsKeyedByTheSameRequestShapesAsS3() {
+        ShapeLatency latency = ShapeLatency.parse(
+                "worker_page=100ms,pivot_probe=20ms,structure_probe=50ms+5ms/cp", 0.0, ShapeLatency.UNSCALED);
+        try (FakeListingStore store = FakeListingStore.ofKeys("a/1", "a/2", "b/1", "c")) {
+            AzureHandler handler = new AzureHandler("replay", "bucket",
+                    () -> "http://127.0.0.1/replay/", store, "fixture", null, latency);
+            Map<String, String> headers = Map.of("x-ms-version", "2026-06-06");
+            assertThat(handler.parse(new ListingHttpRequest("GET", "/replay/bucket",
+                    "restype=container&comp=list", headers)).page().injectedLatency())
+                    .isEqualTo(Duration.ofMillis(100));
+            assertThat(handler.parse(new ListingHttpRequest("GET", "/replay/bucket",
+                    "restype=container&comp=list&maxresults=1", headers)).page().injectedLatency())
+                    .isEqualTo(Duration.ofMillis(20));
+            assertThat(handler.parse(new ListingHttpRequest("GET", "/replay/bucket",
+                    "restype=container&comp=list&delimiter=%2F", headers)).page().injectedLatency())
+                    .isEqualTo(Duration.ofMillis(60));
+        }
+    }
+
+    @Test
     void preparedPageReportsExactBlobAndPrefixCounts() {
         try (FakeListingStore store = FakeListingStore.ofKeys("a/1", "b")) {
             AzureHandler handler = new AzureHandler("replay", "bucket",
-                    () -> "http://127.0.0.1/replay/", store, "fixture", null);
+                    () -> "http://127.0.0.1/replay/", store, "fixture", null, null);
             var delimiter = handler.parse(new ListingHttpRequest("GET", "/replay/bucket",
                     "restype=container&comp=list&delimiter=%2F&maxresults=1",
                     Map.of("x-ms-version", "2026-06-06"))).page().observation();

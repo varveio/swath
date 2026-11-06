@@ -175,7 +175,7 @@ class GcsJsonTest {
                 null, null, null, null, null, null);
         try (FakeListingStore store = new FakeListingStore(List.of(invalid));
              BudgetedOutput output = BudgetedOutput.standalone(128)) {
-            var handler = new GcsHandler("bucket", store, "fixture", metrics);
+            var handler = new GcsHandler("bucket", store, "fixture", metrics, null);
             var operation = handler.parse(new ListingHttpRequest("GET", "/storage/v1/b/bucket/o", "",
                     Map.of()));
             var page = operation.page();

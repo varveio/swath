@@ -169,17 +169,21 @@ public final class ReplayServer implements AutoCloseable {
         Map<Protocol, ListingProtocolHandler> handlers = new EnumMap<>(Protocol.class);
         if (config.protocols().contains(Protocol.S3)) {
             handlers.put(Protocol.S3, new S3ListingProtocolHandler(config.bucket(), opened.fixture(), metrics,
-                    config.s3Latency()));
+                    config.latency()));
         }
+        // The native routes have no S3 request to hand an arbitrary function, so they take the
+        // --inject-latency profile itself; any other latency function is S3-only (test adapters).
+        ShapeLatency nativeLatency = config.latency() instanceof ShapeLatency shape ? shape : null;
         if (config.protocols().contains(Protocol.GCS)) {
-            handlers.put(Protocol.GCS, new GcsHandler(config.bucket(), opened.store(), identity, metrics));
+            handlers.put(Protocol.GCS, new GcsHandler(config.bucket(), opened.store(), identity, metrics,
+                    nativeLatency));
         }
         if (config.protocols().contains(Protocol.AZURE)) {
             String host = config.advertisedHost() == null ? config.host() : config.advertisedHost();
             String authorityHost = host.indexOf(':') >= 0 && !host.startsWith("[") ? "[" + host + "]" : host;
             handlers.put(Protocol.AZURE, new AzureHandler(config.azureAccount(), config.bucket(),
                     () -> "http://%s:%d/%s/".formatted(authorityHost, connector.getLocalPort(),
-                    config.azureAccount()), opened.store(), identity, metrics));
+                    config.azureAccount()), opened.store(), identity, metrics, nativeLatency));
         }
         this.runner = new ListingRequestRunner(metrics, opened.requestAdmissionLimit(),
                 config.maxResponses(), config.responseBufferBudget(), config.maxResponseBytes(),
@@ -321,7 +325,7 @@ public final class ReplayServer implements AutoCloseable {
                 runner.chargedBytes(), runner.peakChargedBytes(), runner.activeResponses(),
                 serveConfig.stopTimeout().toMillis(), serveConfig.idleTimeout().toMillis(),
                 serveConfig.writeTimeout().toMillis(),
-                serveConfig.s3Latency() instanceof ShapeLatency ? "s3-shape" : "off", "default",
+                serveConfig.latency() instanceof ShapeLatency ? "shape" : "off", "default",
                 profiles);
     }
 

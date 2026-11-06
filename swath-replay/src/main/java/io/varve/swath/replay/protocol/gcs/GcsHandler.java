@@ -17,11 +17,15 @@ import io.varve.swath.replay.server.Protocol;
 import io.varve.swath.replay.server.RenderedResponse;
 import io.varve.swath.replay.server.ReplayFailure;
 import io.varve.swath.replay.server.ReplayRequestException;
+import io.varve.swath.replay.server.ShapeLatency;
 import io.varve.swath.replay.store.ListingStore;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.LongConsumer;
 
 /** Native GCS JSON v1 list route and response envelope. */
 public final class GcsHandler implements ListingProtocolHandler {
@@ -29,15 +33,19 @@ public final class GcsHandler implements ListingProtocolHandler {
     private final String bucket;
     private final GcsPager pager;
     private final ReplayMetrics metrics;
+    private final ShapeLatency latency;
 
     public GcsHandler(String bucket, ListingStore store, String fixtureIdentity) {
-        this(bucket, store, fixtureIdentity, null);
+        this(bucket, store, fixtureIdentity, null, null);
     }
 
-    public GcsHandler(String bucket, ListingStore store, String fixtureIdentity, ReplayMetrics metrics) {
+    /** {@code latency} is the {@code --inject-latency} profile, or {@code null} when injection is off. */
+    public GcsHandler(String bucket, ListingStore store, String fixtureIdentity, ReplayMetrics metrics,
+                      ShapeLatency latency) {
         this.bucket = bucket;
         this.pager = new GcsPager(store, fixtureIdentity, PaginationTestProfile.NONE, metrics);
         this.metrics = metrics;
+        this.latency = latency;
     }
 
     @Override
@@ -84,9 +92,22 @@ public final class GcsHandler implements ListingProtocolHandler {
                         : parsed.pageSize() == 1 ? ObservationShape.SEEK : ObservationShape.PAGE;
                 ListingObservation observation = new ListingObservation(shape,
                         page.objects().size(), page.prefixes().size());
+                Duration delay = latency == null ? Duration.ZERO : latency.apply(observation,
+                        Objects.hash(parsed.prefix(), parsed.delimiter(), parsed.startOffset(),
+                                parsed.endOffset(), parsed.pageSize(), parsed.pageToken()));
                 return new PreparedPage() {
                     @Override
                     public ListingObservation observation() { return observation; }
+
+                    @Override
+                    public Duration injectedLatency() { return delay; }
+
+                    @Override
+                    public LongConsumer injectionOverrunRecorder() {
+                        return nanos -> {
+                            if (metrics != null) metrics.recordInjectionOverrun(ShapeLatency.shapeOf(shape), nanos);
+                        };
+                    }
 
                     @Override
                     public int initialOutputBytesHint() {
