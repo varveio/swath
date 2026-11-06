@@ -35,13 +35,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
@@ -109,6 +112,11 @@ var ErrRowType = errors.New("sort-fixture: invalid row_type")
 // wrong path.
 var ErrNoParts = errors.New("sort-fixture: no *.parquet parts")
 
+// ErrMalformedCapture reports a capture part whose footer does not parse,
+// or whose row counts are negative, disagree with its row groups, or
+// exceed what can be held.
+var ErrMalformedCapture = errors.New("sort-fixture: malformed capture footer")
+
 // rowTypes are the canonical row_type values; only objectRowType rows are
 // written.
 var rowTypes = [...]string{objectRowType, "COMMON_PREFIX", "DELETE_MARKER"}
@@ -165,7 +173,7 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	if err != nil {
 		return stats, fmt.Errorf("sort-fixture: %w", err)
 	}
-	c := captured{objects: make([]schema.Row[Object], 0, total)}
+	c := captured{objects: make([]schema.Row[Object], 0, min(total, maxPrealloc))}
 	for _, file := range files {
 		if err := readCapture(ctx, file, &c); err != nil {
 			return stats, fmt.Errorf("sort-fixture: %s: %w", file, err)
@@ -287,7 +295,9 @@ func write(ctx context.Context, opts Options, lock *journal.Lock, sch *schema.Sc
 	return parts, nil
 }
 
-// countRows returns the rows the parts' footers declare.
+// countRows returns the rows the parts' footers declare, refusing a footer
+// that does not parse or whose counts are negative, disagree with its row groups or add up to
+// more rows than one array of them can hold (ErrMalformedCapture).
 func countRows(files []string) (int64, error) {
 	var total int64
 	for _, name := range files {
@@ -296,18 +306,56 @@ func countRows(files []string) (int64, error) {
 			return 0, err
 		}
 		info, err := f.Stat()
+		var file *parquet.File
 		if err == nil {
-			var file *parquet.File
-			if file, err = parquet.OpenFile(f, info.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true)); err == nil {
-				total += file.NumRows()
+			if file, err = parquet.OpenFile(f, info.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true)); err != nil {
+				err = fmt.Errorf("%w: %v", ErrMalformedCapture, err)
 			}
+		}
+		var rows int64
+		if err == nil {
+			rows, err = footerRows(file.Metadata())
 		}
 		_ = f.Close()
 		if err != nil {
 			return 0, fmt.Errorf("%s: %w", name, err)
 		}
+		if total > maxRows-rows {
+			return 0, fmt.Errorf("%w: the parts declare more than %d rows", ErrMalformedCapture, maxRows)
+		}
+		total += rows
 	}
 	return total, nil
+}
+
+// maxRows bounds the rows of one capture: an array of them must be
+// representable.
+const maxRows = math.MaxInt / int64(unsafe.Sizeof(schema.Row[Object]{}))
+
+// maxPrealloc bounds the array allocated from the footers' counts before
+// a row is read: 2^24 rows (2.2 GiB) on 64-bit platforms, a quarter of the
+// address space on 32-bit ones. A capture within it, the intended scope,
+// is held in exactly one array; a larger one grows it as rows are read, so
+// a forged count cannot reserve more than this.
+const maxPrealloc = min(1<<24, maxRows/4)
+
+// footerRows returns a footer's row count once it agrees with its row
+// groups, each non-negative, summed without overflow.
+func footerRows(meta *format.FileMetaData) (int64, error) {
+	if meta.NumRows < 0 {
+		return 0, fmt.Errorf("%w: the footer declares %d rows", ErrMalformedCapture, meta.NumRows)
+	}
+	var sum int64
+	for i, rg := range meta.RowGroups {
+		if rg.NumRows < 0 || sum > math.MaxInt64-rg.NumRows {
+			return 0, fmt.Errorf("%w: row group %d declares %d rows", ErrMalformedCapture, i, rg.NumRows)
+		}
+		sum += rg.NumRows
+	}
+	if sum != meta.NumRows {
+		return 0, fmt.Errorf("%w: the footer declares %d rows, its row groups %d", ErrMalformedCapture, meta.NumRows, sum)
+	}
+	return sum, nil
 }
 
 // duplicate returns a key two rows share: adjacent sorted objects, adjacent

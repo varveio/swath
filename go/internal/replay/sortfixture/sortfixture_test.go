@@ -9,12 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
@@ -339,5 +341,38 @@ func assertUntouched(t *testing.T, out string) {
 	t.Helper()
 	if got := tree(t, out); strings.Count(got, "\n") != 4 || strings.Contains(got, ".parquet") || strings.Contains(got, dataset.ManifestName) {
 		t.Fatalf("the replacement output changed:\n%s", got)
+	}
+}
+
+// TestRefusesMalformedFooterCounts changes the footer row count of an
+// otherwise valid one-row capture: a negative count, one that disagrees
+// with the row groups and the largest int64 are refused with
+// ErrMalformedCapture. Before, math.MaxInt64 reached make and panicked
+// (parquet-go itself rejects a negative file count, now classified the
+// same way).
+func TestRefusesMalformedFooterCounts(t *testing.T) {
+	for _, change := range []struct {
+		name string
+		edit func(*format.FileMetaData)
+	}{
+		{"negative", func(m *format.FileMetaData) { m.NumRows = -1 }},
+		{"more than the groups", func(m *format.FileMetaData) { m.NumRows = 2 }},
+		{"largest", func(m *format.FileMetaData) { m.NumRows = math.MaxInt64 }},
+		{"negative group", func(m *format.FileMetaData) { m.RowGroups[0].NumRows = -1; m.NumRows = -1 }},
+		{"overflowing groups", func(m *format.FileMetaData) {
+			m.RowGroups = append(m.RowGroups, m.RowGroups[0])
+			m.RowGroups[0].NumRows, m.RowGroups[1].NumRows = math.MaxInt64, math.MaxInt64
+		}},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+			part := filepath.Join(in, "part-a.parquet")
+			if err := sortedparquettest.RewriteFooter(part, func(m *format.FileMetaData) error { change.edit(m); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrMalformedCapture) {
+				t.Fatalf("run: %v", err)
+			}
+		})
 	}
 }
