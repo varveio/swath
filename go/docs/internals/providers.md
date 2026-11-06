@@ -219,7 +219,12 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
 The engine's options are the scope prefix, `Sequential`, `Seed`, `SeedDescent`, `Structure`, `Probe`,
 `Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size (default 1,000): data and
 seed requests ask for it, structure and 1-key probes for no more, and the floors count pages of it. The
-engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not. Its tests (`internal/source/keyrange`) run on a fake listing
+engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
+The seed reads a probe page as two facts, what it showed (prefixes and objects) and whether it continues: a
+sample is weighed and classed by what it showed, and a continuing sample that showed less than a nominal page
+(a provider may cut pages short) is taken as a full page, an estimate counted in
+`seed.short_continuing_estimated` (`TestSeedObservedVsContinuing`); a continuing structure probe is a partial
+sample whatever its length (its furthest folder is the pivot). Its tests (`internal/source/keyrange`) run on a fake listing
 API over a sorted key slice (`keyrange/keyrangetest`, with the fixture and hostile keyspaces).
 
 **Rules** (the generic contracts are in [contracts.md](contracts.md)): a range `(a, b]`

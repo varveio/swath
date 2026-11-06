@@ -48,8 +48,8 @@ type seedProbe struct{ prefix, after string }
 // seedOutcome is what the planner reads from a probe's page.
 type seedOutcome struct {
 	prefixes []string
-	capped   bool   // the page was truncated
-	objects  int    // direct objects on the page
+	more     bool   // the page continues (a token): the level was not listed whole
+	objects  int    // direct objects on the page (with prefixes, the observed entries)
 	last     string // greatest key or common prefix on the page
 	hasLast  bool
 }
@@ -200,7 +200,7 @@ func sampleIndex(i, j, n int) int {
 }
 
 func (d *descent) onTop(o seedOutcome) (seedProbe, *seedResult) {
-	d.topCapped, d.topObjects = o.capped, o.objects
+	d.topCapped, d.topObjects = o.more, o.objects
 	d.observeTop(o)
 	d.addCuts(o.prefixes, d.topCeil)
 	if d.topCapped && len(d.cuts) > 0 && d.totalProbes < d.maxProbes && o.hasLast {
@@ -219,7 +219,7 @@ func (d *descent) onTop(o seedOutcome) (seedProbe, *seedResult) {
 
 func (d *descent) onTopExtra(o seedOutcome) (seedProbe, *seedResult) {
 	d.mark("top_paginated")
-	d.extraFired, d.extraCapped = true, o.capped
+	d.extraFired, d.extraCapped = true, o.more
 	d.observeTop(o)
 	d.addCuts(o.prefixes, d.topCeil)
 	return d.afterTop()
@@ -283,7 +283,7 @@ func (d *descent) continueDescent() (seedProbe, *seedResult) {
 }
 
 func (d *descent) onDescentProbe(o seedOutcome) (seedProbe, *seedResult) {
-	if o.capped {
+	if o.more {
 		d.currentCps = slices.Sorted(slices.Values(o.prefixes))
 		return d.classifyTruncated(o)
 	}
@@ -373,11 +373,19 @@ func (d *descent) nextSample() (seedProbe, *seedResult) {
 }
 
 func (d *descent) onSampleChild(o seedOutcome) (seedProbe, *seedResult) {
-	if o.capped || len(o.prefixes) > 0 || o.objects >= sampleDenseMin {
+	dense := len(o.prefixes) > 0 || o.objects >= sampleDenseMin || (o.more && o.entries() >= d.page)
+	if !dense && o.more {
+		dense = true // a short continuing page: taken as a full one (estimate)
+		d.mark("short_continuing_estimated")
+	}
+	if dense {
 		d.sampleDense++
 	}
 	return d.nextSample()
 }
+
+// entries is what the page held: its prefixes and objects.
+func (o seedOutcome) entries() int { return len(o.prefixes) + o.objects }
 
 func (d *descent) finishSample() (seedProbe, *seedResult) {
 	heavy := d.sampleSampled > 0 && d.sampleDense*2 >= d.sampleSampled
@@ -421,9 +429,14 @@ func (d *descent) nextWeight() (seedProbe, *seedResult) {
 }
 
 func (d *descent) onWeightSample(o seedOutcome) (seedProbe, *seedResult) {
-	w := int64(d.page) // a capped sample holds at least a page
-	if !o.capped {
-		w = int64(len(o.prefixes) + o.objects)
+	// The weight is the observed entries. A continuing sample holds more than
+	// it showed, by an unknown amount: when it showed less than a nominal
+	// page (a short continuing page), the nominal page is the estimate (a
+	// heuristic, counted).
+	w := int64(o.entries())
+	if o.more && w < int64(d.page) {
+		w = int64(d.page)
+		d.mark("short_continuing_estimated")
 	}
 	d.weights[d.currentWeight] = max(1, w)
 	return d.nextWeight()

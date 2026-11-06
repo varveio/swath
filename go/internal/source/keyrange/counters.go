@@ -84,6 +84,7 @@ const (
 	cSeedTopUnsafe
 	cPrefixesNormalized
 	cBoundDrops
+	cSeedShortContinuing
 	numCounters
 )
 
@@ -167,6 +168,7 @@ var Counters = []counters.Def{
 	d("seed.top_paginated_declined.unsafe", counters.Count, "probes", "top-up probes not sent: the top page's last entry is not a bound the provider accepts", "seed"),
 	d("prefixes_normalized", counters.Count, "pages", "pages whose common prefixes came unsorted or repeated, sorted and deduplicated"),
 	d("bound_drops", counters.Count, "keys", "keys equal to an inclusive start bound, listed again and dropped (not in overfetch_keys)"),
+	d("seed.short_continuing_estimated", counters.Count, "samples", "continuing seed samples shorter than a nominal page, weighed (or classed dense) as a full page: an estimate", "seed"),
 }
 
 func d(key string, kind counters.Kind, unit, help string, feature ...string) counters.Def {
@@ -224,6 +226,7 @@ var seedMarks = map[string]counters.ID{
 	"heavy_prior_applied":                  cSeedHeavyPrior,
 	"frontier_continued_past_explosion":    cSeedFrontierContinued,
 	"flat_trivial":                         cSeedFlatTrivial,
+	"short_continuing_estimated":           cSeedShortContinuing,
 }
 
 var seedLevels = map[string]counters.ID{

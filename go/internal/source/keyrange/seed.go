@@ -40,7 +40,7 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 				f.err = err
 				return
 			}
-			f.out = seedOutcome{prefixes: out.Prefixes, capped: out.Truncated, objects: len(out.Rows)}
+			f.out = seedOutcome{prefixes: out.Prefixes, more: out.Truncated, objects: len(out.Rows)}
 			for _, o := range out.Rows {
 				if !f.out.hasLast || o.Key > f.out.last {
 					f.out.last, f.out.hasLast = o.Key, true

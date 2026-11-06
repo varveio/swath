@@ -27,7 +27,7 @@ func serialSeed(t *testing.T, api lister, prefix string, workers int) *seedResul
 		if err != nil {
 			t.Fatal(err)
 		}
-		o := seedOutcome{prefixes: out.CommonPrefixes, capped: out.IsTruncated, objects: len(out.Contents)}
+		o := seedOutcome{prefixes: out.CommonPrefixes, more: out.IsTruncated, objects: len(out.Contents)}
 		for _, k := range append(keysOfPage(out), out.CommonPrefixes...) {
 			if !o.hasLast || k > o.last {
 				o.last, o.hasLast = k, true

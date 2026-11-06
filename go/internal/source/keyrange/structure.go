@@ -34,8 +34,9 @@ const (
 )
 
 // structure is a sorted set of folder boundaries known inside a range;
-// capped marks a sample (the probe page was full), where the furthest
-// boundary is taken.
+// capped marks a partial sample (the probe page continues: more folders
+// lie past it, however many it showed), where the furthest boundary is
+// taken.
 type structure struct {
 	bounds []string
 	capped bool

@@ -117,6 +117,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `seed.top_paginated_declined.unsafe` | count | probes | seed | top-up probes not sent: the top page's last entry is not a bound the provider accepts |
 | `prefixes_normalized` | count | pages |  | pages whose common prefixes came unsorted or repeated, sorted and deduplicated |
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound, listed again and dropped (not in overfetch_keys) |
+| `seed.short_continuing_estimated` | count | samples | seed | continuing seed samples shorter than a nominal page, weighed (or classed dense) as a full page: an estimate |
 | `attempts` | count | requests |  | HTTP requests, retries included |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | of the retries, 429/503/SlowDown answers |
