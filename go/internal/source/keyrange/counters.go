@@ -129,7 +129,7 @@ var Counters = []counters.Def{
 	d("probe.moved", counters.Count, "pivots", "pivots moved to the midpoint of (cursor, pivot] after an empty probe", "probe"),
 	d("split.rejected.probe_empty", counters.Count, "decisions", "splits skipped: probes found no key past any pivot tried", "probe"),
 	d("requeues", counters.Count, "requests", "pages asked again after the client's retries were exhausted (the run never fails on that)"),
-	d("split.skipped.remaining_floor", counters.Count, "decisions", "bounded range with at most 4 pages of keys left by its density estimate: not split", "floors"),
+	d("split.skipped.remaining_floor", counters.Count, "decisions", "bounded range with at most 4 pages of keys left by its estimate: not split", "floors"),
 	d("split.skipped.tail_floor", counters.Count, "decisions", "the child past the pivot would realize at most 2 pages of keys: not split", "floors"),
 	d("seed.probes", counters.Count, "requests", "probes the seed descent asked for (a probe asked twice is fetched once; also in requests)", "seed"),
 	d("seed.probes_unused", counters.Count, "requests", "probes fetched ahead that the descent did not ask for", "seed"),

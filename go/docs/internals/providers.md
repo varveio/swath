@@ -206,17 +206,19 @@ Every split feeds an idle worker and no LIST is repeated.
 
 **Floors** (Swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on; REPORT.md
 "Gate-chain floors").
-Two gates on bounded ranges, read from a position estimate rather than a request. Keys are read as base-256
-fractions of the window `(lo, hi]` past the bytes `lo` and `hi` share (12 bytes); the keys left are
-`keys listed ÷ fraction consumed × fraction remaining`.
+Two gates on bounded ranges, read from a position estimate rather than a request (Swath's default
+rate-anchored sensor, `RateAnchoredEstimator`): the keys left are `max(keys listed, 1 page) × g`, where `g`,
+clamped to [1/4, 16], is the remaining span over the consumed span read as base-256 fractions (12 bytes) past
+the byte where the cursor diverges from `lo`; where the cursor shares more with `lo` than `hi` does, the window
+is that shared subtree, with ceiling 1. A cursor at `hi` leaves 0. So a range clears the remaining floor after
+at most 16 pages listed, however deep its keys' shared prefix.
 - *Remaining floor:* a range with at most 4 pages (4,000 keys) left is not split. Counted per full page,
   before demand (`split.skipped.remaining_floor`).
 - *Child-tail floor:* the child past the pivot must realize more than 2 pages. It is credited with
-  `remaining × max(1/16, min(1, ρ) − f)`, where `f` is the pivot's fraction of the remaining window and `ρ`
+  `remaining × max(1/16, min(1, ρ) − f)`, where `f` is the pivot's fraction of the remaining span (same frame) and `ρ`
   the ratio of the trailing page density (EWMA, weight 0.3 on the newest page) to the range's average; a
   thinning keyspace (`ρ < 1`) shrinks the credited tail (`split.skipped.tail_floor`).
-The open frontier's remainder is unbounded, so neither gate applies to it. On keys that use only part of
-each byte (decimal digits, printable names), the estimate over-states the remainder, as Java's does.
+The open frontier's remainder is unbounded, so neither gate applies to it.
 
 **Structure probes** (after Swath's thief structure probes; behind `swath diag list --structure`, off by
 default). A bounded range whose cursor has a folder below the scope prefix sends, alongside its next

@@ -8,9 +8,9 @@ import "math"
 // The gate-chain floors, ported from Swath's owner-split governor and
 // StealMath: a range is not split when the work left in it is worth less
 // than a few pages, or when the child past the pivot would realize less
-// than two pages of keys. Both read a position estimate in a window
-// fraction, not a probe: keys are read as base-256 fractions of the window
-// (lo, hi] past the bytes lo and hi share.
+// than two pages of keys. Both read a position estimate, not a probe: the
+// keys a range has produced, adjusted by the cursor's position read as a
+// base-256 fraction past the bytes it shares with lo (estRemaining).
 
 const (
 	// fracBytes is how many bytes past the window's shared prefix a
@@ -28,6 +28,11 @@ const (
 	tailReachMin = 1.0 / 16
 	// densityAlpha is the weight of the newest page in the density EWMA.
 	densityAlpha = 0.3
+	// anchorBand and anchorMin bound how far the anchored geometry may lift
+	// and cut the keys a range has produced (Java GEOMETRY_BAND and
+	// QUARTER_MIN_GEOMETRY).
+	anchorBand = 16.0
+	anchorMin  = 1.0 / 4
 )
 
 func commonLen(a, b string) int {
@@ -57,16 +62,44 @@ func spanIn(x, y, lo, hi string) float64 {
 	return math.Max(0, fracIn(y, lo, hi)-fracIn(x, lo, hi))
 }
 
-// estRemaining extrapolates the keys left in (c, hi] from the keys listed in
-// (lo, c] at the same density per window fraction; with nothing consumed
-// it is the remaining fraction itself (Java StealMath.estRemaining).
+// estRemaining is the floors' estimate of the keys left in (c, hi] (Java
+// RateAnchoredEstimator, Swath's default position sensor): the keys the
+// range has already produced (at least a page), adjusted by the
+// cursor-anchored geometry within [anchorMin, anchorBand]. A cursor at hi
+// leaves nothing. A range that has not finished after producing many keys
+// is evidence of a big range, so measured position may lift the produced
+// mass sixteenfold but cut it only to a quarter. The plain window reading
+// (keys over the consumed share of (lo, hi]) is not used: on a deep shared
+// prefix its consumed share underflows to zero, the keys drop out, and the
+// remaining-estimate floor refused every split of a range holding most of
+// a bucket.
 func estRemaining(c, lo, hi string, keys int64) float64 {
-	remaining := spanIn(c, hi, lo, hi)
-	consumed := spanIn(lo, c, lo, hi)
-	if consumed <= 0 {
-		return remaining
+	if c >= hi {
+		return 0
 	}
-	return float64(keys) / consumed * remaining
+	g := math.Min(anchorBand, math.Max(anchorMin, anchoredGeometry(c, lo, hi)))
+	return float64(max(keys, PageKeys)) * g
+}
+
+// anchoredGeometry is the remaining span over the consumed span, read from
+// the byte where the cursor diverges from lo (Java
+// StealMath.anchoredGeometricFactor): where the cursor has descended into a
+// subtree it shares with lo, the window is that subtree, with ceiling 1.
+// Neutral (1) without consumed evidence.
+func anchoredGeometry(c, lo, hi string) float64 {
+	if c <= lo {
+		return 1
+	}
+	d, d0 := commonLen(lo, c), commonLen(lo, hi)
+	consumed := fracFrom(c, d) - fracFrom(lo, d)
+	if consumed <= 0 {
+		return 1
+	}
+	top := 1.0
+	if d <= d0 {
+		top = fracFrom(hi, d)
+	}
+	return math.Max(0, top-fracFrom(c, d)) / consumed
 }
 
 // density is a range's page-density digest: an EWMA of keys per window
@@ -117,13 +150,18 @@ func tailBelowFloor(est, f, ratio float64) bool {
 	return est*math.Max(tailReachMin, reach) <= tailFloorPages*PageKeys
 }
 
-// pivotFraction is where m lies in the remaining span (c, hi], in est's
-// window frame; Java places its pivot at a chosen fraction, the Go pivot is
-// synthesized, so its fraction is measured.
+// pivotFraction is where m lies in the remaining span (c, hi], read in the
+// cursor-anchored window estRemaining uses; Java places its pivot at a
+// chosen fraction, the Go pivot is synthesized, so its fraction is measured.
 func pivotFraction(c, m, lo, hi string) float64 {
-	rem := spanIn(c, hi, lo, hi)
+	d := commonLen(lo, c)
+	top := 1.0
+	if d <= commonLen(lo, hi) {
+		top = fracFrom(hi, d)
+	}
+	rem := top - fracFrom(c, d)
 	if rem <= 0 {
 		return 1
 	}
-	return math.Min(1, spanIn(c, m, lo, hi)/rem)
+	return math.Min(1, math.Max(0, fracFrom(m, d)-fracFrom(c, d))/rem)
 }

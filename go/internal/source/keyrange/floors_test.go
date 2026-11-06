@@ -13,23 +13,36 @@ import (
 
 // TestFloorArithmetic pins the estimate and the tail floor (Java StealMath).
 func TestFloorArithmetic(t *testing.T) {
-	// Window (a, e]: 1,000 keys listed up to b (a quarter of the window)
-	// extrapolate to 3,000 left. Byte space, not digits: decimal keys
-	// over-state the remainder (Java's estimate does the same).
+	// The keys produced, adjusted by the anchored geometry: (a, e] with the
+	// cursor at b has consumed a quarter, so 3x the 1,000 keys remain.
 	if est := estRemaining("b", "a", "e", 1000); math.Abs(est-3000) > 1e-6 {
 		t.Fatalf("est %v, want 3000", est)
 	}
-	lo, hi := "p/0000000", "p/0010000"
-	if est := estRemaining("p/0001000", lo, hi, 1000); est < 100_000 {
-		t.Fatalf("decimal keys: est %v, expected the byte-space over-statement", est)
+	// The geometry lifts at most 16x and cuts at most to a quarter; a range
+	// with fewer than a page produced counts a page; a cursor at hi is done.
+	if est := estRemaining("a\x01", "a", "z", 1000); est != 16_000 {
+		t.Fatalf("lift: est %v, want 16000", est)
 	}
-	// Nothing consumed: the remaining window fraction itself.
-	if est := estRemaining(lo, lo, hi, 0); est <= 0 || est > 1 {
-		t.Fatalf("unconsumed est %v", est)
+	if est := estRemaining("y", "a", "z", 1000); est != 250 {
+		t.Fatalf("cut: est %v, want 250", est)
 	}
-	// The estimate is linear in the keys listed.
-	if a, b := estRemaining("p/0001000", lo, hi, 500), estRemaining("p/0001000", lo, hi, 1000); math.Abs(2*a-b) > 1e-6 {
-		t.Fatalf("not linear: %v %v", a, b)
+	if est := estRemaining("b", "a", "e", 10); math.Abs(est-3*PageKeys) > 1e-6 {
+		t.Fatalf("page floor: est %v", est)
+	}
+	if est := estRemaining("e", "a", "e", 1000); est != 0 {
+		t.Fatalf("at hi: est %v", est)
+	}
+	// A deep shared prefix: a range (lo, hi] whose keys all share 20 bytes
+	// past the bytes lo and hi share. The window reading underflows (every
+	// key reads the same fraction); the anchored one reads where the cursor
+	// moves, and a range that has produced 100,000 keys is never worth "a
+	// few pages": the geometry reads 0.02 here and the estimate keeps a quarter.
+	deep := "dataset/ufs/atmos/train/"
+	if est := estRemaining(deep+"ufs-replay_1999", "", "fcngfs", 100_000); est != 100_000/4 {
+		t.Fatalf("deep prefix: est %v", est)
+	}
+	if spanIn("", deep+"ufs-replay_1999", "", "fcngfs") != spanIn("", deep+"ufs-replay_2019", "", "fcngfs") {
+		t.Fatal("the window reading was expected to underflow on the deep prefix")
 	}
 	for _, c := range []struct {
 		est, f, ratio float64

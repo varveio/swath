@@ -83,7 +83,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `probe.moved` | count | pivots | probe | pivots moved to the midpoint of (cursor, pivot] after an empty probe |
 | `split.rejected.probe_empty` | count | decisions | probe | splits skipped: probes found no key past any pivot tried |
 | `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
-| `split.skipped.remaining_floor` | count | decisions | floors | bounded range with at most 4 pages of keys left by its density estimate: not split |
+| `split.skipped.remaining_floor` | count | decisions | floors | bounded range with at most 4 pages of keys left by its estimate: not split |
 | `split.skipped.tail_floor` | count | decisions | floors | the child past the pivot would realize at most 2 pages of keys: not split |
 | `seed.probes` | count | requests | seed | probes the seed descent asked for (a probe asked twice is fetched once; also in requests) |
 | `seed.probes_unused` | count | requests | seed | probes fetched ahead that the descent did not ask for |
