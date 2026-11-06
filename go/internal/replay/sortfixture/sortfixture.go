@@ -38,6 +38,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/sortedparquet/javaera"
@@ -130,6 +131,11 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	if opts.Capture == "" || opts.Output == "" {
 		return stats, errors.New("sort-fixture: a capture and an output are required")
 	}
+	// Refuse an output that is not new or empty before the capture is
+	// read; the check is repeated under the output lock.
+	if _, err := dataset.Usable(opts.Output, "", SchemaID, false); err != nil {
+		return stats, fmt.Errorf("sort-fixture: output: %w", err)
+	}
 	files, err := javaera.Resolve(opts.Capture)
 	if err != nil {
 		return stats, fmt.Errorf("sort-fixture: capture: %w", err)
@@ -184,27 +190,51 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	return stats, nil
 }
 
-// write publishes objects, sorted, through the dataset writer.
+// write publishes objects, sorted, through the dataset writer. It owns
+// the output as the lister does: nothing in it is created, removed or
+// renamed before this process holds the output lock (journal.TakeLock),
+// each removal and the publication follow a check that the output is still
+// the directory locked, and the lock file stays in the workspace, as the
+// lister leaves it. An output another process owns is refused
+// (journal.ErrLocked) without a change.
 func write(ctx context.Context, opts Options, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
+	lock, err := journal.TakeLock(opts.Output)
+	if err != nil {
+		return nil, fmt.Errorf("sort-fixture: %w", err)
+	}
+	defer lock.Release()
+	if err := lock.Verify(); err != nil {
+		return nil, fmt.Errorf("sort-fixture: %w", err)
+	}
 	if err := dataset.Prepare(opts.Output, "", sch.ID, false); err != nil {
 		return nil, fmt.Errorf("sort-fixture: output: %w", err)
 	}
+	// Unpublished parts go when the output is still the one locked.
+	cleanup := func() {
+		if lock.Verify() == nil {
+			dataset.Cleanup(opts.Output)
+		}
+	}
 	router, err := parquetout.NewRouter(parquetout.Options{Out: opts.Output, PartSize: partSize, Encoders: 1}, sch)
 	if err != nil {
+		cleanup()
 		return nil, fmt.Errorf("sort-fixture: %w", err)
 	}
 	const batch = 4096
 	for i := 0; i < len(objects); i += batch {
 		if err := router.Write(ctx, [][]schema.Row[Object]{objects[i:min(i+batch, len(objects))]}); err != nil {
 			router.Abort()
-			dataset.Cleanup(opts.Output)
+			cleanup()
 			return nil, fmt.Errorf("sort-fixture: write: %w", err)
 		}
 	}
 	parts, err := router.Close()
 	if err != nil {
-		dataset.Cleanup(opts.Output)
+		cleanup()
 		return nil, fmt.Errorf("sort-fixture: write: %w", err)
+	}
+	if err := lock.Verify(); err != nil {
+		return nil, fmt.Errorf("sort-fixture: %w", err)
 	}
 	capture, _ := filepath.Abs(opts.Capture)
 	meta := dataset.Meta{
@@ -214,10 +244,10 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[Object], object
 		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: start.UTC(), ListingFinishedAt: time.Now().UTC()},
 	}
 	if err := dataset.Publish(opts.Output, meta, parts, nil); err != nil {
-		dataset.Cleanup(opts.Output)
+		cleanup()
 		return nil, fmt.Errorf("sort-fixture: publish: %w", err)
 	}
-	_ = os.RemoveAll(filepath.Join(opts.Output, dataset.Workspace))
+	cleanup()
 	return parts, nil
 }
 

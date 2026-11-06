@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,8 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/sortedparquet"
 	"github.com/varveio/swath/go/sortedparquet/format2"
 	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
@@ -59,12 +63,12 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	if !strings.HasPrefix(log.String(), "sort_fixture rows=6 objects=4 skipped=2 parts=1 ") {
 		t.Fatalf("summary %q", log.String())
 	}
-	dataset, err := format2.Open(context.Background(), out, nil)
+	sorted, err := format2.Open(context.Background(), out, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dataset.Reader.Close()
-	rows, err := dataset.Reader.Read(context.Background(), sortedparquet.Range{Limit: 10, Columns: []string{"size", "etag"}}, nil)
+	defer sorted.Reader.Close()
+	rows, err := sorted.Reader.Read(context.Background(), sortedparquet.Range{Limit: 10, Columns: []string{"size", "etag"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +85,8 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	if size, _ := rows[2].Value("size"); !size.IsNull() {
 		t.Fatalf("a null size must stay null: %v", size)
 	}
-	if _, err := os.Stat(filepath.Join(out, ".swath")); !os.IsNotExist(err) {
-		t.Fatal("the workspace must not remain")
+	if _, err := os.Stat(filepath.Join(out, dataset.Workspace, dataset.PartsDir)); !os.IsNotExist(err) {
+		t.Fatal("unpublished parts must not remain")
 	}
 }
 
@@ -124,12 +128,12 @@ func TestKeyLimit(t *testing.T) {
 	if err != nil || stats.SchemaID != SchemaID {
 		t.Fatalf("with a key limit: %+v %v", stats, err)
 	}
-	dataset, err := format2.Open(context.Background(), out, nil)
+	sorted, err := format2.Open(context.Background(), out, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dataset.Reader.Close()
-	rows, err := dataset.Reader.Read(context.Background(), sortedparquet.Range{From: []byte(long + "a"), FromInclusive: false, Limit: 5}, nil)
+	defer sorted.Reader.Close()
+	rows, err := sorted.Reader.Read(context.Background(), sortedparquet.Range{From: []byte(long + "a"), FromInclusive: false, Limit: 5}, nil)
 	if err != nil || len(rows) != 1 || string(rows[0].Key) != long+"b" {
 		t.Fatalf("read after a long key: %d rows, %v", len(rows), err)
 	}
@@ -215,4 +219,52 @@ func TestDuplicateAndVersionedNonObjectRows(t *testing.T) {
 	if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrVersioned) || !strings.Contains(err.Error(), "'x'") {
 		t.Fatalf("a versioned delete marker: %v", err)
 	}
+}
+
+// TestSortFixtureRefusesOwnedOutput runs against an empty output whose lock
+// another owner holds: the run is refused with journal.ErrLocked and the
+// output is left exactly as it was. Before, the run wrote into the output
+// and removed the workspace with the other owner's lock in it.
+func TestSortFixtureRefusesOwnedOutput(t *testing.T) {
+	if !journal.LockEnforced {
+		t.Skip("the output lock is not enforced on this platform")
+	}
+	out := filepath.Join(t.TempDir(), "out")
+	lock, err := journal.TakeLock(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	before := tree(t, out)
+	in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+	if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, journal.ErrLocked) {
+		t.Fatalf("an owned output: %v", err)
+	}
+	if after := tree(t, out); after != before {
+		t.Fatalf("the output changed:\n%s\nto\n%s", before, after)
+	}
+	if err := lock.Verify(); err != nil {
+		t.Fatalf("the owner's lock: %v", err)
+	}
+}
+
+// tree lists every entry under dir with its size and modification time.
+func tree(t *testing.T, dir string) string {
+	t.Helper()
+	var b strings.Builder
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&b, "%s %v %d %d\n", path, info.Mode(), info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
 }
