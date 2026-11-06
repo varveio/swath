@@ -422,7 +422,8 @@ func checkWorkspace(r *os.Root) error {
 
 // checkLayout is recovery's first step, before anything is renamed or
 // removed: every directory it acts in is a directory, and every part it may
-// keep, rename or set aside is a regular file, by lstat (a link is refused
+// keep, rename, set aside or remove from the suspect directory is a
+// regular file, by lstat (a link is refused
 // whatever it names). This closes the case of a link already in place when
 // the resume starts (an interrupted output whose data/ was replaced by a
 // link to an unrelated directory, whose files cleanup would otherwise
@@ -446,8 +447,30 @@ func checkLayout(r *os.Root, st *journal.State) error {
 			}
 		}
 	}
-	_, err := need(r, claimRel(n), false, true)
-	return err
+	if _, err := need(r, claimRel(n), false, true); err != nil {
+		return err
+	}
+	// Every entry of the suspect directory: the current suspect is read and
+	// kept, the others removed (keepSuspect), after parts were published
+	// and data/ cleaned, so each must be a regular file now.
+	d, err := r.Open(suspectRel)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("resume: %w", err)
+	}
+	ents, err := d.ReadDir(-1)
+	d.Close()
+	if err != nil {
+		return fmt.Errorf("resume: %w", err)
+	}
+	for _, e := range ents {
+		if _, err := need(r, filepath.Join(suspectRel, e.Name()), false, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // renameIn renames within r the paths under out (rename's arguments are
@@ -552,6 +575,9 @@ func keepSuspect(v verifier, r *os.Root, out string, st *journal.State) (*suspec
 		i, ok := dataset.PartOrdinal(e.Name())
 		switch {
 		case ok && i < n: // recorded since: reproduced
+			if _, err := need(r, rel, false, false); err != nil {
+				return nil, err
+			}
 			if err := r.Remove(rel); err != nil {
 				return nil, fmt.Errorf("resume: %w", err)
 			}

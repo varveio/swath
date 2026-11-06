@@ -247,3 +247,42 @@ func TestRestartRefusesLinkedParts(t *testing.T) {
 	}
 	requireRefusedAndKept(t, lr.resume(t), keep)
 }
+
+// TestRecoveryRefusesLinkedSuspectUnchanged: a current suspect that is a
+// link, in an output where recovery would first publish a claimed part and
+// remove an unrecorded file from data/: the refusal comes before either,
+// and the output is as it was (tenth durability review: the suspect was
+// checked only after those mutations).
+func TestRecoveryRefusesLinkedSuspectUnchanged(t *testing.T) {
+	lr := newLayoutRun(t, 1)
+	final := filepath.Join(lr.out, dataset.DataDir, dataset.PartName(0))
+	claim := dataset.ClaimPath(lr.out, 0)
+	if err := os.MkdirAll(filepath.Dir(claim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(final, claim); err != nil { // recorded, not yet renamed into data/
+		t.Fatal(err)
+	}
+	stray := filepath.Join(lr.out, dataset.DataDir, "stray.tmp")
+	if err := os.WriteFile(stray, []byte("unrecorded"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := lr.sentinel(t, "suspect.parquet")
+	sus := filepath.Join(lr.out, dataset.Workspace, dataset.SuspectDir, dataset.PartName(1))
+	if err := os.MkdirAll(filepath.Dir(sus), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, sus); err != nil {
+		t.Fatal(err)
+	}
+	err := lr.resume(t)
+	for _, p := range []string{claim, stray, sus} {
+		if _, serr := os.Lstat(p); serr != nil {
+			t.Errorf("the refused output changed: %s: %v", p, serr)
+		}
+	}
+	if _, serr := os.Lstat(final); serr == nil {
+		t.Errorf("the refused output changed: the claimed part was published")
+	}
+	requireRefusedAndKept(t, err, outside)
+}

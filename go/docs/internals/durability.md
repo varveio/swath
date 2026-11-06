@@ -152,8 +152,8 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    `.swath/` must be a directory, `data/`, `.swath/parts/` and `.swath/suspect/` directories where they
    exist, and `.swath/journal` a regular file (this also precedes the restart of a run whose journal header
    never became durable, which empties the workspace). Before recovery renames or removes anything, `data/`
-   must exist as a directory and every retained part, a claimed part and the suspect read must be regular
-   files. Anything else (an interrupted output whose `data/` or journal became a link to something
+   must exist as a directory and every retained part, a claimed part and every entry of `.swath/suspect/`
+   (the one read and the ones removed) must be regular files (`TestRecoveryRefusesLinkedSuspectUnchanged`). Anything else (an interrupted output whose `data/` or journal became a link to something
    elsewhere, which cleanup would delete from or the reopen would truncate) is refused with
    `dataset.ErrUnsafeLayout` (`listing.ErrUnsafeLayout`; a `*LayoutError` naming the path; exit 1, class
    `fatal`, not resumable) (`TestRecoveryRefusesSymlinkedData`, `TestRecoveryRefusesSymlinkedSuspectDir`,
