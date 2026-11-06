@@ -7,19 +7,23 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
+	pq "github.com/parquet-go/parquet-go"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 )
 
@@ -111,7 +115,10 @@ func TestSIGKILLResume(t *testing.T) {
 // TestSIGKILLAtEveryPoint makes the real process SIGKILL itself at each
 // crash point (response read, encoding, journal append and sync, rename,
 // publication, ...), resumes, and compares with an uninterrupted run, for
-// each journaled provider.
+// each journaled provider. The "s3-interval" arm runs (and resumes) with a
+// 1 ms part interval against a slower bucket, so parts are closed by time
+// and boundaries depend on timing: it requires the clean run's rows, in
+// order, and no refusal.
 func TestSIGKILLAtEveryPoint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -130,17 +137,25 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	}
 	srv := httptest.NewServer(gofakes3.New(b).Server())
 	t.Cleanup(srv.Close)
+	h := gofakes3.New(b).Server()
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Millisecond)
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(slow.Close)
 	gcs := gcstest.Bucket(t, gcstest.Keys(4000), 0)
 	common := []string{"-workers", "8", "-part-size", "4KiB", "-memory", "1MiB"}
 	for _, prov := range []struct {
-		name string
-		src  []string
+		name    string
+		src     []string
+		runtime []string // also given to swath resume
 	}{
-		{"s3", []string{"s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous"}},
-		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}},
+		{"s3", []string{"s3://bkt", "-endpoint", srv.URL, "-path-style", "-anonymous"}, nil},
+		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}, nil},
+		{"s3-interval", []string{"s3://bkt", "-endpoint", slow.URL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}},
 	} {
 		args := func(out string, extra ...string) []string {
-			a := append(append(append([]string{"list"}, prov.src...), common...), "-o", out)
+			a := append(append(append(append([]string{"list"}, prov.src...), common...), prov.runtime...), "-o", out)
 			return append(a, extra...)
 		}
 		ref := filepath.Join(t.TempDir(), "ref")
@@ -162,7 +177,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 				if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
 					t.Fatalf("%s: not killed: %v", at, err)
 				}
-				if o, err := exec.Command(bin, "resume", out).CombinedOutput(); err != nil {
+				if o, err := exec.Command(bin, append(append([]string{"resume"}, prov.runtime...), out)...).CombinedOutput(); err != nil {
 					switch {
 					case point == "manifest" && bytes.Contains(o, []byte("already complete")):
 						// Killed after the commit: the dataset is complete,
@@ -177,8 +192,49 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 						t.Fatalf("%s resume: %v\n%s", at, err, o)
 					}
 				}
-				sameParts(t, at, ref, out)
+				if prov.runtime != nil {
+					sameRows(t, at, ref, out)
+				} else {
+					sameParts(t, at, ref, out)
+				}
 			}
 		}
+	}
+}
+
+// sameRows compares the keys of two datasets, in manifest order: parts
+// closed by time differ between runs, their rows may not.
+func sameRows(t *testing.T, at, ref, out string) {
+	t.Helper()
+	keys := func(dir string) []string {
+		var m dataset.Manifest
+		b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+		if err != nil || json.Unmarshal(b, &m) != nil {
+			t.Fatalf("%s: manifest of %s: %v", at, dir, err)
+		}
+		var ks []string
+		for _, p := range m.Parts {
+			f, err := os.Open(filepath.Join(dir, p.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pf, err := pq.OpenFile(f, p.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := make([]pq.Row, pf.NumRows())
+			r := pq.NewReader(pf)
+			n, _ := r.ReadRows(rows)
+			r.Close()
+			f.Close()
+			for _, row := range rows[:n] {
+				ks = append(ks, string(row[0].ByteArray()))
+			}
+		}
+		return ks
+	}
+	want, got := keys(ref), keys(out)
+	if !slices.Equal(want, got) {
+		t.Fatalf("%s: %d rows, want %d (or they differ)", at, len(got), len(want))
 	}
 }

@@ -59,6 +59,19 @@ type Options struct {
 	// Verify, if set, is called before each part file is created: the
 	// output's pathname must still name the directory the run owns.
 	Verify func() error
+	// Cut, if set, fixes one part's boundary: the part with that ordinal
+	// is closed after exactly that many rows, neither by size nor by the
+	// interval. A resume sets it to reproduce a claimed part whose record
+	// was never written, whatever cut it (size, or a timer that fires
+	// differently now).
+	Cut *Cut
+}
+
+// Cut is a part boundary recovered from a claimed part: its ordinal and
+// its row count.
+type Cut struct {
+	Ordinal int
+	Rows    int64
 }
 
 // Resume is the router state recovered from a journal.
@@ -114,6 +127,8 @@ type part[P any] struct {
 	done      chan struct{}
 	published chan struct{} // closed once published (or failed), with Publish set
 	logical   int64
+	n         int64 // rows routed into this part
+	pinned    bool  // its boundary is Options.Cut
 	final     bool
 	limit     int64 // logical bytes per part in effect after this part
 	rows      int64 // rows in parts 0..ordinal
@@ -154,7 +169,7 @@ func (r *Router[P]) tick(stop <-chan struct{}) {
 		case <-t.C:
 		}
 		r.mu.Lock()
-		if !r.closed && r.cur != nil && time.Since(r.cur.opened) >= r.opt.Interval && r.firstErr() == nil {
+		if !r.closed && r.cur != nil && !r.cur.pinned && time.Since(r.cur.opened) >= r.opt.Interval && r.firstErr() == nil {
 			r.timeCuts.Add(1)
 			_ = r.cut(r.tickCtx, false) // a failure is the encoder's, and reported by it
 		}
@@ -210,7 +225,12 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 				}
 			}
 			r.rows++
+			r.cur.n++
 			r.cur.logical += r.schema.LogicalBytes(&seg[i])
+			if r.cur.pinned {
+				r.full = r.cur.n >= r.opt.Cut.Rows
+				continue
+			}
 			target := r.limit
 			if target == 0 {
 				target = int64(float64(r.opt.PartSize) / initialRatio)
@@ -287,6 +307,7 @@ func (r *Router[P]) open(ctx context.Context) error {
 	}
 	p := &part[P]{ordinal: len(r.done) + len(r.parts), opened: time.Now(), segs: make(chan batch[P], partQueue), done: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}
+	p.pinned = r.opt.Cut != nil && r.opt.Cut.Ordinal == p.ordinal
 	if n := len(r.parts); n > 0 {
 		p.prev = r.parts[n-1]
 	}

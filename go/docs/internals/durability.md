@@ -28,7 +28,7 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | split decided, children partly queued (`split`) | in memory only: the resume starts from K; the split is lost harmlessly |
 | rows buffered or queued to an encoder (`range-done`, `encoding`) | relisted from K |
 | part closed and synced, not claimed (`part-closed`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
-| part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since |
+| part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since. The resume closes that ordinal after the claimed part's row count, so a part the part interval closed is reproduced whatever the resume's timing or interval (`TestTimeCutClaimResumes`) |
 | record written, not synced (`journal-sync`) | a whole unsynced frame that survived is a valid record of a synced part, and recovery syncs the journal before acting on it; a torn tail (power loss) is dropped, and its claimed part is set aside and must be reproduced exactly (below) |
 | record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, MD5), then renamed into `data/` |
 | record durable, rename absent, the record truncated or zeroed since (damage, not a crash) | reads as a torn tail: the part is set aside in `.swath/suspect/`; the resume records that ordinal again only if it reproduces the part byte for byte, and otherwise refuses (`ErrAmbiguousTail`) with the part kept (`TestAmbiguousTailRefusesOnChangedSource`) |
@@ -41,7 +41,9 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 
 Every boundary in the left column is a named crash point (`internal/faults`). `TestCrashMatrix` stops the run
 there without cleanup, and `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself there, for S3 and GCS. Both then
-resume and compare with an uninterrupted run.
+resume and compare with an uninterrupted run: byte for byte with the part interval off, and row for row (no
+refusal) with it on, where parts are closed by time (a trickling source in `TestCrashMatrix`, a slower bucket
+with a 1 ms interval in `TestSIGKILLAtEveryPoint`).
 
 **The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size
 target or, on a slow frontier, once it has been open for the part interval (default 60 s,
@@ -207,7 +209,12 @@ record lost whole, the journal ending exactly at the frame before it, is indisti
 never began. So neither a torn tail nor a clean end is taken as proof that nothing depends on the next
 ordinal: whenever that ordinal's part is claimed (synced and renamed `.claimed` in `.swath/parts/` before its
 append began), it is moved to `.swath/suspect/` before the temporary parts are removed, and the resume must
-reproduce it byte for byte (size and MD5) before it records that ordinal again. A suspect already set aside
+reproduce it byte for byte (size and MD5) before it records that ordinal again. The claimed part carries its
+boundary: its footer's row count, synced with it before the append, and the resume closes the reproduced part
+after exactly that many rows (`parquetout.Options.Cut`), neither earlier by the part interval nor later by
+size. Without it, a part first closed by the interval would take more rows in a faster resume, or one with
+another `--part-interval`, and an unchanged source would be refused. An unreadable footer gives no boundary,
+and the byte comparison decides as before. A suspect already set aside
 by an earlier resume is never replaced by a later claimed part. The cost: a crash or failure between the claim
 and the end of the append, followed by a source change inside that part, refuses rather than relists. On a static source it does, and the resume
 continues as if the append had never happened; when the source changed in that part's range, or no longer

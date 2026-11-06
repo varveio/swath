@@ -73,7 +73,9 @@ open part holds every row the walk has reached. A cut by time makes that run's b
 the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (a negative
 value), boundaries depend only on the rows and the byte-identity guarantees above hold
 (`TestIntervalClosesAnAgedPart`, `TestPartIntervalBoundsRecoveryPointAge`: a 2 s trickle keeps the recovery
-point under 260 ms old at a 200 ms interval, against 1.96 s by size only). The command sets it with
+point under 260 ms old at a 200 ms interval, against 1.96 s by size only). A resume that must reproduce a
+claimed part ([durability.md](durability.md#the-journal)) closes that ordinal at the claimed part's row count
+(`Options.Cut`) whatever the interval. The command sets it with
 `--part-interval` ([../cli.md](../cli.md)). Each part is
 written by its own goroutine and zstd encoder from a bounded channel; at most `Encoders` parts are open.
 

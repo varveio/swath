@@ -74,25 +74,53 @@ func crashConfig(url, out string, resume bool) Config {
 // occurrence, then resumes; the final dataset must be byte-identical to an
 // uninterrupted run. It is the step-2 gate (contracts I1, I5, I6), for each
 // journaled provider (spill is provider-neutral: S3 runs it both ways).
+// With the part interval on, part boundaries depend on timing (the crashed
+// run's and the resume's differ): the resume must then complete without a
+// refusal and hold exactly the clean run's rows, in order. The object
+// stores answer in bursts, so their interval arm cuts by time now and
+// then; the trickling scripted source (one key per range, 1 ms apart, a
+// 4 ms interval) cuts nearly every part by time, so every crash point
+// meets a time-cut part.
 func TestCrashMatrix(t *testing.T) {
 	s3url, gcsep := crashBucket(t), gcsBucket(t, 8000)
+	var trickle []string
+	for i := range 400 {
+		trickle = append(trickle, fmt.Sprintf("k%04d", i))
+	}
+	const off = -1
 	for _, prov := range []struct {
-		name   string
-		config func(out string, resume bool) Config
-		spill  []bool
-		nth    []int64 // occurrences to crash at, within each run (the GCS run has fewer parts and requests)
+		name      string
+		config    func(out string, resume bool) Config
+		spill     []bool
+		intervals []time.Duration
+		nth       []int64 // occurrences to crash at, within each run (the GCS run has fewer parts and requests)
 	}{
-		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []int64{1, 4, 12}},
-		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []int64{1, 3, 7}},
+		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []time.Duration{off, time.Millisecond}, []int64{1, 4, 12}},
+		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}},
+		{"trickle", func(out string, resume bool) Config {
+			scriptMu.Lock()
+			scriptNext = &scripted{keys: trickle, chunk: 1, slow: time.Millisecond}
+			scriptMu.Unlock()
+			return Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
+				Limits: Limits{PartSize: 2 << 10, Workers: 2, Memory: 256 << 10, Spill: SpillLimits{Off: true}, PartInterval: off}}
+		}, []bool{false}, []time.Duration{4 * time.Millisecond}, []int64{1, 4, 12}},
 	} {
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), prov.config(ref, false)); err != nil {
 			t.Fatal(err)
 		}
-		for _, spill := range prov.spill {
+		refKeys := checkContract(t, ref)
+		for _, mode := range []struct {
+			spill    bool
+			interval time.Duration
+		}{{false, off}, {true, off}, {false, time.Millisecond}, {false, 4 * time.Millisecond}} {
+			spill := mode.spill
+			if !slices.Contains(prov.spill, spill) || !slices.Contains(prov.intervals, mode.interval) {
+				continue
+			}
 			for _, point := range faults.Points {
 				for _, nth := range prov.nth {
-					t.Run(fmt.Sprintf("%s/spill=%v/%s#%d", prov.name, spill, point, nth), func(t *testing.T) {
+					t.Run(fmt.Sprintf("%s/spill=%v/interval=%v/%s#%d", prov.name, spill, mode.interval > 0, point, nth), func(t *testing.T) {
 						out := filepath.Join(t.TempDir(), "ds")
 						var seen atomic.Int64
 						restore := faults.Set(func(p string) error {
@@ -103,6 +131,7 @@ func TestCrashMatrix(t *testing.T) {
 						})
 						cfg := prov.config(out, false)
 						cfg.Limits.Spill.Off = !spill
+						cfg.Limits.PartInterval = mode.interval
 						_, err := Run(context.Background(), cfg)
 						restore()
 						if seen.Load() < nth {
@@ -114,7 +143,9 @@ func TestCrashMatrix(t *testing.T) {
 						if !errors.Is(err, faults.ErrCrash) {
 							t.Fatalf("crash not injected: %v", err)
 						}
-						sum, err := Run(context.Background(), prov.config(out, true))
+						rcfg := prov.config(out, true)
+						rcfg.Limits.PartInterval = mode.interval
+						sum, err := Run(context.Background(), rcfg)
 						if point == "manifest" {
 							if !errors.Is(err, ErrComplete) {
 								t.Fatalf("resume after the manifest: %v", err)
@@ -122,8 +153,14 @@ func TestCrashMatrix(t *testing.T) {
 						} else if err != nil {
 							t.Fatalf("resume: %v", err)
 						}
-						sameDataset(t, point, ref, out)
-						t.Logf("resumed %d parts (%d rows), listed %d more rows", sum.Output.PartsRetained, sum.Output.RowsRetained, sum.Output.RowsListed)
+						if mode.interval > 0 {
+							if got := checkContract(t, out); !slices.Equal(got, refKeys) {
+								t.Fatalf("%d rows after the resume, want %d", len(got), len(refKeys))
+							}
+						} else {
+							sameDataset(t, point, ref, out)
+						}
+						t.Logf("resumed %d parts (%d rows), listed %d more rows, %d parts cut by time", sum.Output.PartsRetained, sum.Output.RowsRetained, sum.Output.RowsListed, sum.Resources.PartTimeCuts)
 					})
 				}
 			}

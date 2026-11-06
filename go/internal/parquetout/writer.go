@@ -318,3 +318,24 @@ func (t *tracking) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+// PartRows is the row count in a part file's footer. A resume reads it from
+// a claimed part to cut the reproduced part at the same boundary
+// (Options.Cut); the byte comparison that follows decides, so a damaged
+// footer can only make that comparison fail.
+func PartRows(path string) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	pf, err := pq.OpenFile(f, st.Size(), pq.SkipPageIndex(true), pq.SkipBloomFilters(true))
+	if err != nil {
+		return 0, err
+	}
+	return pf.NumRows(), nil
+}

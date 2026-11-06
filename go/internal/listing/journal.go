@@ -64,6 +64,11 @@ type suspect struct {
 	ordinal int
 	path    string
 	info    dataset.PartInfo // bytes and MD5 only
+	// rows is the claimed part's row count (its footer; 0 if unreadable):
+	// the resume cuts the reproduced part there (parquetout.Options.Cut),
+	// since its first cut may have been the part interval's, which a
+	// resume's timing does not repeat.
+	rows int64
 }
 
 // openJournal takes ownership of the output and prepares it: a fresh
@@ -335,7 +340,8 @@ func keepSuspect(v verifier, out string, st *journal.State) (*suspect, error) {
 			if err != nil {
 				return nil, fmt.Errorf("resume: suspect part: %w", err)
 			}
-			sus = &suspect{ordinal: n, path: path, info: info}
+			rows, _ := parquetout.PartRows(path) // unreadable: no boundary, the comparison refuses
+			sus = &suspect{ordinal: n, path: path, info: info, rows: rows}
 		default:
 			return nil, fmt.Errorf("%w: %s holds %s but the journal holds %d records", journal.ErrCorrupt, dir, e.Name(), n)
 		}
@@ -521,6 +527,9 @@ func (jr *runJournal) routerOptions(o *parquetout.Options) {
 		o.Resume = &parquetout.Resume{Parts: parts, Limit: last.Limit, Rows: last.RowsTotal}
 	}
 	o.Publish = jr.publish
+	if sus := jr.suspect; sus != nil && sus.rows > 0 {
+		o.Cut = &parquetout.Cut{Ordinal: sus.ordinal, Rows: sus.rows}
+	}
 }
 
 // verifyOption makes the router check the output's identity before it
