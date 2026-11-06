@@ -1626,6 +1626,23 @@ are idle; its `--probe` sends the same 1-key probe but on the owner's path, befo
 - GCS ranges send `endOffset` and overfetch nothing past a bound ("GCS provider"); the S3 cost is S3's
   missing end bound at Go's split rate.
 
+## Part-count growth (2026-11-06)
+
+**Per-part state grows linearly and stays small at 10,000 parts: not a problem at realistic part counts.**
+`TestPartCountGrowth` (opt-in, `SWATH_GROWTH=1`; a GCS fake source, eight workers, `PartSize` 1 so every row is
+a part; one run each, this host):
+
+| Parts | Wall | Journal at the last publish | Manifest | Peak Go heap | Heap retained after the run |
+|---:|---:|---:|---:|---:|---:|
+| 1,000 | 1.39 s | 232,238 B | 252,569 B | 52.5 MiB | 1.2 MiB |
+| 10,000 | 13.0 s | 2,338,240 B | 2,520,569 B | 92.1 MiB | 3.4 MiB |
+
+Journal and manifest are about 234 and 252 bytes per part with these 22-byte keys; each holds a part's first
+and last key in base64, so with 1,024-byte keys both would be near 3 KB per part (about 28 MB each at 10,000
+parts; computed, not measured). Wall is about 1.3 ms per part (the record's and the rename's syncs), linear;
+the peak heap rises by about 4.4 KB per part (the router keeps every part's record; the journal state is read
+once on resume). At the default 64 MiB parts, 10,000 parts is about 640 GB of dataset.
+
 ## Layering: provider registry
 
 The pipeline no longer knows which providers exist. Before this change, `listing` imported both providers, held

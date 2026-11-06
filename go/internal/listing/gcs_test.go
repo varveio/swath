@@ -23,13 +23,13 @@ import (
 	"github.com/varveio/swath/go/internal/journal"
 )
 
-// gcsBucket serves objects.list over 8,000 names with 1 ms per request: a
+// gcsBucket serves objects.list over n names with 1 ms per request: a
 // minimal JSON API (prefix, startOffset inclusive, endOffset exclusive,
 // maxResults, a token naming the last name; no delimiter: the default
 // policy sends none) for the run-level GCS tests.
-func gcsBucket(t *testing.T) string {
+func gcsBucket(t *testing.T, n int) string {
 	t.Helper()
-	keys := make([]string, 8000)
+	keys := make([]string, n)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("d%02d/sub%d/obj+%06d", i%9, i%4, i)
 	}
@@ -92,7 +92,7 @@ func gcsConfig(ep, out string, resume bool) Config {
 // uninterrupted run byte for byte; a resume through another route or
 // another billed project is refused.
 func TestGCSInterruptedResume(t *testing.T) {
-	ep := gcsBucket(t)
+	ep := gcsBucket(t, 8000)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), gcsConfig(ep, ref, false)); err != nil {
 		t.Fatal(err)
