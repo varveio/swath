@@ -242,7 +242,12 @@ func TestPrefixesNormalized(t *testing.T) {
 			opt := opt
 			opt.Workers = 1 // one range at a time: the tiling is the seed's
 			opt.SplitCoin = func() bool { return false }
-			opt.Trace = func(lo, hi string, open bool) { tiles[j] = append(tiles[j], fmt.Sprintf("%q %q %v", lo, hi, open)) }
+			var mu sync.Mutex // the drainer and a worker may both expand ranges
+			opt.Trace = func(lo, hi string, open bool) {
+				mu.Lock()
+				tiles[j] = append(tiles[j], fmt.Sprintf("%q %q %v", lo, hi, open))
+				mu.Unlock()
+			}
 			p, _ := New(opt, Description[Object]{Target: "test", Listing: Listing}, func(ctx context.Context, q *Query) (*Page[Object], error) {
 				out, err := fetch(ctx, q)
 				if err == nil && scramble && len(out.Prefixes) > 1 {
