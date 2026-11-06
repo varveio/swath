@@ -350,22 +350,33 @@ func (l *longRange) Expand(ctx context.Context, r fr, e source.Emitter[fr, tp]) 
 		if err := e.Rows([]schema.Row[tp]{{Key: fmt.Sprintf("k%08d", p), Data: tp{Size: 1}}}); err != nil {
 			return err
 		}
+		runtime.Gosched() // a page at a time, also with one P: the drainer keeps up
 	}
 	return nil
 }
 
 // TestRunningNodeStorageIsBounded: a long streaming range on the drain
-// path keeps its consumed items' storage only until they are half of it, so
-// what it retains does not grow with the pages it has streamed (byte-mode
-// budget; Sol fourth review, P2-11). The old drainer zeroed consumed slots
-// but kept the slice, which grew with every page.
+// path holds its consumed items only until they are half of its items
+// (and at least 256), so the storage for what was already drained never
+// exceeds that for what still waits, however many pages it has streamed
+// (byte-mode budget; Sol fourth review, P2-11). What waits is the awaited
+// range's own lead over the drainer, which the budget exempts. The old
+// drainer zeroed consumed slots but kept them, one per page streamed.
 func TestRunningNodeStorageIsBounded(t *testing.T) {
 	countRows = false
 	defer func() { countRows = true }()
 	const pages = 60000
 	var mu sync.Mutex
-	peak, seen := 0, 0
-	hookItems = func(n int) { mu.Lock(); peak = max(peak, n); seen++; mu.Unlock() }
+	peak, seen, worst := 0, 0, ""
+	hookItems = func(consumed, waiting int) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen++
+		peak = max(peak, consumed)
+		if consumed >= compactAt && consumed > waiting && worst == "" {
+			worst = fmt.Sprintf("%d consumed items held with %d waiting", consumed, waiting)
+		}
+	}
 	defer func() { hookItems = nil }()
 	c := &collect{}
 	if _, err := Run[fr, tp](context.Background(), &longRange{pages: pages}, c, &testSchema, Options{Workers: 4, Budget: 64 << 10}); err != nil {
@@ -379,8 +390,8 @@ func TestRunningNodeStorageIsBounded(t *testing.T) {
 	if seen < pages/2 {
 		t.Fatalf("the drainer consumed only %d of %d items from a running node: the test did not stream", seen, pages)
 	}
-	if limit := 32 * compactAt; peak > limit {
-		t.Fatalf("a running node retained storage for %d items after %d pages (limit %d)", peak, pages, limit)
+	if worst != "" {
+		t.Fatalf("a running node retained storage for consumed items after %d pages: %s", pages, worst)
 	}
-	t.Logf("peak retained %d item slots over %d pages (%d drained while running)", peak, pages, seen)
+	t.Logf("at most %d consumed items held over %d pages (%d drained while running)", peak, pages, seen)
 }
