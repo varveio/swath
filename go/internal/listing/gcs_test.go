@@ -237,3 +237,41 @@ func tree(t *testing.T, dir string) map[string]string {
 	}
 	return m
 }
+
+// TestGCSInvalidEnvelopeNeverCommits: after the run has published parts,
+// the ranges past d05 get 200 answers whose body is `null` or an error
+// envelope. Before the fix those read as empty final pages and the run
+// committed a dataset missing those keys; now each is retried and the run
+// completes only when valid pages return, with exactly the reference rows.
+func TestGCSInvalidEnvelopeNeverCommits(t *testing.T) {
+	ep := gcsBucket(t, 8000)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), gcsConfig(ep, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(ep)
+	bodies := []string{`null`, `{"error":{"code":500,"message":"backend"}}`}
+	var served atomic.Int64
+	const k = 6
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		tok, _ := base64.RawURLEncoding.DecodeString(q.Get("pageToken"))
+		if max(q.Get("startOffset"), string(tok)) >= "d05" {
+			if i := served.Add(1); i <= k {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, bodies[i%2])
+				return
+			}
+		}
+		httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: u.Host}).ServeHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+	out := filepath.Join(t.TempDir(), "ds")
+	if _, err := Run(context.Background(), gcsConfig(front.URL+"/storage/v1/", out, false)); err != nil {
+		t.Fatal(err)
+	}
+	if served.Load() <= k {
+		t.Fatalf("only %d requests past d05: the invalid bodies were not all served", served.Load())
+	}
+	sameDataset(t, "invalid-envelope", ref, out)
+}

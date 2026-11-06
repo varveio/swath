@@ -13,6 +13,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -435,12 +436,24 @@ type wireObject struct {
 
 func parse(body []byte) (*Page, error) {
 	var w struct {
-		Items         []wireObject `json:"items"`
-		Prefixes      []string     `json:"prefixes"`
-		NextPageToken string       `json:"nextPageToken"`
+		Items         []wireObject    `json:"items"`
+		Prefixes      []string        `json:"prefixes"`
+		NextPageToken string          `json:"nextPageToken"`
+		Error         json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(body, &w); err != nil {
 		return nil, fmt.Errorf("%w (%d bytes): %v", ErrSyntax, len(body), err)
+	}
+	// A 200 must carry an objects.list envelope: a JSON object without an
+	// error member. `null`, another JSON value or an error envelope would
+	// otherwise read as an empty final page and end the range early; they
+	// are retried like a garbled body. `{}` (an empty listing under a fields
+	// selector) is a legitimate empty page.
+	if t := bytes.TrimLeft(body, " \t\r\n"); len(t) == 0 || t[0] != '{' {
+		return nil, fmt.Errorf("%w: a 200 whose body is not a JSON object (%d bytes)", ErrSyntax, len(body))
+	}
+	if w.Error != nil {
+		return nil, fmt.Errorf("%w: a 200 carrying an error envelope: %.200s", ErrSyntax, w.Error)
 	}
 	p := &Page{Prefixes: w.Prefixes, NextPageToken: w.NextPageToken, Items: make([]Object, len(w.Items))}
 	for i, o := range w.Items {
