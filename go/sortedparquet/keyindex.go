@@ -5,6 +5,7 @@ package sortedparquet
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
 	"github.com/parquet-go/parquet-go"
@@ -75,7 +76,7 @@ func (index *groupIndex) pageFor(start int, from []byte) int {
 // keyIndex returns the checked key page index of a non-empty physical row
 // group, loading it on first use. Concurrent first uses may both load it;
 // one result is kept.
-func (p *part) keyIndex(physical int) (*groupIndex, error) {
+func (p *part) keyIndex(ctx context.Context, physical int) (*groupIndex, error) {
 	if index := p.index[physical].Load(); index != nil {
 		return index, nil
 	}
@@ -83,11 +84,11 @@ func (p *part) keyIndex(physical int) (*groupIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	columnIndex, err := chunk.ColumnIndexFrom(p.file)
+	columnIndex, err := chunk.ColumnIndexFrom(p.at(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("row group %d: read key column index: %w", physical, err)
 	}
-	offsets, err := chunk.OffsetIndexFrom(p.file)
+	offsets, err := chunk.OffsetIndexFrom(p.at(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("row group %d: read key offset index: %w", physical, err)
 	}

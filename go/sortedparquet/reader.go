@@ -145,7 +145,7 @@ func Open(ctx context.Context, sources []PartSource, opt Options) (*Reader, erro
 			if chunk.ColumnIndexOffset <= 0 || chunk.ColumnIndexLength <= 0 || chunk.OffsetIndexOffset <= 0 || chunk.OffsetIndexLength <= 0 {
 				return nil, Refuse(ReasonNoPageIndex, "%s row group %d: key column lacks a page index", src.Name, physical)
 			}
-			key, err := p.firstKey(physical)
+			key, err := p.firstKey(ctx, physical)
 			if err != nil {
 				return nil, fmt.Errorf("%s row group %d: %w", src.Name, physical, err)
 			}
@@ -267,12 +267,12 @@ func (p *part) chunk(physical, column int) (*parquet.FileColumnChunk, error) {
 
 // firstKey decodes the first key of a non-empty row group from its first
 // key page.
-func (p *part) firstKey(physical int) ([]byte, error) {
+func (p *part) firstKey(ctx context.Context, physical int) ([]byte, error) {
 	chunk, err := p.chunk(physical, p.key)
 	if err != nil {
 		return nil, err
 	}
-	pages := chunk.PagesFrom(p.file)
+	pages := chunk.PagesFrom(p.at(ctx))
 	defer func() { _ = pages.Close() }()
 	page, err := pages.ReadPage()
 	if err != nil {
@@ -296,7 +296,7 @@ func (p *part) firstKey(physical int) ([]byte, error) {
 // lastKey decodes the last key of a non-empty row group from its last key
 // page, located through the OffsetIndex.
 func (p *part) lastKey(ctx context.Context, physical int) ([]byte, error) {
-	index, err := p.keyIndex(physical)
+	index, err := p.keyIndex(ctx, physical)
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +306,15 @@ func (p *part) lastKey(ctx context.Context, physical int) ([]byte, error) {
 		return nil, err
 	}
 	return bytes.Clone(cursor.values[len(cursor.values)-1].ByteArray()), nil
+}
+
+// at returns the part's file for reads under ctx: a *CachedFile waits for
+// a handle only as long as ctx lasts.
+func (p *part) at(ctx context.Context) io.ReaderAt {
+	if f, ok := p.file.(*CachedFile); ok {
+		return f.WithContext(ctx)
+	}
+	return p.file
 }
 
 // Parts returns the number of parts.
@@ -367,9 +376,17 @@ func (r *Reader) enter() error {
 
 func (r *Reader) leave() { r.mu.RUnlock() }
 
-// Close waits for reads in progress and closes every part file that
-// implements io.Closer. Reads after Close fail with ErrClosed.
+// Close closes every part file that implements io.Closer once the reads
+// in progress end, and fails reads after it with ErrClosed. A
+// *CachedFile is closed first: a read in progress that needs another
+// descriptor fails with ErrClosed at once rather than hold Close until one
+// is free.
 func (r *Reader) Close() error {
+	for _, p := range r.parts {
+		if f, ok := p.file.(*CachedFile); ok {
+			_ = f.Close()
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {

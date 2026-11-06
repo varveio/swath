@@ -106,7 +106,7 @@ func (c *keyCursor) decode(i int) error {
 		}
 		// SeekToRow uses the OffsetIndex only once the chunk has loaded it,
 		// which keyIndex did.
-		c.pages = chunk.PagesFrom(c.part.file)
+		c.pages = chunk.PagesFrom(c.part.at(c.ctx))
 	}
 	if c.page != nil {
 		// The previous page's last key must outlive its buffers.
@@ -232,10 +232,10 @@ func (p *part) readColumn(ctx context.Context, physical, column int, row int64, 
 	}
 	// Without an OffsetIndex SeekToRow decodes from the chunk's start,
 	// which is correct, only slower.
-	if _, err := chunk.OffsetIndexFrom(p.file); err != nil && !errors.Is(err, parquet.ErrMissingOffsetIndex) {
+	if _, err := chunk.OffsetIndexFrom(p.at(ctx)); err != nil && !errors.Is(err, parquet.ErrMissingOffsetIndex) {
 		return nil, fmt.Errorf("read offset index: %w", err)
 	}
-	pages := chunk.PagesFrom(p.file)
+	pages := chunk.PagesFrom(p.at(ctx))
 	defer func() { _ = pages.Close() }()
 	out := make([]parquet.Value, 0, n)
 	var scratch []parquet.Value

@@ -71,10 +71,12 @@ and `no_page_index` (a non-empty row group whose key column lacks a ColumnIndex 
   routing hop and at most one page-index landing past it, and a row group whose first key and the next
   group's first key share a common prefix is skipped without a read.
 - A `Reader` is safe for concurrent use; parsed footers and page indexes are shared and loaded once. Both
-  profiles read parts through a `FileCache`: each read leases a descriptor, an idle one is closed (least
-  recently used first) when another part needs one, and an evicted part is reopened by path and must be
-  the same file (`os.SameFile`), so a fixture of any number of parts holds at most the cache's bound
-  (`DefaultMaxOpenFiles`: half the soft descriptor limit, within 64..4,096).
+  profiles read parts through a `FileCache`: every open, the first included, waits for a slot under the
+  cache's bound (`DefaultMaxOpenFiles`: half the soft descriptor limit, at most 4,096), an idle descriptor
+  is closed (least recently used first) when another part needs one, and an evicted part is reopened by
+  path and must be the same file (`os.SameFile`). Opens are non-blocking on unix and anything but a
+  regular file is refused, so a FIFO put at a part's path cannot stall a read. A read waiting for a
+  descriptor ends with its context, and `Close` fails such waits with `ErrClosed` at once.
 
 ## What it does not check
 
