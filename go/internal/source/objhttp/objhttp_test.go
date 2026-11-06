@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/counters"
@@ -87,5 +88,30 @@ func TestCounterTable(t *testing.T) {
 			t.Fatalf("counter %s: value %d unset or stored twice", defs[id].Key, x)
 		}
 		got[x] = true
+	}
+}
+
+// TestAdmissionFeatures: slow start has its own feature state, so a run
+// with the limiter but without slow start reports it off, not on and
+// unengaged; a supplied client has every admission feature off.
+func TestAdmissionFeatures(t *testing.T) {
+	for _, c := range []struct {
+		a   Admission
+		own bool
+		off []string
+	}{
+		{Admission{Limiter: true}, true, []string{FeatureSlowStart, FeatureRequestRate}},
+		{Admission{Limiter: true, SlowStart: true, RequestRate: 5}, true, nil},
+		{Admission{SlowStart: true}, true, []string{FeatureLimiter, FeatureSlowStart, FeatureRequestRate}},
+		{Admission{Limiter: true, SlowStart: true, RequestRate: 5}, false, []string{FeatureLimiter, FeatureSlowStart, FeatureRequestRate}},
+	} {
+		if got := c.a.Off(c.own); fmt.Sprint(got) != fmt.Sprint(c.off) {
+			t.Fatalf("%+v own %v: off %v, want %v", c.a, c.own, got, c.off)
+		}
+	}
+	for _, d := range CounterDefs("t", "-t") {
+		if strings.HasPrefix(d.Key, "slow_start.") != (d.Feature == FeatureSlowStart) {
+			t.Fatalf("%s: feature %q", d.Key, d.Feature)
+		}
 	}
 }

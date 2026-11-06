@@ -189,7 +189,8 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   3 s), under the same brakes (the latency valve's step stays +1); the first throttle answer or attempt timeout
   ends the ramp for good. It applies to whatever builds the client, a resume included; the reason in Java is
   that a restart at the full width into a throttling endpoint (a resume after a stall) storms it at once.
-  Counters `limiter.*`, the ramp's `limiter.slow_start.{doubles,ns,end}`.
+  Counters `limiter.*`, the ramp's `slow_start.{doubles,ramp_ns,end_limit}` (feature `slow_start`: off without the
+  flag, so an unengaged ramp and an absent one differ).
 - *Rate cap* (`objhttp.Rate`, `--request-rate N`, off by default): after its permit every attempt takes a token
   from a bucket of one, refilled every 1/N, so attempts are spaced at least 1/N apart whatever the limit
   (`TestRateCapsAttempts`: 60 attempts with retries from 8 callers take at least 59/N, and with 2 permits never

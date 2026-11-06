@@ -37,7 +37,7 @@ func TestRateLimitStormLowersConcurrency(t *testing.T) {
 		t.Fatalf("%d keys, want %d", len(got), len(keys))
 	}
 	s, v := px.Stats(), st.Counters.Value
-	if s.Throttled == 0 || s.Reset == 0 || v("limiter.decreases") == 0 || v("limiter.depth") == 0 || v("throttles") == 0 {
-		t.Fatalf("proxy %+v, decreases %d depth %d throttles %d", s, v("limiter.decreases"), v("limiter.depth"), v("throttles"))
+	if s.Throttled == 0 || s.Reset == 0 || v("limiter.decreases") == 0 || v("limiter.max_depth") == 0 || v("throttles") == 0 {
+		t.Fatalf("proxy %+v, decreases %d depth %d throttles %d", s, v("limiter.decreases"), v("limiter.max_depth"), v("throttles"))
 	}
 }

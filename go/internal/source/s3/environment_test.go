@@ -82,7 +82,7 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 		v := st.Counters.Value
 		t.Logf("limiter %v: %+v, storm %d-%d ms, in flight after it %d (%d requests), decreases %d depth %d increases %d waits %d",
 			on, s, first*int(faulttest.Step/time.Millisecond), last*int(faulttest.Step/time.Millisecond), after, arrived,
-			v("limiter.decreases"), v("limiter.depth"), v("limiter.increases"), v("limiter.waits"))
+			v("limiter.decreases"), v("limiter.max_depth"), v("limiter.increases"), v("limiter.waits"))
 		if !on {
 			if st.Counters.On("limiter") || s.MaxActive < workers/2 {
 				t.Fatalf("limiter off: feature %v, max in flight %d", st.Counters.On("limiter"), s.MaxActive)
@@ -93,11 +93,11 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 			t.Fatalf("no request arrived after the storm and inside the clean window:\n%s", faulttest.TSV(tl))
 		}
 		grew := v("limiter.increases") != 0 && len(tl) <= first+int(cleanWindow/faulttest.Step)
-		if !st.Counters.On("limiter") || v("limiter.decreases") == 0 || v("limiter.depth") < workers/2 || grew {
-			t.Fatalf("limiter counters: decreases %d depth %d increases %d", v("limiter.decreases"), v("limiter.depth"), v("limiter.increases"))
+		if !st.Counters.On("limiter") || v("limiter.decreases") == 0 || v("limiter.max_depth") < workers/2 || grew {
+			t.Fatalf("limiter counters: decreases %d depth %d increases %d", v("limiter.decreases"), v("limiter.max_depth"), v("limiter.increases"))
 		}
-		if after > workers-v("limiter.depth") {
-			t.Fatalf("%d in flight after the storm, above the lowered limit %d:\n%s", after, workers-v("limiter.depth"), faulttest.TSV(tl))
+		if after > workers-v("limiter.max_depth") {
+			t.Fatalf("%d in flight after the storm, above the lowered limit %d:\n%s", after, workers-v("limiter.max_depth"), faulttest.TSV(tl))
 		}
 	}
 }
@@ -153,9 +153,9 @@ func TestAttemptsAreRequestEconomics(t *testing.T) {
 			}
 			v := st.Counters.Value
 			if v("requests") != 1 || v("attempts") != v("requests")+c.extra || v("retries") != 2 ||
-				v("throttles") != c.thr || v("inflight.max") != 1 || v("inflight.ns") <= 0 {
+				v("throttles") != c.thr || v("inflight.max_active") != 1 || v("inflight.busy_ns") <= 0 {
 				t.Fatalf("requests %d attempts %d retries %d throttles %d inflight max %d ns %d", v("requests"), v("attempts"),
-					v("retries"), v("throttles"), v("inflight.max"), v("inflight.ns"))
+					v("retries"), v("throttles"), v("inflight.max_active"), v("inflight.busy_ns"))
 			}
 		})
 	}
@@ -179,7 +179,7 @@ func TestSlowStartStartsNarrow(t *testing.T) {
 		t.Fatalf("%d keys, want %d", len(rows), len(keys))
 	}
 	tl, v := px.Timeline(), st.Counters.Value
-	if len(tl) == 0 || tl[0].MaxActive > 8 || v("limiter.slow_start.doubles") == 0 {
-		t.Fatalf("first 100 ms: %+v; doubles %d", tl[:min(1, len(tl))], v("limiter.slow_start.doubles"))
+	if len(tl) == 0 || tl[0].MaxActive > 8 || v("slow_start.doubles") == 0 {
+		t.Fatalf("first 100 ms: %+v; doubles %d", tl[:min(1, len(tl))], v("slow_start.doubles"))
 	}
 }

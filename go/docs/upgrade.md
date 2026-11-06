@@ -138,8 +138,8 @@ parts are byte-identical within a build only.
 | `swath.entries.emitted`, `objects` | `objects` |
 | `engine.splits` | `split.accepted_bounded` + `split.accepted_frontier` |
 | `engine.steals`, `swath.steals` | – (splits are owner-side: always 0) |
-| `swath.in_flight.avg`, `engine.avg_in_flight` | `inflight.ns` / (`timings.listing_ms` × 10⁶): attempts in flight, send to body read; `mean_active` is ranges in `Expand`, which includes backoffs and admission waits |
-| `engine.peak_in_flight` | `inflight.max` |
+| `swath.in_flight.avg`, `engine.avg_in_flight` | `inflight.busy_ns` / (`timings.listing_ms` × 10⁶): attempts in flight, send to body read; `mean_active` is ranges in `Expand`, which includes backoffs and admission waits |
+| `engine.peak_in_flight` | `inflight.max_active` |
 | `swath.workers.active` | `max_active` (ranges in `Expand` at once) |
 | `swath.probe.fetches` | `probe.requests` |
 | `swath.probe.empty_upper_bisections` | `probe.moved` (an empty upper child found, the pivot moved toward the cursor) |

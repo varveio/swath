@@ -249,7 +249,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   fixed `--workers` requests in flight. `--limiter-slow-start` (off by default) starts the limit at 4 instead
   and doubles it each second up to `--workers` until the first throttle answer or timeout (Java's slow start);
   a resume replays it from the recorded command and may add or undo it, since a resumed client starts a new
-  limiter (counters `limiter.slow_start.*`). `--request-rate N` (S3 and GCS, default 0: none) also caps the run's
+  limiter (counters `slow_start.*`, feature `slow_start`, on only with the limiter). `--request-rate N` (S3 and GCS, default 0: none) also caps the run's
   HTTP attempts at N per second (at least 0.001), every attempt counted (pages, probes, client retries, engine
   requeues): a token bucket of one token, taken after the limiter's permit, so the k-th token of a burst is due
   (k-1)/N seconds after the first, as with Java's `--request-rate`. Tokens are scheduled, not the sends: a caller

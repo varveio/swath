@@ -425,17 +425,19 @@ const (
 // CounterDefs are the client counters' definitions, by ClientCounter, after
 // the engine's in a provider's tally (Store fills them); throttles and
 // timeouts name the provider's own answers and flag. The limiter's carry
-// the feature "limiter".
+// the feature "limiter", its slow start's "slow_start" (on only with both),
+// the rate cap's "request_rate". Names follow the engine's: a dotted group,
+// a snake_case leaf, high-water marks prefixed max_, durations suffixed _ns.
 func CounterDefs(throttles, timeoutFlag string) []counters.Def {
-	const f = "limiter"
+	const f = FeatureLimiter
 	d := make([]counters.Def, NumCounters)
 	d[CAttempts] = counters.Def{Key: "attempts", Kind: counters.Count, Unit: "requests", Help: "HTTP requests sent: every attempt, client retries and engine requeues included (the request economics)"}
 	d[CRetries] = counters.Def{Key: "retries", Kind: counters.Count, Unit: "requests", Help: "attempts repeated after a retryable failure"}
 	d[CThrottles] = counters.Def{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "attempts answered " + throttles + ", retried or not (the last of an exhausted call included)"}
 	d[CTimeouts] = counters.Def{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past " + timeoutFlag + ", retried or not"}
 	d[CParseFailures] = counters.Def{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"}
-	d[CInflightMax] = counters.Def{Key: "inflight.max", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
-	d[CInflightNs] = counters.Def{Key: "inflight.ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}
+	d[CInflightMax] = counters.Def{Key: "inflight.max_active", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
+	d[CInflightNs] = counters.Def{Key: "inflight.busy_ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}
 	d[CLimiterDecreases] = counters.Def{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit multiplied by 0.7 on a " + throttles + " answer"}
 	d[CLimiterFloorThrottles] = counters.Def{Key: "limiter.floor_throttles", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers at a limit of 1: no decrease and no fresh 10 s cool-down"}
 	d[CLimiterIncreases] = counters.Def{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one (at most one per second, after 10 s without a throttle)"}
@@ -445,12 +447,12 @@ func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 	d[CLimiterValve] = counters.Def{Key: "limiter.valve", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one through the latency freeze (at most one per 30 s, with progress)"}
 	d[CLimiterWaits] = counters.Def{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"}
 	d[CLimiterWaitNs] = counters.Def{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"}
-	d[CLimiterDepth] = counters.Def{Key: "limiter.depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"}
-	d[CSlowStartDoubles] = counters.Def{Key: "limiter.slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: f, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout)"}
-	d[CSlowStartNs] = counters.Def{Key: "limiter.slow_start.ns", Kind: counters.Max, Unit: "ns", Feature: f, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout)"}
-	d[CSlowStartEnd] = counters.Def{Key: "limiter.slow_start.end", Kind: counters.Max, Unit: "permits", Feature: f, Help: "--limiter-slow-start: the limit the ramp ended at (0: still ramping)"}
-	d[CRateWaits] = counters.Def{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: "request_rate", Help: "attempts that waited for a --request-rate token"}
-	d[CRateWaitNs] = counters.Def{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: "request_rate", Help: "time those attempts waited, summed"}
+	d[CLimiterDepth] = counters.Def{Key: "limiter.max_depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"}
+	d[CSlowStartDoubles] = counters.Def{Key: "slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: FeatureSlowStart, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout)"}
+	d[CSlowStartNs] = counters.Def{Key: "slow_start.ramp_ns", Kind: counters.Max, Unit: "ns", Feature: FeatureSlowStart, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout)"}
+	d[CSlowStartEnd] = counters.Def{Key: "slow_start.end_limit", Kind: counters.Max, Unit: "permits", Feature: FeatureSlowStart, Help: "--limiter-slow-start: the limit the ramp ended at (0: still ramping)"}
+	d[CRateWaits] = counters.Def{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: FeatureRequestRate, Help: "attempts that waited for a --request-rate token"}
+	d[CRateWaitNs] = counters.Def{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: FeatureRequestRate, Help: "time those attempts waited, summed"}
 	return d
 }
 

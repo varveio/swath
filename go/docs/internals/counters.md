@@ -12,7 +12,7 @@ kept in the client, which a provider may share or replace, and copied into the t
 snapshots, each by its named ID (`objhttp.ClientCounter`, end sentinel `NumCounters`; `Counts.Store`), so
 no position carries a meaning and `TestCounterTable` refuses an unfilled or doubly filled entry. A new
 path costs one row and its increment. Kinds: `count` is a monotonic sum, `max` a high-water mark, `flag`
-a boolean.
+a boolean. Names: a dotted group, a snake_case leaf; high-water marks start with `max_`, durations end in `_ns`.
 
 **Feature state is separate from engagement; off, absent and zero are different.** A counter that measures
 a policy names it (`Feature`). `features` maps every such policy to whether this run had it on; the values of
@@ -20,7 +20,8 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
 - absent, feature `false`: the policy was off for this run (for S3: `seed` without `-seed` or on resume,
   `split` and `probe` with `--sequential`, `probe` without `--probe`, `floors` without `--floors`, `structure` without `--structure` (all `swath diag list` flags), `resume` on a fresh run, `max_keys`
-  without `-max-keys`, `limiter` with `--limiter=false`, a library caller's zero `Admission` or a supplied client);
+  without `-max-keys`, `limiter` with `--limiter=false`, a library caller's zero `Admission` or a supplied client, `slow_start` without
+  `--limiter-slow-start` or without the limiter, `request_rate` without `--request-rate`);
 - present and zero: the policy was on and never fired.
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
@@ -129,8 +130,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |
 | `timeouts` | count | requests |  | attempts past -request-timeout, retried or not |
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
-| `inflight.max` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
-| `inflight.ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
+| `inflight.max_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
+| `inflight.busy_ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
 | `limiter.decreases` | count | steps | limiter | limit multiplied by 0.7 on a 429/503/SlowDown answer |
 | `limiter.floor_throttles` | count | answers | limiter | 429/503/SlowDown answers at a limit of 1: no decrease and no fresh 10 s cool-down |
 | `limiter.increases` | count | steps | limiter | limit raised by one (at most one per second, after 10 s without a throttle) |
@@ -140,10 +141,10 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `limiter.valve` | count | steps | limiter | limit raised by one through the latency freeze (at most one per 30 s, with progress) |
 | `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
 | `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
-| `limiter.depth` | max | permits | limiter | most permits the limit stood below the worker count |
-| `limiter.slow_start.doubles` | count | steps | limiter | --limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout) |
-| `limiter.slow_start.ns` | max | ns | limiter | --limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout) |
-| `limiter.slow_start.end` | max | permits | limiter | --limiter-slow-start: the limit the ramp ended at (0: still ramping) |
+| `limiter.max_depth` | max | permits | limiter | most permits the limit stood below the worker count |
+| `slow_start.doubles` | count | steps | slow_start | --limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout) |
+| `slow_start.ramp_ns` | max | ns | slow_start | --limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout) |
+| `slow_start.end_limit` | max | permits | slow_start | --limiter-slow-start: the limit the ramp ended at (0: still ramping) |
 | `rate.waits` | count | attempts | request_rate | attempts that waited for a --request-rate token |
 | `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |
 <!-- s3:end -->
