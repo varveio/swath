@@ -11,14 +11,19 @@ package sortedparquettest
 import (
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/encoding/thrift"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 // Row is one canonical row. Nil pointers are nulls.
@@ -81,6 +86,13 @@ type Part struct {
 	PageBytes int
 	// GroupRows rows per row group; 0 is one group.
 	GroupRows int
+	// Groups, when set, are the row counts of the row groups in order,
+	// overriding GroupRows; a zero writes an empty row group. They must
+	// add up to len(Rows).
+	Groups []int
+	// NoKeyPageIndex leaves the key column without a ColumnIndex and an
+	// OffsetIndex, as a writer without page indexes does.
+	NoKeyPageIndex bool
 	// BoundBytes is the ColumnIndex truncation; 0 is 64, the Java writer's
 	// library default.
 	BoundBytes int
@@ -111,25 +123,129 @@ func Write(path string, part Part) error {
 		options = append(options, parquet.KeyValueMetadata(k, v))
 	}
 	w := parquet.NewGenericWriter[Row](f, options...)
-	group := part.GroupRows
-	if group <= 0 {
-		group = len(part.Rows) + 1
+	groups := part.Groups
+	if groups == nil {
+		group := part.GroupRows
+		if group <= 0 {
+			group = len(part.Rows) + 1
+		}
+		for i := 0; i < len(part.Rows); i += group {
+			groups = append(groups, min(group, len(part.Rows)-i))
+		}
 	}
-	for i := 0; i < len(part.Rows); i += group {
-		if _, err := w.Write(part.Rows[i:min(i+group, len(part.Rows))]); err != nil {
+	next := 0
+	for _, n := range groups {
+		if next+n > len(part.Rows) {
+			_ = f.Close()
+			return fmt.Errorf("row groups hold more than the part's %d rows", len(part.Rows))
+		}
+		if n == 0 {
+			continue // parquet-go writes no empty group; insertEmptyGroups adds them
+		}
+		_, err := w.Write(part.Rows[next : next+n])
+		if err == nil {
+			err = w.Flush()
+		}
+		if err != nil {
 			_ = f.Close()
 			return err
 		}
-		if err := w.Flush(); err != nil {
-			_ = f.Close()
-			return err
-		}
+		next += n
+	}
+	if next != len(part.Rows) {
+		_ = f.Close()
+		return fmt.Errorf("row groups hold %d of the part's %d rows", next, len(part.Rows))
 	}
 	if err := w.Close(); err != nil {
 		_ = f.Close()
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if slices.Contains(groups, 0) {
+		if err := insertEmptyGroups(path, groups); err != nil {
+			return err
+		}
+	}
+	if part.NoKeyPageIndex {
+		return dropKeyPageIndex(path)
+	}
+	return nil
+}
+
+// insertEmptyGroups rewrites the footer of the part at path so that its row
+// groups have the row counts groups gives, adding a row group of no rows
+// (its column chunks empty, without page indexes) at each zero: parquet-go
+// skips empty groups when it writes, but other writers leave them.
+func insertEmptyGroups(path string, groups []int) error {
+	return rewriteFooter(path, func(meta *format.FileMetaData) error {
+		if len(meta.RowGroups) == 0 {
+			return errors.New("a part of empty groups only is not supported")
+		}
+		var out []format.RowGroup
+		written := meta.RowGroups
+		for _, rows := range groups {
+			if rows > 0 {
+				out = append(out, written[0])
+				written = written[1:]
+				continue
+			}
+			empty := format.RowGroup{SortingColumns: meta.RowGroups[0].SortingColumns}
+			for _, chunk := range meta.RowGroups[0].Columns {
+				md := chunk.MetaData
+				md.NumValues, md.TotalUncompressedSize, md.TotalCompressedSize = 0, 0, 0
+				md.Statistics, md.DictionaryPageOffset, md.EncodingStats = format.Statistics{}, 0, nil
+				empty.Columns = append(empty.Columns, format.ColumnChunk{FilePath: chunk.FilePath, FileOffset: md.DataPageOffset, MetaData: md})
+			}
+			out = append(out, empty)
+		}
+		for i := range out {
+			out[i].Ordinal = int16(i)
+		}
+		meta.RowGroups = out
+		return nil
+	})
+}
+
+// dropKeyPageIndex rewrites the footer of the part at path so that the key
+// column's chunks reference no ColumnIndex and no OffsetIndex.
+func dropKeyPageIndex(path string) error {
+	return rewriteFooter(path, func(meta *format.FileMetaData) error {
+		for g := range meta.RowGroups {
+			chunk := &meta.RowGroups[g].Columns[0]
+			chunk.ColumnIndexOffset, chunk.ColumnIndexLength = 0, 0
+			chunk.OffsetIndexOffset, chunk.OffsetIndexLength = 0, 0
+		}
+		return nil
+	})
+}
+
+// rewriteFooter applies change to the footer of the part at path and
+// writes the part back with the new footer.
+func rewriteFooter(path string, change func(*format.FileMetaData) error) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	n := len(raw)
+	footerLen := int(binary.LittleEndian.Uint32(raw[n-8 : n-4]))
+	var protocol thrift.CompactProtocol
+	var meta format.FileMetaData
+	if err := thrift.Unmarshal(&protocol, raw[n-8-footerLen:n-8], &meta); err != nil {
+		return fmt.Errorf("read footer: %w", err)
+	}
+	if err := change(&meta); err != nil {
+		return err
+	}
+	footer, err := thrift.Marshal(&protocol, &meta)
+	if err != nil {
+		return err
+	}
+	body := append(raw[:n-8-footerLen:n-8-footerLen], footer...)
+	body = binary.LittleEndian.AppendUint32(body, uint32(len(footer)))
+	body = append(body, "PAR1"...)
+	return os.WriteFile(path, body, 0o644)
 }
 
 func cmpOr(v, fallback int) int {
