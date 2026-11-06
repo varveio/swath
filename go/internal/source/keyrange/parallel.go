@@ -154,10 +154,19 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	start := time.Now()
 	st := p.enter(r)
 	defer p.leave(r, st, start)
-	// A structure probe still in flight when the range ends is cancelled:
-	// its result could only serve this range's next split.
+	// A structure probe still in flight when the range ends is cancelled
+	// (its result could only serve this range's next split) and awaited,
+	// so no request outlives the range.
 	pctx, stop := context.WithCancel(ctx)
-	defer stop()
+	defer func() {
+		stop()
+		p.mu.Lock()
+		ch := st.pending
+		p.mu.Unlock()
+		if ch != nil {
+			<-ch
+		}
+	}()
 	in := p.query()
 	in.After = r.lo
 	in.Through, in.Bounded = r.hi, !r.open
