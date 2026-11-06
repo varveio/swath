@@ -126,6 +126,35 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 			}
 		})
 	}
+	t.Run("limiter: throttles lower it, other failures do not", func(t *testing.T) {
+		var n atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			switch n.Add(1) {
+			case 1, 2:
+				w.Throttle(rw)
+			case 3:
+				w.Server(rw)
+			case 4:
+				conn, _, err := rw.(http.Hijacker).Hijack()
+				if err == nil {
+					conn.Close()
+				}
+			default:
+				w.OK(rw)
+			}
+		}))
+		defer srv.Close()
+		l := objhttp.NewLimiter(8)
+		cl := build(Settings{Endpoint: srv.URL, Timeout: time.Second,
+			Retry: objhttp.Retry{MaxAttempts: 9, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, Limiter: l}})
+		if err := cl.List(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		got := cl.Counters()
+		if l.Limit() != 3 || got.Retries != 3 || got.Limiter.Decreases != 2 || got.Limiter.Depth != 5 || got.Limiter.Increases != 0 {
+			t.Fatalf("limit %d, counters %+v", l.Limit(), got)
+		}
+	})
 	t.Run("canceled in a backoff", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { w.Server(rw) }))
 		defer srv.Close()

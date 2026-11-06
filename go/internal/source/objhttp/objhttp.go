@@ -186,11 +186,14 @@ func Requeue(class func(error) Class) func(error) bool {
 	}
 }
 
-// Retry is a client's retry policy. Zero values take the defaults.
+// Retry is a client's retry policy and admission. Zero values take the
+// defaults.
 type Retry struct {
 	MaxAttempts int           // default 9
 	BaseBackoff time.Duration // default 100 ms
 	MaxBackoff  time.Duration // default 5 s
+	// Limiter, if set, admits every attempt (Limiter); nil admits all.
+	Limiter *Limiter
 }
 
 // Defaults fills the zero values.
@@ -209,15 +212,17 @@ func (r *Retry) Defaults() {
 // Do runs attempt until it succeeds, fails in a way not worth repeating,
 // or has run MaxAttempts times (then an *ExhaustedError), waiting a
 // full-jitter exponential backoff between attempts and counting retries,
-// throttles and timeouts. The caller's cancellation ends it at once.
+// throttles and timeouts. With r.Limiter, each attempt waits for a permit
+// first and returns it with its outcome and latency; no permit is held
+// during a backoff. The caller's cancellation ends it at once.
 func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
 	var zero T
 	for n := 1; ; n++ {
-		v, err := attempt()
+		v, admitted, err := admit(ctx, r.Limiter, attempt)
 		if err == nil {
 			return v, nil
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || !admitted {
 			return zero, ctx.Err()
 		}
 		retry, throttle, timeout := retryable(err)
@@ -245,6 +250,33 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 	}
 }
 
+// admit runs one attempt under l's admission (none when l is nil);
+// admitted is false when the caller's context ended while it waited.
+func admit[T any](ctx context.Context, l *Limiter, attempt func() (T, error)) (v T, admitted bool, err error) {
+	if l == nil {
+		v, err = attempt()
+		return v, true, err
+	}
+	if err := l.Acquire(ctx); err != nil {
+		return v, false, err
+	}
+	t0 := time.Now()
+	v, err = attempt()
+	o := Success
+	if err != nil {
+		switch _, throttle, timeout := retryable(err); {
+		case throttle:
+			o = Throttled
+		case timeout:
+			o = TimedOut
+		default:
+			o = Ignored
+		}
+	}
+	l.Release(o, time.Since(t0))
+	return v, true, err
+}
+
 // Counts are what a client did, for the run summary.
 type Counts struct {
 	Attempts  int64 `json:"attempts"`  // HTTP requests sent
@@ -254,6 +286,8 @@ type Counts struct {
 	// ParseFailures counts 200 responses whose body did not parse (a cut or
 	// garbled body); they are retried like transport faults, never dropped.
 	ParseFailures int64 `json:"parse_failures"`
+	// Limiter is the admission's engagements (zero without a limiter).
+	Limiter LimiterCounts `json:"limiter"`
 }
 
 // Counters accumulate Counts; safe for concurrent use.
@@ -269,28 +303,42 @@ func (c *Counters) ParseFailure() { c.parseFailures.Add(1) }
 
 // Load returns the counts so far.
 func (c *Counters) Load() Counts {
-	return Counts{c.attempts.Load(), c.retries.Load(), c.throttles.Load(), c.timeouts.Load(), c.parseFailures.Load()}
+	return Counts{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(),
+		Timeouts: c.timeouts.Load(), ParseFailures: c.parseFailures.Load()}
 }
 
 // CounterDefs are the client counters' definitions, after the engine's in a
 // provider's tally (Store fills them in this order); throttles and
-// timeouts name the provider's own answers and flag.
+// timeouts name the provider's own answers and flag. The limiter's carry
+// the feature "limiter".
 func CounterDefs(throttles, timeoutFlag string) []counters.Def {
+	const f = "limiter"
 	return []counters.Def{
 		{Key: "attempts", Kind: counters.Count, Unit: "requests", Help: "HTTP requests, retries included"},
 		{Key: "retries", Kind: counters.Count, Unit: "requests", Help: "attempts repeated after a retryable failure"},
 		{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "of the retries, " + throttles + " answers"},
 		{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "of the retries, attempts past " + timeoutFlag},
 		{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"},
+		{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit multiplied by 0.7 on a " + throttles + " answer"},
+		{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one (at most one per second, after 10 s without a throttle)"},
+		{Key: "limiter.growth_cooldown", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: a throttle answer in the last 10 s"},
+		{Key: "limiter.growth_latency_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: successful attempts' latency EWMA above twice the baseline"},
+		{Key: "limiter.growth_timeout_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: 3 or more attempt timeouts in the last 10 s"},
+		{Key: "limiter.valve", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one through the latency freeze (at most one per 30 s, with progress)"},
+		{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"},
+		{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"},
+		{Key: "limiter.depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"},
 	}
 }
 
 // NumCounters is len(CounterDefs(...)).
-const NumCounters = 5
+const NumCounters = 14
 
 // Store writes n into set at the IDs of CounterDefs, the first at first.
 func (n Counts) Store(set *counters.Set, first counters.ID) {
-	for i, v := range [NumCounters]int64{n.Attempts, n.Retries, n.Throttles, n.Timeouts, n.ParseFailures} {
+	l := n.Limiter
+	for i, v := range [NumCounters]int64{n.Attempts, n.Retries, n.Throttles, n.Timeouts, n.ParseFailures,
+		l.Decreases, l.Increases, l.Cooldown, l.LatencyFrozen, l.TimeoutFrozen, l.Valve, l.Waits, l.WaitNs, l.Depth} {
 		set.Set(first+counters.ID(i), v)
 	}
 }

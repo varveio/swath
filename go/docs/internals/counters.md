@@ -16,7 +16,7 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
 - absent, feature `false`: the policy was off for this run (for S3: `seed` without `-seed` or on resume,
   `split` and `probe` with `--sequential`, `probe` without `--probe`, `floors` without `--floors`, `structure` without `--structure` (all `swath diag list` flags), `resume` on a fresh run, `max_keys`
-  without `-max-keys`);
+  without `-max-keys`, `limiter` without `--limiter` or with a supplied client);
 - present and zero: the policy was on and never fired.
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
@@ -123,6 +123,15 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `throttles` | count | requests |  | of the retries, 429/503/SlowDown answers |
 | `timeouts` | count | requests |  | of the retries, attempts past -request-timeout |
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
+| `limiter.decreases` | count | steps | limiter | limit multiplied by 0.7 on a 429/503/SlowDown answer |
+| `limiter.increases` | count | steps | limiter | limit raised by one (at most one per second, after 10 s without a throttle) |
+| `limiter.growth_cooldown` | count | steps | limiter | due growth steps held back: a throttle answer in the last 10 s |
+| `limiter.growth_latency_frozen` | count | steps | limiter | due growth steps held back: successful attempts' latency EWMA above twice the baseline |
+| `limiter.growth_timeout_frozen` | count | steps | limiter | due growth steps held back: 3 or more attempt timeouts in the last 10 s |
+| `limiter.valve` | count | steps | limiter | limit raised by one through the latency freeze (at most one per 30 s, with progress) |
+| `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
+| `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
+| `limiter.depth` | max | permits | limiter | most permits the limit stood below the worker count |
 <!-- s3:end -->
 
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active

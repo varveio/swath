@@ -36,6 +36,8 @@ type Config struct {
 	MaxBackoff     time.Duration // default 5 s
 	HTTPClient     *http.Client
 	Now            func() time.Time // signing clock; default time.Now
+	// Limiter, if set, admits every attempt (objhttp.Limiter).
+	Limiter *objhttp.Limiter
 }
 
 // Counters are what the client did, for the run summary.
@@ -70,7 +72,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: anonymousNote(cfg),
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff}}
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter}}
 	c.retry.Defaults()
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
@@ -102,7 +104,9 @@ func (c *Client) Region() string { return c.region }
 
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
-	return c.counts.Load()
+	n := c.counts.Load()
+	n.Limiter = c.retry.Limiter.Counts()
+	return n
 }
 
 // ListObjectsV2 sends one ListObjectsV2 request, retrying retryable

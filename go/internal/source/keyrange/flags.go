@@ -18,12 +18,15 @@ type Policy struct {
 	MaxKeys     int64 // stop after this many objects (sequential only; 0 = all)
 	Probe       bool  // check each split's upper child with a 1-key request first (off by default)
 	Floors      bool  // the gate-chain floors (off by default)
+	// Limiter: the provider's client admits its HTTP attempts through an
+	// adaptive limiter (objhttp.Limiter) of at most Workers permits.
+	Limiter bool
 }
 
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedDescent: p.SeedDescent, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors}
+		MaxKeys: p.MaxKeys, Probe: p.Probe, Floors: p.Floors, Limiter: p.Limiter}
 }
 
 // Flags registers the engine's policy flags on f and returns the Policy
@@ -46,6 +49,7 @@ func Flags(f *flag.FlagSet, diag bool) *Policy {
 		bf(&p.SeedDescent, "seed-descent", "ranges: with -seed, walk the folder hierarchy (false: one delimiter page)")
 		bf(&p.Floors, "floors", "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		bf(&p.Sequential, "sequential", "ranges: list with one continuation-token chain (no ranges; the reference)")
+		bf(&p.Limiter, "limiter", "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one")
 		bf(&p.Probe, "probe", "ranges: before each split, a 1-key request checks the upper child is not empty (off: it costs more than it saves, REPORT.md Step 5a)")
 		f.Var((*int64Flag)(&p.MaxKeys), "max-keys", "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
 	}

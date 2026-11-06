@@ -58,6 +58,8 @@ type Config struct {
 	BaseBackoff     time.Duration // default 100 ms
 	MaxBackoff      time.Duration // default 5 s
 	HTTPClient      *http.Client
+	// Limiter, if set, admits every attempt (objhttp.Limiter).
+	Limiter *objhttp.Limiter
 	// TokenSource overrides the credential lookup (tests).
 	TokenSource oauth2.TokenSource
 }
@@ -171,7 +173,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		u.Path += "/"
 	}
 	c := &Client{cfg: cfg, base: u, http: cfg.HTTPClient, source: "anonymous",
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff}}
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter}}
 	c.retry.Defaults()
 	if c.http == nil {
 		t := http.DefaultTransport.(*http.Transport).Clone()
@@ -275,7 +277,9 @@ func (c *Client) Credentials() (source string, anonymous bool) { return c.source
 
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
-	return c.counts.Load()
+	n := c.counts.Load()
+	n.Limiter = c.retry.Limiter.Counts()
+	return n
 }
 
 // route is the URL of a bucket's objects collection.

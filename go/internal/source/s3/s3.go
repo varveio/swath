@@ -125,8 +125,13 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		return nil, errors.New("no bucket")
 	}
 	p := &Provider{opt: opt, client: opt.Client}
+	limited := opt.Policy.Limiter && p.client == nil
 	if p.client == nil {
-		c, err := client.New(client.Config{
+		var lim *objhttp.Limiter
+		if limited {
+			lim = objhttp.NewLimiter(opt.Workers)
+		}
+		c, err := client.New(client.Config{Limiter: lim,
 			Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
 			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
 		})
@@ -148,6 +153,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	}
 	eo := opt.Policy.Options()
 	eo.Prefix, eo.Workers, eo.Resume, eo.SplitCoin, eo.Trace = opt.Prefix, opt.Workers, resume, opt.splitCoin, opt.trace
+	eo.Limiter = limited
 	e, err := keyrange.New(eo, keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,

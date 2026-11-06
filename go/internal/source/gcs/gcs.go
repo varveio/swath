@@ -98,8 +98,13 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		return nil, errors.New("no bucket")
 	}
 	p := &Provider{opt: opt, client: opt.Client}
+	limited := opt.Policy.Limiter && p.client == nil
 	if p.client == nil {
-		c, err := client.New(ctx, client.Config{Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
+		var lim *objhttp.Limiter
+		if limited {
+			lim = objhttp.NewLimiter(opt.Workers)
+		}
+		c, err := client.New(ctx, client.Config{Limiter: lim, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
 			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout})
 		if err != nil {
 			return nil, fmt.Errorf("GCS client: %w", err)
@@ -115,7 +120,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		resume = &keyrange.Resume{After: opt.Resume.After}
 	}
 	eo := opt.Policy.Options()
-	eo.Prefix, eo.Workers, eo.Resume = opt.Prefix, opt.Workers, resume
+	eo.Prefix, eo.Workers, eo.Resume, eo.Limiter = opt.Prefix, opt.Workers, resume, limited
 	e, err := keyrange.New(eo, keyrange.Description[Object]{
 		Target:  "gs://" + opt.Bucket + "/" + opt.Prefix,
 		Listing: keyrange.Listing, // names list in unsigned UTF-8 byte order; startOffset is any name

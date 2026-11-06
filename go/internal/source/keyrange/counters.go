@@ -202,6 +202,9 @@ func (p *Engine[P]) disabled() []string {
 	if p.opt.MaxKeys == 0 {
 		off = append(off, "max_keys")
 	}
+	if !p.opt.Limiter {
+		off = append(off, "limiter")
+	}
 	return off
 }
 

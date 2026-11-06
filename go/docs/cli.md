@@ -132,6 +132,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	GCS: per-request timeout; a request that exceeds it is retried (default 30s)
   -gcs-user-project project
     	GCS: bill a requester-pays bucket's requests to this project
+  -limiter
+    	requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -max-keys N
