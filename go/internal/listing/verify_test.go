@@ -18,7 +18,7 @@ import (
 	"github.com/varveio/swath/go/internal/journal"
 )
 
-// TestRecoveryVerificationIsCancellableAndReported (Astra register row
+// TestRecoveryVerificationIsCancellableAndReported (review item
 // 37): a resume reads every retained part in full (size and MD5) before it
 // lists. A stop during that read ends the resume with the cause, before
 // recovery renames or removes anything, and the next resume completes;

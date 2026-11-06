@@ -36,8 +36,8 @@ import (
 // it with its own outcome under the output lock, so a supervisor never
 // resumes on a stale 75 forever. An output another process owns keeps its
 // outcome, and the invocation's goes to stderr; a failed write of the
-// outcome is reported, on stderr and in the report (Sol, fourth review,
-// minimum change 4).
+// outcome is reported, on stderr and in the report (durability
+// review).
 func TestOutcomeIsCurrent(t *testing.T) {
 	var hang atomic.Bool // every request waits: no progress
 	hang.Store(true)
@@ -253,9 +253,8 @@ func crashRun(t *testing.T, args []string, nth int64) {
 // lock while another process completes the run, or replaces it with a new
 // interrupted one, and then continued, it must leave the directory exactly
 // as the other process left it; its outcome goes to stderr, and the report
-// (--report) names this attempt with the reason in outcome.unrecorded (Sol,
-// fifth review, M4; sixth review: the source that does not open gave no
-// reason).
+// (--report) names this attempt with the reason in outcome.unrecorded
+// (durability review: the source that does not open gave no reason).
 func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 	good, broken := fakeADC(t)
 	stderr := captureStderr(t)
@@ -378,7 +377,7 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 // error.json stays, with the same class and exit code as the new outcome,
 // but the later attempt's report names another attempt, so a supervisor
 // that compares them never takes the old outcome for the current one; the
-// same for a refusal before the run (Sol, fifth review, M4).
+// same for a refusal before the run (durability review).
 func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 	gcs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done() // no progress: every attempt is stuck
@@ -453,8 +452,8 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 
 // TestEarlyRefusalSaysWhy: a swath resume refused before any run (the
 // dataset is complete; the directory holds no run) puts why its outcome
-// is not in error.json into the report and on stderr (Sol, seventh
-// review, P2). Before, outcome.unrecorded was empty for these.
+// is not in error.json into the report and on stderr (durability
+// review). Before, outcome.unrecorded was empty for these.
 func TestEarlyRefusalSaysWhy(t *testing.T) {
 	stderr := captureStderr(t)
 	ctx := context.Background()

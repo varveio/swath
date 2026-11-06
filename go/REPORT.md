@@ -1533,7 +1533,7 @@ requests cost nothing and nothing throttles, so they are not turned on from this
 
 ## Review items
 
-The Astra architecture review's deferred items, and the Sol durability review, as built:
+The architecture review's deferred items, and the durability review, as built:
 
 | Item | Change | Test | Commit |
 |---|---|---|---|
@@ -1544,8 +1544,8 @@ The Astra architecture review's deferred items, and the Sol durability review, a
 | Off, absent, zero | a policy's counters name it; an off policy is listed under `disabled` and its counters are absent | `TestSummaryDistinguishesOffFromZero` | ec23ff8 |
 | fs cancellation, bounded shutdown | directory reads check the context every 64 reads and around the sort; the CLI exits 130 after 15 s of stopping | fs and CLI tests | 400012f |
 | fs chunk fd leak | `source.Disposer`: ranges never expanded release their shared directory descriptor | `TestCancelReleasesChunkFDs` | 400012f |
-| Sol P1-1…P1-6 | success never after a failed expand; lock before touching the output; recorded parts kept on error; directory sync before the record; endpoint, region and key cap in the identity; damaged frames refused | one regression test each | 3c257d1…212a830 |
-| Sol P2 | finality on resume; bounded checkpoints; spill frame bound and reader close; orphan spill reclaimed; 13 SIGKILL points; ENOSPC on the journal; Windows warns that lock and syncs are not enforced | crash matrix with spill on and off, `TestSIGKILLAtEveryPoint`, `TestENOSPCOnJournalResumes` | cf88757, e377a5c |
+| Durability P1-1…P1-6 | success never after a failed expand; lock before touching the output; recorded parts kept on error; directory sync before the record; endpoint, region and key cap in the identity; damaged frames refused | one regression test each | 3c257d1…212a830 |
+| Durability P2 | finality on resume; bounded checkpoints; spill frame bound and reader close; orphan spill reclaimed; 13 SIGKILL points; ENOSPC on the journal; Windows warns that lock and syncs are not enforced | crash matrix with spill on and off, `TestSIGKILLAtEveryPoint`, `TestENOSPCOnJournalResumes` | cf88757, e377a5c |
 
 Not done: EIO injection beyond ENOSPC (no portable way to make a write return EIO without a fault-injecting
 filesystem); power-loss behaviour stays untested (SIGKILL cannot show it).
@@ -1822,7 +1822,7 @@ Every run exited 0 with a committed dataset (exit codes in the harness's `arms.t
 - **Rate cap 200/s (fourcastnetgfs, original build):** head exceeds the cap by retrying (10,923 requests,
   4,725 throttled); with the limiter 6,207 requests and 102 throttled, at 107 attempts/s, about half the cap.
 
-**Rerun after the floor re-arm fix (2026-11-06).** Astra's decision register found that a throttle answer at a
+**Rerun after the floor re-arm fix (2026-11-06).** A review found that a throttle answer at a
 limit of 1 re-armed the 10 s cool-down (Java suppresses it), the suspected cause of the sustained arm's
 collapse to serial, which voided those rows. Same harness and replay configuration as above (recording p50
 latency, 64 workers, `--seed`, fresh proxy per arm), replay build from swath-replay `main` with GCS latency

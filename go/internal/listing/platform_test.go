@@ -15,7 +15,7 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 )
 
-// TestUnenforcedPlatformRefusesJournal (Astra register row 42): where
+// TestUnenforcedPlatformRefusesJournal (review item 42): where
 // directory syncs are not enforced (Windows), a journaled
 // run and a resume are refused with ErrUnenforced before the output is
 // created or touched; a --no-journal run of a resumable source and a local

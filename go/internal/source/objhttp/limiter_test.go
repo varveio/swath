@@ -159,7 +159,7 @@ func (l *Limiter) held() int {
 
 // TestLimiterPanicReturnsPermit: an attempt that panics still returns its
 // permit, so a caller that recovers keeps a working limiter (at one permit
-// the leak would block every later attempt; Sol, fifth review, Part 2).
+// the leak would block every later attempt; durability review).
 func TestLimiterPanicReturnsPermit(t *testing.T) {
 	l := NewLimiter(1)
 	var c Counters

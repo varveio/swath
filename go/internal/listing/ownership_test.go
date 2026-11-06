@@ -18,7 +18,7 @@ import (
 // lock like a journaled one, so a second writer is refused before it
 // prepares anything; Settle runs while the lock is still held, and not at
 // all for a run that never owned the output; a refused foreign directory
-// is left untouched (Sol re-review, ownership).
+// is left untouched (durability review, ownership).
 func TestEveryOutputIsOwned(t *testing.T) {
 	src := t.TempDir()
 	mk(t, src, "a", "b", "c")

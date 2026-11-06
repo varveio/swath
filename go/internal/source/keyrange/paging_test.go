@@ -298,7 +298,7 @@ func TestInclusiveBoundDropsCoveredPrefixes(t *testing.T) {
 // followed until the context ends, holding only the latest tokens (before,
 // the run kept every token of the chain: 40,000 pages of 2 KiB tokens held
 // some 80 MB); a token repeated within the window is still an invalid page
-// (Sol, sixth review).
+// (durability review).
 func TestFreshEmptyTokensUseBoundedMemory(t *testing.T) {
 	const pages, tokenBytes = 40000, 2048
 	pad := strings.Repeat("x", tokenBytes)

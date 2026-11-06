@@ -21,8 +21,7 @@ import (
 // source's scheme, and each provider gets its own defaults and the shared
 // engine flags: by default 64 workers whatever the CPU count, no seed, splits on, the limiter on, no structure
 // probes or floors; -seed reaches the selected provider (seed.prefixes
-// counted), on swath list and swath diag list alike (Astra, kernel-seam
-// follow-up, item 7).
+// counted), on swath list and swath diag list alike.
 func TestBothSchemesThroughTheCommand(t *testing.T) {
 	keys := gcstest.Keys(3000)
 	s3url := s3test.Bucket(t, keys)

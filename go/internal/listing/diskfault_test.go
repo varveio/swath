@@ -24,7 +24,7 @@ import (
 // fails with that error and publishes no manifest, the parts it published
 // stay as they were, and a resume completes the dataset of an
 // uninterrupted run byte for byte (before, faults were injected only
-// before a write: TestENOSPCOnJournalResumes; Sol, sixth review).
+// before a write: TestENOSPCOnJournalResumes; durability review).
 func TestDiskFaultMatrix(t *testing.T) {
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")

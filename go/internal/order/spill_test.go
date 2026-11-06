@@ -361,7 +361,7 @@ func (l *longRange) Expand(ctx context.Context, r fr, e source.Emitter[fr, tp]) 
 // path holds its consumed items only until they are half of its items
 // (and at least 256), so the storage for what was already drained never
 // exceeds that for what still waits, however many pages it has streamed
-// (byte-mode budget; Sol fourth review, P2-11). What waits is the awaited
+// (byte-mode budget; durability review, P2-11). What waits is the awaited
 // range's own lead over the drainer, which the budget exempts. The old
 // drainer zeroed consumed slots but kept them, one per page streamed.
 func TestRunningNodeStorageIsBounded(t *testing.T) {

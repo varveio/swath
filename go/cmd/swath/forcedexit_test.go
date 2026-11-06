@@ -40,7 +40,7 @@ func fillPipe(t *testing.T, w *os.File) {
 	}
 }
 
-// TestForcedExitWithFullStderr (Sol, seventh review, Part 3 item 3): the
+// TestForcedExitWithFullStderr (durability review): the
 // process's stderr is a pipe nobody drains, filled after startup, and the
 // journal sync hangs. A deadline (124) and a stall (75) still end the
 // process with their code within the grace plus forcedAllowance, with the

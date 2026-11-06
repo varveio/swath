@@ -200,7 +200,7 @@ func (failingRoot) Expand(context.Context, rng, source.Emitter[rng, tp]) error {
 }
 
 // TestWorkerFailureNeverSucceeds: a worker failure on the final node is
-// always reported, never a successful empty run (Sol P1-1).
+// always reported, never a successful empty run (durability P1-1).
 func TestWorkerFailureNeverSucceeds(t *testing.T) {
 	// Force the window: a worker (not the drainer) expands the root, and
 	// the worker pauses after expand returns while the drainer runs.

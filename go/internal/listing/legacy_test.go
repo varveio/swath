@@ -78,8 +78,8 @@ func snapshot(t *testing.T, out string) map[string][]byte {
 // with the last record intact (unchanged source), and cut by five bytes or
 // lost whole after a row of its part and then the rest of the suffix is
 // deleted from the source, at two attempts each. The acknowledged part keeps its bytes,
-// no replacement part or record is written and no manifest appears (Sol,
-// sixth review: version 7 recovery would remove that part as unrecorded).
+// no replacement part or record is written and no manifest appears
+// (durability review: version 7 recovery would remove that part as unrecorded).
 func TestLegacyTemporaryProtocolIsRefusedOrRecovered(t *testing.T) {
 	for _, damage := range []string{"intact", "five-byte truncation", "whole last frame removed"} {
 		url, b := crashBackend(t)

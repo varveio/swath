@@ -17,7 +17,7 @@ import (
 
 // The order stage's waits, each driven to its wait with a deterministic
 // barrier (hookWait) and then released by exactly one event: the event
-// must wake it promptly. Sort consult (Astra), section 3, lists them.
+// must wake it promptly.
 
 // op is one step of a scripted range: rows, a child, or the end.
 type op struct {

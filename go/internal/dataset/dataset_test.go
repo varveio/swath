@@ -120,7 +120,7 @@ func TestPublishFailureLeavesNoManifest(t *testing.T) {
 	}
 }
 
-// TestOverwriteRemovesTheCommitFirst (Astra register row 43): --overwrite
+// TestOverwriteRemovesTheCommitFirst (review item 43): --overwrite
 // is a destructive replacement, and its first durable step is to remove the
 // previous dataset's commit record: a crash part way through the removal
 // leaves a directory with no dataset (and its old parts), never a manifest

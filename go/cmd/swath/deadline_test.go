@@ -93,7 +93,7 @@ func readJSON(t *testing.T, path string, v any) []byte {
 // with the report and error.json naming the same attempt, no manifest and
 // the published parts kept; once the service lists again, swath resume
 // completes the dataset of an uninterrupted run byte for byte, the kept
-// parts unchanged (Sol, sixth review).
+// parts unchanged (durability review).
 func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	const stall = time.Second
 	captureStderr(t)
@@ -156,7 +156,7 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 // its own (124, not the stale 75), and stderr names its attempt, in the
 // report failure and in the outcome line, so a supervisor that accepts
 // error.json only for the current attempt cannot accept the stale one
-// (Sol, sixth review).
+// (durability review).
 func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
 	stderr := captureStderr(t)
 	s := newRowlessService(t)

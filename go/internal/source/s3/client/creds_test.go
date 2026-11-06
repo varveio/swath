@@ -341,7 +341,7 @@ func TestOnEC2(t *testing.T) {
 	}
 }
 
-// TestPartialCredentialsRefuse (Sol, seventh review, Part 3 item 4):
+// TestPartialCredentialsRefuse (durability review):
 // credential intent the SDK drops (one access key without the other, a
 // session token without keys, a role without its web-identity token or
 // the reverse, a profile that does not exist) is configured but broken:

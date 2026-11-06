@@ -304,8 +304,8 @@ func TestEncoderFailureStopsListing(t *testing.T) {
 
 // TestCompetingRunsAreRefused: while a run owns the output (paused inside
 // an encoder), a resume and an overwrite by another run are refused before
-// they touch anything, and the owner then finishes byte-identically (Sol
-// P1-2).
+// they touch anything, and the owner then finishes byte-identically
+// (durability P1-2).
 func TestCompetingRunsAreRefused(t *testing.T) {
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -370,7 +370,7 @@ func TestCompetingRunsAreRefused(t *testing.T) {
 
 // TestRenameFailureAfterRecordResumes: an ordinary error between a part's
 // durable record and its rename leaves the recorded temporary part in
-// place, and -resume publishes it (Sol P1-3).
+// place, and -resume publishes it (durability P1-3).
 func TestRenameFailureAfterRecordResumes(t *testing.T) {
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -414,7 +414,7 @@ func TestRenameFailureAfterRecordResumes(t *testing.T) {
 
 // TestDamagedJournalRefusesBeforeDeleting: a damaged interior frame length
 // (overrunning the file) and a corrupt last frame of an acknowledged,
-// published part are refused, and nothing is deleted (Sol P1-6).
+// published part are refused, and nothing is deleted (durability P1-6).
 func TestDamagedJournalRefusesBeforeDeleting(t *testing.T) {
 	url := crashBucket(t)
 	for _, damage := range []string{"interior length", "last frame"} {
@@ -459,7 +459,7 @@ func TestDamagedJournalRefusesBeforeDeleting(t *testing.T) {
 
 // TestResumeAfterFinalPartDoesNotList: once the final part is durable a
 // resume publishes without listing again, so a bucket that changed in
-// between cannot add a second final part (Sol P2, finality).
+// between cannot add a second final part (durability P2, finality).
 func TestResumeAfterFinalPartDoesNotList(t *testing.T) {
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -606,8 +606,8 @@ func TestAcknowledgedRecordDamageRefuses(t *testing.T) {
 // truncated or zeroed since: nothing on disk tells. With the source
 // changed inside that part's range, relisting would silently replace what
 // the run committed; the resume refuses instead, with the part kept, and
-// keeps refusing (Sol, fourth review, minimum change 5; the static-source
-// cases above cannot see the loss).
+// keeps refusing (durability review; the static-source cases above cannot
+// see the loss).
 func TestAmbiguousTailRefusesOnChangedSource(t *testing.T) {
 	for _, damage := range []string{"truncated", "zero tail", "truncated, rest deleted"} {
 		url, b := crashBackend(t)
@@ -705,8 +705,8 @@ func TestAcknowledgedTailTruncationRefuses(t *testing.T) {
 // end (no torn bytes), the same as an append that never began, so the
 // part in .swath/parts/ is set aside as the torn tail's is: an unchanged
 // source reproduces it and resumes identically; a deleted row inside it or
-// a deleted suffix is refused with the part kept, at every attempt (Sol,
-// fifth review, M5).
+// a deleted suffix is refused with the part kept, at every attempt
+// (durability review).
 func TestAcknowledgedWholeLastFrameLossPreservesPart(t *testing.T) {
 	url0 := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")

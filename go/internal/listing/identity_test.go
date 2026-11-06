@@ -44,7 +44,7 @@ func fileTree(t *testing.T, dir string) map[string]string {
 	return out
 }
 
-// TestReplacedOutputIsNeverTouched (Astra register row 34): the output
+// TestReplacedOutputIsNeverTouched (review item 34): the output
 // directory is moved away mid-run and another dataset (an interrupted run's
 // layout: a temporary parts directory included) is put at its pathname.
 // The run's lock is on the moved directory's inode; the pathname now names
@@ -148,7 +148,7 @@ func copyTree(t *testing.T, dir, dst string) {
 	}
 }
 
-// TestReplacedOutputWithLiveWriters (Sol, seventh review, Part 3 item 1):
+// TestReplacedOutputWithLiveWriters (durability review):
 // the output is replaced mid-run by a copy of itself (so the impostor
 // holds the run's own spill directory, spill files and progress file at
 // the same names) while spill files are live and a writer like the

@@ -306,7 +306,7 @@ func sameParts(t *testing.T, at, ref, out string) {
 // with a continuation for longer than twice the stall timeout before any
 // row: the run completes (before, it stopped as stuck with 75 while the
 // service answered every request). A source that hangs, or answers only
-// 503, still stops as stuck (Sol, fifth review, Part 2).
+// 503, still stops as stuck (durability review).
 func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 	const stall = time.Second
 	h := gcstest.Handler(gcstest.Keys(2000), 0)
@@ -387,7 +387,7 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 // TestGCSCappedRunIsIncomplete: a GCS run capped by --max-keys commits a
 // dataset whose coverage says incomplete, exits 1 with class incomplete
 // (not resumable), keeps no journal, and swath resume refuses it as
-// complete and leaves it as it is (S3: TestExitCodes, partial; Sol P2-8).
+// complete and leaves it as it is (S3: TestExitCodes, partial; durability P2-8).
 func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	captureStderr(t)
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
