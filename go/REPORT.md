@@ -1586,10 +1586,30 @@ engine drops; that is the separate counter `bound_drops`. Re-run of the GCS rout
 (fourcastnetgfs), `overfetch_keys` 0, `end_offset_omitted` 0; requests 1,117 / 732 / 5,027 (run-to-run
 variation of the split timing).
 
-**Speed: unmeasured.** swath-replay injects latency (`--inject-latency worker_page=…`) in its S3 handler
-only; its GCS handler is built without the latency function (`ReplayServer`: `new GcsHandler(bucket, store,
-identity, metrics)`), so the two routes' wall times on replay are not comparable, and no live GCS bucket was
-listed.
+**GCS speed on replay (2026-11-06): the same as S3.** swath-replay now injects its latency profile on the
+GCS route too (varveio/swath#250, branch `replay/gcs-latency-injection` at `076e769`; before it the GCS route
+was served at local speed, so the routes' wall times were not comparable). One server per recording,
+`--protocols s3,gcs`, sorted mode, the recording's p50 (99 ms noaa-eri-pds and fourcastnetgfs, 164 ms
+pansurg) on every request shape of both routes. The same Go build, `ba85d97`, lists the S3 route and the GCS
+route with `--seed` and default workers (12 on this 4-core host), 3 interleaved repetitions, s3 then gs. Median
+wall s and requests, with the range of 3 in brackets:
+
+| recording | rows | S3 wall s | GCS wall s | GCS/S3 | S3 requests | GCS requests | S3 overfetched keys | GCS overfetched keys |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds | 845,693 | 11.90 (11.10-12.31) | 13.54 (11.69-13.72) | 1.14 | 1,127 | 1,173 | 232,750 | 0 |
+| pansurg-curation-raw-open-data | 501,262 | 12.87 (11.74-13.21) | 12.74 (12.73-12.75) | 0.99 | 703 | 709 | 152,437 | 0 |
+| noaa-nws-fourcastnetgfs-pds | 4,081,170 | 51.01 (48.77-58.37) | 51.53 (51.24-52.20) | 1.01 | 4,933 | 4,950 | 802,821 | 0 |
+
+In all nine pairs, the GCS dataset equals the S3 dataset (keys and sizes) and is ascending. The replay
+server's request count equals the report's `requests` in every run. The injection engaged on GCS: the
+server's `delay` stage counts plus its overruns equal the requests served on each route. GCS wall time is
+within the S3 run-to-run spread on pansurg and fourcastnetgfs. On noaa-eri-pds, two GCS reps were about
+1.5 s slower and the third (11.69 s) was within S3's range. An earlier build, `5edb998`, ran on the same
+server: its three GCS reps on noaa-eri-pds took 11.67-11.77 s against S3's 11.15-12.06 s. So the gap is
+consistent with load from another builder's tests sharing the host; it is not a route cost. GCS sends 0-4 %
+more requests and overfetches nothing (it sends `endOffset`). Its wall time follows the request count and
+the injected latency, as S3's does. These are replay numbers at a uniform p50; no live GCS bucket was
+listed, so GCS's own latency profile is still unmeasured.
 
 **Client cost against Google's generated client (2026-11-06): the GCS gain is small.** The hand-rolled
 `objects.list` client (`internal/source/gcs/client`) against Google's generated JSON client
