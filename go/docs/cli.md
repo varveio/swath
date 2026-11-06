@@ -153,7 +153,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
   -row-budget bytes
     	bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
-    	ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting
+    	ranges: before splitting, cut the keyspace at the folders of one delimiter page ('/') at the scope's root
   -spill-max bytes
     	the spill disk budget: cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
   -stall-timeout duration
@@ -292,7 +292,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -row-budget bytes
     	bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
-    	ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting
+    	ranges: before splitting, cut the keyspace at the folders of one delimiter page ('/') at the scope's root
   -sequential
     	ranges: list with one continuation-token chain (no ranges; the reference)
   -spill-compress
