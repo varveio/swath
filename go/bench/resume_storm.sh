@@ -12,7 +12,7 @@
 #   request (503 SlowDown to that fraction of requests); the list is SIGKILLed KILL_AT seconds after it
 #   starts and resumed at once, through the same proxy, so the phase continues into the resume.
 # Environment: REPLAY_ENV (the replay oracle's env.sh), SWATH (Go binary), FAULTPROXY (built
-#   bench/faultproxy), RECORDINGS (default /home/user/bench-data/recordings), KILL_AT (s, default 30),
+#   bench/faultproxy), RECORDINGS (default $BENCH_DATA/recordings), KILL_AT (s, default 30),
 #   PHASE (s from the first request, default KILL_AT+120), FRACTION (default 0.2), LIST_FLAGS (extra
 #   `swath list` flags, default "--seed --part-interval 10s"), PIN (a command prefix such as
 #   "taskset -c 0", default none), TARGET (an S3 listing endpoint URL such as a bench scale fake: no replay
@@ -28,7 +28,7 @@ WORKERS=("$@")
 [ ${#WORKERS[@]} -gt 0 ] || { echo "no worker counts" >&2; exit 2; }
 SW=${SWATH:?path to the Go swath binary}
 FP=${FAULTPROXY:?path to the built bench/faultproxy}
-REC=${RECORDINGS:-/home/user/bench-data/recordings}
+REC=${RECORDINGS:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}/recordings}
 KILL_AT=${KILL_AT:-30} FRACTION=${FRACTION:-0.2}
 PHASE=${PHASE:-$((KILL_AT + 120))}
 LIST_FLAGS=${LIST_FLAGS:---seed --part-interval 10s}

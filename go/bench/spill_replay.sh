@@ -2,7 +2,7 @@
 # Step 3: spill on the budget-stall shape (noaa-eri-pds recording, replayed with its 98 ms p50 page latency).
 source ${REPLAY_ENV:?path to the replay env.sh}
 S=${S:?scratch dir with swath-s3}; G=${G:-$S/gate3}; B=${B:-noaa-eri-pds}
-swath-replay serve --fixture /home/user/bench-data/recordings/$B/dataset/data --bucket $B --host 127.0.0.1 --port 19320 \
+swath-replay serve --fixture ${BENCH_DATA:?set BENCH_DATA}/recordings/$B/dataset/data --bucket $B --host 127.0.0.1 --port 19320 \
   --serving-mode sorted --metrics-port 19420 --parquet-connections 8 --max-concurrent-requests 1024 \
   --inject-latency "worker_page=98ms,pivot_probe=98ms,structure_probe=98ms" > $G/replay.log 2>&1 &
 SRV=$!; trap 'kill $SRV' EXIT

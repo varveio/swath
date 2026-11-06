@@ -8,14 +8,14 @@
 #   Every arm lists s3://BUCKET through a fresh proxy (so its windows start at the run's first request),
 #   anonymous, path-style, 64 workers with the seed, sorted Parquet. Arms run in file order, REPS times.
 # Needs REPLAY_ENV (the replay oracle's env.sh) and the recording under RECORDINGS (default
-# /home/user/bench-data/recordings); FAULTPROXY is the built bench/faultproxy binary. Writes
+# $BENCH_DATA/recordings); FAULTPROXY is the built bench/faultproxy binary. Writes
 # OUTDIR/arms.tsv (exit code, wall, the proxy's totals), OUTDIR/NAME-REP.json (run report) and
 # OUTDIR/NAME-REP.tsv (the proxy's timeline).
 set -u
 source "${REPLAY_ENV:?path to the replay env.sh}"
 ARMS=$1 B=$2 LAT=$3 PORT=$4 REPS=$5 W=$6
 FP=${FAULTPROXY:?path to the built bench/faultproxy}
-REC=${RECORDINGS:-/home/user/bench-data/recordings}
+REC=${RECORDINGS:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}/recordings}
 MP=$((PORT + 100)) PP=$((PORT + 1))
 mkdir -p "$W"
 swath-replay serve --fixture "$REC/$B/dataset/data" --bucket "$B" --host 127.0.0.1 --port "$PORT" \

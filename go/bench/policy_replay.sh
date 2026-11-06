@@ -9,13 +9,13 @@
 #   Every arm lists s3://BUCKET through the replay endpoint, anonymous, path-style, writes a sorted
 #   Parquet dataset, and Go arms run 64 workers with the seed. Arms run in file order, REPS times.
 # Needs REPLAY_ENV (the replay oracle's env.sh, notes runbook) and the recording under RECORDINGS
-# (default /home/user/bench-data/recordings). Writes OUTDIR/arms.tsv (wall and the replay server's HTTP
+# (default $BENCH_DATA/recordings). Writes OUTDIR/arms.tsv (wall and the replay server's HTTP
 # request count per arm and rep) and OUTDIR/NAME-REP.json (the run report); tabulate with
 # policy_table.py OUTDIR.
 set -u
 source "${REPLAY_ENV:?path to the replay env.sh}"
 ARMS=$1 B=$2 LAT=$3 PORT=$4 REPS=$5 W=$6
-REC=${RECORDINGS:-/home/user/bench-data/recordings}
+REC=${RECORDINGS:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}/recordings}
 MP=$((PORT + 100)) EP=http://127.0.0.1:$PORT
 mkdir -p "$W"
 swath-replay serve --fixture "$REC/$B/dataset/data" --bucket "$B" --host 127.0.0.1 --port "$PORT" \

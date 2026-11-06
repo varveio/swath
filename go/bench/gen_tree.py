@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Generate synthetic filesystem trees for swath-local benchmarks.
 
-Trees (under --base, default /home/user/bench-data):
+Trees (under --base, default $BENCH_DATA):
   wide       1,000,000 empty files in 1,000 directories (1,000 per directory).
   deep       500,000 empty files: a fan-out-4 directory tree of depth 8 whose first
              12,500 leaves (enumeration order) each hold 40 files. A full 4^8 tree
@@ -188,7 +188,7 @@ GENS = {"wide": gen_wide, "deep": gen_deep, "realistic": gen_realistic, "huge": 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("trees", nargs="*", default=["wide", "deep", "realistic"])
-    ap.add_argument("--base", default="/home/user/bench-data")
+    ap.add_argument("--base", default=os.environ.get("BENCH_DATA", "bench-data"))
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
     for t in a.trees:

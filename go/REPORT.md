@@ -306,7 +306,7 @@ what the DFS modes take off the critical path.
 
 ## Per-part parallel encoding (Pass B)
 
-This adopts Swath's Java approach (`PartEncoders`/`PartSizer`; scratchpad note `java-parquet-techniques.md`
+This adopts Swath's Java approach (`PartEncoders`/`PartSizer`; a private design note on the Java Parquet techniques
 §(b)/(c), techniques T1, T2, T3, T7 and the T14 gate) behind `--encode-scheme part`.
 
 **Design** (`sortout/parts.go`):
@@ -636,7 +636,7 @@ buffer.
 - Per the instructions, no other host was tried, so there are no real-bucket numbers.
 
 **Varve.** A temporary test in `varve/internal/swath` (Varve `2353ada`; deleted afterwards, `git status` clean;
-copy in the scratchpad) opened the datasets with `Open(ctx, DirSource(root), "s3", "bench")`:
+scratch copy) opened the datasets with `Open(ctx, DirSource(root), "s3", "bench")`:
 
 | Dataset | Open | Eligibility | Flat List | Delimiter List | Stream |
 |---|---|---|---|---|---|
@@ -672,7 +672,7 @@ summary says this one is not. Opening a prefix dataset would need a Varve-side n
 
 **What was built** (`internal/source/s3/parallel.go`, `pivot.go`). The basics of Swath's parallel engine,
 following the spec written from the Java engine
-(`scratchpad/s3-parallel-core-spec.md`). docs/internals/providers.md "S3" has the full rules. In short:
+(a private design note, the S3 parallel-core spec). docs/internals/providers.md "S3" has the full rules. In short:
 - `(lo, hi]` ranges: the first page is sent with `StartAfter=lo`, later pages with continuation tokens. A page
   ending at `hi` ends the range without another request.
 - A one-page delimiter seed (`-seed`) with a cut cap of `min(1000, 4×workers)`, even subsampling and Swath's
@@ -925,7 +925,7 @@ owner's batch of run summaries.
 
 ### Recordings (live, anonymous, Java `swath list --format parquet --sort`)
 
-All are under `/home/user/bench-data/recordings/<bucket>/` (`dataset/` with `_swath_summary.json`, `run.log`,
+All are under `$BENCH_DATA/recordings/<bucket>/` (`dataset/` with `_swath_summary.json`, `run.log`,
 `time.txt`), and all are whole buckets.
 
 | Bucket | Region | Objects | Java wall s | API calls | Dataset |
@@ -1869,7 +1869,7 @@ Every run exited 0 with a committed dataset. Readings:
 **Default.** Off. The written acceptance criteria held for completion, the drop, the recovery bound (68 s
 measured against 75 s), the bounded rate and baseline parity, and failed for the rate cap ("served rate near
 R": 0.23-0.53 R measured). On replay the rules trade 1.5-3.5x wall in a storm for 11-38 % fewer requests;
-whether that is right for real S3 has no evidence here: 25 of 2,702 stage runs met any 503, all at concurrency
+whether that is right for real S3 has no evidence here: in a private corpus of about 2,700 hosted listings, 25 met any 503, all at concurrency
 256-512.
 
 **Default since the owner's decision (2026-11-06): on**, for S3 and GCS through the command (`--limiter=false`
@@ -1881,7 +1881,7 @@ default against 4.71 / 4.72 s off (requests 1,590 / 1,589 against 1,596 / 1,588)
 0 except one pansurg rep (277, at the start, as in the table above). The default is within about 0.8 s of off
 on these two recordings; one slower rep in each pair, so at 2 reps a cost under 10 % cannot be excluded.
 
-**Live (single run, labelled as such).** `noaa-hrrr-bdp-pds` (a bucket with SlowDown in the stage corpus),
+**Live (single run, labelled as such).** `noaa-hrrr-bdp-pds` (a bucket that returned SlowDown in that corpus),
 prefix `hrrr.202401`, anonymous, 64 workers, `--seed --limiter`, build `acc3f88`: 1,279,184 objects in 5.96 s,
 1,683 attempts, no retry, no throttle, no limiter decrease. A run at 64 workers did not reach the request rate
 that throttled the corpus runs (256-512 workers on the whole bucket).
@@ -2237,23 +2237,10 @@ with the upgrade guide applied, and Varve's own `internal/swath` tests.
 
 ## Hosted listing runner gate (2026-11-06)
 
-The hosted runner's swath adapter (`listing_runner/lister/swath/adapter.py` in the cloud repo, read and run
-locally, nothing pushed) was pointed at this build with `SWATH_CMD` and run on a small live public prefix
-(`s3://noaa-eri-pds/TEMP/`, anonymous). It fails at once: `flag provided but not defined: -format` (exit 1,
-classified from stderr). By reading the adapter, what it expects and this tool does not emit:
-
-| Runner expects (Java CLI contract) | This tool |
-|---|---|
-| `swath list URI --format parquet -o DIR --report PATH --sort` | `swath list URI -o DIR --report PATH`; no `--format` or `--sort` (output is always sorted Parquet); `--report` writes the run report when the attempt ends, on failure too (`DIR/run.json` after a commit as well) |
-| `--concurrency N`, `--no-sign-request`, `--requester-pays requester`, `--engine-toggle NAME=on\|off` | `--workers N`, `--anonymous`, `--request-payer`; policy toggles only as `swath diag list` flags |
-| `--max-duration D` ends with exit 0 and a summary `completed: false` (a truncated `_SAMPLE`) | exit 124, resumable, `error.json` class `deadline` |
-| a summary JSON at `--report` (and `_swath_summary.json` in the dataset after `swath resume`) with `completed`, live `objects` rewritten during the run, `sort.merge_progress_units`, `output.compressed_size_bytes` and `sort.segment_bytes` for disk sizing, and `cost`/`efficiency` blocks | `run.json` after the commit (`outcome.complete`, `output.rows_listed`, `output.bytes`; no cost or efficiency); live progress in `.swath/progress.json` (`objects`, `advance`) |
-| engine-toggle passthrough | none in `list` |
-| `swath --version` first line | works: `swath-go <version> (<revision>)` |
-| `swath resume DIR` | works (same form) |
-| exit 75 resumable, 124 not resumable as a sample | 75 and 124 both resumable |
-| the outcome from the exit code and the summary | the exit code plus the report at `--report` (`outcome`, and `attempt`: a random id and start time); `DIR/error.json` carries the same outcome and attempt and is current only when its attempt id is the report's: an attempt that cannot write it leaves the previous one, and says why in `outcome.unrecorded` |
-| parts under `data/*.parquet` (renumbered on upload), the runner's own manifest | matches |
+The hosted runner that drives the Java CLI was tried against this build: it depends on the Java command-line
+surface and summary fields, so the Go tool does not pass it as a drop-in. The adapter work is scheduled for
+the cutover; the Go tool's own contract for a supervisor is in [docs/cli.md](docs/cli.md) ("What a hosted
+runner needs").
 
 ## Probe default off
 
@@ -2272,7 +2259,7 @@ tables. Ratios held: the parallel walker beat `find -printf` by 3.4x in the main
 
 ## Schema and cost
 
-Physical schema as DuckDB 2.0 reads it from `/home/user/bench-data/out-realistic` (`parquet_schema`; DuckDB
+Physical schema as DuckDB 2.0 reads it from `$BENCH_DATA/out-realistic` (`parquet_schema`; DuckDB
 `DESCRIBE` reports every column nullable regardless). Full output: `bench/results/verify-out-realistic.txt`.
 
 | Column | DuckDB type | Parquet physical / repetition / logical | Swath Java contract (contracts §4) |
@@ -2434,8 +2421,8 @@ later: `getattrlistbulk(2)` on macOS and Windows directory enumeration (`FindFir
 | `realistic` | 971,927 (971,847 files + 80 symlinks) | 99,892 | 40 project trees (src/, nested node_modules/, .git/objects/), 300 days × 24 h Hive partitions × 20 files, 20 home dirs with spaces and non-ASCII names; sparse files with log-uniform sizes (943.8 GB apparent, about 0 allocated) |
 | `huge` | 200,000 | 1 | one directory (split test only) |
 
-Total about 2.79M inodes. The trees stay in `/home/user/bench-data`. The retained dataset
-`/home/user/bench-data/out-realistic` (default settings, `getdents`, 1 part, 19.2 MB) passes `verify.py`.
+Total about 2.79M inodes. The trees stay under `$BENCH_DATA`. The retained dataset
+`$BENCH_DATA/out-realistic` (default settings, `getdents`, 1 part, 19.2 MB) passes `verify.py`.
 
 ## Known gaps
 
@@ -2464,7 +2451,7 @@ bytes, not skipped; ids are unsigned; encoding is parallel; S3 and GCS runs resu
 
 ### Review fixes 2026-11-05
 
-These fixes come from an independent review (`scratchpad/review/review.md`). They are covered by tests only; no
+These fixes come from an independent review (private notes). They are covered by tests only; no
 benchmark was re-run. The retained `out-realistic` dataset was regenerated once with the fixed binary and has the
 same part MD5.
 

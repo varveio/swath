@@ -13,7 +13,7 @@
 #   (the default arm's workers stay 64; only the encoders follow N). Every arm lists s3://BUCKET anonymous,
 #   path-style, into a sorted Parquet dataset; extra Go flags in GO_FLAGS, extra Java flags in JAVA_FLAGS.
 # Environment: REPLAY_ENV (the replay oracle's env.sh), SWATH (Go binary), JAVA_SWATH (the Java CLI's
-#   bin/swath), RECORDINGS (default /home/user/bench-data/recordings).
+#   bin/swath), RECORDINGS (default $BENCH_DATA/recordings).
 # Writes OUTDIR/arms.tsv (wall and the replay server's HTTP request count per run) and
 # OUTDIR/BUCKET-CPUS-ARM-REP.{json,log}; tabulate with defaults_table.py OUTDIR.
 set -u
@@ -21,7 +21,7 @@ source "${REPLAY_ENV:?path to the replay env.sh}"
 B=$1 LAT=$2 PORT=$3 REPS=$4 W=$5
 SW=${SWATH:?path to the Go swath binary}
 JSW=${JAVA_SWATH:-}
-REC=${RECORDINGS:-/home/user/bench-data/recordings}
+REC=${RECORDINGS:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}/recordings}
 CPUS=${CPUS:-all} ARMS=${ARMS:-default measured java}
 GO_FLAGS=${GO_FLAGS:-} JAVA_FLAGS=${JAVA_FLAGS:-}
 MP=$((PORT + 100)) EP=http://127.0.0.1:$PORT

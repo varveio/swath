@@ -7,7 +7,7 @@
 # pdu (parallel-disk-usage), dua (dua-cli), and fdfind.
 set -euo pipefail
 TREES=${*:-realistic wide}
-BASE=${BASE:-/home/user/bench-data}; REPS=${REPS:-3}; OUT=${OUT:?}; BIN=${BIN:?}
+BASE=${BASE:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}}; REPS=${REPS:-3}; OUT=${OUT:?}; BIN=${BIN:?}
 export PATH=$PATH:$HOME/go/bin:$HOME/.cargo/bin
 SCR=$OUT/scratch; mkdir -p "$SCR"
 RAW=$OUT/raw.tsv

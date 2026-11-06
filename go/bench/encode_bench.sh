@@ -4,7 +4,7 @@
 # Pass B: per-part vs per-column parallel encoding (REPORT.md "Per-part parallel encoding").
 # usage: BIN=swath OUT=dir bench/encode_bench.sh [root]   (warm, REPS interleaved)
 set -euo pipefail
-R=${1:-/home/user/bench-data/realistic}
+R=${1:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}/realistic}
 REPS=${REPS:-3}; OUT=${OUT:?}; BIN=${BIN:?}
 SCR=$OUT/scratch; mkdir -p "$SCR"
 RAW=$OUT/raw.tsv

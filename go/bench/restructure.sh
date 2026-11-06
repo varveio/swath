@@ -3,7 +3,7 @@
 # usage: BEFORE=old-binary AFTER=new-binary OUT=dir bench/restructure.sh [root]
 # Warm cache, REPS interleaved repetitions; prints medians.
 set -euo pipefail
-R=${1:-/home/user/bench-data/realistic}
+R=${1:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}/realistic}
 REPS=${REPS:-3}; OUT=${OUT:?}; BEFORE=${BEFORE:?}; AFTER=${AFTER:?}
 SCR=$OUT/scratch; mkdir -p "$SCR"
 RAW=$OUT/raw.tsv

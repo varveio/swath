@@ -5,7 +5,7 @@
 # "Ordered walk optimization"). Warm cache, REPS interleaved repetitions.
 # usage: BEFORE=bin AFTER=bin OUT=dir bench/order_opt.sh [root]
 set -euo pipefail
-R=${1:-/home/user/bench-data/realistic}
+R=${1:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}/realistic}
 REPS=${REPS:-3}
 OUT=${OUT:?}
 SCR=$OUT/scratch
