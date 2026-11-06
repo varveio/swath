@@ -322,6 +322,9 @@ func (c *Client) Route(bucket string) string {
 	return u.String()
 }
 
+// UserProject is the billed project every request names (userProject).
+func (c *Client) UserProject() string { return c.cfg.UserProject }
+
 // URL is the request URL for in (exported for the oracle test).
 func (c *Client) URL(in *ListInput) string {
 	u := c.route(in.Bucket)

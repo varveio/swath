@@ -26,10 +26,14 @@ type API interface {
 
 type counted interface{ Counters() client.Counters }
 
-// Routed is implemented by clients that can name the route a bucket's
-// requests go to (client.Client.Route). A supplied client that cannot is
+// Routed is implemented by clients that can name what their requests
+// carry that resume identity freezes: the route a bucket's requests go to
+// and the billed project (client.Client). A supplied client that cannot is
 // listed, but the run declines resume.
-type Routed interface{ Route(bucket string) string }
+type Routed interface {
+	Route(bucket string) string
+	UserProject() string
+}
 
 // Options configure a listing.
 type Options struct {
@@ -79,6 +83,7 @@ type Provider struct {
 	anonymous bool
 	creds     string
 	route     string // the URL the bucket's requests go to ("" with a supplied Client that is not Routed)
+	project   string // the billed project the client sends (userProject)
 }
 
 // Range is the engine's range.
@@ -102,7 +107,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		p.creds, p.anonymous = c.Credentials()
 	}
 	if r, ok := p.client.(Routed); ok {
-		p.route = r.Route(opt.Bucket)
+		p.route, p.project = r.Route(opt.Bucket), r.UserProject()
 	}
 	var resume *keyrange.Resume
 	if opt.Resume != nil {

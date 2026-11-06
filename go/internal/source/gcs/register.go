@@ -88,14 +88,14 @@ func (o *opened) target() string {
 
 // Identity freezes what a resume must list the same: the source, the
 // route requests go to (the JSON API base and the bucket), and the billed
-// project. A supplied client must name its route (Routed), or the run
-// declines resume.
+// project, both as the client sends them. A supplied client must name both
+// (Routed), or the run declines resume.
 func (o *opened) Identity() source.Identity {
 	opt := o.p.opt
 	return source.Identity{Provider: "gcs", Fields: []source.IdentityField{
 		{Name: "source", Value: "gs://" + opt.Bucket + "/" + opt.Prefix},
 		{Name: "route", Value: o.p.route, Canonical: canonicalRoute(o.p.route)},
-		{Name: "user project", Value: opt.UserProject},
+		{Name: "user project", Value: o.p.project},
 	}}
 }
 

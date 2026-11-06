@@ -369,6 +369,62 @@ func (unrouted) List(context.Context, *client.ListInput) (*client.Page, error) {
 	return &client.Page{}, nil
 }
 
+// routeOnly names its route but not its billed project.
+type routeOnly struct{ unrouted }
+
+func (routeOnly) Route(bucket string) string { return "http://host/storage/v1/b/" + bucket + "/o" }
+
+// billed names both.
+type billed struct {
+	routeOnly
+	project string
+}
+
+func (b billed) UserProject() string { return b.project }
+
+// TestSuppliedClientBilling: a supplied client's identity is the billed
+// project it sends, not the options' (a requester-pays resume must bill
+// the same project); one that names its route but not its project
+// declines resume.
+func TestSuppliedClientBilling(t *testing.T) {
+	ident := func(c API, project string) (source.Identity, bool) {
+		src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: c, UserProject: project}, Workers: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return src.(source.Identified).Identity(), src.(source.Capable).Capabilities().Resume
+	}
+	field := func(id source.Identity, name string) string {
+		for _, f := range id.Fields {
+			if f.Name == name {
+				return f.Value
+			}
+		}
+		t.Fatalf("no %s field", name)
+		return ""
+	}
+	a, ok := ident(billed{project: "p1"}, "options-project")
+	if !ok || field(a, "user project") != "p1" {
+		t.Fatalf("resume %v, user project %q: want the client's p1", ok, field(a, "user project"))
+	}
+	b, _ := ident(billed{project: "p2"}, "options-project")
+	if field(a, "user project") == field(b, "user project") {
+		t.Fatal("a changed billed project leaves the identity equal")
+	}
+	if _, ok := ident(routeOnly{}, "p1"); ok {
+		t.Fatal("a supplied client that does not name its billed project declares resume")
+	}
+	// The built-in client names the options' project.
+	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Anonymous: true, UserProject: "p3",
+		Endpoint: "http://127.0.0.1:1/storage/v1/"}, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := field(src.(source.Identified).Identity(), "user project"); v != "p3" {
+		t.Fatalf("built-in client: user project %q", v)
+	}
+}
+
 // TestEngineFlagsShared: GCS takes the range engine's flags from the
 // shared group, so with another engine provider on the same flag set
 // (here the engine's own Flags first) nothing panics and GCS opens with

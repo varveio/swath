@@ -176,8 +176,9 @@ ones (`keyrange.Flags`); the GCS flags are prefixed `--gcs-` because one flag se
 **Schema** `swath/gcs-objects/v1`: the key (the object name), `size`, `last_modified` (`updated`, µs),
 `etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed) and
 `content_type`. **Identity** for resume: the source, the route (the JSON API base and the bucket, as the
-client requests it; scheme and host case are the only equivalence) and `--gcs-user-project`. A run with
-`--max-keys`, or through a supplied client that does not name its route (`gcs.Routed`), cannot resume.
+client requests it; scheme and host case are the only equivalence) and the billed project the client sends
+(`--gcs-user-project` for the built-in client); credentials may change. A run with `--max-keys`, or through a
+supplied client that does not name its route and billed project (`gcs.Routed`), cannot resume.
 Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `timeouts`,
 `parse_failures`) and `end_offset_omitted`.
 

@@ -23,6 +23,7 @@ migration history, at the end.
 |---|---|---|
 | **One row per listed entry, once.** The ranges of a run partition the scope: every key in it is listed by exactly one range, and no key outside it. | Providers split ranges into disjoint children; the order stage drains them depth-first. | S3 T1 random-split tiling, `TestListingEqualsSortedOracle` (filesystem) |
 | **S3: every row is a current object** (`swath/s3-objects/v1`); a key ending in `/` is an object; delimiter prefixes are derived, never stored; owner columns are null unless asked for at run start. | `s3.Schema`. | `TestS3Dataset`, `diffds.py` against Java |
+| **GCS: every row is a live object** (`swath/gcs-objects/v1`; its current generation, listed by `objects.list` without `versions`); a name ending in `/` is an object; delimiter prefixes are derived, never stored; checksums are base64 as listed and absent fields are null. | `gcs.Schema`, the adapter's row mapping. | `TestRowsCarryEveryField`, `TestClientPagesMatchGoogleClient`, the replay identity with the S3 route (REPORT) |
 | **Filesystem: one row per entry below the root**, directories included with a named `kind`; names are bytes, never skipped or normalised; symlinks are not followed. | `localfs.Schema`; `getdents64` and portable engines. | `TestListingEqualsSortedOracle`, `TestKeysAreBytes` |
 | **A listing is not a snapshot.** Entries that change while it runs may or may not be in it. | `coverage.snapshot` is always false. | – |
 
