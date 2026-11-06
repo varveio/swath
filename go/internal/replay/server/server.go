@@ -105,10 +105,16 @@ type Server struct {
 
 	stopCtx  context.Context
 	stop     context.CancelFunc
-	closing  atomic.Bool
-	ops      sync.WaitGroup
 	started  time.Time
 	shutOnce sync.Once
+
+	// opMu guards the count of requests that hold the store and the
+	// closing flag together, so no request can begin once shutdown has
+	// started waiting for the count to reach zero.
+	opMu    sync.Mutex
+	closing bool
+	active  int
+	drained chan struct{} // closed when active reaches zero after closing
 
 	httpSrv, metricsSrv *http.Server
 	ln, metricsLn       net.Listener
@@ -227,7 +233,14 @@ func (s *Server) Shutdown(timeout time.Duration) bool {
 	complete := true
 	s.shutOnce.Do(func() {
 		deadline := time.Now().Add(timeout)
-		s.closing.Store(true)
+		s.opMu.Lock()
+		s.closing = true
+		s.drained = make(chan struct{})
+		if s.active == 0 {
+			close(s.drained)
+		}
+		drained := s.drained
+		s.opMu.Unlock()
 		s.accepting.Store(false)
 		s.stop()
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
@@ -250,8 +263,6 @@ func (s *Server) Shutdown(timeout time.Duration) bool {
 			fmt.Fprintln(s.cfg.Log, "shutdown_incomplete HTTP server stop exceeded its deadline")
 			complete = false
 		}
-		drained := make(chan struct{})
-		go func() { s.ops.Wait(); close(drained) }()
 		select {
 		case <-drained:
 			s.cfg.Store.Close()
@@ -290,6 +301,27 @@ func (b *budget) tryCharge(n int64) bool {
 }
 
 func (b *budget) release(n int64) { b.charged.Add(-n) }
+
+// begin registers a request that will use the store; false once shutdown
+// has begun.
+func (s *Server) begin() bool {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.active++
+	return true
+}
+
+func (s *Server) end() {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.active--
+	if s.active == 0 && s.closing {
+		close(s.drained)
+	}
+}
 
 // tryResponse takes one of the MaxResponses response permits.
 func (s *Server) tryResponse() bool {
