@@ -382,7 +382,8 @@ func need(r *os.Root, rel string, dir, optional bool) (fs.FileInfo, error) {
 }
 
 // openPart opens part file rel through r for reading
-// (dataset.OpenRegularIn: a regular file, the inode its lstat found).
+// (dataset.OpenRegularIn: a regular file by lstat, and the descriptor that
+// inode; this does not prove the path's components stayed the same).
 func openPart(r *os.Root, rel string) (*os.File, error) {
 	f, err := dataset.OpenRegularIn(r, rel, os.O_RDONLY)
 	if err != nil && !errors.Is(err, ErrUnsafeLayout) {
@@ -430,7 +431,8 @@ func checkWorkspace(r *os.Root) error {
 // remove). It does not close a replacement between this check and a later
 // action; recovery then acts through r, the output root, so a link that
 // leaves the output is refused by the root, and a link inside it is the
-// pathname-replacement window durability.md documents.
+// check/action window durability.md documents, with the operations that
+// remain by pathname.
 func checkLayout(r *os.Root, st *journal.State) error {
 	if _, err := need(r, dataset.DataDir, true, false); err != nil {
 		return err

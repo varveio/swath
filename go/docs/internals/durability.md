@@ -128,14 +128,25 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    before the router starts), so a replacement between a check and those actions cannot reach the impostor
    (`TestReplacedAfterCheckGetsNoPart`, the fault point `part-create` between the router's check and the
    create; under a load average of 13-20 `TestReplacedOutputIsNeverTouched` had seen a part created by
-   pathname in the impostor's `.swath/parts`). Resume recovery (step 3) acts through the same root, opened
-   before it starts. What is not excluded: a replacement between a check and its action for the other
-   pathname operations (the spill files, cleanup, the manifest, the reports, the outcome and progress
-   files), and helpers of several steps (preparation, the publication's directory sync, the manifest's write
-   and rename) check once before they start, so that window spans the helper. Below the root, recovery's
-   type checks (step 3) close the case of a link already in place when the resume starts; a path below the
-   root replaced after those checks and before an action is the same check/action window: the root
-   refuses a link that leaves the output, but follows one that stays inside it.
+   pathname in the impostor's `.swath/parts`). Resume recovery (step 3) opens a root before it reads the
+   journal and does through it: the journal's read, sync and reopen; the lstat, open and verification of
+   parts; the renames into `data/` and into `.swath/suspect/`, with the data directory's sync after each
+   (`dataset.PublishPartIn`); the removal of unrecorded entries and stale suspects; the removal and
+   re-creation of `.swath/parts/`; and its directory syncs. Still by pathname, each after an identity check:
+   taking the lock (after lstat checks of `.swath/` and the lock file), a fresh run's preparation and the
+   restart of a run whose journal header never became durable, the journal's creation for a fresh run and
+   `journal.Witness` (a read), the live run's claim-directory sync and the data directory's sync after each
+   live publication, the final publication of a run without a journal, the manifest, the run report and the
+   outcome file (`dataset.Replace`), the workspace and spill cleanup, and `progress.json` and stack dumps
+   under `Progress.Owned`. What is not excluded: a replacement between a check and its action for those
+   pathname operations, and helpers of several steps (preparation, the manifest's write and rename) check
+   once before they start, so that window spans the helper. The root itself is opened by pathname and the
+   lock's identity checked by pathname after, so a replacement and its undoing around the opening is not
+   excluded either. Below the root, recovery's type checks (step 3) close the case of a link already in
+   place when the resume starts; a path below the root replaced after those checks and before an action is
+   the same check/action window: the root refuses a link that leaves the output, but follows one that stays
+   inside it, and a part's identity check after it is opened (`dataset.OpenRegularIn`, `os.SameFile`)
+   proves the inode, not that each path component stayed the same.
 2. Checks the identity in the journal header against the request (`journal.Check`, a pure function). The
    pipeline freezes the schema, key cap, writer recipe (`parquetout.Recipe`: encodings, geometry, part-size rule) and
    part size; the source names the rest as fields with a canonical form (`source.Identified`). For S3 that
