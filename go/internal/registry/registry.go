@@ -22,6 +22,7 @@ import (
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/textout"
 )
 
 // A Factory opens one kind of source.
@@ -84,6 +85,8 @@ type Env struct {
 	Empty bool
 	// Ordered, if set, counts rows the order stage has handed on.
 	Ordered *atomic.Int64
+	// Text, if set (and Router nil), writes the rows as text there.
+	Text *textout.Out
 }
 
 // Bound is a provider bound to its schema; embed it in an opened source.
@@ -110,6 +113,12 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 			return order.Stats{}, nil, err
 		}
 		sink, enc = r, r
+	} else if env.Text != nil {
+		t, err := textout.NewSink(env.Text, b.s)
+		if err != nil {
+			return order.Stats{}, nil, err
+		}
+		sink = t
 	}
 	if env.Ordered != nil {
 		sink = countSink[P]{sink, env.Ordered}

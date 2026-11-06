@@ -141,7 +141,13 @@ type Invocation struct {
 const (
 	StatusCommitted = "committed" // the dataset was published
 	StatusListed    = "listed"    // a dry run finished
-	StatusFailed    = "failed"    // nothing was published
+	StatusWritten   = "written"   // a text run finished (Output.Text)
+	StatusStopped   = "stopped"   // a text stream whose reader closed it (exit 0)
+
+	// StopDownstreamClosed is the stop reason of a text stream whose
+	// reader closed it.
+	StopDownstreamClosed = "downstream_closed"
+	StatusFailed         = "failed" // nothing was published
 
 	ClassCompleted   = "completed"
 	ClassFatal       = "fatal"
@@ -157,7 +163,8 @@ const (
 
 // Outcome is how the run ended.
 type Outcome struct {
-	// Status is StatusCommitted, StatusListed or StatusFailed.
+	// Status is StatusCommitted, StatusWritten, StatusListed, StatusStopped or
+	// StatusFailed.
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 	Complete   bool   `json:"complete"`              // the listing reached the end of its scope
@@ -209,6 +216,19 @@ type Output struct {
 	PartsWritten  int   `json:"parts_written"` // written by this invocation (after a failure: journaled, durable)
 	PartsRetained int   `json:"parts_retained"`
 	Bytes         int64 `json:"bytes"` // the dataset's part bytes
+	// Text is a text run's output (nil for a dataset or a dry run).
+	Text *TextOutput `json:"text,omitempty"`
+}
+
+// TextOutput is a text run's destination and what reached it. A run that
+// did not complete published no file (its temporary was removed); on a
+// stream, Rows and Bytes are what was written before it stopped.
+type TextOutput struct {
+	Format      string `json:"format"`      // tsv, jsonl, table
+	Destination string `json:"destination"` // the file, or "-" for stdout
+	Compression string `json:"compression"` // none, gzip, zstd
+	Rows        int64  `json:"rows"`
+	Bytes       int64  `json:"bytes"` // delivered, compressed
 }
 
 // Resources the run used. Wait times sum over goroutines.

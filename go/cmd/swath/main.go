@@ -32,6 +32,7 @@ import (
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/go/internal/textout"
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
@@ -71,6 +72,9 @@ func main() {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	// A closed stdout pipe is an error to the writer, not a fatal signal:
+	// a text stream whose reader went away ends with exit 0.
+	signal.Ignore(syscall.SIGPIPE)
 	finished := make(chan struct{})
 	defer close(finished)
 	exitAfterGrace = func(code int, why string) {
@@ -155,7 +159,7 @@ func newAttempt() *listing.Attempt {
 // cfgOut is the output directory a run with o would own ("" with
 // --count-only).
 func cfgOut(o options) string {
-	if o.countOnly {
+	if o.countOnly || o.text != nil {
 		return ""
 	}
 	return o.out
@@ -200,6 +204,12 @@ func stopEarly(report string, argv []string, dir string, att *listing.Attempt, e
 	writeReport(report, r)
 	return &exitError{err, o.ExitCode}
 }
+
+// errText refuses swath resume of a text run.
+var errText = errors.New("text output (table, tsv, jsonl) is not resumable: it keeps no journal; run swath list again")
+
+// brokenPipe reports whether err is the stdout reader closing the stream.
+func brokenPipe(err error) bool { return errors.Is(err, syscall.EPIPE) }
 
 // usageError is a malformed command line.
 type usageError struct{ error }
@@ -286,6 +296,9 @@ type options struct {
 	noSpill, spillCompress bool
 	sources                map[string]any // each provider's options value, by scheme
 	term                   termOptions
+	format, outputType     string
+	compression            string
+	text                   *textout.Config // resolved: a text run's destination
 }
 
 // runtimeFlags may change on swath resume: they do not change the output
@@ -332,8 +345,11 @@ var resumeFlags = append(slices.Clone(runtimeFlags), operationalFlags...)
 
 func newFlags(o *options, diag bool) *flag.FlagSet {
 	f := flag.NewFlagSet("list", flag.ContinueOnError)
-	f.StringVar(&o.out, "output", "", "output dataset `directory` (required unless --count-only)")
+	f.StringVar(&o.out, "output", "", "output: a dataset `directory`, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)")
 	f.StringVar(&o.out, "o", "", "short for --output")
+	f.StringVar(&o.format, "format", "", "auto, table, tsv, jsonl (text: stdout or one file; auto is a table on a terminal, TSV otherwise) or parquet (the dataset; the default for a directory)")
+	f.StringVar(&o.outputType, "output-type", "", "file or dir: what -o names when its extension does not say (file: one text file without a .tsv or .jsonl name)")
+	f.StringVar(&o.compression, "compression", "", "text output: none, gzip or zstd (default: from a .gz or .zst name, else none)")
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in --output")
 	o.partSize = listing.DefaultPartSize
 	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB)")
@@ -442,8 +458,6 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	switch {
 	case root == "":
 		return o, "", usageError{errors.New("missing SOURCE")}
-	case !o.countOnly && o.out == "":
-		return o, "", usageError{errors.New("--output is required unless --count-only")}
 	case o.reportFormat != "text" && o.reportFormat != "json":
 		return o, "", usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
 	}
@@ -452,6 +466,16 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	}
 	if err := o.term.validate(); err != nil {
 		return o, "", usageError{err}
+	}
+	text, err := resolveOutput(&o, stdoutTerminal())
+	if err != nil {
+		return o, "", usageError{err}
+	}
+	if o.text = text; text != nil && text.Path == "" {
+		text.Stdout = stdout
+		if o.reportFormat == "json" {
+			return o, "", usageError{errors.New("--report-format json prints on stdout, which carries the rows: use --report FILE")}
+		}
 	}
 	return o, root, nil
 }
@@ -466,6 +490,10 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	if err != nil {
 		return err
 	}
+	if o.text != nil && resumed {
+		return usageError{errText}
+	}
+	toStdout := o.text != nil && o.text.Path == ""
 	silentErrors.Store(o.term.quiet >= 2)
 	argv := recorded
 	if argv == nil {
@@ -481,7 +509,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	}
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
-		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal},
+		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, Memory: int64(o.memory), PartSize: int64(o.partSize), PartInterval: o.partInterval,
 			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
@@ -491,7 +519,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	if o.term.quiet > 0 {
 		cfg.Warn = func(string) {}
 	}
-	if !o.countOnly {
+	if !o.countOnly && o.text == nil {
 		cfg.Output.Dir = o.out
 	}
 	stopProfile, err := profile()
@@ -525,7 +553,15 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	// report before run.json, error.json (Settle) or --report is written,
 	// and every one of them derives from it. error.json is written while
 	// the run still owns the output (Settle), never by a run that did not.
-	cfg.Finalize = term.account
+	cfg.Finalize = func(r *listing.Report, err error) {
+		if toStdout && brokenPipe(err) {
+			// The reader closed the stream: exit 0, as Java's, and the
+			// report says the listing did not reach its end.
+			err = nil
+			r.Outcome.Status, r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Error = listing.StatusStopped, false, listing.StopDownstreamClosed, ""
+		}
+		term.account(r, err)
+	}
 	settled, unrecorded := false, ""
 	cfg.Settle = func(sum listing.Report, err error) {
 		term.account(&sum, err) // a no-op for the accounted report Settle gets
@@ -583,7 +619,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	}
 	sum.Outcome.Unrecorded = unrecorded
 	writeReport(o.report, sum)
-	tt.stats(&sum, false)
+	tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
 	if o.reportFormat == "json" {
 		// The report goes out on failure too: its outcome names the error.
 		enc := json.NewEncoder(stdout)
@@ -594,6 +630,9 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	}
 	if err != nil {
 		return &exitError{explain(err), out.ExitCode}
+	}
+	if o.text != nil && o.text.Path == "" {
+		return nil // stdout carries the rows; --stats prints the account on stderr
 	}
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")

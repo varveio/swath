@@ -66,6 +66,10 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	stop := func(err error) error {
 		return refuse(stdout, dir, seen, err, att, o.report, o.reportFormat, redactArgv(append([]string{"resume"}, args...)))
 	}
+	if f, _ := textDest(dir); f != "" || dir == "-" || isFile(dir) {
+		// A text run keeps no journal: there is nothing to continue.
+		return stop(usageError{errText})
+	}
 	if dataset.Committed(dir) {
 		return stop(listing.ErrComplete)
 	}
@@ -235,4 +239,10 @@ func show(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "set aside: %s (a part whose record read as torn; swath resume must reproduce it exactly)\n", ents[0].Name())
 	}
 	return nil
+}
+
+// isFile reports whether path is an existing non-directory.
+func isFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
 }

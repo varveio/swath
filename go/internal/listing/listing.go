@@ -23,6 +23,7 @@ import (
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/textout"
 )
 
 // Config is one listing, in three groups: what to list, where the dataset
@@ -88,6 +89,9 @@ type OutputConfig struct {
 	Replace   bool   // replace a previous dataset in Dir
 	Resume    bool   // continue the interrupted journaled run in Dir
 	NoJournal bool   // publish parts only at the end, without a journal (no resume)
+	// Text, if set, writes the rows as text (stdout or one file) instead of
+	// a dataset; Dir must be empty. Such a run keeps no journal.
+	Text *textout.Config
 }
 
 // Limits are the execution limits; none changes the dataset's content.
@@ -185,6 +189,8 @@ func (c *Config) resolve() error {
 		return bad("resume needs the journal")
 	case o.Replace && o.Dir == "":
 		return bad("replace needs an output directory")
+	case o.Text != nil && (o.Dir != "" || o.Resume):
+		return bad("text output excludes a dataset directory and resume")
 	}
 	if l.Workers == 0 {
 		l.Workers = DefaultWorkers
@@ -493,7 +499,30 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
 	}
 	env.Order = oopt
+	var text *textout.Out
+	if cfg.Output.Text != nil {
+		t, err := textout.Open(*cfg.Output.Text)
+		if err != nil {
+			return sum.failed(err)
+		}
+		text, env.Text = t, t
+	}
 	ost, router, err := src.Run(ctx, env)
+	if text != nil {
+		if err == nil {
+			err = text.Commit()
+		} else {
+			text.Abort()
+		}
+		sum.Output.Text = &TextOutput{Format: text.Format(), Destination: cfg.Output.Text.Path, Compression: cfg.Output.Text.Compression,
+			Rows: text.Rows(), Bytes: text.Bytes()}
+		if sum.Output.Text.Destination == "" {
+			sum.Output.Text.Destination = "-"
+		}
+		if sum.Output.Text.Compression == "" {
+			sum.Output.Text.Compression = textout.None
+		}
+	}
 	if router == nil && cfg.Output.Dir != "" && err != nil {
 		return sum.failed(err) // the router could not start: nothing was written
 	}
@@ -539,6 +568,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	}
 	if router == nil {
 		sum.Outcome.Status = StatusListed
+		if text != nil {
+			sum.Outcome.Status = StatusWritten
+		}
 		sum.finish()
 		return sum, nil
 	}

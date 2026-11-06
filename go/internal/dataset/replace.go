@@ -35,30 +35,72 @@ const (
 // remove each other's temporary file, and a failed write leaves the old
 // file and no temporary one. Writes and syncs go through faults.
 func Replace(path string, data []byte, d Durability) error {
+	p, err := NewPending(path)
+	if err != nil {
+		return err
+	}
+	if _, err := p.Write(data); err != nil {
+		p.Abort()
+		return err
+	}
+	return p.Commit(d)
+}
+
+// Pending is a replacement written as it goes (a streamed text output):
+// the temporary file beside the target (TempOf) takes the writes; Commit
+// installs it as Replace does, Abort removes it and leaves the target as
+// it was.
+type Pending struct {
+	path, tmp string
+	f         *os.File
+}
+
+// NewPending creates the temporary file for a replacement of path.
+func NewPending(path string) (*Pending, error) {
 	name := filepath.Base(path)
 	f, err := os.CreateTemp(filepath.Dir(path), "."+name+".*.tmp")
 	if err != nil {
+		return nil, fmt.Errorf("write %s: %w", name, err)
+	}
+	return &Pending{path: path, tmp: f.Name(), f: f}, nil
+}
+
+// Write writes to the temporary file (through faults).
+func (p *Pending) Write(b []byte) (int, error) {
+	n, err := faults.Write(p.f, b)
+	if err != nil {
+		err = fmt.Errorf("write %s: %w", filepath.Base(p.path), err)
+	}
+	return n, err
+}
+
+// Commit installs the temporary file as the target, with durability d.
+func (p *Pending) Commit(d Durability) error {
+	name := filepath.Base(p.path)
+	var err error
+	if d == Durable {
+		err = faults.Sync(p.f)
+	}
+	if err = errors.Join(err, p.f.Chmod(0o644), p.f.Close()); err != nil {
+		os.Remove(p.tmp)
 		return fmt.Errorf("write %s: %w", name, err)
 	}
-	tmp := f.Name()
-	_, err = faults.Write(f, data)
-	if err == nil && d == Durable {
-		err = faults.Sync(f)
-	}
-	if err = errors.Join(err, f.Chmod(0o644), f.Close()); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("write %s: %w", name, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	if err := os.Rename(p.tmp, p.path); err != nil {
+		os.Remove(p.tmp)
 		return fmt.Errorf("commit %s: %w", name, err)
 	}
 	if d == Durable {
-		if err := syncDir(filepath.Dir(path)); err != nil {
+		if err := syncDir(filepath.Dir(p.path)); err != nil {
 			return fmt.Errorf("sync after %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+// Abort removes the temporary file; the target stays as it was.
+func (p *Pending) Abort() {
+	p.f.Close()
+	os.Remove(p.tmp)
 }
 
 // ReplaceJSON is Replace with v as indented JSON (HTML characters kept).

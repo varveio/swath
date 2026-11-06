@@ -48,6 +48,8 @@ usage: swath list SOURCE --output DIR [flags]
     	S3: run --bearer-token-command again after this duration (default 45m)
   -color string
     	colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default "auto")
+  -compression string
+    	text output: none, gzip or zstd (default: from a .gz or .zst name, else none)
   -count-only
     	walk and count without writing a dataset
   -dualstack
@@ -62,6 +64,8 @@ usage: swath list SOURCE --output DIR [flags]
     	S3: fill owner_id and owner_display_name
   -fips
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  -format string
+    	auto, table, tsv, jsonl (text: stdout or one file; auto is a table on a terminal, TSV otherwise) or parquet (the dataset; the default for a directory)
   -gcs-anonymous
     	GCS: send no credentials, ignoring any in the environment
   -gcs-credentials file
@@ -93,7 +97,9 @@ usage: swath list SOURCE --output DIR [flags]
   -o string
     	short for --output
   -output directory
-    	output dataset directory (required unless --count-only)
+    	output: a dataset directory, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)
+  -output-type string
+    	file or dir: what -o names when its extension does not say (file: one text file without a .tsv or .jsonl name)
   -overwrite
     	replace a previous dataset in --output
   -part-interval duration
@@ -163,6 +169,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: run --bearer-token-command again after this duration (default 45m)
   -color string
     	colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default "auto")
+  -compression string
+    	text output: none, gzip or zstd (default: from a .gz or .zst name, else none)
   -count-only
     	walk and count without writing a dataset
   -dualstack
@@ -179,6 +187,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
   -floors
     	ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
+  -format string
+    	auto, table, tsv, jsonl (text: stdout or one file; auto is a table on a terminal, TSV otherwise) or parquet (the dataset; the default for a directory)
   -gcs-anonymous
     	GCS: send no credentials, ignoring any in the environment
   -gcs-credentials file
@@ -216,7 +226,9 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -o string
     	short for --output
   -output directory
-    	output dataset directory (required unless --count-only)
+    	output: a dataset directory, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)
+  -output-type string
+    	file or dir: what -o names when its extension does not say (file: one text file without a .tsv or .jsonl name)
   -overwrite
     	replace a previous dataset in --output
   -part-interval duration
