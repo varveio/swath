@@ -327,13 +327,9 @@ func (t *tracking) Write(p []byte) (int, error) {
 // PartRows is the row count in a part file's footer. A resume reads it from
 // a claimed part to cut the reproduced part at the same boundary
 // (Options.Cut); the byte comparison that follows decides, so a damaged
-// footer can only make that comparison fail.
-func PartRows(path string) (int64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
+// footer can only make that comparison fail. f is the part, opened by the
+// caller (recovery opens it through the output root).
+func PartRows(f *os.File) (int64, error) {
 	st, err := f.Stat()
 	if err != nil {
 		return 0, err

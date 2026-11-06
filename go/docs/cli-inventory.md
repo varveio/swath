@@ -108,7 +108,7 @@ decision to add it later).
 | Java | Go | Status | Decision |
 |---|---|---|---|
 | `--max-duration DURATION` (exit 124, resumable) | `--max-duration` (0: none; exit 124, resumable) | kept | – |
-| `--idle-timeout` (120 s, no activity) | `--stall-timeout` (10 min, no progress and no answered request) | renamed | one watchdog owns liveness, 2026-11-05 |
+| `--idle-timeout` (120 s, no activity) | `--stall-timeout` (10 min, no progress in key space; an empty continuing page counts within the first 1,024 of its run) | renamed | one watchdog owns liveness, 2026-11-05 |
 | `--no-progress-timeout` (10 min, no committed progress) | `--stall-timeout` | renamed | one watchdog owns liveness, 2026-11-05 |
 | `--object-listing-queue-size N` (50,000 entries) | `--row-budget` (bytes of rows in flight, default 128 MiB) | renamed | one byte budget instead of the weighted channel, 2026-11-05; `--memory` (twice the row budget) renamed 2026-11-06 to name what it bounds |
 
@@ -158,7 +158,7 @@ decision to add it later).
 | 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (not resumable) or `incomplete` (partial coverage); a full disk is 74 | kept | – |
 | 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage` (malformed command line, unknown scheme) or `refused` (guarded output refusal, changed resume identity, nothing to resume) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `309e562`) |
 | 74: output filesystem full | 74 `disk_full`, cause `no_space`, resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `0f5fb48`) |
-| 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows` | kept (causes renamed) | – |
+| 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows`, `stuck_empty_chain` | kept (causes renamed) | `stuck_empty_chain` added 2026-11-06 (review R3): Java rejects a continuing empty page at once; Go follows them, bounded |
 | 124: `--max-duration` elapsed | 124 `deadline` | kept | – |
 | 130: SIGINT | 130 `interrupted` | kept | – |
 | 143: SIGTERM | 143 `terminated` | kept | – |

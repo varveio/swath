@@ -194,7 +194,11 @@ type Engine[P any] struct {
 	fetch   Fetch[P]
 	objects atomic.Int64
 	ids     atomic.Uint64
-	start   time.Time
+	// frontier counts key-space progress for the watchdog (Frontier): a
+	// page that held an entry or ended its chain, and an empty continuing
+	// page within the first EmptyChainLive of its run.
+	frontier atomic.Int64
+	start    time.Time
 
 	c       *counters.Set       // the tally (Counters, then the provider's)
 	mu      sync.Mutex          // the decision mutex: taken through lock and unlock, which time it
@@ -275,14 +279,17 @@ func (p *Engine[P]) Stats() Stats {
 // also the page that held only the key at an inclusive bound) is followed
 // by its token here, for every path (ranges, the sequential chain, the
 // probes): each token of such a run must differ from the last
-// emptyTokenWindow ones, or the page is invalid. A service that sends fresh
-// tokens forever is followed until the run's deadline (--max-duration), in
-// bounded memory.
+// emptyTokenWindow ones, or the page is invalid. Only the first
+// EmptyChainLive pages of a run count as progress (Frontier); past them a
+// service that sends fresh tokens forever is followed, in bounded memory,
+// until the command's watchdog stops the run as stuck (--stall-timeout,
+// cause stuck_empty_chain) or its deadline (--max-duration).
 func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 	p.lock()
 	p.c.Inc(cRequests)
 	p.unlock()
 	var seen *tokenWindow // the recent tokens of a run of empty continuing pages
+	empties := 0          // the run's length
 	// chainStart: no page of this chain has held an entry yet, so its first
 	// row may be the key at an inclusive start bound (also after empty
 	// pages followed here).
@@ -318,6 +325,7 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 					p.c.Inc(cPrefixesNormalized)
 					p.unlock()
 				}
+				p.frontier.Add(1)
 				return out, nil
 			}
 			if out.Token == "" {
@@ -338,7 +346,13 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 			p.lock()
 			p.c.Inc(cRequests)
 			p.c.Inc(cEmptyPages)
+			if empties++; empties > EmptyChainLive {
+				p.c.Inc(cEmptyChainPages)
+			}
 			p.unlock()
+			if empties <= EmptyChainLive {
+				p.frontier.Add(1)
+			}
 			continue
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -467,8 +481,27 @@ func (s *Stats) Get(id counters.ID) int64 { return s.Counters.Get(id) }
 // emptyTokenWindow is how many of the latest tokens of a run of empty
 // continuing pages are kept to detect a token that makes no progress: a
 // cycle within it is an invalid page; a longer one, like a chain of ever
-// fresh tokens, is bounded by the run's deadline, not by memory.
+// fresh tokens, is bounded by EmptyChainLive and the watchdog, not by
+// memory.
 const emptyTokenWindow = 1024
+
+// EmptyChainLive is how many empty continuing pages in a run (one
+// request's chain of them, before a page with an entry or the chain's end)
+// count as progress for the watchdog (Frontier). It is the token window:
+// the engine cannot tell a fresh token from a cycle longer than that
+// window, so a longer run proves neither progress nor its absence. Past it
+// the pages are still followed (a legitimate one ends when the service
+// reaches an entry), counted in empty_chain_pages, and the watchdog stops
+// the run as stuck when nothing else progresses for --stall-timeout.
+const EmptyChainLive = emptyTokenWindow
+
+// Frontier is the engine's key-space progress, for the watchdog: pages
+// that held an entry or ended a chain, plus empty continuing pages within
+// the first EmptyChainLive of their run; emptyChained is the empty pages
+// past that bound (followed, but not progress).
+func (p *Engine[P]) Frontier() (advanced, emptyChained int64) {
+	return p.frontier.Load(), p.c.Load(cEmptyChainPages)
+}
 
 // tokenWindow holds the latest emptyTokenWindow tokens of a run.
 type tokenWindow struct {

@@ -25,7 +25,7 @@ Every comparison was row-identical on the 13 canonical columns, with identical m
 |---|---:|
 | Live buckets, Go listing directly against the Java recording of the same bucket | 21 |
 | Synthetic fixtures served by replay (10k keys; 1,000,020 keys from `bench/gen_fixture_1m.py`), each in 5 Go modes (sequential, 4 and 8 workers, with and without `--seed`) | 2 × 5 |
-| Java listing a Go dataset served by replay's sorted mode (1 part and 6 parts) | 2 |
+| Java listing a Go dataset served by replay's sorted mode (1 part and 6 parts); historical: run on format-1 Go output, before format 2, which Java's reader does not read ([upgrade.md](upgrade.md)) | 2 |
 
 The 21 live buckets are noaa-normals-pds, noaa-nws-fourcastnetgfs-pds, real-changesets and 18 open buckets
 chosen for the Java policy features they engage (among them noaa-eri-pds and pansurg-curation-raw-open-data),
@@ -354,8 +354,11 @@ The natural-key run had a nearly full disk, so the spill cap was 1 byte and list
 | at the slow range's half | B | 38.1 | 2.37 | 3,271 | 217,326 | 216 | 219 |
 
 At the kill A had journaled no part (the slow first range had not filled part 0), so it relisted everything; B
-had 1.77 M rows in checkpointed runs, which hold the whole listing and cannot be capped. The gate evaluates as
-designed; the deciding runs need sizes past RAM, 64–512 workers and real disk.
+had 1.77 M rows in checkpointed runs, which hold the whole listing and cannot be capped. The relisted keys
+(1,580,282 for A against 217,326 for B) illustrate the mechanism (ordered emission relists the whole
+speculative suffix above the durable frontier, [Known gaps](#known-gaps)); one synthetic trace and one rep, they
+are not a representative ratio. The gate evaluates as designed; the deciding runs need sizes past RAM, 64–512
+workers and real disk.
 
 **Resume into a storm** (`bench/resume_storm.sh`, `bench/resume_storm_table.py`) and **defaults**
 (`bench/defaults_replay.sh`, `bench/defaults_table.py`: the default argv against `--seed --workers 64` and Java
@@ -367,9 +370,18 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   bind-mount cycle is not detected. A directory is read whole and sorted on one worker, so a huge flat
   directory is serial. Local keys have no length cap (S3 keys are capped at 1,024 bytes). Timestamps are
   microseconds. A local run keeps no journal: an interrupted one starts over.
-- **Resume granularity.** S3 and GCS resume at part granularity: a resume lists again after the last published
-  key, so rows of the open part (at most 64 MiB, or one `--part-interval` of a slow frontier) are listed twice;
-  Java resumed per range cursor.
+- **Resume rework: the whole speculative suffix.** S3 and GCS resume at part granularity: a resume lists the
+  scope again from K, the last published part's max key (`keyrange` restarts one range `(K, ⊤]`), so everything
+  the killed attempt had listed above K is listed again: the open part's rows, rows buffered in memory or in
+  disposable spill for ranges ahead of a slow frontier, and parts closed but not yet recorded (a gap in the
+  ordinals). That suffix is bounded by how far the listing ran ahead of the frontier (the row budget and spill
+  cap, the workers and the time since the last published part), not by the part size: the part size is a target,
+  not a hard maximum, and `--part-interval` bounds the age of the durable frontier, not the work done past it.
+  On a slow first range the suffix can be most of the listing (the slow-first smoke above). Java resumed each
+  range from its own durable cursor. The measurement campaign's relisted-work gate (relisted keys at most one
+  part plus 5 % of the listed keys, with the relisted bytes, requests and the durable frontier's age reported)
+  is a gate to test on kills at peak speculation; it is not a property this build guarantees, and no claim
+  about restart economics should precede it.
 - **Split depth.** Each split leaves almost all the remaining work in the upper child, which must fetch a page
   before it can split again, so on a large flat keyspace the split tree is a chain of dependent requests rather
   than a balanced tree: 398 deep on the live GCS run above where a balanced one needs 13, with about 16 of 64

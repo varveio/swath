@@ -8,6 +8,7 @@ import (
 
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -226,6 +227,26 @@ func PublishPart(out string, ordinal int, p Part) (Part, error) {
 // directory the caller locked, so a replaced pathname is never renamed
 // into).
 func PublishPartWith(rename func(old, new string) error, out string, ordinal int, p Part) (Part, error) {
+	return publishPart(rename, func() error { return syncDir(filepath.Join(out, DataDir)) }, out, ordinal, p)
+}
+
+// PublishPartIn is PublishPart through r, the root of out: the rename and
+// the data directory's sync are relative to it (resume recovery).
+func PublishPartIn(r *os.Root, out string, ordinal int, p Part) (Part, error) {
+	rename := func(old, new string) error {
+		o, err1 := filepath.Rel(out, old)
+		n, err2 := filepath.Rel(out, new)
+		if err := errors.Join(err1, err2); err != nil {
+			return err
+		}
+		return r.Rename(o, n)
+	}
+	return publishPart(rename, func() error { return SyncDirIn(r, DataDir) }, out, ordinal, p)
+}
+
+// publishPart renames p to part ordinal's final name and syncs the data
+// directory (sync), with the fault points between.
+func publishPart(rename func(old, new string) error, sync func() error, out string, ordinal int, p Part) (Part, error) {
 	final := filepath.Join(out, DataDir, PartName(ordinal))
 	if err := faults.At("rename"); err != nil {
 		return p, err
@@ -236,7 +257,7 @@ func PublishPartWith(rename func(old, new string) error, out string, ordinal int
 	if err := faults.At("renamed-unsynced"); err != nil { // between the rename and its directory sync
 		return p, err
 	}
-	if err := syncDir(filepath.Join(out, DataDir)); err != nil {
+	if err := sync(); err != nil {
 		return p, fmt.Errorf("sync data directory: %w", err)
 	}
 	p.Path = final

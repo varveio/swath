@@ -70,11 +70,17 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
 The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`, unless the
 part interval cuts (below).
 
+**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-rotation-max-rows` reaches it. The router refuses to open part 100,000
+(`dataset.ErrPartLimit`, checked when it would open the part) after the parts before it are published, so the
+journal's last record is part 99,999; the command exits 1, `cause` `part_limit`, not resumable
+(`TestRouterRefusesPartPastLimit`). `dataset.PartOrdinal` refuses a six-digit name.
+
 **The part interval** (`listing.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) bounds the
 age of the recovery point on a slow frontier: a part open that long with rows is closed although not full,
 and a journaled run publishes it, so a crash loses at most about that long of frontier progress instead of a
-whole part's worth (the default is Java's rotation interval, 30 s; a cut part can be far below its target
-size). The order stage hands on its batch before the drainer waits on the frontier, so the
+whole part's worth. It bounds the frontier's age only: rows listed past the frontier (buffered, spilled, or in
+parts not yet recorded) are lost and relisted whatever the interval ([durability.md](durability.md)). The
+default is Java's rotation interval, 30 s; a cut part can be far below its target size. The order stage hands on its batch before the drainer waits on the frontier, so the
 open part holds every row the walk has reached. A cut by time makes that run's boundaries depend on timing:
 the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (zero;
 `--part-interval` refuses a negative value), boundaries depend only on the rows and the byte-identity guarantees above hold
@@ -112,7 +118,8 @@ cancellation removes the unpublished parts and writes no manifest.
 
 ```text
 out/
-  data/part-00000.parquet ...   dense, zero-based %05d; name order == key order; parts strictly disjoint
+  data/part-00000.parquet ...   dense, zero-based, five digits (at most 100,000 parts); name order == ordinal
+                                order == key order (the manifest's part list is the order); parts strictly disjoint
   manifest.json                 format 2: source, scope, coverage, ordered parts with exact bounds (the commit)
   run.json                      the run report (operational, written after the commit)
   error.json                    the outcome of a run that did not complete (removed when one completes)

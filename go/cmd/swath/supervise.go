@@ -45,11 +45,16 @@ var (
 )
 
 // Stuck causes (error.json and the report's outcome cause on 75): what
-// rose while neither a row nor an answered request did.
+// rose while the run's liveness (listing.ProgressSnapshot.Liveness) did
+// not.
 const (
-	stuckThrottle = "stuck_throttle" // the service answered only with throttles
-	stuckTimeouts = "stuck_timeouts" // attempts ran past the request timeout (no throttle)
-	stuckNoRows   = "stuck_no_rows"  // neither: failing or hung requests, or a pipeline that stopped
+	// stuckEmptyChain: the service answered only empty continuing pages,
+	// each with a fresh token, past the first keyrange.EmptyChainLive of
+	// their run: up, but the listing does not move.
+	stuckEmptyChain = "stuck_empty_chain"
+	stuckThrottle   = "stuck_throttle" // the service answered only with throttles
+	stuckTimeouts   = "stuck_timeouts" // attempts ran past the request timeout (no throttle)
+	stuckNoRows     = "stuck_no_rows"  // none of these: failing or hung requests, or a pipeline that stopped
 )
 
 // stuckError is errStuck with its cause.
@@ -62,6 +67,8 @@ func (e *stuckError) Is(target error) bool { return target == errStuck }
 // the last progress (at) to now.
 func stuckCause(at, now listing.ProgressSnapshot) string {
 	switch {
+	case now.EmptyChain > at.EmptyChain:
+		return stuckEmptyChain
 	case now.Throttles > at.Throttles:
 		return stuckThrottle
 	case now.Timeouts > at.Timeouts:
@@ -116,6 +123,14 @@ func classify(err, cause error, dir string) outcome {
 		// it outranks a stop cause (a resumable 75, 124, 130 or 143), as
 		// Java's; the journal marks the run unresumable.
 		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "protocol"
+	case errors.Is(err, dataset.ErrUnsafeLayout):
+		// The output needs a person: a stop cause selected meanwhile (a
+		// stall, the deadline, a signal) must not make it resumable.
+		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "unsafe_layout"
+	case errors.Is(err, dataset.ErrPartLimit):
+		// The part size and row cap are frozen in the identity, so a
+		// resume would reach the limit again; it outranks a stop cause.
+		o.Class, o.ExitCode, o.Resumable, o.Cause = listing.ClassFatal, exitFatal, false, "part_limit"
 	case errors.Is(err, errIncomplete):
 		o.Class, o.ExitCode, o.Resumable = listing.ClassIncomplete, exitFatal, false
 	case errors.Is(cause, errStuck):
@@ -462,13 +477,19 @@ var progressName = filepath.Join(dataset.Workspace, "progress.json")
 const progressEvery = 2 * time.Second
 
 // supervise runs list with the run's liveness owner: it rewrites the
-// progress file, and cancels the run as stuck when neither Progress.Advance
-// (rows in any phase, parts) nor Progress.Answered (requests the service
-// answered usably) has risen for stall (half of it earns a warning first).
-// An answered request keeps the clock alive although no row moved (queued
-// work at a low limit, empty continuing pages); a failed or throttled one,
-// or one that never returns, does not, so a total outage or a hung source
-// still stops as stuck. It is the only place that decides a run cannot go
+// progress file, and cancels the run as stuck when its liveness
+// (ProgressSnapshot.Liveness) has not risen for stall (half of it earns a
+// warning first). Liveness is progress in key space: rows in any phase,
+// parts, and the source's pages (Frontier: a page that held an entry or
+// ended a chain), so an answered page keeps the clock alive although no
+// row moved yet (queued work at a low limit). An empty continuing page
+// counts only within the first keyrange.EmptyChainLive of its run: a
+// service that answers forever with empty pages and fresh tokens stops as
+// stuck (cause stuck_empty_chain) within that many pages plus stall,
+// whatever --max-duration is. A failed or throttled request, or one that
+// never returns, does not count, so a total outage or a hung source still
+// stops as stuck. A source without Frontier is live by its answered
+// requests (Answered). It is the only place that decides a run cannot go
 // on; nothing in the pipeline gives up on a slow source.
 func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.Progress, dir string, stall time.Duration, warn func(string), d *display) (stop func()) {
 	done := make(chan struct{})
@@ -502,7 +523,7 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *listing.
 					written = now
 					pr.Owned(func() { _ = dataset.ReplaceJSON(filepath.Join(dir, progressName), s, dataset.Atomic) })
 				}
-				if live := s.Advance + s.Answered; live != last {
+				if live := s.Liveness(); live != last {
 					last, since, warned, at = live, now, false, s
 					continue
 				}

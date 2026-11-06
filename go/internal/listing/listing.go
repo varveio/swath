@@ -513,6 +513,10 @@ func watchSource(pr *Progress, sum *Report, src registry.Source, env *registry.E
 		answered := l.Answered
 		pr.answered.Store(&answered)
 	}
+	if a, ok := src.(source.Advancing); ok {
+		frontier := a.Frontier
+		pr.frontier.Store(&frontier)
+	}
 	if f, ok := src.(source.Faulted); ok {
 		faults := f.Faults
 		pr.faults.Store(&faults)

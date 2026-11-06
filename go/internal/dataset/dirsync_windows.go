@@ -5,6 +5,8 @@
 
 package dataset
 
+import "os"
+
 // DirSyncEnforced reports whether syncDir makes a directory's entries
 // durable here.
 var DirSyncEnforced = false // a variable for tests
@@ -17,3 +19,6 @@ var DirSyncEnforced = false // a variable for tests
 // renames even when the files' data was synced. A journaled run relies on
 // those entries, so it is refused here (listing.ErrUnenforced).
 func syncDir(string) error { return nil }
+
+// SyncDirIn does nothing on Windows, as syncDir.
+func SyncDirIn(*os.Root, string) error { return nil }
