@@ -13,10 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquetout"
@@ -35,6 +37,10 @@ type Config struct {
 	Output OutputConfig
 	Limits Limits
 	Argv   []string // the command line, recorded in the run report and the journal
+	// Filter, if set, drops the rows it does not accept (package filter):
+	// part of the resume identity, recorded in the manifest's
+	// coverage.filters.
+	Filter *filter.Spec
 	// Attempt, if set, identifies this invocation in its report.
 	Attempt *Attempt
 	Warn    func(string) // one-time warnings for the user (nil: dropped)
@@ -333,7 +339,7 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 // what the source names (source.Identified).
 func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
 	id := journal.Identity{Tool: "swath-go", Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.WriterID,
-		PartSize: cfg.Limits.PartSize, Provider: src.Locator().Kind}
+		PartSize: cfg.Limits.PartSize, Provider: src.Locator().Kind, Filters: cfg.Filter.Descriptions()}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()
 		id.Provider = sid.Provider
@@ -499,6 +505,8 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
 	}
 	env.Order = oopt
+	var dropped atomic.Int64
+	env.Filter, env.Filtered = cfg.Filter, &dropped
 	var text *textout.Out
 	if cfg.Output.Text != nil {
 		t, err := textout.Open(*cfg.Output.Text)
@@ -531,6 +539,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		_ = os.Remove(filepath.Dir(oopt.SpillDir))
 	}
 	sum.Resources.MaxBufferedBytes, sum.Output.RowsListed = ost.MaxBuffered, ost.Rows
+	sum.Output.RowsFiltered = dropped.Load()
 	sum.Resources.Features = map[string]bool{"spill": oopt.SpillDir != ""}
 	if oopt.SpillDir != "" {
 		sum.Resources.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
@@ -548,7 +557,10 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if r, ok := src.(source.Reporter); ok {
 		sum.setSource(r.Report())
 	}
-	want := src.Listed()
+	// Rows the filters dropped were listed but never reached the order
+	// stage.
+	sum.Output.RowsFiltered = dropped.Load()
+	want := src.Listed() - sum.Output.RowsFiltered
 	if err != nil {
 		return fail(err)
 	}
@@ -588,7 +600,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if err := jr.verify(); err != nil {
 		return fail(err)
 	}
-	if err := dataset.Publish(cfg.Output.Dir, manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed), parts); err != nil {
+	meta := manifestMeta(s, src.Locator(), sum.report, jr.listingStarted(sum.Timings.StartedAt), listed)
+	meta.Coverage.Filters = append(meta.Coverage.Filters, cfg.Filter.Descriptions()...)
+	if err := dataset.Publish(cfg.Output.Dir, meta, parts); err != nil {
 		if !errors.Is(err, faults.ErrCrash) && !jr.journaled() && jr.verify() == nil {
 			dataset.Cleanup(cfg.Output.Dir)
 		}

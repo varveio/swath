@@ -60,6 +60,8 @@ usage: swath list SOURCE --output DIR [flags]
     	S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   -endpoint-url string
     	S3: Java swath's name for --endpoint
+  -exclude regex
+    	drop keys in which this regex (Go RE2 syntax) matches anywhere
   -fetch-owner
     	S3: fill owner_id and owner_display_name
   -fips
@@ -76,16 +78,26 @@ usage: swath list SOURCE --output DIR [flags]
     	GCS: per-request timeout; a request that exceeds it is retried (default 30s)
   -gcs-user-project project
     	GCS: bill a requester-pays bucket's requests to this project
+  -include regex
+    	keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   -limiter
     	requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight (default true)
   -limiter-slow-start
     	requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too
   -max-duration duration
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
+  -max-size size
+    	keep objects of at most this size
   -memory bytes
     	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -metadata tier
     	local: metadata tier per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)
+  -min-size size
+    	keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+  -modified-since time
+    	keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+  -modified-until time
+    	keep objects modified at or before this time
   -no-dirs
     	local: omit kind=DIR rows
   -no-link-target
@@ -143,6 +155,8 @@ usage: swath list SOURCE --output DIR [flags]
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
   -stats
     	print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
+  -storage-class classes
+    	keep objects in these storage classes (STANDARD,GLACIER; repeatable)
   -v	verbose: a start line, and progress as appended records (-vv, -vvv: the same)
   -vv
     	short for -v -v
@@ -181,6 +195,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   -endpoint-url string
     	S3: Java swath's name for --endpoint
+  -exclude regex
+    	drop keys in which this regex (Go RE2 syntax) matches anywhere
   -fetch-owner
     	S3: fill owner_id and owner_display_name
   -fips
@@ -199,6 +215,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	GCS: per-request timeout; a request that exceeds it is retried (default 30s)
   -gcs-user-project project
     	GCS: bill a requester-pays bucket's requests to this project
+  -include regex
+    	keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   -limiter
     	requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight (default true)
   -limiter-slow-start
@@ -207,10 +225,18 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
   -max-keys N
     	ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
+  -max-size size
+    	keep objects of at most this size
   -memory bytes
     	bytes of rows held between listing and encoding; sets the reorder bound (default 268435456)
   -metadata tier
     	local: metadata tier per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)
+  -min-size size
+    	keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+  -modified-since time
+    	keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+  -modified-until time
+    	keep objects modified at or before this time
   -no-dirs
     	local: omit kind=DIR rows
   -no-journal
@@ -278,6 +304,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
     	stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
   -stats
     	print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
+  -storage-class classes
+    	keep objects in these storage classes (STANDARD,GLACIER; repeatable)
   -structure
     	ranges: structure probes: pivot on folder boundaries listed alongside a range's pages
   -v	verbose: a start line, and progress as appended records (-vv, -vvv: the same)

@@ -29,6 +29,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/registry"
@@ -299,6 +300,7 @@ type options struct {
 	format, outputType     string
 	compression            string
 	text                   *textout.Config // resolved: a text run's destination
+	filter                 filter.Spec
 }
 
 // runtimeFlags may change on swath resume: they do not change the output
@@ -368,6 +370,20 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
 	f.DurationVar(&o.stall, "stall-timeout", 10*time.Minute, "stop the run as stuck after this long without progress (exit 75; resumable); 0: never")
 	o.term.register(f)
+	f.StringVar(&o.filter.Include, "include", "", "keep keys in which this `regex` (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix")
+	f.StringVar(&o.filter.Exclude, "exclude", "", "drop keys in which this `regex` (Go RE2 syntax) matches anywhere")
+	f.StringVar(&o.filter.MinSize, "min-size", "", "keep objects of at least this `size` (1k, 256mb, 1.5GiB: binary units)")
+	f.StringVar(&o.filter.MaxSize, "max-size", "", "keep objects of at most this `size`")
+	f.StringVar(&o.filter.Since, "modified-since", "", "keep objects modified at or after this `time` (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)")
+	f.StringVar(&o.filter.Until, "modified-until", "", "keep objects modified at or before this `time`")
+	f.Func("storage-class", "keep objects in these storage `classes` (STANDARD,GLACIER; repeatable)", func(v string) error {
+		for _, c := range strings.Split(v, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				o.filter.StorageClasses = append(o.filter.StorageClasses, c)
+			}
+		}
+		return nil
+	})
 	if diag {
 		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
 		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
@@ -467,6 +483,9 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	if err := o.term.validate(); err != nil {
 		return o, "", usageError{err}
 	}
+	if err := o.filter.Validate(); err != nil {
+		return o, "", usageError{err}
+	}
 	text, err := resolveOutput(&o, stdoutTerminal())
 	if err != nil {
 		return o, "", usageError{err}
@@ -507,6 +526,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	if err != nil {
 		return stopEarly(o.report, argv, cfgOut(o), att, usageError{err})
 	}
+	root = narrowRoot(root, &o.filter)
 	cfg := listing.Config{
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
@@ -514,6 +534,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,
+		Filter:  &o.filter,
 		Warn:    func(m string) { note(errOut, "swath: warning: "+m+"\n") },
 	}
 	if o.term.quiet > 0 {
@@ -734,4 +755,19 @@ func (s *size) Set(v string) error {
 	}
 	*s = size(n * mult)
 	return nil
+}
+
+// narrowRoot is an object-store root narrowed to the prefix an anchored
+// --include implies (filter.Spec.NarrowPrefix): the same rows, fewer
+// requests. A resume replays the same command, so it narrows the same way.
+func narrowRoot(root string, f *filter.Spec) string {
+	scheme, rest, ok := strings.Cut(root, "://")
+	if !ok || (scheme != "s3" && scheme != "gs") {
+		return root
+	}
+	bucket, prefix, _ := strings.Cut(rest, "/")
+	if n := f.NarrowPrefix(prefix); n != prefix {
+		return scheme + "://" + bucket + "/" + n
+	}
+	return root
 }

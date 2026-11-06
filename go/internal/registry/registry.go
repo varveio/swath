@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
@@ -87,6 +88,10 @@ type Env struct {
 	Ordered *atomic.Int64
 	// Text, if set (and Router nil), writes the rows as text there.
 	Text *textout.Out
+	// Filter, if set, drops the rows it does not accept before the order
+	// stage, counting them in Filtered.
+	Filter   *filter.Spec
+	Filtered *atomic.Int64
 }
 
 // Bound is a provider bound to its schema; embed it in an opened source.
@@ -105,6 +110,10 @@ func (b Bound[P]) Schema() schema.Info { return b.s.Info }
 
 // Run implements Source.Run with the provider's row type.
 func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Encoder, error) {
+	keep, err := filter.Compile(env.Filter, b.s)
+	if err != nil {
+		return order.Stats{}, nil, err
+	}
 	var sink order.Sink[P] = discard[P]{}
 	var enc parquetout.Encoder
 	if env.Router != nil {
@@ -126,6 +135,8 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	p := b.p
 	if env.Empty {
 		p = source.Empty[P]{}
+	} else if keep != nil {
+		p = newFiltered(p, keep, env.Filtered)
 	}
 	st, err := order.Run(ctx, p, sink, b.s, env.Order)
 	return st, enc, err

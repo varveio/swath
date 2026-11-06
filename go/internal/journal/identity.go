@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 )
 
@@ -23,6 +24,9 @@ type Identity struct {
 	PartSize int64   `json:"part_size"` // part boundaries
 	Provider string  `json:"provider"`  // the source's provider ("s3")
 	Source   []Field `json:"source"`    // the provider's frozen settings, in report order
+	// Filters are the row filters' descriptions (package filter), in
+	// order; none for an unfiltered run.
+	Filters []string `json:"filters,omitempty"`
 }
 
 // Field is one frozen source setting. Two values are the same setting when
@@ -91,6 +95,8 @@ func Check(stored, requested Identity) error {
 		return &MismatchError{"writer", stored.Writer, requested.Writer}
 	case stored.PartSize != requested.PartSize:
 		return &MismatchError{"part size", stored.PartSize, requested.PartSize}
+	case !slices.Equal(stored.Filters, requested.Filters):
+		return &MismatchError{"filters", fmt.Sprintf("%q", stored.Filters), fmt.Sprintf("%q", requested.Filters)}
 	}
 	return nil
 }
@@ -118,6 +124,9 @@ func (id Identity) Hash() string {
 	put("provider=", id.Provider)
 	for _, f := range id.Source {
 		put("source."+f.Name+"=", f.canon())
+	}
+	for _, f := range id.Filters {
+		put("filter=", f)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

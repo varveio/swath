@@ -206,7 +206,8 @@ type Timings struct {
 // Output is the row and part accounting: this invocation versus the
 // dataset.
 type Output struct {
-	RowsListed    int64 `json:"rows_listed"`    // listed and ordered by this invocation
+	RowsListed    int64 `json:"rows_listed"`    // listed and ordered by this invocation (after the filters)
+	RowsFiltered  int64 `json:"rows_filtered"`  // listed by this invocation and dropped by the filters (--include, ...)
 	RowsRetained  int64 `json:"rows_retained"`  // kept from the interrupted run (resume)
 	RowsCommitted int64 `json:"rows_committed"` // in the committed dataset (0 unless committed)
 	// RowsDurable is the rows in parts that stay in the output: the

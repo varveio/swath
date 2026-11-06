@@ -310,3 +310,20 @@ func TestUnresumableMark(t *testing.T) {
 		t.Fatalf("a frame after the mark: %v", err)
 	}
 }
+
+// TestFiltersAreIdentity: a resume with other filters, or none, is refused,
+// and the filters change the identity's hash (args_hash); no filters keep
+// the hash an unfiltered identity had.
+func TestFiltersAreIdentity(t *testing.T) {
+	a := Identity{Tool: "t", Provider: "s3", Filters: []string{"exclude=x"}}
+	b := a
+	b.Filters = []string{"exclude=y"}
+	c := a
+	c.Filters = nil
+	if Check(a, a) != nil || Check(a, b) == nil || Check(a, c) == nil || Check(c, a) == nil {
+		t.Fatal("filters not checked")
+	}
+	if a.Hash() == b.Hash() || a.Hash() == c.Hash() || c.Hash() != (Identity{Tool: "t", Provider: "s3"}).Hash() {
+		t.Fatal("hash")
+	}
+}
