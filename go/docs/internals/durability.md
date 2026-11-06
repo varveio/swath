@@ -199,6 +199,11 @@ tail as JSON lines.
 **The contract, precisely.**
 - **Process crash (SIGKILL, panic, OOM kill) on a running kernel.** Every acknowledged step survives, because
   the page cache does. This is what the crash matrix and the SIGKILL tests demonstrate.
+- **A write or an fsync that fails** (a part file, a journal record, the manifest; half the bytes written then
+  `ENOSPC`, or the bytes written and the sync failing with `EIO`): the run fails with that error and no
+  manifest, the published parts stay, and a resume completes the uninterrupted run's dataset
+  (`TestDiskFaultMatrix`, through the `faults.SetIO` seam). The kernel's behaviour after a failed fsync
+  (pages it may drop or mark clean) is not modelled.
 - **Power loss or a kernel crash.** Recovery holds when the filesystem honours `fsync` on files and
   directories (ext4, XFS and APFS do). Before a journal record names a part:
   - the part file is synced, and so is its claimed name in `.swath/parts/`;

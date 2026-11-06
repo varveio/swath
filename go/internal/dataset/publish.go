@@ -218,9 +218,9 @@ func writeAtomic(dir, name string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("write %s: %w", name, err)
 	}
-	_, err = f.Write(data)
+	_, err = faults.Write(f, data)
 	if err == nil {
-		err = f.Sync()
+		err = faults.Sync(f)
 	}
 	if err = errors.Join(err, f.Close()); err != nil {
 		return fmt.Errorf("write %s: %w", name, err)

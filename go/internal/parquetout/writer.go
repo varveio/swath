@@ -20,6 +20,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/schema"
 )
 
@@ -135,7 +136,7 @@ func create[P any](path string, s *schema.Schema[P], ordinal, maxColumns int, co
 		// rows arrive sorted; GenericWriter does not reorder them).
 		pq.SortingWriterConfig(pq.SortingColumns(pq.Ascending("key"))),
 	}
-	out := &tracking{w: f, digest: md5.New()}
+	out := &tracking{w: faults.Writer(f), digest: md5.New()}
 	w := &writer[P]{
 		schema: s, columns: columns, file: f, out: out, codec: c,
 		w:    pq.NewGenericWriter[any](out, opts...),
@@ -270,7 +271,7 @@ func (w *writer[P]) close() (dataset.Part, error) {
 	}
 	err = errors.Join(err, w.codec.Close())
 	if err == nil {
-		err = w.file.Sync()
+		err = faults.Sync(w.file)
 	}
 	// The directory entry is made durable by the committer that claims
 	// the part for its record (listing), not here.

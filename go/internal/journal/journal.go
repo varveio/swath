@@ -233,13 +233,13 @@ func (j *Journal) append(v any) error {
 	binary.LittleEndian.PutUint32(hdr[4:], frameCRC(hdr[:4], payload))
 	err = faults.At("journal-append")
 	if err == nil {
-		_, err = j.f.Write(append(hdr[:], payload...))
+		_, err = faults.Write(j.f, append(hdr[:], payload...))
 	}
 	if err == nil {
 		err = faults.At("journal-sync")
 	}
 	if err == nil {
-		err = j.f.Sync()
+		err = faults.Sync(j.f)
 	}
 	if err != nil {
 		return fmt.Errorf("journal: %w", err)
