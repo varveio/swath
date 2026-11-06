@@ -81,6 +81,10 @@ func ClaimPath(out string, i int) string { return TempPath(out, i) + ClaimSuffix
 // _swath_*summary.json reports and
 // Swath's .swath-state.json) are removed too, so an old dataset can be
 // replaced.
+// commitEntries are the entries that make a directory a dataset (the
+// manifest; _SUCCESS for earlier layouts): overwrite removes them first.
+var commitEntries = []string{ManifestName, legacySuccess}
+
 var ownEntries = []string{DataDir, ManifestName, ReportName, ErrorName, legacyLocalSummary, legacySummary, legacySuccess, legacySymlink, legacyLock, ".swath-state.json"}
 
 const (

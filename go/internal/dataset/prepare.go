@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/varveio/swath/go/internal/faults"
 )
 
 // Errors returned by Prepare.
@@ -89,6 +91,20 @@ func Usable(out, root, schemaID string, replace bool) (string, error) {
 // and creates out/data.
 func prepareOut(absOut string, replace bool) error {
 	if ents, err := os.ReadDir(absOut); err == nil && replace && nonLock(absOut, ents) > 0 {
+		// The commit record goes first, durably: from here the directory
+		// holds no dataset, so a crash part way through the removal never
+		// leaves a manifest naming parts already gone.
+		for _, n := range commitEntries {
+			if err := os.RemoveAll(filepath.Join(absOut, n)); err != nil {
+				return fmt.Errorf("remove previous dataset: %w", err)
+			}
+		}
+		if err := syncDir(absOut); err != nil {
+			return fmt.Errorf("remove previous dataset: %w", err)
+		}
+		if err := faults.At("overwrite-uncommitted"); err != nil {
+			return err
+		}
 		for _, name := range ownEntries {
 			for _, n := range []string{name, name + ".tmp"} {
 				if err := os.RemoveAll(filepath.Join(absOut, n)); err != nil {

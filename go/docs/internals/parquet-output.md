@@ -117,6 +117,18 @@ Output safety: the source root is validated first; the output may not be the roo
 and by dev/inode); a non-empty output is refused unless `--overwrite`, which replaces only a previous dataset of
 this tool, outside the root, removing only its own entries. An output inside the root is skipped by the walk.
 
+**`--overwrite` is a destructive replacement, not an atomic one.** Under the output lock, before anything is
+listed, the previous dataset's commit record (`manifest.json`, or an earlier layout's `_SUCCESS`) is removed
+and the directory synced, then its other entries. From that moment the path holds no dataset: a run that fails
+or is interrupted leaves none there (an interrupted journaled run can be resumed), and readers see no dataset
+until the new manifest is installed. The commit goes first so that a crash part way through the removal never
+leaves a manifest naming parts already gone (`TestOverwriteRemovesTheCommitFirst`). The removal cannot wait
+for the new run's first part or its publication: parts are published early under the same names in `data/`,
+which the old manifest would then name with different bytes. Where readers must always find a dataset (an
+hourly refresh, say), write each refresh to a new directory, never overwritten, and switch readers to it
+through a pointer outside the datasets (a generation file, a database row, a symlink swapped by rename) once
+its `manifest.json` exists; delete a generation only when no reader uses it.
+
 ## What readers rely on
 
 - **Varve's Go reader** opens format-2 S3 datasets with the changes in [../upgrade.md](../upgrade.md): it

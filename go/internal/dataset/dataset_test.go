@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/faults"
 )
 
 func part(i int, lo, hi string, n int64) Part {
@@ -116,4 +118,34 @@ func TestPublishFailureLeavesNoManifest(t *testing.T) {
 	if Committed(out) {
 		t.Fatal("a failed publish committed")
 	}
+}
+
+// TestOverwriteRemovesTheCommitFirst (Astra register row 43): --overwrite
+// is a destructive replacement, and its first durable step is to remove the
+// previous dataset's commit record: a crash part way through the removal
+// leaves a directory with no dataset (and its old parts), never a manifest
+// naming parts already removed. Before, data/ went first.
+func TestOverwriteRemovesTheCommitFirst(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "ds")
+	for _, f := range []string{"data/part-00000.parquet", ManifestName, legacySuccess, ".swath/lock"} {
+		touch(t, filepath.Join(out, f))
+	}
+	restore := faults.Set(func(p string) error {
+		if p == "overwrite-uncommitted" {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	err := Prepare(out, t.TempDir(), id, true)
+	restore()
+	if !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("the crash point was not reached: %v", err)
+	}
+	if Committed(out) {
+		t.Fatal("the manifest outlived the start of the overwrite")
+	}
+	if _, err := os.Stat(filepath.Join(out, legacySuccess)); !os.IsNotExist(err) {
+		t.Fatal("the earlier layout's commit marker outlived the start of the overwrite")
+	}
+	exists(t, filepath.Join(out, "data/part-00000.parquet"))
 }
