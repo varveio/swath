@@ -115,6 +115,16 @@ func classify(err, cause error, dir string) outcome {
 		o.Class, o.ExitCode = "terminated", exitTerminated
 	case errors.As(cause, &se):
 		o.Class, o.ExitCode = "interrupted", exitInterrupted
+	case errors.Is(err, listing.ErrComplete):
+		// swath resume on a committed dataset has nothing to do: it is
+		// idempotent, exit 0, as Java's, when the dataset covers its
+		// scope; one committed with partial coverage stays incomplete.
+		o.Resumable = false
+		if c, ok := committedCoverage(dir); ok && c.Complete {
+			o.Class, o.ExitCode = "completed", exitCompleted
+		} else {
+			o.Class, o.ExitCode = "incomplete", exitFatal
+		}
 	case errors.Is(err, syscall.ENOSPC):
 		// A full disk stops the run (a part, a journal append, spill or
 		// the manifest cannot be written) but loses nothing durable:
@@ -129,6 +139,30 @@ func classify(err, cause error, dir string) outcome {
 		}
 	}
 	return o
+}
+
+// committedCoverage is the coverage in dir's manifest (ok false without a
+// readable one).
+func committedCoverage(dir string) (dataset.Coverage, bool) {
+	var m dataset.Manifest
+	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		return dataset.Coverage{}, false
+	}
+	return m.Coverage, true
+}
+
+// alreadyComplete accounts for a resume that found its output committed
+// and complete (exit 0): the report says so from the manifest's coverage,
+// and the text report says it in one line.
+func alreadyComplete(stdout io.Writer, format, dir string, r *listing.Report) {
+	r.Outcome.Status, r.Outcome.Error, r.Outcome.Unrecorded = "committed", "", listing.UnrecordedComplete
+	if c, ok := committedCoverage(dir); ok {
+		r.Outcome.Complete, r.Outcome.StopReason = c.Complete, c.StopReason
+	}
+	if format != "json" {
+		fmt.Fprintf(stdout, "%s is already complete: nothing to resume\n", dir)
+	}
 }
 
 // classified is an error with the provider's class of its cause.

@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -464,13 +465,71 @@ func TestEarlyRefusalSaysWhy(t *testing.T) {
 	empty := t.TempDir()
 	for _, c := range []struct{ dir, why string }{{done, listing.UnrecordedComplete}, {empty, listing.UnrecordedNoRun}} {
 		report := filepath.Join(t.TempDir(), "report.json")
-		if err := dispatch(ctx, []string{"resume", "--report", report, c.dir}, io.Discard); err == nil {
-			t.Fatalf("resume of %s accepted", c.dir)
+		err := dispatch(ctx, []string{"resume", "--report", report, c.dir}, io.Discard)
+		if (err == nil) != (c.dir == done) {
+			t.Fatalf("resume of %s: %v", c.dir, err)
 		}
 		var rep listing.Report
 		readJSON(t, report, &rep)
-		if rep.Outcome.Unrecorded != c.why || !strings.Contains(stderr.String(), c.why) {
+		// A complete dataset is no refusal (exit 0): nothing goes to stderr.
+		if rep.Outcome.Unrecorded != c.why || (c.dir != done && !strings.Contains(stderr.String(), c.why)) {
 			t.Fatalf("unrecorded %q, want %q; stderr %s", rep.Outcome.Unrecorded, c.why, stderr)
 		}
 	}
+}
+
+// TestResumeCompleteIsIdempotent: swath resume on a committed, complete
+// dataset exits 0 (idempotent, as Java's), its report saying committed
+// and complete with the manifest's stop reason, the dataset unchanged;
+// the same for a resumed run that finds the dataset committed (another
+// process finished it first). Before, both exited 1 ("already complete").
+func TestResumeCompleteIsIdempotent(t *testing.T) {
+	captureStderr(t)
+	ctx := context.Background()
+	ep := gcstest.Bucket(t, gcstest.Keys(200), 0)
+	args := []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB"}
+	dir := filepath.Join(t.TempDir(), "ds")
+	if err := run(ctx, append(slices.Clone(args), "-o", dir), io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	want := dirTree(t, dir)
+	check := func(how string, rep listing.Report) {
+		t.Helper()
+		o := rep.Outcome
+		if o.Class != "completed" || o.ExitCode != exitCompleted || o.Status != "committed" || !o.Complete || o.StopReason != "completed" || o.Resumable || o.Error != "" {
+			t.Fatalf("%s: report outcome %+v", how, o)
+		}
+		if got := dirTree(t, dir); !maps.Equal(want, got) {
+			t.Fatalf("%s: the dataset changed", how)
+		}
+	}
+	report := filepath.Join(t.TempDir(), "report.json")
+	var out bytes.Buffer
+	if err := dispatch(ctx, []string{"resume", "--report", report, dir}, &out); err != nil {
+		t.Fatalf("resume of a complete dataset: %v", err)
+	}
+	if !strings.Contains(out.String(), "already complete") {
+		t.Fatalf("resume printed %q", out.String())
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	check("resume", rep)
+	out.Reset()
+	if err := dispatch(ctx, []string{"resume", "--report-format", "json", dir}, &out); err != nil {
+		t.Fatalf("resume --report-format json: %v", err)
+	}
+	rep = listing.Report{}
+	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
+		t.Fatalf("resume --report-format json: %v %q", err, out.String())
+	}
+	check("resume json", rep)
+	// A resumed run that meets the committed dataset (the race the
+	// command's early check cannot close).
+	report = filepath.Join(t.TempDir(), "report.json")
+	if err := runWith(ctx, append(slices.Clone(args), "-o", dir, "--report", report), io.Discard, false, nil, true, nil); err != nil {
+		t.Fatalf("resumed run on a complete dataset: %v", err)
+	}
+	rep = listing.Report{}
+	readJSON(t, report, &rep)
+	check("resumed run", rep)
 }

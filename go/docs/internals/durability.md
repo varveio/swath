@@ -159,7 +159,8 @@ each range). The ramp-up cost has not been measured.
 
 A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
 may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.
-`swath resume` on a complete dataset returns `ErrComplete`; on a directory without a journal (an empty
+`swath resume` on a committed dataset meets `ErrComplete`: complete coverage exits 0 (class `completed`, the
+report saying `complete`; idempotent, as Java's), partial coverage exits 1 (`incomplete`); on a directory without a journal (an empty
 workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `-overwrite`.
 
 ## The outcome of an attempt

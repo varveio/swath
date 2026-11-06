@@ -64,7 +64,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	seen := journal.Witness(dir)
 	att := newAttempt()
 	stop := func(err error) error {
-		return refuse(dir, seen, err, att, o.report, append([]string{"resume"}, args...))
+		return refuse(stdout, dir, seen, err, att, o.report, o.reportFormat, append([]string{"resume"}, args...))
 	}
 	if dataset.Committed(dir) {
 		return stop(listing.ErrComplete)
@@ -112,17 +112,31 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 // without a run, an output another process owns and a run that changed
 // since seen (its journal.Witness) keep theirs, and the outcome goes to
 // stderr. The report (--report, if given) holds it in every case.
-func refuse(dir, seen string, err error, att *listing.Attempt, report string, argv []string) error {
+//
+// A dataset already committed and complete is no refusal: the resume
+// exits 0 (idempotent, as Java's), its report saying complete.
+func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt, report, format string, argv []string) error {
 	o := classify(err, nil, dir)
 	o.Attempt = att
-	recorded, why := settleOutside(dir, seen, o)
-	if !recorded {
-		reportUnrecorded(dir, o, why)
-	}
 	r := listing.Unstarted(argv, dir, att, err)
 	r.Invocation.Resume = true
-	r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Resumable, r.Outcome.Cause, r.Outcome.Unrecorded = o.Class, o.ExitCode, o.Resumable, o.Cause, why
+	r.Outcome.Class, r.Outcome.ExitCode, r.Outcome.Resumable, r.Outcome.Cause = o.Class, o.ExitCode, o.Resumable, o.Cause
+	done := o.ExitCode == exitCompleted
+	if done {
+		alreadyComplete(stdout, format, dir, &r)
+	} else if recorded, why := settleOutside(dir, seen, o); !recorded {
+		r.Outcome.Unrecorded = why
+		reportUnrecorded(dir, o, why)
+	}
 	writeReport(report, r)
+	if done {
+		if format == "json" {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(r)
+		}
+		return nil
+	}
 	return &exitError{err, o.ExitCode}
 }
 

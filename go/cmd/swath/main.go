@@ -483,6 +483,19 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	stopWatch()
 	stopProfile()
 	err, out := settle(sum, err)
+	if err != nil && out.ExitCode == exitCompleted {
+		// A resume that found the run committed by another process
+		// meanwhile: nothing to do, as swath resume on a committed dataset.
+		sum.Outcome.Class, sum.Outcome.ExitCode, sum.Outcome.Resumable, sum.Outcome.Cause = out.Class, out.ExitCode, out.Resumable, out.Cause
+		alreadyComplete(stdout, o.reportFormat, cfg.Output.Dir, &sum)
+		writeReport(o.report, sum)
+		if o.reportFormat == "json" {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(sum)
+		}
+		return nil
+	}
 	if cfg.Output.Dir != "" && !settled && (err != nil || unrecorded != "") {
 		// Refused before ownership (another owner's outcome stands, the
 		// run changed meanwhile, or there is none to settle), or the write

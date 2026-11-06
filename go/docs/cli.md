@@ -18,7 +18,9 @@ authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeou
 `--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--limiter-slow-start`, `--request-rate`), may be given again (the last value
 wins: `--anonymous=false` undoes a recorded `--anonymous`); anything else is a usage error. The source and output
 identity stays frozen: a resume whose overrides resolve another route (a profile with another region, say) is
-refused by the identity check.
+refused by the identity check. `swath resume` on a committed dataset with complete coverage has nothing to do
+and exits 0 (`DIR is already complete: nothing to resume`; the report's outcome is `completed`, `complete`
+true), so a supervisor may resume until exit 0; one committed with partial coverage stays `incomplete`, exit 1.
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
@@ -299,14 +301,14 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   records its own outcome over the interrupted run's, if that run is still the one it read (its journal and
   `error.json` unchanged) and the dataset still uncommitted once it holds the lock. An attempt that cannot
   record it (another process owns the output, whose outcome stands; another process completed or replaced the
-  run first; a refusal that leaves the directory as it was, such as a complete dataset, a directory without a
+  run first; a refusal that leaves the directory as it was, such as a directory without a
   journal, where nothing is created, or an unusable output; a failed write) prints it on stderr as one line, `swath: outcome: {...}`, after the
   reason; the JSON report carries the reason as `outcome.unrecorded`, which is never empty when the outcome is
   not in `error.json`.
 
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
-  | 0 | `completed` | the dataset is committed (or a dry run finished) | – |
+  | 0 | `completed` | the dataset is committed (or a dry run finished), also by an earlier attempt: `swath resume` on a complete dataset | – |
   | 1 | `fatal`, `incomplete` | a cause a resume will not fix (access denied, no such bucket, an invariant), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
   | 2 | `usage` | a malformed command line | no |
   | 74 | `disk_full` | a part, a journal record or the manifest could not be written: its filesystem is full (`cause` `no_space`; spill waits instead of failing) | yes, journal intact, once there is space |
