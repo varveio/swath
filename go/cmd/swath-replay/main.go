@@ -251,13 +251,8 @@ func serve(args []string, stderr io.Writer) error {
 		return err
 	}
 	cfg.Store, cfg.ServingMode, cfg.FixtureIdentity = st, mode, identity
-	srv, err := server.New(cfg)
+	srv, err := startServer(cfg, stderr)
 	if err != nil {
-		st.Close()
-		return usageError{err}
-	}
-	if err := srv.Listen(); err != nil {
-		st.Close()
 		return err
 	}
 	sigs := make(chan os.Signal, 1)
@@ -281,6 +276,26 @@ func serve(args []string, stderr io.Writer) error {
 		}
 		return exitSignal(130)
 	}
+}
+
+// startServer builds and binds the server over cfg.Store, which it owns
+// from here: when either step fails the store is closed, the original
+// error is returned as it was (a bad configuration still a usage error),
+// and a failure to close the store is reported once on stderr rather than
+// replacing it.
+func startServer(cfg server.Config, stderr io.Writer) (*server.Server, error) {
+	srv, err := server.New(cfg)
+	if err == nil {
+		if err = srv.Listen(); err == nil {
+			return srv, nil
+		}
+	} else {
+		err = usageError{err}
+	}
+	if cerr := cfg.Store.Close(); cerr != nil {
+		fmt.Fprintf(stderr, "replay store cleanup failed after a failed start: %v\n", cerr)
+	}
+	return nil, err
 }
 
 // openFixture opens a .tsv key list in memory, anything else as a sorted
