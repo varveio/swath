@@ -670,58 +670,72 @@ content type is listed by GCS without `contentType`, which the native rendering 
 
 ## Measurements
 
-Configuration, unless a table says otherwise. Host: a 4 vCPU session container (Intel Xeon @ 2.10 GHz) shared
-with other jobs, 15 GiB RAM, Linux 6.18; **4 vCPU shared host, not the corridor's eight isolated cores**, and the
+Configuration, unless a table says otherwise. Host: a 4 vCPU session container (Intel Xeon @ 2.10 GHz) that
+other jobs share, 15 GiB RAM, Linux 6.18, quiet during the runs; **4 vCPU shared host, not the corridor's eight
+isolated cores**, and the
 client runs on the same four vCPUs over loopback, so these numbers are the pair's, not the server's alone. The
-server: this module at the commit that last updated this section, `./build.sh`, GOMAXPROCS 4, the window cache's
-defaults, `--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`, nothing else running
-(2026-11-07, 12:50 to 12:58 UTC). Fixtures, page cache warm: `synthetic-1m/sorted-rolled` (synthetic, 1,000,000
-keys, 6 parts, 110 row groups, 22.7 MB, written by `bench/replay/make-fixtures.sh`) and the `noaa-gk2a-pds`
-recording (a public bucket's listing, 18,472,015 keys, 2 parts, 55 row
-groups, 461 MB; not in the repository). Runs vary by about 15% from one to the next on this host.
+server: this module at `56abc8d` (the serving code this page describes), `./build.sh`, GOMAXPROCS 4, the window
+cache's defaults, `--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`, nothing else
+running. Three rounds on 2026-11-07, 19:17 to 19:52 UTC, the Java server (see
+[the comparison](internals/replay-java.md#measurements-both-servers)) measured back to back with this one for each
+configuration; every figure below is the median of the three runs, with the range of the three where a cell gives
+one. Fixtures, page cache warm: `synthetic-1m/sorted-rolled` (synthetic, 1,000,000 keys, 6 parts, 110 row groups,
+22.7 MB, written by `bench/replay/make-fixtures.sh`) and the `noaa-gk2a-pds` recording (a public bucket's listing,
+18,483,603 keys, 2 parts, recorded 2026-11-07 18:30 to 18:33 UTC; not in the repository). Run-to-run spread on
+this host: the three throughputs of a configuration spread by 0.6% to 25% (range over median), the widest for
+16 walks over the recording (25%) and 64 walks over the synthetic fixture (20%, one slower first round), so
+differences of that size between single runs mean nothing.
 
 ### Throughput and memory
 
 Each run: `swath-replay serve --fixture F --bucket B --port P --metrics-port M --serving-mode sorted
 --parquet-connections 8 --max-concurrent-requests 1024`, then `replayload -endpoint http://127.0.0.1:P -bucket B
 -fixture F -walks W -max-keys 1000 -warmup 10s -duration D -metrics http://127.0.0.1:M/metrics` (D 30 s for 16
-walks, 50 s for 64), with the server's `VmRSS` read from `/proc/PID/status` every second from the client's start:
-the 64-walk rows are one minute of samples. RSS is the measured window's mean and maximum.
+walks, 50 s for 64), with the server's `VmRSS` read from `/proc/PID/status` every second from the client's start.
+RSS mean is the median over the three runs of each run's mean; RSS max is the highest sample of the three runs.
 
-| Fixture | Walks | Object rows/s | Request p50 / p99 ms | RSS mean / max MB | Reader peak |
+| Fixture | Walks | Object rows/s, median (range) | Request p50 / p99 ms | RSS mean / max MB | Reader peak |
 |---|---|---|---|---|---|
-| synthetic-1m rolled | 16 | 1,868,585 | 6.9 / 21.6 | 401 / 402 | 8 |
-| synthetic-1m rolled | 64 | 2,602,299 | 21.8 / 66.6 | 677 / 678 | 8 |
-| noaa-gk2a-pds | 16 | 1,224,641 | 10.6 / 33.0 | 887 / 894 | 8 |
-| noaa-gk2a-pds | 64 | 1,811,143 | 30.1 / 96.9 | 900 / 909 | 8 |
+| synthetic-1m rolled | 16 | 2,407,056 (2,261,596 to 2,591,308) | 5.3 / 17.2 | 426 / 442 | 8 |
+| synthetic-1m rolled | 64 | 3,530,206 (2,852,386 to 3,543,225) | 16.1 / 50.1 | 704 / 719 | 8 |
+| noaa-gk2a-pds | 16 | 1,450,953 (1,227,179 to 1,592,280) | 8.9 / 29.2 | 883 / 973 | 8 |
+| noaa-gk2a-pds | 64 | 2,144,642 (1,931,133 to 2,234,807) | 25.7 / 82.6 | 918 / 954 | 8 |
 
-Idle, the server holds 14 MB and answers `/healthz` 0.22 s after it starts on either fixture. It serves a walk's
-pages from its window cache (above): at 64 walks over the recording it read the fixture 7,617 times (12,821 rows
-a fill on average, read-aheads included) for 108,248 pages answered from windows. Its memory is the cache (2.39
-million rows held over the recording, 2.29 million over the synthetic fixture, whose walks overlap) and the
-in-flight responses (`response.bytes.peak` 20 to 24 MB at 64 walks), not the fixture's object count. With the
-cache off (`--prefetch-window-rows 0`) the same 64-walk synthetic run served 756,214 rows/s in
-45 MB, every page decoded from the fixture. With 256 walks the server served 3,582,394 rows/s (25 s, 680 MB,
-`parquet.queries.peak` 8).
+Under load the server's resident memory averaged 426 to 918 MB (at most 973 MB over any sample) and the reader
+stayed at its 8 slots in every run. It grew with the walks over the synthetic fixture (426 MB at 16 walks, 704 MB
+at 64) and hardly at all over the recording (883 MB, 918 MB), whose 18.5 million keys the server does not hold.
 
-Where the server's CPU goes at 64 walks over the synthetic fixture (`SWATH_CPUPROFILE`, 40 s, 2.4 million rows
-a second): rendering the S3 document 40% (XML escaping 15%), slicing pages out of windows 29% (unpacking rows
-into objects 11%), the response write 13% (mostly the `write` system call), fixture reads 5%, the collector under
-1%.
+The remaining measurements were made on 2026-11-07 between 12:50 and 12:58 UTC, with the server as recorded in
+`b96582d` and the recording as it was then (18,472,015 keys), and were not repeated in the later runs above, so
+they carry that date and commit. Idle, the server holds 14 MB and answers `/healthz` 0.22 s after it starts on
+either fixture. It serves a walk's pages from its window cache (above): at 64 walks over the recording it read
+the fixture 7,617 times (12,821 rows a fill on average, read-aheads included) for 108,248 pages answered from
+windows. Its memory is the cache (2.39 million rows held over the recording, 2.29 million over the synthetic
+fixture, whose walks overlap) and the in-flight responses (`response.bytes.peak` 20 to 24 MB at 64 walks), not
+the fixture's object count. With the cache off (`--prefetch-window-rows 0`) the same 64-walk synthetic run
+served 756,214 rows/s in 45 MB, every page decoded from the fixture. With 256 walks the server served
+3,582,394 rows/s (25 s, 680 MB, `parquet.queries.peak` 8).
+
+Where the server's CPU goes at 64 walks over the synthetic fixture (same date and commit as the paragraph above;
+`SWATH_CPUPROFILE`, 40 s, 2.4 million rows a second): rendering the S3 document 40% (XML escaping 15%), slicing
+pages out of windows 29% (unpacking rows into objects 11%), the response write 13% (mostly the `write` system
+call), fixture reads 5%, the collector under 1%.
 
 ### Overruns at 64 walks
 
 `--inject-latency worker_page=50ms,pivot_probe=50ms,structure_probe=50ms`, 64 walks, 30 s, synthetic-1m rolled,
-`replayload ... -walks 64 -max-keys K -duration 30s`. 64 walks at 50 ms ask for 1,280 pages a second.
+`replayload ... -walks 64 -max-keys 1000 -duration 30s`, medians of the three rounds of 2026-11-07 above. 64 walks at
+50 ms ask for 1,280 pages a second.
 
-| max-keys | Object rows/s | Request p50 / p99 ms | Requests | `inject.overrun` |
+| max-keys | Object rows/s, median (range) | Request p50 / p99 ms | Requests | `inject.overrun`, median (range) |
 |---|---|---|---|---|
-| 1000 | 1,185,970 | 52.2 / 76.6 | 35,611 | 51 |
-| 100 | 124,415 | 51.1 / 56.2 | 37,337 | 0 |
+| 1000 | 1,228,090 (1,224,054 to 1,231,044) | 51.5 / 58.1 | 36,859 | 29 (12 to 43) |
 
 At 1,000-key pages the profile asks for 1.28 million rows a second; with the client on the same four vCPUs the
-server falls a little short, overrunning 0.14% of its pages. At 100-key pages (128,000 rows a second) it holds
-the profile with no overrun (`TestLoadNoOverrunAtSixtyFourWalks` pins this). Check `inject.overrun` against the
+server falls a little short, overrunning 0.08% of its pages (29 of 36,859; 0.03% to 0.12% over the three runs).
+The 100-key run was measured on 2026-11-07 (12:50 to 12:58 UTC, `b96582d`) and not repeated: 124,415 rows/s,
+request p50 / p99 51.1 / 56.2 ms, 37,337 requests, no overrun. At 100-key pages (128,000 rows a second) the
+server holds the profile (`TestLoadNoOverrunAtSixtyFourWalks` pins this). Check `inject.overrun` against the
 request count before trusting a run with a profile.
 
 ### Request ceiling, reader slots and descriptors

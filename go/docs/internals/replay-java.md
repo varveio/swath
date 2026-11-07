@@ -217,43 +217,62 @@ go build -o /tmp/replaydiff ./bench/replaydiff
 
 ## Measurements, both servers
 
-The configuration of [the user page](../replay.md#measurements) (a 4 vCPU shared host, the client on the same
-vCPUs over loopback, 2026-11-07), with the Java server: swath `main` at `01dd55b` (0.3.3-SNAPSHOT) on Temurin
-25.0.5+8 with the launcher's heap defaults and `JAVA_TOOL_OPTIONS` as the host sets it (trust store and proxy
-properties only), as `bench/fault_replay.sh` leaves it, its window cache at its defaults. One server at a time,
-nothing else running, the two measured back to back for each configuration (12:50 to 12:58 UTC), both with
-`--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`. The `synthetic-1m/sorted-rolled`
-fixture was written by the Java `sort-fixture` (`bench/replay/make-fixtures.sh`). Runs vary by about 15% from
-one to the next on this host.
+The configuration of [the user page](../replay.md#measurements) (a 4 vCPU shared host, quiet during the runs, the
+client on the same vCPUs over loopback), with the Java server: swath `main` at `a2efe16` (0.3.3-SNAPSHOT) on
+Temurin 25.0.5+8 with the launcher's heap defaults and `JAVA_TOOL_OPTIONS` as the host sets it (trust store and
+proxy properties only), as `bench/fault_replay.sh` leaves it, its window cache at its defaults; the Go server at
+`56abc8d`. One server at a time, nothing else running, the two measured back to back for each configuration, three
+rounds on 2026-11-07 from 19:17 to 19:52 UTC, both with `--serving-mode sorted --parquet-connections 8
+--max-concurrent-requests 1024`. Every figure is the median of the three runs, with the range of the three where a
+cell gives one. The `synthetic-1m/sorted-rolled` fixture was written by the Java `sort-fixture`
+(`bench/replay/make-fixtures.sh`); the `noaa-gk2a-pds` recording was made with the Java CLI on 2026-11-07
+(18:30 to 18:33 UTC): 18,483,603 keys, 2 parts. Run-to-run spread on this host: a configuration's three
+throughputs lay within 0.6% to 25% of their median (range over median); Go 16 walks over the recording 25% and
+Java 24%, Go 64 walks over the synthetic fixture 20% (one slower first round), Java 64 walks over the recording
+5%, the overrun runs 1%, so a difference of up to about a quarter between two single runs says nothing.
 
-Throughput and memory (the commands of the user page's "Throughput and memory"):
+Throughput and memory (the commands of the user page's "Throughput and memory"; RSS mean is the median of each
+run's mean, RSS max the highest sample of the three runs; Java's reader peak is the median, its range in the
+text below):
 
-| Server | Fixture | Walks | Object rows/s | Request p50 / p99 ms | RSS mean / max MB | Reader peak |
+| Server | Fixture | Walks | Object rows/s, median (range) | Request p50 / p99 ms | RSS mean / max MB | Reader peak |
 |---|---|---|---|---|---|---|
-| Go | synthetic-1m rolled | 16 | 1,868,585 | 6.9 / 21.6 | 401 / 402 | 8 |
-| Java | synthetic-1m rolled | 16 | 1,261,226 | 10.4 / 32.9 | 1,056 / 1,105 | 16 |
-| Go | synthetic-1m rolled | 64 | 2,602,299 | 21.8 / 66.6 | 677 / 678 | 8 |
-| Java | synthetic-1m rolled | 64 | 1,876,586 | 29.7 / 90.9 | 1,472 / 1,473 | 46 |
-| Go | noaa-gk2a-pds | 16 | 1,224,641 | 10.6 / 33.0 | 887 / 894 | 8 |
-| Java | noaa-gk2a-pds | 16 | 738,430 | 16.2 / 83.9 | 1,752 / 1,860 | 10 |
-| Go | noaa-gk2a-pds | 64 | 1,811,143 | 30.1 / 96.9 | 900 / 909 | 8 |
-| Java | noaa-gk2a-pds | 64 | 1,039,262 | 50.6 / 183.3 | 2,043 / 2,595 | 16 |
+| Go | synthetic-1m rolled | 16 | 2,407,056 (2,261,596 to 2,591,308) | 5.3 / 17.2 | 426 / 442 | 8 |
+| Java | synthetic-1m rolled | 16 | 1,843,429 (1,751,334 to 1,852,800) | 7.1 / 21.9 | 985 / 1,234 | 16 |
+| Go | synthetic-1m rolled | 64 | 3,530,206 (2,852,386 to 3,543,225) | 16.1 / 50.1 | 704 / 719 | 8 |
+| Java | synthetic-1m rolled | 64 | 2,231,409 (2,126,134 to 2,434,380) | 25.1 / 78.6 | 1,198 / 1,738 | 46 |
+| Go | noaa-gk2a-pds | 16 | 1,450,953 (1,227,179 to 1,592,280) | 8.9 / 29.2 | 883 / 973 | 8 |
+| Java | noaa-gk2a-pds | 16 | 860,963 (787,900 to 993,852) | 13.8 / 71.4 | 1,607 / 2,106 | 10 |
+| Go | noaa-gk2a-pds | 64 | 2,144,642 (1,931,133 to 2,234,807) | 25.7 / 82.6 | 918 / 954 | 8 |
+| Java | noaa-gk2a-pds | 64 | 1,296,619 (1,286,228 to 1,351,972) | 40.7 / 147.8 | 2,050 / 2,623 | 16 |
 
-The Go server serves 1.4 to 1.7 times the Java server's rows a second here, in about half its memory. Idle, the
-Go server holds 14 MB and answers `/healthz` 0.22 s after it starts on either fixture; the Java server holds
-about 175 MB and answers after 2.0 to 2.2 s. Both serve a walk's pages from their window caches: at 64 walks over
-the recording the Go server read the fixture 7,617 times for 108,248 pages answered from windows, the Java server
-4,062 times for 54,840.
+The Go server serves 1.3 to 1.7 times the Java server's rows a second here (the ratio of the medians: 1.31 and
+1.58 over the synthetic fixture at 16 and 64 walks, 1.69 and 1.65 over the recording), and in 0.4 to 0.6 of its
+mean resident memory (0.43, 0.59, 0.55 and 0.45 in the table's order). The ratios of single rounds ran from 1.17
+to 1.84, so the ends of that span are within the run-to-run spread. The Java server's reader peak was 16 at 16
+walks over the synthetic fixture, 41 to 46 at 64 walks, 10 at 16 over the recording and 14 to 16 at 64; the Go
+server's was 8 in all twelve runs. The memory of the Java server's runs also varied: its 64-walk synthetic mean
+was 1,179 to 1,592 MB.
 
-Overruns at 64 walks (a 50 ms profile on every shape, 30 s, synthetic-1m rolled, 1,000-key pages):
+The following were measured on 2026-11-07 (12:50 to 12:58 UTC; the Go server as recorded in `b96582d`, the Java
+server `main` at `01dd55b`, the recording as it was then, 18,472,015 keys) and not repeated in the later runs
+above, so they carry that date and those commits. Idle, the Go server holds 14 MB and answers `/healthz` 0.22 s
+after it starts on either fixture; the Java server holds about 175 MB and answers after 2.0 to 2.2 s. Both serve
+a walk's pages from their window caches: at 64 walks over the recording the Go server read the fixture 7,617
+times for 108,248 pages answered from windows, the Java server 4,062 times for 54,840.
 
-| Server | Object rows/s | Request p50 / p99 ms | Requests | `inject.overrun` |
+Overruns at 64 walks (a 50 ms profile on every shape, 30 s, synthetic-1m rolled, 1,000-key pages, the same three
+rounds; `inject.overrun` is the median with its range):
+
+| Server | Object rows/s, median (range) | Request p50 / p99 ms | Requests | `inject.overrun` |
 |---|---|---|---|---|
-| Go | 1,185,970 | 52.2 / 76.6 | 35,611 | 51 |
-| Java | 988,981 | 54.5 / 204.3 | 29,719 | 262 |
+| Go | 1,228,090 (1,224,054 to 1,231,044) | 51.5 / 58.1 | 36,859 | 29 (12 to 43) |
+| Java | 1,205,355 (1,199,665 to 1,214,547) | 51.4 / 70.0 | 36,178 | 268 (212 to 316) |
 
-Both servers fall a little short of the 1.28 million rows a second the profile asks for, the Go server
-overrunning 0.14% of its pages and the Java server 0.9%.
+Both servers fall a little short of the 1.28 million rows a second the profile asks for (96% and 94% by the
+medians), the Go server overrunning 0.08% of its pages (0.03% to 0.12% over the three runs) and the Java server
+0.7% (0.6% to 0.9%). The servers' throughputs differ here by 2%, inside the run-to-run spread of the other
+configurations; the overrun counts do not overlap (43 against 212 at the closest).
 
 The bench scripts (`bench/fault_replay.sh` and `bench/resume_storm.sh` as the user page runs them; wall seconds
 and the proxy's requests, throttled in parentheses):
