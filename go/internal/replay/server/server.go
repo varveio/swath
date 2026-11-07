@@ -185,6 +185,7 @@ func New(cfg Config) (*Server, error) {
 		Handler:           s,
 		ReadHeaderTimeout: cfg.IdleTimeout,
 		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    cfg.maxHeaderBytes(),
 		ErrorLog:          nil,
 	}
 	return s, nil

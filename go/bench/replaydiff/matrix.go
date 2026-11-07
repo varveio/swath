@@ -226,6 +226,17 @@ func rawTargets() []request {
 		out = append(out, request{Name: fmt.Sprintf("raw GET [full] unsent body %s", framing[0]), Method: "GET",
 			Raw: "/{bucket}?list-type=2&max-keys=2", Header: [][2]string{framing}})
 	}
+	// Request heads around the limits (8 KiB with S3 alone, 64 KiB with a
+	// native route): a long header, a long request line, and the 70 KiB
+	// header a native configuration also refuses.
+	for _, n := range []int{8000, 9000, 60000, 70000} {
+		pad := strings.Repeat("a", n)
+		out = append(out,
+			request{Name: fmt.Sprintf("raw GET [headers] %d-byte header", n), Method: "GET", Raw: "/{bucket}?list-type=2&max-keys=1",
+				Header: [][2]string{{"X-Pad", pad}}, Compare: "headers"},
+			request{Name: fmt.Sprintf("raw GET [headers] %d-byte request line", n), Method: "GET",
+				Raw: "/{bucket}?list-type=2&max-keys=1&prefix=" + pad, Compare: "headers"})
+	}
 	add("GET", "status",
 		"/{bucket}%zz?list-type=2", "/{bucket}%?list-type=2", "/{bucket}%u0041?list-type=2", "{bucket}?list-type=2",
 		"/{bucket}?list-type=2&prefix=a b&max-keys=1", "/{bucket}?list-type=2&prefix=\x01&max-keys=1",

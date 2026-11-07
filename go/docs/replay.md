@@ -117,6 +117,9 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   `response_too_large`; `500 InternalError` with `fixture_disordered` when a row group's keys turn out not to
   ascend (the message names the row group and the part's file name, never its directory); and
   `500 InternalError` (`internal`, no detail) when the fixture read fails otherwise.
+- A request head (request line, headers, blank line) may be 8 KiB with the S3 route alone and 64 KiB with a
+  native route enabled, the Java server's limits: a request line longer than that is `414 URI Too Long`, a
+  longer head `431 Request Header Fields Too Large`, both with the HTML refusal page below.
 - The listing routes take no request body. A request that declares one (`Content-Length` or chunked) is answered
   as it would be without it, and its connection is then closed instead of drained, as on the Java server; a
   body that never arrives holds nothing.
@@ -450,7 +453,7 @@ Every run exited 0. The scripts behave the same on either server; nothing in the
     this server's own page naming the problem, not a copy of the Java server's HTTP layer's page.
   - A request line Go's HTTP parser refuses before any handler runs: whitespace or a control byte in the target,
     a malformed `%` escape (`%zz`, a lone `%`, `%uXXXX`) in the path, a target with neither a leading `/` nor a
-    scheme. Both servers answer `400`; this one with Go's `text/plain; charset=utf-8` page and no
+    scheme, and a request head over about 132 KiB (`431` from both servers). Both servers answer `400`; this one with Go's `text/plain; charset=utf-8` page and no
     `Cache-Control`.
   - An absolute target whose authority differs from the `Host` header (`GET http://other.invalid/bucket?...`
     with `Host: localhost`). The Java server refuses it with `400`; this server serves it, because Go's HTTP

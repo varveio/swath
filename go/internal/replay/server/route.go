@@ -65,6 +65,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// deferred work has given back the permit and the output.
 		defer ignoreBody(w)()
 	}
+	if status, problem := headProblem(r, s.cfg.headLimit()); status != 0 {
+		rejectRequest(w, r, status, problem)
+		return
+	}
 	if problem := targetProblem(r.RequestURI); problem != "" {
 		rejectTarget(w, r, problem)
 		return
