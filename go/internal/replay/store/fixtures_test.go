@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -100,11 +101,27 @@ type refRow struct {
 
 // reference reads a fixture's parts in order with parquet-go's row reader,
 // independently of the page index, and reports the first key of every row
-// group and every key page.
+// group and every key page. A local recording's rows have no etag column
+// and answer the S3 placeholder ETag (TestLocalRecordingS3View).
 func reference(t testing.TB, path string) (rows []refRow, boundaries []string) {
 	t.Helper()
 	var files []string
+	var placeholderETag *string
 	if format2.IsDataset(path) {
+		raw, err := os.ReadFile(filepath.Join(path, "manifest.json"))
+		var manifest struct {
+			SchemaID string `json:"schema_id"`
+		}
+		if err == nil {
+			err = json.Unmarshal(raw, &manifest)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if manifest.SchemaID == "swath-local/v1" {
+			placeholder := "swath-s3-synthetic-v1"
+			placeholderETag = &placeholder
+		}
 		// Part names are dense and zero-padded: name order is key order.
 		files, _ = filepath.Glob(filepath.Join(path, "data", "*.parquet"))
 	} else {
@@ -136,7 +153,7 @@ func reference(t testing.TB, path string) (rows []refRow, boundaries []string) {
 		for {
 			n, err := reader.ReadRows(buffer)
 			for _, row := range buffer[:n] {
-				var r refRow
+				r := refRow{etag: placeholderETag}
 				for _, v := range row {
 					switch c := v.Column(); {
 					case c == key:

@@ -333,6 +333,10 @@ type objectProjection struct {
 	// md5 names the column of a GCS recording's MD5 (base64). When set,
 	// the ETag is not the etag column's value but gcsETag of the two.
 	md5 string
+	// fixedETag and fixedStorageClass, when set, are the placeholder
+	// every row answers with, for a schema with no column the field maps
+	// from.
+	fixedETag, fixedStorageClass string
 }
 
 // s3Objects is the projection of the S3-shaped schemas: the Java-era
@@ -358,21 +362,34 @@ var objectProjections = map[string]objectProjection{
 	"swath/s3-objects/v1":     s3Objects,
 	"swath-replay/objects/v1": s3Objects,
 	"swath/gcs-objects/v1":    gcsObjects,
-	"swath-local/v1":          {size: "size", lastModified: "last_modified"},
+	"swath-local/v1":          localObjects,
 }
 
-// syntheticGCSETag is the S3 ETag of a GCS recording's row that holds
-// neither an MD5 nor an etag (Cloud Storage lists every object with an
-// etag, so only a recording made otherwise lacks both). Neither 32
+// localObjects is the S3 view of a local tree's recording, which holds
+// nothing S3's ETag or StorageClass maps from. S3 lists every object with
+// both, so each takes a placeholder: syntheticETag, and STANDARD, the
+// class S3 stores an object in unless the upload names another. Owner
+// stays absent under fetch-owner=true: an S3 owner id names an account,
+// which nothing in a local tree does (its uid names a user of one host),
+// so a placeholder would invent one; live S3 drops an owner field it does
+// not return (DisplayName, probed 2026-11-07) rather than filling it, and
+// the route answers fetch-owner=true without an Owner for every recording
+// that holds none (server TestLocalRecordingOnTheS3Route).
+var localObjects = objectProjection{size: "size", lastModified: "last_modified", fixedETag: syntheticETag, fixedStorageClass: "STANDARD"}
+
+// syntheticETag is the S3 ETag of a row with no source value for one: a
+// GCS recording's row that holds neither an MD5 nor an etag (Cloud
+// Storage lists every object with an etag, so only a recording made
+// otherwise lacks both), and every row of a local recording. Neither 32
 // hexadecimal digits (an MD5, S3's or the XML API's) with an optional
 // "-N" part count (an S3 multipart upload), nor "-" and base64 (the XML
 // API's composite object), it cannot be taken for a real ETag.
-const syntheticGCSETag = "swath-s3-synthetic-v1"
+const syntheticETag = "swath-s3-synthetic-v1"
 
 // gcsETag appends the S3 ETag of a GCS object, as the XML API forms it:
 // the MD5 in lower-case hexadecimal when the object has one; otherwise
 // (a composite object) "-" and the JSON API's etag; otherwise
-// syntheticGCSETag. An md5 value that is not the standard base64 of 16
+// syntheticETag. An md5 value that is not the standard base64 of 16
 // bytes is not an MD5, and the etag answers. Empty (a null) is no value.
 func gcsETag(dst []byte, md5, etag string) []byte {
 	if len(md5) == base64.StdEncoding.EncodedLen(16) {
@@ -384,7 +401,7 @@ func gcsETag(dst []byte, md5, etag string) []byte {
 	if etag != "" {
 		return append(append(dst, '-'), etag...)
 	}
-	return append(dst, syntheticGCSETag...)
+	return append(dst, syntheticETag...)
 }
 
 func objectProjectionFor(schemaID string) objectProjection {
@@ -432,7 +449,15 @@ func (p objectProjection) object(row *sortedparquet.Row) Object {
 		etag := string(gcsETag(nil, md5, stored))
 		o.ETag = &etag
 	}
+	if p.fixedETag != "" {
+		etag := p.fixedETag
+		o.ETag = &etag
+	}
 	o.StorageClass = text(row, p.storageClass)
+	if p.fixedStorageClass != "" {
+		class := p.fixedStorageClass
+		o.StorageClass = &class
+	}
 	o.OwnerID = text(row, p.ownerID)
 	o.OwnerDisplayName = text(row, p.ownerDisplayName)
 	o.ChecksumAlgorithm = text(row, p.checksumAlgorithm)

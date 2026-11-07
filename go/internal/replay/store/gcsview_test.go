@@ -25,13 +25,13 @@ func TestGCSETag(t *testing.T) {
 		{"Hn9gS4ZBWt6U4V/vhidgmw==", "CMDE1s/L3JADEAE=", "1e7f604b86415ade94e15fef8627609b"},
 		{"1B2M2Y8AsgTpgAmY7PhCfg==", "", "d41d8cd98f00b204e9800998ecf8427e"},
 		{"", "CM6Qk6/M3JADEAE=", "-CM6Qk6/M3JADEAE="},
-		{"", "", syntheticGCSETag},
+		{"", "", syntheticETag},
 		// Not the standard base64 of 16 bytes: the etag answers.
 		{"bm90IGFuIE1ENQ==", "CAEQAQ==", "-CAEQAQ=="},
 		{"Hn9gS4ZBWt6U4V_vhidgmw==", "CAEQAQ==", "-CAEQAQ=="},
 		{"Hn9gS4ZBWt6U4V/vhidgmx==", "CAEQAQ==", "-CAEQAQ=="},
 		{"Hn9gS4ZBWt6U4V/vhidgmw", "CAEQAQ==", "-CAEQAQ=="},
-		{"Hn9gS4ZBWt6U4V/vhidg\nmw=", "", syntheticGCSETag},
+		{"Hn9gS4ZBWt6U4V/vhidg\nmw=", "", syntheticETag},
 	} {
 		if got := string(gcsETag([]byte("x"), c.md5, c.etag)); got != "x"+c.want {
 			t.Errorf("gcsETag(%q, %q) = %q, want x%q", c.md5, c.etag, got, c.want)
@@ -69,9 +69,9 @@ func gcsRows(n int) ([]gcsRow, []string) {
 		case 2:
 			r.MD5, r.ETag, want[i] = str("not an md5"), str(etag), "-"+etag
 		case 3:
-			want[i] = syntheticGCSETag
+			want[i] = syntheticETag
 		case 4:
-			r.MD5, r.ETag, want[i] = str(""), str(""), syntheticGCSETag
+			r.MD5, r.ETag, want[i] = str(""), str(""), syntheticETag
 		}
 		rows[i] = r
 	}

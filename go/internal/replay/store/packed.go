@@ -35,9 +35,12 @@ type packedInts struct {
 
 type packedText struct {
 	present bool
-	arena   string
-	end     []uint32
-	null    []bool
+	// fixed is a column whose every row holds arena (a placeholder), kept
+	// once: end and null are unused.
+	fixed bool
+	arena string
+	end   []uint32
+	null  []bool
 }
 
 // textFields are the Object fields packed as text, in packed.texts order.
@@ -99,6 +102,11 @@ func (p objectProjection) packer(columns []string, n, limit int) *packer {
 		default:
 			col, _ := k.text(slot)
 			col.present, col.end, col.null = true, make([]uint32, 0, n), make([]bool, 0, n)
+		}
+	}
+	for f, value := range [...]string{p.fixedETag, p.fixedStorageClass} { // texts 0 and 1
+		if value != "" {
+			k.out.texts[f] = packedText{present: true, fixed: true, arena: value}
 		}
 	}
 	return k
@@ -184,7 +192,9 @@ func (k *packer) packed() (packed, error) {
 		return packed{}, errPackedOverflow
 	}
 	for f := range k.texts {
-		k.out.texts[f].arena = k.texts[f].String()
+		if !k.out.texts[f].fixed {
+			k.out.texts[f].arena = k.texts[f].String()
+		}
 	}
 	if k.md5.present {
 		k.md5.arena = k.md5Text.String()
@@ -217,7 +227,12 @@ func gcsETags(md5, etag *packedText, n, limit int) (packedText, bool) {
 // value returns row i's value, "" when the column is absent or the row
 // holds a null.
 func (c *packedText) value(i int) string {
-	if !c.present || c.null[i] {
+	switch {
+	case !c.present:
+		return ""
+	case c.fixed:
+		return c.arena
+	case c.null[i]:
 		return ""
 	}
 	from := uint32(0)
@@ -271,14 +286,10 @@ func (p *packed) objects(dst []Object, start, end int) []Object {
 		fields := textFields(&o)
 		for f := range p.texts {
 			c := &p.texts[f]
-			if !c.present || c.null[i] {
+			if !c.present || !c.fixed && c.null[i] {
 				continue
 			}
-			from := uint32(0)
-			if i > 0 {
-				from = c.end[i-1]
-			}
-			strs = append(strs, c.arena[from:c.end[i]])
+			strs = append(strs, c.value(i))
 			*fields[f] = &strs[len(strs)-1]
 		}
 		dst = append(dst, o)
