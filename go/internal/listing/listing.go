@@ -527,10 +527,12 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		// stage has removed its spill files, after success or failure.
 		defer os.RemoveAll(scratch)
 	}
+	// The cache is closed however the attempt ends, a failed Start
+	// included (it holds the ledger's descriptor; closing writes nothing).
+	defer jr.closeCache(false)
 	if err := a.startCache(&oopt, src, cancel); err != nil {
 		return a.sum.failed(err)
 	}
-	defer jr.closeCache(false)
 	env.Order = oopt
 	var dropped atomic.Int64
 	env.Filter, env.Filtered = cfg.Filter, &dropped

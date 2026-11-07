@@ -40,6 +40,7 @@ func CreateDurable(root *os.Root, verify func() error, uuid, ident, codec string
 		return nil, fmt.Errorf("%w: %w", ErrDurableUnavailable, err)
 	}
 	if err := c.fresh(); err != nil {
+		c.Close()
 		return nil, err
 	}
 	return c, nil
@@ -179,16 +180,24 @@ func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec strin
 		return nil, err
 	}
 	if fi == nil {
-		return c, c.fresh()
+		if err := c.fresh(); err != nil {
+			c.Close()
+			return nil, err
+		}
+		return c, nil
 	}
 	entries, err := c.readLedger()
+	if err == nil {
+		err = c.sweep(entries)
+	}
+	if err == nil {
+		err = c.classify(entries)
+	}
 	if err != nil {
+		c.Close() // the ledger's descriptor: nothing is written (no flusher yet)
 		return nil, err
 	}
-	if err := c.sweep(entries); err != nil {
-		return nil, err
-	}
-	return c, c.classify(entries)
+	return c, nil
 }
 
 // readLedger opens the ledger and reads its durable prefix: frames from

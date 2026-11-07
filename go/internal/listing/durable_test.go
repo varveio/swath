@@ -884,3 +884,79 @@ func TestDurableLedgerTornWrite(t *testing.T) {
 	}
 	t.Logf("resume after the torn ledger: %+v", r)
 }
+
+// ledgerFDs counts this process's open descriptors on out's ledger.
+func ledgerFDs(t *testing.T, out string) int {
+	t.Helper()
+	want, _ := filepath.EvalSymlinks(filepath.Join(out, order.DurableDir))
+	ents, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skip("no /proc/self/fd")
+	}
+	n := 0
+	for _, e := range ents {
+		if l, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name())); err == nil && l == filepath.Join(want, "ledger") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestDurableFailedRecoveryCloses: a resume whose durable spill fails in
+// recovery (interrupted at the retirements' sync) or in Start (its cap 0
+// retires every accepted certificate, interrupted there) leaves no
+// descriptor on the ledger after Run returns, and writes nothing more.
+func TestDurableFailedRecoveryCloses(t *testing.T) {
+	url, _, ref, out := durableFixture(t)
+	occurrences := func(dir string, cfg func(string) Config, point string) int64 {
+		cp := filepath.Join(t.TempDir(), "probe")
+		if err := os.CopyFS(cp, os.DirFS(dir)); err != nil {
+			t.Fatal(err)
+		}
+		var n atomic.Int64
+		defer faults.Set(func(p string) error {
+			if p == point {
+				n.Add(1)
+			}
+			return nil
+		})()
+		if _, err := Run(context.Background(), cfg(cp)); err != nil {
+			t.Fatal(err)
+		}
+		return n.Load()
+	}
+	for _, tc := range []struct {
+		name, point string
+		cfg         func(string) Config
+		last        bool // the point's last occurrence (Start's, after recovery's)
+	}{
+		{"recovery", "spill-recovery-sync", func(d string) Config { return durableConfig(url, d, true) }, false},
+		{"start", "spill-recovery-retire", func(d string) Config {
+			cfg := durableConfig(url, d, true)
+			cfg.Limits.Spill.Max = 8 << 20 // below 16 MiB: cap 0, Start retires every accepted certificate
+			return cfg
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "ds")
+			if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
+				t.Fatal(err)
+			}
+			nth := int64(1)
+			if tc.last {
+				nth = occurrences(dir, tc.cfg, tc.point)
+				if nth == 0 {
+					t.Fatalf("%s not reached", tc.point)
+				}
+			}
+			crashDurable(t, tc.cfg(dir), tc.point, nth)
+			if n := ledgerFDs(t, dir); n != 0 {
+				t.Fatalf("%d descriptors left on the ledger after Run returned", n)
+			}
+			if _, err := Run(context.Background(), durableConfig(url, dir, true)); err != nil {
+				t.Fatal(err)
+			}
+			sameDataset(t, tc.name, ref, dir)
+		})
+	}
+}

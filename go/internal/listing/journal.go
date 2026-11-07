@@ -945,6 +945,11 @@ func (jr *runJournal) close(cfg Config, rep Report, err error) {
 	if jr == nil {
 		return
 	}
+	// A durable spill no attempt closed (the run failed before one
+	// started) releases its ledger's descriptor; this writes nothing.
+	if c := jr.cache; c != nil {
+		c.Close()
+	}
 	if jr.j != nil {
 		if errors.Is(err, source.ErrProtocol) {
 			// The service broke the listing contract: a resume would walk
