@@ -13,6 +13,7 @@ Linked into `cmd/swath` unless marked tests.
 |---|---|---|
 | `github.com/aws/aws-sdk-go-v2` (`aws`, `config`, `feature/ec2/imds`) | Apache-2.0 | The S3 credential chain (environment, profiles, SSO, web identity, roles, IMDS) and the SigV4 signer; the list requests themselves are ours ([providers.md](providers.md#the-list-clients-hand-rolled-on-the-sdks-auth)). |
 | `github.com/aws/aws-sdk-go-v2/service/s3` | Apache-2.0 | Tests: the SDK oracle the S3 list client is compared against (`internal/source/s3/sdkoracle`). |
+| `github.com/Azure/azure-sdk-for-go/sdk/storage/azblob` (v1.7.0), `.../sdk/azcore` | MIT | Tests: the official Azure SDK's flat and hierarchy paginators consume the replay's Azure route (`internal/replay/azure` `sdk_test.go`, `sdkunit_test.go`); not linked into either binary. v1.7.0 is the newest release that does not require Apache Arrow and newer compression modules than the production build uses. |
 | `github.com/aws/smithy-go` | Apache-2.0 | The SDK's `APIError` and logger types, to classify credential failures and keep the SDK's logger quiet. |
 | `cloud.google.com/go/compute/metadata` | Apache-2.0 | The GCE metadata server's typed error, to tell a transient metadata outage from a refusal. |
 | `golang.org/x/oauth2` (`google`) | BSD-3 | Google application-default credentials and token refresh for GCS; bearer-token reuse (`internal/source/tokensource`). |

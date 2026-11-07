@@ -46,6 +46,12 @@ func TestAzureComparator(t *testing.T) {
 	if d := (azureComparator{}).compare(ref, &response{200, h("x", "2026-06-06"), body("1", m1)}); d.OK {
 		t.Error("a malformed request id compared equal")
 	}
+	// A marker element closed by the other marker tag is not normalized
+	// into a valid one.
+	broken := &response{200, h("replay-4", "2026-06-06"), []byte(strings.Replace(string(body("2", m2)), "</NextMarker>", "</Marker>", 1))}
+	if d := (azureComparator{}).compare(ref, broken); d.OK {
+		t.Error("a mismatched marker tag compared equal")
+	}
 	noBOM := &response{200, h("replay-3", "2026-06-06"), body("1", m1)[3:]}
 	if d := (azureComparator{}).compare(ref, noBOM); d.OK {
 		t.Error("a body without the BOM compared equal")
@@ -56,6 +62,56 @@ func TestAzureComparator(t *testing.T) {
 	}
 	if d := (azureComparator{}).compare(seg, ref); d.OK {
 		t.Error("segment improvement accepted without the flag")
+	}
+}
+
+func azureServer(t *testing.T, rollup bool, keys ...string) string {
+	t.Helper()
+	srv, err := server.New(server.Config{Bucket: "bkt", Host: "127.0.0.1", MetricsPort: -1, MaxConcurrentRequests: 64,
+		ResponseBufferBudget: 1 << 30, MaxResponseBytes: 1 << 26, StopTimeout: time.Second, IdleTimeout: time.Minute,
+		WriteTimeout: time.Minute, SlowRequestLog: -1, Store: memstore.Keys(memstore.Options{Rollup: rollup}, keys...),
+		ServingMode: "MEMORY", FixtureIdentity: "same", Protocols: []string{"s3", "azure"}, AzureAccount: "replay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve()
+	t.Cleanup(func() { srv.Shutdown(time.Second) })
+	return fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+}
+
+// TestMarkerCasesRunOrSkip pins that every marker case sends its follow-up
+// request when the fixture pages, and is recorded as a skip, never a pass,
+// when it cannot.
+func TestMarkerCasesRunOrSkip(t *testing.T) {
+	for _, c := range []struct {
+		keys    []string
+		skipped bool
+	}{{[]string{"a", "b", "c"}, false}, {[]string{"d/1", "d/2", "e"}, false}, {[]string{"c\ufffe/1", "c\ufffe/2", "d/1", "d/2"}, false},
+		{[]string{"a"}, true}} {
+		client := &http.Client{}
+		rep := &report{}
+		d := &driver{o: options{bucket: "bkt"}, ref: &target{name: "a", base: azureServer(t, false, c.keys...), client: client},
+			got: &target{name: "b", base: azureServer(t, true, c.keys...), client: client}, comp: azureComparator{}, rep: rep}
+		var keys [][]byte
+		for _, k := range c.keys {
+			keys = append(keys, []byte(k))
+		}
+		_, marks := azureMatrix(keys, rand.New(rand.NewPCG(1, 1)), 10)
+		for _, m := range marks {
+			d.record(d.markerCase(m))
+		}
+		if c.skipped {
+			if len(rep.Skipped) != len(marks) || rep.Passed != 0 || rep.Failed != 0 {
+				t.Errorf("%v: %d skipped %d passed %d failed of %d", c.keys, len(rep.Skipped), rep.Passed, rep.Failed, len(marks))
+			}
+			continue
+		}
+		if len(rep.Skipped) != 0 || rep.Failed != 0 || rep.Requests != 4*len(marks) {
+			t.Errorf("%v: %d skipped %d failed, %d requests for %d cases", c.keys, len(rep.Skipped), rep.Failed, rep.Requests, len(marks))
+		}
 	}
 }
 

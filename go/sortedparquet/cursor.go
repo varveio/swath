@@ -135,8 +135,7 @@ func (c *keyCursor) decode(i int) error {
 			previous = values[j-1].ByteArray()
 		}
 		if (j > 0 || c.last != nil) && bytes.Compare(key, previous) <= 0 {
-			return &DisorderError{Part: c.part.name, RowGroup: c.physical, Row: meta.first + int64(j),
-				Detail: fmt.Sprintf("key %d is at or below its predecessor (key page %d)", meta.first+int64(j), i)}
+			return rowDisorder(c.part.name, c.physical, meta.first+int64(j), key)
 		}
 	}
 	if bytes.Compare(values[0].ByteArray(), meta.lo) < 0 || !meta.holdsLast(values[len(values)-1].ByteArray()) {

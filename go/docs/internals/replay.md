@@ -390,11 +390,13 @@ a 255-segment name (`TestRenderRefusals`; evidence capture `azure-12a`).
 delimiters `/`, multi-byte, astral, empty; `startFrom` around names, inside rolled prefixes and with EE..F4
 characters including the 4,096-byte U+10000 bound; header, `Accept`, query-grammar and raw-byte refusals;
 routing, HEAD, POST, DELETE), marker cases in which each server resumes with its own marker (page 2, other
-scope, other version, truncated, flipped, padded), marker walks at `-walks` sizes (default 1, 7, 5000), and a
+scope, other version, truncated, flipped, padded; each source asks for one result in a scope with at least two
+entries, and a case whose sources agree without a marker is reported as skipped, not passed), marker walks at `-walks` sizes (default 1, 7, 5000), and a
 seeded random set. `azureComparator` requires the same status and classified headers (`Content-Type`,
 `x-ms-version`, `x-ms-error-code`, `x-ms-client-request-id`, `Allow`, `x-swath-replay-error`), a well-formed
 `x-ms-request-id` and `Date` on each side, the BOM, and the same body bytes after masking the
-`ServiceEndpoint` authority and replacing every marker by its effect (flag, progress, boundary); it counts the
+`ServiceEndpoint` authority and replacing every marker by its effect (flag, progress, boundary; `<Marker>` and
+`<NextMarker>` each matched with its own closing tag, so a broken element is compared as it is); it counts the
 answers that matched only by effect, which is zero when both servers report the same fixture identity. With
 `-java-args "... --serving-mode duckdb"` and `-go-fixture` it compares the Java server serving an unsorted
 capture with the Go server serving the same rows sorted; `-accept-segment-improvement` then counts the Java
@@ -406,20 +408,34 @@ server's `too_many_segments` refusals answered by the Go route as the known impr
 the archive's corpus (names up to 2,010 bytes, sorted with a 4,096-byte key limit and checked against the
 manifest) on the Azure route alone, and replays each capture as the conformance tree's
 `NativeEvidenceReplayTest` does, with a port of its comparators (`evidencecmp_test.go`) whose failure messages
-are spelled as the pins in `azure/replay-expectations.json` spell them. SDK runs are replayed as the requests
-the SDK sends (captured headers, client request ids `prefix-N`). A pinned match must match; a pinned mismatch
-must reproduce or improve; `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-outcomes.json`.
+are spelled as the pins in `azure/replay-expectations.json` spell them. The SDK runs (`azure-10a`, `10b`,
+`10c`) are consumed by the official Azure SDK for Go (`sdk_test.go`): its flat and hierarchy paginators on the
+local account path, retries off, through a recording transport that sets only what the captured Java run set by
+option (the service version, client request ids `prefix-N`) and, for the flat walk, adds the captured
+`startFrom` that this SDK release's flat paginator drops. The recorded exchanges are held to the capture as an
+SDK run (request scope compared as decoded parameters, since the Go SDK orders and escapes them its own way;
+the Go SDK's product token in place of the Java one), and the SDK's decoded blobs, prefixes, sizes and times,
+Encoded names included, to the native pages. `sdkunit_test.go` adds Encoded names and properties, 5,000-name
+pages, and a fixture fault with and without retries. A pinned match must match; a pinned mismatch
+must reproduce in full or improve (only the `azure-09h` and `azure-09j` pins, whose actual value is the replay's
+own marker, match that value as a prefix); the parser refuses what the reference DOM parser refuses and keeps
+comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorruptedReplayResults`); `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-outcomes.json`.
 
 ### Azure tests
 
 | Contract | Test |
 |---|---|
-| provider order, flat and delimited, against brute force | `azure` `TestProviderOrderMatchesUTF16`, `TestStartFromInsideRolledPrefix` |
-| empty-read settlement cost | `azure` `TestLongStartFromCostBound` |
+| provider order, flat and delimited, against brute force (rollup and walk stores) | `azure` `TestProviderOrderMatchesUTF16`, `TestStartFromInsideRolledPrefix`, `TestCompareIsUTF16OrderForValidNames`, `TestInvalidUTF8NamesKeepATotalOrder` |
+| store reads | `azure` `TestLongStartFromCostBound`, `TestDeepLeadByteBoundsRetireEmptyPartsWithAFewProbes`, `TestNamesWithoutLeadBytesKeepOneRangeAndOneRead`, `TestSwappedBranchesReuseRowsAlreadyRead`, `TestFallbackBatchesFlatEntriesUnderDelimiter` |
+| page limit, shapes, counts, engagement | `azure` `TestFiveThousandPageLimitAndMarkerScope`, `TestInjectedLatencyShapes`, `TestPageReportsBlobAndPrefixCounts`, `TestEngagementPaths`; `server` `TestAzureEngagementMeters` |
 | markers | `azure` `TestMarkerGolden`, `TestMarkerDecodeLeniency` |
 | request checks and their order | `azure` `TestParseRefusalOrder`, `TestAcceptRule`, `TestRequestLineText` |
-| bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals` |
+| bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals`, `TestUnrenderableYearsAndNegativeEpoch`, `TestHTTPDatePadsSingleDigitDay` |
+| client request id | `azure` `TestClientRequestIDLength`; `server` `TestAzureErrorEchoUsesTheClientIDRule` |
+| response bounds with escaping-heavy names | `server` `TestAzureEscapingHeavyPageStopsAtTheCap`, `TestAzureConcurrentBudgetExhaustion` |
+| the evidence comparator itself | `azure` `TestComparatorAcceptsTheProfile`, `TestComparatorOmitsNativeOrMetadata`, `TestComparatorAcceptsTheRenderer`, `TestComparatorRefusesChanges`, `TestComparatorWalkBoundaries`, `TestComparatorRefusesCrossPagePrefixRepeat`, `TestNamespaceMapping`, `TestExchangeChecksVersionClientIDAndErrorCode`, `TestWalkChecksVersionAndPreamble`, `TestWalkRequestsCarryClientIDAndRefuseDuplicates`, `TestPageParsing` |
 | latency key | `azure` `TestLatencyKeyGolden` |
 | routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
-| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself` |
-| native captures | `azure` `TestAzureEvidenceReplay` (fixture tier) |
+| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself`, `TestMarkerCasesRunOrSkip` |
+| native captures | `azure` `TestAzureEvidenceReplay` (fixture tier), `TestEvidenceRejectsCorruptedReplayResults`, `TestPinRules`, `TestPinAdjustments` |
+| the official SDK | `azure` `TestSDKDecodesEncodedNamesAndProperties`, `TestSDKConsumesFiveThousandPages`, `TestSDKFixtureFaultAndRetries`; the SDK runs of `TestAzureEvidenceReplay` |

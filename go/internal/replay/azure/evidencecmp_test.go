@@ -557,16 +557,29 @@ func properties(parent *xnode, replay bool) map[string]string {
 	return fields
 }
 
-// xnode is a parsed element: its children are elements and text, in
-// document order.
+// xnode is a parsed element: its children are elements, text, CDATA,
+// comments and processing instructions, in document order, kept apart
+// because the reference comparator's policy tells them apart (a comment
+// inside a scalar is an unexpected child; text between elements must be
+// blank, CDATA there is ignored).
 type xnode struct {
 	name     string
 	attrs    []xml.Attr
 	children []xchild
 }
 
+type childKind int
+
+const (
+	textNode childKind = iota
+	cdataNode
+	commentNode
+	piNode
+)
+
 type xchild struct {
 	elem *xnode
+	kind childKind
 	text string
 }
 
@@ -577,14 +590,28 @@ func qname(n xml.Name) string {
 	return n.Space + ":" + n.Local
 }
 
-// parseXML parses a document as a namespace-unaware DOM would, refusing
-// a DOCTYPE. A UTF-8 byte order mark is allowed before the declaration.
+// xmlSpace is the XML grammar's white space, the only text allowed
+// outside the root element.
+func xmlSpace(b []byte) bool {
+	for _, c := range b {
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseXML parses a document as the reference comparator's DOM parser
+// does, namespace-unaware: a DOCTYPE, a duplicate attribute, a misplaced
+// XML declaration, mismatched tags, a second root or text outside the root
+// are refused. A UTF-8 byte order mark is allowed before the declaration.
 func parseXML(body []byte) (*xnode, error) {
 	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))
 	d := xml.NewDecoder(bytes.NewReader(body))
 	var stack []*xnode
 	var root *xnode
-	for {
+	for first := true; ; first = false {
+		offset := d.InputOffset()
 		tok, err := d.RawToken()
 		if err == io.EOF {
 			break
@@ -594,6 +621,13 @@ func parseXML(body []byte) (*xnode, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			seen := map[string]bool{}
+			for _, a := range t.Attr {
+				if seen[qname(a.Name)] {
+					return nil, errors.New("duplicate attribute")
+				}
+				seen[qname(a.Name)] = true
+			}
 			n := &xnode{name: qname(t.Name), attrs: t.Attr}
 			if len(stack) == 0 {
 				if root != nil {
@@ -611,14 +645,35 @@ func parseXML(body []byte) (*xnode, error) {
 			}
 			stack = stack[:len(stack)-1]
 		case xml.CharData:
+			cdata := bytes.HasPrefix(body[offset:], []byte("<![CDATA["))
 			if len(stack) == 0 {
-				if len(bytes.TrimSpace(t)) > 0 {
+				if cdata || !xmlSpace(t) {
 					return nil, errors.New("text outside the root")
 				}
 				continue
 			}
+			kind := textNode
+			if cdata {
+				kind = cdataNode
+			}
 			top := stack[len(stack)-1]
-			top.children = append(top.children, xchild{text: string(t)})
+			top.children = append(top.children, xchild{kind: kind, text: string(t)})
+		case xml.Comment:
+			if len(stack) > 0 {
+				top := stack[len(stack)-1]
+				top.children = append(top.children, xchild{kind: commentNode, text: string(t)})
+			}
+		case xml.ProcInst:
+			if strings.EqualFold(t.Target, "xml") {
+				if !first || offset != 0 {
+					return nil, errors.New("misplaced XML declaration")
+				}
+				continue
+			}
+			if len(stack) > 0 {
+				top := stack[len(stack)-1]
+				top.children = append(top.children, xchild{kind: piNode, text: string(t.Inst)})
+			}
 		case xml.Directive:
 			return nil, errors.New("doctype refused")
 		}
@@ -654,12 +709,30 @@ func (n *xnode) onlyAttributes(allowed ...string) {
 	}
 }
 
+// javaBlank is the reference's blank test: every code point a Java
+// whitespace character (the Unicode space, line and paragraph separators
+// except the no-break spaces, plus TAB, LF, VT, FF, CR and U+001C..U+001F).
+func javaBlank(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= '\t' && r <= '\r', r >= 0x1c && r <= 0x1f:
+		case r == 0xa0 || r == 0x2007 || r == 0x202f:
+			return false
+		case unicode.In(r, unicode.Zs, unicode.Zl, unicode.Zp):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (n *xnode) elements() []*xnode {
 	var out []*xnode
 	for _, c := range n.children {
-		if c.elem != nil {
+		switch {
+		case c.elem != nil:
 			out = append(out, c.elem)
-		} else if strings.TrimFunc(c.text, unicode.IsSpace) != "" {
+		case c.kind == textNode && !javaBlank(c.text):
 			fail("unexpected Azure XML text")
 		}
 	}
@@ -672,7 +745,7 @@ func (n *xnode) scalar(label string) string {
 	}
 	var b strings.Builder
 	for _, c := range n.children {
-		if c.elem != nil {
+		if c.elem != nil || c.kind != textNode && c.kind != cdataNode {
 			fail("%s has unexpected child", label)
 		}
 		b.WriteString(c.text)
@@ -683,9 +756,10 @@ func (n *xnode) scalar(label string) string {
 func (n *xnode) textContent() string {
 	var b strings.Builder
 	for _, c := range n.children {
-		if c.elem != nil {
+		switch {
+		case c.elem != nil:
 			b.WriteString(c.elem.textContent())
-		} else {
+		case c.kind == textNode || c.kind == cdataNode:
 			b.WriteString(c.text)
 		}
 	}
