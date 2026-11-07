@@ -23,6 +23,10 @@
 //
 // -dump-tsv FILE writes the reference's full listing as a memstore TSV
 // fixture and exits.
+//
+// -route azure compares the Azure List Blobs route instead (both servers
+// serve s3,azure): the matrix in azure.go, marker walks in which each
+// server follows its own markers, and a structural comparator.
 package main
 
 import (
@@ -51,10 +55,11 @@ import (
 
 type options struct {
 	java, goBin, fixture, goFixture, bucket, report, live, dumpTSV string
-	javaArgs, goArgs, logDir                                       string
+	javaArgs, goArgs, logDir, route                                string
 	walkSizes                                                      string
 	random, parallel, walkLimit, maxPrefixes, maxTop               int
 	seed                                                           uint64
+	acceptSegments                                                 bool
 }
 
 func main() {
@@ -77,6 +82,9 @@ func main() {
 	flag.IntVar(&o.random, "random", 500, "requests in the seeded random walk")
 	flag.Uint64Var(&o.seed, "seed", 1, "the random walk's seed")
 	flag.IntVar(&o.parallel, "parallel", 4, "requests in flight")
+	flag.BoolVar(&o.acceptSegments, "accept-segment-improvement", false,
+		"azure: count a reference 500 too_many_segments answered 200 by the Go server as the known improvement, not a difference")
+	flag.StringVar(&o.route, "route", "s3", "the route compared: s3, or azure (both servers then serve s3,azure)")
 	flag.Parse()
 	if err := run(o); err != nil {
 		log.Fatal(err)
@@ -111,6 +119,9 @@ func (t *target) do(bucket string, r request) (*response, error) {
 	req, err := http.NewRequest(r.Method, t.url(bucket, r), nil)
 	if err != nil {
 		return nil, err
+	}
+	for _, h := range r.Header {
+		req.Header[h[0]] = append(req.Header[h[0]], h[1])
 	}
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -157,6 +168,13 @@ func run(o options) error {
 		flag.Usage()
 		return fmt.Errorf("-go, -java (or -live-endpoint) and -fixture are required")
 	}
+	if o.route == "azure" {
+		o.javaArgs += azureServeArgs
+		o.goArgs += azureServeArgs
+		if o.walkSizes == "1,7,1000" {
+			o.walkSizes = azureWalkSizes
+		}
+	}
 	client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: o.parallel * 2}, Timeout: 5 * time.Minute}
 	var ref *target
 	var comp comparator = bytesComparator{}
@@ -193,6 +211,11 @@ func run(o options) error {
 	rng := rand.New(rand.NewPCG(o.seed, 0x5eed))
 	d := &driver{o: o, ref: ref, got: got, comp: comp, rep: rep}
 
+	if o.route == "azure" {
+		d.runAzure(keys, rng)
+		rep.Seconds = time.Since(rep.Started).Seconds()
+		return d.write()
+	}
 	cases := s3Matrix(keys, rng, o.maxPrefixes)
 	if o.live != "" {
 		live := cases[:0]
@@ -225,7 +248,10 @@ func run(o options) error {
 }
 
 func serveArgs(fixture, bucket, extra string) []string {
-	args := []string{"--fixture", fixture, "--bucket", bucket, "--host", "127.0.0.1", "--port", "0", "--metrics-port", "0", "--serving-mode", "sorted"}
+	args := []string{"--fixture", fixture, "--bucket", bucket, "--host", "127.0.0.1", "--port", "0", "--metrics-port", "0"}
+	if !strings.Contains(extra, "--serving-mode") {
+		args = append(args, "--serving-mode", "sorted")
+	}
 	return append(args, strings.Fields(extra)...)
 }
 
