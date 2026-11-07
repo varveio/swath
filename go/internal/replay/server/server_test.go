@@ -172,6 +172,13 @@ type syncWriter struct {
 	w  io.Writer
 }
 
+// String reads what was written, under the same lock.
+func (s *syncWriter) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.(fmt.Stringer).String()
+}
+
 func (s *syncWriter) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -475,8 +482,8 @@ func TestShutdownInterruptsALongDelay(t *testing.T) {
 	go func() { got <- get(t, s, "/bucket?list-type=2") }()
 	time.Sleep(100 * time.Millisecond)
 	began := time.Now()
-	if !s.Shutdown(2 * time.Second) {
-		t.Error("shutdown incomplete")
+	if complete, err := s.Shutdown(2 * time.Second); !complete || err != nil {
+		t.Errorf("shutdown: complete %v, %v", complete, err)
 	}
 	if d := time.Since(began); d > time.Second {
 		t.Errorf("shutdown took %v", d)
@@ -511,7 +518,7 @@ func TestUninterruptibleReadDefersStoreClose(t *testing.T) {
 		}
 	}()
 	<-entered
-	if s.Shutdown(200 * time.Millisecond) {
+	if complete, _ := s.Shutdown(200 * time.Millisecond); complete {
 		t.Error("shutdown reported complete with a read outstanding")
 	}
 	if st.closed.Load() {
@@ -527,6 +534,76 @@ func TestUninterruptibleReadDefersStoreClose(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "shutdown_incomplete") {
 		t.Errorf("log: %s", log.String())
+	}
+}
+
+// closeStore wraps a store with a Close that blocks until release and then
+// fails, counting its calls.
+type closeStore struct {
+	store.Store
+	release chan struct{}
+	calls   atomic.Int32
+	err     error
+}
+
+func (c *closeStore) Close() error {
+	c.calls.Add(1)
+	if c.release != nil {
+		<-c.release
+	}
+	c.Store.Close()
+	return c.err
+}
+
+// TestShutdownBoundsABlockingStoreClose: with every request finished, a
+// store Close that blocks cannot hold Shutdown past its deadline; it
+// reports shutdown_incomplete and the Close still completes, once, in the
+// background, its failure logged.
+func TestShutdownBoundsABlockingStoreClose(t *testing.T) {
+	st := &closeStore{Store: memstore.Keys(memstore.Options{}, "a"), release: make(chan struct{}), err: errors.New("boom")}
+	cfg := config(st)
+	log := &syncWriter{w: &strings.Builder{}}
+	cfg.Log = log
+	s, _ := New(cfg)
+	if err := s.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve()
+	if r := get(t, s, "/bucket?list-type=2"); r.status != 200 {
+		t.Fatalf("%d", r.status)
+	}
+	began := time.Now()
+	complete, err := s.Shutdown(50 * time.Millisecond)
+	if took := time.Since(began); took > time.Second || complete || err != nil {
+		t.Errorf("took %v, complete %v, err %v", took, complete, err)
+	}
+	if !strings.Contains(log.String(), "shutdown_incomplete active replay work retained its resources for deferred cleanup") {
+		t.Errorf("log: %s", log.String())
+	}
+	close(st.release)
+	waitFor(t, "the deferred close", func() bool { return strings.Contains(log.String(), "replay store cleanup failed: boom") })
+	if st.calls.Load() != 1 {
+		t.Errorf("Close called %d times", st.calls.Load())
+	}
+}
+
+// TestShutdownIsIdempotentAndSurfacesCloseFailureOnce is the contract's
+// closeIsIdempotentAndSurfacesFixtureCloseFailureOnlyOnce: the first
+// Shutdown returns the store's Close failure, the second neither closes
+// the store again nor repeats the failure.
+func TestShutdownIsIdempotentAndSurfacesCloseFailureOnce(t *testing.T) {
+	st := &closeStore{Store: memstore.Keys(memstore.Options{}, "a"), err: errors.New("boom")}
+	s, _ := New(config(st))
+	if err := s.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve()
+	complete, err := s.Shutdown(time.Second)
+	if !complete || err == nil || !strings.Contains(err.Error(), "failed to close S3 listing replay fixture") || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("first: complete %v, %v", complete, err)
+	}
+	if complete, err := s.Shutdown(time.Second); !complete || err != nil || st.calls.Load() != 1 {
+		t.Errorf("second: complete %v, %v, %d closes", complete, err, st.calls.Load())
 	}
 }
 

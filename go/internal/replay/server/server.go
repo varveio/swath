@@ -234,11 +234,14 @@ func (s *Server) Serve() error {
 // Shutdown stops the server within timeout: new requests are refused,
 // requests waiting for admission or sleeping in an injected delay are
 // answered 503 at once, and the store is closed once every request that
-// holds it has returned. It reports false (and logs shutdown_incomplete)
-// when the deadline passed first; a store read that does not stop on
-// cancellation then keeps the store open until it returns.
-func (s *Server) Shutdown(timeout time.Duration) bool {
-	complete := true
+// holds it has returned. Everything, the store's Close included, is bounded
+// by the one deadline: past it Shutdown logs shutdown_incomplete, reports
+// false and leaves the remaining cleanup to finish in the background (a
+// store read that ignores cancellation keeps the store open until it
+// returns). A store Close failure is logged and returned once. A second
+// call does nothing and reports true, nil.
+func (s *Server) Shutdown(timeout time.Duration) (bool, error) {
+	complete, failed := true, error(nil)
 	s.shutOnce.Do(func() {
 		deadline := time.Now().Add(timeout)
 		s.opMu.Lock()
@@ -271,16 +274,29 @@ func (s *Server) Shutdown(timeout time.Duration) bool {
 			fmt.Fprintln(s.cfg.Log, "shutdown_incomplete HTTP server stop exceeded its deadline")
 			complete = false
 		}
+		// The store closes after the last request that holds it, on its
+		// own goroutine, so a Close that blocks cannot outlast the
+		// deadline.
+		cleaned := make(chan error, 1)
+		go func() {
+			<-drained
+			err := s.cfg.Store.Close()
+			if err != nil {
+				fmt.Fprintf(s.cfg.Log, "replay store cleanup failed: %v\n", err)
+			}
+			cleaned <- err
+		}()
 		select {
-		case <-drained:
-			s.cfg.Store.Close()
+		case err := <-cleaned:
+			if err != nil {
+				failed = fmt.Errorf("failed to close S3 listing replay fixture: %w", err)
+			}
 		case <-ctx.Done():
 			fmt.Fprintln(s.cfg.Log, "shutdown_incomplete active replay work retained its resources for deferred cleanup")
 			complete = false
-			go func() { <-drained; s.cfg.Store.Close() }()
 		}
 	})
-	return complete
+	return complete, failed
 }
 
 // begin registers a request that will use the store; false once shutdown

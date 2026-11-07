@@ -266,9 +266,13 @@ func serve(args []string, stderr io.Writer) error {
 	fmt.Fprintln(stderr, startupLine(f, srv, cfg, readers))
 	select {
 	case err := <-served:
-		srv.Shutdown(cfg.StopTimeout)
+		if _, cerr := srv.Shutdown(cfg.StopTimeout); err == nil {
+			err = cerr
+		}
 		return err
 	case sig := <-sigs:
+		// A store close failure is already in the log; the hook line
+		// follows either way, as the launcher's shutdown hook prints it.
 		srv.Shutdown(cfg.StopTimeout)
 		fmt.Fprintln(stderr, "swath_replay_shutdown_hook complete")
 		if s, ok := sig.(syscall.Signal); ok {
