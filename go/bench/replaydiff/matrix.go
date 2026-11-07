@@ -137,6 +137,11 @@ func s3Matrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 		request{Name: "list-type=1", Method: "GET", Query: "list-type=1"},
 		request{Name: "encoded names", Method: "GET", Query: "list%2Dtype=2&max%2Dkeys=2&pre%66ix=" + s3.PercentEncode([]byte(firstSegment(keys)))},
 		request{Name: "duplicate max-keys", Method: "GET", Query: "list-type=2&max-keys=1&max-keys=2"},
+		// Digits from other scripts: a BMP fullwidth one and Arabic-Indic
+		// zero (a digit), and a mathematical one outside the BMP (not a
+		// digit: its UTF-16 form is a surrogate pair).
+		request{Name: "max-keys BMP digits", Method: "GET", Query: "list-type=2&max-keys=%EF%BC%91%D9%A0"},
+		request{Name: "max-keys supplementary digit", Method: "GET", Query: "list-type=2&max-keys=%F0%9D%9F%99"},
 		request{Name: "raw plus and broken escape", Method: "GET", Query: "list-type=2&prefix=a+b%2&max-keys=1"},
 		request{Name: "unknown bucket", Method: "GET", Path: "/no-such-bucket-here", Query: "list-type=2"},
 		request{Name: "escaped bucket", Method: "GET", Path: "/%62ucket", Query: "list-type=2"},

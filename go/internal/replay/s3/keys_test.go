@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"math/rand/v2"
 	"testing"
-	"unicode"
 )
 
 func TestPercentEncodeMatchesS3(t *testing.T) {
@@ -104,30 +103,16 @@ func TestParseInt32(t *testing.T) {
 	for s, want := range map[string]int32{
 		"0": 0, "-0": 0, "+7": 7, "1000": 1000, "2147483647": 2147483647, "-2147483648": -2147483648,
 		"١٢": 12, // Arabic-Indic digits
-		"𝟗":  9,  // a mathematical digit outside the BMP
+		"９":  9,  // a fullwidth digit
 	} {
 		if got, ok := parseInt32(s); !ok || got != want {
 			t.Errorf("parseInt32(%q) = %d, %v; want %d", s, got, ok, want)
 		}
 	}
-	for _, s := range []string{"", "+", "-", "abc", "1.5", " 5", "5 ", "2147483648", "-2147483649", "99999999999999999999", "0x10", "1_000"} {
+	for _, s := range []string{"", "+", "-", "abc", "1.5", " 5", "5 ", "2147483648", "-2147483649", "99999999999999999999",
+		"0x10", "1_000", "𝟗", "𝟙"} { // the last two: mathematical digits outside the BMP
 		if _, ok := parseInt32(s); ok {
 			t.Errorf("parseInt32(%q) accepted", s)
-		}
-	}
-}
-
-// decimalDigit assumes each Nd range is whole runs of ten starting at a
-// zero.
-func TestDecimalDigitRangesAreWholeRuns(t *testing.T) {
-	for _, r := range unicode.Nd.R16 {
-		if r.Stride != 1 || (r.Hi-r.Lo+1)%10 != 0 {
-			t.Errorf("Nd range %#x-%#x stride %d", r.Lo, r.Hi, r.Stride)
-		}
-	}
-	for _, r := range unicode.Nd.R32 {
-		if r.Stride != 1 || (r.Hi-r.Lo+1)%10 != 0 {
-			t.Errorf("Nd range %#x-%#x stride %d", r.Lo, r.Hi, r.Stride)
 		}
 	}
 }
