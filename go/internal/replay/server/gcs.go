@@ -40,10 +40,8 @@ var profiles = map[string]string{ProtocolS3: "list-objects-v2", ProtocolGCS: "js
 // unknown bucket.
 const gcsPathPrefix = "/storage/v1/b/"
 
-// ProviderPath counts the path a provider route took for a page or a
-// refusal, and why (the GCS route's flat, delimiter_indexed,
-// delimiter_walk, query_refused, ...).
-var ProviderPath = metrics.Def{Name: "swath.replay.provider.path", Kind: metrics.Counter, Tags: []string{"protocol", "path", "reason"}}
+// ProviderPath is metrics.ProviderPath, the name the routes use.
+var ProviderPath = metrics.ProviderPath
 
 // routes is the multi-protocol state of a server; nil when only the S3
 // route is enabled, so the S3 route answers every request as before.

@@ -93,8 +93,8 @@ func TestCacheWaitEndsWithContextAndClose(t *testing.T) {
 	if err := <-closed; err != nil {
 		t.Fatal(err)
 	}
-	if open := cache.Stats().Open; open != 1 {
-		t.Fatalf("%d descriptors open while A is leased, want 1", open)
+	if st := cache.Stats(); st.Open != 1 || st.Waits < 2 {
+		t.Fatalf("stats %+v while A is leased: want 1 open and both reads counted as waits", st)
 	}
 	files[0].release()
 	if st := cache.Stats(); st.Open != 0 || st.Peak > 1 {

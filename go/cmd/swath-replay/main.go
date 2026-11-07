@@ -246,11 +246,15 @@ func serve(args []string, stderr io.Writer) error {
 	if readers <= 0 {
 		readers = store.DefaultReaders()
 	}
-	st, mode, identity, err := openFixture(f.fixture, readers)
+	opened := time.Now()
+	st, mode, meta, err := openFixture(f.fixture, readers)
 	if err != nil {
 		return err
 	}
-	cfg.Store, cfg.ServingMode, cfg.FixtureIdentity = st, mode, identity
+	cfg.Store, cfg.ServingMode, cfg.FixtureIdentity = st, mode, meta.Identity
+	if mode == "SORTED" {
+		cfg.IndexLoad, cfg.IndexEntries = time.Since(opened), meta.RowGroups
+	}
 	srv, err := server.New(cfg)
 	if err != nil {
 		st.Close()
@@ -285,28 +289,28 @@ func serve(args []string, stderr io.Writer) error {
 
 // openFixture opens a .tsv key list in memory, anything else as a sorted
 // fixture.
-func openFixture(path string, readers int) (store.Store, string, string, error) {
+func openFixture(path string, readers int) (store.Store, string, store.Metadata, error) {
 	if strings.HasSuffix(path, ".tsv") {
 		b, err := os.ReadFile(path)
 		if err != nil {
-			return nil, "", "", err
+			return nil, "", store.Metadata{}, err
 		}
 		objs, err := memstore.ReadTSV(strings.NewReader(string(b)))
 		if err != nil {
-			return nil, "", "", err
+			return nil, "", store.Metadata{}, err
 		}
 		st, err := memstore.New(objs, memstore.Options{Rollup: true})
 		if err != nil {
-			return nil, "", "", err
+			return nil, "", store.Metadata{}, err
 		}
 		sum := sha256.Sum256(b)
-		return st, "MEMORY", hex.EncodeToString(sum[:]), nil
+		return st, "MEMORY", store.Metadata{Identity: hex.EncodeToString(sum[:])}, nil
 	}
 	st, meta, err := store.Open(context.Background(), path, store.Options{Readers: readers})
 	if err != nil {
-		return nil, "", "", fmt.Errorf("open fixture %s: %w", path, err)
+		return nil, "", store.Metadata{}, fmt.Errorf("open fixture %s: %w", path, err)
 	}
-	return st, "SORTED", meta.Identity, nil
+	return st, "SORTED", meta, nil
 }
 
 func (f *serveFlags) config() (server.Config, error) {
