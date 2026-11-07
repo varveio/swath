@@ -56,9 +56,13 @@ func textFields(o *Object) [6]**string {
 type packer struct {
 	out packed
 	// slots maps each read column to its packed field: 0 and 1 the ints,
-	// 2 to 7 the texts.
+	// 2 to 7 the texts, 8 a GCS recording's MD5 (md5).
 	slots []int
 	texts [6]strings.Builder
+	// md5 holds the MD5 column of a projection with one, from which
+	// packed derives the ETags (gcsETag).
+	md5     packedText
+	md5Text strings.Builder
 	// limit bounds each arena (at most maxPackedArena); overflow reports
 	// a row was refused, and stop (when set) ends the read early.
 	limit    int
@@ -81,7 +85,7 @@ func (p objectProjection) packer(columns []string, n, limit int) *packer {
 		limit = maxPackedArena
 	}
 	k := &packer{slots: make([]int, len(columns)), limit: limit}
-	fields := [8]string{p.size, p.lastModified, p.etag, p.storageClass, p.ownerID, p.ownerDisplayName, p.checksumAlgorithm, p.checksumType}
+	fields := [9]string{p.size, p.lastModified, p.etag, p.storageClass, p.ownerID, p.ownerDisplayName, p.checksumAlgorithm, p.checksumType, p.md5}
 	for c, name := range columns {
 		k.slots[c] = slices.Index(fields[:], name)
 	}
@@ -93,11 +97,19 @@ func (p objectProjection) packer(columns []string, n, limit int) *packer {
 			col := &k.out.ints[slot]
 			col.present, col.values, col.null = true, make([]int64, 0, n), make([]bool, 0, n)
 		default:
-			col := &k.out.texts[slot-2]
+			col, _ := k.text(slot)
 			col.present, col.end, col.null = true, make([]uint32, 0, n), make([]bool, 0, n)
 		}
 	}
 	return k
+}
+
+// text returns a text slot's column and arena.
+func (k *packer) text(slot int) (*packedText, *strings.Builder) {
+	if slot == 8 {
+		return &k.md5, &k.md5Text
+	}
+	return &k.out.texts[slot-2], &k.texts[slot-2]
 }
 
 // fits reports whether an arena of have bytes takes add more, and marks
@@ -134,7 +146,7 @@ func (k *packer) Values(c int, values []parquet.Value) {
 			col.null = append(col.null, v.IsNull())
 		}
 	default:
-		col, arena := &k.out.texts[slot-2], &k.texts[slot-2]
+		col, arena := k.text(slot)
 		for _, v := range values {
 			if !k.fits(arena.Len(), len(v.ByteArray())) {
 				return
@@ -158,7 +170,7 @@ func (k *packer) Missing(c int) {
 			col.null = append(col.null, true)
 		}
 	default:
-		col, arena := &k.out.texts[slot-2], &k.texts[slot-2]
+		col, arena := k.text(slot)
 		for len(col.null) < k.out.n {
 			col.end = append(col.end, uint32(arena.Len()))
 			col.null = append(col.null, true)
@@ -174,7 +186,45 @@ func (k *packer) packed() (packed, error) {
 	for f := range k.texts {
 		k.out.texts[f].arena = k.texts[f].String()
 	}
+	if k.md5.present {
+		k.md5.arena = k.md5Text.String()
+		etags, ok := gcsETags(&k.md5, &k.out.texts[0], k.out.n, k.limit)
+		if !ok {
+			k.overflow = true
+			return packed{}, errPackedOverflow
+		}
+		k.out.texts[0] = etags
+	}
 	return k.out, nil
+}
+
+// gcsETags is the ETag column of n packed rows of a GCS recording, each
+// row's gcsETag of its MD5 and etag, or false past limit bytes.
+func gcsETags(md5, etag *packedText, n, limit int) (packedText, bool) {
+	out := packedText{present: true, end: make([]uint32, 0, n), null: make([]bool, n)}
+	var arena []byte
+	for i := range n {
+		arena = gcsETag(arena, md5.value(i), etag.value(i))
+		if len(arena) > limit {
+			return packedText{}, false
+		}
+		out.end = append(out.end, uint32(len(arena)))
+	}
+	out.arena = string(arena)
+	return out, true
+}
+
+// value returns row i's value, "" when the column is absent or the row
+// holds a null.
+func (c *packedText) value(i int) string {
+	if !c.present || c.null[i] {
+		return ""
+	}
+	from := uint32(0)
+	if i > 0 {
+		from = c.end[i-1]
+	}
+	return c.arena[from:c.end[i]]
 }
 
 func (p *packed) len() int { return p.n }
