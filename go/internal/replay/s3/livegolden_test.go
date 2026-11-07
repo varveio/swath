@@ -100,3 +100,27 @@ func TestLiveEmptyStartAfterIsEchoed(t *testing.T) {
 			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
 		"O:r/k01 O:r/k02")
 }
+
+// A malformed escape ('%' not followed by two hex digits) drops the whole
+// parameter: S3 answered prefix=P/a%ZZ, prefix=P/pct% and prefix=P/a%4
+// with an empty Prefix and the bucket's first keys; a malformed
+// start-after, delimiter, max-keys, encoding-type or continuation-token
+// was likewise absent, and a valid duplicate after a malformed one was
+// used.
+func TestLiveMalformedEscapeDropsTheParameter(t *testing.T) {
+	root := "<Name>bkt</Name><Prefix></Prefix><NextContinuationToken>T</NextContinuationToken>" +
+		"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>"
+	for _, p := range []string{"r/a%ZZ", "r/pct%", "r/a%4", "r/%g1"} {
+		wantLivePage(t, "list-type=2&prefix="+p+"&max-keys=2", root, "O:index.html O:r/k01")
+	}
+	wantLivePage(t, "list-type=2&pre%ZZfix=r/&max-keys=2", root, "O:index.html O:r/k01")
+	inR := "<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>" +
+		"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>"
+	for _, q := range []string{"start-after=r/k%ZZ", "delimiter=%ZZ", "encoding-type=url%ZZ", "continuation-token=%ZZ", "fetch-owner=true%ZZ"} {
+		wantLivePage(t, "list-type=2&prefix=r/&max-keys=2&"+q, inR, "O:r/k01 O:r/k02")
+	}
+	wantLivePage(t, "list-type=2&prefix=r/&max-keys=2%ZZ",
+		"<Name>bkt</Name><Prefix>r/</Prefix><KeyCount>6</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>",
+		"O:r/k01 O:r/k02 O:r/k03 O:r/k04 O:r/k05 O:r/k06")
+	wantLivePage(t, "list-type=2&prefix=r/a%ZZ&prefix=r/&max-keys=2", inR, "O:r/k01 O:r/k02")
+}

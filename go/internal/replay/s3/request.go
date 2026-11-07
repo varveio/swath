@@ -48,6 +48,10 @@ func (r *Request) HasToken() bool {
 // bytes. A repeated name keeps its last value.
 type query map[string][]byte
 
+// parseQuery splits the raw query into parameters. A name or value that
+// holds a malformed escape ('%' not followed by two hex digits) drops the
+// whole parameter, as live S3 does: prefix=a%ZZ lists from the bucket's
+// first key and echoes an empty Prefix (TestLiveMalformedEscapeDropsTheParameter).
 func parseQuery(raw string) query {
 	q := query{}
 	if raw == "" {
@@ -55,7 +59,12 @@ func parseQuery(raw string) query {
 	}
 	for _, part := range strings.Split(queryText(raw), "&") {
 		name, value, _ := strings.Cut(part, "=")
-		q[decodeText(PercentDecode(name))] = PercentDecode(value)
+		n, okName := queryDecode(name)
+		v, okValue := queryDecode(value)
+		if !okName || !okValue {
+			continue
+		}
+		q[decodeText(n)] = v
 	}
 	return q
 }

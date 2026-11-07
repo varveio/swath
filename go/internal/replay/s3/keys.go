@@ -173,6 +173,30 @@ func queryText(raw string) string {
 	return string(out)
 }
 
+// queryDecode decodes a query name or value: %XX escapes (either hex
+// case) to bytes, every other byte as it is. ok is false when a '%' is not
+// followed by two hex digits.
+func queryDecode(s string) (out []byte, ok bool) {
+	out = make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '%' {
+			if i+2 >= len(s) {
+				return nil, false
+			}
+			hi, lo := unhex(s[i+1]), unhex(s[i+2])
+			if hi < 0 || lo < 0 {
+				return nil, false
+			}
+			out = append(out, byte(hi<<4|lo))
+			i += 2
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, true
+}
+
 func unhex(c byte) int {
 	switch {
 	case c >= '0' && c <= '9':

@@ -25,9 +25,9 @@ func TestParseRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Empty values are absent, a later duplicate wins, names are
-	// percent-decoded, '+' and a broken escape stay as they are, and only
-	// "url" (any case not) selects URL encoding.
-	if string(r.Prefix) != "a+b%2" || r.MaxKeys != 1000 || r.EncodingURL || r.FetchOwner || r.TokenSet {
+	// percent-decoded, a parameter with a broken escape is dropped, and
+	// only "url" (any case not) selects URL encoding.
+	if string(r.Prefix) != "q" || r.MaxKeys != 1000 || r.EncodingURL || r.FetchOwner || r.TokenSet {
 		t.Errorf("parsed %+v", r)
 	}
 	r, _ = ParseRequest("bkt", "list-type=2&max-keys=%D9%A1%D9%A2&max-keys=+3")
