@@ -104,13 +104,13 @@ func TestMarkerCasesRunOrSkip(t *testing.T) {
 			d.record(d.markerCase(m))
 		}
 		if c.skipped {
-			if rep.Skipped != len(marks) || rep.Passed != 0 || rep.Failed != 0 {
-				t.Errorf("%v: %d skipped %d passed %d failed of %d", c.keys, rep.Skipped, rep.Passed, rep.Failed, len(marks))
+			if len(rep.Skipped) != len(marks) || rep.Passed != 0 || rep.Failed != 0 {
+				t.Errorf("%v: %d skipped %d passed %d failed of %d", c.keys, len(rep.Skipped), rep.Passed, rep.Failed, len(marks))
 			}
 			continue
 		}
-		if rep.Skipped != 0 || rep.Failed != 0 || rep.Requests != 4*len(marks) {
-			t.Errorf("%v: %d skipped %d failed, %d requests for %d cases", c.keys, rep.Skipped, rep.Failed, rep.Requests, len(marks))
+		if len(rep.Skipped) != 0 || rep.Failed != 0 || rep.Requests != 4*len(marks) {
+			t.Errorf("%v: %d skipped %d failed, %d requests for %d cases", c.keys, len(rep.Skipped), rep.Failed, rep.Requests, len(marks))
 		}
 	}
 }

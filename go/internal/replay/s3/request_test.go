@@ -57,6 +57,9 @@ func TestParseRequestErrors(t *testing.T) {
 		"list-type=%32&max-keys=%2D%31":     "max-keys must be non-negative",
 		"list%2Dtype=2&max-keys=-5":         "max-keys must be non-negative",
 		"list-type=2&max-keys=-1&max-keys=": "",
+		// A mathematical digit one, outside the BMP: two UTF-16 code units, neither a digit.
+		"list-type=2&max-keys=%F0%9D%9F%99":    "max-keys must be an integer",
+		"list-type=2&max-keys=%EF%BC%91%D9%A0": "",
 	} {
 		_, err := ParseRequest("bkt", q)
 		if want == "" {

@@ -189,3 +189,74 @@ func fetch(t *testing.T, url string) string {
 	b, _ := io.ReadAll(resp.Body)
 	return string(b)
 }
+
+// TestSigtermWithActiveWorkIsBoundedAndIdempotent is the contract's
+// sigtermRunsBoundedIdempotentServeShutdownHook with work in flight: a
+// request sleeping in a 60 s injected delay is answered 503 shutdown, the
+// process exits 143 within its 1 s stop timeout plus slack, and two
+// SIGTERMs run the shutdown once.
+func TestSigtermWithActiveWorkIsBoundedAndIdempotent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signals")
+	}
+	fixture := filepath.Join(t.TempDir(), "keys.tsv")
+	if err := os.WriteFile(fixture, []byte("a\t1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "serve", "--fixture", fixture, "--bucket", "bkt", "--port", "0", "--metrics-port", "0",
+		"--inject-latency", "worker_page=60s", "--stop-timeout", "1s")
+	cmd.Env = append(os.Environ(), "SWATH_REPLAY_TEST_MAIN=1")
+	stderr, _ := cmd.StderrPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	lines := bufio.NewScanner(stderr)
+	var startup string
+	for lines.Scan() {
+		if strings.HasPrefix(lines.Text(), "swath_replay endpoint=") {
+			startup = lines.Text()
+			break
+		}
+	}
+	endpoint := regexp.MustCompile(`endpoint=(http://[^ ]+)`).FindStringSubmatch(startup)[1]
+	metrics := regexp.MustCompile(`metrics_endpoint=(http://[^ ]+)/metrics`).FindStringSubmatch(startup)[1]
+	answered := make(chan *http.Response, 1)
+	go func() {
+		resp, err := http.Get(endpoint + "/bkt?list-type=2")
+		if err != nil {
+			answered <- nil
+			return
+		}
+		answered <- resp
+	}()
+	active := `"name":"swath.replay.protocol.requests.active","type":"gauge","tags":{"protocol":"s3"},"value":1.000000`
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(fetch(t, metrics+"/metrics"), active) {
+		if time.Now().After(deadline) {
+			t.Fatal("the request never became active")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	began := time.Now()
+	cmd.Process.Signal(syscall.SIGTERM)
+	cmd.Process.Signal(syscall.SIGTERM)
+	rest, _ := io.ReadAll(stderr)
+	err := cmd.Wait()
+	if took := time.Since(began); took > 3*time.Second {
+		t.Errorf("shutdown took %v with a 1s stop timeout", took)
+	}
+	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 143 {
+		t.Errorf("exit: %v", err)
+	}
+	if n := strings.Count(string(rest), "swath_replay_shutdown_hook complete"); n != 1 {
+		t.Errorf("hook ran %d times: %s", n, rest)
+	}
+	resp := <-answered
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if resp == nil || resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "shutdown" {
+		t.Errorf("the in-flight request: %v", resp)
+	}
+}

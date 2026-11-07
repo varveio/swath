@@ -5,6 +5,8 @@ package s3
 
 import (
 	"unicode"
+
+	"github.com/varveio/swath/go/internal/replay/javanum"
 	"unicode/utf8"
 )
 
@@ -161,61 +163,9 @@ func isSpace(r rune) bool {
 
 // parseInt32 parses a signed decimal int32 the way the replay wire contract
 // reads max-keys: an optional '+' or '-', then one or more decimal digits
-// from any script (Unicode category Nd), nothing else, no overflow.
+// from any BMP script, nothing else, no overflow (javanum.ParseInt; a
+// digit outside the BMP is refused).
 func parseInt32(s string) (int32, bool) {
-	if s == "" {
-		return 0, false
-	}
-	neg := false
-	switch s[0] {
-	case '-':
-		neg = true
-		s = s[1:]
-	case '+':
-		s = s[1:]
-	}
-	if s == "" {
-		return 0, false
-	}
-	var v int64
-	for _, r := range s {
-		d, ok := decimalDigit(r)
-		if !ok {
-			return 0, false
-		}
-		v = v*10 + int64(d)
-		if v > 1<<31 {
-			return 0, false
-		}
-	}
-	if neg {
-		v = -v
-	}
-	if v > 1<<31-1 || v < -1<<31 {
-		return 0, false
-	}
-	return int32(v), true
-}
-
-// decimalDigit is the value of a decimal digit in any script. Every Nd
-// range in the Unicode tables is a whole number of 0..9 runs starting at a
-// zero, so the value is the offset into the range modulo ten.
-func decimalDigit(r rune) (int, bool) {
-	if r >= '0' && r <= '9' {
-		return int(r - '0'), true
-	}
-	if r < 0x80 || !unicode.Is(unicode.Nd, r) {
-		return 0, false
-	}
-	for _, rg := range unicode.Nd.R16 {
-		if r >= rune(rg.Lo) && r <= rune(rg.Hi) {
-			return int(r-rune(rg.Lo)) % 10, true
-		}
-	}
-	for _, rg := range unicode.Nd.R32 {
-		if r >= rune(rg.Lo) && r <= rune(rg.Hi) {
-			return int(r-rune(rg.Lo)) % 10, true
-		}
-	}
-	return 0, false
+	v, ok := javanum.ParseInt(s, 32)
+	return int32(v), ok
 }

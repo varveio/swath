@@ -8,6 +8,8 @@ import (
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/varveio/swath/go/internal/replay/output"
 )
 
 // The body is assembled byte by byte: the BOM before the declaration, the
@@ -44,41 +46,53 @@ var (
 // entries before it is read and rendered.
 func EstimateSize(pageSize int) int { return 2048 + pageSize*512 }
 
-// AppendList appends the EnumerationResults document for res. endpoint is
-// the ServiceEndpoint, http://host:port/account/. A fixture row the
-// profile cannot render (a negative size, a time outside years 1 to 9999,
-// an empty, over-long or invalid-UTF-8 name, a control character) is a
-// FixtureIncompatible error naming the reason.
-func AppendList(dst []byte, res *Result, endpoint string) ([]byte, error) {
+// RenderList renders the EnumerationResults document for res into o.
+// endpoint is the ServiceEndpoint, http://host:port/account/. A fixture
+// row the profile cannot render (a negative size, a time outside years 1
+// to 9999, an empty, over-long or invalid-UTF-8 name, a control character)
+// is a FixtureIncompatible error naming the reason. Each entry is
+// formatted on its own and then written, so no more than one entry is held
+// outside o; a refusal by o (its cap or budget, o.Err) stops rendering
+// before the next entry.
+func RenderList(o *output.Output, res *Result, endpoint string) error {
+	var buf []byte
+	flush := func() bool {
+		o.Write(buf)
+		buf = buf[:0]
+		return o.Err() == nil
+	}
 	r := res.Request
-	dst = append(dst, prolog...)
-	dst = append(dst, `<EnumerationResults ServiceEndpoint="`...)
-	dst = appendEscaped(dst, endpoint)
-	dst = append(dst, `" ContainerName="`...)
-	dst = appendEscaped(dst, r.Container)
-	dst = append(dst, `">`...)
+	buf = append(buf, prolog...)
+	buf = append(buf, `<EnumerationResults ServiceEndpoint="`...)
+	buf = appendEscaped(buf, endpoint)
+	buf = append(buf, `" ContainerName="`...)
+	buf = appendEscaped(buf, r.Container)
+	buf = append(buf, `">`...)
 	if r.PrefixSupplied {
-		dst = element(dst, "Prefix", r.Prefix)
+		buf = element(buf, "Prefix", r.Prefix)
 	}
 	if r.MarkerSupplied {
-		dst = element(dst, "Marker", r.Marker)
+		buf = element(buf, "Marker", r.Marker)
 	}
 	if r.MaxResultsSet {
-		dst = element(dst, "MaxResults", r.MaxResults)
+		buf = element(buf, "MaxResults", r.MaxResults)
 	}
 	if r.DelimiterSupplied {
-		dst = element(dst, "Delimiter", r.Delimiter)
+		buf = element(buf, "Delimiter", r.Delimiter)
 	}
-	dst = append(dst, "<Blobs>"...)
+	buf = append(buf, "<Blobs>"...)
 	cachedSecond, cached := int64(0), []byte(nil)
 	for _, e := range res.Entries {
+		if !flush() {
+			return nil
+		}
 		if e.Object == nil {
-			dst = append(dst, "<BlobPrefix>"...)
+			buf = append(buf, "<BlobPrefix>"...)
 			var err error
-			if dst, err = appendName(dst, e.Prefix, true, res.onPath); err != nil {
-				return nil, err
+			if buf, err = appendName(buf, e.Prefix, true, res.onPath); err != nil {
+				return err
 			}
-			dst = append(dst, "</BlobPrefix>"...)
+			buf = append(buf, "</BlobPrefix>"...)
 			continue
 		}
 		o := e.Object
@@ -90,29 +104,43 @@ func AppendList(dst []byte, res *Result, endpoint string) ([]byte, error) {
 			micros = o.LastModified.UnixMicro()
 		}
 		if size < 0 {
-			return nil, fail(FixtureIncompatible, "negative_size")
+			return fail(FixtureIncompatible, "negative_size")
 		}
-		dst = append(dst, "<Blob>"...)
+		buf = append(buf, "<Blob>"...)
 		var err error
-		if dst, err = appendName(dst, o.Key, false, res.onPath); err != nil {
-			return nil, err
+		if buf, err = appendName(buf, o.Key, false, res.onPath); err != nil {
+			return err
 		}
-		dst = append(dst, propertiesStart...)
+		buf = append(buf, propertiesStart...)
 		sec := floorDiv(micros, 1_000_000)
 		if sec < firstRenderable || sec > lastRenderable {
-			return nil, fail(FixtureIncompatible, "timestamp_year_out_of_range")
+			return fail(FixtureIncompatible, "timestamp_year_out_of_range")
 		}
 		if cached == nil || sec != cachedSecond {
 			cachedSecond, cached = sec, time.Unix(sec, 0).UTC().AppendFormat(cached[:0], HTTPTime)
 		}
-		dst = append(dst, cached...)
-		dst = append(dst, afterTime...)
-		dst = strconv.AppendInt(dst, size, 10)
-		dst = append(dst, afterSize...)
+		buf = append(buf, cached...)
+		buf = append(buf, afterTime...)
+		buf = strconv.AppendInt(buf, size, 10)
+		buf = append(buf, afterSize...)
 	}
-	dst = append(dst, "</Blobs><NextMarker>"...)
-	dst = appendEscaped(dst, res.NextMarker)
-	return append(dst, "</NextMarker></EnumerationResults>"...), nil
+	buf = append(buf, "</Blobs><NextMarker>"...)
+	buf = appendEscaped(buf, res.NextMarker)
+	o.Write(append(buf, "</NextMarker></EnumerationResults>"...))
+	return nil
+}
+
+// AppendList appends what RenderList renders, outside any budget.
+func AppendList(dst []byte, res *Result, endpoint string) ([]byte, error) {
+	o := output.Standalone(max(4096, 2048+len(res.Entries)*512))
+	defer o.Close()
+	if err := RenderList(o, res, endpoint); err != nil {
+		return nil, err
+	}
+	for _, v := range o.Body() {
+		dst = append(dst, v...)
+	}
+	return dst, nil
 }
 
 // AppendError appends the error document for code.

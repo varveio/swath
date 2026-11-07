@@ -2,6 +2,8 @@ module github.com/varveio/swath/go
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	cloud.google.com/go/compute/metadata v0.10.0
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1

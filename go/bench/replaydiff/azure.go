@@ -447,8 +447,7 @@ func (d *driver) markerCase(m azureMarkerCase) result {
 			res.Error = "source answers differ"
 			return res
 		}
-		res.Skipped = true
-		res.Error = fmt.Sprintf("no marker to resume: the source answered %d without one", a.Status)
+		res.Skipped = fmt.Sprintf("no marker to resume: the source answered %d without one", a.Status)
 		return res
 	}
 	ra, rb := m.follow(ma), m.follow(mb)

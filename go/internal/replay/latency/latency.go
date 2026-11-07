@@ -16,10 +16,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/varveio/swath/go/internal/replay/javanum"
 )
 
 // Shape is a request's class.
@@ -112,8 +112,8 @@ func (p *Profile) Delay(s Shape, commonPrefixes int64, key int64) time.Duration 
 	}
 	d := p.delays[s]
 	base := d.Base
-	if d.PerCommonPrefix != 0 {
-		base += d.PerCommonPrefix * time.Duration(commonPrefixes)
+	if d.PerCommonPrefix != 0 && commonPrefixes > 0 {
+		base = addSaturating(base, mulSaturating(d.PerCommonPrefix, commonPrefixes))
 	}
 	if base == 0 || p.jitter == 0 {
 		return base
@@ -124,8 +124,27 @@ func (p *Profile) Delay(s Shape, commonPrefixes int64, key int64) time.Duration 
 	// same draw.
 	h := uint64(mix64(key))
 	signed := float64(h>>11)*0x1p-53*2 - 1
-	scaled := int64(float64(base.Nanoseconds()) * (1 + p.jitter*signed))
+	scaled := javanum.Saturate(float64(base.Nanoseconds()) * (1 + p.jitter*signed))
 	return time.Duration(max(0, scaled))
+}
+
+// The delay arithmetic saturates at the largest time.Duration (about 292
+// years) instead of wrapping: a wrapped sum or product is negative, and
+// the route reads a non-positive delay as no injection, so an overflowing
+// profile would silently answer at once (TestHugeDelaysSaturate).
+
+func addSaturating(a, b time.Duration) time.Duration {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
+}
+
+func mulSaturating(d time.Duration, n int64) time.Duration {
+	if d != 0 && n > math.MaxInt64/int64(d) {
+		return math.MaxInt64
+	}
+	return d * time.Duration(n)
 }
 
 // mix64 is SplitMix64's finalizer.
@@ -190,8 +209,10 @@ func Parse(spec string, jitter, scale float64) (*Profile, error) {
 	return New(delays, jitter)
 }
 
+// divide scales a delay down, truncating toward zero and saturating (a
+// tiny scale on a long delay overflows the quotient).
 func divide(d time.Duration, scale float64) time.Duration {
-	return time.Duration(int64(float64(d.Nanoseconds()) / scale))
+	return time.Duration(javanum.Saturate(float64(d.Nanoseconds()) / scale))
 }
 
 func parseShape(s string) (Shape, error) {
@@ -227,13 +248,12 @@ func parseDelay(s Shape, v string) (Delay, error) {
 	return Delay{Base: b, PerCommonPrefix: c}, err
 }
 
-// decimal is the number grammar a delay accepts: an optional sign, digits
-// with an optional fraction (or a bare fraction), an optional exponent,
-// an optional d/f type suffix, surrounding whitespace ignored. It is the
-// replay wire contract's grammar for --inject-latency, narrower than
-// strconv.ParseFloat (no hex, no underscores, no inf or nan).
-var decimal = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?[dDfF]?$`)
-
+// parseDuration reads one delay: a number then ms or s (the number in the
+// floating-point grammar of javanum.ParseDouble: decimal or hexadecimal,
+// an optional d/f suffix; 0x1p0s is one second), or a bare integer count
+// of milliseconds (javanum.ParseInt). The text is lower-cased first, so
+// NaN and Infinity are not spellings of a delay, and a value too large for
+// a time.Duration saturates.
 func parseDuration(s string) (time.Duration, error) {
 	v := strings.ToLower(s)
 	bad := fmt.Errorf("bad latency duration '%s' (e.g. 6865ms, 6.9s, 250)", s)
@@ -244,21 +264,21 @@ func parseDuration(s string) (time.Duration, error) {
 		if strings.HasSuffix(v, "ms") {
 			unit, cut = 1e6, 2
 		}
-		num := strings.TrimSpace(v[:len(v)-cut])
-		if !decimal.MatchString(num) {
+		f, ok := javanum.ParseDouble(v[:len(v)-cut])
+		if !ok {
 			return 0, bad
 		}
-		f, err := strconv.ParseFloat(strings.TrimRight(num, "df"), 64)
-		if err != nil {
-			return 0, bad
-		}
-		d = time.Duration(int64(f * unit))
+		d = time.Duration(javanum.Saturate(f * unit))
 	default:
-		ms, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
+		ms, ok := javanum.ParseInt(v, 64)
+		if !ok {
 			return 0, bad
 		}
-		d = time.Duration(ms) * time.Millisecond
+		if ms < 0 {
+			d = -1
+		} else {
+			d = mulSaturating(time.Millisecond, ms)
+		}
 	}
 	if d < 0 {
 		return 0, fmt.Errorf("latency duration must be >= 0, got '%s'", s)

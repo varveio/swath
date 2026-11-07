@@ -9,13 +9,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/go/sortedparquet"
 )
 
 const protocolS3 = "s3"
@@ -25,26 +28,41 @@ const protocolS3 = "s3"
 var (
 	errStopping    = &s3.Error{Status: 503, Code: "ServiceUnavailable", Message: "replay server is stopping", Reason: "shutdown"}
 	errInterrupted = &s3.Error{Status: 503, Code: "ServiceUnavailable", Message: "replay request interrupted", Reason: "shutdown"}
-	errCount       = &s3.Error{Status: 503, Code: "ServiceUnavailable", Message: "response buffer budget exhausted", Reason: "response_count_exhausted"}
-	errBudget      = &s3.Error{Status: 503, Code: "ServiceUnavailable", Message: "response buffer budget exhausted", Reason: "response_budget_exhausted"}
-	errTooLarge    = &s3.Error{Status: 500, Code: "InternalError", Message: "response exceeded configured per-response cap", Reason: "response_too_large"}
+	errCount       = &s3.Error{Status: 503, Code: "ServiceUnavailable", Message: output.ErrCount.Error(), Reason: output.ErrCount.Reason}
+	errBudget      = &s3.Error{Status: 503, Code: "ServiceUnavailable", Message: output.ErrBudget.Error(), Reason: output.ErrBudget.Reason}
+	errTooLarge    = &s3.Error{Status: 500, Code: "InternalError", Message: output.ErrTooLarge.Error(), Reason: output.ErrTooLarge.Reason}
 	errInternal    = &s3.Error{Status: 500, Code: "InternalError", Message: "internal replay error", Reason: "internal"}
 )
 
 // requestTarget splits the request target as sent into its path and raw
 // query: the S3 route compares the bucket with the path still
-// percent-encoded, and reads the query's own bytes.
+// percent-encoded, and reads the query's own bytes. An absolute target
+// ("http://host/b?q") contributes the path after its authority.
 func requestTarget(r *http.Request) (path, query string) {
 	target := r.RequestURI
-	if !strings.HasPrefix(target, "/") {
-		return r.URL.EscapedPath(), r.URL.RawQuery
+	path, _ = targetPath(target)
+	if i := strings.IndexByte(target, '?'); i >= 0 {
+		query = target[i+1:]
 	}
-	path, query, _ = strings.Cut(target, "?")
 	return path, query
 }
 
 // ServeHTTP answers the S3 route.
+//
+// A request holds two things for different spans. Its execution slot (the
+// --max-concurrent-requests ceiling, a worker in a pool) covers parsing,
+// paging, rendering and the injected delay, and is released before the
+// response is written, so a client that reads slowly does not hold a
+// worker. Its response (one of MaxResponses permits, and the budget bytes
+// backing its chunks) is held from admission until the write completes.
+// With N slots, up to 2N responses can be outstanding; the next request is
+// refused with response_count_exhausted, not queued
+// (TestSlowReadersReachTheResponseCeiling).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if problem := targetProblem(r.RequestURI); problem != "" {
+		rejectTarget(w, r, problem)
+		return
+	}
 	arrived := time.Now()
 	path, rawQuery := requestTarget(r)
 	if s.serveOtherRoute(w, r, path, rawQuery) {
@@ -52,16 +70,31 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// The request ceiling queues a request beyond it, as a full worker
 	// pool would; shutdown releases the queue with a refusal.
+	slot := false
 	select {
 	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
+		slot = true
 	case <-s.stopCtx.Done():
 	}
+	releaseSlot := func() {
+		if slot {
+			slot = false
+			<-s.slots
+		}
+	}
+	defer releaseSlot()
 	if !s.begin() {
 		s.refuse(w, r, path, arrived, errStopping)
 		return
 	}
-	defer s.end()
+	operating := true
+	endOperation := func() {
+		if operating {
+			operating = false
+			s.end()
+		}
+	}
+	defer endOperation()
 	s.s3Active.Add(1)
 	defer s.s3Active.Add(-1)
 
@@ -75,12 +108,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.responses.Add(-1)
-	reserved := int64(min(s.cfg.MaxResponseBytes, s3.EstimateSize(req.PageSize())))
-	if !s.budget.tryCharge(reserved) {
+	// Reserve for a full page before reading it; the reservation shrinks
+	// to what the page needs once it is rendered.
+	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, s3.EstimateSize(req.PageSize())), s.cfg.MaxResponseBytes)
+	if err != nil {
 		s.refuse(w, r, path, arrived, errBudget)
 		return
 	}
-	defer func() { s.budget.release(reserved) }()
+	defer out.Close()
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -103,22 +138,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.reg.Get(metrics.RequestStageLatency, protocolS3, "page").Record(cost)
 	s.logIfSlow(req, res, cost, shape)
 	prefixes := res.CommonPrefixes()
+	objects := len(res.Entries) - prefixes
 	delay := s.cfg.Latency.Delay(shape, int64(prefixes), req.LatencyKey())
 
 	renderStart := time.Now()
-	body := s3.AppendList(make([]byte, 0, reserved), res)
-	s.reg.Get(metrics.RequestStageLatency, protocolS3, "render").Record(time.Since(renderStart))
-	if len(body) > s.cfg.MaxResponseBytes {
-		s.refuse(w, r, path, arrived, errTooLarge)
+	out.SetFirstChunkHint(s3.EstimateSize(len(res.Entries)))
+	s3.RenderList(out, res)
+	if err := out.Err(); err != nil {
+		e := errBudget
+		if err == output.ErrTooLarge {
+			e = errTooLarge
+		}
+		s.refuse(w, r, path, arrived, e)
 		return
 	}
-	if extra := int64(len(body)) - reserved; extra > 0 {
-		if !s.budget.tryCharge(extra) {
-			s.refuse(w, r, path, arrived, errBudget)
-			return
-		}
-		reserved += extra
-	}
+	// Body returns the unused reservation: through the delay and the write
+	// the response holds only its chunks.
+	body := out.Body()
+	s.reg.Get(metrics.RequestStageLatency, protocolS3, "render").Record(time.Since(renderStart))
+	res = nil // the decoded page is not held through the delay and the write
 
 	// The injected delay is the request's total target time: sleep only
 	// for what the server's own work left of it.
@@ -141,9 +179,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	neutral := neutralShape(shape)
-	s.reg.Get(metrics.ProtocolObjects, protocolS3, neutral).Add(int64(len(res.Entries) - prefixes))
+	s.reg.Get(metrics.ProtocolObjects, protocolS3, neutral).Add(int64(objects))
 	s.reg.Get(metrics.ProtocolPrefixes, protocolS3, neutral).Add(int64(prefixes))
-	s.reg.Get(metrics.ProtocolEncodedBytes, protocolS3, neutral).Add(int64(len(body)))
+	s.reg.Get(metrics.ProtocolEncodedBytes, protocolS3, neutral).Add(int64(out.Len()))
+	onePass, fallback := out.PercentPaths()
+	if onePass > 0 {
+		s.reg.Get(metrics.ResponsePercentEncodingPath, protocolS3, "charged_chunk_one_pass").Add(int64(onePass))
+	}
+	if fallback > 0 {
+		s.reg.Get(metrics.ResponsePercentEncodingPath, protocolS3, "exact_length_fallback").Add(int64(fallback))
+	}
+	endOperation()
+	releaseSlot()
 	s.write(w, r, 200, body, "", arrived)
 }
 
@@ -159,15 +206,34 @@ func neutralShape(s latency.Shape) string {
 	return "page"
 }
 
-// fail answers an error: an S3 error as it is, anything else (a store
-// failure) as a 500 that carries no detail.
+// fail answers an error: an S3 error as it is; a fixture found disordered
+// inside a row group as a 500 fixture_disordered that names the part by
+// its base name only (disorderError); anything else (a store failure) as a
+// 500 that carries no detail. The full error, path included, goes to the
+// log only.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, path string, arrived time.Time, err error) {
 	var e *s3.Error
-	if !errors.As(err, &e) {
+	var disorder *sortedparquet.DisorderError
+	switch {
+	case errors.As(err, &e):
+	case errors.As(err, &disorder):
+		fmt.Fprintf(s.cfg.Log, "replay refused a request over a disordered fixture: %v\n", err)
+		e = disorderError(disorder)
+	default:
 		fmt.Fprintf(s.cfg.Log, "replay failed to serve request: %v\n", err)
 		e = errInternal
 	}
 	s.writeError(w, r, path, arrived, e)
+}
+
+// disorderError is the replay wire contract's answer to a row group whose
+// keys do not ascend: the reason row_group_disorder, the group and the
+// part's file name, never the server's directory layout
+// (TestDisorderedFixtureNamesOnlyThePart).
+func disorderError(d *sortedparquet.DisorderError) *s3.Error {
+	msg := fmt.Sprintf("row group %d of %s is not sorted (reason=%s): %s",
+		d.RowGroup, filepath.Base(d.Part), sortedparquet.ReasonRowGroupDisorder, d.Detail)
+	return &s3.Error{Status: 500, Code: "InternalError", Message: msg, Reason: "fixture_disordered"}
 }
 
 // refuse answers an admission refusal and counts it.
@@ -177,17 +243,17 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, path string, arr
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, path string, arrived time.Time, e *s3.Error) {
-	s.write(w, r, e.Status, s3.AppendError(nil, e, path), e.Reason, arrived)
+	s.write(w, r, e.Status, [][]byte{s3.AppendError(nil, e, path)}, e.Reason, arrived)
 }
 
 // write sends a response: the replay wire contract's headers (lower-case
-// names, as sent), the body in views of at most OutputChunkBytes, and a
-// write deadline that starts when writing does, so an injected delay never
-// counts against it.
-func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body []byte, reason string, arrived time.Time) {
+// names, as sent), the body's views in writes of at most OutputChunkBytes,
+// and a write deadline that starts when writing does, so an injected delay
+// never counts against it.
+func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body [][]byte, reason string, arrived time.Time) {
 	h := w.Header()
 	h["Content-Type"] = []string{"application/xml"}
-	h["Content-Length"] = []string{strconv.Itoa(len(body))}
+	h["Content-Length"] = []string{strconv.Itoa(viewsLen(body))}
 	h["x-amz-request-id"] = []string{"S3LISTINGREPLAY"}
 	h["x-amz-id-2"] = []string{"S3LISTINGREPLAY"}
 	if reason != "" {
@@ -203,17 +269,37 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body 
 	w.WriteHeader(status)
 	var err error
 	if r.Method != http.MethodHead {
-		for len(body) > 0 && err == nil {
-			n := min(len(body), OutputChunkBytes)
-			_, err = w.Write(body[:n])
-			body = body[n:]
-		}
+		err = writeViews(w, body)
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocolS3, "total_deadline").Inc()
 	}
 	s.reg.Get(metrics.RequestStageLatency, protocolS3, "write").Record(time.Since(writeStart))
 	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
+}
+
+// viewsLen is a body's length.
+func viewsLen(body [][]byte) int {
+	n := 0
+	for _, v := range body {
+		n += len(v)
+	}
+	return n
+}
+
+// writeViews writes a body's views in writes of at most OutputChunkBytes,
+// stopping at the first error.
+func writeViews(w http.ResponseWriter, body [][]byte) error {
+	for _, v := range body {
+		for len(v) > 0 {
+			n := min(len(v), OutputChunkBytes)
+			if _, err := w.Write(v[:n]); err != nil {
+				return err
+			}
+			v = v[n:]
+		}
+	}
+	return nil
 }
 
 // logIfSlow logs a request whose own cost reached the slow-request

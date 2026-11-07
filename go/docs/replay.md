@@ -30,8 +30,21 @@ in `.tsv` is instead a key list loaded into memory (one object per line: key, si
 ETag, storage class, owner id, owner display name, checksum algorithm, checksum type; fields percent-escaped,
 `\N` for null), for tests and for listings that have no Parquet form; `bench/replaydiff -dump-tsv` writes one.
 
-`swath-replay --version` prints the build. `sort-fixture` is not built into the Go binary; sort a capture with
-the Java `swath-replay sort-fixture`.
+`swath-replay --version` prints the build.
+
+`swath-replay sort-fixture --capture PATH --output DIR [--key-limit N]` turns an unsorted capture (one Parquet
+part in the 13-column canonical schema, or a directory of `*.parquet` parts) into a sorted format-2 dataset that
+`serve` can open. `--output` must be new or empty; like the lister, the command takes the output's lock and
+leaves `.swath/` with the lock file in it. Only `OBJECT` rows are written; a duplicate key, a versioned row, an
+unknown `row_type` or a key over the cap (1,024 bytes; `--key-limit` raises it up to 4,096) is refused before
+anything is written. On success it prints one line on stdout:
+
+```
+sort_fixture rows=10000 objects=10000 skipped=0 parts=1 bytes=230500 schema=swath-replay/objects/v1 wall_ms=40 output=/data/sorted
+```
+
+A refusal is one `sort-fixture: ...` line on stderr and exit 1; a bad command line is exit 2. The capture is
+held in memory while it is sorted (about 300 bytes per row), so it suits captures of a few million rows.
 
 ## Flags
 
@@ -44,12 +57,12 @@ the Java `swath-replay sort-fixture`.
 | `--bucket NAME` | required | the bucket name the S3 route answers for; any other is `NoSuchBucket` |
 | `--host`, `--port` | `127.0.0.1`, `0` | bind address; port `0` binds a free port, reported in the startup line |
 | `--metrics-port` | `-1` | the metrics port (below); negative disables it, `0` binds a free one |
-| `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency |
+| `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`) |
 | `--parquet-connections` | `0` | concurrent fixture page decodes; `0` is `max(8, min(32, GOMAXPROCS))` |
 | `--inject-latency SPEC` | off | target latency by request shape (below) |
 | `--latency-jitter F` | `0` | jitter fraction in [0, 1), drawn from the request so a repeated request gets the same delay |
 | `--latency-scale N` | `1` | divide every injected delay by N (compressed time); needs `--inject-latency` |
-| `--response-buffer-budget` | 256 MiB | encoded response bytes held at once; a request that would exceed it is refused |
+| `--response-buffer-budget` | 256 MiB | response memory held at once, charged before it is allocated; a request that would exceed it is refused (below) |
 | `--max-response-bytes` | 64 MiB | the largest encoded response; a larger page is a 500 |
 | `--stop-timeout` | `10s` | shutdown deadline |
 | `--idle-timeout` | `30s` | idle connection timeout |
@@ -75,8 +88,9 @@ swath_replay endpoint=http://127.0.0.1:19090 bucket=noaa-normals-pds fixture=/da
 
 (one line on the terminal). SIGINT or SIGTERM stops it: new requests and requests waiting for a slot are answered
 `503`, requests sleeping in an injected delay are answered `503` at once, the fixture is closed when the last
-read returns, and the process exits 130 or 143. A stop that outlives `--stop-timeout` logs
-`shutdown_incomplete`.
+read returns, and the process exits 130 or 143. Everything, closing the fixture included, is bounded by
+`--stop-timeout`: past it the server logs `shutdown_incomplete` and exits, leaving a read that ignores
+cancellation to finish on its own. A failure to close the fixture is logged (`replay store cleanup failed`).
 
 ## The S3 route
 
@@ -85,19 +99,39 @@ read returns, and the process exits 130 or 143. A stop that outlives `--stop-tim
 ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte order.
 
 - `max-keys` is echoed as asked; a page holds at most 1,000 entries, objects and common prefixes together.
-  Missing or blank is 1,000; negative or not an integer is `400 InvalidArgument`.
+  Missing or blank is 1,000; negative or not an integer is `400 InvalidArgument`. An integer is an optional sign
+  and decimal digits from any script of the Basic Multilingual Plane (`١٢` is 12); a digit outside it (such as
+  U+1D7D9) is not an integer.
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
   omits the ignored `StartAfter`. A blank token is absent. A malformed token is `400 InvalidArgument`
   even when a `start-after` could have served. Replay tokens (`v2:...`) and S3's are not interchangeable.
 - `encoding-type=url` percent-encodes every byte but `A-Z a-z 0-9 - _ . /` with upper-case hex, as S3 does.
   Without it, key bytes are rendered as UTF-8 text with malformed sequences replaced.
-- `LastModified` has millisecond precision; `Owner` appears only with `fetch-owner=true`.
+- `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
+  `Owner` appears only with `fetch-owner=true`.
 - Errors are S3's XML error document with `Code`, `Message`, `Resource` (the path as sent) and `RequestId`:
   `404 NoSuchBucket`, `405 MethodNotAllowed` (anything but GET), `400 InvalidArgument`. Every answer carries
   `x-amz-request-id` and `x-amz-id-2` (`S3LISTINGREPLAY`).
 - The replay's own refusals carry `x-swath-replay-error` with the reason: `503 ServiceUnavailable` for
   `shutdown`, `response_count_exhausted` and `response_budget_exhausted`, `500 InternalError` for
-  `response_too_large`, and `500 InternalError` (`internal`, no detail) when the fixture read fails.
+  `response_too_large`; `500 InternalError` with `fixture_disordered` when a row group's keys turn out not to
+  ascend (the message names the row group and the part's file name, never its directory); and
+  `500 InternalError` (`internal`, no detail) when the fixture read fails otherwise.
+- Some request targets are refused before the route, with `400`, an HTML page and
+  `Cache-Control: must-revalidate,no-cache,no-store`, as the Java server's HTTP layer refuses them: a fragment
+  (`#`), an empty path segment other than the last (`//bucket`, `/;/bucket`), an encoded `/` or `%`, an encoded
+  dot segment (`%2e%2e`) or a dot segment with a parameter (`..;`), a raw `\` or a raw byte outside the path
+  characters (`"`, `<`, `|`, non-ASCII, ...), an encoded control character or `\`, invalid UTF-8 once decoded,
+  a malformed escape or an encoded NUL, a path that climbs above the root (`/../bucket`), and user information
+  in an absolute target. The page is this server's own.
+
+Response memory (the same on every route). A request reserves room for a full page (on S3 320 bytes an entry,
+at least 4 KiB; on GCS `1024 + 384` an entry; on Azure `2048 + 512` an entry; at most `--max-response-bytes`)
+before it reads the fixture, and is refused (`response_budget_exhausted`) if the budget
+has no room for that. The response is then rendered into chunks sized from the page it actually got, each
+charged before it is allocated; rendering stops at the first byte past `--max-response-bytes`
+(`response_too_large`) or past the budget. The unused reservation goes back before any injected delay, and the
+chunks are held until the response is written.
 
 ## The Azure route
 
@@ -156,7 +190,9 @@ swath-replay serve ... --inject-latency prod-commoncrawl --latency-scale 50
 A request with a delimiter is a `structure_probe`, a delimiter-free request with `max-keys` at most 1 a
 `pivot_probe`, anything else a `worker_page` (aliases `structure`, `pivot`, `page`). A delay is `223ms`, `6.9s`
 or a bare millisecond count; `+55ms/cp` (structure probes only) adds a term per common prefix returned. An
-unlisted shape gets none. `prod-commoncrawl` is the built-in reference profile (223 ms pages, 121 ms pivots,
+unlisted shape gets none. The number before `ms` or `s` is read as a floating-point number in the Java
+grammar (`1.5e3ms`, `2dms`, `0x1p0s`); a delay too long to represent saturates at about 292 years rather than
+wrapping to none. `prod-commoncrawl` is the built-in reference profile (223 ms pages, 121 ms pivots,
 223 ms + 55 ms per prefix for structure probes).
 
 The delay is the request's total target time, not a surcharge: the server sleeps only for what its own cost
@@ -190,8 +226,10 @@ fixture answered a `/` listing in one pass, `walk` for the range walk), `inject.
 `inject.overrun.ms{shape}`, `protocol.http.requests{protocol,status_class}`,
 `protocol.objects|prefixes|encoded.bytes{protocol,shape}` (shape `page`, `seek`, `delimiter`),
 `protocol.requests.active{protocol}`, `response.admission.refused{protocol,reason}`,
-`response.bytes.live|peak`, `response.active` and `response.write.deadline{protocol,reason}`, all under
-`swath.replay.`.
+`response.bytes.live|peak`, `response.active`, `response.chunk.allocation{reason}` and
+`response.chunk.capacity.bytes{reason}` (response chunks by `initial`, `initial_cap_partial`, `continuation`,
+`cap_partial`), `response.percent.encoding.path{protocol,reason}` and `response.write.deadline{protocol,reason}`,
+all under `swath.replay.`.
 
 ## With the bench scripts
 
@@ -228,13 +266,13 @@ go build -o /tmp/replaydiff ./bench/replaydiff
 - Three routes (S3 `ListObjectsV2`, path-style, the GCS JSON `objects.list` and the Azure flat `List Blobs`
   subset below) and one serving mode (sorted). Version listing, object data and
   authentication are not served.
-- The Java server's HTTP layer rejects some request targets before the S3 route sees them (an empty path
-  segment such as `//bucket`, an encoded `/` in the path, a raw non-ASCII byte in the path, a `#` in the
-  target) with an HTML `400`; this server answers them as S3 requests (`NoSuchBucket` or a listing).
+- Two request-target cases differ from the Java server: a request line Go's HTTP parser refuses itself
+  (whitespace or a control byte in the target, a malformed `%` escape in the path, a target with neither a
+  leading `/` nor a scheme) gets its `400` with a `text/plain` page; and an absolute target whose host differs
+  from the `Host` header, which the Java server refuses, is served, because Go's HTTP layer ignores the `Host`
+  header for an absolute target as RFC 9112 section 3.2.2 has an origin server do.
 - Timer `max_ms` is the all-time maximum and percentiles cover the last 4,096 samples; the Java registry decays
   both over a time window, so the two servers' timer fields agree on counts and sums, not on those.
-- `max-keys` accepts decimal digits from every script the Go toolchain's Unicode tables know; digits added in
-  later Unicode versions are not integers here.
 - One process does not reproduce distributed service capacity or network faults; put `bench/faultproxy` in
   front for those.
 
@@ -272,9 +310,13 @@ path under `/storage/v1/b/` (another bucket, an escaped spelling, a trailing sla
 A query is read as UTF-8 (a raw ill-formed sequence becomes U+FFFD); `%XX` escapes must be complete and decode
 to valid UTF-8 (`invalid_percent_escape`, `invalid_utf8`); a raw `+` stays `+`. A value over 1,024 bytes
 (2,048 for `pageToken`) is `field_too_long_NAME`. A request with several faults reports the first in this
-order: unknown or repeated names and bad escapes (left to right), the four boolean features (in the table's
-order), `matchGlob`, `filter`, `fields`, `alt`, `prettyPrint`, `projection`, `maxResults`, the field lengths,
-then the token.
+order: unknown or repeated names and bad escapes (left to right), the four boolean features (`versions`,
+`softDeleted`, `includeFoldersAsPrefixes`, `includeTrailingDelimiter`), `matchGlob`, `filter`, `fields`,
+`alt`, `prettyPrint`, `projection`, `maxResults`, the field lengths, then the token. The Java server checks the
+two feature groups in the same order, but within a group it takes its set's iteration order, which is
+randomized each time the JVM starts: with two refused features of one group (say `versions=true&softDeleted=true`
+or `fields=x&filter=x`) its `x-swath-replay-error` names either, while this server's order is fixed as listed.
+The status and the envelope are the same either way.
 
 The answer is `{"kind":"storage#objects"}` plus `items` and `prefixes` when non-empty and `nextPageToken` when
 there is more. Errors are the JSON API envelope `{"error":{"code":N,"message":...,"errors":[{"message":...,
@@ -319,13 +361,17 @@ against this server. With `SWATH_REPLAY_FIXTURES=ROOT` it extracts the archive i
 serves the capture corpus (from `ROOT/fixtures/evidence-gcs/sorted` when present, and always from the same
 corpus written in the test and sorted by sort-fixture) under the bucket `replay-bucket`, and replays every
 `gcs/captures/*.json`: an exchange as captured with the bucket placeholder mapped and a native page token
-replaced by the replay's token for the same position (or its tampered, flipped or truncated form), a walk and
-an SDK run re-walked with the replay's own tokens (an SDK run with the run's captured query scope and client
-headers). Each answer is compared with the provider's under the conformance field policy: status, classified
+replaced by the replay's token for the same position (or its tampered, flipped or truncated form), and a walk
+re-walked with the replay's own tokens. An SDK run is executed by an official client library, the Go one
+(`google.golang.org/api/storage/v1`; the captures were made with the Java one): pointed at the server with its
+endpoint override, anonymous, auto-paginating, one attempt per call. Its requests must carry the captured
+scope as decoded parameters (its own `alt=json` and `prettyPrint=false` aside) and identify the Go client,
+its answers are compared as a walk, and its own decoded inventory must equal the provider's. Each answer is compared with the provider's under the conformance field policy: status, classified
 headers, then the page (items field by field, prefixes, terminal pagination; walks as merged inventories with
 unbroken token chains) or the error envelope's first reason. Each outcome must be its pin in
 `gcs/replay-expectations.json` (with `docs/replay-provider-expectations.json` applied) or better: a pinned
-mismatch that now matches is logged as an improvement. `SWATH_PROVIDER_REPORT=DIR` writes the per-capture
+mismatch must be reproduced as the whole message (only a replay token's body after a pin ending at the token's
+prefix is open), and a pinned mismatch that now matches is logged as an improvement. `SWATH_PROVIDER_REPORT=DIR` writes the per-capture
 outcomes to `DIR/<fixture>/gcs-outcomes.json`, in the shape of the Java suite's `-PproviderReport` file.
 
 ```bash
@@ -343,3 +389,59 @@ Today 77 of the 110 GCS captures match, the 77 pinned `match`; the other 33 meet
 
 starts both servers with `--protocols gcs` and compares the GCS request matrix, token walks and a seeded random
 walk ([internals/replay.md](internals/replay.md#the-gcs-route)).
+## Container image
+
+`Dockerfile.replay-go` (at the repository root) builds an image that holds the static binary and nothing else:
+`/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `10001:10001`, and the runtime stage is
+`scratch`, so there is no shell, no package manager and no OS package in it. Fixtures are never baked in: mount
+one read-only and pass its container path to `--fixture`.
+
+```bash
+docker build -f Dockerfile.replay-go --build-arg SWATH_REVISION="$(git rev-parse HEAD)" -t swath-replay-go:dev .
+docker run --rm -p 127.0.0.1:19090:19090 -p 127.0.0.1:19192:19192 -v /data/sorted:/fixtures:ro \
+  swath-replay-go:dev serve --fixture /fixtures --bucket bkt --host 0.0.0.0 --port 19090 --metrics-port 19192
+```
+
+The server must bind `0.0.0.0` for a published port to reach it; it has no authentication, so bind the host
+side to loopback as shown unless an isolated container network is the boundary. The build context is `go/`
+alone (`Dockerfile.replay-go.dockerignore`, which also leaves out local build output). The build stage
+cross-compiles for the target platform, so `--platform linux/arm64` builds on an amd64 host without emulation.
+Build arguments: `SWATH_REVISION` is the commit `--version` prints (the context carries no `.git`, so without
+it the binary names no revision), `GOFLAGS` passes through to the Go toolchain (`-p=2` bounds the compile on a
+shared host), and `GOPROXY` names a module mirror.
+
+`sort-fixture` writes its output, so it needs a writable mount; running it as the invoking user leaves the
+output removable by that user:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v /data/capture:/capture:ro -v /data/out:/out \
+  swath-replay-go:dev sort-fixture --capture /capture --output /out/sorted
+```
+
+`scripts/ci/smoke-replay-container.sh IMAGE FIXTURE sorted` smokes the image: it serves `FIXTURE` (a directory
+of sorted parts, or a dataset directory) as bucket `smoke` with a metrics port, waits for `/healthz` to answer
+`ok`, requires a `ListBucketResult` naming the bucket and holding a key, `/metrics` with `schema_version` 2,
+and the container's user `10001:10001`. When the server refuses the fixture as not servable sorted (a capture,
+or a `swath list` dataset written without `--sort` by the Java lister), the smoke sorts it with the image's
+own `sort-fixture` into a temporary directory and serves that. Without the third argument, or with `duckdb`,
+the script smokes the Java replay image as before.
+
+## Continuous integration
+
+Two jobs of `.github/workflows/ci.yml` cover the Go port. Each always runs and does its work only when its
+inputs changed (or on a manual run); `ci-gate` needs both.
+
+- `go` (inputs: `go/`, the workflow, `Dockerfile.replay-go` and its ignore file, the replay smoke script):
+  `go vet`, `go test -race`, the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
+  darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit), then the image:
+  built for linux/amd64 and linux/arm64 without pushing, the native one loaded as `swath-replay-go:ci` and
+  smoked. The smoke's fixture is written in the job: `bench/s3fake` serves 2,000 keys and the Go lister's
+  dataset of that bucket is the fixture, so the smoke needs no network, Java or recording.
+- `go-fixtures` (inputs: `go/`, the workflow, the Java `swath-replay`, `swath-core` and `swath-model` modules,
+  the shared Gradle build and wrapper (`build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`,
+  `gradle/`, `build-logic/`, `gradlew`), `docs/replay-provider-evidence.tar.gz`,
+  `docs/replay-provider-expectations.json`, the replay smoke script): JDK 25,
+  `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh` into the runner's temporary
+  directory, then the gated tests named in the step's `FIXTURE_PACKAGES` and `FIXTURE_TESTS` with
+  `SWATH_REPLAY_FIXTURES` set. Every named test must run and pass: one that skips, or a name that matches no
+  test, fails the step. A new gated test is added to those two lists.

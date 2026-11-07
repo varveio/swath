@@ -19,6 +19,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/replay/azure"
 	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/store"
 )
 
@@ -137,19 +138,33 @@ func (s *Server) azureClaims(path, rawQuery string) bool {
 		(hasQueryKey(rawQuery, "restype") || hasQueryKey(rawQuery, "comp"))
 }
 
-// admit takes a request slot (queueing as a full worker pool would) and
-// registers the request with the store; release undoes both. ok=false
-// means shutdown has begun.
+// admit takes a request's execution slot (queueing as a full worker pool
+// would) and registers the request with the store; release undoes both
+// and may be called more than once, so a route calls it before writing
+// (the slot covers the work, not the write) and defers it for the early
+// answers. ok=false means shutdown has begun.
 func (s *Server) admit() (release func(), ok bool) {
 	select {
 	case s.slots <- struct{}{}:
 	case <-s.stopCtx.Done():
 		return func() {}, false
 	}
-	if !s.begin() {
-		return func() { <-s.slots }, false
+	slot, op := true, false
+	release = func() {
+		if op {
+			op = false
+			s.end()
+		}
+		if slot {
+			slot = false
+			<-s.slots
+		}
 	}
-	return func() { s.end(); <-s.slots }, true
+	if !s.begin() {
+		return release, false
+	}
+	op = true
+	return release, true
 }
 
 func (s *Server) countResponse(protocol string, status int, arrived time.Time) {
@@ -198,12 +213,14 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 		return
 	}
 	defer s.responses.Add(-1)
-	reserved := int64(min(s.cfg.MaxResponseBytes, azure.EstimateSize(req.PageSize)))
-	if !s.budget.tryCharge(reserved) {
+	// The response's memory: reserved for a full page before it is read,
+	// then the chunks the rendered page needs (output.Output).
+	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, azure.EstimateSize(req.PageSize)), s.cfg.MaxResponseBytes)
+	if err != nil {
 		s.azureRefuse(w, r, arrived, azureBudget)
 		return
 	}
-	defer func() { s.budget.release(reserved) }()
+	defer out.Close()
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -225,26 +242,26 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "page").Record(time.Since(started))
 	shape := req.Shape()
 	delay := s.cfg.Latency.Delay(shape, int64(res.Prefixes), req.LatencyKey())
+	objects, prefixes := len(res.Entries)-res.Prefixes, res.Prefixes
 
 	renderStart := time.Now()
-	body, err := azure.AppendList(make([]byte, 0, reserved), res, s.azureEndpoint())
-	if err != nil {
+	out.SetFirstChunkHint(max(4096, azure.EstimateSize(len(res.Entries))))
+	if err := azure.RenderList(out, res, s.azureEndpoint()); err != nil {
 		s.azurePath("fixture_rejected", err.(*azure.Error).Reason)
 		s.azureFail(w, r, arrived, err)
 		return
 	}
-	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "render").Record(time.Since(renderStart))
-	if len(body) > s.cfg.MaxResponseBytes {
-		s.azureRefuse(w, r, arrived, azureTooLarge)
+	if err := out.Err(); err != nil {
+		e := azureBudget
+		if err == output.ErrTooLarge {
+			e = azureTooLarge
+		}
+		s.azureRefuse(w, r, arrived, e)
 		return
 	}
-	if extra := int64(len(body)) - reserved; extra > 0 {
-		if !s.budget.tryCharge(extra) {
-			s.azureRefuse(w, r, arrived, azureBudget)
-			return
-		}
-		reserved += extra
-	}
+	body := out.Body() // the unused reservation goes back before the delay
+	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "render").Record(time.Since(renderStart))
+	res = nil
 	// The injected delay is the request's total target time.
 	if delay > 0 {
 		if remaining := delay - time.Since(started); remaining > 0 {
@@ -264,9 +281,10 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 		}
 	}
 	neutral := neutralShape(shape)
-	s.reg.Get(metrics.ProtocolObjects, ProtocolAzure, neutral).Add(int64(len(res.Entries) - res.Prefixes))
-	s.reg.Get(metrics.ProtocolPrefixes, ProtocolAzure, neutral).Add(int64(res.Prefixes))
-	s.reg.Get(metrics.ProtocolEncodedBytes, ProtocolAzure, neutral).Add(int64(len(body)))
+	s.reg.Get(metrics.ProtocolObjects, ProtocolAzure, neutral).Add(int64(objects))
+	s.reg.Get(metrics.ProtocolPrefixes, ProtocolAzure, neutral).Add(int64(prefixes))
+	s.reg.Get(metrics.ProtocolEncodedBytes, ProtocolAzure, neutral).Add(int64(out.Len()))
+	release()
 	s.azureWrite(w, r, 200, body, req, nil, arrived)
 }
 
@@ -303,14 +321,14 @@ func (s *Server) azureWriteError(w http.ResponseWriter, r *http.Request, arrived
 	if vs := r.Header.Values("x-ms-client-request-id"); len(vs) == 1 {
 		echo.ClientRequestID, echo.HasClientRequestID = vs[0], true
 	}
-	s.azureWrite(w, r, e.Status(), body, echo, e, arrived)
+	s.azureWrite(w, r, e.Status(), [][]byte{body}, echo, e, arrived)
 }
 
 // azureWrite sends a response with the Azure route's headers.
-func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, body []byte, req *azure.Request, e *azure.Error, arrived time.Time) {
+func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, body [][]byte, req *azure.Request, e *azure.Error, arrived time.Time) {
 	h := w.Header()
 	h["Content-Type"] = []string{"application/xml"}
-	h["Content-Length"] = []string{strconv.Itoa(len(body))}
+	h["Content-Length"] = []string{strconv.Itoa(viewsLen(body))}
 	h["x-ms-request-id"] = []string{"replay-" + strconv.FormatUint(s.azure.requests.Add(1), 16)}
 	h["Date"] = []string{time.Now().UTC().Format(azure.HTTPTime)}
 	if req.Version == azure.Version20260606 || req.Version == azure.Version20261006 {
@@ -332,13 +350,7 @@ func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, 
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
-	var err error
-	for len(body) > 0 && err == nil {
-		n := min(len(body), OutputChunkBytes)
-		_, err = w.Write(body[:n])
-		body = body[n:]
-	}
-	if errors.Is(err, os.ErrDeadlineExceeded) {
+	if err := writeViews(w, body); errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, ProtocolAzure, "total_deadline").Inc()
 	}
 	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "write").Record(time.Since(writeStart))

@@ -19,6 +19,7 @@ import (
 	"github.com/varveio/swath/go/internal/replay/gcs"
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/store"
 )
@@ -231,52 +232,44 @@ func hasQueryKey(rawQuery, key string) bool {
 // claim (400) with the replay's own small JSON document.
 func (s *Server) serveEnvelope(w http.ResponseWriter, r *http.Request, status int, reason string) {
 	arrived := time.Now()
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	case <-s.stopCtx.Done():
-	}
+	release, ok := s.admit()
+	defer release()
 	header := ""
-	if !s.begin() {
+	if !ok {
 		s.reg.Get(metrics.ResponseAdmissionRefused, protocolReplay, "shutdown").Inc()
 		status, reason, header = 503, "shutdown", "shutdown"
-	} else {
-		defer s.end()
 	}
 	var body []byte
 	if r.Method != http.MethodHead {
 		body = []byte(`{"error":"` + reason + `"}`)
 	}
-	s.writeJSON(w, r, protocolReplay, status, "application/json", body, header, false, arrived)
+	release()
+	s.writeJSON(w, r, protocolReplay, status, "application/json", [][]byte{body}, header, false, arrived)
 }
 
-// serveGCS answers objects.list: the S3 route's admission, budget, delay
-// and shutdown rules with the GCS request, pager, renderer and error
-// envelope.
+// serveGCS answers objects.list: the S3 route's admission, response
+// memory, delay and shutdown rules with the GCS request, pager, renderer
+// and error envelope.
 func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery string) {
 	arrived := time.Now()
 	rt := s.routes
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	case <-s.stopCtx.Done():
-	}
+	release, ok := s.admit()
+	defer release()
 	fail := func(kind gcs.Kind, reason string) {
 		var body []byte
 		if r.Method != http.MethodHead {
 			body = gcs.AppendError(nil, kind)
 		}
-		s.writeJSON(w, r, ProtocolGCS, kind.Status(), gcs.ContentType, body, reason, kind == gcs.WrongMethod, arrived)
+		s.writeJSON(w, r, ProtocolGCS, kind.Status(), gcs.ContentType, [][]byte{body}, reason, kind == gcs.WrongMethod, arrived)
 	}
 	refuse := func(kind gcs.Kind, reason string) {
 		s.reg.Get(metrics.ResponseAdmissionRefused, ProtocolGCS, reason).Inc()
 		fail(kind, reason)
 	}
-	if !s.begin() {
+	if !ok {
 		refuse(gcs.Overload, "shutdown")
 		return
 	}
-	defer s.end()
 	rt.gcsActive.Add(1)
 	defer rt.gcsActive.Add(-1)
 	countPath := func(p, reason string) { s.reg.Get(ProviderPath, ProtocolGCS, p, reason).Inc() }
@@ -309,12 +302,14 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 		return
 	}
 	defer s.responses.Add(-1)
-	reserved := int64(min(s.cfg.MaxResponseBytes, gcs.EstimateSize(req.PageSize)))
-	if !s.budget.tryCharge(reserved) {
+	// The response's memory: reserved for a full page before it is read,
+	// then the chunks the rendered page needs (output.Output).
+	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, gcs.EstimateSize(req.PageSize)), s.cfg.MaxResponseBytes)
+	if err != nil {
 		refuse(gcs.Overload, "response_budget_exhausted")
 		return
 	}
-	defer func() { s.budget.release(reserved) }()
+	defer out.Close()
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -344,27 +339,27 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 	delay := s.cfg.Latency.Delay(shape, int64(len(page.Prefixes)), req.LatencyKey())
 
 	renderStart := time.Now()
-	body, err := gcs.AppendPage(make([]byte, 0, reserved), req, page)
-	if err != nil {
+	out.SetFirstChunkHint(max(4096, gcs.EstimateSize(len(page.Items)+len(page.Prefixes))))
+	if err := gcs.RenderPage(out, req, page); err != nil {
 		var p *gcs.FixtureProblem
 		errors.As(err, &p)
 		countPath("fixture_rejected", p.Reason)
 		fail(gcs.FixtureIncompatible, p.Reason)
 		return
 	}
-	s.reg.Get(metrics.RequestStageLatency, ProtocolGCS, "render").Record(time.Since(renderStart))
-	countPath("timestamp_render", gcs.DaysRendered(page))
-	if len(body) > s.cfg.MaxResponseBytes {
-		refuse(gcs.ResponseTooLarge, "response_too_large")
+	if err := out.Err(); err != nil {
+		if err == output.ErrTooLarge {
+			refuse(gcs.ResponseTooLarge, "response_too_large")
+		} else {
+			refuse(gcs.Overload, "response_budget_exhausted")
+		}
 		return
 	}
-	if extra := int64(len(body)) - reserved; extra > 0 {
-		if !s.budget.tryCharge(extra) {
-			refuse(gcs.Overload, "response_budget_exhausted")
-			return
-		}
-		reserved += extra
-	}
+	body := out.Body() // the unused reservation goes back before the delay
+	s.reg.Get(metrics.RequestStageLatency, ProtocolGCS, "render").Record(time.Since(renderStart))
+	countPath("timestamp_render", gcs.DaysRendered(page))
+	objects, prefixes := len(page.Items), len(page.Prefixes)
+	page = nil
 	if delay > 0 {
 		if remaining := delay - time.Since(started); remaining > 0 {
 			delayStart := time.Now()
@@ -383,19 +378,20 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 		}
 	}
 	neutral := neutralShape(shape)
-	s.reg.Get(metrics.ProtocolObjects, ProtocolGCS, neutral).Add(int64(len(page.Items)))
-	s.reg.Get(metrics.ProtocolPrefixes, ProtocolGCS, neutral).Add(int64(len(page.Prefixes)))
-	s.reg.Get(metrics.ProtocolEncodedBytes, ProtocolGCS, neutral).Add(int64(len(body)))
+	s.reg.Get(metrics.ProtocolObjects, ProtocolGCS, neutral).Add(int64(objects))
+	s.reg.Get(metrics.ProtocolPrefixes, ProtocolGCS, neutral).Add(int64(prefixes))
+	s.reg.Get(metrics.ProtocolEncodedBytes, ProtocolGCS, neutral).Add(int64(out.Len()))
+	release()
 	s.writeJSON(w, r, ProtocolGCS, 200, gcs.ContentType, body, "", false, arrived)
 }
 
 // writeJSON sends an answer on a JSON route: Content-Type, Content-Length,
 // the replay's reason header when there is one, Allow on a 405, and the
 // body in views of at most OutputChunkBytes under the write deadline.
-func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, protocol string, status int, contentType string, body []byte, reason string, allow bool, arrived time.Time) {
+func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, protocol string, status int, contentType string, body [][]byte, reason string, allow bool, arrived time.Time) {
 	h := w.Header()
 	h["Content-Type"] = []string{contentType}
-	h["Content-Length"] = []string{strconv.Itoa(len(body))}
+	h["Content-Length"] = []string{strconv.Itoa(viewsLen(body))}
 	if reason != "" {
 		h["x-swath-replay-error"] = []string{reason}
 	}
@@ -412,11 +408,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, protocol stri
 	w.WriteHeader(status)
 	var err error
 	if r.Method != http.MethodHead {
-		for len(body) > 0 && err == nil {
-			n := min(len(body), OutputChunkBytes)
-			_, err = w.Write(body[:n])
-			body = body[n:]
-		}
+		err = writeViews(w, body)
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocol, "total_deadline").Inc()
