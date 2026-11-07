@@ -36,6 +36,9 @@ func launch(bin string, args []string, logPath string, ready time.Duration) (*pr
 		if err := p.cmd.Process.Signal(syscall.Signal(0)); !errors.Is(err, os.ErrProcessDone) {
 			return fmt.Errorf("the server (pid %d) is still running after it was stopped: %v", p.cmd.Process.Pid, err)
 		}
+		if groupAlive(p.cmd.Process) {
+			return fmt.Errorf("the server's process group %d still has members after it was stopped", p.cmd.Process.Pid)
+		}
 		return nil
 	}
 	return p, stopAndCheck, err

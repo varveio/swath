@@ -61,10 +61,13 @@ func script(t *testing.T, dir, name, body string) string {
 // Java server helper with launchers that never print their startup line,
 // under a one-second readiness deadline: the start fails within the stop's
 // bounds, the helper's own check passes, and afterwards neither the
-// launcher's process group nor its child exists.
+// launcher's process group nor its child exists. The second launcher exits
+// on SIGTERM while its child ignores it, so the launcher's exit alone does
+// not prove the group stopped.
 func TestServerThatNeverBecomesReadyIsStopped(t *testing.T) {
 	for name, body := range map[string]string{
-		"child keeps running": "sleep 600 &\necho \"child $!\" >&2\nwait\n",
+		"child keeps running":                      "sleep 600 &\necho \"child $!\" >&2\nwait\n",
+		"launcher exits on TERM, child ignores it": "trap 'exit 0' TERM\nsh -c 'trap \"\" TERM; exec sleep 3600' &\necho \"child $!\" >&2\nwait\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
