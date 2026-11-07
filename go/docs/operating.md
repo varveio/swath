@@ -109,7 +109,10 @@ report's `output.bytes` over `output.rows_committed`. If the dataset outgrows th
   sorted listings match between neighbouring keys, and a 1 MiB window measured the ratio and speed of
   the 8 MiB default at a seventh of the memory), its output, the overlap the next job takes and its
   encoder; measured at 5 to 13 MiB a job. Gzip is one stream. The report's `output.text.compressor`
-  names the jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`).
+  names the jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`). A file's
+  rows are also formatted by `--encoders` goroutines (`output.text.formatters`) into one ordered stream;
+  their queued batches are rows in flight, charged to `--row-budget`, and the chunks they format are about
+  the same size.
 - **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-max`. On tmpfs (a
   common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
   report names the filesystem (`resources.spill.fs_type`) and the run warns at start.
@@ -189,7 +192,7 @@ report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stu
 | `order.ahead_rows` | about the row budget's worth | rising for minutes: rows pile up ahead of a held-up frontier (spill grows with it) |
 | `resources.peak_heap_live_bytes` against `row_budget_bytes` (report) | a few times the budget plus the pages in flight | far beyond: memory the budget does not see |
 | `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
-| `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run formatting and compressing rows (`output_wait_ns`: handing them to the compressor or the file); rows wait behind it, spill grows and workers idle. More `--encoders` for a `.zst` file, if the budget carries them |
+| `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
 | `objects` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
 | `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
 | `throttles` | flat | rising steadily: see Throttling |

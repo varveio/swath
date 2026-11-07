@@ -46,6 +46,12 @@ type Config struct {
 	Path        string    // the destination file; "" for Stdout
 	Stdout      io.Writer // the stream when Path is ""
 	Compression string    // None (""), Gzip or Zstd
+	// Formatters is the goroutines formatting rows at once; below 2 the
+	// order stage formats them itself. Account, if set, is told the row
+	// bytes (schema.RowsBytes) of batches handed to them and not yet
+	// written (negative: released), as the order stage's shared budget.
+	Formatters int
+	Account    func(int64)
 	// Jobs is the zstd jobs compressed at once (admitted by the caller
 	// against JobBytes each); below 2, one synchronous encoder. Gzip is one
 	// stream whatever it is.
@@ -85,8 +91,9 @@ type Out struct {
 	in    *counter         // bytes handed to the compressor (or the file), and the time it took
 	bw    *bufio.Writer
 	rows  int64
-	flush bool // flush after every batch: a stream's reader sees rows as they come
-	jobs  int  // zstd jobs at once (1: synchronous; 0 without zstd)
+	flush bool    // flush after every batch: a stream's reader sees rows as they come
+	jobs  int     // zstd jobs at once (1: synchronous; 0 without zstd)
+	pipe  stopper // the sink's formatters, if parallel: drained by Commit, stopped by Abort
 	sink  time.Duration
 }
 
@@ -191,23 +198,26 @@ func (o *Out) Rows() int64 { return o.rows }
 // Stats is what the text sink did, for the run report.
 type Stats struct {
 	// SinkWait is the time the order stage spent in the sink: rows waiting
-	// on the writer (formatting, and OutputWait).
+	// on the writer (with one formatter, formatting them and OutputWait;
+	// with more, handing batches to the formatters' queue).
 	SinkWait time.Duration
-	// OutputWait is the part of SinkWait spent handing bytes on: to the
-	// compressor (a synchronous encoder compressing, or a parallel one's
-	// queue full), or to the file or stream when uncompressed.
+	// OutputWait is the time spent handing bytes on: to the compressor (a
+	// synchronous encoder compressing, or a parallel one's queue full), or
+	// to the file or stream when uncompressed; by the order stage with one
+	// formatter, by the sequencer with more.
 	OutputWait time.Duration
 	// In is the bytes formatted (the uncompressed output), Out the bytes
 	// delivered to the file or stream.
 	In, Out int64
-	// Jobs is the zstd jobs compressed at once (0 without zstd).
-	Jobs int
+	// Jobs is the zstd jobs compressed at once (0 without zstd);
+	// Formatters the goroutines formatting rows (1: the order stage).
+	Jobs, Formatters int
 }
 
 // Stats reads the sink's statistics; after Commit or Abort they are final.
 func (o *Out) Stats() Stats {
 	return Stats{SinkWait: o.sink, OutputWait: time.Duration(o.in.wait.Load()), In: o.in.n.Load() + int64(o.bw.Buffered()),
-		Out: o.count.n.Load(), Jobs: o.jobs}
+		Out: o.count.n.Load(), Jobs: o.jobs, Formatters: max(1, o.cfg.Formatters)}
 }
 
 // endBatch ends one sink batch: a stream is flushed, so its reader sees the
@@ -228,7 +238,13 @@ func (o *Out) endBatch() error {
 // Commit completes the output: the buffer and the compressor are flushed
 // and closed, and a file is synced and renamed over its destination.
 func (o *Out) Commit() error {
-	err := o.bw.Flush()
+	var err error
+	if o.pipe != nil {
+		err = o.pipe.finish(false)
+	}
+	if err == nil {
+		err = o.bw.Flush()
+	}
 	if o.comp != nil {
 		if cerr := o.comp.Close(); err == nil {
 			err = cerr
@@ -252,6 +268,9 @@ func (o *Out) Commit() error {
 // joined; for a file, its remaining writes refused rather than made), a
 // file's temporary is removed and the destination left as it was.
 func (o *Out) Abort() {
+	if o.pipe != nil {
+		_ = o.pipe.finish(true)
+	}
 	if o.f != nil {
 		o.count.stopped.Store(true)
 	}

@@ -471,6 +471,19 @@ at the 8 MiB window 459 MB/s and 449 MiB allocated; 4 jobs at a 1 MiB window 492
 ratio (4.42). `BenchmarkSink` (the order stage's cost, rows to a `.tsv.zst` file): 135 MB/s with one
 synchronous encoder, 205 MB/s with 4 jobs.
 
+Batch (orchestrator, the three largest lists, 130-145M keys, 256 workers, 8 cores, fake at 50 ms): the
+change above took `.tsv.zst` from 216/115/151 s to 167/105/140 s (Parquet 129/74/99 s), with
+`output.text.sink_wait_ns` still 64/51/63 s: one formatting stream. Parallel formatters (`--encoders`
+goroutines, one ordered stream), on the local fake above, box shared and loaded, three interleaved rounds:
+
+| Workers | Before (7b05605) | One formatter (f4653660) | 4 formatters | Sink wait s: one / four |
+|---|---|---|---|---|
+| 64 | 9.96, 7.93, 8.16 | 7.17, 7.95, 7.35 | 7.27, 6.88, 6.75 | 1.9-2.4 / 0.54-0.77 |
+| 256 | 9.74, 9.43, 8.41 | 9.83, 9.39, 8.63 | 9.30, 7.23, 6.91 | 3.0-3.8 / 0.58-1.17 |
+
+Mean active at 256 workers rose from 105-114 (before) to 132-137. The output equals the serial path's byte
+for byte.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured

@@ -141,10 +141,16 @@ arbitrary I/O, which the command's forced-exit grace covers.
 
 The sink's own waits are outside these: the drainer hands a batch to the sink and waits for it to return,
 holding the drained bytes until then. A Parquet router's is `encoder_wait_ns` (a full part queue); a text
-sink's is `output.text.sink_wait_ns`, formatting the rows and handing them on, of which `output_wait_ns` is
-the compressor's (a synchronous encoder compressing, or every parallel job's slot full) or the file's. The
-compressor queues bytes, not rows: its sections are bounded by its jobs (`textout.JobBytes` each, admitted
-apart from the budget) and nothing it holds is charged to the budget.
+sink's is `output.text.sink_wait_ns`. A text file's rows are formatted by `--encoders` goroutines: the drainer
+hands each batch, numbered by its order, to their queue (two batches per formatter) and returns; a sequencer
+writes the formatted chunks to the one stream in that order, waiting for each (`output_wait_ns`: the
+compressor's, a synchronous encoder or every parallel job's slot full, or the file's). A queued batch's row
+bytes are charged to the shared budget (`Shared`, as a Parquet part queue's) from hand-off until its chunk is
+written or dropped, so the drainer's wait is the queue full and listing waits on the budget as for any
+storage. With one formatter (stdout, or `--encoders 1`) the drainer formats and writes itself. An abort stops
+the formatters at their next batch, drops the queue (releasing its bytes) and joins them before the
+compressor. The compressor queues bytes, not rows: its sections are bounded by its jobs (`textout.JobBytes`
+each, admitted apart from the budget) and nothing it holds is charged to the budget.
 
 ## Counting without order
 

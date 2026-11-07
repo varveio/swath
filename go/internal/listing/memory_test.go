@@ -89,9 +89,14 @@ func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 	sum, err := Run(context.Background(), Config{
 		Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true, Policy: keyrange.Policy{}}},
 		Output: OutputConfig{Text: &textout.Config{Path: out, Format: textout.TSV}},
-		Limits: Limits{Workers: workers, RowBudget: budget}})
+		// Four formatters (beyond what the budget admits, as asked): their
+		// queued batches are charged to the same budget.
+		Limits: Limits{Workers: workers, RowBudget: budget, Encoders: 4}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if sum.Output.Text.Formatters != 4 {
+		t.Fatalf("%d formatters, want 4", sum.Output.Text.Formatters)
 	}
 	res := sum.Resources
 	grew := res.PeakHeapLiveBytes - base

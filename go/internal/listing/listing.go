@@ -519,6 +519,13 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		if c := sum.Output.Text.Compressor; c != nil {
 			tc.Jobs = c.Jobs
 		}
+		if tc.Path != "" {
+			// A file's rows are formatted by as many goroutines as the
+			// encoders admitted, their queued batches charged to the
+			// shared budget; a stream's by the order stage, flushed per
+			// batch to its reader.
+			tc.Formatters, tc.Account = cfg.Limits.Encoders, shared.Add
+		}
 		t, err := textout.Open(tc)
 		if err != nil {
 			return a.sum.failed(err)
@@ -739,7 +746,7 @@ func (a *attempt) settleText(text *textout.Out, err error) error {
 		text.Abort()
 	}
 	st, out := text.Stats(), a.sum.Output.Text
-	out.Rows, out.Bytes, out.SinkWaitNs, out.OutputWaitNs = text.Rows(), text.Bytes(), int64(st.SinkWait), int64(st.OutputWait)
+	out.Rows, out.Bytes, out.SinkWaitNs, out.OutputWaitNs, out.Formatters = text.Rows(), text.Bytes(), int64(st.SinkWait), int64(st.OutputWait), st.Formatters
 	if c := out.Compressor; c != nil {
 		c.BytesIn, c.BytesOut = st.In, st.Out
 	}

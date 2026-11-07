@@ -232,12 +232,16 @@ type TextOutput struct {
 	Compression string `json:"compression"` // none, gzip, zstd
 	Rows        int64  `json:"rows"`
 	Bytes       int64  `json:"bytes"` // delivered, compressed
-	// SinkWaitNs is the time the order stage spent in the text sink (rows
-	// waiting on the writer: formatting them and handing the bytes on);
-	// OutputWaitNs the part of it spent handing bytes to the compressor,
-	// or to the file or stream when uncompressed (textout.Stats).
+	// SinkWaitNs is the time the order stage spent in the text sink: with
+	// one formatter, formatting rows and handing the bytes on; with more,
+	// handing batches to them (waiting while their queue is full).
+	// OutputWaitNs is the time spent handing bytes to the compressor, or
+	// to the file or stream when uncompressed: by the order stage with one
+	// formatter, by the sequencer behind them with more (textout.Stats).
+	// Formatters is the goroutines formatting rows (1: the order stage).
 	SinkWaitNs   int64 `json:"sink_wait_ns"`
 	OutputWaitNs int64 `json:"output_wait_ns"`
+	Formatters   int   `json:"formatters"`
 	// Compressor is the compression's work (absent uncompressed).
 	Compressor *TextCompressor `json:"compressor,omitempty"`
 }
