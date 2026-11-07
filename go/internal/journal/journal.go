@@ -23,6 +23,7 @@ package journal
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -85,6 +86,10 @@ type Header struct {
 	Created  time.Time `json:"created"`
 	// Argv is the command that started the run; swath resume replays it.
 	Argv []string `json:"argv,omitempty"`
+	// RunUUID (version 8) names the run across every resume: Create makes
+	// it, and it is never replaced. A durable spill file and its ledger
+	// carry it, so recovery never reuses another run's certificates.
+	RunUUID string `json:"run_uuid,omitempty"`
 }
 
 // Record is one durable step: a part published.
@@ -149,7 +154,12 @@ type Journal struct {
 	n      int     // records in the journal
 	last   *Record // the last of them, nil for none
 	sealed bool    // marked unresumable: no record follows
+	uuid   string  // the header's run UUID ("" in a version 7 journal)
 }
+
+// RunUUID is the run's UUID (Header.RunUUID): "" for a version 7 journal,
+// which keeps no durable spill.
+func (j *Journal) RunUUID() string { return j.uuid }
 
 // Create starts a new journal at Path(out), replacing any old one, with
 // the header written and synced.
@@ -162,7 +172,10 @@ func Create(out string, id Identity, argv []string) (*Journal, error) {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
 	j := start(f)
-	if err := j.append(Header{Type: "header", Version: Version, Identity: id, Created: time.Now().UTC(), Argv: argv}); err != nil {
+	var uuid [16]byte
+	rand.Read(uuid[:])
+	j.uuid = hex.EncodeToString(uuid[:])
+	if err := j.append(Header{Type: "header", Version: Version, Identity: id, Created: time.Now().UTC(), Argv: argv, RunUUID: j.uuid}); err != nil {
 		j.Close()
 		return nil, err
 	}
@@ -223,6 +236,9 @@ func ReopenIn(r *os.Root, st *State) (*Journal, error) {
 	}
 	j := start(f)
 	j.n, j.last = len(st.Records), st.Last()
+	if st.Header.Version >= 8 {
+		j.uuid = st.Header.RunUUID
+	}
 	return j, nil
 }
 
@@ -428,7 +444,17 @@ func (j *Journal) Close() error {
 // recovery touches anything (see durability.md). The unresumable mark
 // (Unresumable) is a later frame type within version 7: a build without
 // it reads a marked journal as corrupt, which refuses the resume too.
-const Version = 7
+//
+// Version 8 adds the run UUID (Header.RunUUID) and keeps the durable spill
+// (DIR/.swath/spill/durable, with its own ledger) across a resume; its
+// part records and claimed-part handling are version 7's. A version 7
+// journal is still read, and resumes as version 7: with durable spill off
+// and nothing of version 8 written (an opened journal keeps its version).
+// A version 7 build refuses version 8 (VersionError).
+const Version = 8
+
+// MinVersion is the oldest version this build reads.
+const MinVersion = 7
 
 // frameCRC covers the length field and the payload, so a damaged length
 // cannot pass for a different frame boundary.
@@ -593,7 +619,7 @@ func decode(r io.Reader) (*State, error) {
 			if err := json.Unmarshal(payload, &st.Header); err != nil || st.Header.Type != "header" {
 				return nil, fmt.Errorf("%w: first frame is not a header", ErrCorrupt)
 			}
-			if st.Header.Version != Version {
+			if st.Header.Version < MinVersion || st.Header.Version > Version {
 				return nil, &VersionError{Found: st.Header.Version, Want: Version}
 			}
 			first = false
