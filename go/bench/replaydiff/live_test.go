@@ -278,8 +278,9 @@ func TestS3LiveComparatorPolicy(t *testing.T) {
 }
 
 // TestGCSLiveComparatorMetadata: with a native fixture the stored fields
-// are compared exactly; with a synthetic one the replay's fixed values
-// are required and the provider's are not compared.
+// are compared exactly (timeCreated where the replay lists it); with a
+// synthetic one the replay's fixed values are required and the
+// provider's are not compared.
 func TestGCSLiveComparatorMetadata(t *testing.T) {
 	item := func(etag, gen, md5 string) string {
 		s := `{"kind":"storage#object","bucket":"b","name":"a","size":"1","updated":"2026-01-01T00:00:00.123456Z","etag":"` + etag +
@@ -305,6 +306,23 @@ func TestGCSLiveComparatorMetadata(t *testing.T) {
 	}
 	if d := gcsLive(live, &response{200, h, page(item("CJ+", "17", ""))}, "b", false, gcsNative); d.OK || !strings.Contains(d.Detail, "md5Hash 0") {
 		t.Errorf("a missing md5Hash passed: %+v", d)
+	}
+	// A recording that stored timeCreated lists it, compared as an instant
+	// with six fractional digits; one that did not lists none.
+	withCreated := func(v string) *response {
+		return &response{200, h, page(strings.Replace(item("CJ+", "17", "bWQ="), `"updated"`, `"timeCreated":"`+v+`","updated"`, 1))}
+	}
+	if d := gcsLive(live, withCreated("2026-01-01T00:00:00.000000Z"), "b", false, gcsNative); !d.OK {
+		t.Errorf("native timeCreated: %s", d.Detail)
+	}
+	if d := gcsLive(live, withCreated("2026-01-01T00:00:00.001000Z"), "b", false, gcsNative); d.OK || !strings.Contains(d.Detail, "timeCreated 0") {
+		t.Errorf("another timeCreated passed: %+v", d)
+	}
+	if d := gcsLive(live, withCreated("2026-01-01T00:00:00Z"), "b", false, gcsNative); d.OK || !strings.Contains(d.Detail, "six UTC fractional digits") {
+		t.Errorf("a timeCreated without six digits passed: %+v", d)
+	}
+	if d := gcsLive(live, withCreated("2026-01-01T00:00:00.000000Z"), "b", false, gcsSynthetic); d.OK {
+		t.Error("a synthetic profile listing timeCreated passed")
 	}
 	e := func(reason string) *response {
 		return &response{400, h, []byte(`{"error":{"code":400,"message":"m","errors":[{"message":"m","domain":"global","reason":"` + reason + `"}]}}`)}

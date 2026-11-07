@@ -80,6 +80,13 @@ type Projection struct {
 	// and Content-MD5). A schema without those columns ignores it, so its
 	// reads share the window cache with reads without it.
 	Content bool
+	// Created reads LastModified as the object's creation time where the
+	// schema stores one: a GCS recording's time_created, which Cloud
+	// Storage's S3-compatible XML API lists as LastModified. A row whose
+	// creation time is null (a part written before the column was listed)
+	// keeps its modification time. A schema without the column ignores it,
+	// as Content.
+	Created bool
 }
 
 // DelimitedEntry is one entry of a DelimitedRollup: exactly one of

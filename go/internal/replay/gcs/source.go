@@ -15,7 +15,8 @@ import (
 // NativeSchemaID is the schema id of a dataset the lister wrote from a
 // Cloud Storage bucket: its rows carry generation, metageneration, the
 // checksums and the content type, which the route renders instead of the
-// synthetic values.
+// synthetic values, and the creation time where the part holds the
+// optional time_created column.
 const NativeSchemaID = "swath/gcs-objects/v1"
 
 // Item is one listed object as the route renders it. Size and Updated are
@@ -28,10 +29,11 @@ type Item struct {
 	Native  *Native
 }
 
-// Native is the GCS metadata of a NativeSchemaID row.
+// Native is the GCS metadata of a NativeSchemaID row. TimeCreated is in
+// epoch microseconds, nil in a part written before the lister recorded it.
 type Native struct {
 	ETag, StorageClass, ContentType, MD5, CRC32C *string
-	Generation, Metageneration                   *int64
+	Generation, Metageneration, TimeCreated      *int64
 }
 
 // Entry is one entry of a rollup: a common prefix (Item nil) or an item.
@@ -95,7 +97,8 @@ func (s objectSource) rollup(ctx context.Context, lower boundary, upper, prefix,
 type nativeSource struct{ st *store.Sorted }
 
 // nativeColumns are the NativeSchemaID columns the route renders.
-var nativeColumns = []string{"size", "last_modified", "etag", "generation", "metageneration", "storage_class", "md5", "crc32c", "content_type"}
+var nativeColumns = []string{"size", "last_modified", "etag", "generation", "metageneration", "storage_class", "md5", "crc32c", "content_type",
+	"time_created"}
 
 func nativeItem(row *sortedparquet.Row) Item {
 	it := Item{Key: row.Key, Native: &Native{}}
@@ -109,6 +112,7 @@ func nativeItem(row *sortedparquet.Row) Item {
 	n.ETag, n.StorageClass, n.ContentType = text(row, "etag"), text(row, "storage_class"), text(row, "content_type")
 	n.MD5, n.CRC32C = text(row, "md5"), text(row, "crc32c")
 	n.Generation, n.Metageneration = integer(row, "generation"), integer(row, "metageneration")
+	n.TimeCreated = integer(row, "time_created")
 	return it
 }
 

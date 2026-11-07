@@ -57,12 +57,13 @@ func azureWalk(t *testing.T, s *Server, query string) []string {
 // placed where native listings place them; the placeholder type and no
 // Content-MD5 where the recording holds none, an MD5 in another form, or
 // a content type Azure could not hold (a control character); flat, paged
-// and rolled up, with the window cache and without it. Before, every
-// Blob had the placeholder type and no Content-MD5.
+// and rolled up, with the window cache and without it. Last-Modified is
+// the recorded updated time, never the creation time the S3 route lists.
+// Before, every Blob had the placeholder type and no Content-MD5.
 func TestGCSRecordingOnTheAzureRoute(t *testing.T) {
 	base := func(name string) map[string]any {
 		return map[string]any{"name": name, "size": "5", "generation": "1762400000000001", "metageneration": "1",
-			"etag": "CAEQAQ==", "storageClass": "STANDARD", "updated": "2025-11-06T03:33:20.123456Z"}
+			"etag": "CAEQAQ==", "storageClass": "STANDARD", "updated": "2025-11-06T03:33:20.123456Z", "timeCreated": "2025-11-05T01:00:00.000Z"}
 	}
 	whole := base("a/whole.txt")
 	whole["md5Hash"], whole["contentType"] = "Hn9gS4ZBWt6U4V/vhidgmw==", "text/plain; charset=utf-8"

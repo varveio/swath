@@ -61,8 +61,8 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 - **GCS client vs Google's JSON API client:** `TestClientPagesMatchGoogleClient` sends the same requests
   through the hand-rolled `objects.list` call and `google.golang.org/api/storage/v1` (a test dependency;
   the binary does not link it) to a fake JSON server and compares every field the schema keeps (names,
-  prefixes, tokens, size, generation, metageneration, etag, update time, storage class, MD5, CRC32C, content
-  type) across prefixes, delimiters, both offsets and keys that need escaping or hold control characters. Our
+  prefixes, tokens, size, generation, metageneration, etag, update time, creation time, storage class, MD5,
+  CRC32C, content type) across prefixes, delimiters, both offsets and keys that need escaping or hold control characters. Our
   client runs twice: on the fake's endpoint, and addressed to Google's endpoint (redirected to the fake), where
   it sends the production `fields=` selector, which the fake applies while the Google client reads full
   responses; `TestRowsCarryEveryField` checks the adapter's row mapping. The fake's page tokens are opaque

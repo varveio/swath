@@ -206,7 +206,8 @@ go build -o /tmp/replaydiff ./bench/replaydiff
   dataset (`-go-fixture`) and `-gcs-mask-metadata`, every name, size, time, prefix, status and page boundary
   agreed, and the only differences were the page tokens' bytes (453 pages; each token is bound to its fixture's
   identity) and the 8 token cases that send the Java server's token to the Go server, which refuses a token of
-  another fixture (`invalid_page_token`).
+  another fixture (`invalid_page_token`). `-gcs-mask-metadata` masks `timeCreated` with the other metadata,
+  since the Java server lists no creation time.
 
 ## The conformance suite and the evidence
 

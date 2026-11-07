@@ -702,7 +702,7 @@ func gcsAssertPage(nativeBody, replayBody []byte, bucket string, full bool, meta
 	replayFields := gcsReplayFields
 	if meta == gcsNative {
 		replayFields = maps.Clone(gcsReplayFields)
-		replayFields["md5Hash"], replayFields["crc32c"] = true, true
+		replayFields["md5Hash"], replayFields["crc32c"], replayFields["timeCreated"] = true, true, true
 	}
 	for i := range n.items {
 		ni, ri := n.items[i], r.items[i]
@@ -733,6 +733,14 @@ func gcsAssertPage(nativeBody, replayBody []byte, bucket string, full bool, meta
 			for _, f := range []string{"storageClass", "contentType", "md5Hash", "crc32c"} {
 				pequal(f+" "+is, ni.optionalText(f), ri.optionalText(f))
 			}
+			// timeCreated is listed where the recording stored it (a part
+			// written before the lister recorded it holds none).
+			if ri.has("timeCreated") {
+				if !gcsSixDigits.MatchString(ri.text("timeCreated")) {
+					pfail("replay timeCreated must use six UTC fractional digits")
+				}
+				pequal("timeCreated "+is, instantOf(ni.text("timeCreated"), "timeCreated"), instantOf(ri.text("timeCreated"), "timeCreated"))
+			}
 		} else {
 			pequal("generation "+is, "1", ri.decimal("generation"))
 			pequal("metageneration "+is, "1", ri.decimal("metageneration"))
@@ -751,7 +759,7 @@ func gcsAssertPage(nativeBody, replayBody []byte, bucket string, full bool, meta
 		} else if ri.has("acl") {
 			pfail("replay noAcl projection must omit acl")
 		}
-		if ri.has("timeCreated") || ri.has("owner") {
+		if meta != gcsNative && ri.has("timeCreated") || ri.has("owner") {
 			pfail("replay contains profile-omitted native metadata")
 		}
 	}

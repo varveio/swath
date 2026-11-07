@@ -303,7 +303,10 @@ duckdb -c "SELECT key, size FROM read_parquet('DIR/data/*.parquet') WHERE starts
 ```
 
 The S3 schema is `swath/s3-objects/v1` (`key`, `size`, `last_modified`, `etag`, `storage_class`, `owner_id`,
-`owner_display_name`, `checksum_algorithm`, `checksum_type`); GCS is `swath/gcs-objects/v1`. `python3
+`owner_display_name`, `checksum_algorithm`, `checksum_type`); GCS is `swath/gcs-objects/v1` (`key`, `size`,
+`last_modified`, `etag`, `generation`, `metageneration`, `storage_class`, `md5`, `crc32c`, `content_type`,
+and the optional `time_created`, absent from parts written before it was listed: read the parts by name, as
+`read_parquet(..., union_by_name = true)` does, to see it). `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
 only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open format 2.
 

@@ -9,7 +9,8 @@ is the commit (no _SUCCESS, no symlink.txt); data/ holds exactly the manifest's 
 current-object schema and every row a current object; per part: DuckDB row count == manifest rows,
 first/last key == manifest min_key_base64/max_key_base64 (exact bytes), keys strictly ascending (unsigned bytes) within and
 across parts; footer stamps (profile, profile version, schema id, index bound) and nothing else under
-swath.*. Prints the schema as DuckDB sees it and min/max key per part.
+swath.*. Prints the schema as DuckDB sees it (the parts' columns united by name: an optional column, such as
+the GCS schema's time_created, may be absent from parts written before it existed) and min/max key per part.
 """
 import base64
 import json
@@ -47,7 +48,7 @@ def main(out):
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = true")
     glob = os.path.join(out, "data", "*.parquet")
-    total = con.execute(f"SELECT count(*) FROM read_parquet('{glob}')").fetchone()[0]
+    total = con.execute(f"SELECT count(*) FROM read_parquet('{glob}', union_by_name = true)").fetchone()[0]
     check(total == rows, f"DuckDB count {total} == sum of manifest rows {rows}")
 
     if s3:
@@ -71,12 +72,12 @@ def main(out):
                 good = good and "isAdjustedToUTC=1" in (logical or "") and "MICROS=MicroSeconds" in (logical or "")
             check(good, f"  {want[0]}: {g[1]} {g[2]} {logical}")
         check(len(got) == len(contract), f"  {len(got)} columns, contract has {len(contract)}")
-        bad = con.execute(f"""SELECT count(*) FROM read_parquet('{glob}') WHERE size IS NULL OR last_modified IS NULL
+        bad = con.execute(f"""SELECT count(*) FROM read_parquet('{glob}', union_by_name = true) WHERE size IS NULL OR last_modified IS NULL
                               OR etag LIKE '"%'""").fetchone()[0]
         check(bad == 0, "every row is a current object: size and mtime set, etag unquoted")
 
     print("\nSchema as DuckDB sees it (DESCRIBE):")
-    for name, typ, null, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}')").fetchall():
+    for name, typ, null, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name = true)").fetchall():
         print(f"  {name:20s} {typ:28s} null={null}")
     print("\nParquet physical schema (part 0):")
     if paths:
@@ -86,7 +87,7 @@ def main(out):
             print("  " + " | ".join(str(x) for x in row))
 
     # S3 keys are STRING (VARCHAR); filesystem keys are unannotated BYTE_ARRAY (BLOB).
-    key_type = dict((r[0], r[1]) for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}')").fetchall())["key"]
+    key_type = dict((r[0], r[1]) for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name = true)").fetchall())["key"]
     kb = "key" if key_type == "BLOB" else "encode(key)"
     print("\nPer part:")
     prev_max = None
