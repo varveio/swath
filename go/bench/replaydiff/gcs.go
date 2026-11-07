@@ -505,9 +505,10 @@ func gcsMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 	for _, edit := range slices.Sorted(maps.Keys(gcsTokenEdits)) {
 		next("token page 2 "+edit, "token page 1", "maxResults", "1")
 	}
-	pageOne("delimiter token page 1", "maxResults", "1", "delimiter", "/")
-	next("delimiter token page 2", "delimiter token page 1", "maxResults", "1", "delimiter", "/")
-	next("delimiter token page 2 without delimiter", "delimiter token page 1", "maxResults", "1")
+	dp := twoEntryPrefix(keys)
+	pageOne("delimiter token page 1", "maxResults", "1", "delimiter", "/", "prefix", dp)
+	next("delimiter token page 2", "delimiter token page 1", "maxResults", "1", "delimiter", "/", "prefix", dp)
+	next("delimiter token page 2 without delimiter", "delimiter token page 1", "maxResults", "1", "prefix", dp)
 	if len(keys) >= 3 {
 		lo, hi := string(keys[len(keys)/2-1]), string(keys[len(keys)/2+1])
 		pageOne("offset token page 1", "maxResults", "1", "startOffset", lo, "endOffset", hi)
@@ -531,6 +532,28 @@ func gcsMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 		request{Name: "DELETE unknown bucket", Method: "DELETE", Path: "/storage/v1/b/no-such-bucket-here/o", Query: ""},
 	)
 	return out
+}
+
+// twoEntryPrefix is the shortest directory prefix (the root first) under
+// which a "/" listing has at least two entries, so a one-entry page of it
+// is truncated.
+func twoEntryPrefix(keys [][]byte) string {
+	for _, p := range append([]string{""}, directoryPrefixes(keys)...) {
+		seen := map[string]bool{}
+		for _, k := range keys {
+			rest, ok := strings.CutPrefix(string(k), p)
+			if !ok {
+				continue
+			}
+			if i := strings.IndexByte(rest, '/'); i >= 0 {
+				rest = rest[:i+1]
+			}
+			if seen[rest] = true; len(seen) >= 2 {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // gcsTokenEdits alter a genuinely issued token (the reference's) before

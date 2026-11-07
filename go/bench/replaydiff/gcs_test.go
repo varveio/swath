@@ -202,3 +202,19 @@ func TestCompetingFeaturesCompareAllButTheChosenFeature(t *testing.T) {
 		}
 	}
 }
+
+func TestTwoEntryPrefix(t *testing.T) {
+	for want, keys := range map[string][]string{
+		"":        {"a", "b/1"},
+		"logs/":   {"logs/a/1", "logs/b/1"},
+		"logs/a/": {"logs/a/1", "logs/a/2"},
+	} {
+		var b [][]byte
+		for _, k := range keys {
+			b = append(b, []byte(k))
+		}
+		if got := twoEntryPrefix(b); got != want {
+			t.Errorf("%v: %q, want %q", keys, got, want)
+		}
+	}
+}
