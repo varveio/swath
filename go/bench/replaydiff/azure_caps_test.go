@@ -59,12 +59,14 @@ func TestAzureSmallCapsAgainstJava(t *testing.T) {
 	if err := sortedparquettest.Write(filepath.Join(capture, "part-00000.parquet"), sortedparquettest.Part{Rows: rows}); err != nil {
 		t.Fatal(err)
 	}
-	sort := exec.Command(java, "sort-fixture", "--capture", capture, "--output", fixture)
+	sortCtx, cancelSort := context.WithTimeout(context.Background(), javaReady)
+	defer cancelSort()
+	sort := exec.CommandContext(sortCtx, java, "sort-fixture", "--capture", capture, "--output", fixture)
 	detach(sort)
 	if out, err := sort.CombinedOutput(); err != nil {
 		t.Fatalf("java sort-fixture: %v\n%s", err, out)
 	}
-	client := &http.Client{}
+	client := &http.Client{Timeout: javaRequests}
 	for _, maxBytes := range []int{256, 4096, server.DefaultMaxResponseBytes} {
 		t.Run(fmt.Sprint(maxBytes), func(t *testing.T) {
 			testSmallCap(t, java, dir, fixture, client, maxBytes)
