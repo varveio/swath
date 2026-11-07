@@ -72,6 +72,12 @@ type Config struct {
 	FixtureIdentity string
 	// Log receives the slow-request and shutdown lines.
 	Log io.Writer
+	// Protocols are the enabled listing routes (s3, azure); empty is s3
+	// only.
+	Protocols []string
+	// AzureAccount is the Azure route's account path segment and
+	// AdvertisedHost the host its ServiceEndpoint names (Host when empty).
+	AzureAccount, AdvertisedHost string
 }
 
 // Validate checks the bounds the server relies on (not the store, which is
@@ -87,7 +93,7 @@ func (c *Config) Validate() error {
 	case c.StopTimeout <= 0 || c.IdleTimeout <= 0 || c.WriteTimeout <= 0:
 		return errors.New("serve timeouts must be positive")
 	}
-	return nil
+	return c.validateAzure()
 }
 
 // MaxResponses is the response-count ceiling: twice the request ceiling.
@@ -120,6 +126,7 @@ type Server struct {
 	ln, metricsLn       net.Listener
 	accepting           atomic.Bool
 	s3Active            atomic.Int64
+	azure               *azureRoute
 }
 
 // New returns a server for cfg; Listen binds it.
@@ -155,6 +162,7 @@ func New(cfg Config) (*Server, error) {
 	s.reg.SetGauge(metrics.ResponseBytesPeak, func() float64 { return float64(s.budget.peak.Load()) })
 	s.reg.SetGauge(metrics.ResponseActive, func() float64 { return float64(s.responses.Load()) })
 	s.reg.SetGauge(metrics.ProtocolRequestsActive, func() float64 { return float64(s.s3Active.Load()) }, "s3")
+	s.newAzureRoute()
 	s.httpSrv = &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: cfg.IdleTimeout,

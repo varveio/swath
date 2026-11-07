@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store"
 )
 
 // The metrics port is a second listener on purpose: a scrape never waits
@@ -49,12 +48,25 @@ func (s *Server) Snapshot(now time.Time) []byte {
 	c := &s.cfg
 	out := []byte(`{"schema_version":2,"serving_mode":`)
 	out = metrics.AppendString(out, c.ServingMode)
-	out = append(out, `,"serving":{"protocols":["s3"],"bucket":`...)
+	out = append(out, `,"serving":{"protocols":[`...)
+	for i, p := range c.EnabledProtocols() {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = metrics.AppendString(out, p)
+	}
+	out = append(out, `],"bucket":`...)
 	out = metrics.AppendString(out, c.Bucket)
-	out = append(out, `,"azure_account":null,"fixture_identity":`...)
+	out = append(out, `,"azure_account":`...)
+	if s.azure == nil {
+		out = append(out, "null"...)
+	} else {
+		out = metrics.AppendString(out, c.AzureAccount)
+	}
+	out = append(out, `,"fixture_identity":`...)
 	out = metrics.AppendString(out, c.FixtureIdentity)
 	out = append(out, `,"ordering_profile":`...)
-	out = metrics.AppendString(out, store.OrderingProfile)
+	out = metrics.AppendString(out, c.OrderingProfile())
 	out = append(out, `,"metadata_policy":"fixture-plus-synthetic"`...)
 	for _, f := range []struct {
 		name string
@@ -80,7 +92,16 @@ func (s *Server) Snapshot(now time.Time) []byte {
 	if c.Latency != nil {
 		injection = "shape"
 	}
-	out = append(out, `,"latency_injection":"`+injection+`","pagination_profile":"default","profiles":{"s3":"list-objects-v2"}}`...)
+	out = append(out, `,"latency_injection":"`+injection+`","pagination_profile":"default","profiles":{`...)
+	for i, p := range c.EnabledProtocols() {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = metrics.AppendString(out, p)
+		out = append(out, ':')
+		out = metrics.AppendString(out, ProtocolProfile(p))
+	}
+	out = append(out, "}}"...)
 	out = append(out, `,"uptime_ms":`...)
 	out = strconv.AppendInt(out, now.Sub(s.started).Milliseconds(), 10)
 	out = append(out, `,"sampled_at_epoch_ms":`...)
