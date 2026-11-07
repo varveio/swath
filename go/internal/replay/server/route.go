@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/javanum"
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/output"
@@ -318,7 +319,7 @@ func (s *Server) logIfSlow(req *s3.Request, res *s3.Result, cost time.Duration, 
 		cont = "yes"
 	}
 	fmt.Fprintf(s.cfg.Log, "replay slow request shape=%s ms=%s prefix=%s delimiter=%s start_after=%s continuation=%s max_keys=%d entries=%d truncated=%v\n",
-		shape.Upper(), strconv.FormatFloat(float64(cost.Nanoseconds())/1e6, 'f', -1, 64), logBytes(req.Prefix),
+		shape.Upper(), javanum.FormatDouble(float64(cost.Nanoseconds())/1e6), logBytes(req.Prefix),
 		logBytes(req.Delimiter), logBytes(req.StartAfter), cont, req.MaxKeys, len(res.Entries), res.Truncated)
 }
 

@@ -102,12 +102,7 @@ func TestAdvertisedHost(t *testing.T) {
 	}
 }
 
-func TestDecimalStringAndEndpoint(t *testing.T) {
-	for v, want := range map[float64]string{1: "1.0", 50: "50.0", 12.5: "12.5", 0.0001: "1.0E-4", 1e7: "1.0E7", 0.25: "0.25"} {
-		if got := decimalString(v); got != want {
-			t.Errorf("%v: %s, want %s", v, got, want)
-		}
-	}
+func TestBracketHost(t *testing.T) {
 	if got := bracketHost("", "::1"); got != "[::1]" {
 		t.Errorf("%s", got)
 	}

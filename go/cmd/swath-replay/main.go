@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/javanum"
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/server"
 	"github.com/varveio/swath/go/internal/replay/sortfixture"
@@ -480,7 +481,7 @@ func startupLine(f *serveFlags, srv *server.Server, cfg server.Config, readers i
 		"inject_latency=%s latency_scale=%s metrics_endpoint=%s max_concurrent_requests=%d protocols=%s "+
 		"response_buffer_budget=%d max_response_bytes=%d max_responses=%d output_chunk_bytes=%d fixture_identity=%s "+
 		"ordering_profile=%s metadata_policy=fixture-plus-synthetic profiles=%s native_endpoints=%s",
-		f.host, srv.Port(), f.bucket, fixture, cfg.ServingMode, readers, inject, decimalString(f.latencyScale),
+		f.host, srv.Port(), f.bucket, fixture, cfg.ServingMode, readers, inject, javanum.FormatDouble(f.latencyScale),
 		metricsEndpoint, cfg.MaxConcurrentRequests, cfg.ProtocolList(), cfg.ResponseBufferBudget, cfg.MaxResponseBytes, cfg.MaxResponses(),
 		server.OutputChunkBytes, cfg.FixtureIdentity, cfg.OrderingProfile(), cfg.ProfilesString(),
 		nativeEndpoints(f, cfg, srv.Port()))
@@ -516,25 +517,4 @@ func bracketHost(advertised, host string) string {
 		return "[" + host + "]"
 	}
 	return host
-}
-
-// decimalString spells a float the way the startup line always has: at
-// least one fractional digit (1.0, 12.5), scientific notation outside
-// [1e-3, 1e7) (1.0E-4).
-func decimalString(v float64) string {
-	a := math.Abs(v)
-	if a == 0 || (a >= 1e-3 && a < 1e7) {
-		s := strconv.FormatFloat(v, 'f', -1, 64)
-		if !strings.Contains(s, ".") {
-			s += ".0"
-		}
-		return s
-	}
-	s := strconv.FormatFloat(v, 'E', -1, 64)
-	mant, exp, _ := strings.Cut(s, "E")
-	if !strings.Contains(mant, ".") {
-		mant += ".0"
-	}
-	e, _ := strconv.Atoi(exp)
-	return mant + "E" + strconv.Itoa(e)
 }
