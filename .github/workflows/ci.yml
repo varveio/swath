@@ -319,10 +319,17 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
             echo "go=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$BASE" HEAD | grep -qE '^(go/|\.github/workflows/ci\.yml$|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$)'; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
           else
-            echo "go=false" >> "$GITHUB_OUTPUT"
+            # Capture the whole list first: a git failure then fails the step (set -e) instead of
+            # reading as "no Go change", and grep reads every line rather than exiting at the
+            # first match while git still writes (git's SIGPIPE under pipefail would turn a
+            # match into go=false).
+            changed=$(git diff --name-only "$BASE" HEAD)
+            if grep -E '^(go/|\.github/workflows/ci\.yml$|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
+              echo "go=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "go=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Set up Go (version from go/go.mod)
@@ -436,10 +443,17 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
             echo "go=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$BASE" HEAD | grep -qE '^(go/|\.github/workflows/ci\.yml$|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)'; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
           else
-            echo "go=false" >> "$GITHUB_OUTPUT"
+            # Capture the whole list first: a git failure then fails the step (set -e) instead of
+            # reading as "no Go change", and grep reads every line rather than exiting at the
+            # first match while git still writes (git's SIGPIPE under pipefail would turn a
+            # match into go=false).
+            changed=$(git diff --name-only "$BASE" HEAD)
+            if grep -E '^(go/|\.github/workflows/ci\.yml$|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
+              echo "go=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "go=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Set up Go (version from go/go.mod)
