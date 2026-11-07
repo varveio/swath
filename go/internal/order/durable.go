@@ -331,7 +331,7 @@ func event(e string) {
 }
 
 // SetDurableEvents installs f to see the durable spill's lifecycle events
-// ("setk", "setk-detached", "detach", "close", "cycle", "flusher-joined",
+// ("sealed", "setk", "setk-detached", "detach", "close", "cycle", "flusher-joined",
 // "ledger-closed", and Run's "waker-stopped"), for the shutdown-order
 // tests; nil removes it. It returns a function restoring the previous one.
 func SetDurableEvents(f func(string)) (restore func()) {
@@ -454,6 +454,7 @@ func (c *Cache) sealed(d *Cert) {
 	c.queue = append(c.queue, ledgerRec{cert: d})
 	c.st.SealedFiles.Add(1)
 	c.mu.Unlock()
+	event("sealed")
 	c.wakeFlusher()
 }
 
