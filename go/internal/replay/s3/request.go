@@ -5,6 +5,7 @@ package s3
 
 import (
 	"bytes"
+	"net/url"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -113,8 +114,11 @@ func (q query) text(name string) (string, bool) {
 // a NUL in the prefix or the start-after.
 func ParseRequest(bucket, rawQuery string) (*Request, error) {
 	q := parseQuery(rawQuery)
-	if lt, _ := q.text("list-type"); lt != "2" {
-		return nil, errListType
+	if lt, ok := q.text("list-type"); lt != "2" {
+		if !ok {
+			return nil, errListType.argument("list-type")
+		}
+		return nil, errListType.argument("list-type", lt)
 	}
 	r := &Request{
 		Bucket:     bucket,
@@ -132,13 +136,13 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 	if q.has("marker") {
 		// ListObjects V1's marker, present even empty, is refused in a V2
 		// request (TestLiveMarkerIsRefused).
-		return nil, errMarker
+		return nil, errMarker.argument("marker")
 	}
 	if enc, ok := q.text("encoding-type"); ok {
 		// S3 takes the value in any case and refuses anything else, the
 		// empty value included (TestLiveEncodingTypeIsChecked).
 		if !strings.EqualFold(enc, "url") || len(enc) != 3 {
-			return nil, errEncodingType
+			return nil, errEncodingType.argument("encoding-type", enc)
 		}
 		r.EncodingURL, r.EncodingType = true, enc
 	}
@@ -149,8 +153,12 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 	}
 	// A NUL in the prefix, or in a start-after that bounds the page (a
 	// token wins over it), is refused (TestLiveNULIsRefused).
-	if bytes.IndexByte(r.Prefix, 0) >= 0 || !r.TokenSet && bytes.IndexByte(r.StartAfter, 0) >= 0 {
-		return nil, errNUL
+	// S3 names the start-after key-marker, its internal name.
+	if bytes.IndexByte(r.Prefix, 0) >= 0 {
+		return nil, errNUL.argument("prefix", string(r.Prefix))
+	}
+	if !r.TokenSet && bytes.IndexByte(r.StartAfter, 0) >= 0 {
+		return nil, errNUL.argument("key-marker", string(r.StartAfter))
 	}
 	owner, _ := q.text("fetch-owner")
 	r.FetchOwner = strings.EqualFold(owner, "true")
@@ -162,12 +170,13 @@ func maxKeys(q query) (int32, error) {
 	if !ok || isBlank(s) {
 		return MaxPageSize, nil
 	}
+	// S3 names the parameter maxKeys when it refuses a negative value.
 	v, ok := parseInt32(s)
 	if !ok {
-		return 0, errMaxKeysInteger
+		return 0, errMaxKeysInteger.argument("max-keys", s)
 	}
 	if v < 0 {
-		return 0, errMaxKeysNegative
+		return 0, errMaxKeysNegative.argument("maxKeys", s)
 	}
 	return v, nil
 }
@@ -179,10 +188,17 @@ func maxKeys(q query) (int32, error) {
 // percent-encoded: a bucket spelled with escapes is a different bucket.
 func ParseHTTP(method, path, rawQuery, bucket string) (*Request, error) {
 	if method != "GET" {
-		return nil, errMethodNotAllowed
+		return nil, errMethodNotAllowed.with(Detail{"Method", method}, Detail{"ResourceType", "BUCKET"})
 	}
-	if bucketOf(path) != bucket {
-		return nil, errNoSuchBucket
+	if b := bucketOf(path); b != bucket {
+		if b == "" {
+			return nil, errNoSuchBucket
+		}
+		// S3 names the bucket decoded from the path.
+		if name, err := url.PathUnescape(b); err == nil {
+			b = name
+		}
+		return nil, errNoSuchBucket.with(Detail{"BucketName", b})
 	}
 	return ParseRequest(bucket, rawQuery)
 }

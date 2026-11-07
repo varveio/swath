@@ -62,8 +62,9 @@ func EncodeToken(boundary []byte, inclusive bool) string {
 }
 
 // errInvalidToken is the answer to every token that is not one: live
-// S3's code and message (TestLiveEmptyTokenIsRefused).
-var errInvalidToken = &Error{Status: 400, Code: "InvalidArgument", Message: "The continuation token provided is incorrect"}
+// S3's code, message and ArgumentName, without the value
+// (TestLiveEmptyTokenIsRefused, TestLiveErrorDocuments).
+var errInvalidToken = (&Error{Status: 400, Code: "InvalidArgument", Message: "The continuation token provided is incorrect"}).argument("continuation-token")
 
 // DecodeToken parses a token. Any string that is not a token this server
 // issued unaltered, the empty and blank strings included, is a 400

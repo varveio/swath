@@ -16,11 +16,12 @@ import (
 // encoding/xml: the element order, the escaping of the five XML
 // metacharacters ('\'' as &apos;), ETag quoting as &quot; and millisecond
 // LastModified are the replay wire contract, and the encoding-type=url
-// grammar (output.AppendPercentEncoded) and the control characters as
-// &#xN; references (output.XMLEntity) are live S3's. encoding/xml's
-// marshaller produces neither (it escapes '"' as &#34;, TAB, LF and CR as
-// references, and writes other control characters as U+FFFD).
-// TestRenderListGolden pins the bytes.
+// grammar (output.AppendPercentEncoded), the control characters as
+// &#xN; references (output.XMLEntity) and the error document
+// (AppendError) are live S3's. encoding/xml's marshaller produces none of
+// them (it escapes '"' as &#34;, TAB, LF and CR as references, and writes
+// other control characters as U+FFFD). TestRenderListGolden pins the
+// bytes.
 
 const (
 	xmlDecl     = `<?xml version="1.0" encoding="UTF-8"?>`
@@ -260,16 +261,56 @@ func contentUnits(o *output.Output, obj *store.Object, req *Request, ts *timesta
 	o.ASCII("</Contents>")
 }
 
-// AppendError appends the S3 error document. resource is the request path
-// as sent.
-func AppendError(dst []byte, e *Error, resource string) []byte {
+// AppendError appends the S3 error document: Code, Message, e's
+// details, RequestId and HostId, the elements and order live S3 wrote for
+// each error the route answers (TestLiveErrorDocuments). RequestId and
+// HostId are the x-amz-request-id and x-amz-id-2 values, as on S3; the
+// replay's are a constant where S3's vary per request, so a comparison
+// with S3 masks them.
+func AppendError(dst []byte, e *Error) []byte {
 	dst = append(dst, xmlDecl...)
 	dst = append(dst, "<Error>"...)
-	dst = appendTextElement(dst, "Code", e.Code)
-	dst = appendTextElement(dst, "Message", e.Message)
-	dst = appendTextElement(dst, "Resource", resource)
-	dst = appendTextElement(dst, "RequestId", requestID)
+	dst = appendErrorElement(dst, "Code", e.Code)
+	dst = appendErrorElement(dst, "Message", e.Message)
+	for _, d := range e.Details {
+		dst = appendErrorElement(dst, d.Name, d.Value)
+	}
+	dst = appendErrorElement(dst, "RequestId", requestID)
+	dst = appendErrorElement(dst, "HostId", requestID)
 	return append(dst, "</Error>"...)
+}
+
+// appendErrorElement writes an error document element. S3 escapes error
+// text differently from listing text: '&', '<' and '>' as entities,
+// quotation marks and apostrophes as they are, and a C0 control
+// character other than TAB, LF and CR as a decimal character reference
+// (&#0;, &#31;), as it echoed a prefix, max-keys and encoding-type in its
+// errors on 2026-11-07 (TestLiveErrorDocuments). Malformed UTF-8 is
+// replaced as in listing text.
+func appendErrorElement(dst []byte, name, value string) []byte {
+	dst = append(dst, '<')
+	dst = append(dst, name...)
+	dst = append(dst, '>')
+	v := decodeString(value)
+	for i := 0; i < len(v); i++ {
+		switch c := v[i]; {
+		case c == '&':
+			dst = append(dst, "&amp;"...)
+		case c == '<':
+			dst = append(dst, "&lt;"...)
+		case c == '>':
+			dst = append(dst, "&gt;"...)
+		case c < 0x20 && c != '\t' && c != '\n' && c != '\r':
+			dst = append(dst, "&#"...)
+			dst = strconv.AppendInt(dst, int64(c), 10)
+			dst = append(dst, ';')
+		default:
+			dst = append(dst, c)
+		}
+	}
+	dst = append(dst, "</"...)
+	dst = append(dst, name...)
+	return append(dst, '>')
 }
 
 // The element helpers admit the opening tag's three parts, the value and
@@ -321,8 +362,7 @@ func byteElement(o *output.Output, name string, raw []byte, encoded bool) {
 	closeTag(o, name)
 }
 
-// appendTextElement and appendEscaped build the small error document, which
-// is rendered outside the budget.
+// appendTextElement appends a listing text element outside the budget.
 func appendTextElement(dst []byte, name, value string) []byte {
 	dst = append(dst, '<')
 	dst = append(dst, name...)

@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,13 +35,15 @@ func TestS3PlanRules(t *testing.T) {
 		{query: "list-type=2&continuation-token=" + goTok, java: "list-type=2&continuation-token=v2%3AAGEvMQ"},
 		{query: "list-type=2&continuation-token=v2:AGEvMQ", driverToken: true, java: "list-type=2&continuation-token=v2:AGEvMQ",
 			goQuery: "list-type=2&continuation-token=" + goTok},
-		{query: "list-type=2&encoding-type=bogus", refusal: refuseEncoding},
+		{query: "list-type=2&encoding-type=bogus", refusal: refuseEncoding.withArgument("encoding-type", []byte("bogus"))},
 		{query: "list-type=2&encoding-type=URL", java: "list-type=2&encoding-type=url"},
 		{query: "list-type=2&marker=", refusal: refuseMarker},
 		{query: "list-type=2&marker=x&encoding-type=bogus", refusal: refuseMarker},
-		{query: "list-type=2&encoding-type=bogus&continuation-token=", refusal: refuseEncoding},
-		{query: "list-type=2&start-after=a%00", refusal: refuseNUL},
-		{query: "list-type=2&prefix=a%00", refusal: refuseNUL},
+		{query: "list-type=2&encoding-type=bogus&continuation-token=", refusal: refuseEncoding.withArgument("encoding-type", []byte("bogus"))},
+		{query: "list-type=2&encoding-type=%01%FF", refusal: refuseEncoding.withArgument("encoding-type", []byte("\x01\uFFFD"))},
+		{query: "list-type=2&start-after=a%00", refusal: refuseNUL.withArgument("key-marker", []byte("a\x00"))},
+		{query: "list-type=2&prefix=a%00", refusal: refuseNUL.withArgument("prefix", []byte("a\x00"))},
+		{query: "list-type=2&prefix=a%00&start-after=b%00", refusal: refuseNUL.withArgument("prefix", []byte("a\x00"))},
 		{query: "list-type=2&start-after=a%00&continuation-token=v2:AGEvMQ", driverToken: true, java: "list-type=2&start-after=a%00&continuation-token=v2:AGEvMQ",
 			goQuery: "list-type=2&start-after=a%00&continuation-token=" + goTok},
 		{query: "list-type=2&start-after=a%FF", java: "list-type=2&start-after=a%EF%BF%BD"},
@@ -51,7 +54,7 @@ func TestS3PlanRules(t *testing.T) {
 		if goQuery == "" {
 			goQuery = c.query
 		}
-		if p.refusal != c.refusal || c.refusal == nil && p.java != c.java || p.goQuery != goQuery {
+		if !reflect.DeepEqual(p.refusal, c.refusal) || c.refusal == nil && p.java != c.java || p.goQuery != goQuery {
 			t.Errorf("%s: java %q go %q refusal %v; want java %q go %q refusal %v", c.query, p.java, p.goQuery, p.refusal, c.java, goQuery, c.refusal)
 		}
 	}
@@ -63,7 +66,7 @@ func TestS3PlanFixes(t *testing.T) {
 		`<Contents><Key>a%20b%2Ac%7E</Key></Contents></ListBucketResult>`)
 	p := planS3("list-type=2&prefix=a%20b*&start-after=&encoding-type=Url", false)
 	var reasons []string
-	exp := expectedS3(&response{Status: 200, Body: page}, p, "/b", &reasons)
+	exp := expectedS3(&response{Status: 200, Body: page}, p, request{Method: "GET"}, "", "b", &reasons)
 	want := `<ListBucketResult><Name>b</Name><Prefix>a+b*</Prefix><StartAfter></StartAfter><KeyCount>1</KeyCount><EncodingType>Url</EncodingType>` +
 		`<Contents><Key>a+b*c%7E</Key></Contents></ListBucketResult>`
 	if string(exp.Body) != want {
@@ -72,15 +75,65 @@ func TestS3PlanFixes(t *testing.T) {
 	if len(reasons) != 3 {
 		t.Errorf("reasons %q", reasons)
 	}
-	// The Java server's own max-keys refusal comes first.
-	mk := []byte(`<Error><Code>InvalidArgument</Code><Message>max-keys must be an integer</Message></Error>`)
-	p = planS3("list-type=2&max-keys=x&marker=", false)
-	if exp := expectedS3(&response{Status: 400, Body: mk}, p, "/b", &reasons); !bytes.Equal(exp.Body, mk) {
-		t.Errorf("max-keys refusal replaced: %s", exp.Body)
+	// The Java server's own max-keys refusal comes first, in live S3's
+	// document.
+	const tail = "<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>"
+	mk := []byte(`<Error><Code>InvalidArgument</Code><Message>max-keys must be an integer</Message><Resource>/b</Resource></Error>`)
+	q := "list-type=2&max-keys=x%01&marker="
+	p = planS3(q, false)
+	if exp := expectedS3(&response{Status: 400, Body: mk}, p, request{Method: "GET", Query: q}, q, "b", &reasons); exp.Status != 400 ||
+		!strings.HasSuffix(string(exp.Body), "<Message>Provided max-keys not an integer or within integer range</Message>"+
+			"<ArgumentName>max-keys</ArgumentName><ArgumentValue>x&#1;</ArgumentValue>"+tail) {
+		t.Errorf("max-keys refusal: %s", exp.Body)
 	}
-	if exp := expectedS3(&response{Status: 200, Body: page, Header: http.Header{}}, p, "/b", &reasons); exp.Status != 400 ||
-		!strings.Contains(string(exp.Body), "<Message>Marker unsupported with REST.GET.BUCKET in list-type=2</Message><Resource>/b</Resource>") {
+	if exp := expectedS3(&response{Status: 200, Body: page, Header: http.Header{}}, p, request{Method: "GET", Query: q}, q, "b", &reasons); exp.Status != 400 ||
+		!strings.HasSuffix(string(exp.Body), "<Message>Marker unsupported with REST.GET.BUCKET in list-type=2</Message><ArgumentName>marker</ArgumentName>"+tail) {
 		t.Errorf("marker: %d %s", exp.Status, exp.Body)
+	}
+	// Control characters in a Java page become references.
+	ctl := []byte("<ListBucketResult><Prefix>a\x01\t\x1f\x7f</Prefix><Delimiter>\x00</Delimiter></ListBucketResult>")
+	reasons = nil
+	if exp := expectedS3(&response{Status: 200, Body: ctl}, planS3("list-type=2", false), request{}, "list-type=2", "b", &reasons); string(exp.Body) !=
+		"<ListBucketResult><Prefix>a&#x1;\t&#x1f;\x7f</Prefix><Delimiter>&#x0;</Delimiter></ListBucketResult>" || len(reasons) != 1 {
+		t.Errorf("control characters: %q %q", exp.Body, reasons)
+	}
+}
+
+// TestJavaFirstRefusals: the refusals the Java server makes first, in
+// live S3's document.
+func TestJavaFirstRefusals(t *testing.T) {
+	javaErr := func(status int, code, msg string) *response {
+		return &response{Status: status, Body: []byte("<Error><Code>" + code + "</Code><Message>" + msg + "</Message><Resource>/x</Resource></Error>")}
+	}
+	const tail = "<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>"
+	for _, c := range []struct {
+		exp  *response
+		r    request
+		want string
+	}{
+		{javaErr(404, "NoSuchBucket", "The specified bucket does not exist"), request{Method: "GET", Path: "/no%2Dsuch", Query: "list-type=2"},
+			"<Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><BucketName>no-such</BucketName>"},
+		{javaErr(404, "NoSuchBucket", "x"), request{Method: "GET", Raw: "http://{host}/other?list-type=2"},
+			"<Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><BucketName>other</BucketName>"},
+		{javaErr(404, "NoSuchBucket", "x"), request{Method: "GET", Path: "/", Query: "list-type=2"},
+			"<Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message>"},
+		{javaErr(405, "MethodNotAllowed", "method not allowed"), request{Method: "POST", Query: "list-type=2"},
+			"<Code>MethodNotAllowed</Code><Message>The specified method is not allowed against this resource.</Message><Method>POST</Method><ResourceType>BUCKET</ResourceType>"},
+		{javaErr(400, "InvalidArgument", "only ListObjectsV2 is supported"), request{Method: "GET", Query: "max-keys=1"},
+			"<Code>InvalidArgument</Code><Message>only ListObjectsV2 is supported</Message><ArgumentName>list-type</ArgumentName>"},
+		{javaErr(400, "InvalidArgument", "only ListObjectsV2 is supported"), request{Method: "GET", Query: "list-type=1"},
+			"<Code>InvalidArgument</Code><Message>only ListObjectsV2 is supported</Message><ArgumentName>list-type</ArgumentName><ArgumentValue>1</ArgumentValue>"},
+		{javaErr(400, "InvalidArgument", "max-keys must be non-negative"), request{Method: "GET", Query: "list-type=2&max-keys=-1"},
+			"<Code>InvalidArgument</Code><Message>Argument maxKeys must be an integer between 0 and 2147483647</Message><ArgumentName>maxKeys</ArgumentName><ArgumentValue>-1</ArgumentValue>"},
+	} {
+		query, _ := requestQuery(c.r)
+		got := javaFirstRefusal(c.exp, c.r, query, "bkt")
+		if got == nil || string(got.body()) != `<?xml version="1.0" encoding="UTF-8"?><Error>`+c.want+tail {
+			t.Errorf("%+v: %v", c.r, got)
+		}
+	}
+	if javaFirstRefusal(javaErr(400, "InvalidArgument", "something else"), request{}, "", "bkt") != nil {
+		t.Error("other refusal taken")
 	}
 }
 

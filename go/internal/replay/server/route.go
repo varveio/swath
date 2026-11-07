@@ -86,7 +86,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rw := releasing(w, release)
 	w = rw
 	if !ok {
-		s.refuse(w, r, path, arrived, errStopping)
+		s.refuse(w, r, arrived, errStopping)
 		return
 	}
 	s.s3Active.Add(1)
@@ -94,11 +94,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	req, err := s3.ParseHTTP(r.Method, path, rawQuery, s.cfg.Bucket)
 	if err != nil {
-		s.fail(w, r, path, arrived, err)
+		s.fail(w, r, arrived, err)
 		return
 	}
 	if !s.tryResponse() {
-		s.refuse(w, r, path, arrived, errCount)
+		s.refuse(w, r, arrived, errCount)
 		return
 	}
 	hold := &responseHold{s: s}
@@ -108,7 +108,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// to what the page needs once it is rendered.
 	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, s3.EstimateSize(req.PageSize())), s.cfg.MaxResponseBytes)
 	if err != nil {
-		s.refuse(w, r, path, arrived, errBudget)
+		s.refuse(w, r, arrived, errBudget)
 		return
 	}
 	hold.out = out
@@ -129,7 +129,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if s.stopCtx.Err() != nil {
 			err = errInterrupted
 		}
-		s.fail(w, r, path, arrived, err)
+		s.fail(w, r, arrived, err)
 		return
 	}
 	cost := time.Since(started)
@@ -149,7 +149,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err == output.ErrTooLarge {
 			e = errTooLarge
 		}
-		s.refuse(w, r, path, arrived, e)
+		s.refuse(w, r, arrived, e)
 		return
 	}
 	// Body returns the unused reservation: through the delay and the write
@@ -168,7 +168,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			case <-t.C:
 			case <-s.stopCtx.Done():
 				t.Stop()
-				s.fail(w, r, path, arrived, errInterrupted)
+				s.fail(w, r, arrived, errInterrupted)
 				return
 			}
 			s.reg.Get(metrics.RequestStageLatency, protocolS3, "delay").Record(time.Since(delayStart))
@@ -210,7 +210,7 @@ func neutralShape(s latency.Shape) string {
 // its base name only (disorderError); anything else (a store failure) as a
 // 500 that carries no detail. The full error, path included, goes to the
 // log only.
-func (s *Server) fail(w http.ResponseWriter, r *http.Request, path string, arrived time.Time, err error) {
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, arrived time.Time, err error) {
 	var e *s3.Error
 	var disorder *sortedparquet.DisorderError
 	switch {
@@ -222,7 +222,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, path string, arriv
 		fmt.Fprintf(s.cfg.Log, "replay failed to serve request: %v\n", err)
 		e = errInternal
 	}
-	s.writeError(w, r, path, arrived, e)
+	s.writeError(w, r, arrived, e)
 }
 
 // disorderError is the replay wire contract's answer to a row group whose
@@ -236,14 +236,14 @@ func disorderError(d *sortedparquet.DisorderError) *s3.Error {
 }
 
 // refuse answers an admission refusal and counts it.
-func (s *Server) refuse(w http.ResponseWriter, r *http.Request, path string, arrived time.Time, e *s3.Error) {
+func (s *Server) refuse(w http.ResponseWriter, r *http.Request, arrived time.Time, e *s3.Error) {
 	s.reg.Get(metrics.ResponseAdmissionRefused, protocolS3, e.Reason).Inc()
-	s.writeError(w, r, path, arrived, e)
+	s.writeError(w, r, arrived, e)
 }
 
-func (s *Server) writeError(w http.ResponseWriter, r *http.Request, path string, arrived time.Time, e *s3.Error) {
+func (s *Server) writeError(w http.ResponseWriter, r *http.Request, arrived time.Time, e *s3.Error) {
 	dropResponse(w)
-	s.write(w, r, e.Status, [][]byte{s3.AppendError(nil, e, path)}, e.Reason, arrived)
+	s.write(w, r, e.Status, [][]byte{s3.AppendError(nil, e)}, e.Reason, arrived)
 }
 
 // write sends a response: the replay wire contract's headers (lower-case

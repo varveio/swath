@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -55,18 +56,36 @@ func (d *driver) s3DivergenceRef(r request) bool {
 }
 
 // s3Refusal is an S3 answer the Go route gives where the Java server does
-// not refuse: live S3's status, code and message.
+// not refuse, or refuses with another document: live S3's status, code,
+// message and the elements after the message (s3.AppendError writes
+// them, with RequestId and HostId, whose values S3 varies per request).
 type s3Refusal struct {
 	status        int
 	code, message string
+	details       []s3.Detail
 }
 
 var (
-	refuseToken    = &s3Refusal{400, "InvalidArgument", "The continuation token provided is incorrect"}
-	refuseMarker   = &s3Refusal{400, "InvalidArgument", "Marker unsupported with REST.GET.BUCKET in list-type=2"}
-	refuseEncoding = &s3Refusal{400, "InvalidArgument", "Invalid Encoding Method specified in Request"}
-	refuseNUL      = &s3Refusal{400, "InvalidArgument", "Value must be a sequence of Unicode characters and cannot include Null."}
+	refuseToken  = &s3Refusal{400, "InvalidArgument", "The continuation token provided is incorrect", []s3.Detail{{Name: "ArgumentName", Value: "continuation-token"}}}
+	refuseMarker = &s3Refusal{400, "InvalidArgument", "Marker unsupported with REST.GET.BUCKET in list-type=2", []s3.Detail{{Name: "ArgumentName", Value: "marker"}}}
+	// The refusals below echo the value: see withArgument.
+	refuseEncoding = &s3Refusal{400, "InvalidArgument", "Invalid Encoding Method specified in Request", nil}
+	refuseNUL      = &s3Refusal{400, "InvalidArgument", "Value must be a sequence of Unicode characters and cannot include Null.", nil}
+	refuseMaxKeys  = &s3Refusal{400, "InvalidArgument", "Provided max-keys not an integer or within integer range", nil}
 )
+
+// withArgument is r naming the parameter it refuses and echoing value,
+// as live S3 does for encoding-type, a NUL and max-keys.
+func (r *s3Refusal) withArgument(name string, value []byte) *s3Refusal {
+	c := *r
+	c.details = []s3.Detail{{Name: "ArgumentName", Value: name}, {Name: "ArgumentValue", Value: string(utf8Replaced(value))}}
+	return &c
+}
+
+// body is the error document the Go route writes for r.
+func (r *s3Refusal) body() []byte {
+	return s3.AppendError(nil, &s3.Error{Status: r.status, Code: r.code, Message: r.message, Details: r.details})
+}
 
 // s3Param is one query parameter as the Go route reads it.
 type s3Param struct {
@@ -233,6 +252,7 @@ func javaFormToken(boundary []byte, inclusive bool) string {
 // written into the matrix is sent to the Go server as it is.
 func planS3(query string, driverToken bool) s3Plan {
 	plan := s3Plan{java: query, goQuery: query}
+	plan.fixes = append(plan.fixes, s3Fix{"control characters written as references", controlReferences})
 	for i := 0; i < len(query); i++ {
 		if query[i] >= 0x80 {
 			// The route reads raw non-ASCII bytes as '?'; the driver's
@@ -277,7 +297,7 @@ func planS3(query string, driverToken bool) s3Plan {
 		plan.refusal = refuseMarker
 		plan.reasons = append(plan.reasons, "marker refused")
 	case hasEnc && !strings.EqualFold(string(enc.value), "url"):
-		plan.refusal = refuseEncoding
+		plan.refusal = refuseEncoding.withArgument("encoding-type", enc.value)
 		plan.reasons = append(plan.reasons, "encoding-type checked")
 	case hasTok:
 		if _, _, err := s3.DecodeToken(goTok); err != nil {
@@ -286,9 +306,13 @@ func planS3(query string, driverToken bool) s3Plan {
 		}
 	}
 	if plan.refusal == nil {
+		// S3 names the start-after by its internal name, key-marker.
 		switch {
-		case prefix != nil && bytes.IndexByte(prefix.value, 0) >= 0, !hasTok && hasStartAfter && bytes.IndexByte(startAfter.value, 0) >= 0:
-			plan.refusal = refuseNUL
+		case prefix != nil && bytes.IndexByte(prefix.value, 0) >= 0:
+			plan.refusal = refuseNUL.withArgument("prefix", prefix.value)
+			plan.reasons = append(plan.reasons, "NUL refused")
+		case !hasTok && hasStartAfter && bytes.IndexByte(startAfter.value, 0) >= 0:
+			plan.refusal = refuseNUL.withArgument("key-marker", startAfter.value)
 			plan.reasons = append(plan.reasons, "NUL refused")
 		}
 	}
@@ -399,7 +423,7 @@ func s3DivergenceCases(keys [][]byte) []request {
 	add("s3 live 01 empty start-after", "prefix="+p+"&start-after=&max-keys=2", "", &s3Pin{contains: "<StartAfter></StartAfter>"})
 	add("s3 live 02 malformed escape in prefix", "prefix="+p+"a%ZZ&max-keys=2", "", &s3Pin{contains: "<Prefix></Prefix>"})
 	add("s3 live 03 first max-keys wins", "prefix="+p+"&max-keys=1&max-keys=2", "", &s3Pin{contains: "<MaxKeys>1</MaxKeys>"})
-	add("s3 live 04 max-keys=+2", "prefix="+p+"&max-keys=+2", "", &s3Pin{refusal: &s3Refusal{400, "InvalidArgument", "max-keys must be an integer"}})
+	add("s3 live 04 max-keys=+2", "prefix="+p+"&max-keys=+2", "", &s3Pin{refusal: refuseMaxKeys.withArgument("max-keys", []byte(" 2"))})
 	add("s3 live 05 empty continuation-token", "prefix="+p+"&max-keys=2&continuation-token=", "", &s3Pin{refusal: refuseToken})
 	add("s3 live 06 flipped token", "max-keys=3", "token page 1", &s3Pin{refusal: refuseToken, mutate: flipLast})
 	add("s3 live 06 truncated token", "max-keys=3", "token page 1", &s3Pin{refusal: refuseToken, mutate: func(t string) string { return t[:max(1, len(t)-4)] }})
@@ -411,12 +435,40 @@ func s3DivergenceCases(keys [][]byte) []request {
 			java:     "list-type=2&prefix=" + s + "&delimiter=%2F&max-keys=2&continuation-token=" + s3.PercentEncode([]byte(javaFormToken([]byte(seed), true))),
 		})
 	}
-	add("s3 live 08 encoding-type=bogus", "prefix="+p+"&max-keys=2&encoding-type=bogus", "", &s3Pin{refusal: refuseEncoding})
+	add("s3 live 08 encoding-type=bogus", "prefix="+p+"&max-keys=2&encoding-type=bogus", "", &s3Pin{refusal: refuseEncoding.withArgument("encoding-type", []byte("bogus"))})
 	add("s3 live 08 encoding-type=URL", "prefix="+p+"&max-keys=2&encoding-type=URL", "", &s3Pin{contains: "<EncodingType>URL</EncodingType>"})
 	add("s3 live 09 marker", "prefix="+p+"&max-keys=2&marker="+p, "", &s3Pin{refusal: refuseMarker})
 	add("s3 live 10 url encoding table", "start-after=a%20b%2Ac&max-keys=1&encoding-type=url", "", &s3Pin{contains: "<StartAfter>a+b*c</StartAfter>"})
-	add("s3 live 11 NUL in start-after", "prefix="+p+"&start-after="+p+"%00&max-keys=2", "", &s3Pin{refusal: refuseNUL})
+	add("s3 live 11 NUL in start-after", "prefix="+p+"&start-after="+p+"%00&max-keys=2", "", &s3Pin{refusal: refuseNUL.withArgument("key-marker", []byte(dir+"\x00"))})
 	add("s3 live 12 %FF in start-after", "start-after=%FF&max-keys=2&encoding-type=url", "", &s3Pin{contains: "<StartAfter>%EF%BF%BD</StartAfter>"})
+	add("s3 live 13 control characters in start-after", "start-after=a%01b%09c%0Ad%0De%1Ff%7Fg&max-keys=0", "",
+		&s3Pin{contains: "<StartAfter>a&#x1;b\tc\nd\re&#x1f;f\x7fg</StartAfter>"})
+	add("s3 live 13 control characters in prefix", "prefix=a%01b%0B&max-keys=0", "", &s3Pin{contains: "<Prefix>a&#x1;b&#xb;</Prefix>"})
+	add("s3 live 13 control characters in delimiter", "prefix="+p+"&delimiter=%00%01%1F&max-keys=2", "",
+		&s3Pin{contains: "<Delimiter>&#x0;&#x1;&#x1f;</Delimiter>"})
+	add("s3 live 14 max-keys error document", "max-keys=a%01b", "", &s3Pin{refusal: refuseMaxKeys.withArgument("max-keys", []byte("a\x01b"))})
+	add("s3 live 14 negative max-keys error document", "max-keys=-1", "", &s3Pin{refusal: &s3Refusal{400, "InvalidArgument",
+		"Argument maxKeys must be an integer between 0 and 2147483647", []s3.Detail{{Name: "ArgumentName", Value: "maxKeys"}, {Name: "ArgumentValue", Value: "-1"}}}})
+	add("s3 live 14 token error document", "continuation-token=abc&max-keys=1", "", &s3Pin{refusal: refuseToken})
+	add("s3 live 14 encoding-type error document", "encoding-type=a%22%27%3C%3E%26%01&max-keys=1", "",
+		&s3Pin{refusal: refuseEncoding.withArgument("encoding-type", []byte("a\"'<>&\x01"))})
+	add("s3 live 14 marker error document", "marker=x&max-keys=1", "", &s3Pin{refusal: refuseMarker})
+	add("s3 live 14 NUL prefix error document", "prefix=a%00%01%3C&max-keys=1", "", &s3Pin{refusal: refuseNUL.withArgument("prefix", []byte("a\x00\x01<"))})
+	add("s3 live 14 NUL start-after error document", "start-after=a%00&max-keys=1", "", &s3Pin{refusal: refuseNUL.withArgument("key-marker", []byte("a\x00"))})
+	for _, c := range []struct {
+		name, method, path string
+		pin                *s3Refusal
+	}{
+		{"s3 live 14 NoSuchBucket error document", "GET", "/no%2Dsuch-bucket-here", &s3Refusal{404, "NoSuchBucket", "The specified bucket does not exist",
+			[]s3.Detail{{Name: "BucketName", Value: "no-such-bucket-here"}}}},
+		{"s3 live 14 MethodNotAllowed error document", "PATCH", "", &s3Refusal{405, "MethodNotAllowed", "The specified method is not allowed against this resource.",
+			[]s3.Detail{{Name: "Method", Value: "PATCH"}, {Name: "ResourceType", Value: "BUCKET"}}}},
+	} {
+		out = append(out, request{Name: c.name, Method: c.method, Path: c.path, Query: "list-type=2"})
+		s3PinsMu.Lock()
+		s3Pins[c.name] = &s3Pin{refusal: c.pin}
+		s3PinsMu.Unlock()
+	}
 	return out
 }
 
@@ -425,6 +477,28 @@ func flipLast(t string) string {
 		return t[:len(t)-1] + "B"
 	}
 	return t[:len(t)-1] + "A"
+}
+
+// errorText escapes s as live S3 escapes error document text: '&', '<'
+// and '>' as entities, a C0 control character but TAB, LF and CR as a
+// decimal reference.
+func errorText(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '&':
+			b.WriteString("&amp;")
+		case c == '<':
+			b.WriteString("&lt;")
+		case c == '>':
+			b.WriteString("&gt;")
+		case c < 0x20 && c != '\t' && c != '\n' && c != '\r':
+			fmt.Fprintf(&b, "&#%d;", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 func xmlText(s string) string {
@@ -524,7 +598,7 @@ func (d *driver) compareS3(r request) (*response, diff, error) {
 		}
 		d.count(1)
 	}
-	want := expectedS3(exp, plan, resourceOf(r, d.o.bucket), &plan.reasons)
+	want := expectedS3(exp, plan, r, query, d.o.bucket, &plan.reasons)
 	df := (bytesComparator{}).compare(masked(want), masked(got))
 	if pin != nil && df.OK {
 		if msg := pin.check(got); msg != "" {
@@ -545,17 +619,20 @@ func (d *driver) compareS3(r request) (*response, diff, error) {
 
 // expectedS3 is the Go answer plan expects, given the Java server's
 // answer to the equivalent request: the Java server's own refusal of the
-// bucket, method, list-type or max-keys (checked first by both), else the
-// planned refusal, else the Java page with the probed rules applied.
-func expectedS3(exp *response, plan s3Plan, resource string, reasons *[]string) *response {
-	javaFirst := exp.Status == 400 && (bytes.Contains(exp.Body, []byte("<Message>only ListObjectsV2 is supported<")) ||
-		bytes.Contains(exp.Body, []byte("<Message>max-keys must be")))
-	if javaFirst || exp.Status == 404 || exp.Status == 405 {
-		return exp
+// bucket, method, list-type or max-keys (checked first by both) in live
+// S3's document, else the planned refusal, else the Java page with the
+// probed rules applied.
+func expectedS3(exp *response, plan s3Plan, r request, query, bucket string, reasons *[]string) *response {
+	if ref := javaFirstRefusal(exp, r, query, bucket); ref != nil {
+		if len(exp.Body) == 0 { // a HEAD answer
+			return exp
+		}
+		*reasons = append(*reasons, "S3's error document")
+		return &response{Status: exp.Status, Header: exp.Header, Body: ref.body()}
 	}
 	if plan.refusal != nil {
-		body := s3.AppendError(nil, &s3.Error{Status: plan.refusal.status, Code: plan.refusal.code, Message: plan.refusal.message}, resource)
-		return &response{Status: plan.refusal.status, Header: exp.Header, Body: body}
+		*reasons = append(*reasons, "S3's error document")
+		return &response{Status: plan.refusal.status, Header: exp.Header, Body: plan.refusal.body()}
 	}
 	if exp.Status != 200 {
 		return exp
@@ -570,6 +647,97 @@ func expectedS3(exp *response, plan s3Plan, resource string, reasons *[]string) 
 	return &response{Status: exp.Status, Header: exp.Header, Body: body}
 }
 
+var errorMessage = regexp.MustCompile(`<Message>([^<]*)</Message>`)
+
+// javaFirstRefusal is the refusal both servers make before any other, as
+// live S3 writes it, when exp is the Java server's: an unknown bucket
+// (BucketName, decoded from the path), a method other than GET (Method,
+// ResourceType), a list-type other than 2 (the replay's own refusal, in
+// S3's InvalidArgument form) and a bad max-keys (S3's messages and
+// argument names, probed live on 2026-11-07); nil for any other answer.
+func javaFirstRefusal(exp *response, r request, query, bucket string) *s3Refusal {
+	code, message := "", ""
+	if m := errorCode.FindSubmatch(exp.Body); m != nil {
+		code = string(m[1])
+	}
+	if m := errorMessage.FindSubmatch(exp.Body); m != nil {
+		message = string(m[1])
+	}
+	params, _ := s3Params(query)
+	arg := func(ref *s3Refusal, name, param string) *s3Refusal {
+		for _, p := range params {
+			if p.name == param {
+				return ref.withArgument(name, p.value)
+			}
+		}
+		c := *ref
+		c.details = []s3.Detail{{Name: "ArgumentName", Value: name}}
+		return &c
+	}
+	switch {
+	case exp.Status == 404 && code == "NoSuchBucket":
+		ref := &s3Refusal{404, "NoSuchBucket", "The specified bucket does not exist", nil}
+		if name := bucketName(r, bucket); name != "" {
+			ref.details = []s3.Detail{{Name: "BucketName", Value: name}}
+		}
+		return ref
+	case exp.Status == 405:
+		return &s3Refusal{405, "MethodNotAllowed", "The specified method is not allowed against this resource.",
+			[]s3.Detail{{Name: "Method", Value: r.Method}, {Name: "ResourceType", Value: "BUCKET"}}}
+	case exp.Status != 400:
+		return nil
+	case message == "only ListObjectsV2 is supported":
+		return arg(&s3Refusal{400, "InvalidArgument", message, nil}, "list-type", "list-type")
+	case message == "max-keys must be an integer":
+		return arg(&s3Refusal{400, "InvalidArgument", "Provided max-keys not an integer or within integer range", nil}, "max-keys", "max-keys")
+	case message == "max-keys must be non-negative":
+		return arg(&s3Refusal{400, "InvalidArgument", "Argument maxKeys must be an integer between 0 and 2147483647", nil}, "maxKeys", "max-keys")
+	}
+	return nil
+}
+
+// bucketName is the bucket an S3 NoSuchBucket names: the first segment of
+// the request path (an absolute target's authority dropped),
+// percent-decoded.
+func bucketName(r request, bucket string) string {
+	p := resourceOf(r, bucket)
+	if !strings.HasPrefix(p, "/") {
+		if _, rest, ok := strings.Cut(p, ":"); ok {
+			p = rest
+			if strings.HasPrefix(p, "//") {
+				_, p, _ = strings.Cut(p[2:], "/")
+			}
+		}
+	}
+	seg, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
+	if name, err := url.PathUnescape(seg); err == nil {
+		return name
+	}
+	return seg
+}
+
+// controlReferences writes each C0 control character but TAB, LF and CR
+// in a Java listing as live S3 writes it in listing text: a lower-case
+// hexadecimal reference (&#x1;). Raw control bytes occur in a listing
+// only in text.
+func controlReferences(b []byte) []byte {
+	var out []byte
+	for i, c := range b {
+		if c < 0x20 && c != '\t' && c != '\n' && c != '\r' {
+			if out == nil {
+				out = append(make([]byte, 0, len(b)+16), b[:i]...)
+			}
+			out = fmt.Appendf(out, "&#x%x;", c)
+		} else if out != nil {
+			out = append(out, c)
+		}
+	}
+	if out == nil {
+		return b
+	}
+	return out
+}
+
 func masked(r *response) *response {
 	return &response{Status: r.Status, Header: r.Header, Body: maskTokens(r.Body)}
 }
@@ -577,6 +745,10 @@ func masked(r *response) *response {
 func (p *s3Pin) check(got *response) string {
 	if p.refusal != nil {
 		want := "<Code>" + p.refusal.code + "</Code><Message>" + xmlText(p.refusal.message) + "</Message>"
+		for _, d := range p.refusal.details {
+			want += "<" + d.Name + ">" + errorText(d.Value) + "</" + d.Name + ">"
+		}
+		want += "<RequestId>"
 		if got.Status != p.refusal.status || !bytes.Contains(got.Body, []byte(want)) {
 			return fmt.Sprintf("want %d %s, got %d %.200s", p.refusal.status, want, got.Status, got.Body)
 		}
@@ -609,7 +781,7 @@ func requestQuery(r request) (string, func(string) request) {
 	}
 }
 
-// resourceOf is the path an S3 error names: the request path as sent.
+// resourceOf is the request path as sent.
 func resourceOf(r request, bucket string) string {
 	if r.Raw != "" {
 		p, _, _ := strings.Cut(strings.ReplaceAll(r.Raw, "{bucket}", bucket), "?")

@@ -125,20 +125,19 @@ func TestErrorsAreS3Answers(t *testing.T) {
 	for _, c := range []struct {
 		method, target string
 		status         int
-		code           string
+		code, details  string
 	}{
-		{"GET", "/other?list-type=2", 404, "NoSuchBucket"},
-		{"GET", "/b%75cket?list-type=2", 404, "NoSuchBucket"},
-		{"GET", "/?list-type=2", 404, "NoSuchBucket"},
-		{"GET", "/bucket?max-keys=1", 400, "InvalidArgument"},
-		{"GET", "/bucket?list-type=2&continuation-token=zz", 400, "InvalidArgument"},
-		{"POST", "/bucket?list-type=2", 405, "MethodNotAllowed"},
+		{"GET", "/other?list-type=2", 404, "NoSuchBucket", "<BucketName>other</BucketName>"},
+		{"GET", "/b%75cket?list-type=2", 404, "NoSuchBucket", "<BucketName>bucket</BucketName>"},
+		{"GET", "/?list-type=2", 404, "NoSuchBucket", ""},
+		{"GET", "/bucket?max-keys=1", 400, "InvalidArgument", "<ArgumentName>list-type</ArgumentName>"},
+		{"GET", "/bucket?list-type=2&continuation-token=zz", 400, "InvalidArgument", "<ArgumentName>continuation-token</ArgumentName>"},
+		{"POST", "/bucket?list-type=2", 405, "MethodNotAllowed", "<Method>POST</Method><ResourceType>BUCKET</ResourceType>"},
 	} {
 		r := do(t, c.method, fmt.Sprintf("http://127.0.0.1:%d%s", s.Port(), c.target))
-		resource, _, _ := strings.Cut(c.target, "?")
 		if r.status != c.status || !strings.Contains(r.body, "<Code>"+c.code+"</Code>") ||
-			!strings.Contains(r.body, "<Resource>"+resource+"</Resource>") || r.header.Get("x-amz-request-id") != "S3LISTINGREPLAY" ||
-			r.header.Get("Content-Type") != "application/xml" {
+			!strings.Contains(r.body, "</Message>"+c.details+"<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>") ||
+			r.header.Get("x-amz-request-id") != "S3LISTINGREPLAY" || r.header.Get("Content-Type") != "application/xml" {
 			t.Errorf("%s %s: %d %v %s", c.method, c.target, r.status, r.header, r.body)
 		}
 	}

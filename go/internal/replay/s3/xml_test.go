@@ -5,6 +5,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -141,11 +142,32 @@ func TestTokenSuppressesTheIgnoredStartAfter(t *testing.T) {
 	}
 }
 
+// TestRenderError pins the document for the replay's own refusals: no
+// details between Message and RequestId, and error text escaped as S3
+// escapes it (TestLiveErrorDocuments), a list-type refusal naming the
+// parameter and its value.
 func TestRenderError(t *testing.T) {
-	got := string(AppendError(nil, errNoSuchBucket, "/b%6Bt"))
-	const want = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><Resource>/b%6Bt</Resource><RequestId>S3LISTINGREPLAY</RequestId></Error>`
+	got := string(AppendError(nil, &Error{Status: 500, Code: "InternalError", Message: "a&<>\"'\x01\t\xff"}))
+	const want = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>a&amp;&lt;&gt;"'&#1;` + "\t\ufffd" +
+		`</Message><RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>`
 	if got != want {
-		t.Errorf("got %s", got)
+		t.Errorf("got %q", got)
+	}
+	for q, details := range map[string]string{
+		"max-keys=1":              "<ArgumentName>list-type</ArgumentName>",
+		"list-type=1":             "<ArgumentName>list-type</ArgumentName><ArgumentValue>1</ArgumentValue>",
+		"list-type=&max-keys=abc": "<ArgumentName>list-type</ArgumentName><ArgumentValue></ArgumentValue>",
+	} {
+		_, err := ParseRequest("bkt", q)
+		var e *Error
+		if !errors.As(err, &e) {
+			t.Fatalf("%s: %v", q, err)
+		}
+		want := `<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidArgument</Code><Message>only ListObjectsV2 is supported</Message>` +
+			details + `<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>`
+		if got := string(AppendError(nil, e)); got != want {
+			t.Errorf("%s: got %s", q, got)
+		}
 	}
 }
 

@@ -24,9 +24,9 @@ import (
 // replay wire contract answered differently. Each request is transcribed
 // onto synthetic keys of the same shape; the want is S3's answer under the
 // provider conformance normalizations: a continuation token's value is
-// masked, an error is its status, code and message (S3's own document also
-// carries ArgumentName, ArgumentValue and HostId, which the replay's does
-// not).
+// masked, an error is its status, code and message, and its whole
+// document in TestLiveErrorDocuments with RequestId and HostId, which vary
+// on S3, the replay's own.
 
 // liveKeys is a small tree of the shape the probes listed: six keys in
 // one directory, then a directory of three subdirectories.
@@ -265,7 +265,7 @@ func TestLiveEncodingTypeIsChecked(t *testing.T) {
 		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
 			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><EncodingType>URL</EncodingType><IsTruncated>true</IsTruncated>",
 		"O:r/k01 O:r/k02")
-	wantLiveError(t, "list-type=2&max-keys=abc&encoding-type=bogus", 400, "InvalidArgument", "max-keys must be an integer")
+	wantLiveError(t, "list-type=2&max-keys=abc&encoding-type=bogus", 400, "InvalidArgument", "Provided max-keys not an integer or within integer range")
 	wantLiveError(t, "list-type=2&continuation-token=&encoding-type=bogus", 400, "InvalidArgument", msg)
 }
 
@@ -278,7 +278,7 @@ func TestLiveMarkerIsRefused(t *testing.T) {
 	for _, q := range []string{"marker=r/k02", "marker=", "marker=x&encoding-type=bogus", "marker=x&continuation-token="} {
 		wantLiveError(t, "list-type=2&prefix=r/&max-keys=2&"+q, 400, "InvalidArgument", msg)
 	}
-	wantLiveError(t, "list-type=2&marker=x&max-keys=abc", 400, "InvalidArgument", "max-keys must be an integer")
+	wantLiveError(t, "list-type=2&marker=x&max-keys=abc", 400, "InvalidArgument", "Provided max-keys not an integer or within integer range")
 	// A malformed escape drops it, as any parameter.
 	wantLivePage(t, "list-type=2&prefix=r/&max-keys=2&marker=%ZZ",
 		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
@@ -345,7 +345,7 @@ func TestLiveNULIsRefused(t *testing.T) {
 	for _, q := range []string{"prefix=r/%00", "prefix=r/&start-after=r/%00", "prefix=r/&start-after=a%00b", "prefix=a%00&start-after=b%00"} {
 		wantLiveError(t, "list-type=2&max-keys=2&"+q, 400, "InvalidArgument", msg)
 	}
-	wantLiveError(t, "list-type=2&start-after=a%00&max-keys=abc", 400, "InvalidArgument", "max-keys must be an integer")
+	wantLiveError(t, "list-type=2&start-after=a%00&max-keys=abc", 400, "InvalidArgument", "Provided max-keys not an integer or within integer range")
 	wantLiveError(t, "list-type=2&start-after=a%00&encoding-type=bogus", 400, "InvalidArgument", "Invalid Encoding Method specified in Request")
 	wantLiveError(t, "list-type=2&prefix=a%00&continuation-token=", 400, "InvalidArgument", "The continuation token provided is incorrect")
 	tok := EncodeToken([]byte("r/k02"), false)
@@ -435,6 +435,76 @@ func TestLiveControlCharactersAreReferences(t *testing.T) {
 		if !strings.Contains(doc, "<Key>"+want+"</Key>") || !strings.Contains(doc, "<ETag>&quot;"+string(refs)+"&quot;</ETag>") ||
 			!strings.Contains(doc, "<CommonPrefixes><Prefix>"+want+"/</Prefix></CommonPrefixes>") {
 			t.Errorf("fast=%v: %q", fast, doc)
+		}
+	}
+}
+
+// TestLiveErrorDocuments pins S3's error document for each refusal the
+// route shares with S3: Code, Message, then ArgumentName and
+// ArgumentValue (InvalidArgument), BucketName (NoSuchBucket) or Method and
+// ResourceType (MethodNotAllowed), then RequestId and HostId, each as S3
+// answered on 2026-11-07. S3 names a negative max-keys maxKeys and a
+// start-after key-marker, echoes no value for a token or a marker, and
+// writes error text with '&', '<' and '>' as entities, quotes as they are,
+// and a C0 control character other than TAB, LF and CR as a decimal
+// reference (&#1;). RequestId and HostId are per request on S3 and the
+// x-amz-request-id and x-amz-id-2 values here.
+func TestLiveErrorDocuments(t *testing.T) {
+	const tail = "<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>"
+	invalid := func(msg, name string, value ...string) string {
+		d := "<Error><Code>InvalidArgument</Code><Message>" + msg + "</Message><ArgumentName>" + name + "</ArgumentName>"
+		for _, v := range value {
+			d += "<ArgumentValue>" + v + "</ArgumentValue>"
+		}
+		return d + tail
+	}
+	const (
+		notInt = "Provided max-keys not an integer or within integer range"
+		neg    = "Argument maxKeys must be an integer between 0 and 2147483647"
+		tok    = "The continuation token provided is incorrect"
+		enc    = "Invalid Encoding Method specified in Request"
+		marker = "Marker unsupported with REST.GET.BUCKET in list-type=2"
+		null   = "Value must be a sequence of Unicode characters and cannot include Null."
+	)
+	for _, c := range []struct{ method, path, query, want string }{
+		{"GET", "/bkt", "list-type=2&max-keys=abc", invalid(notInt, "max-keys", "abc")},
+		{"GET", "/bkt", "list-type=2&max-keys=+2", invalid(notInt, "max-keys", " 2")},
+		{"GET", "/bkt", "list-type=2&max-keys=%207", invalid(notInt, "max-keys", " 7")},
+		{"GET", "/bkt", "list-type=2&max-keys=2147483648", invalid(notInt, "max-keys", "2147483648")},
+		{"GET", "/bkt", "list-type=2&max-keys=-2147483649", invalid(notInt, "max-keys", "-2147483649")},
+		{"GET", "/bkt", "list-type=2&max-keys=a%01b%FF", invalid(notInt, "max-keys", "a&#1;b\ufffd")},
+		{"GET", "/bkt", "list-type=2&max-keys=x%FF%FFy%E2%82Az%ED%A0%80", invalid(notInt, "max-keys", "x\ufffd\ufffdy\ufffdAz\ufffd")},
+		{"GET", "/bkt", "list-type=2&max-keys=-1", invalid(neg, "maxKeys", "-1")},
+		{"GET", "/bkt", "list-type=2&max-keys=-1&encoding-type=url", invalid(neg, "maxKeys", "-1")},
+		{"GET", "/bkt", "list-type=2&continuation-token=", invalid(tok, "continuation-token")},
+		{"GET", "/bkt", "list-type=2&continuation-token=abc", invalid(tok, "continuation-token")},
+		{"GET", "/bkt", "list-type=2&encoding-type=bogus", invalid(enc, "encoding-type", "bogus")},
+		{"GET", "/bkt", "list-type=2&encoding-type=", invalid(enc, "encoding-type", "")},
+		{"GET", "/bkt", "list-type=2&encoding-type=a%22b%27c%3Ed%3Ce%26f", invalid(enc, "encoding-type", "a\"b'c&gt;d&lt;e&amp;f")},
+		{"GET", "/bkt", "list-type=2&encoding-type=%00%08%0B%0C%0E%10%7F", invalid(enc, "encoding-type", "&#0;&#8;&#11;&#12;&#14;&#16;\x7f")},
+		{"GET", "/bkt", "list-type=2&encoding-type=x%FF%FFy%E2%82Az%C3", invalid(enc, "encoding-type", "x\ufffd\ufffdy\ufffdAz\ufffd")},
+		{"GET", "/bkt", "list-type=2&marker=x", invalid(marker, "marker")},
+		{"GET", "/bkt", "list-type=2&marker=", invalid(marker, "marker")},
+		{"GET", "/bkt", "list-type=2&prefix=a%00b", invalid(null, "prefix", "a&#0;b")},
+		{"GET", "/bkt", "list-type=2&prefix=a%00%01%09%0A%0D%1F%7Fb%FF%3C%26", invalid(null, "prefix", "a&#0;&#1;\t\n\r&#31;\x7fb\ufffd&lt;&amp;")},
+		{"GET", "/bkt", "list-type=2&start-after=a%00b", invalid(null, "key-marker", "a&#0;b")},
+		{"GET", "/bkt", "list-type=2&start-after=a%00%01%3C", invalid(null, "key-marker", "a&#0;&#1;&lt;")},
+		{"GET", "/bkt", "list-type=2&start-after=a%00&encoding-type=url", invalid(null, "key-marker", "a&#0;")},
+		{"GET", "/swath-no-such-bucket-b11-zq9x7", "list-type=2", "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message>" +
+			"<BucketName>swath-no-such-bucket-b11-zq9x7</BucketName>" + tail},
+		{"GET", "/swath-no%2Dsuch-b11", "list-type=2", "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message>" +
+			"<BucketName>swath-no-such-b11</BucketName>" + tail},
+		{"PATCH", "/bkt", "list-type=2", "<Error><Code>MethodNotAllowed</Code><Message>The specified method is not allowed against this resource.</Message>" +
+			"<Method>PATCH</Method><ResourceType>BUCKET</ResourceType>" + tail},
+	} {
+		_, err := ParseHTTP(c.method, c.path, c.query, "bkt")
+		var e *Error
+		if !errors.As(err, &e) {
+			t.Errorf("%s %s?%s: %v, want an S3 error", c.method, c.path, c.query, err)
+			continue
+		}
+		if got := string(AppendError(nil, e)); got != xmlDecl+c.want {
+			t.Errorf("%s %s?%s:\n got %q\nwant %q", c.method, c.path, c.query, got, xmlDecl+c.want)
 		}
 	}
 }
