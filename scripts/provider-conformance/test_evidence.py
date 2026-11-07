@@ -724,6 +724,37 @@ class GoReceiptTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "changed since the receipt commit"):
             self.validate(self.row(self.receipt()))
 
+    def test_dirty_evidence_sources_are_refused_and_unrelated_edits_pass(self):
+        """The working tree's bytes are checked too: staged, unstaged and added sources are refused,
+        an edit outside the named set is not."""
+        row = self.row(self.receipt())
+        self.validate(row)
+        self.write("docs/ledger-note.md", "unrelated unstaged edit\n")
+        self.write("go/internal/replay/azure/port_test.go", "package azure // unrelated unstaged edit\n")
+        self.validate(row)
+        self.git("add", "docs/ledger-note.md")
+        self.validate(row)
+        source = "go/internal/replay/evidence/evidence_test.go"
+        original = (self.root / source).read_text()
+        for name, change in (("unstaged", lambda: self.write(source, original + "// edited\n")),
+                             ("staged", lambda: (self.write(source, original + "// edited\n"),
+                                                 self.git("add", source))),
+                             ("added", lambda: self.write("go/internal/replay/evidence/extra_test.go",
+                                                          "package evidence\n")),
+                             ("added in a staged directory", lambda: (
+                                 self.write("go/sortedparquet/sortedparquettest/extra.go", "package x\n"),
+                                 self.git("add", "go/sortedparquet/sortedparquettest/extra.go"))),
+                             ("go.sum", lambda: self.write("go/go.sum", "x\n")),
+                             ("deleted", lambda: (self.root / source).unlink())):
+            with self.subTest(name):
+                change()
+                with self.assertRaisesRegex(ValueError, "working tree differ"):
+                    self.validate(row)
+                self.git("reset", "-q", "--hard", "HEAD")
+                self.git("clean", "-qfd", "go")
+                self.git("reset", "-q")
+                self.validate(row)
+
     def test_non_ancestor_commit_is_refused(self):
         main = self.git("rev-parse", "--abbrev-ref", "HEAD")
         self.git("checkout", "-q", "-b", "side")
