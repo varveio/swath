@@ -70,9 +70,15 @@ start() {
     --serving-mode "$mode")
 }
 
+# host_port PORT: the host port the container's PORT is published on. An inspection that
+# fails or yields anything but a port number fails, so no request is ever sent to an empty
+# or wrong port (curl would read an empty port as 80, where another service may answer).
 host_port() {
-  docker inspect --format \
-    "{{(index (index .NetworkSettings.Ports \"$1/tcp\") 0).HostPort}}" "$container_id"
+  local port
+  port=$(docker inspect --format \
+    "{{(index (index .NetworkSettings.Ports \"$1/tcp\") 0).HostPort}}" "$container_id") || return 1
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$port"
 }
 
 running() {
@@ -83,10 +89,11 @@ running() {
 # exits, or 20 s pass; prints the body. A stopped container has no port mapping, so the
 # host port is looked up only while it runs.
 ready() {
-  local body
+  local body port
   for _attempt in {1..80}; do
     running || return 1
-    if body=$(curl -fsS "http://127.0.0.1:$(host_port "$1")$2" 2>/dev/null); then
+    port=$(host_port "$1") || { echo "replay smoke: no host port for $1" >&2; return 1; }
+    if body=$(curl -fsS "http://127.0.0.1:${port}$2" 2>/dev/null); then
       printf '%s' "$body"
       return 0
     fi
@@ -130,7 +137,8 @@ grep -q '<Name>smoke</Name>' <<< "$body"
 grep -q '<Key>' <<< "$body"
 
 if [[ "$mode" = sorted ]]; then
-  metrics=$(curl -fsS "http://127.0.0.1:$(host_port 19192)/metrics") || fail "no /metrics response"
+  metrics_port=$(host_port 19192) || fail "no host port for 19192"
+  metrics=$(curl -fsS "http://127.0.0.1:${metrics_port}/metrics") || fail "no /metrics response"
   grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*2[,}[:space:]]' <<< "$metrics" ||
     fail "/metrics does not report schema_version 2: $(head -c 400 <<< "$metrics")"
 fi
