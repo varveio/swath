@@ -76,7 +76,7 @@ func TestRenderGolden(t *testing.T) {
 		}
 		binding := tokenBinding(r, evidenceIdentity)
 		if doc.NextPageToken != "" {
-			page.Token = encodeToken(last.inclusive, last.key, binding)
+			page.Token = encodeToken(last.inclusive, last.key, binding, 0)
 			if _, err := decodeToken(doc.NextPageToken, binding); err != nil {
 				t.Errorf("%s: the Java token does not decode: %v", g.query, err)
 			}
