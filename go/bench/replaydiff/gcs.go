@@ -56,7 +56,7 @@ func runGCS(o options) error {
 	defer goSrv.stop()
 	got := &target{name: "go", base: goSrv.endpoint, client: client}
 	rep := &report{Reference: ref.name, Fixture: o.fixture, GoFixture: o.goFixture, Bucket: o.bucket, Seed: o.seed, Started: time.Now(), Keys: len(keys)}
-	d := &driver{o: o, ref: ref, got: got, comp: gcsComparator{}, rep: rep}
+	d := &driver{o: o, ref: ref, got: got, comp: gcsComparator{maskMetadata: o.maskMetadata}, rep: rep}
 	d.runGCSAll(keys, rand.New(rand.NewPCG(o.seed, 0x5eed)))
 	rep.Seconds = time.Since(rep.Started).Seconds()
 	return d.write()
@@ -175,9 +175,30 @@ func gcsListAll(t *target, bucket string) ([][]byte, error) {
 // walk judges the tokens by where they lead), listing that page in the
 // report's token_byte_differences: the walk's verdict is semantic, the
 // list is the wire fidelity.
-type gcsComparator struct{}
+//
+// With maskMetadata (-gcs-mask-metadata) each item's metadata fields are
+// removed from both bodies first: the comparison of a native
+// swath/gcs-objects/v1 fixture on the Go server with the same rows
+// sorted into a fixture the Java server reads, whose metadata is the
+// synthetic profile. Names, sizes, times, order, prefixes, tokens,
+// statuses and errors are still compared byte for byte.
+type gcsComparator struct{ maskMetadata bool }
 
-func (gcsComparator) compare(ref, got *response) diff {
+// itemMetadata matches one item metadata field with its leading comma
+// (each follows "updated", so a comma always precedes it).
+var itemMetadata = regexp.MustCompile(`,"(?:etag|generation|metageneration|storageClass|contentType|md5Hash|crc32c)":"(?:[^"\\]|\\.)*"`)
+
+func (c gcsComparator) masked(r *response) *response {
+	if !c.maskMetadata || r == nil {
+		return r
+	}
+	m := *r
+	m.Body = itemMetadata.ReplaceAll(r.Body, nil)
+	return &m
+}
+
+func (c gcsComparator) compare(ref, got *response) diff {
+	ref, got = c.masked(ref), c.masked(got)
 	d := (bytesComparator{}).compare(ref, got)
 	if a, b := values(ref.Header, "allow"), values(got.Header, "allow"); a != b {
 		d.HeaderDiffs = append(d.HeaderDiffs, fmt.Sprintf("allow: %q | %q", a, b))
@@ -334,7 +355,11 @@ func (d *driver) gcsWalkOne(w walk) result {
 		var df diff
 		if errA == nil && errB == nil {
 			df = d.comp.compare(a, b)
-			if !df.OK && a.Status == b.Status && len(df.HeaderDiffs) == 0 && equalMaskedTokens(a.Body, b.Body) {
+			ma, mb := a, b
+			if c, ok := d.comp.(gcsComparator); ok {
+				ma, mb = c.masked(a), c.masked(b)
+			}
+			if !df.OK && a.Status == b.Status && len(df.HeaderDiffs) == 0 && equalMaskedTokens(ma.Body, mb.Body) {
 				// Every byte but the token values agrees: the walk judges
 				// the tokens by where they lead, and the byte difference
 				// is reported as a wire difference of its own.
