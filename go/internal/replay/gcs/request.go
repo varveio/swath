@@ -77,14 +77,19 @@ var allowed = map[string]bool{
 // Parse parses the raw query string (as sent on the request line) of an
 // objects.list request for bucket.
 //
-// The checks run in the wire contract's order, so a request with several
-// faults reports the same reason from either server: unknown or repeated
-// names and bad escapes while splitting (left to right), then the boolean
+// The checks run in the wire contract's order: unknown or repeated names
+// and bad escapes while splitting (left to right), then the boolean
 // features (versions, softDeleted, includeFoldersAsPrefixes,
 // includeTrailingDelimiter: anything but "false"), then matchGlob, filter
 // and fields (anything non-empty), alt (only "json"), prettyPrint ("true"
 // or "false", accepted and otherwise ignored: the body is always compact),
 // projection ("noAcl" or "full"), maxResults, and the field lengths.
+//
+// Within each of the two feature groups the Java server's order is its
+// set's iteration order, which is randomized per JVM launch, so when two
+// features of one group are both refused the reason can differ from it
+// (status and envelope do not). This order is fixed: the groups as listed
+// (TestCompetingFeaturesUseTheFixedOrder).
 func Parse(bucket, rawQuery string) (*Request, error) {
 	params := map[string][]byte{}
 	if rawQuery != "" {

@@ -11,12 +11,16 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // node is a parsed JSON value that keeps object member order, so a page
 // can be edited and re-rendered with its fields where they were, and that
-// is parsed strictly: a repeated member name or anything after the value
-// is an error, the policy the conformance comparator reads pages with.
+// is parsed strictly: ill-formed UTF-8 anywhere, a repeated member name or
+// anything after the value is an error, the policy the conformance
+// comparator reads pages with. encoding/json alone would replace an
+// ill-formed byte in a string with U+FFFD, so a corrupted name could
+// compare equal to the provider's.
 type node struct {
 	kind   byte // 'o' object, 'a' array, 's' string, 'n' number, 'b' bool, 'z' null; 0 missing
 	keys   []string
@@ -31,6 +35,9 @@ var missing = &node{}
 func parseNode(b []byte) (*node, error) {
 	if len(bytes.TrimSpace(b)) == 0 {
 		return missing, nil
+	}
+	if !utf8.Valid(b) {
+		return nil, errors.New("invalid UTF-8 in JSON document")
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()

@@ -219,7 +219,7 @@ func percent(s string) string {
 
 func TestTokenShapes(t *testing.T) {
 	binding := bytes.Repeat([]byte{7}, bindingBytes)
-	tok := encodeToken(true, []byte("k\xff"), binding)
+	tok := encodeToken(true, []byte("k\xff"), binding, 0)
 	c, err := decodeToken(tok, binding)
 	if err != nil || !c.inclusive || string(c.boundary) != "k\xff" {
 		t.Fatalf("%+v %v", c, err)
@@ -228,8 +228,9 @@ func TestTokenShapes(t *testing.T) {
 	for _, bad := range []string{
 		"", "gcs2." + body, tokenPrefix, tokenPrefix + body + "==", tokenPrefix + body[:len(body)-1] + "\n" + body[len(body)-1:],
 		tokenPrefix + "Ag" + body[2:], tokenPrefix + body[:1] + "=" + body[1:], tokenPrefix + body[:len(body)-2],
-		encodeToken(false, bytes.Repeat([]byte("k"), maxFieldBytes+1), binding),
-		encodeToken(false, nil, bytes.Repeat([]byte{8}, bindingBytes)),
+		encodeToken(false, bytes.Repeat([]byte("k"), maxFieldBytes+1), binding, 0),
+		encodeToken(false, []byte("k"), binding, 2),
+		encodeToken(false, nil, bytes.Repeat([]byte{8}, bindingBytes), 0),
 	} {
 		if _, err := decodeToken(bad, binding); err == nil {
 			t.Errorf("%q accepted", bad)
@@ -239,7 +240,7 @@ func TestTokenShapes(t *testing.T) {
 	for _, c := range []struct {
 		boundary, pad string
 	}{{"ab", "="}, {"a", "=="}} {
-		raw := encodeToken(false, []byte(c.boundary), binding)
+		raw := encodeToken(false, []byte(c.boundary), binding, 0)
 		if _, err := decodeToken(raw+c.pad, binding); err != nil {
 			t.Errorf("%q: correct padding refused: %v", c.boundary, err)
 		}
@@ -247,7 +248,34 @@ func TestTokenShapes(t *testing.T) {
 			t.Errorf("%q: wrong padding accepted", c.boundary)
 		}
 	}
-	if _, err := decodeToken(encodeToken(false, []byte("abc"), binding)+"=", binding); err == nil {
+	if _, err := decodeToken(encodeToken(false, []byte("abc"), binding, 0)+"=", binding); err == nil {
 		t.Error("padding on a whole unit accepted")
+	}
+}
+
+// TestTokenProgressIsRetained resumes from a token whose progress byte
+// is 1: the next token keeps it, on the flat, rolled-up and walked paths,
+// as the Java server's does (the bytes are the ones it answered for this
+// request over the same keys and fixture identity).
+func TestTokenProgressIsRetained(t *testing.T) {
+	const in, want = "gcs1.AAGVQQoGK9iXFfts8fbwln-xYQ", "gcs1.AAGVQQoGK9iXFfts8fbwln-xYg"
+	page := list(t, pagerOver(false, "a", "b", "c"), "maxResults=1&pageToken="+in)
+	if got := entries(page); !slices.Equal(got, []string{"b"}) || page.Token != want {
+		t.Fatalf("%v %q, want [b] %q", got, page.Token, want)
+	}
+	for _, rollup := range []bool{false, true} {
+		p := pagerOver(rollup, "a/1", "b/1", "c/1", "d")
+		first := list(t, p, "delimiter=/&maxResults=1")
+		r, _ := Parse("bkt", "delimiter=/")
+		c, err := decodeToken(first.Token, tokenBinding(r, "fixture-1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		progressed := encodeToken(c.inclusive, c.boundary, tokenBinding(r, "fixture-1"), 1)
+		next := list(t, p, "delimiter=/&maxResults=1&pageToken="+progressed)
+		got, err := decodeToken(next.Token, tokenBinding(r, "fixture-1"))
+		if err != nil || got.progress != 1 || !slices.Equal(entries(next), []string{"b/|"}) {
+			t.Errorf("rollup %v: %v %+v %v", rollup, entries(next), got, err)
+		}
 	}
 }

@@ -224,19 +224,21 @@ rescoped tokens, wrong buckets, paths and methods, raw and escaped non-ASCII), `
 and top-level prefixes, with and without the delimiter, at each page size) and a random walk. `gcsComparator`
 compares status, the compared headers plus `Allow`, and the body byte for byte (both servers are deterministic);
 a difference only in `nextPageToken` is named, and walks follow each server's own tokens, so tokens are judged by
-their effect. Measured with zero differences (the Java oracle at swath `main` 01dd55b, `--parquet-connections 2`,
-default `-walks 1,7,1000`, `-walk-limit 300` and a separate full `-walks 1000` run on the large fixtures): the
-GCS evidence corpus (1,051 compared), synthetic 10k (2,065), synthetic 1M rolled into 6 parts and 110 row groups
-(2,065 plus 1,551 with the full 1,000-page walks), and the recordings of `noaa-normals-pds` (1,227 + 701) and
-`giab` (2,119 + 1,569).
+their effect. Measured with zero differences, no skipped token case and no token byte difference (the Java oracle at swath
+`main` 01dd55b, `--parquet-connections 2`, default `-walks 1,7,1000` with `-walk-limit 300` on the large fixtures,
+plus a separate full `-walks 1000 -random 0` run): the GCS evidence corpus (1,065 compared), synthetic 10k
+(2,079), synthetic 1M rolled into 6 parts and 110 row groups (2,079 plus 1,565 with the full 1,000-page walks),
+and the recordings of `noaa-normals-pds` (1,241 + 715) and `giab` (2,133 + 1,583).
 
 `internal/replay/evidence` ports the conformance comparison: `compare_test.go` is the GCS field policy and
-exchange comparator with the suite's messages (the pins match on message prefixes, `TestComparatorMessages`), a
-small order-keeping JSON node with duplicate-member and trailing-token refusal stands in for the suite's strict
-parser, and `evidence_test.go` is the capture replay (token mapping and mutation, receipt checks of the request
-scope, walks, SDK runs). `TestEvidenceRejectsCorruptedReplayResults` corrupts matched answers (a dropped,
-repeated or reordered item, a decoded name, an early end, a repeated prefix, a wrong status or reason) and
-requires each to be rejected.
+exchange comparator with the suite's messages (`TestComparatorMessages`; a pin is the whole message,
+`TestPinsMatchWholeMessages`), a small order-keeping JSON node that refuses ill-formed UTF-8, repeated members
+and trailing tokens stands in for the suite's strict parser, `evidence_test.go` is the capture replay (token
+mapping and mutation, receipt checks of the request scope, walks), and `sdk_test.go` runs the SDK captures
+through the Go client library with a recording transport (`TestSDKMakesOneAttempt` holds it to one attempt per
+call). `TestEvidenceRejectsCorruptedReplayResults` corrupts matched answers (a dropped, repeated or reordered
+item, a decoded name, an early end, a repeated prefix, a wrong status or reason, an ill-formed UTF-8 byte, and
+the same corruptions of SDK runs) and requires each to be rejected.
 
 | Contract | Test |
 |---|---|
@@ -246,7 +248,22 @@ requires each to be rejected.
 | GCS native metadata | `gcs` `TestNativeSchemaRendersTheBucketsMetadata` |
 | GCS serving | `server` `TestServesGCSObjectsList`, `TestGCSErrorsAreJSONEnvelopes`, `TestRouteClassification`, `TestGCSAdmissionRefusals`, `TestGCSFixtureAndStoreFailures`, `TestGCSInjectedDelayUsesTheSharedShapes`, `TestValidateProtocols`; `cmd/swath-replay` `TestProtocolSelection`, `TestServeGCSEndToEnd` |
 | GCS driver | `replaydiff` `TestGCSComparator`, `TestGCSMatrixNamesAreUnique`, `TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk` |
-| GCS evidence | `evidence` `TestGCSNativeCapturesMatchReplay`, `TestEvidenceRejectsCorruptedReplayResults`, `TestExpectationRules`, `TestComparatorMessages` (with `SWATH_REPLAY_FIXTURES`) |
+| GCS evidence | `evidence` `TestGCSNativeCapturesMatchReplay`, `TestEvidenceRejectsCorruptedReplayResults` (with `SWATH_REPLAY_FIXTURES`), `TestExpectationRules`, `TestComparatorMessages`, `TestPinsMatchWholeMessages`, `TestSDKMakesOneAttempt`, `TestProfileComparatorAcceptsAndRefuses`, `TestFullProjectionRequiresEmptyACLAndNoACLForbidsIt`, `TestWalksCompareInventoriesAcrossPageBoundaries`, `TestExchangeHeadersAreClassified`, `TestSDKRunReceiptNeedsEveryStep`, `TestRetryRunCapturesAreRefusedRatherThanWalked` |
+| GCS ports of the Java unit tests | `gcs` `TestTimestampsMatchAnIndependentFormatter`, `TestRendersProfileTypes`, `TestRawEscapesAndOmitsEmptyArrays`, `TestCompleteWireGolden`, `TestRefusesTooLongAndReservedNamesAndNegativeSize`, `TestClampedPageLimitReportsItsPath`, `TestDelimiterWalkReadsInBatches`, `TestIndexedDelimiterMatchesWalkAcrossRowGroups`; `server` `TestGCSShapeCountsAndRejectionMeter`, `TestOfficialClientUsesHierarchyOffsetsAndUnicode`, `TestOfficialClientDecodesAReplayFault` |
+
+The Java route's and conformance suite's own unit tests are held against this code where a Go counterpart
+exists (`gcs` `ported_test.go`, `server` `TestGCSShapeCountsAndRejectionMeter` and `gcs_sdk_test.go`,
+`evidence` `ported_test.go`). Not ported, with the reason:
+
+| Java test | Reason |
+|---|---|
+| `GcsJsonTest.rendersProfileTypesAndKeepsOutputLeaseOpen` (the lease half) | the output lease is the Java response sink's; the profile types are `TestRendersProfileTypes` |
+| `GcsPagerTest.optInEmptyAndShortPagesCarryBoundedProgressInToken` | the injected empty and short pages are a Java constructor-only test profile with no Go counterpart; the progress byte they set is held by `TestTokenProgressIsRetained` |
+| `GcsSdkTest.officialSdkDecodesReplayFixtureFaultAndRecordsNormalRetries` (the retry half) | the Go client makes one attempt per call; the decoded fault is `TestOfficialClientDecodesAReplayFault` |
+| `ProviderMatchReceiptRunTest.sdkHeadersIgnoreOnlyTheJvmVersionToken` | it compares the Java client's identity tokens; SDK runs here use the Go client, whose identity `TestSDKRunReceiptNeedsEveryStep` checks |
+| `ProviderEvidenceTest.gcsKeepsObjectAndPrefixArraysSeparateAndChecksWireTypes`, `tokenWalkerFollowsEachEndpointsOwnOpaqueTokensAndRejectsCycles` | they test the Java capture tool's page parser and inventory walker, which have no Go counterpart; the wire-type and repeated-token refusals are in `TestProfileComparatorAcceptsAndRefuses` and `TestWalksCompareInventoriesAcrossPageBoundaries` |
+| `ProviderCaptureRoundTripTest.sanitizedGcsErrorStillHasTypedEnvelope` | the capture sanitization pipeline is the capture tool's, not replay's |
+| `GcsPagerTest.fixtureIdentitySurvivesRelocationAndInvalidatesChangedManifest` | the identity half is `store` `TestIdentity`; the token half `TestTokenRejectsAnotherScopeOrFixture` |
 
 ## The Azure route
 

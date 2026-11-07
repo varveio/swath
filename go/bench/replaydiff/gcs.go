@@ -6,12 +6,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"path/filepath"
-	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -166,11 +168,13 @@ func gcsListAll(t *target, bucket string) ([][]byte, error) {
 // the same compared headers (Content-Type, x-swath-replay-*, and Allow on
 // a 405), and the same body. Both servers render compact JSON in a fixed
 // field order and issue the same token bytes for the same state, so the
-// body is compared byte for byte; when the bytes differ but the
-// documents are equal once the page tokens are masked, the difference is
-// in the tokens alone and Detail says so (still a failure: a token
-// difference is a wire difference). Walks compare tokens by effect: each
-// server follows its own tokens and every page must agree.
+// body is compared byte for byte; when the bytes differ only inside the
+// page token's value, Detail says so (still a failure: a token difference
+// is a wire difference). A walk follows each server's own tokens and
+// passes a page whose bytes agree apart from the token's value (the
+// walk judges the tokens by where they lead), listing that page in the
+// report's token_byte_differences: the walk's verdict is semantic, the
+// list is the wire fidelity.
 type gcsComparator struct{}
 
 func (gcsComparator) compare(ref, got *response) diff {
@@ -181,7 +185,7 @@ func (gcsComparator) compare(ref, got *response) diff {
 	}
 	if d.Offset >= 0 {
 		if equalMaskedTokens(ref.Body, got.Body) {
-			d.Detail = "documents equal with page tokens masked: the tokens differ"
+			d.Detail = "bytes equal with the page tokens' values masked: the tokens differ"
 		} else {
 			d.Detail = "documents differ"
 		}
@@ -189,23 +193,35 @@ func (gcsComparator) compare(ref, got *response) diff {
 	return d
 }
 
+// tokenValue is the value span of a page's nextPageToken member as the
+// servers write it (a token is base64url and '.', never escaped).
+var tokenValue = regexp.MustCompile(`"nextPageToken":"[^"\\]*"`)
+
+// maskTokenValue blanks the token's value and keeps every other byte, so
+// field order, spacing and escapes still count.
+func maskTokenValue(b []byte) []byte {
+	return tokenValue.ReplaceAll(b, []byte(`"nextPageToken":""`))
+}
+
+// equalMaskedTokens reports whether two bodies are byte-identical apart
+// from their page tokens' values.
 func equalMaskedTokens(a, b []byte) bool {
-	var x, y map[string]any
-	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
-		return false
-	}
-	_, tx := x["nextPageToken"]
-	_, ty := y["nextPageToken"]
-	if tx != ty {
-		return false
-	}
-	delete(x, "nextPageToken")
-	delete(y, "nextPageToken")
-	return reflect.DeepEqual(x, y)
+	return bytes.Equal(maskTokenValue(a), maskTokenValue(b))
+}
+
+// skip records a case that could not run as designed; it is neither
+// compared nor passed.
+func (d *driver) skip(name, reason string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.rep.Skipped = append(d.rep.Skipped, name+": "+reason)
 }
 
 // runGCSCases is runCases with GCS page tokens: a request naming
-// TokenFrom gets the reference's nextPageToken for that request.
+// TokenFrom gets the reference's nextPageToken for that request, edited
+// by gcsTokenEdits when the case names one. A source page that issued no
+// token leaves the case skipped: without a token it would be an ordinary
+// listing passing for a token test.
 func (d *driver) runGCSCases(kind string, cases []request) {
 	var first, second []request
 	for _, c := range cases {
@@ -223,15 +239,25 @@ func (d *driver) runGCSCases(kind string, cases []request) {
 			wg.Go(func() {
 				for c := range work {
 					if c.TokenFrom != "" {
-						if tok, ok := d.refTokens.Load(c.TokenFrom); ok {
-							c.Query += "&pageToken=" + gcsEscape(tok.(string))
+						tok, ok := d.refTokens.Load(c.TokenFrom)
+						if !ok {
+							d.skip(c.Name, "the source page "+strconv.Quote(c.TokenFrom)+" issued no token")
+							continue
 						}
+						t := tok.(string)
+						if edit := gcsTokenEdits[editOf(c.Name)]; edit != nil {
+							t = edit(t)
+						}
+						c.Query += "&pageToken=" + gcsEscape(t)
 					}
 					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c)}
-					a, df, err := d.compareOne(c)
+					a, b, df, err := d.gcsCompareOne(c)
 					if err != nil {
 						res.Error = err.Error()
 					} else {
+						if competingFeatureOK(c, a, b, df) {
+							df.OK = true
+						}
 						res.Pass, res.diff = df.OK, &df
 						if tok := gcsNextToken(a.Body); tok != "" {
 							d.refTokens.Store(c.Name, tok)
@@ -250,6 +276,18 @@ func (d *driver) runGCSCases(kind string, cases []request) {
 		close(work)
 		wg.Wait()
 	}
+}
+
+// gcsCompareOne sends c to both servers and compares the answers.
+func (d *driver) gcsCompareOne(c request) (ref, got *response, df diff, err error) {
+	if ref, err = d.ref.do(d.o.bucket, c); err != nil {
+		return nil, nil, df, fmt.Errorf("%s: %w", d.ref.name, err)
+	}
+	if got, err = d.got.do(d.o.bucket, c); err != nil {
+		return ref, nil, df, fmt.Errorf("%s: %w", d.got.name, err)
+	}
+	d.count(2)
+	return ref, got, d.comp.compare(ref, got), nil
 }
 
 func cmpOrPath(p string) string {
@@ -296,10 +334,14 @@ func (d *driver) gcsWalkOne(w walk) result {
 		var df diff
 		if errA == nil && errB == nil {
 			df = d.comp.compare(a, b)
-			if !df.OK && equalMaskedTokens(a.Body, b.Body) && a.Status == b.Status && len(df.HeaderDiffs) == 0 {
-				// The tokens differ in bytes; the walk decides whether
-				// they mean the same thing.
+			if !df.OK && a.Status == b.Status && len(df.HeaderDiffs) == 0 && equalMaskedTokens(a.Body, b.Body) {
+				// Every byte but the token values agrees: the walk judges
+				// the tokens by where they lead, and the byte difference
+				// is reported as a wire difference of its own.
 				df.OK = true
+				d.mu.Lock()
+				d.rep.TokenBytes = append(d.rep.TokenBytes, fmt.Sprintf("walk %q page %d", w.Name, res.Pages))
+				d.mu.Unlock()
 			}
 		}
 		if errA != nil || errB != nil || !df.OK {
@@ -431,7 +473,11 @@ func gcsMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 	raw("raw non-ASCII", "prefix=é&maxResults=3")
 	raw("raw invalid byte", "prefix=a\xff&maxResults=3")
 	raw("raw truncated sequence", "prefix=a\xe1\x80&maxResults=3")
-	raw("two unsupported features", "versions=true&softDeleted=false&maxResults=1")
+	raw("one refused feature beside an accepted one", "versions=true&softDeleted=false&maxResults=1")
+	raw("refused features across the groups", "fields=x&versions=true&maxResults=1")
+	for name, query := range gcsCompetingFeatures {
+		raw(name, query)
+	}
 	// Tokens: malformed, tampered, padded, foreign, and real tokens
 	// replayed with another scope or page size.
 	for _, tok := range []struct{ name, v string }{
@@ -440,25 +486,35 @@ func gcsMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 	} {
 		add("token "+tok.name, "pageToken", tok.v, "maxResults", "5")
 	}
+	// Token cases take a token the reference issued. Each source page is
+	// one entry of a window that holds more, so it is truncated whenever
+	// the fixture has two keys (two root entries, two keys at the middle).
 	pageOne := func(name string, params ...string) {
 		out = append(out, request{Name: name, Method: "GET", Query: gcsQuery(params...)})
 	}
 	next := func(name, from string, params ...string) {
 		out = append(out, request{Name: name, Method: "GET", Query: gcsQuery(params...), TokenFrom: from})
 	}
-	pageOne("token page 1", "maxResults", "3")
-	next("token page 2", "token page 1", "maxResults", "3")
+	pageOne("token page 1", "maxResults", "1")
+	next("token page 2", "token page 1", "maxResults", "1")
 	next("token page 2 other size", "token page 1", "maxResults", "1000")
-	next("token page 2 other prefix", "token page 1", "maxResults", "3", "prefix", "a")
-	next("token page 2 with delimiter", "token page 1", "maxResults", "3", "delimiter", "/")
-	next("token page 2 with startOffset", "token page 1", "maxResults", "3", "startOffset", "\x01")
-	pageOne("delimiter token page 1", "maxResults", "1", "delimiter", "/")
-	next("delimiter token page 2", "delimiter token page 1", "maxResults", "1", "delimiter", "/")
-	if len(keys) > 0 {
-		mid := string(keys[len(keys)/2])
-		pageOne("offset token page 1", "maxResults", "2", "startOffset", mid, "endOffset", mid+"\U0010FFFF")
-		next("offset token page 2", "offset token page 1", "maxResults", "2", "startOffset", mid, "endOffset", mid+"\U0010FFFF")
-		next("offset token page 2 other end", "offset token page 1", "maxResults", "2", "startOffset", mid)
+	next("token page 2 other prefix", "token page 1", "maxResults", "1", "prefix", "a")
+	next("token page 2 with delimiter", "token page 1", "maxResults", "1", "delimiter", "/")
+	next("token page 2 with startOffset", "token page 1", "maxResults", "1", "startOffset", "\x01")
+	next("token page 2 with endOffset", "token page 1", "maxResults", "1", "endOffset", "\U0010FFFF")
+	for _, edit := range slices.Sorted(maps.Keys(gcsTokenEdits)) {
+		next("token page 2 "+edit, "token page 1", "maxResults", "1")
+	}
+	dp := twoEntryPrefix(keys)
+	pageOne("delimiter token page 1", "maxResults", "1", "delimiter", "/", "prefix", dp)
+	next("delimiter token page 2", "delimiter token page 1", "maxResults", "1", "delimiter", "/", "prefix", dp)
+	next("delimiter token page 2 without delimiter", "delimiter token page 1", "maxResults", "1", "prefix", dp)
+	if len(keys) >= 3 {
+		lo, hi := string(keys[len(keys)/2-1]), string(keys[len(keys)/2+1])
+		pageOne("offset token page 1", "maxResults", "1", "startOffset", lo, "endOffset", hi)
+		next("offset token page 2", "offset token page 1", "maxResults", "1", "startOffset", lo, "endOffset", hi)
+		next("offset token page 2 other end", "offset token page 1", "maxResults", "1", "startOffset", lo)
+		next("offset token page 2 other start", "offset token page 1", "maxResults", "1", "endOffset", hi)
 	}
 	out = append(out,
 		request{Name: "unknown bucket", Method: "GET", Path: "/storage/v1/b/no-such-bucket-here/o", Query: "maxResults=1"},
@@ -476,6 +532,93 @@ func gcsMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 		request{Name: "DELETE unknown bucket", Method: "DELETE", Path: "/storage/v1/b/no-such-bucket-here/o", Query: ""},
 	)
 	return out
+}
+
+// twoEntryPrefix is the shortest directory prefix (the root first) under
+// which a "/" listing has at least two entries, so a one-entry page of it
+// is truncated.
+func twoEntryPrefix(keys [][]byte) string {
+	for _, p := range append([]string{""}, directoryPrefixes(keys)...) {
+		seen := map[string]bool{}
+		for _, k := range keys {
+			rest, ok := strings.CutPrefix(string(k), p)
+			if !ok {
+				continue
+			}
+			if i := strings.IndexByte(rest, '/'); i >= 0 {
+				rest = rest[:i+1]
+			}
+			if seen[rest] = true; len(seen) >= 2 {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// gcsTokenEdits alter a genuinely issued token (the reference's) before
+// it is sent: the native probe runner's mutations, and the padding and
+// line-break spellings the token decoder must judge. A case "token page 2
+// EDIT" applies gcsTokenEdits[EDIT].
+var gcsTokenEdits = map[string]func(string) string{
+	"flip": func(t string) string {
+		last := byte('A')
+		if t[len(t)-1] == 'A' {
+			last = 'B'
+		}
+		return t[:len(t)-1] + string(last)
+	},
+	"truncate": func(t string) string { return t[:max(1, len(t)-4)] },
+	"flip-decoded": func(t string) string {
+		body, ok := strings.CutPrefix(t, "gcs1.")
+		raw, err := base64.RawURLEncoding.DecodeString(body)
+		if !ok || err != nil || len(raw) == 0 {
+			return t + "!"
+		}
+		raw[len(raw)-1] ^= 1
+		return "gcs1." + base64.RawURLEncoding.EncodeToString(raw)
+	},
+	"padded":      func(t string) string { return t + strings.Repeat("=", (4-len(strings.TrimPrefix(t, "gcs1."))%4)%4) },
+	"overpadded":  func(t string) string { return t + "===" },
+	"line break":  func(t string) string { return t[:len(t)/2] + "\n" + t[len(t)/2:] },
+	"gcs2 prefix": func(t string) string { return "gcs2." + strings.TrimPrefix(t, "gcs1.") },
+}
+
+func editOf(name string) string { return strings.TrimPrefix(name, "token page 2 ") }
+
+// gcsCompetingFeatures are requests with two or more refused features of
+// one group. The Java server picks the reason among them by a set order
+// randomized per JVM launch, so these cases compare everything but the
+// x-swath-replay-error value, which must name one of the refused
+// features (gcsFeatureReasons).
+var gcsCompetingFeatures = map[string]string{
+	"competing features versions softDeleted":    "versions=true&softDeleted=true&maxResults=1",
+	"competing features all four booleans":       "versions=true&softDeleted=true&includeFoldersAsPrefixes=true&includeTrailingDelimiter=true",
+	"competing features fields filter matchGlob": "fields=x&filter=x&matchGlob=x",
+}
+
+// gcsFeatureReasons is the reason header a competing-feature case may
+// carry: feature_NAME for a feature its query refuses.
+func gcsFeatureReasons(query string) map[string]bool {
+	out := map[string]bool{}
+	for _, part := range strings.Split(query, "&") {
+		name, value, _ := strings.Cut(part, "=")
+		if value != "false" && value != "" && name != "maxResults" {
+			out["feature_"+name] = true
+		}
+	}
+	return out
+}
+
+// competingFeatureOK passes a competing-feature case whose only
+// difference is a reason header naming another of its refused features.
+func competingFeatureOK(c request, ref, got *response, df diff) bool {
+	if _, ok := gcsCompetingFeatures[c.Name]; !ok || df.OK || ref.Status != got.Status || df.Offset >= 0 || len(df.HeaderDiffs) != 1 {
+		return false
+	}
+	allowed := gcsFeatureReasons(c.Query)
+	return strings.HasPrefix(df.HeaderDiffs[0], "x-swath-replay-error:") &&
+		allowed[values(ref.Header, "x-swath-replay-error")] && allowed[values(got.Header, "x-swath-replay-error")]
 }
 
 func trim(s string) string {
