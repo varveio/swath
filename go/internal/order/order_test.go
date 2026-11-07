@@ -189,6 +189,48 @@ func TestCancellation(t *testing.T) {
 	}
 }
 
+// stalledRoot's root emits nothing for wait, then fails with err, or
+// waits for cancellation when err is nil: a frontier that never answers.
+type stalledRoot struct {
+	wait time.Duration
+	err  error
+}
+
+func (stalledRoot) Root() rng { return rng{} }
+func (s stalledRoot) Expand(ctx context.Context, _ rng, _ source.Emitter[rng, tp]) error {
+	if s.err == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	time.Sleep(s.wait)
+	return s.err
+}
+
+// TestInterruptedRunReportsStall: a run stopped while its frontier has
+// handed nothing on still reports that interval as FrontierStuck, on a
+// cancellation and on a provider error (the drain's early exits), not
+// zero as when only the successful tail closed the interval. The drain
+// starts a little after the clock does, so the bound is half the stall.
+func TestInterruptedRunReportsStall(t *testing.T) {
+	const stall = 200 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(stall, cancel)
+	st, err := Run[rng, tp](ctx, stalledRoot{}, &collect{}, &testSchema, Options{Workers: 2, Budget: 1000})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled: err = %v", err)
+	}
+	if st.FrontierStuck < stall/2 {
+		t.Fatalf("cancelled after %v with nothing handed on: FrontierStuck %v", stall, st.FrontierStuck)
+	}
+	st, err = Run[rng, tp](context.Background(), stalledRoot{wait: stall, err: errors.New("provider failed")}, &collect{}, &testSchema, Options{Workers: 2, Budget: 1000})
+	if err == nil || err.Error() != "provider failed" {
+		t.Fatalf("failed: err = %v", err)
+	}
+	if st.FrontierStuck < stall/2 {
+		t.Fatalf("failed after %v with nothing handed on: FrontierStuck %v", stall, st.FrontierStuck)
+	}
+}
+
 // failingRoot's root emits nothing and fails, the shape where the drainer
 // could find the tree finished between the node's completion and the
 // failure being recorded.

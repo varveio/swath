@@ -59,7 +59,7 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `spill.peak_bytes`, `spill.refused` | bytes, frames | peak live spill bytes; frames the disk budget refused (the emitter waited instead) |
 | `spill.dir`, `spill.fs_type` | path, name | the spill directory and its filesystem (Linux: `tmpfs`, `ext4`, `xfs`, ..., or the statfs magic in hex; absent elsewhere): on `tmpfs` or `ramfs` spill is memory outside `peak_rss_bytes`, and the run warns at start |
 | `peak_ahead_rows` | rows | the most rows listed and not yet handed on at once: ahead of the publish frontier, in memory or spilled (live: `progress.json` `order.ahead_rows`) |
-| `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end |
+| `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
 | `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `row_budget_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
 
 A dry run (`--count-only`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
