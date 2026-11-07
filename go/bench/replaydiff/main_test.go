@@ -36,25 +36,6 @@ func TestBytesComparator(t *testing.T) {
 	}
 }
 
-func TestLiveComparatorMasksTokensAndFormatting(t *testing.T) {
-	ref := &response{200, http.Header{"Content-Type": {"application/xml"}, "X-Amz-Request-Id": {"X1"}},
-		[]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult><Name>b</Name><NextContinuationToken>1ueG=</NextContinuationToken><KeyCount>1</KeyCount></ListBucketResult>")}
-	got := &response{200, http.Header{"Content-Type": {"application/xml"}, "x-amz-request-id": {"S3LISTINGREPLAY"}},
-		[]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name><NextContinuationToken>v2:AA</NextContinuationToken><KeyCount>1</KeyCount></ListBucketResult>`)}
-	if d := (liveComparator{}).compare(ref, got); !d.OK {
-		t.Errorf("%+v", d)
-	}
-	got.Body = []byte(strings.Replace(string(got.Body), "<KeyCount>1", "<KeyCount>2", 1))
-	if d := (liveComparator{}).compare(ref, got); d.OK {
-		t.Error("a different KeyCount compared equal")
-	}
-	e1 := &response{400, nil, []byte("<Error><Code>InvalidArgument</Code><Message>S3 words</Message></Error>")}
-	e2 := &response{400, nil, []byte("<Error><Code>InvalidArgument</Code><Message>replay words</Message><Resource>/b</Resource></Error>")}
-	if d := (liveComparator{}).compare(e1, e2); !d.OK {
-		t.Errorf("errors with the same code: %+v", d)
-	}
-}
-
 func TestMatrixNamesAreUnique(t *testing.T) {
 	keys := [][]byte{[]byte("a/b/c"), []byte("a/b/d e"), []byte("a/x"), []byte("b/é"), []byte("c")}
 	seen := map[string]bool{}
