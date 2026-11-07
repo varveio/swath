@@ -307,6 +307,7 @@ type options struct {
 	spillMax, spillReserve zsize
 	resume, noJournal      bool
 	noSpill, spillCompress bool
+	spillPlain             bool
 	sources                map[string]any      // each provider's options value, by scheme
 	owners                 map[string][]string // a provider flag's name: the schemes it applies to
 	term                   termOptions
@@ -318,7 +319,7 @@ type options struct {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-max", "spill-reserve", "spill-compress", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}, termFlags...)
+var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-max", "spill-reserve", "spill-compress", "spill-plain", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -398,7 +399,8 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
 		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
 		f.Var(&o.spillReserve, "spill-reserve", "diagnostic: free `bytes` spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)")
-		f.BoolVar(&o.spillCompress, "spill-compress", false, "diagnostic: compress spill files (zstd level 1)")
+		f.BoolVar(&o.spillCompress, "spill-compress", true, "diagnostic: compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed")
+		f.BoolVar(&o.spillPlain, "spill-plain", false, "diagnostic: write spill frames without delta coding (each key and payload whole)")
 	}
 	// Each provider owns its flag group; a group several share (the range
 	// engine's) is registered once and passed to each of them.
@@ -631,7 +633,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
-			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
+			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,

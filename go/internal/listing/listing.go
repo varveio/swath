@@ -129,10 +129,13 @@ type Limits struct {
 
 // SpillLimits bound spill.
 type SpillLimits struct {
-	Off      bool  // wait on the reorder budget instead of spilling ahead-of-frontier rows
-	Compress bool  // zstd level 1 on spill frames
-	Max      int64 // cap on live spill bytes (0: half the free space on the spill filesystem at start, after Reserve; negative: none)
-	Reserve  int64 // free bytes spill leaves on its filesystem (0: derived, spillReserve; negative: none)
+	Off   bool // wait on the reorder budget instead of spilling ahead-of-frontier rows
+	Plain bool // plain spill frames instead of delta-coded ones (a comparison arm)
+	// Uncompressed writes spill frames without zstd (level 1 by default: it
+	// still finds the ETag and key-suffix bytes delta coding leaves).
+	Uncompressed bool
+	Max          int64 // cap on live spill bytes (0: half the free space on the spill filesystem at start, after Reserve; negative: none)
+	Reserve      int64 // free bytes spill leaves on its filesystem (0: derived, spillReserve; negative: none)
 }
 
 // ConfigError is an invalid configuration: a value or a combination.
@@ -142,11 +145,20 @@ func (e *ConfigError) Error() string { return "invalid configuration: " + e.Reas
 
 // Spill describes the run's spill (see order.Stats).
 type Spill struct {
-	Rows      int64 `json:"rows"`   // rows written to spill files and replayed
-	Bytes     int64 `json:"bytes"`  // bytes written
-	Ranges    int64 `json:"ranges"` // ranges that spilled
-	PeakBytes int64 `json:"peak_bytes"`
-	Refused   int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
+	Rows  int64 `json:"rows"`  // rows written to spill files and replayed
+	Bytes int64 `json:"bytes"` // bytes written
+	// LogicalBytes is the spilled rows' logical size (key and column
+	// values, as the part router counts them): Bytes against it is what
+	// the frame coding saved. Format names the frames: "delta" or "plain",
+	// "+zstd" unless --spill-compress=false.
+	LogicalBytes int64  `json:"logical_bytes"`
+	Format       string `json:"format"`
+	// DecodeRefused counts frames refused at read for decoding past their
+	// storage bound (a malformed frame; the run fails).
+	DecodeRefused int64 `json:"decode_refused"`
+	Ranges        int64 `json:"ranges"` // ranges that spilled
+	PeakBytes     int64 `json:"peak_bytes"`
+	Refused       int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
 	// MaxBytes is the cap on live spill bytes in effect (0: none);
 	// ReserveBytes the free space spill left on its filesystem (0: none).
 	MaxBytes     int64 `json:"max_bytes"`
@@ -587,7 +599,7 @@ func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel cont
 // and its disk budget).
 func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared) (order.Options, error) {
 	gauges := &order.Gauges{}
-	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillReserve: cfg.Limits.Spill.Reserve,
+	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillPlain: cfg.Limits.Spill.Plain, SpillCompress: !cfg.Limits.Spill.Uncompressed, SpillReserve: cfg.Limits.Spill.Reserve,
 		After: jr.after(), Gauges: gauges}
 	if pr := cfg.Progress; pr != nil {
 		pr.gauges.Store(gauges)
@@ -662,7 +674,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	// (order.Count: no reorder storage, max_buffered_bytes 0).
 	res.Features = map[string]bool{"spill": oopt.SpillDir != "", "order": !dryRun(a.cfg)}
 	if oopt.SpillDir != "" {
-		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
+		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir))}
 	}

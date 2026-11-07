@@ -83,7 +83,8 @@ type Schema[P any] struct {
 	// part router cuts parts by it, so the boundaries are deterministic.
 	Bytes func(p *P) int64
 	// Heap is the memory the payload references beyond its own value (its
-	// strings), for the memory budget.
+	// strings), for the memory budget. It is at least the bytes of the
+	// payload's strings: spill bounds a decoded frame's storage by it.
 	Heap func(p *P) int64
 	// Codec serializes payloads for spill files, private to one run.
 	Codec Codec[P]
@@ -94,6 +95,21 @@ type Schema[P any] struct {
 type Codec[P any] interface {
 	Append(dst []byte, p *P) []byte
 	Decode(d *Decoder, p *P)
+}
+
+// DeltaCodec is a Codec that can also encode a payload against the
+// previous row's, for spill's delta frames (rows sorted by key, whose
+// neighbours share times, classes and owners). prev is the previous row's
+// payload in the same frame, or a zero P for a frame's first row: the
+// state is the two arguments, never the codec, so one codec serves every
+// frame and goroutine at once. DecodeDelta's strings may be prev's (a
+// repeat) or the decoder's (an owning decoder copies them), never views of
+// the source. A producer without one gets its Codec in delta frames too
+// (keys are prefix-coded by the frame either way).
+type DeltaCodec[P any] interface {
+	Codec[P]
+	AppendDelta(dst []byte, prev, p *P) []byte
+	DecodeDelta(d *Decoder, prev, p *P)
 }
 
 // ErrKeyTooLong reports a key over the schema's MaxKeyBytes.

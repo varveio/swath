@@ -27,7 +27,7 @@ marks (`_SUCCESS` beside `data/`, a `schemaId` manifest) and other tools' manife
 `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` files are checked the same way and may not be symbolic links
 (a profile is opened, never through a link; the report replaces its name by a rename, which replaces a link
 there rather than writing its target). `swath resume DIR` replays the command the journal recorded; only
-the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, the diagnostic `--spill-reserve` and `--spill-compress`,
+the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, the diagnostic `--spill-reserve`, `--spill-compress` and `--spill-plain`,
 `--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and the terminal flags
 `--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
 operational ones, how requests are
@@ -43,7 +43,7 @@ true), so a supervisor may resume until exit 0; one committed with partial cover
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
 `list` flag plus the diagnostic ones: `--sequential`, `--floors`, `--structure=auto|on|off`, `--max-keys` (range-engine sources), `--no-journal`,
-`--no-spill`, `--spill-reserve` and `--spill-compress`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
+`--no-spill`, `--spill-reserve`, `--spill-compress` and `--spill-plain`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
 Running it in production (sizing, watching, resuming, reading the output): [operating.md](operating.md).
@@ -180,7 +180,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
         listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
@@ -305,9 +305,11 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -sequential
         ranges: list with one continuation-token chain (no ranges; the reference)
   -spill-compress
-        diagnostic: compress spill files (zstd level 1)
+        diagnostic: compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed (default true)
   -spill-max bytes
         the spill disk budget: cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
+  -spill-plain
+        diagnostic: write spill frames without delta coding (each key and payload whole)
   -spill-reserve bytes
         diagnostic: free bytes spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)
   -stall-timeout duration
@@ -327,7 +329,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
         listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
@@ -462,8 +464,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   (and listing waits instead) at that many bytes on disk (default 0: half the space free on the spill
   filesystem when the run starts, after the reserve) or when the filesystem would drop below the reserve, one
   part per encoder at full size and at least 1 GiB (room for the parts being written on the same filesystem).
-  `swath diag list --no-spill` turns spill off, `--spill-reserve` sets the reserve and `--spill-compress`
-  compresses the files
+  `swath diag list --no-spill` turns spill off, `--spill-reserve` sets the reserve and `--spill-compress=false`
+  writes the frames uncompressed (by default zstd level 1 runs over the delta-coded frames); `--spill-plain` writes each key and payload whole
+  instead of delta-coding them, the comparison arm
   ([internals/ordering.md](internals/ordering.md)).
 - **Encoders:** the default count is GOMAXPROCS lowered to what the resources carry: one writer's working set
   (24 MiB) each from an allowance equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,

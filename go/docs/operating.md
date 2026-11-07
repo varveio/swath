@@ -169,7 +169,8 @@ latency percentiles `inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns`, `li
 `limiter.increases`, `limiter.max_depth`, `limiter.waits`, and `source.stats.mean_active` (mean active ranges). The
 report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stuck_max_ns`, `peak_nodes`,
 `peak_markers`, `peak_ahead_rows`, `peak_heap_live_bytes`, `part_time_cuts` and `spill.peak_bytes`,
-`spill.peak_readers`, `spill.max_bytes`, `spill.reserve_bytes`, `spill.dir`, `spill.fs_type`.
+`spill.peak_readers`, `spill.max_bytes`, `spill.reserve_bytes`, `spill.dir`, `spill.fs_type`, and
+`spill.bytes` against `spill.logical_bytes` (what the `spill.format` frames saved).
 
 | Signal | Healthy | Act when |
 |---|---|---|
@@ -232,7 +233,7 @@ again in a new or empty directory (`--overwrite` refuses an interrupted filesyst
 OOM kill loses nothing durable: the journal is crash-safe and the resume reconciles.
 
 **`swath resume DIR`** replays the command recorded in the journal. Only these may be given again (the last
-value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
+value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--spill-compress`, `--spill-plain`,
 `--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and `--profile`,
 `--anonymous`, `--request-timeout`, `--gcs-anonymous`, `--gcs-credentials`, `--gcs-request-timeout`,
 `--limiter`, `--limiter-slow-start`, `--request-rate`. Any other flag is a usage error. `--max-duration` and the

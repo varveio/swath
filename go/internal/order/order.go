@@ -52,8 +52,10 @@ type Options struct {
 	Shared *Shared
 	// SpillDir, if set, enables spill: when the budget is used up, ranges
 	// that are not being drained write their rows to files there instead
-	// of waiting (see spill.go). SpillCompress compresses frames (zstd 1).
+	// of waiting (see spill.go). Frames are delta-coded unless SpillPlain;
+	// SpillCompress compresses them (zstd 1).
 	SpillDir      string
+	SpillPlain    bool
 	SpillCompress bool
 	// SpillMax caps the live spill bytes (0: no cap); SpillReserve is the
 	// free space spill leaves on its filesystem (0: none). Past either, an
@@ -81,6 +83,14 @@ type Stats struct {
 	SpillBytes  int64
 	SpillFiles  int64 // ranges that spilled
 	SpillPeak   int64 // peak live spill bytes
+	// SpillLogical is the spilled rows' logical bytes (schema.LogicalBytes):
+	// against SpillBytes, what the frame coding saved. SpillFormat names
+	// the frames ("delta", "plain", each optionally "+zstd").
+	SpillLogical int64
+	SpillFormat  string
+	// SpillDecodeRefused counts frames refused at read for decoding past
+	// their storage bound (a malformed frame: the run fails).
+	SpillDecodeRefused int64
 	// SpillRefused counts frames the disk budget refused; each made its
 	// emitter wait on the reorder budget instead.
 	SpillRefused int64
@@ -457,6 +467,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if o.sp != nil {
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
+		st.SpillLogical, st.SpillFormat, st.SpillDecodeRefused = o.sp.logical.Load(), o.sp.format(), o.sp.decodeRefused.Load()
 	}
 	return st, err
 }
@@ -494,7 +505,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 			err = opt.SpillVerify()
 		}
 		if err == nil {
-			sp, err = newSpiller(s.Codec, opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
+			sp, err = newSpiller(s, opt.SpillDir, opt.SpillPlain, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
 		}
 		if err != nil {
 			cancel(nil)

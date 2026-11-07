@@ -229,6 +229,9 @@ longer has is refused (exit 2); finish such a run with the build that started it
 - `--spill-max` is the one disk budget on `swath list`; `--spill-reserve` (now derived by default: one part per
   encoder at full size, at least 1 GiB, which is 1 GiB at the defaults) and `--spill-compress` moved to
   `swath diag list`. `swath resume` still accepts both. The report's `resources.spill` adds `reserve_bytes`.
+- Spill frames are delta-coded and zstd-compressed (level 1) by default; `swath diag list --spill-compress=false`
+  writes them uncompressed and `--spill-plain` without delta coding. The report's `resources.spill` adds
+  `logical_bytes`, `format` and `decode_refused`.
 
 ## The downstream reader: dispatch on schema id
 
