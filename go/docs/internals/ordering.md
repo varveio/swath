@@ -375,7 +375,8 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 - **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
   `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
   every unlink): K from part records only; the ledger's prefix, bounded by the format rather than by
-  trusting the writer: the scan stops at H records, and before a sealed record that would make more than
+  trusting the writer: the scan stops where the records kept plus one retirement owed per live certificate
+  (written by recovery, or reserved for an accepted one) would pass H (`TestDurableRecoveryHistory`), and before a sealed record that would make more than
   10,000 certificates live (the largest cap any attempt has); the ledger is truncated there like a damaged
   tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`);
   the directory streamed, every file no record names unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's

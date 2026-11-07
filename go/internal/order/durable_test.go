@@ -1314,3 +1314,67 @@ func TestDurableNestedOverlaps(t *testing.T) {
 		})
 	}
 }
+
+// ledgerRecords counts the ledger's record frames (the header excluded).
+func ledgerRecords(t *testing.T, root *os.Root) int {
+	t.Helper()
+	b, err := root.ReadFile(filepath.Join(DurableDir, ledgerName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := -1
+	for off := 0; off+8 <= len(b); off += 8 + int(binary.LittleEndian.Uint32(b[off:])) {
+		n++
+	}
+	return n
+}
+
+// TestDurableRecoveryHistory: a checksum-valid ledger whose records fill
+// H with certificates still live passes the scan, but recovery and Start
+// then owe one retirement per live certificate (written now, or reserved
+// for an accepted one). The prefix is cut so that the records kept plus
+// those owed stay within H: through complete recovery and Start, with
+// accepted certificates (reserved) and with missing files (retired now),
+// and again on a further resume, the history and the ledger never pass H.
+func TestDurableRecoveryHistory(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
+			root, _ := sealedSpill(t, 6)
+			lf, err := root.OpenFile(filepath.Join(DurableDir, ledgerName), os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var buf []byte
+			for range historyCap - ledgerRecords(t, root) - 1 { // the scan alone would keep them all
+				buf = appendLedgerFrame(buf, ledgerRec{cert: &Cert{id: randomID()}, retire: retireRecovery})
+			}
+			lf.Write(buf)
+			lf.Close()
+			if missing {
+				ents, _ := root.FS().(fs.ReadDirFS).ReadDir(DurableDir)
+				for _, e := range ents {
+					if strings.HasSuffix(e.Name(), ".spill") {
+						root.Remove(filepath.Join(DurableDir, e.Name()))
+					}
+				}
+			}
+			for attempt := range 2 {
+				r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := r.Start(1000, 0, nil); err != nil {
+					t.Fatal(err)
+				}
+				hist, reused := r.hist, r.Reused()
+				r.Close()
+				if n := ledgerRecords(t, root); hist > historyCap || n > historyCap || n+reused > historyCap {
+					t.Fatalf("attempt %d: history %d, ledger %d records plus %d reserved (H %d)", attempt, hist, n, reused, historyCap)
+				}
+				if attempt == 0 && !missing && reused == 0 {
+					t.Fatal("nothing accepted")
+				}
+			}
+		})
+	}
+}

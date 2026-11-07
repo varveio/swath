@@ -198,9 +198,10 @@ func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec strin
 // and every file becomes an orphan (nil entries).
 //
 // The prefix is also cut where the history no writer could have made
-// begins: at H records (a writer reserves within H), and at a sealed
-// record that would make more than 10,000 certificates live at once (the
-// largest cap any attempt has). The scan and the inventory are bounded by
+// begins: where its records plus one retirement per live entry would pass
+// H (a writer reserves both within H), and at a sealed record that would
+// make more than 10,000 certificates live at once (the largest cap any
+// attempt has). The scan and the inventory are bounded by
 // the persisted format, not by trusting the writer's admission; what is
 // cut is dropped like a damaged tail (its files are orphans, their
 // intervals relisted), which is always safe (ledger_cut).
@@ -243,12 +244,13 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 	}
 	entries := map[[16]byte]*entry{}
 	records := 0
+	// History: every record kept, plus the retirement each live entry will
+	// still write (recovery's, or the reservation of an accepted
+	// certificate), stays within H; a record that would pass it is where
+	// the prefix ends. So recovery, Start and every later attempt append
+	// within H, and a resume after them reads the same bound.
 	for {
 		at := off
-		if records >= historyCap {
-			c.st.LedgerCut.Add(1) // H records read: nothing after is history
-			break
-		}
 		typ, body, ok := next()
 		if !ok {
 			off = at
@@ -259,23 +261,27 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 			off = at
 			break
 		}
-		if typ == ledgerRetired {
-			records++
-			delete(entries, e.id)
-			continue
+		_, live := entries[e.id]
+		grow := 1 // the record
+		switch {
+		case typ == ledgerRetired && live:
+			grow = 0 // its entry's outstanding retirement, now written
+		case typ == ledgerSealed && !live:
+			grow = 2 // the seal and its retirement to come
 		}
-		if _, dup := entries[e.id]; dup {
-			records++
-			continue // a second seal of one file: the first stands
-		}
-		if len(entries) >= maxCertificates {
-			off = at // more live certificates than any cap: cut here
+		if records+len(entries)+grow > historyCap || (typ == ledgerSealed && !live && len(entries) >= maxCertificates) {
+			off = at // past H, or more live certificates than any cap: cut here
 			c.st.LedgerCut.Add(1)
 			break
 		}
 		records++
-		e.order = records
-		entries[e.id] = e
+		switch {
+		case typ == ledgerRetired:
+			delete(entries, e.id)
+		case !live:
+			e.order = records
+			entries[e.id] = e
+		} // a second seal of one file: the first stands
 	}
 	if dropped := size - off; dropped > 0 {
 		c.st.LedgerDroppedBytes.Add(dropped)
