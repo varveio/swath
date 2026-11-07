@@ -46,27 +46,30 @@ type Def struct {
 	Name string
 	Kind Kind
 	Tags []string
+	// NoPercentiles marks a timer that publishes no percentiles: its
+	// p50_ms and p99_ms are null, as on the Java server's timers built
+	// without published percentiles (the one-off index load and sort).
+	NoPercentiles bool
 }
-
-// reservoirSize is how many recent samples a timer keeps for its
-// percentiles.
-const reservoirSize = 4096
 
 // Meter is one instantiated meter.
 type Meter struct {
+	reg   *Registry
 	def   Def
 	tags  []string // values, in def.Tags order
 	sort  string
 	count atomic.Int64
-	// counters: the count is the value. timers: nanoseconds.
-	// distributions: float totals under mu.
-	sum, maxv atomic.Int64
-	mu        sync.Mutex
-	fsum      float64
-	fmax      float64
-	samples   []int64
-	next      int
-	gauge     func() float64
+	// timers: the sum in nanoseconds over the meter's life; the max and
+	// percentiles over the window (window.go).
+	sum atomic.Int64
+	// Under mu: distribution totals, the timer window, a gauge's or
+	// function counter's source.
+	mu      sync.Mutex
+	fsum    float64
+	fmax    float64
+	window  *timeWindow
+	gauge   func() float64
+	counter func() int64
 }
 
 // Add adds n to a counter.
@@ -79,19 +82,12 @@ func (m *Meter) Inc() { m.count.Add(1) }
 func (m *Meter) Record(d time.Duration) {
 	m.count.Add(1)
 	m.sum.Add(int64(d))
-	for {
-		cur := m.maxv.Load()
-		if int64(d) <= cur || m.maxv.CompareAndSwap(cur, int64(d)) {
-			break
-		}
-	}
+	now := m.reg.now()
 	m.mu.Lock()
-	if len(m.samples) < reservoirSize {
-		m.samples = append(m.samples, int64(d))
-	} else {
-		m.samples[m.next] = int64(d)
-		m.next = (m.next + 1) % reservoirSize
+	if m.window == nil {
+		m.window = newTimeWindow(now)
 	}
+	m.window.record(now, int64(d))
 	m.mu.Unlock()
 }
 
@@ -104,13 +100,32 @@ func (m *Meter) Observe(v float64) {
 	m.mu.Unlock()
 }
 
-// Count is a counter's value or a timer's or distribution's sample count.
-func (m *Meter) Count() int64 { return m.count.Load() }
+// Count is a counter's value (a function counter's included) or a
+// timer's or distribution's sample count.
+func (m *Meter) Count() int64 {
+	m.mu.Lock()
+	fn := m.counter
+	m.mu.Unlock()
+	n := m.count.Load()
+	if fn != nil {
+		n += fn()
+	}
+	return n
+}
 
 // Registry holds the meters.
 type Registry struct {
 	mu     sync.Mutex
 	meters map[string]*Meter
+	// clock is the time timer windows rotate on; nil is time.Now.
+	clock func() time.Time
+}
+
+func (r *Registry) now() time.Time {
+	if r.clock != nil {
+		return r.clock()
+	}
+	return time.Now()
 }
 
 // NewRegistry returns an empty registry.
@@ -127,7 +142,7 @@ func (r *Registry) Get(d Def, tagValues ...string) *Meter {
 	defer r.mu.Unlock()
 	m := r.meters[id]
 	if m == nil {
-		m = &Meter{def: d, tags: slices.Clone(tagValues)}
+		m = &Meter{reg: r, def: d, tags: slices.Clone(tagValues)}
 		m.sort = sortKey(m)
 		r.meters[id] = m
 	}
@@ -146,6 +161,15 @@ func (r *Registry) SetGauge(d Def, fn func() float64, tagValues ...string) {
 	m := r.Get(d, tagValues...)
 	m.mu.Lock()
 	m.gauge = fn
+	m.mu.Unlock()
+}
+
+// SetCounter registers a counter read from fn at every snapshot, for a
+// count another package keeps (the store's and its descriptor cache's).
+func (r *Registry) SetCounter(d Def, fn func() int64, tagValues ...string) {
+	m := r.Get(d, tagValues...)
+	m.mu.Lock()
+	m.counter = fn
 	m.mu.Unlock()
 }
 
@@ -215,7 +239,7 @@ func (m *Meter) appendJSON(dst []byte) []byte {
 	dst = append(dst, '}')
 	switch m.def.Kind {
 	case Counter:
-		dst = number(dst, "count", float64(m.count.Load()))
+		dst = number(dst, "count", float64(m.Count()))
 	case Timer:
 		n := m.count.Load()
 		sum := float64(m.sum.Load()) / 1e6
@@ -227,13 +251,19 @@ func (m *Meter) appendJSON(dst []byte) []byte {
 			mean = sum / float64(n)
 		}
 		dst = number(dst, "mean_ms", mean)
-		dst = number(dst, "max_ms", float64(m.maxv.Load())/1e6)
+		var maxv, p50, p99 int64
 		m.mu.Lock()
-		s := slices.Clone(m.samples)
+		if m.window != nil {
+			maxv, p50, p99 = m.window.read(m.reg.now())
+		}
 		m.mu.Unlock()
-		slices.Sort(s)
-		dst = number(dst, "p50_ms", percentile(s, 0.50))
-		dst = number(dst, "p99_ms", percentile(s, 0.99))
+		dst = number(dst, "max_ms", float64(maxv)/1e6)
+		if m.def.NoPercentiles {
+			dst = append(dst, `,"p50_ms":null,"p99_ms":null`...)
+		} else {
+			dst = number(dst, "p50_ms", float64(p50)/1e6)
+			dst = number(dst, "p99_ms", float64(p99)/1e6)
+		}
 	case Distribution:
 		m.mu.Lock()
 		n, total, mx := m.count.Load(), m.fsum, m.fmax
@@ -258,16 +288,6 @@ func (m *Meter) appendJSON(dst []byte) []byte {
 		dst = number(dst, "value", v)
 	}
 	return append(dst, '}')
-}
-
-// percentile is the nearest-rank percentile of sorted nanosecond samples,
-// in milliseconds; 0 with no samples.
-func percentile(sorted []int64, p float64) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	i := int(math.Ceil(p*float64(len(sorted)))) - 1
-	return float64(sorted[max(i, 0)]) / 1e6
 }
 
 // number appends ,"field":v with six decimals, or null for a value that is

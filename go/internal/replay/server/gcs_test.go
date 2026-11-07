@@ -153,9 +153,10 @@ func TestGCSAdmissionRefusals(t *testing.T) {
 		t.Errorf("budget: %d %v", r.status, r.header)
 	}
 	s.budget.Release(held)
-	if r := get(t, s, gcsList+"?maxResults=5"); r.status != 200 || s.budget.Charged() != 0 {
-		t.Errorf("after: %d charged %d", r.status, s.budget.Charged())
+	if r := get(t, s, gcsList+"?maxResults=5"); r.status != 200 {
+		t.Errorf("after: %d", r.status)
 	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
 	for _, reason := range []string{"response_too_large", "response_count_exhausted", "response_budget_exhausted"} {
 		if count(s, metrics.ResponseAdmissionRefused, "gcs", reason) != 1 {
 			t.Errorf("%s: %s", reason, s.reg.AppendMeters(nil))

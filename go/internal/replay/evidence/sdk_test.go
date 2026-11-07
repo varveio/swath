@@ -162,7 +162,9 @@ func sdkScope(query string) []string {
 		name, value, _ := strings.Cut(part, "=")
 		v, err := url.PathUnescape(value)
 		require(err == nil, "replay request query is not percent-encoded")
-		if name == "pageToken" || goTransportForms[name] == v {
+		// Only a parameter the Go client adds, at the value it adds,
+		// is set aside; any other, empty-valued or not, is scope.
+		if transportValue, transportForm := goTransportForms[name]; name == "pageToken" || (transportForm && transportValue == v) {
 			continue
 		}
 		out = append(out, name+"="+v)

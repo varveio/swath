@@ -37,7 +37,7 @@ type FileCache struct {
 	open    int           // descriptors open or being opened
 	idle    list.List     // *CachedFile with an open handle and no lease, oldest first
 
-	peak, opens int
+	peak, opens, evictions, waits int
 
 	// waiting, if set (by tests), is called with c.mu held each time a
 	// read is about to wait: a barrier that tells a test a waiter exists.
@@ -58,13 +58,17 @@ type FileCacheStats struct {
 	// Open is the descriptors open now, Peak the most at once, and Opens
 	// the files opened in all, first opens and reopens after eviction.
 	Open, Peak, Opens int
+	// Evictions counts idle descriptors closed to make room for another
+	// part's, and Waits the times a read or open waited because every
+	// descriptor was leased or the file was being opened by another read.
+	Evictions, Waits int
 }
 
 // Stats returns the cache's counts.
 func (c *FileCache) Stats() FileCacheStats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return FileCacheStats{Open: c.open, Peak: c.peak, Opens: c.opens}
+	return FileCacheStats{Open: c.open, Peak: c.peak, Opens: c.opens, Evictions: c.evictions, Waits: c.waits}
 }
 
 // Max returns the descriptor bound.
@@ -82,6 +86,7 @@ func (c *FileCache) waitLocked(ctx context.Context) error {
 	if c.waiting != nil {
 		c.waiting()
 	}
+	c.waits++
 	changed := c.changed
 	c.mu.Unlock()
 	defer c.mu.Lock()
@@ -125,6 +130,7 @@ func (c *FileCache) evictLocked() bool {
 	_ = cf.f.Close()
 	cf.f = nil
 	c.open--
+	c.evictions++
 	return true
 }
 

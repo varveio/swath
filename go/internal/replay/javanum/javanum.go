@@ -18,6 +18,7 @@ package javanum
 import (
 	"math"
 	"strconv"
+	"strings"
 )
 
 // digitZeros are the code points of the zero of every BMP run of decimal
@@ -213,4 +214,26 @@ func Saturate(f float64) int64 {
 		return math.MinInt64
 	}
 	return int64(f)
+}
+
+// FormatDouble spells a float as the replay wire contract's startup and
+// slow-request lines do: the shortest digits that read back as v, at
+// least one fractional digit (1.0, 12.5), scientific notation outside
+// [1e-3, 1e7) (1.0E-4).
+func FormatDouble(v float64) string {
+	a := math.Abs(v)
+	if a == 0 || (a >= 1e-3 && a < 1e7) {
+		s := strconv.FormatFloat(v, 'f', -1, 64)
+		if !strings.Contains(s, ".") {
+			s += ".0"
+		}
+		return s
+	}
+	s := strconv.FormatFloat(v, 'E', -1, 64)
+	mant, exp, _ := strings.Cut(s, "E")
+	if !strings.Contains(mant, ".") {
+		mant += ".0"
+	}
+	e, _ := strconv.Atoi(exp)
+	return mant + "E" + strconv.Itoa(e)
 }

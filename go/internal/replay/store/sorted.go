@@ -51,11 +51,37 @@ type Counters struct {
 type Sorted struct {
 	reader   *sortedparquet.Reader
 	sem      *semaphore.Weighted
+	readers  int
 	schemaID string
 	objects  objectProjection
 	counters Counters
 	files    *sortedparquet.FileCache
+	meters   Meters
 }
+
+// Meters receives a Sorted store's per-read measurements, for the server's
+// meters. A nil func is skipped.
+type Meters struct {
+	// SlotHeld is how long a read held its reader slot: the decode
+	// service time, slot wait excluded.
+	SlotHeld func(time.Duration)
+	// Query is one ReadRows or RollupRows call that read, slot wait
+	// included: its duration, the rows or entries it returned, and
+	// whether it failed.
+	Query func(d time.Duration, rows int, failed bool)
+	// Rollup is one skip-scan's work.
+	Rollup func(sortedparquet.Stats)
+	// Refused is a read that failed for a fixture reason
+	// (row_group_disorder).
+	Refused func(reason string)
+}
+
+// SetMeters installs m. It is called before the store serves its first
+// read.
+func (s *Sorted) SetMeters(m Meters) { s.meters = m }
+
+// Readers returns the reader-slot bound (Options.Readers resolved).
+func (s *Sorted) Readers() int { return s.readers }
 
 var _ Store = (*Sorted)(nil)
 
@@ -65,6 +91,10 @@ func (s *Sorted) Counters() *Counters { return &s.counters }
 // Files returns the descriptor cache the fixture's parts are read through,
 // for its counts.
 func (s *Sorted) Files() *sortedparquet.FileCache { return s.files }
+
+// FirstKeys returns the first key of every non-empty row group, in key
+// order: the routing keys.
+func (s *Sorted) FirstKeys() [][]byte { return s.reader.FirstKeys() }
 
 // SchemaID returns the fixture's declared schema id.
 func (s *Sorted) SchemaID() string { return s.schemaID }
@@ -82,13 +112,22 @@ func (s *Sorted) acquire(ctx context.Context) (func(), error) {
 	n := s.counters.InFlightReaders.Add(1)
 	for peak := s.counters.PeakReaders.Load(); n > peak && !s.counters.PeakReaders.CompareAndSwap(peak, n); peak = s.counters.PeakReaders.Load() {
 	}
+	held := time.Now()
 	return func() {
+		if f := s.meters.SlotHeld; f != nil {
+			f(time.Since(held))
+		}
 		s.counters.InFlightReaders.Add(-1)
 		s.sem.Release(1)
 	}, nil
 }
 
-func (s *Sorted) record(stats *sortedparquet.Stats) {
+// record adds a read's stats to the counters; a rollup's also go to
+// Meters.Rollup.
+func (s *Sorted) record(stats *sortedparquet.Stats, rollup bool) {
+	if f := s.meters.Rollup; f != nil && rollup {
+		f(*stats)
+	}
 	s.counters.PageDecodes.Add(stats.PagesDecoded)
 	s.counters.RowsDecoded.Add(stats.KeysDecoded)
 	s.counters.Reseeks.Add(stats.Reseeks)
@@ -101,24 +140,34 @@ func (s *Sorted) ReadRows(ctx context.Context, from []byte, fromInclusive bool, 
 	if limit <= 0 {
 		return nil, nil
 	}
+	started := time.Now()
 	release, err := s.acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
-	var stats sortedparquet.Stats
-	defer s.record(&stats)
-	rows, err := s.reader.Read(ctx, sortedparquet.Range{
-		From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
-		Limit: limit, Columns: columns,
-	}, &stats)
-	return rows, s.failed(err)
+	rows, err := func() ([]sortedparquet.Row, error) {
+		defer release()
+		var stats sortedparquet.Stats
+		defer s.record(&stats, false)
+		return s.reader.Read(ctx, sortedparquet.Range{
+			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
+			Limit: limit, Columns: columns,
+		}, &stats)
+	}()
+	return rows, s.finished(started, len(rows), err)
 }
 
-// failed counts a read error the replay server classifies, and returns it.
-func (s *Sorted) failed(err error) error {
-	if sortedparquet.ReasonOf(err) == sortedparquet.ReasonRowGroupDisorder {
+// finished meters a store call that read and counts an error the replay
+// server classifies, and returns the error.
+func (s *Sorted) finished(started time.Time, rows int, err error) error {
+	if f := s.meters.Query; f != nil {
+		f(time.Since(started), rows, err != nil)
+	}
+	if reason := sortedparquet.ReasonOf(err); reason == sortedparquet.ReasonRowGroupDisorder {
 		s.counters.DisorderRefusals.Add(1)
+		if f := s.meters.Refused; f != nil {
+			f(reason)
+		}
 	}
 	return err
 }
@@ -133,20 +182,23 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 	if limit <= 0 {
 		return nil, true, nil
 	}
+	started := time.Now()
 	release, err := s.acquire(ctx)
 	if err != nil {
 		return nil, true, err
 	}
-	defer release()
 	s.counters.DelimiterEngagements.Add(1)
-	var stats sortedparquet.Stats
-	defer s.record(&stats)
-	entries, err := s.reader.RollupRead(ctx, sortedparquet.Rollup{
-		From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
-		Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: saturatingIncrement(limit),
-		SuppressAtOrBeforeFrom: suppressPrefixAtOrBeforeFloor, Columns: columns,
-	}, &stats)
-	return entries, true, s.failed(err)
+	entries, err := func() ([]sortedparquet.Entry, error) {
+		defer release()
+		var stats sortedparquet.Stats
+		defer s.record(&stats, true)
+		return s.reader.RollupRead(ctx, sortedparquet.Rollup{
+			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
+			Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: saturatingIncrement(limit),
+			SuppressAtOrBeforeFrom: suppressPrefixAtOrBeforeFloor, Columns: columns,
+		}, &stats)
+	}()
+	return entries, true, s.finished(started, len(entries), err)
 }
 
 // Rows implements Store with the Object projection.

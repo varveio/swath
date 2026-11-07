@@ -13,8 +13,8 @@ var (
 	HTTPRequests = Def{Name: "swath.replay.http.requests", Kind: Counter}
 	// HTTPErrors counts answers with a 5xx status.
 	HTTPErrors = Def{Name: "swath.replay.http.errors", Kind: Counter}
-	// HTTPRequestLatency is arrival to response written, injected delay
-	// included.
+	// HTTPRequestLatency is arrival to the start of the response's write,
+	// injected delay included.
 	HTTPRequestLatency = Def{Name: "swath.replay.http.request.latency", Kind: Timer}
 	// FixtureListLatency is one pager operation (store reads included).
 	FixtureListLatency = Def{Name: "swath.replay.fixture.list.latency", Kind: Timer}
@@ -22,8 +22,8 @@ var (
 	// delay excluded: read it against the injected profile for the same
 	// shape.
 	RequestLatency = Def{Name: "swath.replay.request.latency", Kind: Timer, Tags: []string{"shape"}}
-	// RequestStageLatency splits a request into page, render, delay and
-	// write.
+	// RequestStageLatency splits a page into page, render, delay and
+	// write; an error answer has no write stage.
 	RequestStageLatency = Def{Name: "swath.replay.request.stage.latency", Kind: Timer, Tags: []string{"protocol", "stage"}}
 	// ServingPath counts pager operations by serving mode.
 	ServingPath = Def{Name: "swath.replay.serving.path", Kind: Counter, Tags: []string{"mode"}}
@@ -66,4 +66,54 @@ var (
 	// ResponseWriteDeadline counts responses whose write outlived
 	// --write-timeout.
 	ResponseWriteDeadline = Def{Name: "swath.replay.response.write.deadline", Kind: Counter, Tags: []string{"protocol", "reason"}}
+)
+
+// The fixture and store meters.
+var (
+	// ProviderPath counts native pager decisions on the GCS and Azure
+	// routes: the path engaged and why.
+	ProviderPath = Def{Name: "swath.replay.provider.path", Kind: Counter, Tags: []string{"protocol", "path", "reason"}}
+	// ServingRefused counts requests refused at read time for a fixture
+	// reason; row_group_disorder is a row group whose keys do not ascend.
+	ServingRefused = Def{Name: "swath.replay.serving.refused", Kind: Counter, Tags: []string{"reason"}}
+	// IndexLoadLatency is the fixture open (footers read, row-group first
+	// keys decoded, the routing index built), once at startup;
+	// IndexEntries its routing entries, one per non-empty row group.
+	IndexLoadLatency = Def{Name: "swath.replay.index.load.latency", Kind: Timer, Tags: []string{"source"}, NoPercentiles: true}
+	IndexEntries     = Def{Name: "swath.replay.index.entries", Kind: Distribution}
+	// PageReadLatency is the time a store read holds its reader slot: the
+	// decode service time, slot wait excluded.
+	PageReadLatency = Def{Name: "swath.replay.page.read.latency", Kind: Timer}
+	// ParquetQueryLatency is one store call, slot wait included;
+	// ParquetQueryRows the rows (or rollup entries) it returned and
+	// ParquetQueryErrors the calls that failed.
+	ParquetQueryLatency = Def{Name: "swath.replay.parquet.query.latency", Kind: Timer}
+	ParquetQueryRows    = Def{Name: "swath.replay.parquet.query.rows", Kind: Distribution}
+	ParquetQueryErrors  = Def{Name: "swath.replay.parquet.query.errors", Kind: Counter}
+	// ParquetQueriesInFlight and ParquetQueriesPeak are the reads holding
+	// a reader slot (--parquet-connections) now and at most.
+	ParquetQueriesInFlight = Def{Name: "swath.replay.parquet.queries.in_flight", Kind: Gauge}
+	ParquetQueriesPeak     = Def{Name: "swath.replay.parquet.queries.peak", Kind: Gauge}
+	// The "/" skip-scan's work: key cursors opened on a row group (a group
+	// can be opened again after a reseek), row groups emitted as one
+	// common prefix from routing keys alone, and per rollup the key values
+	// decoded and the cursor moves through the page index.
+	DelimiterSkipScanRowGroupOpens       = Def{Name: "swath.replay.delimiter.skipscan.row_group_opens", Kind: Counter}
+	DelimiterSkipScanWholeGroupShortcuts = Def{Name: "swath.replay.delimiter.skipscan.whole_group_shortcuts", Kind: Counter}
+	DelimiterSkipScanDecodedKeyRows      = Def{Name: "swath.replay.delimiter.skipscan.decoded_key_rows", Kind: Distribution}
+	DelimiterSkipScanPageReseeks         = Def{Name: "swath.replay.delimiter.skipscan.page_reseeks", Kind: Distribution}
+	// The descriptor cache every part is read through: files opened
+	// (first opens and reopens after eviction), idle descriptors closed to
+	// make room, reads that waited for a descriptor, and the descriptors
+	// open now, at most, and allowed.
+	HandleCacheOpens     = Def{Name: "swath.replay.handle_cache.opens", Kind: Counter}
+	HandleCacheEvictions = Def{Name: "swath.replay.handle_cache.evictions", Kind: Counter}
+	HandleCacheWaits     = Def{Name: "swath.replay.handle_cache.waits", Kind: Counter}
+	HandleCacheOpen      = Def{Name: "swath.replay.handle_cache.open", Kind: Gauge}
+	HandleCachePeak      = Def{Name: "swath.replay.handle_cache.peak", Kind: Gauge}
+	HandleCacheLimit     = Def{Name: "swath.replay.handle_cache.limit", Kind: Gauge}
+	// SortFixtureBuildLatency and SortFixtureOutputBytes are the
+	// sort-fixture command's; a server never sorts, so they read zero.
+	SortFixtureBuildLatency = Def{Name: "swath.replay.sortfixture.build.latency", Kind: Timer, NoPercentiles: true}
+	SortFixtureOutputBytes  = Def{Name: "swath.replay.sortfixture.output.bytes", Kind: Distribution}
 )

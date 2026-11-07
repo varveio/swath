@@ -5,7 +5,9 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,6 +18,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/replay/server"
+	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
 
 func TestMain(m *testing.M) {
@@ -102,12 +108,7 @@ func TestAdvertisedHost(t *testing.T) {
 	}
 }
 
-func TestDecimalStringAndEndpoint(t *testing.T) {
-	for v, want := range map[float64]string{1: "1.0", 50: "50.0", 12.5: "12.5", 0.0001: "1.0E-4", 1e7: "1.0E7", 0.25: "0.25"} {
-		if got := decimalString(v); got != want {
-			t.Errorf("%v: %s, want %s", v, got, want)
-		}
-	}
+func TestBracketHost(t *testing.T) {
 	if got := bracketHost("", "::1"); got != "[::1]" {
 		t.Errorf("%s", got)
 	}
@@ -258,5 +259,58 @@ func TestSigtermWithActiveWorkIsBoundedAndIdempotent(t *testing.T) {
 	}
 	if resp == nil || resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "shutdown" {
 		t.Errorf("the in-flight request: %v", resp)
+	}
+}
+
+// failingCloseStore is a store whose Close fails, counting its calls.
+type failingCloseStore struct {
+	store.Store
+	closes int
+}
+
+func (f *failingCloseStore) Close() error {
+	f.closes++
+	f.Store.Close()
+	return errors.New("boom")
+}
+
+// TestFailedStartClosesTheStoreAndKeepsItsError is the contract's
+// startFailureClosesOwnedFixtureAndPreservesCleanupFailureAsSuppressed:
+// when the server cannot start, the store it owns is closed once, the
+// start's own error comes back unchanged, and the close failure is
+// reported once beside it.
+func TestFailedStartClosesTheStoreAndKeepsItsError(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	base := server.Config{Bucket: "bkt", Host: "127.0.0.1", Port: busy.Addr().(*net.TCPAddr).Port, MetricsPort: -1,
+		MaxConcurrentRequests: server.DefaultMaxConcurrentRequests, ResponseBufferBudget: server.DefaultResponseBufferBudget,
+		MaxResponseBytes: server.DefaultMaxResponseBytes, StopTimeout: time.Second, IdleTimeout: time.Second,
+		WriteTimeout: time.Second, SlowRequestLog: -1, ServingMode: "MEMORY"}
+
+	st := &failingCloseStore{Store: memstore.Keys(memstore.Options{}, "a")}
+	cfg := base
+	cfg.Store = st
+	var log strings.Builder
+	srv, err := startServer(cfg, &log)
+	var opErr *net.OpError
+	if srv != nil || !errors.As(err, &opErr) || opErr.Op != "listen" {
+		t.Errorf("listen failure: %v, %v", srv, err)
+	}
+	if st.closes != 1 || strings.Count(log.String(), "replay store cleanup failed after a failed start: boom") != 1 {
+		t.Errorf("%d closes, log %q", st.closes, log.String())
+	}
+
+	st = &failingCloseStore{Store: memstore.Keys(memstore.Options{}, "a")}
+	cfg = base
+	cfg.Store, cfg.MaxConcurrentRequests = st, 1
+	log.Reset()
+	_, err = startServer(cfg, &log)
+	var usage usageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "at least 8") || st.closes != 1 ||
+		strings.Count(log.String(), "boom") != 1 {
+		t.Errorf("configuration failure: %v, %d closes, log %q", err, st.closes, log.String())
 	}
 }

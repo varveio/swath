@@ -91,12 +91,23 @@ type DisorderError struct {
 	Row int64
 	// Key is that row's key, nil when Row is -1.
 	Key []byte
-	// Detail says what is out of order, in the replay server's words:
-	// for a row, "its keys must be in strictly ascending unsigned order,
+	// Detail says what is out of order, in the replay server's words: for
+	// page bounds that do not ascend, "its keys must be in strictly
+	// ascending unsigned order, but the column index reports its pages
+	// ORDER" (DESCENDING or UNORDERED); for a row, "its keys must be in strictly ascending unsigned order,
 	// but row R (HEX) is at or below its predecessor", HEX the key's bytes
 	// in lower-case hex (the replay wire contract's fixture_disordered
 	// detail; TestDisorderReasonMatchesJava pins it).
 	Detail string
+}
+
+// pageDisorder returns the *DisorderError of a row group whose key page
+// bounds do not ascend: no one row is at fault (Row -1), and the detail
+// names the order as the replay server does ("DESCENDING" or
+// "UNORDERED").
+func pageDisorder(part string, group int, order string) *DisorderError {
+	return &DisorderError{Part: part, RowGroup: group, Row: -1,
+		Detail: "its keys must be in strictly ascending unsigned order, but the column index reports its pages " + order}
 }
 
 // rowDisorder returns the *DisorderError of a row whose key is at or below
