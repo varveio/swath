@@ -5,14 +5,21 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/go/internal/replay/server"
+	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
 
 // TestS3PlanRules holds the driver's reading of a request to the probed
@@ -254,3 +261,141 @@ func TestDeclNewline(t *testing.T) {
 		}
 	}
 }
+
+// TestOwnerOrderIsDerived serves an owner-bearing fixture from the Go
+// route and, as the reference named java, the same answers in the Java
+// server's form: no newline after the XML declaration and each Owner
+// after the StorageClass in front of it (the order
+// TestEmptyAndNullStringsEndToEnd recorded from the Java server). A
+// fetch-owner=true listing passes only because the driver moves the
+// Owner on the Java side, and is listed as a documented divergence for
+// that reason; a listing without owners is not a divergence; a Go answer
+// in the Java order fails. The reference reads fetch-owner=TRUE as true,
+// as the Java server does, and the Go route lists without owners, as live
+// S3 does: the driver drops the Java page's owners, a divergence of its
+// own reason, and without that the request fails.
+func TestOwnerOrderIsDerived(t *testing.T) {
+	sp := func(s string) *string { return &s }
+	size, mod := int64(7), time.UnixMicro(1_767_225_600_000_000)
+	objs := []store.Object{
+		{Key: []byte("a1"), Size: &size, LastModified: &mod, ETag: sp("e1"), StorageClass: sp("STANDARD"), OwnerID: sp("id&1"),
+			ChecksumAlgorithm: sp("CRC32"), ChecksumType: sp("FULL_OBJECT")},
+		{Key: []byte("a2"), Size: &size, LastModified: &mod, ETag: sp("e2"), StorageClass: sp(""), OwnerID: sp(""), OwnerDisplayName: sp("n<2")},
+		{Key: []byte("b/k3"), Size: &size, LastModified: &mod, OwnerID: sp("id3")},       // no StorageClass: nothing to move
+		{Key: []byte("c"), Size: &size, LastModified: &mod, StorageClass: sp("GLACIER")}, // no owner
+	}
+	st, err := memstore.New(objs, memstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := server.New(server.Config{Bucket: "bkt", Host: "127.0.0.1", MetricsPort: -1, MaxConcurrentRequests: 64,
+		ResponseBufferBudget: 1 << 30, MaxResponseBytes: 1 << 26, StopTimeout: time.Second, IdleTimeout: time.Minute,
+		WriteTimeout: time.Minute, SlowRequestLog: -1, Store: st, ServingMode: "MEMORY", FixtureIdentity: "same", Protocols: []string{"s3"}})
+	if err == nil {
+		err = srv.Listen()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve()
+	t.Cleanup(func() { srv.Shutdown(time.Second) })
+	goBase := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+
+	// javaForm rewrites a Go answer in the Java server's form, by string
+	// surgery independent of the driver's regular expression.
+	javaForm := func(body []byte, newline bool) []byte {
+		b := string(body)
+		if !newline {
+			b = strings.Replace(b, javaDecl+"\n", javaDecl, 1)
+		}
+		var out strings.Builder
+		for {
+			i := strings.Index(b, "<Owner>")
+			if i < 0 {
+				out.WriteString(b)
+				return []byte(out.String())
+			}
+			j := strings.Index(b[i:], "</Owner>") + i + len("</Owner>")
+			owner, rest := b[i:j], b[j:]
+			out.WriteString(b[:i])
+			if strings.HasPrefix(rest, "<StorageClass>") {
+				k := strings.Index(rest, "</StorageClass>") + len("</StorageClass>")
+				out.WriteString(rest[:k])
+				rest = rest[k:]
+			}
+			out.WriteString(owner)
+			b = rest
+		}
+	}
+	stub := func(newline bool) string {
+		h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The Java server reads fetch-owner case-insensitively.
+			resp, err := http.Get(goBase + r.URL.Path + "?" + anyCaseTrue.ReplaceAllString(r.URL.RawQuery, "fetch-owner=true"))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			for k, v := range resp.Header {
+				if k != "Content-Length" {
+					w.Header()[k] = v
+				}
+			}
+			w.WriteHeader(resp.StatusCode)
+			w.Write(javaForm(body, newline))
+		}))
+		t.Cleanup(h.Close)
+		return h.URL
+	}
+	java := &target{name: "java", base: stub(false), client: http.DefaultClient}
+
+	// The rewrite is the Java server's order on the probed shape.
+	page := javaForm([]byte(javaDecl+"\n<Size>1</Size><Owner><ID></ID><DisplayName></DisplayName></Owner><StorageClass></StorageClass></Contents>"), false)
+	if string(page) != javaDecl+"<Size>1</Size><StorageClass></StorageClass><Owner><ID></ID><DisplayName></DisplayName></Owner></Contents>" {
+		t.Fatalf("java form: %s", page)
+	}
+
+	owned := []string{"list-type=2&fetch-owner=true", "list-type=2&fetch-owner=true&delimiter=%2F", "list-type=2&fetch-owner=true&encoding-type=url",
+		"list-type=2&fetch-owner=true&max-keys=1"}
+	plain := []string{"list-type=2", "list-type=2&fetch-owner=false", "list-type=2&fetch-owner=true&prefix=c", "list-type=2&fetch-owner=yes"}
+	anyCase := []string{"list-type=2&fetch-owner=TRUE", "list-type=2&fetch-owner=True&delimiter=%2F"}
+	run := func(got *target, queries []string) *report {
+		rep := &report{}
+		d := &driver{o: options{bucket: "bkt", parallel: 1}, ref: java, got: got, comp: bytesComparator{}, rep: rep}
+		var cases []request
+		for _, q := range queries {
+			cases = append(cases, request{Name: q, Method: "GET", Query: q})
+		}
+		d.runCases("case", cases)
+		return rep
+	}
+	goRoute := &target{name: "go", base: goBase, client: http.DefaultClient}
+	if rep := run(goRoute, owned); rep.Passed != len(owned) || rep.Failed != 0 || len(rep.Divergences) != len(owned) {
+		t.Errorf("owned: passed %d failed %d divergences %q", rep.Passed, rep.Failed, rep.Divergences)
+	} else {
+		for _, l := range rep.Divergences {
+			if !strings.Contains(l, "Owner before StorageClass") {
+				t.Errorf("divergence without the owner reason: %s", l)
+			}
+		}
+	}
+	if rep := run(goRoute, plain); rep.Passed != len(plain) || rep.Failed != 0 || len(rep.Divergences) != 0 {
+		t.Errorf("plain: passed %d failed %d divergences %q", rep.Passed, rep.Failed, rep.Divergences)
+	}
+	if rep := run(goRoute, anyCase); rep.Passed != len(anyCase) || rep.Failed != 0 || len(rep.Divergences) != len(anyCase) {
+		t.Errorf("any case: passed %d failed %d divergences %q", rep.Passed, rep.Failed, rep.Divergences)
+	} else {
+		for _, l := range rep.Divergences {
+			if !strings.HasSuffix(l, "(as live S3: Owner only for fetch-owner=true exactly)") {
+				t.Errorf("not the fetch-owner divergence alone: %s", l)
+			}
+		}
+	}
+	javaOrder := &target{name: "go", base: stub(true), client: http.DefaultClient}
+	if rep := run(javaOrder, owned); rep.Failed != len(owned) {
+		t.Errorf("a Go answer in the Java order: passed %d failed %d", rep.Passed, rep.Failed)
+	}
+}
+
+var anyCaseTrue = regexp.MustCompile(`(?i)fetch-owner=true\b`)

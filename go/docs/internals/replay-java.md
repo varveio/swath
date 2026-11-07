@@ -108,7 +108,7 @@ Java server's bytes.
 
 ### The S3 route
 
-Probed on 2026-11-07 against a public `us-east-1` bucket, anonymous (`s3` `TestLive*`, `s3/livegolden_test.go`):
+Probed on 2026-11-07 against public `us-east-1` buckets, anonymous (`s3` `TestLive*`, `s3/livegolden_test.go`):
 
 | Request or element | Go server (as live S3) | Java server |
 |---|---|---|
@@ -124,6 +124,8 @@ Probed on 2026-11-07 against a public `us-east-1` bucket, anonymous (`s3` `TestL
 | `encoding-type=url` | a space as `+`, `*` as it is | a space as `%20`, `*` escaped |
 | a C0 control character in listing text | a hexadecimal character reference | the raw byte |
 | the XML declaration | followed by a newline | no newline |
+| `Owner` in `Contents` (`fetch-owner=true`, a recording with owners) | after `Size`, before `StorageClass` | after `StorageClass` |
+| `fetch-owner` other than exactly `true` (`TRUE`, `True`) | no `Owner` | `Owner` for `true` in any case |
 | the error document | S3's elements and messages | its own: `Resource` in place of S3's elements, other messages for `max-keys` and the method |
 | continuation tokens | unpadded base64url of the boundary and a CRC-32; an altered token is refused | `v2:` and base64url of flag and boundary (`v1:` and the key), unchecked; an altered token still decodes to a position |
 | a flat walk's token sent with `delimiter=/` | resumes at its key and relists the common prefix that holds it | resumes after that whole prefix |
