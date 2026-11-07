@@ -425,11 +425,13 @@ func (o *Output) ThreeDigits(v int) {
 	o.Byte(byte('0' + v%10))
 }
 
-// Escaped appends text with the five XML metacharacters escaped (an apostrophe as
-// &apos;) and every other byte as it is. Text without a metacharacter or a
-// non-ASCII byte is admitted whole; otherwise each entity and each byte is
-// admitted on its own, so a refusal lands on the same byte as the replay
-// wire contract's.
+// Escaped appends text with the five XML metacharacters escaped (an
+// apostrophe as &apos;), a C0 control character other than TAB, LF and CR
+// as a hexadecimal character reference (&#x1;, &#x1f;: live S3's form,
+// TestLiveControlCharactersAreReferences) and every other byte as it is.
+// Text without an escaped byte or a non-ASCII byte is admitted whole;
+// otherwise each entity and each byte is admitted on its own, so a refusal
+// lands on the same byte as the replay wire contract's.
 func (o *Output) Escaped(s string) { escaped(o, s) }
 
 // EscapedBytes is Escaped over bytes.
@@ -438,8 +440,7 @@ func (o *Output) EscapedBytes(b []byte) { escaped(o, b) }
 func escaped[T string | []byte](o *Output, s T) {
 	safe := true
 	for i := 0; i < len(s) && safe; i++ {
-		switch c := s[i]; {
-		case c >= 0x80, c == '&', c == '<', c == '>', c == '"', c == '\'':
+		if c := s[i]; c >= 0x80 || XMLEntity[c] != "" {
 			safe = false
 		}
 	}
@@ -450,22 +451,30 @@ func escaped[T string | []byte](o *Output, s T) {
 		return
 	}
 	for i := 0; i < len(s) && o.err == nil; i++ {
-		switch c := s[i]; c {
-		case '&':
-			o.ASCII("&amp;")
-		case '<':
-			o.ASCII("&lt;")
-		case '>':
-			o.ASCII("&gt;")
-		case '"':
-			o.ASCII("&quot;")
-		case '\'':
-			o.ASCII("&apos;")
-		default:
-			o.Byte(c)
+		if entity := XMLEntity[s[i]]; entity != "" {
+			o.ASCII(entity)
+		} else {
+			o.Byte(s[i])
 		}
 	}
 }
+
+// XMLEntity is how listing text writes each byte that is not written as
+// itself: the five XML metacharacters as entities, and the C0 controls
+// but TAB, LF and CR as lower-case hexadecimal character references
+// without padding. Live S3 echoed 0x00 (in a delimiter) and every byte
+// 0x01..0x1F through start-after, prefix and delimiter this way on
+// 2026-11-07, and DEL, the C1 controls and the other characters XML 1.0
+// excludes as they are. "" for a byte written as itself.
+var XMLEntity = func() (t [256]string) {
+	t['&'], t['<'], t['>'], t['"'], t['\''] = "&amp;", "&lt;", "&gt;", "&quot;", "&apos;"
+	for c := 0; c < 0x20; c++ {
+		if c != '\t' && c != '\n' && c != '\r' {
+			t[c] = "&#x" + strconv.FormatInt(int64(c), 16) + ";"
+		}
+	}
+	return t
+}()
 
 const hexDigits = "0123456789ABCDEF"
 

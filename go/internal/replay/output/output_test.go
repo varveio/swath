@@ -6,6 +6,7 @@ package output
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net/url"
 	"slices"
@@ -405,8 +406,14 @@ func TestBoundedGrowthPreservesEveryByte(t *testing.T) {
 					want.WriteString("&quot;")
 				case '\'':
 					want.WriteString("&apos;")
-				default:
+				case '\t', '\n', '\r':
 					want.WriteByte(c)
+				default:
+					if c < 0x20 {
+						fmt.Fprintf(&want, "&#x%x;", c)
+					} else {
+						want.WriteByte(c)
+					}
 				}
 			}
 		}

@@ -256,7 +256,8 @@ func TestRenderSurrogateBytesUnencoded(t *testing.T) {
 	}
 }
 
-// TestRowFastPathMatchesUnits renders pages of adversarial objects through
+// TestRowFastPathMatchesUnits renders pages of adversarial objects (XML
+// metacharacters, malformed UTF-8, control characters) through
 // outputs of many chunk sizes and caps, once with whole Contents elements
 // appended where they fit and once unit by unit, and requires the same
 // bytes, refusal, chunk allocations and percent-encoding counts.
@@ -268,6 +269,7 @@ func TestRowFastPathMatchesUnits(t *testing.T) {
 		{Key: []byte("k/😀&<>'\" space"), Size: &neg, LastModified: &early, ETag: sp("e&<>\"'😀"), StorageClass: sp("ST😀&"),
 			OwnerID: sp("id<"), OwnerDisplayName: sp("display'"), ChecksumAlgorithm: sp("CRC&"), ChecksumType: sp("TYPE>")},
 		{Key: []byte{'k', 0xED, 0xA0, 0x80, 'z', 0xff}, ETag: sp(string([]byte{0xff, 'x'})), OwnerID: sp("o")},
+		{Key: []byte("k\x00\x01\t\n\r\x1f\x7f/"), ETag: sp("\x0be"), StorageClass: sp("S\x1f"), OwnerID: sp("\x01")},
 		{Key: []byte(strings.Repeat("long key/", 40)), Size: &size, LastModified: &mod},
 		{Key: []byte("k")},
 	}

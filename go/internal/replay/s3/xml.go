@@ -13,12 +13,14 @@ import (
 )
 
 // The response body is assembled byte by byte rather than with
-// encoding/xml: the element order, the escaping (all five XML
-// metacharacters, '\'' as &apos;), ETag quoting as &quot;, millisecond
-// LastModified are the replay wire contract and the encoding-type=url
-// grammar is live S3's (output.AppendPercentEncoded), which encoding/xml's marshaller does not produce (it escapes
-// '"' as &#34; and control bytes as &#xN;). TestRenderListGolden pins the
-// bytes.
+// encoding/xml: the element order, the escaping of the five XML
+// metacharacters ('\'' as &apos;), ETag quoting as &quot; and millisecond
+// LastModified are the replay wire contract, and the encoding-type=url
+// grammar (output.AppendPercentEncoded) and the control characters as
+// &#xN; references (output.XMLEntity) are live S3's. encoding/xml's
+// marshaller produces neither (it escapes '"' as &#34;, TAB, LF and CR as
+// references, and writes other control characters as U+FFFD).
+// TestRenderListGolden pins the bytes.
 
 const (
 	xmlDecl     = `<?xml version="1.0" encoding="UTF-8"?>`
@@ -331,13 +333,13 @@ func appendTextElement(dst []byte, name, value string) []byte {
 	return append(dst, '>')
 }
 
-// appendEscaped escapes the five XML metacharacters and copies every other
-// byte, control characters included, as it is, a run of plain bytes at a
-// time.
+// appendEscaped writes listing text as output.Escaped does
+// (output.XMLEntity), a run of plain bytes at a time, so the row fast path
+// and the unit path render the same bytes (TestRowFastPathMatchesUnits).
 func appendEscaped[T string | []byte](dst []byte, s T) []byte {
 	plain := 0
 	for i := 0; i < len(s); i++ {
-		entity := xmlEntity[s[i]]
+		entity := output.XMLEntity[s[i]]
 		if entity == "" {
 			continue
 		}
@@ -347,9 +349,6 @@ func appendEscaped[T string | []byte](dst []byte, s T) []byte {
 	}
 	return append(dst, s[plain:]...)
 }
-
-// xmlEntity is the escape of each XML metacharacter, "" for other bytes.
-var xmlEntity = [256]string{'&': "&amp;", '<': "&lt;", '>': "&gt;", '"': "&quot;", '\'': "&apos;"}
 
 // timestamps caches the formatted calendar second: listings hold long runs
 // of objects modified in the same second, and formatting the date costs far

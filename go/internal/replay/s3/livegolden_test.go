@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -337,9 +338,8 @@ func TestLiveURLEncodingTable(t *testing.T) {
 // cannot include Null." (ArgumentName prefix or key-marker), after a bad
 // max-keys, encoding-type or continuation-token, the prefix's before the
 // start-after's. With a valid token the start-after is not read and its
-// NUL is not refused; a NUL delimiter is served (S3 writes it as the
-// character reference &#x0;, the replay as the raw byte: control
-// characters in text are a documented difference).
+// NUL is not refused; a NUL delimiter is served and echoed as the
+// character reference &#x0;.
 func TestLiveNULIsRefused(t *testing.T) {
 	const msg = "Value must be a sequence of Unicode characters and cannot include Null."
 	for _, q := range []string{"prefix=r/%00", "prefix=r/&start-after=r/%00", "prefix=r/&start-after=a%00b", "prefix=a%00&start-after=b%00"} {
@@ -355,7 +355,7 @@ func TestLiveNULIsRefused(t *testing.T) {
 		"O:r/k03 O:r/k04")
 	wantLivePage(t, "list-type=2&prefix=r/&delimiter=%00&max-keys=2",
 		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
-			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><Delimiter>\x00</Delimiter><IsTruncated>true</IsTruncated>",
+			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><Delimiter>&#x0;</Delimiter><IsTruncated>true</IsTruncated>",
 		"O:r/k01 O:r/k02")
 }
 
@@ -379,4 +379,62 @@ func TestLiveKeyParametersAreUTF8(t *testing.T) {
 	wantLivePage(t, "list-type=2&prefix=r/&delimiter=%FF&max-keys=2&encoding-type=url",
 		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken><KeyCount>2</KeyCount><MaxKeys>2</MaxKeys>"+
 			"<Delimiter>"+r+"</Delimiter><EncodingType>url</EncodingType><IsTruncated>true</IsTruncated>", "O:r/k01 O:r/k02")
+}
+
+// TestLiveControlCharactersAreReferences pins how listing text carries a
+// C0 control character: S3 echoed start-after=a%XXb for every byte
+// 0x01..0x1F with the byte as a lower-case hexadecimal character
+// reference without padding (&#x1;, &#xb;, &#x1f;) except TAB, LF and CR,
+// which it wrote as they are, as it wrote DEL, the C1 controls U+0080,
+// U+0085 and U+009F, U+2028, U+FFFE and U+FFFF; a prefix and a delimiter
+// the same way, a NUL delimiter as &#x0;; and with encoding-type=url
+// every control character as %XX. The bucket's keys hold no control
+// character, so Key and CommonPrefixes/Prefix, written by the same
+// listing text rule, are pinned on the rule; both go through the row fast
+// path and the unit path.
+func TestLiveControlCharactersAreReferences(t *testing.T) {
+	ref := func(c byte) string {
+		if c == '\t' || c == '\n' || c == '\r' || c == 0x7f {
+			return string([]byte{c})
+		}
+		return "&#x" + strconv.FormatInt(int64(c), 16) + ";"
+	}
+	if ref(1) != "&#x1;" || ref(0x0b) != "&#xb;" || ref(0x10) != "&#x10;" || ref(0x1f) != "&#x1f;" {
+		t.Fatal("ref")
+	}
+	for c := byte(1); c < 0x20; c++ {
+		wantLivePage(t, "list-type=2&max-keys=0&start-after=a%"+strings.ToUpper(hex.EncodeToString([]byte{c}))+"b",
+			"<Name>bkt</Name><Prefix></Prefix><StartAfter>a"+ref(c)+"b</StartAfter><KeyCount>0</KeyCount><MaxKeys>0</MaxKeys><IsTruncated>false</IsTruncated>", "")
+	}
+	head := "<Name>bkt</Name><Prefix></Prefix><StartAfter>a\u0080b\u0085c\u009fd\u2028e\ufffef\uffffg\x7fh</StartAfter>" +
+		"<KeyCount>0</KeyCount><MaxKeys>0</MaxKeys><IsTruncated>false</IsTruncated>"
+	wantLivePage(t, "list-type=2&max-keys=0&start-after=a%C2%80b%C2%85c%C2%9Fd%E2%80%A8e%EF%BF%BEf%EF%BF%BFg%7Fh", head, "")
+	wantLivePage(t, "list-type=2&max-keys=0&prefix=a%01b%09c%0Ad%0De%7Ff",
+		"<Name>bkt</Name><Prefix>a&#x1;b\tc\nd\re\x7ff</Prefix><KeyCount>0</KeyCount><MaxKeys>0</MaxKeys><IsTruncated>false</IsTruncated>", "")
+	wantLivePage(t, "list-type=2&max-keys=0&prefix=a&delimiter=%01%09%0A%0D%1F%7F",
+		"<Name>bkt</Name><Prefix>a</Prefix><KeyCount>0</KeyCount><MaxKeys>0</MaxKeys><Delimiter>&#x1;\t\n\r&#x1f;\x7f</Delimiter><IsTruncated>false</IsTruncated>", "")
+	wantLivePage(t, "list-type=2&max-keys=0&prefix=a&delimiter=%00",
+		"<Name>bkt</Name><Prefix>a</Prefix><KeyCount>0</KeyCount><MaxKeys>0</MaxKeys><Delimiter>&#x0;</Delimiter><IsTruncated>false</IsTruncated>", "")
+	wantLivePage(t, "list-type=2&max-keys=0&encoding-type=url&prefix=a%01b%09&start-after=c%0Ad%1F&delimiter=%01%0D",
+		"<Name>bkt</Name><Prefix>a%01b%09</Prefix><StartAfter>c%0Ad%1F</StartAfter><KeyCount>0</KeyCount><MaxKeys>0</MaxKeys>"+
+			"<Delimiter>%01%0D</Delimiter><EncodingType>url</EncodingType><IsTruncated>false</IsTruncated>", "")
+	var all, refs []byte
+	for c := 0; c < 0x20; c++ {
+		all = append(all, byte(c))
+		refs = append(refs, ref(byte(c))...)
+	}
+	all, refs = append(all, 0x7f), append(refs, 0x7f)
+	key := "k" + string(all)
+	want := "k" + string(refs)
+	for _, fast := range []bool{true, false} {
+		rowFastPath = fast
+		req := &Request{Bucket: "bkt", MaxKeys: 2}
+		doc := string(AppendList(nil, &Result{Request: req, Entries: []Entry{
+			{Object: &store.Object{Key: []byte(key), ETag: sp(string(all))}}, {CommonPrefix: []byte(key + "/")}}}))
+		rowFastPath = true
+		if !strings.Contains(doc, "<Key>"+want+"</Key>") || !strings.Contains(doc, "<ETag>&quot;"+string(refs)+"&quot;</ETag>") ||
+			!strings.Contains(doc, "<CommonPrefixes><Prefix>"+want+"/</Prefix></CommonPrefixes>") {
+			t.Errorf("fast=%v: %q", fast, doc)
+		}
+	}
 }
