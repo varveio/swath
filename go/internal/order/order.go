@@ -1012,6 +1012,17 @@ func (o *run[R, P]) closeNode(n *node[R, P]) error {
 
 // expandHere expands a queued node nobody has claimed, on the drainer.
 func (o *run[R, P]) expandHere(n *node[R, P], direct bool) error {
+	if len(o.segs) > 0 {
+		// Hand on what is batched before listing here, as before a wait on
+		// the frontier: the expansion is a request that may take long, and
+		// the sink (a part's age bound, its durability) must see every row
+		// the walk has reached meanwhile. The caller rechecks after (a
+		// worker may have taken the node).
+		o.mu.Unlock()
+		err := o.flush()
+		o.mu.Lock()
+		return err
+	}
 	n.state = expanding
 	n.awaited.Store(true)
 	o.release()
