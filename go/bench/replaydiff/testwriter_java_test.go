@@ -76,7 +76,7 @@ func TestTestWriterPartAgainstJava(t *testing.T) {
 	}
 	go srv.Serve()
 	defer srv.Shutdown(time.Second)
-	client := &http.Client{}
+	client := &http.Client{Timeout: javaRequests}
 	ref := &target{name: "java", base: jp.endpoint, client: client}
 	got := &target{name: "go", base: fmt.Sprintf("http://127.0.0.1:%d", srv.Port()), client: client}
 	compared := 0
