@@ -138,7 +138,9 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   ListObjects V1 (no `list-type`) and `list-type=3` are refused (`400 InvalidArgument`), where S3 serves them;
   `fetch-owner=true` renders `Owner` only where the fixture holds owner columns.
 - `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
-  `Owner` appears only with `fetch-owner=true`. Which fields a `Contents` element carries, and from what, depends
+  `Owner` appears only with `fetch-owner=true`, after `Size` and before `StorageClass`, where live S3 writes it
+  (`TestLiveOwnerBeforeStorageClass`; S3 wrote `ID` alone on 2026-11-07, and a recording that holds a display
+  name renders it after the `ID`). Which fields a `Contents` element carries, and from what, depends
   on the recording's schema ([Item fields by route and recording schema](#item-fields-by-route-and-recording-schema)):
   a `swath/gcs-objects/v1` recording is listed as Cloud Storage's own S3-compatible XML API lists it.
 - Errors are S3's XML error document, as live S3 wrote each: `Code`, `Message`, then the elements of that
@@ -557,7 +559,7 @@ route now answers twelve of them as live S3 does (The S3 route, above). The S3 r
 | walks of `giab` | `encoding-type=url` over a key with spaces | a space is `+` (`Karyotype+Report+-+...`) | `%20` | as live S3 |
 | scripted, 22 requests | `start-after` holding U+0000 | `400 InvalidArgument` ("cannot include Null") | a listing | as live S3 |
 | scripted, 2 requests | `start-after` with a byte that is not UTF-8 (`%FF`) | read as U+FFFD (echoed `%EF%BF%BD`) | the byte as sent | as live S3 |
-| `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID` | no `Owner` | no `Owner`: the recording was made without owners (a fixture with owner columns renders them) |
+| `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID`, before `StorageClass` | no `Owner` | no `Owner` over a recording made without owners; over one made with them, as live S3 (below) |
 
 Rerun after the change (same recordings and flags): `noaa-normals-pds` with `-live-scripted -max-prefixes 40`,
 provider cases 67 passed and 5 differing, scripted 336 / 1, walks 10 / 0 (1,908 requests); `giab` 67 / 4, walks
@@ -574,6 +576,14 @@ for `max-keys`, `encoding-type`, a NUL in `prefix` and in `start-after`, `marker
 previous server, `noaa-normals-pds` with `-live-scripted -max-prefixes 40` differed on 58 of 428 (provider 17,
 scripted 41, every S3 error and the control characters); after the change, provider cases 67 passed and 5
 differing, scripted 345 / 1, walks 10 / 0 (1,926 requests), the same six differences as above.
+
+Owner's place (2026-11-07): over a recording of `noaa-normals-pds` made with `--fetch-owner` the same day, the
+replay wrote `Owner` after `StorageClass`, and `s3-11a` and the scripted `fetch-owner=true` differed on the
+`Contents` field sequence; it now writes it before, as live S3 does (The S3 route), and both pass. With
+`-live-scripted -max-prefixes 40`: provider cases 68 passed and 4 differing, scripted 345 / 1, walks 10 / 0
+(1,926 requests). The differences left are ListObjects V1 (`s3-12a` to `s3-12c`), `s3-07x`, and the scripted
+`fetch-owner=TRUE`: live S3 writes `Owner` only for the value `true` in lower case (`TRUE`, `True`, `yes` and `1`
+list without it), where the route takes `true` in any case.
 
 ### Live GCS, 2026-11-07
 

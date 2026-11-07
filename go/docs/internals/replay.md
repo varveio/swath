@@ -129,9 +129,10 @@ character references and other control bytes as U+FFFD, and the element order, `
 `&quot;`, millisecond `LastModified` rounded toward the earlier millisecond with the year of era (`+10000`,
 `0001` for year 0, `TestLastModifiedYears`) are fixed by the wire contract (`TestRenderListGolden` is a page the
 Java server answered), while the `encoding-type=url` grammar, the control characters as `&#xN;` in listing text
-(`output.XMLEntity`, read by both the unit path and the row fast path) and the error document with its own
-escaping (`&#N;`, quotes as they are) are live S3's (`TestLiveURLEncodingTable`,
-`TestLiveControlCharactersAreReferences`, `TestLiveErrorDocuments`).
+(`output.XMLEntity`, read by both the unit path and the row fast path), `Owner`'s place in `Contents` (before
+`StorageClass`) and the error document with its own escaping (`&#N;`, quotes as they are) are live S3's
+(`TestLiveURLEncodingTable`, `TestLiveControlCharactersAreReferences`, `TestLiveOwnerBeforeStorageClass`,
+`TestLiveErrorDocuments`).
 
 It is written into an `output.Output`, not a slice, so memory is charged before it exists. Each append admits
 the same unit the contract's renderer admits (a tag in three parts, an entity, a byte, a number, a value's exact
@@ -298,11 +299,13 @@ both answers and the rules involved, counted as passed or failed on the Go side.
 first (bucket, method, `list-type`, `max-keys`) is expected in live S3's document (`javaFirstRefusal`).
 The newline after the XML declaration is on every listing and error, so the driver inserts it after the Java
 server's declaration in every expectation and in the as-sent comparison (`declNewline`), and it alone makes no
-request a divergence (`TestDivergenceAssertsTheGoSide`). `s3DivergenceCases` adds one case per rule with a pin
+request a divergence (`TestDivergenceAssertsTheGoSide`). Each `Owner` in a Java page is moved before the
+`StorageClass` in front of it (`ownerFirst`; `TestOwnerOrderIsDerived` over an owner-bearing fixture, and
+`TestTestWriterPartAgainstJava` against the Java launcher). `s3DivergenceCases` adds one case per rule with a pin
 from the live probe. Tests: `TestS3PlanRules`,
 `TestS3PlanFixes`, `TestJavaFirstRefusals`,
 `TestUTF8ReplacedMatchesTheRoute`, `TestTokenTranslation`, `TestDivergenceCases`,
-`TestDivergenceAssertsTheGoSide`; the route's own pins are the `TestLive*` tests in `s3/livegolden_test.go`.
+`TestDivergenceAssertsTheGoSide`, `TestOwnerOrderIsDerived`; the route's own pins are the `TestLive*` tests in `s3/livegolden_test.go`.
 
 In the package's own tests the driver compares two Go servers over the same keys, one whose store answers the
 `/` rollup and one that declines it (`TestDriverFindsNoDifferenceBetweenRollupAndWalk`), and checks that
