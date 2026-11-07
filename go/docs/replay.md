@@ -651,7 +651,7 @@ fixture's declared schema id:
 | `etag` | exact (`swath-gcs-synthetic-v1` when null) | synthetic: `swath-gcs-synthetic-v1` (an S3 ETag is not a GCS etag) |
 | `generation`, `metageneration` | exact (`1` when null) | synthetic: `1` |
 | `storageClass` | exact (`STANDARD` when null) | synthetic: `STANDARD` |
-| `contentType` | exact (`application/octet-stream` when null) | synthetic: `application/octet-stream` |
+| `contentType` | exact, absent when null (as live GCS lists an object stored without one) | synthetic: `application/octet-stream` |
 | `md5Hash`, `crc32c` | exact, absent when null | absent |
 | `acl` | `[]` with `projection=full` | `[]` with `projection=full` |
 | `id`, `selfLink`, `mediaLink`, `timeCreated`, `owner`, `metadata` and the rest | absent (not stored) | absent |

@@ -192,14 +192,18 @@ func (w *jsonWriter) metadata(n *Native) {
 			w.ascii(strconv.FormatInt(*v, 10))
 		}
 	}
+	contentType := ""
 	if n == nil {
-		n = &Native{}
+		n, contentType = &Native{}, syntheticContentType
 	}
 	str("etag", n.ETag, syntheticETag)
 	num("generation", n.Generation)
 	num("metageneration", n.Metageneration)
 	str("storageClass", n.StorageClass, syntheticStorageClass)
-	str("contentType", n.ContentType, syntheticContentType)
+	// An object stored without a content type is listed without the
+	// field (TestNativeNullContentTypeIsOmitted, from the live capture
+	// replay); only the synthetic profile names one.
+	str("contentType", n.ContentType, contentType)
 	str("md5Hash", n.MD5, "")
 	str("crc32c", n.CRC32C, "")
 }

@@ -118,3 +118,32 @@ func TestNativeSchemaRendersTheBucketsMetadata(t *testing.T) {
 		t.Errorf("updated %v", got[0]["updated"])
 	}
 }
+
+// TestNativeNullContentTypeIsOmitted: live GCS lists an object stored
+// without a content type with no contentType field (pinned by the live
+// capture replay of cloud-samples-data, go/docs/replay.md, Live
+// conformance), so a native row whose content_type is null renders none;
+// a fixture without GCS metadata keeps the synthetic profile's value.
+func TestNativeNullContentTypeIsOmitted(t *testing.T) {
+	r, err := Parse("bkt", "maxResults=5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := "text/plain"
+	for _, c := range []struct {
+		native *Native
+		want   string
+	}{
+		{&Native{}, ""},
+		{&Native{ContentType: &ct}, `"contentType":"text/plain"`},
+		{nil, `"contentType":"application/octet-stream"`},
+	} {
+		body, err := AppendPage(nil, r, &Page{Items: []Item{{Key: []byte("a"), Native: c.native}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(string(body), `"contentType"`); got != (c.want != "") || c.want != "" && !strings.Contains(string(body), c.want) {
+			t.Errorf("native %+v: %s", c.native, body)
+		}
+	}
+}
