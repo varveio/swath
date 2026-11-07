@@ -392,14 +392,15 @@ go build -o /tmp/replaydiff ./bench/replaydiff
 Configuration, unless a table says otherwise. Host: a 4 vCPU session container (Intel Xeon @ 2.10 GHz) shared
 with other jobs, 15 GiB RAM, Linux 6.18; **4 vCPU shared host, not the corridor's eight isolated cores**, and the
 client runs on the same four vCPUs over loopback, so these numbers are the pair's, not the server's alone. Go
-server: this module at the commit that added this section, `./build.sh`, GOMAXPROCS 4. Java server: swath `main`
-at `01dd55b` (0.3.3-SNAPSHOT) on Temurin 25.0.5+8 with the launcher's heap defaults and `JAVA_TOOL_OPTIONS` as the
-host sets it (trust store and proxy properties only), as `bench/fault_replay.sh` leaves it. One server at a time,
-both with `--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`. Fixtures, page cache
-warm: `synthetic-1m/sorted-rolled` (synthetic, 1,000,000 keys, 6 parts, 110 row groups, 22.7 MB, written by the
-Java `sort-fixture`) and the `noaa-gk2a-pds` recording (a public bucket's listing, 18,472,015 keys, 2 parts, 55
-row groups, 461 MB; not in the repository). Measured on 2026-11-07; runs vary by about 15% from one to the next
-on this host.
+server: this module at the commit that last updated this section, `./build.sh`, GOMAXPROCS 4, the window cache's
+defaults. Java server: swath `main` at `01dd55b` (0.3.3-SNAPSHOT) on Temurin 25.0.5+8 with the launcher's heap
+defaults and `JAVA_TOOL_OPTIONS` as the host sets it (trust store and proxy properties only), as
+`bench/fault_replay.sh` leaves it, its window cache at its defaults. One server at a time, nothing else running,
+the two measured back to back for each configuration (2026-11-07, 12:50 to 12:58 UTC), both with
+`--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`. Fixtures, page cache warm:
+`synthetic-1m/sorted-rolled` (synthetic, 1,000,000 keys, 6 parts, 110 row groups, 22.7 MB, written by the Java
+`sort-fixture`) and the `noaa-gk2a-pds` recording (a public bucket's listing, 18,472,015 keys, 2 parts, 55 row
+groups, 461 MB; not in the repository). Runs vary by about 15% from one to the next on this host.
 
 ### Throughput and memory
 
@@ -411,24 +412,30 @@ the 64-walk rows are one minute of samples. RSS is the measured window's mean an
 
 | Server | Fixture | Walks | Object rows/s | Request p50 / p99 ms | RSS mean / max MB | Reader peak |
 |---|---|---|---|---|---|---|
-| Go | synthetic-1m rolled | 16 | 581,534 | 23.4 / 78.0 | 39 / 45 | 8 |
-| Go | synthetic-1m rolled | 64 | 667,485 | 92.5 / 153.7 | 45 / 50 | 8 |
-| Java | synthetic-1m rolled | 16 | 1,466,799 | 8.9 / 27.0 | 1,217 / 1,219 | 16 |
-| Java | synthetic-1m rolled | 64 | 1,918,334 | 28.8 / 91.6 | 1,600 / 1,601 | 46 |
-| Go | noaa-gk2a-pds | 16 | 636,777 | 21.4 / 65.1 | 64 / 72 | 8 |
-| Go | noaa-gk2a-pds | 64 | 708,869 | 85.5 / 165.3 | 79 / 84 | 8 |
-| Java | noaa-gk2a-pds | 16 | 758,565 | 15.8 / 84.8 | 1,937 / 2,206 | 10 |
-| Java | noaa-gk2a-pds | 64 | 1,062,748 | 49.2 / 184.0 | 2,118 / 2,474 | 16 |
+| Go | synthetic-1m rolled | 16 | 1,868,585 | 6.9 / 21.6 | 401 / 402 | 8 |
+| Java | synthetic-1m rolled | 16 | 1,261,226 | 10.4 / 32.9 | 1,056 / 1,105 | 16 |
+| Go | synthetic-1m rolled | 64 | 2,602,299 | 21.8 / 66.6 | 677 / 678 | 8 |
+| Java | synthetic-1m rolled | 64 | 1,876,586 | 29.7 / 90.9 | 1,472 / 1,473 | 46 |
+| Go | noaa-gk2a-pds | 16 | 1,224,641 | 10.6 / 33.0 | 887 / 894 | 8 |
+| Java | noaa-gk2a-pds | 16 | 738,430 | 16.2 / 83.9 | 1,752 / 1,860 | 10 |
+| Go | noaa-gk2a-pds | 64 | 1,811,143 | 30.1 / 96.9 | 900 / 909 | 8 |
+| Java | noaa-gk2a-pds | 64 | 1,039,262 | 50.6 / 183.3 | 2,043 / 2,595 | 16 |
 
-Idle, the Go server holds 13 MB and answers `/healthz` 0.22 s after it starts on either fixture; the Java server
-holds about 180 MB and answers after 2.2 s. The Go server's memory does not follow the fixture's object count
-(18.5 million keys cost 30 MB more than one million); it is the in-flight pages and responses
-(`response.bytes.peak` 20.5 MB at 64 walks, 82 MB at 256). The Java server serves 1.2 to 2.9 times as many rows a
-second here: its prefetch window cache decodes a run of rows once for the pages a walk reads next, where the Go
-reader decodes every page's rows from the fixture (`page.read.latency`, the reader slot's hold time with 8 slots
-sharing 4 vCPUs, averaged 9.8 ms a 1,000-key page at 64 walks).
-With 256 walks the Go server served 708,891 rows/s with `parquet.queries.peak` 8, page reads 8.5 ms and the reader
-slot wait in `parquet.query.latency` (347 ms).
+The Go server serves 1.4 to 1.7 times the Java server's rows a second here, in about half its memory. Idle, the
+Go server holds 14 MB and answers `/healthz` 0.22 s after it starts on either fixture; the Java server holds
+about 175 MB and answers after 2.0 to 2.2 s. Both serve a walk's pages from their window caches (above): at 64
+walks over the recording the Go server read the fixture 7,617 times (12,821 rows a fill on average, read-aheads
+included) for 108,248 pages answered from windows, the Java server 4,062 times for 54,840. The Go server's memory
+is the cache (2.39 million rows held over the recording, 2.29 million over the synthetic fixture, whose walks
+overlap) and the in-flight responses (`response.bytes.peak` 20 to 24 MB at 64 walks), not the fixture's object
+count. With the cache off (`--prefetch-window-rows 0`) the same 64-walk synthetic run served 756,214 rows/s in
+45 MB, every page decoded from the fixture. With 256 walks the Go server served 3,582,394 rows/s (25 s, 680 MB,
+`parquet.queries.peak` 8).
+
+Where the Go server's CPU goes at 64 walks over the synthetic fixture (`SWATH_CPUPROFILE`, 40 s, 2.4 million rows
+a second): rendering the S3 document 40% (XML escaping 15%), slicing pages out of windows 29% (unpacking rows
+into objects 11%), the response write 13% (mostly the `write` system call), fixture reads 5%, the collector under
+1%.
 
 ### Overruns at 64 walks
 
@@ -437,13 +444,13 @@ slot wait in `parquet.query.latency` (347 ms).
 
 | Server | max-keys | Object rows/s | Request p50 / p99 ms | Requests | `inject.overrun` |
 |---|---|---|---|---|---|
-| Go | 1000 | 672,848 | 91.8 / 150.9 | 20,252 | 20,057 |
-| Go | 100 | 123,950 | 51.1 / 58.0 | 37,194 | 0 |
-| Java | 1000 | 1,011,384 | 54.6 / 163.9 | 30,382 | 312 |
+| Go | 1000 | 1,185,970 | 52.2 / 76.6 | 35,611 | 51 |
+| Java | 1000 | 988,981 | 54.5 / 204.3 | 29,719 | 262 |
+| Go | 100 | 124,415 | 51.1 / 56.2 | 37,337 | 0 |
 
-At 1,000-key pages the profile asks for 1.28 million rows a second, about twice what the Go server serves on this
-host with the client beside it, so nearly every page overruns: such a run measures the server, not the profile.
-At 100-key pages (128,000 rows a second) it holds the profile with no overrun (`TestLoadNoOverrunAtSixtyFourWalks`
+At 1,000-key pages the profile asks for 1.28 million rows a second; with the client on the same four vCPUs both
+servers fall a little short, the Go server overrunning 0.14% of its pages and the Java server 0.9%. At 100-key
+pages (128,000 rows a second) the Go server holds the profile with no overrun (`TestLoadNoOverrunAtSixtyFourWalks`
 pins this). Check `inject.overrun` against the request count before trusting a run with a profile.
 
 ### Request ceiling, reader slots and descriptors
