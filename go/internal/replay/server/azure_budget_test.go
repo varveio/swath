@@ -5,10 +5,12 @@ package server
 
 import (
 	"fmt"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
@@ -59,46 +61,66 @@ func TestAzureEscapingHeavyPageStopsAtTheCap(t *testing.T) {
 	}
 }
 
-// TestAzureConcurrentBudgetExhaustion sends escaping-heavy pages at once
-// against a small budget: requests beyond it are refused 503 while
-// rendering, the charged bytes never exceed the budget, and the budget is
-// whole again afterwards.
+// TestAzureConcurrentBudgetExhaustion holds one escaping-heavy page
+// charged (its client sends the request and never reads, so the write
+// blocks with the rendered chunks charged), then sends competing pages:
+// each is refused 503 response_budget_exhausted while rendering, the
+// refusals are counted exactly, the peak charge stays within the budget,
+// and once the held connection closes every byte is released.
 func TestAzureConcurrentBudgetExhaustion(t *testing.T) {
-	cfg := config(memstore.Keys(memstore.Options{}, apostropheNames()[:200]...))
+	const pageNames = 3300 // about 20 MiB escaped
+	cfg := config(memstore.Keys(memstore.Options{}, apostropheNames()[:pageNames]...))
 	cfg.Protocols, cfg.AzureAccount = []string{"azure"}, DefaultAzureAccount
-	cfg.ResponseBufferBudget, cfg.MaxResponseBytes = 2<<20, 2<<20
+	cfg.ResponseBufferBudget, cfg.MaxResponseBytes = 24<<20, 24<<20
 	s := start(t, cfg)
-	statuses := map[int]int{}
-	var mu sync.Mutex
-	alloc := allocatedDuring(func() {
-		var wg sync.WaitGroup
-		for range 16 {
-			wg.Go(func() {
-				r := azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list&maxresults=200", "x-ms-version", "2026-06-06")
-				mu.Lock()
-				statuses[r.status]++
-				mu.Unlock()
-			})
-		}
-		wg.Wait()
-	})
-	// A served page is about 1.2 MiB rendered, and the test's client
-	// copies it twice more while reading it; a refused one must stop
-	// growing at the refusal rather than render in full first (before the
-	// bounded sink, 16 requests allocated about 136 MiB here).
-	if limit := uint64(16<<20 + statuses[200]*(8<<20)); alloc > limit {
-		t.Errorf("allocated %d bytes, over %d for %d served pages", alloc, limit, statuses[200])
+	target := fmt.Sprintf("/replay/bucket?restype=container&comp=list&maxresults=%d", pageNames)
+
+	held, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if statuses[200]+statuses[503] != 16 || statuses[200] == 0 {
-		t.Errorf("statuses %v", statuses)
+	defer held.Close()
+	if tc, ok := held.(*net.TCPConn); ok {
+		tc.SetReadBuffer(4096)
+	}
+	fmt.Fprintf(held, "GET %s HTTP/1.1\r\nHost: x\r\nx-ms-version: 2026-06-06\r\n\r\n", target)
+	deadline := time.Now().Add(20 * time.Second)
+	// Wait until the held page is rendered (its render stage recorded):
+	// from then on it is only writing, with its chunks charged.
+	for count(s, metrics.RequestStageLatency, ProtocolAzure, "render") < 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the held page never rendered: %d bytes charged", s.budget.Charged())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if held := s.budget.Charged(); held < 16<<20 {
+		t.Fatalf("the held page holds only %d bytes", held)
+	}
+
+	const competing = 3
+	var wg sync.WaitGroup
+	statuses := make([]response, competing)
+	for i := range competing {
+		wg.Go(func() { statuses[i] = azureDo(t, s, "GET", target, "x-ms-version", "2026-06-06") })
+	}
+	wg.Wait()
+	for i, r := range statuses {
+		if r.status != 503 || r.header.Get("x-swath-replay-error") != "response_budget_exhausted" ||
+			r.header.Get("x-ms-error-code") != "ServerBusy" {
+			t.Errorf("competing page %d: %d %s (%d bytes, charge now %d)", i, r.status, r.header.Get("x-swath-replay-error"), len(r.body), s.budget.Charged())
+		}
+	}
+	if n := count(s, metrics.ResponseAdmissionRefused, ProtocolAzure, "response_budget_exhausted"); n != competing {
+		t.Errorf("%d refusals counted, want %d", n, competing)
 	}
 	if peak := s.budget.Peak(); peak > cfg.ResponseBufferBudget {
 		t.Errorf("peak %d over the budget %d", peak, cfg.ResponseBufferBudget)
 	}
-	if n := s.budget.Charged(); n != 0 {
-		t.Errorf("%d bytes still charged", n)
-	}
-	if statuses[503] > 0 && count(s, metrics.ResponseAdmissionRefused, ProtocolAzure, "response_budget_exhausted") != int64(statuses[503]) {
-		t.Error("refusals not counted")
+	held.Close()
+	for s.budget.Charged() != 0 {
+		if time.Now().After(deadline.Add(10 * time.Second)) {
+			t.Fatalf("%d bytes still charged after the held connection closed", s.budget.Charged())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -647,7 +647,11 @@ func parseXML(body []byte) (*xnode, error) {
 		case xml.CharData:
 			cdata := bytes.HasPrefix(body[offset:], []byte("<![CDATA["))
 			if len(stack) == 0 {
-				if cdata || !xmlSpace(t) {
+				// Outside the root only literal white space is allowed:
+				// the decoded text would let a character reference such
+				// as &#32; pass as a space, so the bytes as sent are
+				// checked.
+				if cdata || !xmlSpace(body[offset:d.InputOffset()]) {
 					return nil, errors.New("text outside the root")
 				}
 				continue

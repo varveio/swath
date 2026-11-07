@@ -51,9 +51,13 @@ func EstimateSize(pageSize int) int { return 2048 + pageSize*512 }
 // row the profile cannot render (a negative size, a time outside years 1
 // to 9999, an empty, over-long or invalid-UTF-8 name, a control character)
 // is a FixtureIncompatible error naming the reason. Each entry is
-// formatted on its own and then written, so no more than one entry is held
-// outside o; a refusal by o (its cap or budget, o.Err) stops rendering
-// before the next entry.
+// formatted on its own and written, so no more than one entry is held
+// outside o; a refusal by o (its cap or budget, o.Err) stops rendering.
+// The writes and the checks keep the replay wire contract's order: the
+// entry's opening tag is written before its name is checked, and the name
+// and the properties' opening before its time is, so under a small cap a
+// write the cap refuses is reported (response_too_large) before a fixture
+// value the profile refuses further on (TestRenderErrorPrecedence).
 func RenderList(o *output.Output, res *Result, endpoint string) error {
 	var buf []byte
 	flush := func() bool {
@@ -88,6 +92,9 @@ func RenderList(o *output.Output, res *Result, endpoint string) error {
 		}
 		if e.Object == nil {
 			buf = append(buf, "<BlobPrefix>"...)
+			if !flush() {
+				return nil
+			}
 			var err error
 			if buf, err = appendName(buf, e.Prefix, true, res.onPath); err != nil {
 				return err
@@ -107,11 +114,17 @@ func RenderList(o *output.Output, res *Result, endpoint string) error {
 			return fail(FixtureIncompatible, "negative_size")
 		}
 		buf = append(buf, "<Blob>"...)
+		if !flush() {
+			return nil
+		}
 		var err error
 		if buf, err = appendName(buf, o.Key, false, res.onPath); err != nil {
 			return err
 		}
 		buf = append(buf, propertiesStart...)
+		if !flush() {
+			return nil
+		}
 		sec := floorDiv(micros, 1_000_000)
 		if sec < firstRenderable || sec > lastRenderable {
 			return fail(FixtureIncompatible, "timestamp_year_out_of_range")
