@@ -232,7 +232,7 @@ type prefetcher struct {
 
 	mu      sync.Mutex
 	ahead   map[windowKey]*pending // read-aheads in flight
-	windows []*window                   // least recently used first
+	windows []*window              // least recently used first
 	live    int64
 	anchors map[string]*list.Element
 	order   *list.List // of *anchor, least recently used first
