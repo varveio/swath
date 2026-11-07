@@ -31,7 +31,7 @@ import (
 // marker is refused; encoding-type=url writes a space as '+' and leaves
 // '*'; a NUL in the prefix or start-after is refused; key parameters are
 // read as UTF-8 with replacement; Owner is written before StorageClass
-// (ownerFirst); and every listing and error document has a newline after
+// (ownerFirst), and only for fetch-owner=true exactly (dropOwners); and every listing and error document has a newline after
 // its XML declaration (declNewline).
 //
 // Against the Java server every S3 request therefore goes through
@@ -351,6 +351,10 @@ func planS3(query string, driverToken bool) s3Plan {
 		plan.fixes = append(plan.fixes, s3Fix{"empty start-after echoed", func(b []byte) []byte {
 			return bytes.Replace(b, []byte("</Prefix>"), []byte("</Prefix><StartAfter></StartAfter>"), 1)
 		}})
+	}
+	if owner, ok := get("fetch-owner"); ok && string(owner.value) != "true" {
+		// First, so the owners are gone before any rule moves them.
+		plan.fixes = append([]s3Fix{{"Owner only for fetch-owner=true exactly", dropOwners}}, plan.fixes...)
 	}
 	if hasEnc && strings.EqualFold(string(enc.value), "url") {
 		plan.fixes = append(plan.fixes, s3Fix{"encoding-type=url writes ' ' as '+' and '*' as is", reencodeURL})
@@ -772,6 +776,20 @@ func controlReferences(b []byte) []byte {
 		return b
 	}
 	return out
+}
+
+// javaOwnerElement is an Owner element of a Java page.
+var javaOwnerElement = regexp.MustCompile(`<Owner>(?:<ID>[^<]*</ID>)?(?:<DisplayName>[^<]*</DisplayName>)?</Owner>`)
+
+// dropOwners removes every Owner from a Java page: the Java server
+// renders owners for fetch-owner=true in any case, live S3 and the Go
+// route only for the exact value true (internal/replay/s3
+// TestLiveFetchOwnerIsExactlyTrue).
+func dropOwners(b []byte) []byte {
+	if !bytes.Contains(b, []byte("<Owner>")) {
+		return b
+	}
+	return javaOwnerElement.ReplaceAll(b, nil)
 }
 
 // javaOwner is a Java page's StorageClass followed by its Owner, the

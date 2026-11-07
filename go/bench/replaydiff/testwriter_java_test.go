@@ -29,7 +29,9 @@ import (
 // or not. The fixture's rows carry owners, so the same listings with
 // fetch-owner=true are compared as well: each must pass only as the
 // documented divergence of Owner's place (written before StorageClass, as
-// live S3 does). The Java server's rollup refuses a row group whose key column index does not
+// live S3 does); with fetch-owner=TRUE, only as the divergence of the
+// value (the Java server renders owners for it, live S3 does not). The
+// Java server's rollup refuses a row group whose key column index does not
 // declare ASCENDING (fixture_disordered), which the test writer once left
 // to parquet-go's default. It needs the Java launcher:
 // SWATH_REPLAY_JAVA=PATH (with JAVA_HOME set as the launcher needs it);
@@ -88,10 +90,10 @@ func TestTestWriterPartAgainstJava(t *testing.T) {
 	got := &target{name: "go", base: fmt.Sprintf("http://127.0.0.1:%d", srv.Port()), client: client}
 	rep := &report{}
 	d := &driver{o: options{bucket: "bkt"}, ref: ref, got: got, rep: rep}
-	compared, owned := 0, map[string]bool{}
+	compared, owned := 0, map[string]string{}
 	for _, prefix := range []string{"", "d0/", "d3/", "d3/s2/", "d5/s1/", "top"} {
 		for _, maxKeys := range []string{"1", "3", "1000"} {
-			for _, params := range [][]string{{"delimiter", "/"}, {"delimiter", ""}, {"delimiter", "/", "fetch-owner", "true"}, {"fetch-owner", "true"}} {
+			for _, params := range [][]string{{"delimiter", "/"}, {"delimiter", ""}, {"delimiter", "/", "fetch-owner", "true"}, {"fetch-owner", "true"}, {"fetch-owner", "TRUE"}} {
 				query := q(append([]string{"list-type", "2", "prefix", prefix, "max-keys", maxKeys}, params...)...)
 				r := request{Name: "test writer " + query, Method: "GET", Query: query}
 				a, df, err := d.compareOne(r)
@@ -105,15 +107,18 @@ func TestTestWriterPartAgainstJava(t *testing.T) {
 				if !df.OK {
 					t.Errorf("%s: %+v", r.Query, df)
 				}
-				if strings.Contains(query, "fetch-owner") && strings.Contains(string(a.Body), "<Owner>") {
-					owned[r.Name] = true
+				if strings.Contains(string(a.Body), "<Owner>") {
+					owned[r.Name] = "(as live S3: Owner before StorageClass)"
+					if strings.Contains(query, "fetch-owner=TRUE") {
+						owned[r.Name] = "(as live S3: Owner only for fetch-owner=true exactly)"
+					}
 				}
 			}
 		}
 	}
 	for _, l := range rep.Divergences {
 		name, _, _ := strings.Cut(l, ": java ")
-		if !owned[name] || !strings.HasSuffix(l, "(as live S3: Owner before StorageClass)") {
+		if reason := owned[name]; reason == "" || !strings.HasSuffix(l, reason) {
 			t.Errorf("not the owner divergence alone: %s", l)
 		}
 		delete(owned, name)

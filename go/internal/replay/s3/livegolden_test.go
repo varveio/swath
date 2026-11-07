@@ -628,3 +628,45 @@ func TestLiveOwnerBeforeStorageClass(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveFetchOwnerIsExactlyTrue pins which fetch-owner values ask for
+// owners: S3 answered fetch-owner=true, =%74rue, a true before a TRUE or
+// a false, and a true after a malformed fetch-owner with Owner; and
+// fetch-owner=TRUE, =True, =yes, =1, =, a bare fetch-owner, =true%20,
+// =+true, =true%00, a true after a TRUE, a false or an empty value, and
+// Fetch-Owner=true without it. The value is read as every parameter is
+// (the first one counts, a malformed one is dropped) and must then be
+// "true" exactly.
+func TestLiveFetchOwnerIsExactlyTrue(t *testing.T) {
+	id := strings.Repeat("0123456789abcdef", 4)
+	size := int64(36822)
+	st, err := memstore.New([]store.Object{{Key: []byte("index.html"), Size: &size, StorageClass: sp("STANDARD"), OwnerID: &id}}, memstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for q, want := range map[string]bool{
+		"fetch-owner=true": true, "fetch-owner=%74rue": true, "fetch-owner=true&fetch-owner=TRUE": true,
+		"fetch-owner=true&fetch-owner=false": true, "fetch-owner=tru%ZZ&fetch-owner=true": true,
+		"fetch-owner=TRUE": false, "fetch-owner=True": false, "fetch-owner=yes": false, "fetch-owner=1": false,
+		"fetch-owner=": false, "fetch-owner": false, "fetch-owner=true%20": false, "fetch-owner=+true": false,
+		"fetch-owner=true%00": false, "fetch-owner=TRUE&fetch-owner=true": false, "fetch-owner=false&fetch-owner=true": false,
+		"fetch-owner=&fetch-owner=true": false, "Fetch-Owner=true": false,
+	} {
+		req, err := ParseRequest("bkt", "list-type=2&max-keys=1&"+q)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		res, err := (&Pager{Store: st}).List(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		doc := string(AppendList(nil, res))
+		owner := "<Size>36822</Size><Owner><ID>" + id + "</ID></Owner><StorageClass>STANDARD</StorageClass></Contents>"
+		if !want {
+			owner = "<Size>36822</Size><StorageClass>STANDARD</StorageClass></Contents>"
+		}
+		if !strings.Contains(doc, owner) {
+			t.Errorf("%s: %s\nwant %s", q, doc, owner)
+		}
+	}
+}

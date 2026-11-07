@@ -160,8 +160,10 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 	if !r.TokenSet && bytes.IndexByte(r.StartAfter, 0) >= 0 {
 		return nil, errNUL.argument("key-marker", string(r.StartAfter))
 	}
+	// Only the exact value "true" asks for owners; "TRUE", "yes", "1"
+	// and an empty value do not (TestLiveFetchOwnerIsExactlyTrue).
 	owner, _ := q.text("fetch-owner")
-	r.FetchOwner = strings.EqualFold(owner, "true")
+	r.FetchOwner = owner == "true"
 	return r, nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -269,7 +270,10 @@ func TestDeclNewline(t *testing.T) {
 // fetch-owner=true listing passes only because the driver moves the
 // Owner on the Java side, and is listed as a documented divergence for
 // that reason; a listing without owners is not a divergence; a Go answer
-// in the Java order fails.
+// in the Java order fails. The reference reads fetch-owner=TRUE as true,
+// as the Java server does, and the Go route lists without owners, as live
+// S3 does: the driver drops the Java page's owners, a divergence of its
+// own reason, and without that the request fails.
 func TestOwnerOrderIsDerived(t *testing.T) {
 	sp := func(s string) *string { return &s }
 	size, mod := int64(7), time.UnixMicro(1_767_225_600_000_000)
@@ -325,7 +329,8 @@ func TestOwnerOrderIsDerived(t *testing.T) {
 	}
 	stub := func(newline bool) string {
 		h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			resp, err := http.Get(goBase + r.URL.RequestURI())
+			// The Java server reads fetch-owner case-insensitively.
+			resp, err := http.Get(goBase + r.URL.Path + "?" + anyCaseTrue.ReplaceAllString(r.URL.RawQuery, "fetch-owner=true"))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)
 				return
@@ -351,9 +356,10 @@ func TestOwnerOrderIsDerived(t *testing.T) {
 		t.Fatalf("java form: %s", page)
 	}
 
-	owned := []string{"list-type=2&fetch-owner=true", "list-type=2&fetch-owner=TRUE&delimiter=%2F", "list-type=2&fetch-owner=true&encoding-type=url",
+	owned := []string{"list-type=2&fetch-owner=true", "list-type=2&fetch-owner=true&delimiter=%2F", "list-type=2&fetch-owner=true&encoding-type=url",
 		"list-type=2&fetch-owner=true&max-keys=1"}
-	plain := []string{"list-type=2", "list-type=2&fetch-owner=false", "list-type=2&fetch-owner=true&prefix=c"}
+	plain := []string{"list-type=2", "list-type=2&fetch-owner=false", "list-type=2&fetch-owner=true&prefix=c", "list-type=2&fetch-owner=yes"}
+	anyCase := []string{"list-type=2&fetch-owner=TRUE", "list-type=2&fetch-owner=True&delimiter=%2F"}
 	run := func(got *target, queries []string) *report {
 		rep := &report{}
 		d := &driver{o: options{bucket: "bkt", parallel: 1}, ref: java, got: got, comp: bytesComparator{}, rep: rep}
@@ -377,8 +383,19 @@ func TestOwnerOrderIsDerived(t *testing.T) {
 	if rep := run(goRoute, plain); rep.Passed != len(plain) || rep.Failed != 0 || len(rep.Divergences) != 0 {
 		t.Errorf("plain: passed %d failed %d divergences %q", rep.Passed, rep.Failed, rep.Divergences)
 	}
+	if rep := run(goRoute, anyCase); rep.Passed != len(anyCase) || rep.Failed != 0 || len(rep.Divergences) != len(anyCase) {
+		t.Errorf("any case: passed %d failed %d divergences %q", rep.Passed, rep.Failed, rep.Divergences)
+	} else {
+		for _, l := range rep.Divergences {
+			if !strings.HasSuffix(l, "(as live S3: Owner only for fetch-owner=true exactly)") {
+				t.Errorf("not the fetch-owner divergence alone: %s", l)
+			}
+		}
+	}
 	javaOrder := &target{name: "go", base: stub(true), client: http.DefaultClient}
 	if rep := run(javaOrder, owned); rep.Failed != len(owned) {
 		t.Errorf("a Go answer in the Java order: passed %d failed %d", rep.Passed, rep.Failed)
 	}
 }
+
+var anyCaseTrue = regexp.MustCompile(`(?i)fetch-owner=true\b`)
