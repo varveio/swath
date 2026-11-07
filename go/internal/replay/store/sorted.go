@@ -92,6 +92,10 @@ func (s *Sorted) Counters() *Counters { return &s.counters }
 // for its counts.
 func (s *Sorted) Files() *sortedparquet.FileCache { return s.files }
 
+// FirstKeys returns the first key of every non-empty row group, in key
+// order: the routing keys.
+func (s *Sorted) FirstKeys() [][]byte { return s.reader.FirstKeys() }
+
 // SchemaID returns the fixture's declared schema id.
 func (s *Sorted) SchemaID() string { return s.schemaID }
 
