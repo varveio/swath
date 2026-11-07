@@ -315,11 +315,13 @@ a 255-segment name (`TestRenderRefusals`; evidence capture `azure-12a`).
 delimiters `/`, multi-byte, astral, empty; `startFrom` around names, inside rolled prefixes and with EE..F4
 characters including the 4,096-byte U+10000 bound; header, `Accept`, query-grammar and raw-byte refusals;
 routing, HEAD, POST, DELETE), marker cases in which each server resumes with its own marker (page 2, other
-scope, other version, truncated, flipped, padded), marker walks at `-walks` sizes (default 1, 7, 5000), and a
+scope, other version, truncated, flipped, padded; each source asks for one result in a scope with at least two
+entries, and a case whose sources agree without a marker is reported as skipped, not passed), marker walks at `-walks` sizes (default 1, 7, 5000), and a
 seeded random set. `azureComparator` requires the same status and classified headers (`Content-Type`,
 `x-ms-version`, `x-ms-error-code`, `x-ms-client-request-id`, `Allow`, `x-swath-replay-error`), a well-formed
 `x-ms-request-id` and `Date` on each side, the BOM, and the same body bytes after masking the
-`ServiceEndpoint` authority and replacing every marker by its effect (flag, progress, boundary); it counts the
+`ServiceEndpoint` authority and replacing every marker by its effect (flag, progress, boundary; `<Marker>` and
+`<NextMarker>` each matched with its own closing tag, so a broken element is compared as it is); it counts the
 answers that matched only by effect, which is zero when both servers report the same fixture identity. With
 `-java-args "... --serving-mode duckdb"` and `-go-fixture` it compares the Java server serving an unsorted
 capture with the Go server serving the same rows sorted; `-accept-segment-improvement` then counts the Java
@@ -340,7 +342,9 @@ SDK run (request scope compared as decoded parameters, since the Go SDK orders a
 the Go SDK's product token in place of the Java one), and the SDK's decoded blobs, prefixes, sizes and times,
 Encoded names included, to the native pages. `sdkunit_test.go` adds Encoded names and properties, 5,000-name
 pages, and a fixture fault with and without retries. A pinned match must match; a pinned mismatch
-must reproduce or improve; `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-outcomes.json`.
+must reproduce in full or improve (only the `azure-09h` and `azure-09j` pins, whose actual value is the replay's
+own marker, match that value as a prefix); the parser refuses what the reference DOM parser refuses and keeps
+comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorruptedReplayResults`); `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-outcomes.json`.
 
 ### Azure tests
 
