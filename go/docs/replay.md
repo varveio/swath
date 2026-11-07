@@ -573,7 +573,11 @@ refuses it, the replay decodes it), `gcs-11e`, `11f`, `11g`, `11i` (`fields`, `v
 
 `bench/faultproxy -record FILE` writes every exchange it forwards as a JSON line (the campaign's raw-exchange
 shape: method, URL, raw path and query, request headers with credentials redacted, status, response headers, body,
-timestamps). Running the lister through it against the provider records the listing and the client's whole
+timestamps). Each exchange is written before its answer is released to the client, so the answer that issued a
+page token precedes, in the file and in sequence numbers, every request that carries that token
+(`TestRecordPersistsBeforeRelease`). On SIGINT or SIGTERM the proxy stops accepting connections and waits up to
+`-drain` (30 s) for the requests in flight to be answered and recorded, a reset included, before it closes the
+file (`TestRecordDrainsOnShutdown`); an exchange still in flight then is reported and the proxy exits 1. Running the lister through it against the provider records the listing and the client's whole
 request stream in one go; `replaydiff -capture FILE` then replays every captured request, in order, against the Go
 server serving the dataset that same run wrote, maps each captured token to the token the Go server issued for the
 same request, and compares each answer with the captured one under the policy above (a gzip-coded captured body is

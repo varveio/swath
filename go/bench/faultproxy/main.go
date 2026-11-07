@@ -4,12 +4,14 @@
 // Command faultproxy serves the test-only fault-injecting proxy
 // (internal/source/objhttp/faulttest) in front of a listing server, for
 // benchmarks: throttle storms, latency inflation, connection resets and a
-// rate cap, deterministic from a seed. On SIGINT or SIGTERM it writes the
-// timeline (TSV, 100 ms buckets since the first request) and prints the
-// totals.
+// rate cap, deterministic from a seed. On SIGINT or SIGTERM it stops
+// accepting connections, waits up to -drain for the requests in flight to
+// finish (and be recorded), writes the timeline (TSV, 100 ms buckets
+// since the first request) and prints the totals.
 //
 // With -record FILE it also writes every exchange it forwards (and every
-// answer it injects) to FILE as JSON lines (record.go): run a client
+// answer it injects) to FILE as JSON lines (record.go), each before its
+// answer is released to the client: run a client
 // through it against a live provider endpoint (-target
 // https://s3.REGION.amazonaws.com for path-style S3, or
 // https://storage.googleapis.com) and replay the capture with
@@ -20,6 +22,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -29,6 +32,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
 )
@@ -51,6 +55,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:19091", "listen address")
 	timeline := flag.String("timeline", "", "write the timeline TSV to this `file` on exit")
 	record := flag.String("record", "", "write every exchange to this `file` as JSON lines")
+	drain := flag.Duration("drain", 30*time.Second, "on SIGINT or SIGTERM, wait this long for requests in flight to finish")
 	flag.Uint64Var(&plan.Seed, "seed", 1, "decision seed")
 	flag.StringVar(&plan.Dialect, "dialect", "s3", "throttle answer: s3 (503 SlowDown) or gcs (429 rateLimitExceeded)")
 	flag.Float64Var(&plan.RateCap, "rate-cap", 0, "throttle requests beyond `N` per trailing second (0: off)")
@@ -67,31 +72,53 @@ func main() {
 	}
 	var h http.Handler = p
 	var rec *recorder
+	var f *os.File
 	if *record != "" {
-		f, err := os.Create(*record)
-		if err != nil {
+		if f, err = os.Create(*record); err != nil {
 			log.Fatal(err)
 		}
-		defer f.Close()
 		rec = newRecorder(p, *target, f)
 		h = rec
 	}
-	go func() { _ = http.Serve(ln, h) }()
+	srv := &http.Server{Handler: h}
+	go func() { _ = srv.Serve(ln) }()
 	fmt.Fprintf(os.Stderr, "faultproxy %s -> %s plan %+v\n", ln.Addr(), *target, plan)
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
+	stopErr := stop(srv, rec, f, *drain)
 	if *timeline != "" {
 		if err := os.WriteFile(*timeline, []byte(faulttest.TSV(p.Timeline())), 0o644); err != nil {
 			log.Fatal(err)
 		}
 	}
-	if rec != nil {
-		if err := rec.Err(); err != nil {
-			log.Fatalf("recording: %v", err)
-		}
-	}
 	s := p.Stats()
 	fmt.Println(strings.TrimSpace(fmt.Sprintf("requests=%d throttled=%d reset=%d delayed=%d forwarded=%d max_active=%d",
 		s.Requests, s.Throttled, s.Reset, s.Delayed, s.Forwarded, s.MaxActive)))
+	if stopErr != nil {
+		log.Fatalf("recording: %v", stopErr)
+	}
+}
+
+// stop shuts srv down: no new connections, the requests in flight
+// answered (or drain elapsed); then rec, if set, records what is still in
+// flight (a reset outlives its connection) and f is synced and closed.
+func stop(srv *http.Server, rec *recorder, f *os.File, drain time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), drain)
+	defer cancel()
+	shut := srv.Shutdown(ctx)
+	if rec == nil {
+		return nil
+	}
+	err := rec.Close(ctx)
+	if err == nil && shut != nil {
+		err = fmt.Errorf("shutdown: %w", shut)
+	}
+	if e := f.Sync(); err == nil {
+		err = e
+	}
+	if e := f.Close(); err == nil {
+		err = e
+	}
+	return err
 }
