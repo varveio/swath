@@ -41,69 +41,366 @@ distinct timestamps: parquet-go cannot switch from dictionary to delta mid-chunk
 
 ## Replayed recordings: Go against Java defaults
 
-Replay at each recording's worker-page p50 latency, 64 workers, `--seed`, sorted Parquet output, 3 interleaved
-repetitions (Java defaults interleaved with the Go arm), median (min–max). Requests per 1k keys are computed
-from the medians.
+**Run `recordings1`, 2026-11-07.** One n4-highcpu-16 VM in GCP us-east1 (150 GB disk). The Java CLI and
+swath-replay were built from this repository at `62b224f8` with Temurin 25.0.5. The four recordings were made
+again that day by listing the live buckets anonymously with that Java CLI (64 concurrency, sorted Parquet), and
+their object counts equal the earlier recordings'. `bench/policy_replay.sh` then served each recording at its
+worker-page p50 latency (99, 164, 99 and 103 ms on every request shape). Four arms ran interleaved, 3
+repetitions each, all with sorted Parquet output:
 
-| Recording (objects, latency) | Arm | Wall s | Requests | Requests per 1k keys | Splits | Empty children | Overfetched keys | Mean active |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| noaa-eri-pds (845,693, 99 ms) | Java | 43.4 (43.0–43.5) | 1,353 | 1.60 | 94 | 100 | 148,904 | 7.7 |
-| | Go | **3.7** (3.7–3.8) | 1,228 | 1.45 | 466 | 150 | 378,597 | 35.6 |
-| pansurg-curation-raw-open-data (501,262, 164 ms) | Java | 66.4 (66.1–68.8) | 1,174 | 2.34 | 77 | 99 | 310,056 | 6.8 |
-| | Go | **6.0** (5.1–6.2) | 803 | 1.60 | 395 | 168 | 298,042 | 22.9 |
-| noaa-nws-fourcastnetgfs-pds (4,081,170, 99 ms) | Java | 83.2 (80.8–92.4) | 4,913 | 1.20 | 296 | 55 | 171,414 | 8.3 |
-| | Go | **14.8** (14.6–15.6) | 5,803 | 1.42 | 2,337 | 1,106 | 1,720,578 | 43.6 |
-| nara-1950-census (13,540,310, 103 ms) | Java | 109.4 (108.8–111.3) | 14,942 | 1.10 | 994 | 170 | 715,051 | 19.6 |
-| | Go | **57.2** (55.9–58.1) | 20,928 | 1.55 | 9,847 | 4,504 | 7,383,588 | 40.4 |
+- Java at its defaults;
+- Go at main `62b224f8`;
+- Go at `7b05605`;
+- Go at this head, `4ad9eecc`.
 
-Java's splits are its owner splits plus steals; its empty children are `CHILD_MASS/empty`; its overfetched
-keys are `swath.page.raw_keys` minus objects. Go is 12x and 11x faster on the shallow recordings and 5.6x and
-1.9x on the deep ones, at about 40 of 64 ranges active where Java runs 8–20. On the deep recordings it sends
-more requests (+18 % and +40 % here) and overfetches far more keys; the next section explains why. Replay
-inflates Java's serial tail; the live runs below are smaller wins.
+The Go arms use 64 workers and `--seed`. The table gives the median, with (min–max) on wall. Requests are the
+replay server's HTTP count, and requests per 1k keys come from the medians. `7b05605` is within a few percent
+of the head on every column and is left out of the table; the head adds only telemetry.
 
-**Reproduce:** with the replay oracle built and the recording under `$BENCH_DATA/recordings/BUCKET/`,
+**Row identity.** For each Go build and recording, one more run without injected latency wrote a dataset.
+`bench/diffds.py` compared it with the Java recording, and all 12 were row-identical.
+
+| Recording (objects, latency) | Arm | Wall s | Requests | Requests per 1k keys | Splits | Empty children | Overfetched keys | Structure probes | Mean active |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds (845,693, 99 ms) | Java | 42.0 (42.0–42.5) | 1,356 | 1.60 | 94 | 100 | 148,904 | 355 | 7.6 |
+| | Go main | 3.6 (3.4–3.6) | 1,234 | 1.46 | 475 | 154 | 384,597 | 0 | 35.8 |
+| | Go head | **3.1** (3.1–3.1) | 1,389 | 1.64 | 223 | 109 | 342,612 | 142 | 42.3 |
+| pansurg-curation-raw-open-data (501,262, 164 ms) | Java | 68.2 (65.1–69.7) | 1,188 | 2.37 | 83 | 99 | 308,056 | 362 | 6.0 |
+| | Go main | 5.8 (4.9–5.9) | 793 | 1.58 | 390 | 164 | 288,042 | 0 | 23.1 |
+| | Go head | **5.2** (5.0–5.2) | 839 | 1.67 | 167 | 54 | 247,439 | 40 | 25.5 |
+| noaa-nws-fourcastnetgfs-pds (4,081,170, 99 ms) | Java | 82.8 (75.8–85.1) | 4,954 | 1.21 | 313 | 61 | 182,414 | 672 | 8.1 |
+| | Go main | 14.3 (14.1–15.2) | 5,844 | 1.43 | 2,445 | 1,123 | 1,761,578 | 0 | 42.3 |
+| | Go head | **11.6** (11.3–11.6) | 5,503 | 1.35 | 1,129 | 442 | 809,578 | 616 | 46.4 |
+| nara-1950-census (13,540,310, 103 ms) | Java | 102.3 (102.3–103.2) | 14,929 | 1.10 | 990 | 166 | 708,051 | 679 | 19.9 |
+| | Go main | 53.7 (50.4–54.3) | 20,547 | 1.52 | 9,410 | 4,181 | 7,002,326 | 0 | 40.4 |
+| | Go head | **29.6** (29.6–30.4) | 14,396 | 1.06 | 918 | 260 | 781,326 | 60 | 51.5 |
+
+How the columns are counted. Java's splits are its owner splits plus steals, and its empty children are
+`CHILD_MASS/empty`. Its overfetched keys are `swath.page.raw_keys` minus objects. Its probes are all of its
+probe kinds, while Go's are structure probes, which are delimiter requests.
+
+**Wall.**
+- Against Java, the head is 13.5x and 13.1x faster on the shallow recordings and 7.1x and 3.5x on the deep
+  ones.
+- Against main it is 0.86x, 0.90x, 0.81x and 0.55x the wall.
+- The deep recordings gain the most. On nara, splits fall from 9,410 to 918 and empty children from 4,181 to
+  260. Overfetched keys fall from 7.0M to 0.78M, against Java's 0.71M, and mean active rises from 40 to 51 of
+  64.
+
+**Requests.** They fall where the old policy over-split: −30 % against main on nara, now 3.6 % below Java's,
+and −6 % on fourcastnetgfs, 11 % above Java's. On the shallow recordings they rise:
+- +12.6 % against main on eri, to 1.64 per 1k keys, 2.4 % above Java;
+- +5.8 % on pansurg, still 29 % below Java.
+
+The rise is the structure probes the head sends on its evidence (142 and 40 per run), which more than cancel
+the requests saved by fewer splits. Replay charges nothing for a request, so these runs show the wall gain and
+the probe cost side by side but not what the probes cost under throttling.
+
+Replay inflates Java's serial tail, so the live runs below are smaller wins.
+
+**Reproduce:** build the replay oracle and put the recording under `$BENCH_DATA/recordings/BUCKET/`, then:
 
 ```bash
-printf 'java-default\tjava\t\ngo-base\tgo\t/path/to/swath\n' > arms.tsv
+printf 'java-default\tjava\t\ngo-head\tgo\t/path/to/swath\n' > arms.tsv
 REPLAY_ENV=/path/to/env.sh bench/policy_replay.sh arms.tsv noaa-eri-pds 99 19300 3 out/eri
 python3 bench/policy_table.py out/eri
 ```
 
-The harness runs Go arms as `swath diag list` with 64 workers and `--seed`; latencies are 99, 164, 99 and
+The harness runs Go arms as `swath diag list` with 64 workers and `--seed`. The latencies are 99, 164, 99 and
 103 ms for the four recordings.
+
+### Before the engine campaign (pre-merge build)
+
+The port measured these recordings before it merged as `01dd55b`, on a container that no longer exists, using
+the recordings of that time. That build had the spec pivot with a clamped density refinement and a single-page
+seed, and none of the engine campaign's work: no anchor reflection, gallop, admission gates or seed descent.
+Same configuration, 3 interleaved repetitions, median (min–max):
+
+| Recording (objects, latency) | Arm | Wall s | Requests | Requests per 1k keys | Splits | Empty children | Overfetched keys | Mean active |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds (845,693, 99 ms) | Java | 43.4 (43.0–43.5) | 1,353 | 1.60 | 94 | 100 | 148,904 | 7.7 |
+| | Go | 3.7 (3.7–3.8) | 1,228 | 1.45 | 466 | 150 | 378,597 | 35.6 |
+| pansurg-curation-raw-open-data (501,262, 164 ms) | Java | 66.4 (66.1–68.8) | 1,174 | 2.34 | 77 | 99 | 310,056 | 6.8 |
+| | Go | 6.0 (5.1–6.2) | 803 | 1.60 | 395 | 168 | 298,042 | 22.9 |
+| noaa-nws-fourcastnetgfs-pds (4,081,170, 99 ms) | Java | 83.2 (80.8–92.4) | 4,913 | 1.20 | 296 | 55 | 171,414 | 8.3 |
+| | Go | 14.8 (14.6–15.6) | 5,803 | 1.42 | 2,337 | 1,106 | 1,720,578 | 43.6 |
+| nara-1950-census (13,540,310, 103 ms) | Java | 109.4 (108.8–111.3) | 14,942 | 1.10 | 994 | 170 | 715,051 | 19.6 |
+| | Go | 57.2 (55.9–58.1) | 20,928 | 1.55 | 9,847 | 4,504 | 7,383,588 | 40.4 |
+
+`recordings1`'s main arm (`62b224f8`) reproduces these rows to within a few percent.
 
 ## Splits, overfetch and requests on the deep recordings
 
-A second interleaved session on the deep recordings (same configuration, 3 repetitions, median (min–max)):
+These figures come from `recordings1`'s medians, above.
 
-| Recording | Arm | Wall s | Requests | Splits | Empty children | Overfetched keys | Mean active |
+| Recording | Arm | Splits | Overfetched keys per split | Empty children per split | Requests against Java |
+|---|---|---:|---:|---:|---:|
+| fourcastnetgfs | Java | 313 | 583 | 0.19 | – |
+| | Go main | 2,445 | 720 | 0.46 | +18 % |
+| | Go head | 1,129 | 717 | 0.39 | +11 % |
+| nara-1950-census | Java | 990 | 715 | 0.17 | – |
+| | Go main | 9,410 | 744 | 0.44 | +38 % |
+| | Go head | 918 | 851 | 0.28 | −4 % |
+
+- **Main.** It split 7.8x and 9.5x as often as Java. Each split adds a trimmed last page and a child's first
+  page, so its requests and overfetched keys followed.
+- **The head.** It splits 3.6x as often as Java on fourcastnetgfs and slightly less often than Java on nara.
+  It holds 46–52 ranges active against Java's 8–20, so the remaining gap to Java is concurrency, not split
+  count. Its overfetch per split is higher than main's on nara because it has fewer splits over a similar
+  number of range ends.
+- **Reading the ratios.** Overfetch per split is total overfetch over all splits. It includes every range's
+  last page, seeded and split ranges alike, so it is not the marginal cost of a split. The empty-children
+  count adds lower and upper children together.
+- **S3 against GCS.** S3 has no end bound, so a range's last page reads past it. GCS ranges send `endOffset`
+  and overfetch nothing ([GCS route parity](#gcs-route-parity)).
+
+A second session of the pre-merge build gave Go 6,078 and 19,128 requests and 2,464 and 7,131 splits on
+fourcastnetgfs and nara, in line with `recordings1`'s main arm.
+
+**Reproduce:** run the commands above on `noaa-nws-fourcastnetgfs-pds` (99 ms) and `nara-1950-census` (103 ms).
+
+## Engine campaign, 2026-11-07 (prod key lists through a fake at 50 ms)
+
+**What it is.** Production key lists: the keys of anonymous public S3 buckets of 1M to 150M objects, taken from
+earlier Java runs' sorted output, served as ListObjectsV2 by a private key-list fake (`keyfake`: start-after,
+continuation tokens and delimiter pages, a flat 50 ms per page). No request reached S3 (the live runs below say so).
+One run per arm and list, 64 workers, `--count-only` unless an arm says otherwise, a 600 s cap per arm unless
+stated, on n4-highcpu-16 Spot VMs (GCP Batch). These are diagnostic
+runs outside the study harness: no receipts. The ideal is `ideal64 = (pages/64 + 7 + seed round trips) × 50 ms`
+(one seed round trip in the candidate's ideal, none in the baseline's).
+
+- **Baseline:** `577c7c2` (`01dd55b`, the Go port as merged, plus the `split.max_depth` counter), on 251 lists.
+- **Candidate 1:** `091c4534`: the anchor reflection and the gallop, the refused sliver, structure probes on
+  their evidence, the seed's pagination, descent and resume seeding with `--seed` on, and the order-stage stop
+  latch. Not in it: the retained-bound copies and `order.Count`, the review fixes, the admission gates. Run on
+  the 201 lists of the iteration set (the 251 less every fifth by size, held out).
+- **Java:** the Java CLI at the same latency, `--format=discard --checkpoint=none --concurrency=64`. The
+  baseline's Java comparison is a 41-list subset (every fifth list of the iteration set) run with `2df5b331`, the baseline plus
+  instrumentation, whose decisions are the baseline's.
+
+| Gate | Campaign bar | Baseline | Candidate 1 | Candidate 1, `--seed=false` |
+|---|---|---|---|---|
+| completed within the cap | all | 232 of 251 | **201 of 201** | 201 of 201 |
+| wall / ideal64, median | ≤ 2.0 | 5.32 | **1.31** | 1.42 |
+| wall / ideal64, p90 | ≤ 3.0 | 14.2 | **1.82** | 1.93 |
+| wall / ideal64, worst | ≤ 5 | 45.7 | **2.5** | 5.2 |
+| requests per 1k keys, median / p90 | ≤ 1.20 / 1.40 | 1.58 / 1.69 | **1.10 / 1.41** | 1.16 / 1.45 |
+| `split.max_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 3 of 232 | **185 / 150 of 201** | 136 / 60 of 201 |
+| mean active ranges, lists of 10M keys or more | ≥ 40 of 64 | 20 (median) | **56.8** | 55.5 |
+| regressions against the baseline: wall > 1.05x / requests > 1.10x | 0 / 0 | – | **0 / 2** (noaa-ghcn-pds +12 %, mogreps-g +11 %, both about 1M keys) | 0 / 2 |
+| lists where Go is slower than Java | 0 | 24 of 41 | **2 of 200** (fcp-indi 183 against 130 s, noaa-goes19 154 against 147 s); Go / Java wall median 0.31 | 4 of 200 |
+| wall on lists under 2M keys, against the baseline | not slower | – | **0.34x** | 0.35x |
+| peak RSS, count-only | – | median 0.48 GB, p90 2.4 GB, max 17.3 GB | median 0.52 GB, p90 0.87 GB, max 2.9 GB | – |
+
+- The split chain is gone at breadth: depth, wall and mean active move from a chain of dependent requests to
+  near the ideal on most lists, and every list completes.
+- The seed on by default is a win on these lists: 185 against 136 lists within the depth bound, worst 2.5x
+  against 5.2x.
+- Still open in candidate 1: requests on small lists (the lists above 1.40 requests per 1k keys are almost all
+  under 3M keys: empty children of pivots in key gaps), 16 lists above the depth bound, the two request
+  regressions, and the two large lists where Java is faster. Peak RSS in this binary still includes the
+  retained-page leak ([Memory behind a held-up frontier](#memory-behind-a-held-up-frontier)).
+
+**Builds after candidate 1.** Each row of the tables below names the build it measured. The head of this change
+(`7b05605`) was not re-swept on the iteration and held-out sets: it adds to candidate 4 a consistent total order
+for the remainder rank (a decision change: three ranges could each outrank the next) and cancellation of
+`order.Count` between children; the runs that name `7b05605` are the scale, one-core and study runs further down.
+
+- **Candidate 3:** `c48ea228`: candidate 1 plus the retained-bound copies and `order.Count`, the review fixes and
+  the admission gates.
+- **Candidate 4:** `26f363ea`: candidate 3 plus the admission override (a gate refuses a split at most 4
+  consecutive pages while workers want work) and the rank's fallback to age on an unknowable estimate.
+
+**Candidate 3 on the iteration set** (2026-11-07, 201 lists, same fake and VMs, 600 s cap per arm). Arms:
+count-only; sorted Parquet, whose keys were compared byte for byte with the key list served (the keys of the
+Java run's sorted output); the Java CLI as above; a kill (SIGKILL to the process group) at 40 % of the keys
+then `swath resume`, compared row for row; and `--spill-max` at a tenth of the default.
+
+| Gate | Campaign bar | Candidate 3 |
+|---|---|---|
+| completed within the cap | all | **201 of 201**, every arm |
+| wall / ideal64, median / p90 / worst | ≤ 2.0 / 3.0 / 5 | **1.19 / 1.76 / 8.1** (haisslab, an admission regression) |
+| requests per 1k keys, median / p90 | ≤ 1.20 / 1.40 | **1.07 / 1.35** |
+| `split.max_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 181 / 156 of 201 |
+| mean active ranges, lists of 10M keys or more | ≥ 40 of 64 | **61.9** |
+| regressions against the baseline: wall / requests | 0 / 0 | **3 / 0** (haisslab 18 → 48 s, common-screens 115 → 192 s, spacenet 13 → 13 s) |
+| lists where Go is slower than Java | 0 | **3 of 199** (common-screens, haisslab, nexrad-arco 86 against 67 s) |
+| peak RSS, count-only | – | median 0.08 GB, max 0.1 GB |
+| sorted Parquet keys byte-identical to the key list | every list | **201 of 201** (see below) |
+| kill at 40 % then resume, rows identical | every list | **201 of 201** |
+| `--spill-max` at a tenth, wall against unconstrained, six largest lists | ≤ 2x | pds-css-archive 2.87x, genome-browser 1.94x, logan-pub 1.60x; hrrr, rap, pmc 0.99–1.07x; output identical on 193 of 194 lists |
+
+The first sorted-Parquet pass matched on 200 of 201: 17 keys of nifs-lhd end in a bare carriage return, which
+the fake sent raw although the client asks for `encoding-type=url` (S3 percent-encodes such keys), and XML
+line-end normalization turned it into a newline. With the fake fixed, that list's 22,156,937 rows are
+byte-identical too. The three regressions are one admission gate (`split.skipped.upper_tiny`: the gauge
+underestimated the upper remainder and held a tile's remainder serial); on the 50 held-out lists the same gate
+took argoverse (19.1M keys) from 121 s to 267 s at 4 in flight (`idle_demand_ns` 16,000 s over the run), which
+the admission override of candidate 4 removes.
+
+**Candidate 4 on the iteration and held-out sets** (2026-11-07, same fake and VMs, count-only and the Java CLI;
+no sorted-Parquet or kill arm ran on this build's 201 and 50):
+
+| Gate | Campaign bar | Candidate 4, iteration (201) | Candidate 4, held-out (50) |
+|---|---|---|---|
+| completed within the cap | all | **201** | **50** |
+| wall / ideal64, median / p90 / worst | ≤ 2.0 / 3.0 / 5 | **1.20 / 1.67 / 2.3** | **1.19 / 1.50 / 2.2** |
+| requests per 1k keys, median / p90 | ≤ 1.20 / 1.40 | **1.08 / 1.35** | **1.09 / 1.37** |
+| `split.max_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 186 / 154 | 49 / 42 |
+| mean active ranges, lists of 10M keys or more | ≥ 40 of 64 | **60.7** | **61.1** |
+| regressions against the baseline: wall / requests | 0 / 0 | **0 / 0** | **0 / 0** |
+| lists where Go is slower than Java | 0 | **0 of 199** (Go / Java wall median 0.29) | **0 of 50** (median 0.26) |
+| wall on lists under 2M keys, against the baseline | not slower | 0.32x | 0.37x |
+| peak RSS, count-only | – | max 0.2 GB | max 0.1 GB |
+
+What separates candidate 4 from the stricter bar (requests p90 ≤ 1.25, every list within the depth bound):
+empty children at folder gaps on small lists, which only a structure probe sees, and 16 lists above the depth
+bound that still run at 1.2–1.5x the ideal.
+
+**The sorted run's working set** (candidate 4, 2026-11-07; the 64 lists of 20M keys or more, same fake,
+n4-highcpu-16, 64 workers, sorted Parquet, the default 128 MiB `--row-budget`, 900 s cap; medians over the
+lists):
+
+| Arm | Completed | Wall s | Rows spilled | Rows ahead of the frontier at peak | Lists with spill refusals | Budget wait s (summed) | Requests / 1k | Keys byte-identical |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| defaults | 64 of 64 | 51 | 96 % | 71 % | 0 | 0 | 1.02 | 64 |
+| `--spill-max` 2 × the row budget | **8 of 64** | 275 | 62 % | 13 % | 8 | 15,442 | 1.02 | 8 |
+| kill at 40 % then `swath resume` | 64 of 64 | 71 | 95 % | 67 % | 0 | 0 | 1.02 | 64 |
+
+Under today's ordered emission a healthy sorted run of a large list holds most of its rows ahead of the
+publish frontier and spills nearly all of them once: work stealing finishes ranges in roughly key-uniform
+order, so the leftmost unfinished range holds the drain until listing is nearly over (an earlier sweep of
+candidate 3 put `peak_ahead_rows` at 0.90–0.98 of the dataset on skewed tiles, and its pq arm spilled a median
+86 %, p90 97 %, of all rows, at 11–111x the Parquet output's bytes). The set is bounded by `--spill-max`, not
+by `--row-budget`. A tight cap does not degrade gracefully: at 2 × the budget, 56 of 64 lists did not finish
+within 900 s. And a kill relists most of the run: the 40 % kill on candidate 3 relisted 90–100 % of the keys
+on every list of 20M or more (0–12M rows durable at the kill), since the durable frontier is the published
+parts' ([Known gaps](#known-gaps)). A frontier-priority variant of demand and claiming cut the ahead set to
+10 % of rows and completed 39 of 64 spill-capped runs, but ran a median 3.2x slower on the defaults and was
+not adopted.
+
+**Live S3** (candidate 3, `c48ea228`, 2026-11-07). One n4-highcpu-16 Spot VM in GCP us-east1 listing the two
+buckets in AWS us-east-1: cross-cloud, the same geography, one run each, Go then Java. Anonymous,
+`--count-only --max-duration 15m` at the defaults (64 workers); Java `--format=discard --concurrency=64`. Attempt
+latency as Go measured it: p50 84 ms, p99 168 ms on nbm; p50 117 ms, p99 268 ms on fourcastnetgfs.
+
+| Bucket | Objects | Go wall | Go requests (per 1k keys) | Go mean in flight / `split.max_depth` / RSS | Java wall | Java requests | Java in flight |
+|---|---:|---:|---:|---|---:|---:|---:|
+| noaa-nbm-grib2-pds | 69,132,677 | **91 s** | 69,772 (1.01) | 63 / 16 / 74 MB | 99 s | 70,454 | 56 |
+| noaa-nws-fourcastnetgfs-pds | 4,081,170 | **12 s** | 5,446 (1.33) | 47 / 59 / 64 MB | 57 s | 5,008 | 9 |
+
+No throttle, no retry, both counts exact. At 64 wide and the measured p50 the nbm ideal is 69,133 pages / 64 ×
+84 ms = 91 s; the baseline build crawled at 4 in flight on this key list and was killed at 710 s through the
+fake. fourcastnetgfs still sends 9 % more requests than Java (empty children on a small bucket). One run per
+tool: an observation on that VM and that hour, not a rate.
+
+**Workers above 64** (`7b05605`, 2026-11-07; the 64 lists of 20M keys or more, fake at 50 ms, n4-highcpu-16;
+medians over the lists):
+
+| Arm | Wall s | Against count-only at 64 | Mean active | `split.max_depth` | Requests / 1k |
+|---|---:|---:|---:|---:|---:|
+| count-only, 64 workers | 41.5 | 1.00 | 63 | 38 | 1.019 |
+| count-only, 256 | 12.9 | 0.31 | 237 | 49 | 1.074 |
+| count-only, 512 | 11.9 | 0.27 | 458 | 51 | 1.124 |
+| sorted Parquet, 256 | 29.3 | 0.69 | 114 | 50 | 1.075 |
+
+The engine scales near-linearly to 256 workers and still gains at 512 (requests +10 %, the fan-out's cost).
+Sorted output at 256 runs at 114 active and 2.3x the count-only wall: about half its wall is a single-threaded
+drain after listing ends (at peak 94 % of rows are ahead of the frontier), so on 16 vCPU the order stage, spill
+and encoders are the limit above 64 workers, not the engine.
+
+**One core, sorted Parquet** (n4-highcpu-2, 2 vCPU and 4 GB, `GOMAXPROCS=1` so one encoder, fake at 50 ms, the
+three largest iteration lists; Java pinned with `-XX:ActiveProcessorCount=1 -Xmx2g`, `--format=parquet`; one
+run each, 2026-11-07):
+
+| List | Keys | Java, 1 core | Go candidate 4 (`26f363ea`) | Go `7b05605` | Spill written (`7b05605`) |
+|---|---:|---:|---:|---:|---:|
+| noaa-goes19 | 144.8M | 515 s | 559 s | **465 s** | 22.2 GB |
+| chalmerscloudiceclimatology | 139.1M | 362 s | 365 s | **347 s** | 16.0 GB |
+| deafrica-sentinel-5p-cloud | 129.8M | 446 s | 469 s | **415 s** | 20.4 GB |
+
+On candidate 4 Java was ahead by 1–8 % on one core; on `7b05605` Go is ahead by 4–17 %. Both tools are bound
+by the one core and the disk there (Go writes and reads back 86–98 % of its rows through spill). Go's output
+was byte-identical to the key list on candidate 4's runs. The same lists take 187, 154 and 120 s on
+n4-highcpu-16.
+
+**Through the study harness** (`7b05605`, 2026-11-07). The scale study's replay fixtures and harness (its
+replay image, fixture digests, latency deadlines, warm-up, machines, container memory and subject vCPUs as in
+the release rows), with Java 0.3.2 beside Go at the same concurrency, output written. Every row completed with
+the fixture's row count; content was not compared in these rows.
+
+| Fixture | Keys | Machine (subject) | Mode | Workers | Java s | Go s | Go / Java | Go RSS |
+|---|---:|---|---|---:|---:|---:|---:|---:|
+| aws-public-blockchain | 143.0M | n4-highcpu-80 (8 vCPU, 8 GB) | sorted Parquet | 256 | 218 | 170 | 0.78 | 1.2 GB |
+| | | | sorted Parquet | 64 | 324 | 258 | 0.80 | 0.6 GB |
+| | | | zstd TSV (Java: a dataset, 3 writers; Go: one file) | 256 | 154 | **284** | **1.84** | 1.1 GB |
+| idc-open-data (no injected latency) | 56.3M | n4-highcpu-16 (6 vCPU, 16 GB) | sorted Parquet | 64 | 125 | 82 | 0.66 | 0.6 GB |
+| noaa-nbm-grib2-pds | 66.4M | n4-highcpu-32 (4 vCPU, 8 GB) | sorted Parquet | 64 | 159 | 105 | 0.66 | 0.5 GB |
+| | | | TSV (one file; no Java row) | 64 | – | 112 | – | 0.4 GB |
+| nara-1950-census | 13.5M | n4-highcpu-32 | sorted Parquet | 64 | 79 | 27 | 0.34 | 0.5 GB |
+| real-changesets | 13.9M | n4-highcpu-32 | sorted Parquet | 64 | 63 | 34 | 0.54 | 0.4 GB |
+| noaa-nws-fourcastnetgfs-pds | 4.1M | n4-highcpu-16 | sorted Parquet | 64 | 48 | 12 | 0.25 | 0.4 GB |
+
+The one loss is the zstd text output at 256 workers: the engine waited on the output (mean active 76 of 256
+against 118 for the Parquet row on the same fixture), spilled 21.5 GB under `$TMPDIR`, which in the container is
+its overlay filesystem, and one zstd writer compressed about 21 GB of rows where Java runs three text writers.
+The study's timing grades for these rows describe its instrument, equally for both tools in a group.
+
+## Split admission on small lists
+
+The keyfake S3 fake (`keyfake-static`, 50 ms a page, ListObjectsV2, path-style, anonymous) on 4 shared cores,
+64 workers, `--count-only`, 3 interleaved repetitions, median; before is `go/engine` at `2cb204c2`, after adds
+the admission gates and the remainder rank ([providers](internals/providers.md#range-engine-internalsourcekeyrange)).
+The synthetic lists follow the shapes of the sweep's worst small lists: `mogreps` 1.04M objects flat at the
+root (`prods_op_mogreps-g_YYYYMMDD_RR_MM_TTT.nc`), `urma` 1.77M under 18,400 day folders
+(`akurma.YYYYMMDD/akurma.tHHz.<product>.grb2`), `zarr` 1.26M zarr chunks seven levels down under two top
+folders; `fourcastnetgfs` is the recorded 4.1M-key list. Depth bound: 4 log2(pages) + 8.
+
+| List | Arm | Requests / 1k | Splits | Empty children | Wall s | Depth (bound) | Mean active |
 |---|---|---:|---:|---:|---:|---:|---:|
-| fourcastnetgfs | Java | 81.8 (80.2–84.3) | 4,916 | 287 | 54 | 177,414 | 8.6 |
-| | Go | 16.4 (16.0–17.0) | 6,078 | 2,464 | 1,093 | 1,751,569 | 40.4 |
-| nara-1950-census | Java | 111.4 (109.9–114.0) | 14,961 | 1,015 | 170 | 709,051 | 19.3 |
-| | Go | 55.0 (49.6–57.2) | 19,128 | 7,131 | 2,908 | 5,360,246 | 39.1 |
+| mogreps 1.04M | before | 1.407 | 626 | 275 | 2.32 | 31 (48) | 34.8 |
+| | after | 1.202 | 323 | 88 | 2.23 | 30 | 31.0 |
+| urma 1.77M | before | 1.308 | 765 | 371 | 3.48 | 43 (51) | 38.7 |
+| | after | 1.282 | 776 | 317 | 3.63 | 48 | 37.7 |
+| zarr 1.26M | before | 1.715 | 695 | 446 | 3.01 | 35 (49) | 36.4 |
+| | after | 1.478 | 401 | 181 | 2.77 | 31 | 35.3 |
+| fourcastnetgfs 4.1M | before | 1.422 | 1,426 | 687 | 6.45 | 58 (55) | 49.1 |
+| | after | 1.343 | 1,126 | 442 | 6.07 | 56 | 48.2 |
 
-Divided by the splits (medians): overfetched keys 711 (Go) against 618 (Java) on fourcastnetgfs and 752 against
-699 on nara; empty children 0.44 against 0.19 and 0.41 against 0.17.
+- Requests fall 2–15 %, empty children 15–68 %; wall is within the runs' spread (before 3.29–3.60 s on urma,
+  after 3.40–3.92 s; the others fall). fourcastnetgfs was over the depth bound before and stays at it.
+- On `urma` the gates hardly engage (0–8 refusals): its empty children are upper children of pivots placed in
+  the gap after a month's last day (`akurma.202113` before `akurma.202114`), which a page's density reads as
+  keys. The same holds for most of the empties left on the other lists. Only a structure probe sees a folder end.
+- An earlier gauge reading the whole page's alphabet (letters of the shared prefix included) and the page's
+  density across folders read a remainder holding whole folders as 0 on `zarr` and refused its largest ranges:
+  5–8 s against 3.0 s. The run under the interval's prefix and the +∞ reading of a bound in another folder
+  are the fix.
 
-- Go splits 8.6x and 7.0x as often as Java. That buys about 40 active ranges against Java's 9–19 and 5.0x and
-  2.0x less wall. Each split adds a trimmed last page and a child's first page, so requests (+24 % and +28 %)
-  and overfetched keys follow.
-- Go's overfetched keys divided by its splits are within 15 % of Java's. That is total overfetch (every range's
-  last page, seeded and split ranges alike) over all splits, not the overfetch one split adds, so it does not
-  say what a split costs at the margin. The empty-children count aggregates lower and upper children, so it does
-  not attribute the excess to empty upper children either; Java probes the pivot from an idle thief, and the
-  1-key probe below is the only measurement of what probing removes.
-- S3 has no end bound, so a range's last page reads past it; GCS ranges send `endOffset` and overfetch nothing
-  ([GCS route parity](#gcs-route-parity)).
+**The refusal limit.** On held-out 6M-key slices (same setup, median of 2), the first version of the gates refused
+one pivot for a range's life on `e11bio-prism` (the midpoint `…/0/1>` below `hi` `…/0/2`; 1,815 upper-child
+refusals): 66.2 s at 5.1 in flight, against 7.4 s before the gates. Admitting the split after 4 refusals in a
+row (`split.admission.overridden`):
 
-**Reproduce:** as above, on `noaa-nws-fourcastnetgfs-pds` (99 ms) and `nara-1950-census` (103 ms).
+| Slice | before gates: req/1k, wall s, in flight | gates without limit | gates with limit |
+|---|---|---|---|
+| e11bio-prism 6M | 1.173, 7.46, 51.9 | 1.047, 66.2, 5.1 | 1.062, 6.51, 54.0 |
+| argoverse 6M | 1.127, 7.10, 55.0 | 1.044, 7.12, 50.6 | 1.051, 6.74, 54.1 |
+
+With the limit the small lists keep their savings (mogreps 1.21, urma 1.27, zarr 1.47, fourcastnetgfs 1.34
+requests per 1k). The argoverse slice did not reproduce the full list's slowdown (267 s against 121 s), which
+the limit bounds the same way.
+
+**Reproduce:** `keyfake-static -keys FILE -addr 127.0.0.1:19600 -delay 50ms`, then `swath list s3://b --endpoint
+http://127.0.0.1:19600 --path-style --anonymous --region us-east-1 --count-only --report R.json`.
 
 ## Policy switches
 
-Same session and configuration as [the four recordings](#replayed-recordings-go-against-java-defaults), Go
-arms only; wall s / requests, median of 3. `--floors` and `--structure` are `swath diag list` switches; the
+Pre-merge build, in the session of [Before the engine campaign](#before-the-engine-campaign-pre-merge-build), Go
+arms only; not rerun on the current engine, which sends structure probes by default on their evidence
+(`auto`; 40–616 per run in `recordings1`, [above](#replayed-recordings-go-against-java-defaults)); wall s / requests,
+median of 3. `--floors` and `--structure` are `swath diag list` switches (`--structure` here is that build's
+boolean switch, before the `auto` mode and the structure probes of the engine campaign); the
 seed descent was measured as `--seed` with the hybrid descent, since deleted.
 
 | Arm | noaa-eri-pds | pansurg | fourcastnetgfs | nara |
@@ -120,7 +417,7 @@ seed descent was measured as `--seed` with the hybrid descent, since deleted.
   requests). Off: on replay requests cost nothing and nothing throttles.
 - All three: slower than structure probes alone everywhere.
 
-**1-key pivot probe** (deleted), deep recordings, the session of the previous section: with the probe, empty
+**1-key pivot probe** (deleted), deep recordings, the pre-merge build's second session ([above](#splits-overfetch-and-requests-on-the-deep-recordings)): with the probe, empty
 children fell 1,093 → 201 and 2,908 → 443, but it sent 2.8 and 2.3 probes per split, 31 % and 27 % more
 requests, and took 2.3x and 2.2x the wall (fourcastnetgfs 38.0 s, nara 119.9 s), because the owner waits for
 the probe. For a fixed stream of split proposals, an asynchronous probe would save at most one request per
@@ -218,8 +515,10 @@ host; an earlier build on the same server took 11.67–11.77 s on GCS against 11
 Live GCS, measured privately on one 5.1M-object bucket in-region (2026-11-06), by API and clock: Go on the JSON
 API 29.5-32.4 s end to end; Go on the XML API 34.4-39.8 s end to end; the Java tool on the XML API 49-52 s end to
 end, of which its listing phase 23-28 s. Both Go arms finish first end to end, though each takes longer than
-Java's listing phase alone; mean in flight about 16 of 64 workers; split tree 398 deep where a balanced one needs 13; the cause and the planned
-pivot-policy change are in [Known gaps](#known-gaps).
+Java's listing phase alone; mean in flight about 16 of 64 workers; split tree 398 deep where a balanced one needs 13.
+That run used the build of the merged port, before the pivot policy and seed of the
+[engine campaign](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms); see
+[Known gaps](#known-gaps).
 
 **Reproduce:** swath-replay with GCS latency injection (varveio/swath#250) serving `--protocols s3,gcs`; list
 `s3://BUCKET` and `gs://BUCKET` through it alternately ([testing.md](testing.md#replay-oracle)).
@@ -326,6 +625,27 @@ less kernel time than every full-path stat tool. The disk-usage tools only sum s
 row per entry. Not established: cold-cache behaviour of these tools, hard-link de-duplication, network or
 overlay filesystems.
 
+## Memory behind a held-up frontier
+
+**Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake
+server, `slowfake`, whose requests starting in the first 5,000 keys wait 15 s and the rest 20 ms; 64 workers,
+the default 128 MiB `--row-budget`, `--seed=false`; one run per arm on a shared 4-core, 7 GiB host). Every
+range after the first lists, splits and waits ahead of the frontier. "Before" is the parent of the change
+that copies retained bounds and adds `order.Count`:
+
+| Run | Peak RSS | Peak live heap | Peak nodes | Spill |
+|---|---:|---:|---:|---:|
+| `--count-only`, before (through the order stage) | 797 MiB | – | 4,827 | 392 MB |
+| `--count-only`, cursor copied, still ordered | 338 MiB | – | 4,799 | 392 MB |
+| `--count-only`, after (`order.Count`) | **35 MiB** | 8 MiB | 16 | none |
+| `-o keys.tsv` (ordered), before | 808 MiB | – | 4,829 | 392 MB |
+| `-o keys.tsv` (ordered), after | **333 MiB** | 157 MiB | 4,815 | 392 MB |
+
+The TSV is byte-identical before and after, and every count is 3,000,000. With the seed on (the default) the
+count-only run peaked at 438 MiB before and 97 MiB after. The ordered run's remaining RSS is the budget's rows
+(157 MiB live against the 128 MiB budget) and the garbage collector's headroom. The in-repository guard is
+`TestRetainedBoundsDoNotPinPages` (synthetic: `scalefake`, 400,000 keys, [ordering](internals/ordering.md#what-a-waiting-range-retains)).
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured
@@ -371,28 +691,28 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   directory is serial. Local keys have no length cap (S3 keys are capped at 1,024 bytes). Timestamps are
   microseconds. A local run keeps no journal: an interrupted one starts over.
 - **Resume rework: the whole speculative suffix.** S3 and GCS resume at part granularity: a resume lists the
-  scope again from K, the last published part's max key (`keyrange` restarts one range `(K, ⊤]`), so everything
+  scope again from K, the last published part's max key (`keyrange` tiles `(K, ⊤]` afresh: the seed's listings above K, or one range), so everything
   the killed attempt had listed above K is listed again: the open part's rows, rows buffered in memory or in
   disposable spill for ranges ahead of a slow frontier, and parts closed but not yet recorded (a gap in the
   ordinals). That suffix is bounded by how far the listing ran ahead of the frontier (the row budget and spill
   cap, the workers and the time since the last published part), not by the part size: the part size is a target,
   not a hard maximum, and `--part-interval` bounds the age of the durable frontier, not the work done past it.
-  On a slow first range the suffix can be most of the listing (the slow-first smoke above). Java resumed each
+  On a slow first range the suffix can be most of the listing (the slow-first smoke above), and on a large
+  sorted run it is: a kill at 40 % relisted 90–100 % of the keys on every key list of 20M or more
+  ([the sorted run's working set](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)). Java resumed each
   range from its own durable cursor. The measurement campaign's relisted-work gate (relisted keys at most one
   part plus 5 % of the listed keys, with the relisted bytes, requests and the durable frontier's age reported)
   is a gate to test on kills at peak speculation; it is not a property this build guarantees, and no claim
   about restart economics should precede it.
-- **Split depth.** Each split leaves almost all the remaining work in the upper child, which must fetch a page
-  before it can split again, so on a large flat keyspace the split tree is a chain of dependent requests rather
-  than a balanced tree: 398 deep on the live GCS run above where a balanced one needs 13, with about 16 of 64
-  workers in flight. The causes are in `keyrange`'s pivot policy: the frontier's forward reflection steps by the
-  distance since the previous pivot (about one page), the density refinement caps the step at `max(4, hunger)`
-  page spans and wins whenever it is nearer the cursor, and where `between` finds no midpoint scalar its fallback, a
-  key just above the cursor, still counts as found and lies within one page span of it, so the density step,
-  when the page yields one, replaces it (refinement applies only to a found pivot; with none found the page does not split). The planned change doubles the step along a chain of upper children (a gallop; a lower child
-  resets it), still capped at the midpoint of a bounded range; as an experiment on a fake serving the same keys it took the run from 22.3 s to 7.1 s and the depth
-  from 408 to 84. Date-partitioned layouts are not helped by it: there Java's hierarchy seed wins (a synthetic
-  case: 19 s against 4.4 s), and the Go seed is one delimiter page.
+- **Split depth.** Each split waits for a page, so depth times the page latency bounds the wall from below. The
+  merged port's pivot policy built a chain of dependent requests on large keyspaces: 398 deep on the live GCS
+  run above where a balanced tree needs 13, about 16 of 64 workers in flight, and 3 of 232 production key lists
+  within 4 log2(pages) + 8. With the anchor reflection, the gallop, structure probes and the seed's descent,
+  185 of 201 lists are within that bound and 150 within 3 log2(pages) + 8
+  ([engine campaign](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms), through a fake at
+  50 ms); the 16 above it are open, and fourcastnetgfs sits at the bound in the local admission runs
+  ([above](#split-admission-on-small-lists)). Live, candidate 3 listed noaa-nbm-grib2-pds at depth 16 and the
+  64-wide ideal, cross-cloud from GCP us-east1 (one run); no live GCS run of the campaign's engine yet.
 - **Throttling.** The limiter starts at `--workers` unless `--limiter-slow-start` (off, unmeasured). Under
   sustained throttling it holds the limit at 1–2 for the whole run ([above](#throttling-through-the-fault-proxy)).
   It has never met real 503s.
@@ -402,18 +722,23 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   gzip and zstd), the seven filters (Go RE2, not Java regular expressions), the stderr progress display and
   statistics, `-v`/`-q`/`--color`, bearer-token authentication, the report's `cost`, `efficiency`, `args_hash`,
   `session_ms` and `stop_source`, and `--part-rotation-max-rows` are covered by unit and command tests against
-  fakes; none has been run against a live bucket or at scale, and no consumer of the report (the cloud
-  importer included) has read the new fields.
+  fakes. None has been run against a live bucket. At scale only text output has run: the study harness's
+  zstd TSV row (143M keys, one file, through replay, [above](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) and the
+  plain TSV row on nbm; the filters, the progress display, bearer tokens and row rotation have not. No consumer
+  of the report (the cloud importer included) has read the new fields.
 - **Platforms.** Windows refuses journaled runs (no directory sync,
   [internals/durability.md](internals/durability.md)); Windows and macOS builds are compiled, not run. Power
   loss is untested.
-- **Scale.** Billions of keys, runs of hours and 256 or more workers are unmeasured; the largest runs are the
-  replay recordings and live buckets above (13.9 M objects).
+- **Scale.** Billions of keys and runs of hours are unmeasured. The largest runs are the campaign's key lists
+  through the fake (up to 150M keys) and the live nbm bucket (69M objects); 256 and 512 workers were measured
+  through the fake only ([engine campaign](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)).
 - **Local benchmarks.** Cold-cache numbers are guest-cold in a VM and single runs; all trees are synthetic.
 
 ## Skipped or not measured
 
-- Live GCS beyond the one private in-region run above; GCS's own latency profile.
+- Live GCS beyond the one private in-region run above, which measured the port before the engine campaign; the
+  campaign's in-region GCS gate (that bucket within 12 s) has not run. GCS's own latency profile.
+- The policy switches on the campaign's engine (the four recordings themselves were rerun, `recordings1`).
 - Throttling against real S3 or GCS; Java under the sustained-throttle fault.
 - The resume ramp-up after a restart, and the defaults and resume-storm campaigns (smoke only, above).
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.

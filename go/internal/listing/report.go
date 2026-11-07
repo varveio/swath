@@ -208,7 +208,7 @@ type Timings struct {
 // Output is the row and part accounting: this invocation versus the
 // dataset.
 type Output struct {
-	RowsListed    int64 `json:"rows_listed"`    // listed and ordered by this invocation (after the filters)
+	RowsListed    int64 `json:"rows_listed"`    // listed and ordered (a dry run: counted) by this invocation, after the filters
 	RowsFiltered  int64 `json:"rows_filtered"`  // listed by this invocation and dropped by the filters (--include, ...)
 	RowsRetained  int64 `json:"rows_retained"`  // kept from the interrupted run (resume)
 	RowsCommitted int64 `json:"rows_committed"` // in the committed dataset (0 unless committed)
@@ -244,8 +244,18 @@ type Resources struct {
 	RusageAvailable  bool  `json:"rusage_available"`
 	RowBudgetBytes   int64 `json:"row_budget_bytes"`   // rows in flight: reorder storage and encoder queues
 	MaxBufferedBytes int64 `json:"max_buffered_bytes"` // peak reorder storage
-	FrontierWaitNs   int64 `json:"frontier_wait_ns"`
-	BudgetWaitNs     int64 `json:"budget_wait_ns"`
+	// PeakHeapLiveBytes is the peak live heap while listing (the bytes a
+	// garbage collection marked reachable, sampled every 100 ms): beside
+	// row_budget_bytes, the memory the budget does not see.
+	PeakHeapLiveBytes int64 `json:"peak_heap_live_bytes"`
+	// PeakAheadRows is the most rows listed and not yet handed on at once
+	// (ahead of the publish frontier, in memory or spilled);
+	// FrontierStuckMaxNs the longest interval in which the order stage
+	// handed nothing on. Both 0 for a dry run, which does not order.
+	PeakAheadRows      int64 `json:"peak_ahead_rows"`
+	FrontierStuckMaxNs int64 `json:"frontier_stuck_max_ns"`
+	FrontierWaitNs     int64 `json:"frontier_wait_ns"`
+	BudgetWaitNs       int64 `json:"budget_wait_ns"`
 	// EncoderWaitNs is the time the order stage waited for an encoder (nil
 	// without output).
 	EncoderWaitNs *int64 `json:"encoder_wait_ns,omitempty"`

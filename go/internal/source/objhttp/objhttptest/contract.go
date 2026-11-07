@@ -116,7 +116,12 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 			if want := min(c.want.Attempts, 1); got.InflightMax != want || (want > 0) != (got.InflightNs > 0) {
 				t.Errorf("in flight: max %d, %d ns, want max %d", got.InflightMax, got.InflightNs, want)
 			}
-			got.InflightMax, got.InflightNs = 0, 0
+			// every attempt is timed: ordered percentiles, a timed-out one at the top
+			if (c.want.Attempts > 0) != (got.P50Ns > 0) || got.P50Ns > got.P90Ns || got.P90Ns > got.P99Ns ||
+				(c.want.Timeouts > 0 && got.P99Ns < int64(200*time.Millisecond)) {
+				t.Errorf("attempt latency p50 %d, p90 %d, p99 %d ns", got.P50Ns, got.P90Ns, got.P99Ns)
+			}
+			got.InflightMax, got.InflightNs, got.P50Ns, got.P90Ns, got.P99Ns = 0, 0, 0, 0, 0
 			if got != c.want {
 				t.Errorf("counters %+v, want %+v (err %v)", got, c.want, err)
 			}

@@ -11,7 +11,8 @@ swath --version                          print the build (tool, module version, 
 
 SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `swath list` writes a dataset to `--output` (`-o`)
 ([internals/parquet-output.md](internals/parquet-output.md)), text rows to a file or stdout (**Text output**
-below), or with `--count-only` only lists. It prints one
+below), or with `--count-only` only lists and counts (rows are counted as they arrive, never ordered, buffered
+or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)). It prints one
 line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. FILE may not land on managed output (exit 2, checked before the
 source is opened, and by `swath resume` before it settles anything): the text output file, the dataset directory's own entries
@@ -41,7 +42,7 @@ true), so a supervisor may resume until exit 0; one committed with partial cover
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
-`list` flag plus the diagnostic ones: `--sequential`, `--floors`, `--max-keys` (range-engine sources), `--no-journal`,
+`list` flag plus the diagnostic ones: `--sequential`, `--floors`, `--structure=auto|on|off`, `--max-keys` (range-engine sources), `--no-journal`,
 `--no-spill`, `--spill-reserve` and `--spill-compress`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
@@ -161,7 +162,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
   -row-budget bytes
         bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
-        ranges: before splitting, cut the keyspace at the folders of one delimiter page ('/') at the scope's root
+        ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists; not with -sequential); false: start from one range (default true)
   -spill-max bytes
         the spill disk budget: cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
   -stall-timeout duration
@@ -300,7 +301,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -row-budget bytes
         bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
-        ranges: before splitting, cut the keyspace at the folders of one delimiter page ('/') at the scope's root
+        ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists; not with -sequential); false: start from one range (default true)
   -sequential
         ranges: list with one continuation-token chain (no ranges; the reference)
   -spill-compress
@@ -316,7 +317,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -storage-class classes
         keep objects in these storage classes (STANDARD,GLACIER; repeatable)
   -structure
-        ranges: structure probes: pivot on folder boundaries listed alongside a range's pages
+        ranges: structure probes (delimiter pages of 32 alongside a range's pages; a split pivots on the folder boundaries they list), written --structure=auto|on|off with '=' (the bare flag is on, so a separate word is the next argument): auto probes on the open frontier while its cursor is in a folder and in bounded ranges whose chain stays inside one folder; on (or true) probes every range in a folder; off (or false) none (default auto)
   -v	verbose: a start line, and progress as appended records (-vv, -vvv: the same)
   -vv
         short for -v -v
@@ -339,8 +340,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Sizes** (`--part-size`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--min-size`, `--max-size`) have
   one syntax, Java's: a decimal number and an optional unit, `b`, `k`/`kb`/`kib`, `m`/`mb`/`mib`, `g`/`gb`/`gib`
   or `t`/`tb`/`tib`, in any case and all binary (`64MB` is 64 MiB), coming to a whole number of bytes (`1.5g`,
-  not `1.3b`). Earlier Go builds read `KB`, `MB` and `GB` as decimal for the resource sizes; a run started that
-  way and resumed by this build sees a different part size and is refused.
+  not `1.3b`).
 - **Provider flags** (`S3:` and `GCS:` in the list, and the range-engine flags both object stores share) apply
   to their own sources only: one given for another source (`gs://... --anonymous`, where GCS takes
   `--gcs-anonymous`; `--endpoint` against `--gcs-endpoint`; an S3 flag on a local tree) is refused (exit 2)
@@ -411,7 +411,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   quantifiers and atomic groups do not exist and are refused (exit 2); `\Z` is not supported (`\z` is), and
   some character-class and Unicode-property details differ. RE2 runs in time linear in the key, so no pattern
   can stall a listing.
-- **S3 modes.** The default is the parallel core; `--seed` tiles the scope from one delimiter page first;
+- **S3 modes.** The default is the parallel core, seeded: before any range lists, delimiter listings of the
+  folder hierarchy (the top level up to 4 pages, levels narrower than `--workers` descended up to 4 deep, at
+  most 64 requests in at most 6 serial waves) tile the scope, or a resumed scope after its last published key.
+  On a bucket of a few pages that pre-phase is most of the run; `--seed=false` starts from one range instead;
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
   dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` (or Java's
   name `--endpoint-url`) selects an S3-compatible store, addressed path-style by default, as Java's
@@ -581,7 +584,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | `requests`, `retries` | HTTP attempts sent (pages, probes, client retries, engine requeues); attempts repeated (S3, GCS) |
   | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
   | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent on a custom endpoint) |
-  | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes) |
+  | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes`, `order.ahead_rows` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes); `ahead_rows` is rows listed and not yet handed on (in memory or spilled) |
   | `started_at`, `as_of`, `duration_ms` | timing |
 
   A supervisor watches that file; `DIR/run.json` follows the
@@ -624,6 +627,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   Java's (which covered the listing scope only). `outcome.stop_source` says what stopped a stopped run:
   `sigint`, `sigterm`, `liveness_watchdog` (`--stall-timeout`), `timebox` (`--max-duration`), with
   `+forced_exit` when it did not stop within the grace (`forced_exit` alone if it came first); `error.json`
-  carries it too. A supervisor can read the live `objects` count from `progress.json`.
+  carries it too. A supervisor can read the live `objects` count from `progress.json`. Attempt latency
+  is `source.stats.counters.values` `inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns`; how a split chain
+  reads from the counters is under "Range engine" in [internals/providers.md](internals/providers.md).
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;
-  `SWATH_LOCALFS_ENGINE=portable` selects the portable filesystem engine; `SWATH_SPLIT_TRACE` traces S3 splits.
+  `SWATH_LOCALFS_ENGINE=portable` selects the portable filesystem engine; `SWATH_SPLIT_TRACE` traces range-engine splits on stderr, one line per split (range id,
+  bounds, cursor, pivot, keys listed, the pivot's source, the children's depth, the range's gallop generation
+  and the anchor its upper child carries).

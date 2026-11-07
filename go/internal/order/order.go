@@ -92,6 +92,13 @@ type Stats struct {
 	// Peaks of the stage's metadata (Gauges): outstanding range nodes,
 	// spill markers in memory, open spill readers.
 	PeakNodes, PeakMarkers, PeakReaders int64
+	// PeakAhead is the most rows received and not yet handed on at once:
+	// rows ahead of the publish frontier, in memory or spilled (Gauges).
+	PeakAhead int64
+	// FrontierStuck is the longest interval in which the drainer handed
+	// nothing on: from the drain's start to the first row, between two
+	// hand-ons, or from the last row to the drain's end.
+	FrontierStuck time.Duration
 }
 
 // Gauges are the order stage's live resource counts, read while it runs
@@ -100,6 +107,7 @@ type Stats struct {
 // bytes, each with its peak.
 type Gauges struct {
 	nodes, markers, readers, spill gauge
+	ahead                          gauge // rows received and not yet handed on
 }
 
 // gauge is a count and its peak.
@@ -128,6 +136,10 @@ type GaugeSnapshot struct {
 	PeakSpillReaders int64 `json:"peak_spill_readers"`
 	SpillLiveBytes   int64 `json:"spill_live_bytes"`
 	PeakSpillBytes   int64 `json:"peak_spill_live_bytes"`
+	// AheadRows are rows received and not yet handed on: ahead of the
+	// publish frontier, in memory or spilled.
+	AheadRows     int64 `json:"ahead_rows"`
+	PeakAheadRows int64 `json:"peak_ahead_rows"`
 }
 
 // Snapshot reads g; a nil Gauges reads as zero.
@@ -136,7 +148,8 @@ func (g *Gauges) Snapshot() GaugeSnapshot {
 		return GaugeSnapshot{}
 	}
 	return GaugeSnapshot{Nodes: g.nodes.n.Load(), PeakNodes: g.nodes.peak.Load(), Markers: g.markers.n.Load(), PeakMarkers: g.markers.peak.Load(),
-		SpillReaders: g.readers.n.Load(), PeakSpillReaders: g.readers.peak.Load(), SpillLiveBytes: g.spill.n.Load(), PeakSpillBytes: g.spill.peak.Load()}
+		SpillReaders: g.readers.n.Load(), PeakSpillReaders: g.readers.peak.Load(), SpillLiveBytes: g.spill.n.Load(), PeakSpillBytes: g.spill.peak.Load(),
+		AheadRows: g.ahead.n.Load(), PeakAheadRows: g.ahead.peak.Load()}
 }
 
 // batchRows is the minimum number of rows per sink call (except the last).
@@ -199,6 +212,10 @@ type run[R, P any] struct {
 	// The stream-wide order guard: the last key handed on (drainer only).
 	last    string
 	hasLast bool
+	// advanced is when the drainer last handed rows on (or began), stuck
+	// the longest interval between two such moments (Stats.FrontierStuck).
+	advanced time.Time
+	stuck    time.Duration
 
 	received atomic.Int64 // rows the emitters received
 }
@@ -358,6 +375,9 @@ func (o *run[R, P]) send(rows []schema.Row[P]) error {
 		}
 		o.last, o.hasLast = k, true
 	}
+	o.stalled()
+	o.advanced = time.Now()
+	o.g.ahead.add(-int64(len(rows)))
 	o.segs = append(o.segs, rows)
 	o.segRows += len(rows)
 	if o.segRows >= batchRows {
@@ -427,6 +447,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	st.Rows, st.MaxBuffered, st.FrontierWait, st.BudgetWait = o.rows, o.max, o.frontier, o.budget
 	st.Received = o.received.Load()
 	st.PeakNodes, st.PeakMarkers, st.PeakReaders = o.g.nodes.peak.Load(), o.g.markers.peak.Load(), o.g.readers.peak.Load()
+	st.PeakAhead, st.FrontierStuck = o.g.ahead.peak.Load(), o.stuck
 	if err == nil && st.Received != st.Rows {
 		// Conservation inside the stage (spill, compaction, replay): a row
 		// received and never handed on is a lost row, never a success.
@@ -617,6 +638,7 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 		return nil
 	}
 	e.o.received.Add(int64(len(rows)))
+	e.o.g.ahead.add(int64(len(rows)))
 	if e.direct {
 		if e.o.stopped.Load() {
 			return context.Cause(e.o.ctx)
@@ -821,6 +843,8 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	var st Stats
 	releaseEvery := max(1, o.opt.Budget/16)
 	frames := []drainFrame[R, P]{{n: root}}
+	o.advanced = time.Now()
+	defer o.stalled() // after the final flush too: a sink write that blocks is a stall
 	o.mu.Lock()
 	root.onPath.Store(true)
 	for len(frames) > 0 {
@@ -868,6 +892,13 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	o.mu.Unlock()
 	return st, o.flush()
 }
+
+// stalled closes the interval since the drainer last handed rows on into
+// stuck. Every drain exit runs it, deferred, after the final flush,
+// cancellation and errors included: an interrupted run's last stall (a
+// frontier that never answered, or a sink whose last write blocked until
+// the stop) is the one its report most needs.
+func (o *run[R, P]) stalled() { o.stuck = max(o.stuck, time.Since(o.advanced)) }
 
 // drainFinished drains a finished node's items up to its next child,
 // which it returns. A finished node's items are immutable: they are
@@ -980,6 +1011,17 @@ func (o *run[R, P]) closeNode(n *node[R, P]) error {
 
 // expandHere expands a queued node nobody has claimed, on the drainer.
 func (o *run[R, P]) expandHere(n *node[R, P], direct bool) error {
+	if len(o.segs) > 0 {
+		// Hand on what is batched before listing here, as before a wait on
+		// the frontier: the expansion is a request that may take long, and
+		// the sink (a part's age bound, its durability) must see every row
+		// the walk has reached meanwhile. The caller rechecks after (a
+		// worker may have taken the node).
+		o.mu.Unlock()
+		err := o.flush()
+		o.mu.Lock()
+		return err
+	}
 	n.state = expanding
 	n.awaited.Store(true)
 	o.release()

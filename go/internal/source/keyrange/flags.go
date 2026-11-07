@@ -14,11 +14,11 @@ import (
 // Policy is the engine's policy configuration, the same for every provider
 // on the engine: one flag group (Flags), one value a provider passes on.
 type Policy struct {
-	Sequential bool  // one continuation-token chain, no ranges (the oracle)
-	Seed       bool  // parallel: first cut the scope at the common prefixes of one delimiter page
-	Structure  bool  // pivot on folder boundaries from structure probes sent alongside pages
-	MaxKeys    int64 // stop after this many objects (sequential only; 0 = all)
-	Floors     bool  // the gate-chain floors (off by default)
+	Sequential bool      // one continuation-token chain, no ranges (the oracle)
+	Seed       bool      // parallel: tile the scope from delimiter listings first (the command's default)
+	Structure  Structure // pivot on folder boundaries from structure probes sent alongside pages
+	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
+	Floors     bool      // the gate-chain floors (off by default)
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -44,17 +44,19 @@ const FlagGroup = "keyrange"
 // policy toggles and comparison modes are diagnostic (swath diag list);
 // -seed and the admission flags are on swath list too.
 func Flags(f *flag.FlagSet, diag bool) *Common {
-	// The command's default: the client admits its requests through the
-	// adaptive limiter (Java's gauge rules); --limiter=false turns it off. A
-	// library caller's zero Admission has none.
-	c := &Common{Admission: objhttp.Admission{Limiter: true}}
+	// The command's defaults: the seed tiles the scope (--seed=false skips
+	// it), structure probes engage on their evidence (StructureAuto), and
+	// the client admits its requests through the adaptive limiter (Java's
+	// gauge rules; --limiter=false turns it off). A library caller's zero
+	// Policy has no seed and no probes, its zero Admission no limiter.
+	c := &Common{Policy: Policy{Seed: true, Structure: StructureAuto}, Admission: objhttp.Admission{Limiter: true}}
 	p, a := &c.Policy, &c.Admission
 	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
 	f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
 	f.Var((*rateFlag)(&a.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
-	f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: before splitting, cut the keyspace at the folders of one delimiter page ('/') at the scope's root")
+	f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists; not with -sequential); false: start from one range")
 	if diag {
-		f.BoolVar(&p.Structure, "structure", p.Structure, "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
+		f.Var((*structureFlag)(&p.Structure), "structure", "ranges: structure probes (delimiter pages of 32 alongside a range's pages; a split pivots on the folder boundaries they list), written --structure=auto|on|off with '=' (the bare flag is on, so a separate word is the next argument): auto probes on the open frontier while its cursor is in a folder and in bounded ranges whose chain stays inside one folder; on (or true) probes every range in a folder; off (or false) none")
 		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		f.BoolVar(&p.Sequential, "sequential", p.Sequential, "ranges: list with one continuation-token chain (no ranges; the reference)")
 		f.Var((*int64Flag)(&p.MaxKeys), "max-keys", "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
@@ -92,3 +94,30 @@ func (i *int64Flag) Set(s string) error {
 	*i = int64Flag(v)
 	return err
 }
+
+// structureFlag is --structure: auto, on (true, or the bare flag) or off
+// (false).
+type structureFlag Structure
+
+func (s *structureFlag) String() string {
+	if s == nil {
+		return StructureAuto.String()
+	}
+	return Structure(*s).String()
+}
+
+func (s *structureFlag) Set(v string) error {
+	switch v {
+	case "auto":
+		*s = structureFlag(StructureAuto)
+	case "on", "true":
+		*s = structureFlag(StructureOn)
+	case "off", "false":
+		*s = structureFlag(StructureOff)
+	default:
+		return fmt.Errorf("want auto, on or off")
+	}
+	return nil
+}
+
+func (s *structureFlag) IsBoolFlag() bool { return true }

@@ -197,8 +197,10 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    `verified_bytes`, included in `advance`), so the stall watchdog does not stop a long verification
    (`TestRecoveryVerificationIsCancellableAndReported`).
 4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
-   normal start-up. S3 lists one range `(K, ⊤]` and splits it as on a fresh run. If K is not a bound
-   the provider accepts, the range starts at K's longest accepted prefix and drops keys up to K.
+   normal start-up. S3 and GCS tile `(K, ⊤]` as a fresh run tiles the scope: with the seed (the default) from
+   delimiter listings of every folder above K, keeping only cuts above K, else as one range `(K, ⊤]` that
+   splits ([providers.md](providers.md#range-engine-internalsourcekeyrange), "A resumed scope"). If K is not a
+   bound the provider accepts, the first tile starts at K's longest accepted prefix and drops keys up to K.
 5. Continues the router at the next ordinal with the recorded limit, so size cuts fall exactly where the
    uninterrupted run would have put them (a cut by `--part-interval` depends on timing in either run).
 
@@ -206,10 +208,10 @@ A record also carries whether its part is the final one. Once the final part is 
 resume does not list again: it only publishes. On a changed bucket, listing again could add a second final
 part. The journal grows with parts only. A record over the frame limit is refused on append as well as on read.
 
-**The trade-off.** Earlier versions also journaled every split boundary so a resume could start with the
-interrupted run's tiling. That costs journal growth and ties the journal to S3's range model; without it a
-resume ramps up from one range, as a fresh run does from the root (splits engage after the first page of
-each range). The ramp-up cost has not been measured.
+**The trade-off.** The journal records no split boundary, so a resume cannot start with the interrupted
+run's tiling: recording one would cost journal growth and tie the journal to the range engine's model. A
+resume tiles `(K, ⊤]` afresh instead (the seed's listings above K, or one range), and splits engage after the
+first page of each range, as on a fresh run. The ramp-up cost has not been measured.
 
 A journaled run that fails with an ordinary error (not a crash) leaves its temporary parts in place: one
 may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.

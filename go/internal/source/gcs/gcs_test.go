@@ -77,7 +77,7 @@ func TestListFakeBucket(t *testing.T) {
 		{"one worker", Options{}, 1},
 		{"8 workers", Options{}, 8},
 		{"64 workers, seed", Options{Policy: keyrange.Policy{Seed: true}}, 64},
-		{"64 workers, floors, structure", Options{Policy: keyrange.Policy{Floors: true, Structure: true}}, 64},
+		{"64 workers, floors, structure", Options{Policy: keyrange.Policy{Floors: true, Structure: keyrange.StructureOn}}, 64},
 	} {
 		opt := c.opt
 		opt.Bucket, opt.Endpoint = "bkt", ep
@@ -159,7 +159,7 @@ func TestTokenChainsAndEmptyPages(t *testing.T) {
 	}{
 		{Options{Policy: keyrange.Policy{Sequential: true}}, 1},
 		{Options{}, 8},
-		{Options{Policy: keyrange.Policy{Seed: true, Structure: true}}, 64},
+		{Options{Policy: keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}}, 64},
 		{Options{Resume: &Resume{After: keys[len(keys)/2]}}, 16},
 	} {
 		opt := c.opt
@@ -285,8 +285,8 @@ func TestDelimiterBoundaries(t *testing.T) {
 	}{
 		{"sequential", keyrange.Policy{Sequential: true}, 1},
 		{"demand splits", keyrange.Policy{}, 8},
-		{"seed, structure", keyrange.Policy{Seed: true, Structure: true}, 8},
-		{"one-page seed, structure", keyrange.Policy{Seed: true, Structure: true}, 64},
+		{"seed, structure", keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}, 8},
+		{"one-page seed, structure", keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}, 64},
 	} {
 		before := len(f.Sent())
 		got, _ := list(t, Options{Bucket: "bkt", Endpoint: ep, Policy: c.pol}, c.workers)
@@ -299,7 +299,7 @@ func TestDelimiterBoundaries(t *testing.T) {
 				delimited++
 			}
 		}
-		if (c.pol.Seed || c.pol.Structure) != (delimited > 0) {
+		if (c.pol.Seed || c.pol.Structure != keyrange.StructureOff) != (delimited > 0) {
 			t.Fatalf("%s: %d delimiter requests", c.name, delimited)
 		}
 	}
@@ -440,7 +440,7 @@ func TestEngineFlagsShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := src.(*opened).p
-	if !other.Policy.Seed || !p.opt.Seed || !p.opt.Structure || !p.opt.Anonymous {
+	if !other.Policy.Seed || !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous {
 		t.Fatalf("policy not shared: %+v", p.opt)
 	}
 }
@@ -488,4 +488,21 @@ func TestInvalidPageClass(t *testing.T) {
 func newFake(t testing.TB, keys []string) (*gcstest.Strict, string) {
 	f := gcstest.NewStrict(keys)
 	return f, f.Serve(t)
+}
+
+// TestPoolSizeReported: the report's transport.pool_size is the built
+// client's pool, one transport per 16 workers, and the listing is exact
+// over it.
+func TestPoolSizeReported(t *testing.T) {
+	keys := testKeys()
+	_, ep := newFake(t, keys)
+	for workers, want := range map[int]int64{1: 1, 40: 3} {
+		got, st := list(t, Options{Bucket: "bkt", Endpoint: ep}, workers)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("%d workers: %d keys, want %d", workers, len(got), len(keys))
+		}
+		if n := st.Counters.Value("transport.pool_size"); n != want {
+			t.Fatalf("%d workers: transport.pool_size %d, want %d", workers, n, want)
+		}
+	}
 }

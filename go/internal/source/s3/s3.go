@@ -5,7 +5,7 @@
 // binary (unsigned byte) order, so every page can be emitted as it arrives.
 //
 // By default ranges are key intervals (lo, hi] listed in parallel: the root
-// is (⊥, ⊤] or, with Seed, one delimiter page that tiles the scope; a range
+// is (⊥, ⊤] or, with Seed, delimiter listings of the folders that tile the scope; a range
 // whose owner sees idle workers splits itself at a page boundary into
 // (cursor, pivot] and (pivot, hi] (see parallel.go). With Sequential the
 // whole scope is one continuation-token chain: the reference oracle.

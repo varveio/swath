@@ -86,6 +86,9 @@ type Env struct {
 	Order order.Options
 	// Router, if set, routes the rows into parts; nil discards them.
 	Router *parquetout.Options
+	// Count counts the rows without ordering them (order.Count): a dry
+	// run, whose rows nothing consumes; Router and Text must be nil.
+	Count bool
 	// Empty lists nothing: a resume whose final part is durable.
 	Empty bool
 	// Ordered, if set, counts rows the order stage has handed on.
@@ -141,6 +144,10 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		p = source.Empty[P]{}
 	} else if keep != nil {
 		p = newFiltered(p, keep, b.s, env.Filtered)
+	}
+	if env.Count {
+		st, err := order.Count(ctx, p, env.Ordered, env.Order)
+		return st, nil, err
 	}
 	st, err := order.Run(ctx, p, sink, b.s, env.Order)
 	return st, enc, err

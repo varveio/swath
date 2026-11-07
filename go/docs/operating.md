@@ -70,6 +70,9 @@ Requests go unauthenticated only when none exists, or with `--gcs-anonymous`. A
 `devstorage.read_only`. Requester-pays buckets: `--gcs-user-project PROJECT` bills that project; it is part of
 the resume identity.
 
+GCS requests travel over HTTP/2, one connection per 16 workers (at most 8; `transport.pool_size` in the
+report's counters). S3 uses HTTP/1.1, one connection per request in flight.
+
 The report's `source.stats` records `anonymous`, `credentials` (where they came from) and, for S3, `region`.
 
 ## Sizing a run
@@ -79,7 +82,7 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
 | Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder queues). Not a cap on resident memory |
 | Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. A warning names a shortfall |
-| Spill disk | `--spill-max` | 0: half the free space on the output filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
+| Spill disk | `--spill-max` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/` (a text output's under `$TMPDIR`; `--count-only` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
 **Disk for the worst case** is the dataset itself plus the spill cap plus the reserve, all on the output's
@@ -87,9 +90,28 @@ filesystem (spill lives under the output directory). Estimate the dataset from a
 report's `output.bytes` over `output.rows_committed`. If the dataset outgrows the disk the run stops with exit
 74 and resumes once there is space; spill alone never fails a run.
 
-**Memory.** Outside `--row-budget` are the encoders' writers (24 MiB each), response bodies being parsed (up to
-16 MiB each, one per worker in the worst case), compression scratch and the garbage collector's headroom. Read the actual figure from the report's
-`resources.peak_rss_bytes` on a representative run, and size the host from that, not from `--row-budget`.
+**Memory.** A run holds three things:
+
+- **Rows in flight, bounded by `--row-budget`:** rows listed ahead of the publish frontier and the
+  encoders' queues, with the scheduler's metadata (about 150 bytes per waiting range; its two bounds are
+  not charged, and no range keeps the page it was cut from alive, see
+  [ordering](internals/ordering.md#what-a-waiting-range-retains)).
+- **Pages in flight, outside it:** a response body and its parsed page per worker (up to 16 MiB each in
+  the worst case, about 300 KB for 1,000 keys of 120 bytes), the encoders' writers (24 MiB each),
+  compression scratch, and the garbage collector's headroom (with the default `GOGC`, up to about twice
+  the live heap).
+- **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-max`. On tmpfs (a
+  common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
+  report names the filesystem (`resources.spill.fs_type`) and the run warns at start.
+
+`--count-only` holds only pages in flight and the ranges queued for a worker: it counts rows as they
+arrive and never orders, buffers or spills them (`resources.features.order` false, `max_buffered_bytes` 0, no `spill`).
+
+Read the actual figure from the report's `resources.peak_rss_bytes` on a representative run, and size the
+host from that, not from `--row-budget`. Beside it, `resources.peak_heap_live_bytes` (the peak live heap,
+sampled every 100 ms) against `row_budget_bytes` shows how much memory the budget does not see;
+`peak_ahead_rows` is the most rows listed and not yet handed on at once (in memory or spilled), and
+`frontier_stuck_max_ns` the longest stretch in which nothing was handed on (a held-up frontier).
 Linux (VmHWM), macOS (`getrusage`) and Windows (peak working set) measure it with the CPU times; on another
 platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.user_cpu_ms` and
 `timings.sys_cpu_ms` are left out (the summary line prints `-`), never reported as zero.
@@ -142,22 +164,34 @@ Its fields are listed once, under "Progress file" in [cli.md](cli.md).
 and `limit` (the adaptive limiter's current limit), and `cost_usd` on AWS S3 or GCS. The totals are in the
 report, under
 `source.stats.counters.values`: `attempts`, `requests`, `retries`, `throttles`, `timeouts`, `inflight.max_active`,
-`inflight.busy_ns` (divided by the listing time, `timings.listing_ms`, it is the mean in flight), `limiter.decreases`,
+`inflight.busy_ns` (divided by the listing time, `timings.listing_ms`, it is the mean in flight), the attempt
+latency percentiles `inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns` (9223372036854775807 when the
+percentile falls among attempts of 2^40 ns, about 18 min 20 s, or longer, which `inflight.latency_overflow`
+counts), `limiter.decreases`,
 `limiter.increases`, `limiter.max_depth`, `limiter.waits`, and `source.stats.mean_active` (mean active ranges). The
-report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `peak_nodes`, `peak_markers`,
-`part_time_cuts` and `spill.peak_bytes`, `spill.peak_readers`, `spill.max_bytes`, `spill.reserve_bytes`.
+report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stuck_max_ns`, `peak_nodes`,
+`peak_markers`, `peak_ahead_rows`, `peak_heap_live_bytes`, `part_time_cuts` and `spill.peak_bytes`,
+`spill.peak_readers`, `spill.max_bytes`, `spill.reserve_bytes`, `spill.dir`, `spill.fs_type`.
 
 | Signal | Healthy | Act when |
 |---|---|---|
 | `part_age_ms` | under a minute | several minutes: durable progress has stalled and a crash now loses all of it |
-| `order.spill_live_bytes` | small and transient | climbing for minutes: the frontier is stalled while other ranges finish; disk exposure |
+| `order.spill_live_bytes` | on a sorted run of a large list, most of the rows listed: today's ordered emission spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
+| `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-max`, not by `--row-budget`; a count-only run holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
+| `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (at `--spill-max` 2 × the row budget, 56 of 64 large lists did not finish in 900 s) |
+| `resources.frontier_stuck_max_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on the campaign's sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
+| `resources.peak_heap_live_bytes` against `row_budget_bytes` (report) | a few times the budget plus the pages in flight | far beyond: memory the budget does not see |
+| `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; point `TMPDIR` (or the output) at a disk |
 | `objects` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
 | `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
 | `throttles` | flat | rising steadily: see Throttling |
 | `inflight` against `limit` | `limit` near `--workers`, `inflight` near `limit` | `limit` falling: the service throttles; `inflight` far below `limit`: the engine has too little work in parallel |
 | `resources.budget_wait_ns` (report) | near 0 with spill on | large: workers blocked on a full row budget |
 | `mean_active` against mean in flight (report) | both near `--workers` | active high, in flight low: requests held by the limiter or admission |
+| `inflight.p99_ns` against `inflight.p50_ns` (report) | a few times p50 | p99 tens of times p50: a tail of slow attempts (timeouts, a throttled route) |
+| `inflight.latency_overflow` (report) | 0 | above 0: attempts of 18 min 20 s or longer; a percentile among them reads 9223372036854775807, open-ended, not a measured bound |
+| `idle_demand_ns` against `busy_ns` (report) | small | comparable: workers sat idle with work wanted; the split policy could not hand out work (see the split counters) |
 | exit 75 on the same output | never twice | a second 75 in a row needs a person |
 
 ## Throttling
@@ -226,6 +260,7 @@ was. Restore the original environment, or start over.
 |---|---|---|
 | exit 2, identity mismatch | the resume would list another route | fix the environment, or `swath list --overwrite` |
 | exit 2, nothing to resume | no journal in the directory | start a fresh `swath list` |
+| exit 1, another swath process owns this output directory | a process still holds the output lock: the killed run has not exited yet, or a wrapper was killed and swath under it lives on. The resume is refused, not queued, and changes nothing | wait for that process to exit (stop a wrapper's whole process group, not the wrapper alone), then resume |
 | exit 1, `cause` `protocol` | the service returned an invalid page; the journal is marked unresumable | `swath list --overwrite` |
 | exit 1, journal version | written by another build | finish with that build, or `--overwrite` |
 | exit 1, part altered or journal corrupt | a retained part or the journal changed on disk | `--overwrite` |
@@ -283,7 +318,9 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
 - **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
   committed dataset is the complete result of a live listing, exactly once per key, not a point-in-time view.
 - **Memory:** `--row-budget` bounds rows in flight, not resident memory (see Sizing).
-- **Scale:** billions of keys, runs of hours and 256 or more workers are unmeasured ([measurements](measurements.md#known-gaps)).
+- **Scale:** 256 and 512 workers and lists of up to 150M keys were measured through a key-list fake at 50 ms
+  and the scale study's replay fixtures, not against a live bucket; billions of keys and runs of hours are
+  unmeasured ([measurements](measurements.md#known-gaps)).
 
 ## When it goes wrong
 

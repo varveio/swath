@@ -23,9 +23,10 @@ const (
 	Count Kind = iota // monotonic sum
 	Max               // high-water mark
 	Flag              // 0 or 1, reported as a boolean
+	Gauge             // a value derived when it is copied in (a percentile): neither summed nor a high-water mark
 )
 
-func (k Kind) String() string { return [...]string{"count", "max", "flag"}[k] }
+func (k Kind) String() string { return [...]string{"count", "max", "flag", "gauge"}[k] }
 
 // ID is a counter's index in its table.
 type ID int

@@ -442,3 +442,11 @@ const Unlimited = 1<<63 - 1
 // FreeBytes is the space available to an unprivileged writer on dir's
 // filesystem, or Unlimited when it cannot be measured.
 func FreeBytes(dir string) int64 { return freeBytes(dir) }
+
+// FSType names the filesystem dir is on (Linux: "tmpfs", "ext4", "xfs",
+// ..., or its statfs magic number in hex), or "" where it is not read. A
+// spill on tmpfs or ramfs is held in memory, outside the process's RSS.
+func FSType(dir string) string { return fsType(dir) }
+
+// InMemory reports whether fsType names a filesystem held in memory.
+func InMemory(fsType string) bool { return fsType == "tmpfs" || fsType == "ramfs" }

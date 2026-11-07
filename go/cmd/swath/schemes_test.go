@@ -19,9 +19,9 @@ import (
 // TestBothSchemesThroughTheCommand: one command line, with every
 // provider's flags registered on one flag set, selects S3 or GCS by the
 // source's scheme, and each provider gets its own defaults and the shared
-// engine flags: by default 64 workers whatever the CPU count, no seed, splits on, the limiter on, no structure
-// probes or floors; -seed reaches the selected provider (seed.prefixes
-// counted), on swath list and swath diag list alike.
+// engine flags: by default 64 workers whatever the CPU count, the seed (seed.prefixes counted), splits on,
+// the limiter on, no structure probes or floors; -seed=false reaches the selected provider, on swath list
+// and swath diag list alike.
 func TestBothSchemesThroughTheCommand(t *testing.T) {
 	keys := gcstest.Keys(3000)
 	s3url := s3test.Bucket(t, keys)
@@ -61,7 +61,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		return r
 	}
 	defaults := map[string]bool{"floors": false, "limiter": true, "max_keys": false, "request_rate": false, "resume": false, "slow_start": false,
-		"seed": false, "split": true, "structure": false}
+		"seed": true, "split": true, "structure": true}
 	for name, src := range schemes {
 		r := runJSON(false, src...)
 		if r.Outcome.Status != "committed" || r.Output.RowsListed != int64(len(keys)) || r.Source.Name != name || !r.Source.Stats.Anonymous {
@@ -77,16 +77,19 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 			_, ok := r.Source.Stats.Counters.Values["seed.prefixes"]
 			return r.Source.Stats.Counters.Features["seed"] && ok
 		}
-		r = runJSON(false, append([]string{"--seed"}, src...)...)
-		if !seeded(r) || r.Output.RowsListed != int64(len(keys)) {
-			t.Fatalf("%s --seed: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsListed)
+		if !seeded(r) {
+			t.Fatalf("%s: not seeded by default: %v", name, r.Source.Stats.Counters.Values)
 		}
-		r = runJSON(true, append([]string{"--seed"}, src...)...)
+		r = runJSON(false, append([]string{"--seed=false"}, src...)...)
+		if seeded(r) || r.Source.Stats.Counters.Features["seed"] || r.Output.RowsListed != int64(len(keys)) {
+			t.Fatalf("%s --seed=false: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsListed)
+		}
+		r = runJSON(true, append([]string{"--seed=false"}, src...)...)
 		if r.Invocation.Workers != 64 {
 			t.Fatalf("%s diag: default workers %d, want 64", name, r.Invocation.Workers)
 		}
-		if !seeded(r) || r.Output.RowsListed != int64(len(keys)) {
-			t.Fatalf("%s diag --seed: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsListed)
+		if seeded(r) || r.Output.RowsListed != int64(len(keys)) {
+			t.Fatalf("%s diag --seed=false: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsListed)
 		}
 		t.Logf("%s: %s", name, fmt.Sprint(r.Source.Stats.Counters.Features))
 	}
