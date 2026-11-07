@@ -191,7 +191,12 @@ func (s segSink[P]) Plan() (order.SegmentPlan, bool) {
 	return order.SegmentPlan{Limit: p.Limit, MaxRows: p.MaxRows, Logical: p.Logical, Rows: p.Rows, Open: p.Open, Full: p.Full, Encoders: p.Encoders}, ok
 }
 
-func (s segSink[P]) BeginSegments() { s.r.BeginSegments() }
+func (s segSink[P]) BeginSegments() (order.SegmentPlan, bool) {
+	p, ok := s.r.BeginSegments()
+	return order.SegmentPlan{Limit: p.Limit, MaxRows: p.MaxRows, Logical: p.Logical, Rows: p.Rows, Open: p.Open, Full: p.Full, Encoders: p.Encoders}, ok
+}
+
+func (s segSink[P]) AbandonSegments() { s.r.AbandonSegments() }
 
 func (s segSink[P]) OpenSegment(ctx context.Context, continueOpen bool) (order.SegmentSink[P], error) {
 	seg, err := s.r.OpenSegment(ctx, continueOpen)

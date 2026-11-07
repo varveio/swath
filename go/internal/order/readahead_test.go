@@ -403,14 +403,21 @@ func TestFetchWaitWakes(t *testing.T) {
 	}
 }
 
-// blockingSink holds every write until opened.
+// blockingSink holds every write once it has taken after rows, until
+// opened: the drainer has begun the replay (planned frames) by then.
 type blockingSink struct {
 	collect
-	open chan struct{}
+	after int
+	open  chan struct{}
 }
 
 func (b *blockingSink) Write(ctx context.Context, segs [][]schema.Row[tp]) error {
-	<-b.open
+	b.mu.Lock()
+	n := len(b.keys)
+	b.mu.Unlock()
+	if n >= b.after {
+		<-b.open
+	}
 	return b.collect.Write(ctx, segs)
 }
 
@@ -427,7 +434,7 @@ func TestAheadWaitWakes(t *testing.T) {
 			f.left.Store(int64(f.siblings))
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
-			sink := &blockingSink{open: make(chan struct{})}
+			sink := &blockingSink{after: 300, open: make(chan struct{})}
 			done := make(chan Stats, 1)
 			errs := make(chan error, 1)
 			go func() {

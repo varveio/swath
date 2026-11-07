@@ -186,13 +186,20 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	if res := opt.Resume; res != nil {
 		r.done, r.limit, r.rows = res.Parts, res.Limit, res.Rows
 	}
-	if opt.Interval > 0 {
-		r.stopTick = make(chan struct{})
-		r.tickCtx, r.tickStop = context.WithCancel(context.Background())
-		r.ticked.Add(1)
-		go r.tick(r.stopTick)
-	}
+	r.startTick()
 	return r, nil
+}
+
+// startTick starts the interval cut, if the router has one (mu held, or
+// before the router is shared).
+func (r *Router[P]) startTick() {
+	if r.opt.Interval <= 0 || r.stopTick != nil {
+		return
+	}
+	r.stopTick = make(chan struct{})
+	r.tickCtx, r.tickStop = context.WithCancel(context.Background())
+	r.ticked.Add(1)
+	go r.tick(r.stopTick)
 }
 
 // tick closes the open part once it is Interval old, until stopped.
@@ -413,7 +420,10 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	var w *writer[P]
 	if err == nil {
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.MaxEncoders, columns)
+		// Its codec's zstd states (about 1.3 MiB each, allocated at once
+		// on the first page) for as many goroutines as can take its
+		// columns: never more than the columns, whatever the encoders.
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, min(r.opt.MaxEncoders, len(r.schema.Columns)+1), columns)
 	}
 	if err != nil {
 		p.err = err

@@ -51,7 +51,9 @@ func segmentRun(t *testing.T, rows []row, base []dataset.Part, abortFirst bool) 
 	if !ok || !pl.Open || pl.Rows != base[1].Rows/2 {
 		t.Fatalf("plan %+v, %v", pl, ok)
 	}
-	r.BeginSegments()
+	if _, ok := r.BeginSegments(); !ok {
+		t.Fatal("segments could not begin")
+	}
 	if err := r.Write(ctx, [][]row{rows[serial : serial+1]}); err == nil {
 		t.Fatal("Write after the segments began")
 	}
@@ -88,7 +90,11 @@ func segmentRun(t *testing.T, rows []row, base []dataset.Part, abortFirst bool) 
 				t.Fatal(err)
 			}
 		}
-		segs[j].Close(j == len(segs)-1, false)
+		if j == len(segs)-1 {
+			segs[j].Hold(false) // Close marks it final
+		} else {
+			segs[j].Close(false)
+		}
 	}
 	parts, err := r.Close()
 	mu.Lock()

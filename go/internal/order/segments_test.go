@@ -5,8 +5,11 @@ package order
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -89,9 +92,19 @@ func (s *partSink) Plan() (SegmentPlan, bool) {
 	return pl, true
 }
 
-func (s *partSink) BeginSegments() {
+func (s *partSink) BeginSegments() (SegmentPlan, bool) {
+	pl, ok := s.Plan()
+	if ok {
+		s.mu.Lock()
+		s.segmented = true
+		s.mu.Unlock()
+	}
+	return pl, ok
+}
+
+func (s *partSink) AbandonSegments() {
 	s.mu.Lock()
-	s.segmented = true
+	s.segmented = false
 	s.mu.Unlock()
 }
 
@@ -139,10 +152,20 @@ func (f *fakeSeg) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 	return nil
 }
 
-func (f *fakeSeg) Close(final, rowCut bool) {
+func (f *fakeSeg) Close(rowCut bool) {
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
-	f.p.closed, f.p.final = true, final
+	f.p.closed = true
+	if rowCut {
+		f.s.rowCuts++
+	}
+}
+
+// Hold hands the last part back: the sink's close marks it final.
+func (f *fakeSeg) Hold(rowCut bool) {
+	f.s.mu.Lock()
+	defer f.s.mu.Unlock()
+	f.s.cur = f.p
 	if rowCut {
 		f.s.rowCuts++
 	}
@@ -358,5 +381,100 @@ func TestSegmentWorkersCap(t *testing.T) {
 	}
 	if st.Segments.Reason != SegmentEngaged || st.Segments.Workers != 3 {
 		t.Fatalf("segments %+v, want 3 workers", st.Segments)
+	}
+}
+
+// TestSegmenterCalledUnlocked: the drainer calls its Segmenter without
+// the stage's lock. Holding it there deadlocked: the router's interval cut
+// holds the router's lock while part 0's encoder, accounting its bytes,
+// wakes the stage (Shared.Add takes the stage's lock).
+func TestSegmenterCalledUnlocked(t *testing.T) {
+	withProcs(t, 5)
+	var calls, held atomic.Int64
+	hookSegmenter = func(mu *sync.Mutex) {
+		// The caller is stopped here: if it held the lock, nobody could
+		// take it now (a worker holding it briefly lets go).
+		calls.Add(1)
+		got := make(chan struct{})
+		go func() {
+			mu.Lock()
+			mu.Unlock()
+			close(got)
+		}()
+		select {
+		case <-got:
+		case <-time.After(2 * time.Second):
+			held.Add(1)
+		}
+	}
+	t.Cleanup(func() { hookSegmenter = nil })
+	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
+	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+	f.left.Store(int64(f.siblings))
+	s := &partSink{limit: 3000, encoders: 4}
+	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Segments.Reason != SegmentEngaged || calls.Load() < 2 || held.Load() != 0 {
+		t.Fatalf("segments %+v: %d calls, %d with the stage's lock held", st.Segments, calls.Load(), held.Load())
+	}
+}
+
+// damageTrailer rewrites the trailer of the spill file at path to count
+// one row more, its CRC valid: only the count check can refuse it.
+func damageTrailer(t *testing.T, path string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for off := 0; off+8 <= len(b); {
+		n := int(binary.LittleEndian.Uint32(b[off:]))
+		payload := b[off+8 : off+8+n]
+		if payload[0] == frameTrailer {
+			rows, _ := binary.Uvarint(payload[1:])
+			tr := (&spiller[tp]{}).frame(frameTrailer, binary.AppendUvarint(nil, rows+1))
+			if err := os.WriteFile(path, append(b[:off:off], tr...), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		off += 8 + n
+	}
+	t.Fatalf("%s: no trailer", path)
+}
+
+// TestSegmentsTrailerFailureClosesNoPart: a spill file whose trailer
+// disagrees with its rows is found before any segment closes a part: the
+// run fails, no segment was opened, and no part is final (a part closed
+// could be journaled; the final one would let a resume commit).
+func TestSegmentsTrailerFailureClosesNoPart(t *testing.T) {
+	withProcs(t, 5)
+	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
+	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+	f.left.Store(int64(f.siblings))
+	dir := t.TempDir()
+	s := &partSink{limit: 3000, encoders: 4}
+	opt := Options{Workers: 8, Budget: 500, SpillDir: dir, ListingDone: func() {
+		files, _ := filepath.Glob(filepath.Join(dir, "spill-*", "*.spill"))
+		if len(files) == 0 {
+			t.Error("no spill file to damage")
+			return
+		}
+		slices.Sort(files)
+		damageTrailer(t, files[len(files)-1]) // a late sibling's: replayed by the segments
+	}}
+	_, err := Run[fr, tp](context.Background(), f, s, &testSchema, opt)
+	var inv *dataset.InvariantError
+	if !errors.As(err, &inv) {
+		t.Fatalf("err %v, want the trailer's invariant error", err)
+	}
+	if s.opened != 0 {
+		t.Fatalf("%d segments opened before the trailers were checked", s.opened)
+	}
+	for i, p := range s.parts {
+		if p.final {
+			t.Fatalf("part %d final", i)
+		}
 	}
 }

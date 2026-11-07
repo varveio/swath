@@ -40,6 +40,11 @@ type SegmentPlan struct {
 func (r *Router[P]) Plan() (SegmentPlan, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.plan()
+}
+
+// plan is Plan with mu held.
+func (r *Router[P]) plan() (SegmentPlan, bool) {
 	if r.closed || r.segmented || r.limit == 0 || r.firstErr() != nil {
 		return SegmentPlan{}, false
 	}
@@ -60,12 +65,35 @@ func (r *Router[P]) Plan() (SegmentPlan, bool) {
 }
 
 // BeginSegments ends Write: the rest of the stream goes to segments. The
-// interval cut stops.
-func (r *Router[P]) BeginSegments() {
+// interval cut stops first, and the rule is stated in the same step, so no
+// cut can close the open part after the caller has planned against it.
+// False: the rule cannot be stated, and nothing changed (the interval cut
+// is restarted).
+func (r *Router[P]) BeginSegments() (SegmentPlan, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.stop()
+	if _, ok := r.plan(); !ok {
+		return SegmentPlan{}, false
+	}
+	r.stop() // releases mu while the ticker returns
+	pl, ok := r.plan()
+	if !ok {
+		r.startTick()
+		return SegmentPlan{}, false
+	}
 	r.segmented = true
+	return pl, true
+}
+
+// AbandonSegments undoes BeginSegments: Write goes on, and the interval
+// cut with it.
+func (r *Router[P]) AbandonSegments() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.segmented && !r.closed {
+		r.segmented = false
+		r.startTick()
+	}
 }
 
 // segmentQueue bounds the batches (4,096 rows or more each) queued to a
@@ -153,16 +181,28 @@ func (s *Segment[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 	return s.r.sendTo(ctx, s.p, segs)
 }
 
-// Close closes the segment's part, the dataset's last when final; rowCut
-// says the row cap closed it (RowCuts).
-func (s *Segment[P]) Close(final, rowCut bool) {
+// Close closes the segment's part (never the last: Hold); rowCut says the
+// row cap closed it (RowCuts).
+func (s *Segment[P]) Close(rowCut bool) {
 	s.r.mu.Lock()
 	defer s.r.mu.Unlock()
 	if s.p.closed {
 		return
 	}
-	s.p.final, s.p.closed = final, true
+	s.p.closed = true
 	close(s.p.segs)
+	if rowCut {
+		s.r.rowCuts.Add(1)
+	}
+}
+
+// Hold hands the last segment's part back as the open part: Close marks
+// it final and closes it, once the run has checked out, as for a part
+// written by Write; Abort discards it.
+func (s *Segment[P]) Hold(rowCut bool) {
+	s.r.mu.Lock()
+	defer s.r.mu.Unlock()
+	s.r.cur = s.p
 	if rowCut {
 		s.r.rowCuts.Add(1)
 	}

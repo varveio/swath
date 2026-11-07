@@ -31,10 +31,15 @@ import (
 // Segmenter is a sink that can take the rest of its stream as consecutive
 // segments (the Parquet router through registry).
 type Segmenter[P any] interface {
-	// Plan is the sink's cut rule now, false while it cannot be stated.
+	// Plan is the sink's cut rule now (its encoders, its readiness),
+	// false while it cannot be stated.
 	Plan() (SegmentPlan, bool)
-	// BeginSegments ends Sink.Write: the rest goes to segments.
-	BeginSegments()
+	// BeginSegments ends Sink.Write and stops whatever could still close
+	// the open part (the interval cut), returning the rule in the same
+	// step; false: it cannot be stated, and nothing changed.
+	BeginSegments() (SegmentPlan, bool)
+	// AbandonSegments undoes BeginSegments: Sink.Write goes on.
+	AbandonSegments()
 	// OpenSegment opens the next segment's part, in order: the open part
 	// when continueOpen, else a new one.
 	OpenSegment(ctx context.Context, continueOpen bool) (SegmentSink[P], error)
@@ -51,10 +56,15 @@ type SegmentPlan struct {
 	Encoders       int
 }
 
-// SegmentSink is one segment's part.
+// SegmentSink is one segment's part. Close closes it (not the last);
+// Hold hands the last back to the sink as its open part, which the sink
+// closes, final, only once the whole run has checked out (the Parquet
+// router's Close, after the stage's conservation and the pipeline's
+// reconciliation). rowCut: the row cap closed the part.
 type SegmentSink[P any] interface {
 	Write(ctx context.Context, segs [][]schema.Row[P]) error
-	Close(final, rowCut bool)
+	Close(rowCut bool)
+	Hold(rowCut bool)
 }
 
 // SegmentStats describe the segment-parallel replay. Reason is why it ran
@@ -145,8 +155,28 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		o.seg.tried, o.seg.st.Reason = true, SegmentOneProcessor
 		return false, nil
 	}
-	if _, ok := sg.Plan(); !ok {
+	// The sink is called without the stage's lock: the router's lock is
+	// held by its interval cut while part 0's encoder, accounting its
+	// bytes, wakes the stage (Shared.Add takes o.mu).
+	o.mu.Unlock()
+	if hookSegmenter != nil {
+		hookSegmenter(&o.mu)
+	}
+	pl, ok := sg.Plan()
+	o.mu.Lock()
+	if !ok {
 		o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
+		return false, nil
+	}
+	k := min(pl.Encoders, spareProcs(), max(minSegmentWorkers, aheadProcs()/2))
+	if c := o.opt.SegmentWorkers; c > 0 {
+		k = min(k, c)
+	}
+	if k < 2 {
+		o.seg.tried, o.seg.st.Reason = true, SegmentOneEncoder
+		if pl.Encoders >= 2 {
+			o.seg.st.Reason = SegmentOneProcessor // one spare processor: one segment at a time is the serial drain
+		}
 		return false, nil
 	}
 	o.mu.Unlock()
@@ -155,57 +185,69 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	pl, ok := sg.Plan()
-	if !ok {
-		o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
-		return false, nil
-	}
-	o.seg.tried = true
-	k := min(pl.Encoders, spareProcs(), max(minSegmentWorkers, aheadProcs()/2))
-	if c := o.opt.SegmentWorkers; c > 0 {
-		k = min(k, c)
-	}
-	if k < 2 {
-		o.seg.st.Reason = SegmentOneEncoder
-		if pl.Encoders >= 2 {
-			o.seg.st.Reason = SegmentOneProcessor // one spare processor: one segment at a time is the serial drain
-		}
-		return false, nil
-	}
 	t := time.Now()
 	units, files, released, releasedMeta, nodes, markers := o.flatten()
-	segs, err := o.cut(units, pl)
-	o.seg.st.Plan = time.Since(t)
-	if err != nil {
-		return false, err
+	o.mu.Unlock()
+	// Every spill file's trailer must count the rows replayed from it
+	// before any segment's part is closed: a part closed is a part the
+	// router may journal.
+	err = o.checkTrailers(files)
+	if err == nil && hookSegmenter != nil {
+		hookSegmenter(&o.mu)
 	}
+	var segs []segment
+	began := false
+	if err == nil {
+		// The definitive rule: the router stops its interval cut and
+		// states the open part at once, so no cut can close it after.
+		if pl, began = sg.BeginSegments(); began {
+			segs, err = o.cut(units, pl)
+		}
+	}
+	o.seg.st.Plan = time.Since(t)
 	real := 0
 	for _, s := range segs {
 		if s.u0 < s.u1 || s.r0 < s.r1 && s.u0 == s.u1 {
 			real++
 		}
 	}
-	if real < 2 {
-		o.seg.st.Reason = SegmentSinglePart
+	if err != nil || !began || real < 2 {
+		if began {
+			sg.AbandonSegments() // the drainer writes on, the interval cut resumes
+		}
+		o.mu.Lock()
+		switch {
+		case err != nil:
+			return false, err
+		case !began:
+			o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
+		default:
+			o.seg.tried, o.seg.st.Reason = true, SegmentSinglePart
+		}
 		return false, nil
 	}
+	o.seg.tried = true
 	// Committed: the tree's remaining items are the segments'.
+	o.mu.Lock()
 	o.seg.st.Reason, o.seg.st.Segments, o.seg.st.Workers = SegmentEngaged, len(segs), min(k, len(segs))
-	if o.ra != nil { // the read-ahead stops: the segments read for themselves
-		o.ra.off = true
-		o.buffered -= o.ra.held
-		o.ra.held, o.ra.q = 0, nil
+	if ra := o.ra; ra != nil {
+		// The read-ahead stops, and its reads in flight end (their
+		// descriptors and decoded rows) before the segments read.
+		ra.off = true
+		for ra.reads > 0 {
+			ra.waiting = true
+			o.waitAt(o.drain, waitFetch)
+		}
+		ra.waiting = false
+		o.buffered -= ra.held
+		ra.held, ra.q = 0, nil
 	}
-	sg.BeginSegments()
+	o.mu.Unlock()
 	if o.sp != nil {
 		o.sp.closeReaders() // the drainer reads no more frames
 	}
-	o.mu.Unlock()
 	o.stalled()
 	err = o.runSegments(units, segs, o.seg.st.Workers)
-	if err == nil {
-		err = o.checkTrailers(files)
-	}
 	o.advanced = time.Now()
 	o.mu.Lock()
 	if err != nil {
@@ -218,6 +260,10 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	o.path = nil
 	return true, nil
 }
+
+// hookSegmenter runs (tests) just before the drainer calls its Segmenter;
+// mu is the stage's lock, which must not be held then.
+var hookSegmenter func(mu *sync.Mutex)
 
 // flatten lists the rows still to hand on, in drain order, from the
 // drainer's walk (mu held; every node is done), with the rows each spill
@@ -376,7 +422,11 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 					fail(err)
 					return
 				}
-				out.Close(segs[j].final, segs[j].rowCut)
+				if segs[j].final {
+					out.Hold(segs[j].rowCut)
+				} else {
+					out.Close(segs[j].rowCut)
+				}
 				first[j], last[j], has[j], counts[j], times[j] = f, l, ok, n, time.Since(t)
 			}
 		})
