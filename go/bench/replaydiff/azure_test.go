@@ -65,6 +65,55 @@ func TestAzureComparator(t *testing.T) {
 	}
 }
 
+func azureServer(t *testing.T, rollup bool, keys ...string) string {
+	t.Helper()
+	srv, err := server.New(server.Config{Bucket: "bkt", Host: "127.0.0.1", MetricsPort: -1, MaxConcurrentRequests: 64,
+		ResponseBufferBudget: 1 << 30, MaxResponseBytes: 1 << 26, StopTimeout: time.Second, IdleTimeout: time.Minute,
+		WriteTimeout: time.Minute, SlowRequestLog: -1, Store: memstore.Keys(memstore.Options{Rollup: rollup}, keys...),
+		ServingMode: "MEMORY", FixtureIdentity: "same", Protocols: []string{"s3", "azure"}, AzureAccount: "replay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve()
+	t.Cleanup(func() { srv.Shutdown(time.Second) })
+	return fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+}
+
+// TestMarkerCasesRunOrSkip pins that every marker case sends its follow-up
+// request when the fixture pages, and is recorded as a skip, never a pass,
+// when it cannot.
+func TestMarkerCasesRunOrSkip(t *testing.T) {
+	for _, c := range []struct {
+		keys    []string
+		skipped bool
+	}{{[]string{"a", "b", "c"}, false}, {[]string{"d/1", "d/2", "e"}, false}, {[]string{"a"}, true}} {
+		client := &http.Client{}
+		rep := &report{}
+		d := &driver{o: options{bucket: "bkt"}, ref: &target{name: "a", base: azureServer(t, false, c.keys...), client: client},
+			got: &target{name: "b", base: azureServer(t, true, c.keys...), client: client}, comp: azureComparator{}, rep: rep}
+		var keys [][]byte
+		for _, k := range c.keys {
+			keys = append(keys, []byte(k))
+		}
+		_, marks := azureMatrix(keys, rand.New(rand.NewPCG(1, 1)), 10)
+		for _, m := range marks {
+			d.record(d.markerCase(m))
+		}
+		if c.skipped {
+			if rep.Skipped != len(marks) || rep.Passed != 0 || rep.Failed != 0 {
+				t.Errorf("%v: %d skipped %d passed %d failed of %d", c.keys, rep.Skipped, rep.Passed, rep.Failed, len(marks))
+			}
+			continue
+		}
+		if rep.Skipped != 0 || rep.Failed != 0 || rep.Requests != 4*len(marks) {
+			t.Errorf("%v: %d skipped %d failed, %d requests for %d cases", c.keys, rep.Skipped, rep.Failed, rep.Requests, len(marks))
+		}
+	}
+}
+
 // TestAzureDriverAgreesWithItself runs the Azure matrix, marker cases and
 // walks against two Go servers over the same names, one whose store
 // rolls up and one that walks: every answer must agree, and the driver

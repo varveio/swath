@@ -144,6 +144,9 @@ type result struct {
 	Error   string `json:"error,omitempty"`
 	FailAt  int    `json:"fail_at_page,omitempty"`
 	Partial bool   `json:"partial,omitempty"` // a walk stopped by -walk-limit
+	// Skipped marks a case that could not be exercised (Error says why);
+	// it is neither a pass nor a failure.
+	Skipped bool `json:"skipped,omitempty"`
 	*diff
 }
 
@@ -160,6 +163,7 @@ type report struct {
 	Compared  int       `json:"compared"`
 	Passed    int       `json:"passed"`
 	Failed    int       `json:"failed"`
+	Skipped   int       `json:"skipped,omitempty"`
 	Results   []result  `json:"results"`
 }
 
@@ -271,6 +275,11 @@ type driver struct {
 func (d *driver) record(r result) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if r.Skipped {
+		d.rep.Skipped++
+		d.rep.Results = append(d.rep.Results, r)
+		return
+	}
 	d.rep.Compared++
 	if r.Pass {
 		d.rep.Passed++
@@ -484,6 +493,9 @@ func (d *driver) write() error {
 	fmt.Fprintf(&text, "replaydiff: reference=%s fixture=%s bucket=%s keys=%d seed=%d\n", rep.Reference, rep.Fixture, rep.Bucket, rep.Keys, rep.Seed)
 	kinds := map[string][2]int{}
 	for _, r := range rep.Results {
+		if r.Skipped {
+			continue
+		}
 		k := kinds[r.Kind]
 		if r.Pass {
 			k[0]++
@@ -501,6 +513,10 @@ func (d *driver) write() error {
 	for _, r := range rep.Results {
 		if r.Partial {
 			partial++
+		}
+		if r.Skipped {
+			fmt.Fprintf(&text, "SKIP %s %q: %s\n", r.Kind, r.Name, r.Error)
+			continue
 		}
 		if r.Pass {
 			continue
@@ -526,7 +542,7 @@ func (d *driver) write() error {
 	if partial > 0 {
 		fmt.Fprintf(&text, "%d walks stopped at -walk-limit %d pages\n", partial, d.o.walkLimit)
 	}
-	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed)
+	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, rep.Skipped)
 	os.Stdout.Write(text.Bytes())
 	if d.o.report != "" {
 		j, err := json.MarshalIndent(rep, "", " ")
