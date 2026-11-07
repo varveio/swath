@@ -967,8 +967,8 @@ func jsonText(s string) string {
 
 // TestEvidenceRejectsCorruptedReplayResults corrupts replay answers that
 // matched their captures: a lost, repeated or reordered item, a decoded
-// name, an early end, a repeated prefix, a wrong status and a wrong error
-// reason must each be rejected, so a comparator that tolerates them is
+// name, an early end, a repeated prefix, a wrong status, a wrong error
+// reason and an ill-formed UTF-8 byte in a name must each be rejected, so a comparator that tolerates them is
 // caught here.
 func TestEvidenceRejectsCorruptedReplayResults(t *testing.T) {
 	fixtureRoot(t)
@@ -977,7 +977,7 @@ func TestEvidenceRejectsCorruptedReplayResults(t *testing.T) {
 	for _, c := range [][2]string{
 		{"gcs-01a", "drop-first"}, {"gcs-01a", "duplicate-last"}, {"gcs-04a", "swap-order-pair"},
 		{"gcs-05o", "double-decode"}, {"gcs-07q", "terminate-early"}, {"gcs-07c", "repeat-prefix"},
-		{"gcs-07g", "wrong-status"}, {"gcs-07g", "wrong-error"},
+		{"gcs-07g", "wrong-status"}, {"gcs-07g", "wrong-error"}, {"gcs-04a", "invalid-utf8"},
 	} {
 		path := filepath.Join(ev.root, ev.index.Captures[c[0]].File)
 		clean := &endpoint{port: port, cases: ev.cases, mutate: func(p []exchange) []exchange { return p }}
@@ -1039,6 +1039,13 @@ func corruption(name string) mutation {
 			}
 			return []exchange{{s, p[0].headers, p[0].body}}
 		}
+	case "invalid-utf8":
+		// A name's U+FFFD replaced by a raw 0xFF byte: a decoder that
+		// repairs ill-formed UTF-8 would read the name back unchanged.
+		return onFirst(func(b string) string {
+			require(strings.Contains(b, "\uFFFD"), "mutation target U+FFFD is absent")
+			return strings.Replace(b, "\uFFFD", "\xff", 1)
+		})
 	case "wrong-error":
 		return onFirst(func(b string) string {
 			return regexp.MustCompile(`"reason":"[A-Za-z]+"`).ReplaceAllLiteralString(b, `"reason":"conflict"`)
