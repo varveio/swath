@@ -546,12 +546,35 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 		gotTok, mutation, source := "", "", refTok
 		switch {
 		case note.token == tokenVerbatim:
+			// A token the case wrote itself is one no answer issued: one
+			// an earlier answer did issue would be sent to the Go server
+			// as the provider's, and judged as a token case's refusal.
+			if _, issuedEarlier := tokens.m[refTok]; issuedEarlier && refTok != "" {
+				failed(x.Seq)
+				d.record(result{Kind: "capture", Name: name, Error: "annotation does not match the captured token: " +
+					"the token annotated as the case's own was issued by an earlier captured answer"})
+				continue
+			}
 			gotTok = refTok
 		case note.token != "":
 			var err error
 			if mutation, source, err = noteMutation(note.token); err != nil {
 				failed(x.Seq)
 				d.record(result{Kind: "capture", Name: name, Error: err.Error()})
+				continue
+			}
+			// The annotation names the alteration and the token it was
+			// applied to; the request carries the result. Unless the two
+			// agree exactly, the Go token would be altered on the
+			// annotation's word alone and its refusal judged against an
+			// answer to some other token.
+			if m, err := mutateToken(source, mutation); err != nil || !hasTok || m != refTok {
+				why := fmt.Sprintf("%s of the annotated token is not the token the request carried", mutation)
+				if err != nil {
+					why = fmt.Sprintf("%s of the annotated token: %v", mutation, err)
+				}
+				failed(x.Seq)
+				d.record(result{Kind: "capture", Name: name, Error: "annotation does not match the captured token: " + why})
 				continue
 			}
 		}

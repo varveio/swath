@@ -664,3 +664,50 @@ func TestTokenMapLookup(t *testing.T) {
 		t.Error("an unknown token was found")
 	}
 }
+
+// TestCaptureMutationAnnotationIsVerified: an annotation that says a
+// request's token is an issued token altered is a claim about the
+// captured request, held to it: the alteration of the named token must
+// be exactly the token the request carried. A forged flip-decoded
+// annotation on a continuation whose captured answer is the provider's
+// next page fails the exchange (it would otherwise send an altered Go
+// token and document the refusal against a captured 200), as does a
+// verbatim annotation on a token an earlier answer issued; the genuine
+// annotation, on the token so altered, is replayed and documented.
+func TestCaptureMutationAnnotationIsVerified(t *testing.T) {
+	keys := liveKeys()
+	xs := s3CaptureWalk(t, keys)[:2]
+	issued := nextToken([]byte(*xs[0].Response.Body))
+	flipped, err := mutateToken(issued, "flip-decoded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotate := func(token, carried string) capturedExchange {
+		x := xs[1]
+		x.Annotations = []capturedHeader{{recordCaseHeader, "s3-07x"}, {recordTokenHeader, token}}
+		x.Request.Query = strings.Replace(x.Request.Query, "continuation-token="+campaignEscape(issued, ""),
+			"continuation-token="+campaignEscape(carried, ""), 1)
+		return x
+	}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, keys...), client: &http.Client{}}
+	for _, c := range []struct {
+		name string
+		x    capturedExchange
+		want string // the failure; "" for documented
+	}{
+		{"forged flip-decoded", annotate(tokenNote("flip-decoded", issued), issued), "annotation does not match the captured token"},
+		{"forged truncate", annotate(tokenNote("truncate", issued), flipped), "annotation does not match the captured token"},
+		{"forged verbatim", annotate(tokenVerbatim, issued), "annotation does not match the captured token"},
+		{"genuine flip-decoded", annotate(tokenNote("flip-decoded", issued), flipped), ""},
+	} {
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, "s3", gcsSynthetic,
+			exchangeItems([]capturedExchange{xs[0], c.x}), testLimits)
+		switch {
+		case c.want == "" && (len(rep.Residuals) != 1 || rep.Failed != 0):
+			t.Errorf("%s: documented %q, %d failed %+v", c.name, rep.Residuals, rep.Failed, rep.Results)
+		case c.want != "" && (len(rep.Residuals) != 0 || len(rep.Results) != 1 || !strings.Contains(rep.Results[0].Error, c.want)):
+			t.Errorf("%s: documented %q, results %+v", c.name, rep.Residuals, rep.Results)
+		}
+	}
+}
