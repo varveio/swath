@@ -10,11 +10,13 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import functools
 import gzip
 import hashlib
 import html
 import io
 import json
+import os
 import re
 import subprocess
 import tarfile
@@ -91,6 +93,30 @@ VERSION_EQUIVALENCE_SCHEMA = "provider-version-equivalence-v1"
 VERSION_NORMALIZED_HEADERS = VOLATILE_ID_HEADERS | {"x-ms-version", "x-ms-client-request-id", "date", "expires"}
 # Capture provenance that names its own version, manifest and capture time.
 VERSION_PROVENANCE_FIELDS = ("api_version", "manifest_sha256", "captured_at")
+
+# A replay match receipt names its producer: `java` (implied when the field is absent) or `go`.
+RECEIPT_PRODUCERS = ("java", "go")
+JAVA_RECEIPT_FIELDS = {"schema_version", "comparison", "status", "test", "test_path", "test_source_sha256",
+                       "api_version", "evidence_kind", "compared_steps", "capture_sha256", "replay_commit",
+                       "distribution_sha256", "distribution_name"}
+GO_RECEIPT_FIELDS = JAVA_RECEIPT_FIELDS | {"producer", "test_sources", "go_toolchain"}
+# The Go test sources a Go receipt binds. A path ending in `/` stands for every file git tracks
+# directly in that directory (not its subdirectories). The set is what the Go evidence replays
+# compile and read beyond the replay binary itself: the GCS evidence package, the test-only fixture
+# writer it imports, the Azure route's evidence replay with its comparator and SDK runner (the
+# route's other test files are not compiled into that replay), and go.mod and go.sum, which pin
+# the SDK versions the SDK runs use.
+GO_EVIDENCE_TEST_SOURCES = ("go/go.mod", "go/go.sum",
+                            "go/internal/replay/evidence/",
+                            "go/sortedparquet/sortedparquettest/",
+                            "go/internal/replay/azure/evidence_test.go",
+                            "go/internal/replay/azure/evidencecmp_test.go",
+                            "go/internal/replay/azure/sdk_test.go")
+# The binary a Go receipt binds: `go/build.sh`'s static linux/amd64 replay server.
+GO_DISTRIBUTION_NAME = "swath-replay-linux-amd64"
+# Build settings that change the binary's bytes; everything else comes from the receipt commit.
+GO_BUILD_ENV = {"GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1", "CGO_ENABLED": "0",
+                "GOFLAGS": "", "GOEXPERIMENT": ""}
 
 
 def canonical(value: object) -> bytes:
@@ -683,7 +709,7 @@ def validate_version_equivalence(row: dict, version: str, proof: dict,
     record; the cited capture is then validated at that reference version."""
     if captures is None:
         raise ValueError("version equivalence needs the evidence directory")
-    if "replay_test" in proof:
+    if "replay_test" in proof or "go_replay" in proof:
         # The record shows the two native versions agree; replay was only run at the reference.
         raise ValueError("version equivalence cannot carry a replay match")
     record = strict_json(checked_child(captures, proof["version_equivalence_file"]).read_text(encoding="utf-8"))
@@ -791,44 +817,185 @@ def validate_promotion(row: dict, version: str, proof: dict, manifest: dict,
             if identity not in sdk_values:
                 raise ValueError("SDK run lacks exact pinned product/version token")
     if status == "REPLAY_MATCH":
-        if repo_root is None or not proof.get("replay_test") or not proof.get("replay_test_path") \
-                or not SHA256.fullmatch(proof.get("replay_result_sha256", "")) \
-                or replay_commit is None or distribution is None:
+        if distribution is None:
             raise ValueError("replay match lacks verifiable test/result")
+        validate_receipt(proof, version, kind, len(exchanges), "java", captures, repo_root, replay_commit,
+                         distribution)
+    if "go_replay" in proof:
+        go_proof = proof["go_replay"]
+        if not isinstance(go_proof, dict) or set(go_proof) != {"replay_test", "replay_test_path",
+                                                              "replay_result_file", "replay_result_sha256"}:
+            raise ValueError("Go replay proof needs exactly its test, test path, result file and checksum")
+        validate_receipt({**go_proof, "capture_sha256": proof["capture_sha256"]}, version, kind, len(exchanges),
+                         "go", captures, repo_root, replay_commit, None)
+
+
+def validate_receipt(proof: dict, version: str, kind: str, steps: int, producer: str, captures: Path,
+                     repo_root: Path | None, replay_commit: str | None, distribution: Path | None) -> None:
+    """Check one producer's PASS receipt for a capture: the fields both producers share, then what
+    that producer binds (a Java receipt: the test source in the tree and the jar given; a Go
+    receipt: the test sources and `go/build.sh`'s binary, both recomputed at the receipt commit),
+    then that the receipt commit is an ancestor of the current replay source."""
+    if repo_root is None or not proof.get("replay_test") or not proof.get("replay_test_path") \
+            or not SHA256.fullmatch(proof.get("replay_result_sha256", "")) or replay_commit is None:
+        raise ValueError("replay match lacks verifiable test/result")
+    if producer == "java":
         test_path = checked_child(repo_root, proof["replay_test_path"])
-        source = test_path.read_text(encoding="utf-8")
-        method = re.escape(proof["replay_test"])
-        if test_path.suffix == ".java":
-            found = re.search(rf'@(?:Test|ParameterizedTest|RepeatedTest)\b[^@{{}}]*?'
-                              rf'\bvoid\s+{method}\s*\(', source, re.DOTALL)
-        elif test_path.suffix == ".py":
-            found = re.search(rf'^\s*def\s+{method}\s*\(\s*self\b', source, re.MULTILINE)
-        else:
-            found = None
-        if not found:
+        if not declares_test(test_path.suffix, test_path.read_text(encoding="utf-8"), proof["replay_test"]):
             raise ValueError("replay test identifier does not resolve to source")
-        result_path = checked_child(captures, proof.get("replay_result_file", ""))
-        result_bytes = result_path.read_bytes()
-        if hashlib.sha256(result_bytes).hexdigest() != proof["replay_result_sha256"]:
-            raise ValueError("replay result SHA-256 differs from ledger")
-        result = strict_json(result_bytes.decode("utf-8"))
-        if result.get("status") != "PASS" or result.get("capture_sha256") != proof["capture_sha256"] \
-                or result.get("test") != proof["replay_test"] or result.get("api_version") != version \
-                or result.get("test_path") != proof["replay_test_path"] \
-                or result.get("test_source_sha256") != hashlib.sha256(test_path.read_bytes()).hexdigest() \
-                or result.get("schema_version") != "provider-match-receipt-v2" \
-                or result.get("comparison") != "ProviderExchangeComparator" \
-                or result.get("evidence_kind") != kind \
-                or result.get("compared_steps") != len(exchanges) \
-                or not isinstance(result.get("replay_commit"), str) \
-                or not re.fullmatch(r"[0-9a-f]{40}", result["replay_commit"]) \
+    result_path = checked_child(captures, proof.get("replay_result_file", ""))
+    result_bytes = result_path.read_bytes()
+    if hashlib.sha256(result_bytes).hexdigest() != proof["replay_result_sha256"]:
+        raise ValueError("replay result SHA-256 differs from ledger")
+    result = strict_json(result_bytes.decode("utf-8"))
+    if result.get("producer", "java") != producer:
+        raise ValueError(f"replay result receipt is not a {producer} receipt")
+    if result.get("status") != "PASS" or result.get("capture_sha256") != proof["capture_sha256"] \
+            or result.get("test") != proof["replay_test"] or result.get("api_version") != version \
+            or result.get("test_path") != proof["replay_test_path"] \
+            or result.get("schema_version") != "provider-match-receipt-v2" \
+            or result.get("comparison") != "ProviderExchangeComparator" \
+            or result.get("evidence_kind") != kind \
+            or result.get("compared_steps") != steps \
+            or not isinstance(result.get("replay_commit"), str) \
+            or not re.fullmatch(r"[0-9a-f]{40}", result["replay_commit"]):
+        raise ValueError("replay result receipt does not prove matched capture/test/version")
+    if producer == "java":
+        if set(result) - JAVA_RECEIPT_FIELDS - {"producer"}:
+            raise ValueError("Java receipt carries fields of another producer")
+        if result.get("test_source_sha256") != hashlib.sha256(test_path.read_bytes()).hexdigest() \
                 or result.get("distribution_sha256") != hashlib.sha256(distribution.read_bytes()).hexdigest() \
                 or result.get("distribution_name") != distribution.name:
             raise ValueError("replay result receipt does not prove matched capture/test/version")
-        ancestor = subprocess.run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor",
-                                   result["replay_commit"], replay_commit], capture_output=True)
-        if ancestor.returncode != 0:
-            raise ValueError("receipt commit is not an ancestor of current replay source")
+    commit = result["replay_commit"]
+    ancestor = subprocess.run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor",
+                               commit, replay_commit], capture_output=True)
+    if ancestor.returncode != 0:
+        raise ValueError("receipt commit is not an ancestor of current replay source")
+    if producer == "go":
+        validate_go_receipt(result, repo_root, replay_commit)
+
+
+def declares_test(suffix: str, source: str, name: str) -> bool:
+    """Whether `source` declares the test `name`: a Java test method, a Python test method or a Go
+    test function."""
+    method = re.escape(name)
+    if suffix == ".java":
+        return re.search(rf'@(?:Test|ParameterizedTest|RepeatedTest)\b[^@{{}}]*?'
+                         rf'\bvoid\s+{method}\s*\(', source, re.DOTALL) is not None
+    if suffix == ".py":
+        return re.search(rf'^\s*def\s+{method}\s*\(\s*self\b', source, re.MULTILINE) is not None
+    if suffix == ".go":
+        return re.search(rf'^func\s+{method}\s*\(\s*\w+\s+\*testing\.T\s*\)', source, re.MULTILINE) is not None
+    return False
+
+
+def validate_go_receipt(result: dict, repo_root: Path, replay_commit: str) -> None:
+    """A Go receipt's own bindings, recomputed at its commit: the evidence test sources (which must
+    also be unchanged at the current replay commit, as a Java receipt's test source must be), the
+    pinned toolchain, and the SHA-256 of the binary `go/build.sh` builds there."""
+    if set(result) != GO_RECEIPT_FIELDS or result.get("distribution_name") != GO_DISTRIBUTION_NAME:
+        raise ValueError("Go receipt carries fields of another producer")
+    commit = result["replay_commit"]
+    sources = go_test_sources(repo_root, commit)
+    if result["test_sources"] != sorted(sources) or result["test_path"] not in sources \
+            or not result["test_path"].endswith("_test.go") \
+            or result["test_source_sha256"] != go_test_source_sha256(sources):
+        raise ValueError("Go receipt test sources differ from its commit")
+    if go_test_sources(repo_root, replay_commit) != sources:
+        raise ValueError("Go evidence test sources changed since the receipt commit")
+    if not declares_test(".go", git_blob(repo_root, commit, result["test_path"]).decode("utf-8"), result["test"]):
+        raise ValueError("replay test identifier does not resolve to source")
+    if result["go_toolchain"] != go_toolchain(repo_root, commit):
+        raise ValueError("Go receipt toolchain differs from go/go.mod at its commit")
+    if result["distribution_sha256"] != go_distribution_sha256(repo_root, commit):
+        raise ValueError("Go receipt binary differs from go/build.sh's build at its commit")
+
+
+def git_output(repo_root: Path, *arguments: str) -> bytes:
+    run = subprocess.run(["git", "-C", str(repo_root), *arguments], capture_output=True)
+    if run.returncode != 0:
+        raise ValueError(f"git {arguments[0]} failed: {run.stderr.decode('utf-8', 'replace').strip()}")
+    return run.stdout
+
+
+def git_blob(repo_root: Path, commit: str, path: str) -> bytes:
+    return git_output(repo_root, "cat-file", "blob", f"{commit}:{path}")
+
+
+def go_test_sources(repo_root: Path, commit: str) -> dict[str, str]:
+    """Each file of GO_EVIDENCE_TEST_SOURCES at `commit`, mapped to its SHA-256."""
+    sources = {}
+    for entry in GO_EVIDENCE_TEST_SOURCES:
+        paths = [entry]
+        if entry.endswith("/"):
+            listing = git_output(repo_root, "ls-tree", "-z", "--full-tree", commit, entry).decode("utf-8")
+            paths = [line.split("\t", 1)[1] for line in listing.split("\0") if line and line.split()[1] == "blob"]
+            if not paths:
+                raise ValueError(f"Go evidence test source {entry} is absent at {commit}")
+        for path in paths:
+            sources[path] = hashlib.sha256(git_blob(repo_root, commit, path)).hexdigest()
+    return sources
+
+
+def go_test_source_sha256(sources: dict[str, str]) -> str:
+    """The SHA-256 of the canonical JSON object mapping each Go test source path to its SHA-256."""
+    return hashlib.sha256(canonical(sources)).hexdigest()
+
+
+def go_toolchain(repo_root: Path, commit: str) -> str:
+    """The toolchain go/go.mod pins at `commit`: its `toolchain` line, else its `go` line."""
+    mod = git_blob(repo_root, commit, "go/go.mod").decode("utf-8")
+    pinned = re.search(r"^toolchain\s+(go[0-9][0-9A-Za-z.\-]*)\s*$", mod, re.MULTILINE)
+    if pinned:
+        return pinned.group(1)
+    version = re.search(r"^go\s+([0-9][0-9A-Za-z.\-]*)\s*$", mod, re.MULTILINE)
+    if not version:
+        raise ValueError("go/go.mod names no Go version")
+    return "go" + version.group(1)
+
+
+@contextlib.contextmanager
+def go_checkout(repo_root: Path, commit: str) -> Iterator[Path]:
+    """A clean detached worktree of `commit`, removed afterwards. A worktree rather than an
+    exported tree: build.sh and the Go toolchain both stamp the binary from the checkout's VCS
+    state, so a receipt and its validation build the same bytes only from the same kind of tree."""
+    with tempfile.TemporaryDirectory(prefix="go-receipt-") as temp:
+        tree = Path(temp) / "src"
+        git_output(repo_root, "worktree", "add", "--detach", "--quiet", str(tree), commit)
+        try:
+            yield tree
+        finally:
+            subprocess.run(["git", "-C", str(repo_root), "worktree", "remove", "--force", str(tree)],
+                           capture_output=True)
+
+
+def go_environment(toolchain: str, build: bool) -> dict[str, str]:
+    """The caller's environment with the pinned toolchain, and for a build the target settings,
+    so the binary depends only on the receipt commit."""
+    env = {key: value for key, value in os.environ.items()
+           if key not in GO_BUILD_ENV and key not in {"GOTOOLCHAIN", "SWATH_REVISION"}}
+    env["GOTOOLCHAIN"] = toolchain
+    if build:
+        env.update(GO_BUILD_ENV)
+    return env
+
+
+def build_go_distribution(tree: Path, toolchain: str, out: Path) -> str:
+    """Build the replay server with the tree's go/build.sh and return the binary's SHA-256."""
+    run = subprocess.run(["sh", str(tree / "go" / "build.sh"), "-o", str(out), "./cmd/swath-replay"],
+                         env=go_environment(toolchain, True), capture_output=True)
+    if run.returncode != 0:
+        raise ValueError("go/build.sh failed: " + run.stderr.decode("utf-8", "replace").strip())
+    return hashlib.sha256(out.read_bytes()).hexdigest()
+
+
+@functools.cache
+def go_distribution_sha256(repo_root: Path, commit: str) -> str:
+    """The SHA-256 of the static linux/amd64 `swath-replay` that go/build.sh builds at `commit`."""
+    toolchain = go_toolchain(repo_root, commit)
+    with go_checkout(repo_root, commit) as tree:
+        return build_go_distribution(tree, toolchain, tree.parent / GO_DISTRIBUTION_NAME)
 
 
 def checked_child(root: Path, relative: str) -> Path:
