@@ -372,3 +372,59 @@ func TestRecordReleasesWithAContentType(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordAnnotations: a request's X-Record-* headers, in any
+// spelling, are written as the exchange's annotations, not among its
+// request headers, and never reach the provider; the client's other
+// headers are forwarded as before.
+func TestRecordAnnotations(t *testing.T) {
+	var mu sync.Mutex
+	var seen []http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Clone())
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte("<ListBucketResult/>"))
+	}))
+	defer upstream.Close()
+	p, err := faulttest.New(upstream.URL, faulttest.Plan{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	rec := newRecorder(p, upstream.URL, &out, 1<<20)
+	front := httptest.NewServer(rec)
+	defer front.Close()
+	req, _ := http.NewRequest("GET", front.URL+"/b?list-type=2", nil)
+	req.Header["x-record-case"] = []string{"s3-07r"}
+	req.Header.Set("X-Record-Token", "flip abc%3D")
+	req.Header.Set("X-Other", "kept")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	xs := readExchanges(t, &out)
+	if len(xs) != 1 || len(seen) != 1 {
+		t.Fatalf("%d exchanges, %d forwarded", len(xs), len(seen))
+	}
+	want := []Header{{"X-Record-Case", "s3-07r"}, {"X-Record-Token", "flip abc%3D"}}
+	if got := xs[0].Annotations; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("annotations %v, want %v", got, want)
+	}
+	for _, h := range xs[0].Request.Headers {
+		if strings.HasPrefix(strings.ToLower(h.Name), "x-record-") {
+			t.Errorf("annotation recorded as a request header: %v", h)
+		}
+	}
+	for k := range seen[0] {
+		if strings.HasPrefix(strings.ToLower(k), "x-record-") {
+			t.Errorf("annotation forwarded: %s", k)
+		}
+	}
+	if seen[0].Get("X-Other") != "kept" {
+		t.Errorf("other header not forwarded: %v", seen[0])
+	}
+}

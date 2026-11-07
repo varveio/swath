@@ -10,10 +10,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -420,5 +423,244 @@ func TestCaptureStreams(t *testing.T) {
 		"s3", gcsSynthetic, captureLines(pr, 1<<20), testLimits)
 	if rep.Passed != len(xs) {
 		t.Errorf("%d of %d passed: %+v", rep.Passed, len(xs), rep.Results)
+	}
+}
+
+// testRecorder stands for bench/faultproxy -record in front of a
+// provider: each exchange is kept, in the -record shape, before its
+// answer is released; a request's X-Record-* headers are kept as the
+// exchange's annotations and not forwarded; and the answer released
+// carries the X-Content-Type-Options the proxy sets.
+type testRecorder struct {
+	next http.Handler
+	mu   sync.Mutex
+	xs   []capturedExchange
+}
+
+func (rec *testRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var x capturedExchange
+	for k, vs := range r.Header {
+		if strings.HasPrefix(k, "X-Record-") {
+			for _, v := range vs {
+				x.Annotations = append(x.Annotations, capturedHeader{k, v})
+			}
+			delete(r.Header, k)
+		}
+	}
+	path, query, _ := strings.Cut(r.RequestURI, "?")
+	x.Request.Method, x.Request.Path, x.Request.Query = r.Method, path, query
+	rw := httptest.NewRecorder()
+	rec.next.ServeHTTP(rw, r)
+	x.Response.Status = rw.Code
+	for k, vs := range rw.Header() {
+		for _, v := range vs {
+			x.Response.Headers = append(x.Response.Headers, capturedHeader{k, v})
+		}
+	}
+	body := rw.Body.String()
+	x.Response.Body = &body
+	rec.mu.Lock()
+	x.Seq = uint64(len(rec.xs) + 1)
+	rec.xs = append(rec.xs, x)
+	rec.mu.Unlock()
+	maps.Copy(w.Header(), rw.Header())
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(rw.Code)
+	io.WriteString(w, body)
+}
+
+// TestLiveMatrixRecordedReplaysOffline: the live matrix (provider cases,
+// walks, token cases with altered and invented tokens, the scripted
+// matrix) sent once through a recording proxy with -live-record replays
+// from the recording alone with the live run's verdicts: no failure the
+// live run did not have, each live failure again a failure, and the
+// documented differences documented in both. Every exchange is
+// accounted for (compared, documented or skipped), and a second replay
+// gives the same report. The same recording without its annotations
+// fails the requests whose tokens no answer issued.
+func TestLiveMatrixRecordedReplaysOffline(t *testing.T) {
+	keys := liveKeys()
+	for _, protocol := range []string{"s3", "gcs"} {
+		rec := &testRecorder{}
+		live := runFakeLiveThrough(t, protocol, nil, rec, true, nil)
+		if live.Compared < 50 || len(rec.xs) < live.Requests/2 {
+			t.Fatalf("%s: live compared %d, %d requests, %d recorded", protocol, live.Compared, live.Requests, len(rec.xs))
+		}
+		liveFailed := map[string]string{}
+		for _, r := range live.Results {
+			if !r.Pass {
+				liveFailed[r.Name] = r.Detail
+			}
+		}
+		protocols := []string{server.ProtocolS3}
+		if protocol == "gcs" {
+			protocols = []string{server.ProtocolGCS}
+		}
+		got := &target{name: "go", base: startGoProtocols(t, protocols, keys...), client: &http.Client{}}
+		replay := func(xs []capturedExchange) *report {
+			rep := &report{}
+			replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, protocol, gcsSynthetic, exchangeItems(xs), testLimits)
+			return rep
+		}
+		rep := replay(rec.xs)
+		if n := rep.Compared + len(rep.Residuals) + rep.SkippedCount; n != len(rec.xs) {
+			t.Errorf("%s: %d exchanges, %d accounted for", protocol, len(rec.xs), n)
+		}
+		caseOf := func(line string) string { return strings.SplitN(strings.SplitN(line, "[", 2)[1], "]", 2)[0] }
+		capFailed := map[string]string{}
+		for _, r := range rep.Results {
+			capFailed[caseOf(r.Name)] = r.Detail
+			if r.Error != "" {
+				t.Errorf("%s %s: %s", protocol, r.Name, r.Error)
+			}
+		}
+		if fmt.Sprint(capFailed) != fmt.Sprint(liveFailed) {
+			t.Errorf("%s: the replay failed %v, the live run %v", protocol, capFailed, liveFailed)
+		}
+		var liveDoc, capDoc []string
+		for _, l := range live.Residuals {
+			liveDoc = append(liveDoc, strings.SplitN(l, ":", 2)[0])
+		}
+		for _, l := range rep.Residuals {
+			capDoc = append(capDoc, caseOf(l))
+		}
+		if fmt.Sprint(liveDoc) != fmt.Sprint(capDoc) {
+			t.Errorf("%s: documented in the replay %v, in the live run %v", protocol, capDoc, liveDoc)
+		}
+		// A case the live run skipped was never sent, so never recorded.
+		if len(rep.Skipped) != 0 {
+			t.Errorf("%s: skipped %v", protocol, rep.Skipped)
+		}
+		again := replay(rec.xs)
+		strip := func(r *report) string { b, _ := json.Marshal(r); return string(b) }
+		if strip(again) != strip(rep) {
+			t.Errorf("%s: a second replay differs", protocol)
+		}
+		bare := make([]capturedExchange, len(rec.xs))
+		copy(bare, rec.xs)
+		for i := range bare {
+			bare[i].Annotations = nil
+		}
+		orphans := 0
+		for _, r := range replay(bare).Results {
+			if strings.Contains(r.Error, "not issued by an earlier captured answer") {
+				orphans++
+			}
+		}
+		if orphans == 0 {
+			t.Errorf("%s: without annotations no request's token was unknown", protocol)
+		}
+		t.Logf("%s: %d exchanges: %d compared (%d passed, %d failed), %d documented, %d skipped; live %d failed, %d documented",
+			protocol, len(rec.xs), rep.Compared, rep.Passed, rep.Failed, len(rep.Residuals), rep.SkippedCount, live.Failed, len(live.Residuals))
+	}
+}
+
+// TestPinnedDifferencesAreDocumentedInBoth: a provider whose later pages
+// name another object fails the walks at their second page and the
+// token cases; with each of those mismatches pinned for its case, the
+// live run documents every one (a walk at the page that differs) and
+// fails none, and the replay of its recording documents the same
+// exchanges, with the same pins, and fails none.
+func TestPinnedDifferencesAreDocumentedInBoth(t *testing.T) {
+	edit := func(query string, body []byte) []byte {
+		if strings.Contains(query, "continuation-token=") {
+			return bytes.Replace(body, []byte("<Key>data/"), []byte("<Key>date/"), 1)
+		}
+		return body
+	}
+	first := runFakeLiveThrough(t, "s3", edit, &testRecorder{}, false, nil)
+	pins := map[string]string{}
+	walks := 0
+	for _, r := range first.Results {
+		if !r.Pass && r.diff != nil {
+			pins[r.Name] = r.Detail
+			if r.Kind == "walk" {
+				walks++
+			}
+		}
+	}
+	if walks == 0 || len(pins) != first.Failed {
+		t.Fatalf("the edit failed %d cases, %d walks: %v", first.Failed, walks, pins)
+	}
+	rec := &testRecorder{}
+	live := runFakeLiveThrough(t, "s3", edit, rec, false, pins)
+	if live.Failed != 0 || len(live.Residuals) != len(pins)+1 { // and s3-07x
+		t.Errorf("live: %d failed, documented %q", live.Failed, live.Residuals)
+	}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, liveKeys()...), client: &http.Client{}}
+	rep := &report{}
+	replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true, pins: pins}, "s3", gcsSynthetic, exchangeItems(rec.xs), testLimits)
+	if rep.Failed != 0 || len(rep.Residuals) != len(live.Residuals) {
+		for _, r := range rep.Results {
+			t.Errorf("replay: %s %s", r.Name, r.Detail)
+		}
+		t.Errorf("replay: %d failed, documented %q", rep.Failed, rep.Residuals)
+	}
+}
+
+// TestCaptureTokenIssuedByTwoScopes: a provider can issue the same token
+// to requests of different scope (a GCS token names the object it ends
+// at), where the Go server's tokens differ and each is refused with the
+// other's scope. Two walks whose first pages issue one token, their
+// pages interleaved, each continue with the Go token their own first
+// page issued, and pass.
+func TestCaptureTokenIssuedByTwoScopes(t *testing.T) {
+	keys := liveKeys()
+	re := regexp.MustCompile(`("nextPageToken":")([^"]*)"`)
+	f := &fakeProvider{backend: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), tokenParam: "pageToken", tokenRe: re,
+		extra: http.Header{"X-Guploader-Uploadid": {"U1"}, "Server": {"UploadServer"}}, tokens: map[string]string{}}
+	live := httptest.NewServer(f)
+	defer live.Close()
+	path := "/storage/v1/b/bkt/o"
+	a := captureWalk(t, live.URL, path, "prefix=data/small/&maxResults=3", "pageToken", gcsNextToken, false)
+	b := captureWalk(t, live.URL, path, "prefix=data/tree/&maxResults=3", "pageToken", gcsNextToken, false)
+	same := func(w []capturedExchange) {
+		tok := gcsNextToken([]byte(*w[0].Response.Body))
+		body := strings.Replace(*w[0].Response.Body, tok, "SAME", 1)
+		w[0].Response.Body = &body
+		w[0].Response.Headers = slices.DeleteFunc(w[0].Response.Headers, func(h capturedHeader) bool { return h.Name == "Content-Length" })
+		w[1].Request.Query = strings.Replace(w[1].Request.Query, "pageToken="+campaignEscape(tok, ""), "pageToken=SAME", 1)
+	}
+	same(a)
+	same(b)
+	xs := []capturedExchange{a[0], b[0], a[1], b[1]}
+	for i := range xs {
+		xs[i].Seq = uint64(i + 1)
+	}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), client: &http.Client{}}
+	rep := &report{}
+	replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, "gcs", gcsSynthetic, exchangeItems(xs), testLimits)
+	if rep.Passed != 4 || rep.Failed != 0 {
+		for _, r := range rep.Results {
+			t.Errorf("%s: %s %s", r.Name, r.Error, r.Detail)
+		}
+		t.Fatalf("%d passed, %d failed", rep.Passed, rep.Failed)
+	}
+}
+
+// TestTokenMapLookup: a token issued from several requests resolves to
+// the entry of the request's own walk (the same query), else to the one
+// its annotated source case issued, else to the latest; re-issuing from
+// the same request replaces its entry and adds none.
+func TestTokenMapLookup(t *testing.T) {
+	tm := &tokenMap{m: map[string][]capturedToken{}}
+	tm.set("T", capturedToken{got: "a", query: "q=a", caseID: "walk a"})
+	tm.set("T", capturedToken{got: "b", query: "q=b", caseID: "walk b"})
+	tm.set("T", capturedToken{got: "c", query: "q=c", caseID: "walk c"})
+	if tm.grows("T", "q=b", "walk b") || !tm.grows("T", "q=b", "walk d") {
+		t.Error("grows")
+	}
+	if tm.set("T", capturedToken{got: "b2", query: "q=b", caseID: "walk b"}); tm.n != 3 {
+		t.Errorf("%d entries", tm.n)
+	}
+	for _, c := range []struct{ query, from, want string }{
+		{"q=b", "", "b2"}, {"q=a", "walk c", "a"}, {"q=x", "walk a", "a"}, {"q=x", "", "c"}, {"q=x", "walk z", "c"},
+	} {
+		if got, ok := tm.lookup("T", c.query, c.from); !ok || got.got != c.want {
+			t.Errorf("lookup %s from %q: %q", c.query, c.from, got.got)
+		}
+	}
+	if _, ok := tm.lookup("U", "q=a", ""); ok {
+		t.Error("an unknown token was found")
 	}
 }

@@ -35,15 +35,27 @@ import (
 // written. LimitExceeded, when set, says the answer's body was over the
 // recording's limit (-record-max-body): the response carries the
 // provider's status and headers, no body, and the client was answered
-// 502 instead.
+// 502 instead. Annotations are the request's X-Record-* headers (see
+// annotationPrefix), written here and never forwarded.
 type Exchange struct {
 	Seq           uint64   `json:"seq"`
 	StartedAt     string   `json:"started_at"`
 	CapturedAt    string   `json:"captured_at"`
 	LimitExceeded string   `json:"limit_exceeded,omitempty"`
+	Annotations   []Header `json:"annotations,omitempty"`
 	Request       Request  `json:"request"`
 	Response      Response `json:"response"`
 }
+
+// annotationPrefix names the request headers that annotate an exchange
+// for the replay of the recording rather than ask the provider anything:
+// a client that knows more about a request than its bytes say (which
+// case of a matrix it belongs to, how it formed a page token the provider
+// never issued) sends it as X-Record-* headers. The recorder writes them
+// to the exchange's annotations and removes them before forwarding, so
+// the provider is asked exactly what it would be asked without the
+// recorder.
+const annotationPrefix = "X-Record-"
 
 // Request is the forwarded request as the client sent it: Path and Query
 // are the raw request target's two halves, URL the target it was
@@ -146,7 +158,8 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now().UTC()
 	cw := &captureWriter{ResponseWriter: w, limit: rec.maxBody}
 	path, query, _ := strings.Cut(r.RequestURI, "?")
-	x := Exchange{StartedAt: started.Format(time.RFC3339Nano),
+	notes := annotations(r.Header)
+	x := Exchange{StartedAt: started.Format(time.RFC3339Nano), Annotations: notes,
 		Request: Request{Method: r.Method, URL: rec.target + r.RequestURI, Path: path, Query: query, Headers: headers(r.Header, r.Host, true)}}
 	defer func() {
 		// A handler that panics (http.ErrAbortHandler: the upstream
@@ -251,6 +264,27 @@ func (rec *recorder) Err() error {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	return rec.err
+}
+
+// annotations removes the X-Record-* headers from h and returns them, by
+// name (sorted; a repeated header's values in order). The header map's
+// keys are canonical (net/http's server canonicalizes them), so the
+// prefix is matched in its canonical spelling.
+func annotations(h http.Header) []Header {
+	var notes http.Header
+	for k, v := range h {
+		if strings.HasPrefix(k, annotationPrefix) {
+			if notes == nil {
+				notes = http.Header{}
+			}
+			notes[k] = v
+			delete(h, k)
+		}
+	}
+	if notes == nil {
+		return nil
+	}
+	return headers(notes, "", false)
 }
 
 // headers lists h by name (sorted; a repeated header's values in
