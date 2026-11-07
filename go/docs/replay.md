@@ -106,9 +106,10 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   `start-after` are read as UTF-8, each malformed sequence one U+FFFD (`start-after=%FF` bounds and echoes as
   U+FFFD).
 - `max-keys` is echoed as asked; a page holds at most 1,000 entries, objects and common prefixes together.
-  Missing or blank is 1,000; negative or not an integer is `400 InvalidArgument` (`max-keys=+2` is " 2", not an
-  integer). An integer is an optional sign and decimal digits from any script of the Basic Multilingual Plane
-  (`١٢` is 12); a digit outside it (such as U+1D7D9) is not an integer.
+  Missing or blank is 1,000; not an integer (or outside int32) is `400 InvalidArgument` "Provided max-keys not an
+  integer or within integer range", negative is "Argument maxKeys must be an integer between 0 and 2147483647"
+  (`max-keys=+2` is " 2", not an integer). An integer is an optional sign and decimal digits from any script of
+  the Basic Multilingual Plane (`١٢` is 12); a digit outside it (such as U+1D7D9) is not an integer.
 - Refusals, each `400 InvalidArgument` with live S3's message, checked in S3's order after `max-keys`: a `marker`
   (ListObjects V1's, even empty); an `encoding-type` other than `url` in any case (the empty one included); a
   `continuation-token` that is empty, blank or not a token this server issued unaltered; a NUL in `prefix`, or
@@ -123,20 +124,32 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
 - An empty `start-after` bounds nothing and is echoed as `<StartAfter></StartAfter>`.
 - `encoding-type=url` writes letters, digits, `-`, `_`, `.`, `/` and `*` as they are, a space as `+`, and every
   other byte as `%XX` with upper-case hex; `EncodingType` echoes the value as sent (`URL`). Without it, key
-  bytes are rendered as UTF-8 text with malformed sequences replaced (control characters as the raw byte,
-  where S3 writes a character reference such as `&#x1;`).
+  bytes are rendered as UTF-8 text with malformed sequences replaced, the five XML metacharacters as entities,
+  and a C0 control character other than TAB, LF and CR as a lower-case hexadecimal character reference
+  (`&#x0;`, `&#x1;`, `&#xb;`, `&#x1f;`); TAB, LF, CR, DEL and every other character are written as they are.
+  This holds in `Key`, `Prefix`, `StartAfter`, `Delimiter` and `CommonPrefixes/Prefix`.
 - The rules in the three items above, the form reading and the refusals answer as live S3 does (probed on
   2026-11-07 against a public `us-east-1` bucket, anonymous) and differ from the Java server, which keeps `+`
   and malformed escapes as bytes, takes the last of duplicates, treats a blank token or `encoding-type` value
-  as absent, ignores `marker`, serves a NUL, reads key parameters as raw bytes, escapes a space and `*`, and
-  issues and accepts unchecked tokens. ListObjects V1 (no `list-type`) and `list-type=3` stay refused
-  (`400 InvalidArgument`), as on the Java server, where S3 serves them; `fetch-owner=true` renders `Owner` only
+  as absent, ignores `marker`, serves a NUL, reads key parameters as raw bytes, escapes a space and `*`, writes
+  control characters raw, issues and accepts unchecked tokens, and writes its own error document (`Resource`
+  in place of S3's elements, other messages for `max-keys` and the method). ListObjects V1 (no `list-type`) and
+  `list-type=3` stay refused (`400 InvalidArgument`), as on the Java server, where S3 serves them; `fetch-owner=true` renders `Owner` only
   where the fixture holds owner columns.
 - `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
   `Owner` appears only with `fetch-owner=true`.
-- Errors are S3's XML error document with `Code`, `Message`, `Resource` (the path as sent) and `RequestId`:
-  `404 NoSuchBucket`, `405 MethodNotAllowed` (anything but GET), `400 InvalidArgument`. Every answer carries
-  `x-amz-request-id` and `x-amz-id-2` (`S3LISTINGREPLAY`).
+- Errors are S3's XML error document, as live S3 wrote each: `Code`, `Message`, then the elements of that
+  error, then `RequestId` and `HostId` (the `x-amz-request-id` and `x-amz-id-2` values; S3's change with every
+  request, the replay's are `S3LISTINGREPLAY`). `400 InvalidArgument` carries `ArgumentName` and, except for a
+  token or a `marker`, `ArgumentValue` (the value as read: `+` a space, malformed UTF-8 replaced); S3 names a
+  negative `max-keys` `maxKeys` and a `start-after` `key-marker`. `404 NoSuchBucket` carries `BucketName` (the
+  path's first segment, percent-decoded; none for the root). `405 MethodNotAllowed` (anything but GET) carries
+  `Method` and `ResourceType` `BUCKET`, with S3's message "The specified method is not allowed against this
+  resource."; live S3 itself answers an anonymous POST, PUT or DELETE with other codes. Error text is escaped
+  as S3 escapes it: `&`, `<` and `>` as entities, quotation marks and apostrophes as they are, a C0 control
+  character other than TAB, LF and CR as a decimal reference (`&#0;`, `&#1;`). The `list-type` refusal is the
+  replay's own (S3 serves ListObjects V1) in that form: `ArgumentName` `list-type` and the value when present.
+  The replay's own refusals below carry no element between `Message` and `RequestId`.
 - The replay's own refusals carry `x-swath-replay-error` with the reason: `503 ServiceUnavailable` for
   `shutdown`, `response_count_exhausted` and `response_budget_exhausted`, `500 InternalError` for
   `response_too_large`; `500 InternalError` with `fixture_disordered` when a row group's keys turn out not to
@@ -461,7 +474,10 @@ values (its element sequence is compared; the replay's are synthetic). GCS item 
 (`etag`, `generation`, `metageneration`, `storageClass`, `contentType`, `md5Hash`, `crc32c`) when the fixture is
 a `swath/gcs-objects/v1` dataset, and held to the synthetic profile otherwise (`-gcs-metadata`, default auto);
 `timeCreated`, `id`, `selfLink` and the rest are not stored, so not compared. A header outside the classified
-set fails the comparison, as it fails the suite.
+set fails the comparison, as it fails the suite. Two S3 checks go beyond the suite's policy: an S3 error is
+compared as its whole document, every element's name and text as written in order, `RequestId` and `HostId` by
+presence only; and the key-carrying elements of a page (`Key`, `Prefix`, `StartAfter`, `Delimiter`) are
+compared as written as well as decoded, so a character reference and the raw character differ.
 
 ### Live S3, 2026-11-07
 
@@ -510,6 +526,15 @@ provider cases 67 passed and 5 differing, scripted 336 / 1, walks 10 / 0 (1,908 
 recording without owners (`s3-11a` and its scripted twin), and `s3-07x`, now sent because the replay's token is
 base64 as a whole: live S3 serves its own token with the last decoded byte flipped as if unaltered, while the
 replay refuses every alteration (The S3 route).
+
+Control characters and the error document (2026-11-07): live S3 wrote a control character in listing text as
+a character reference and an error as its own document (The S3 route); the replay wrote the raw byte and an
+error document with `Resource`. The comparison above was extended to see both, and the scripted matrix gained
+nine requests that show them (`control characters` in `start-after`, `prefix` and `delimiter`; `error document`
+for `max-keys`, `encoding-type`, a NUL in `prefix` and in `start-after`, `marker` and a token). Against the
+previous server, `noaa-normals-pds` with `-live-scripted -max-prefixes 40` differed on 58 of 428 (provider 17,
+scripted 41, every S3 error and the control characters); after the change, provider cases 67 passed and 5
+differing, scripted 345 / 1, walks 10 / 0 (1,926 requests), the same six differences as above.
 
 ### Live GCS, 2026-11-07
 

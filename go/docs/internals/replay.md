@@ -114,11 +114,14 @@ Three conversions decide bytes on the wire, and each was measured against the Ja
   (an absent token, a default `max-keys`) is the Unicode separators except the no-break spaces plus the ASCII
   and information-separator controls.
 
-The XML is written byte by byte rather than marshalled: `encoding/xml` escapes `"` as `&#34;` and control bytes
-as character references, and the element order, `&apos;`, ETag quoting as `&quot;`, millisecond `LastModified`
-rounded toward the earlier millisecond with the year of era (`+10000`, `0001` for year 0, `TestLastModifiedYears`)
-and the `encoding-type=url` grammar are fixed by the wire contract (`TestRenderListGolden` is a page the Java
-server answered).
+The XML is written byte by byte rather than marshalled: `encoding/xml` escapes `"` as `&#34;`, TAB, LF and CR as
+character references and other control bytes as U+FFFD, and the element order, `&apos;`, ETag quoting as
+`&quot;`, millisecond `LastModified` rounded toward the earlier millisecond with the year of era (`+10000`,
+`0001` for year 0, `TestLastModifiedYears`) are fixed by the wire contract (`TestRenderListGolden` is a page the
+Java server answered), while the `encoding-type=url` grammar, the control characters as `&#xN;` in listing text
+(`output.XMLEntity`, read by both the unit path and the row fast path) and the error document with its own
+escaping (`&#N;`, quotes as they are) are live S3's (`TestLiveURLEncodingTable`,
+`TestLiveControlCharactersAreReferences`, `TestLiveErrorDocuments`).
 
 It is written into an `output.Output`, not a slice, so memory is charged before it exists. Each append admits
 the same unit the contract's renderer admits (a tag in three parts, an entity, a byte, a number, a value's exact
@@ -269,13 +272,16 @@ stand-in provider with tokens and headers of its own.
 On the S3 route "identical" has exceptions by decision: the route answers as live S3 does where the Java server
 does not (the form reading of the query, the first of duplicates, key parameters as UTF-8, the empty
 `start-after` echo, `encoding-type` checked and echoed, `marker`, NUL and token refusals, checksummed tokens, a
-flat token's relisting, and the `+`/`*` encoding table). Against the Java launcher every S3 request goes
+flat token's relisting, the `+`/`*` encoding table, control characters as references and S3's error
+document). Against the Java launcher every S3 request goes
 through `compareS3` (`s3_divergences.go`): `planS3` reads the request as the route does (the driver's own
 reading) and derives the Go answer from the Java server's, either a probed refusal or the Java answer to the
 equivalent request with the probed echo and encoding rules applied; the Go answer must equal it with token
 values masked, and a request whose Java answer as sent differs is listed under `documented_divergences` with
-both answers and the rules involved, counted as passed or failed on the Go side. `s3DivergenceCases` adds one
-case per rule with a pin from the live probe. Tests: `TestS3PlanRules`, `TestS3PlanFixes`,
+both answers and the rules involved, counted as passed or failed on the Go side. A refusal the Java server makes
+first (bucket, method, `list-type`, `max-keys`) is expected in live S3's document (`javaFirstRefusal`).
+`s3DivergenceCases` adds one case per rule with a pin from the live probe. Tests: `TestS3PlanRules`,
+`TestS3PlanFixes`, `TestJavaFirstRefusals`,
 `TestUTF8ReplacedMatchesTheRoute`, `TestTokenTranslation`, `TestDivergenceCases`,
 `TestDivergenceAssertsTheGoSide`; the route's own pins are the `TestLive*` tests in `s3/livegolden_test.go`.
 
