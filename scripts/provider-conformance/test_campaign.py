@@ -718,6 +718,20 @@ class GoReceiptPromotionTest(unittest.TestCase):
             line = promotion.matrix_lines(promoted["rows"])[2]
             self.assertTrue(line.endswith("| `json-v1:aTest` | `json-v1:TestGo` | REPLAY_MATCH |"), line)
 
+    def test_zero_go_receipts_leave_the_go_column_empty_and_the_ledger_valid(self):
+        """The Go receipts are archived at the merge commit, so a tree without any must
+        promote: no `go_replay` entry and an empty Go cell."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            row = self.evidence_dir(root)
+            self.assertEqual(promotion.load_receipts(root, "go"), {})
+            promoted = promotion.promote({"rows": [dict(row)]}, root, promotion.load_receipts(root),
+                                         promotion.load_receipts(root, "go"))
+            proof = promoted["rows"][0]["evidence"]["json-v1"]
+            self.assertNotIn("go_replay", proof)
+            self.assertEqual(evidence.go_matrix_cell(promoted["rows"][0]), "\u2014")
+            self.assertTrue(promotion.matrix_lines(promoted["rows"])[2].endswith("| \u2014 | \u2014 | OBSERVED |"))
+
     def test_a_receipt_in_the_other_producers_folder_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
