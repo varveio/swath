@@ -24,7 +24,10 @@ import (
 // bytes.
 
 const (
-	xmlDecl     = `<?xml version="1.0" encoding="UTF-8"?>`
+	// xmlDecl is the declaration and the newline after it, as live S3
+	// writes both in a listing and in an error document (probed on
+	// 2026-11-07, TestLiveXMLDeclarationNewline).
+	xmlDecl     = `<?xml version="1.0" encoding="UTF-8"?>` + "\n"
 	listOpen    = `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`
 	requestID   = "S3LISTINGREPLAY"
 	bytesPerRow = 320

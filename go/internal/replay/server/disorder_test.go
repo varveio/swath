@@ -30,7 +30,7 @@ func TestDisorderedFixtureNamesOnlyThePart(t *testing.T) {
 	cfg.Log = &syncWriter{w: &log}
 	s := start(t, cfg)
 	r := get(t, s, "/bucket?list-type=2&delimiter=%2F")
-	const want = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code>` +
+	const want = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<Error><Code>InternalError</Code>` +
 		`<Message>row group 7 of part-00001.parquet is not sorted (reason=row_group_disorder): its keys must be in strictly ascending unsigned order</Message>` +
 		`<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>`
 	if r.status != 500 || r.body != want || r.header.Get("x-swath-replay-error") != "fixture_disordered" {
@@ -67,7 +67,7 @@ func TestDisorderedPartOverHTTP(t *testing.T) {
 	r := get(t, s, "/bucket?list-type=2&max-keys=1000")
 	// The message, the store's detail included, is the Java server's for
 	// the same part: the row in its group and the key in hex.
-	const want = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code>` +
+	const want = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<Error><Code>InternalError</Code>` +
 		`<Message>row group 0 of part-00001.parquet is not sorted (reason=row_group_disorder): ` +
 		`its keys must be in strictly ascending unsigned order, but row 2 (62) is at or below its predecessor</Message>` +
 		`<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>`

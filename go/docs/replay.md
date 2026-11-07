@@ -131,11 +131,14 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   and a C0 control character other than TAB, LF and CR as a lower-case hexadecimal character reference
   (`&#x0;`, `&#x1;`, `&#xb;`, `&#x1f;`); TAB, LF, CR, DEL and every other character are written as they are.
   This holds in `Key`, `Prefix`, `StartAfter`, `Delimiter` and `CommonPrefixes/Prefix`.
-- The rules in the three items above, the form reading and the refusals answer as live S3 does (probed on
+- A listing and an error document both start with `<?xml version="1.0" encoding="UTF-8"?>` and a newline (LF),
+  then the root element, the bytes live S3 wrote on 2026-11-07 (`TestLiveXMLDeclarationNewline`).
+- The rules in the four items above, the form reading and the refusals answer as live S3 does (probed on
   2026-11-07 against a public `us-east-1` bucket, anonymous) and differ from the Java server, which keeps `+`
   and malformed escapes as bytes, takes the last of duplicates, treats a blank token or `encoding-type` value
   as absent, ignores `marker`, serves a NUL, reads key parameters as raw bytes, escapes a space and `*`, writes
-  control characters raw, issues and accepts unchecked tokens, and writes its own error document (`Resource`
+  control characters raw, writes no newline after the XML declaration, issues and accepts unchecked tokens, and
+  writes its own error document (`Resource`
   in place of S3's elements, other messages for `max-keys` and the method). ListObjects V1 (no `list-type`) and
   `list-type=3` stay refused (`400 InvalidArgument`), as on the Java server, where S3 serves them; `fetch-owner=true` renders `Owner` only
   where the fixture holds owner columns.

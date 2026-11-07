@@ -282,15 +282,18 @@ stand-in provider with tokens and headers of its own.
 On the S3 route "identical" has exceptions by decision: the route answers as live S3 does where the Java server
 does not (the form reading of the query, the first of duplicates, key parameters as UTF-8, the empty
 `start-after` echo, `encoding-type` checked and echoed, `marker`, NUL and token refusals, checksummed tokens, a
-flat token's relisting, the `+`/`*` encoding table, control characters as references and S3's error
-document). Against the Java launcher every S3 request goes
+flat token's relisting, the `+`/`*` encoding table, control characters as references, S3's error
+document and the newline after the XML declaration). Against the Java launcher every S3 request goes
 through `compareS3` (`s3_divergences.go`): `planS3` reads the request as the route does (the driver's own
 reading) and derives the Go answer from the Java server's, either a probed refusal or the Java answer to the
 equivalent request with the probed echo and encoding rules applied; the Go answer must equal it with token
 values masked, and a request whose Java answer as sent differs is listed under `documented_divergences` with
 both answers and the rules involved, counted as passed or failed on the Go side. A refusal the Java server makes
 first (bucket, method, `list-type`, `max-keys`) is expected in live S3's document (`javaFirstRefusal`).
-`s3DivergenceCases` adds one case per rule with a pin from the live probe. Tests: `TestS3PlanRules`,
+The newline after the XML declaration is on every listing and error, so the driver inserts it after the Java
+server's declaration in every expectation and in the as-sent comparison (`declNewline`), and it alone makes no
+request a divergence (`TestDivergenceAssertsTheGoSide`). `s3DivergenceCases` adds one case per rule with a pin
+from the live probe. Tests: `TestS3PlanRules`,
 `TestS3PlanFixes`, `TestJavaFirstRefusals`,
 `TestUTF8ReplacedMatchesTheRoute`, `TestTokenTranslation`, `TestDivergenceCases`,
 `TestDivergenceAssertsTheGoSide`; the route's own pins are the `TestLive*` tests in `s3/livegolden_test.go`.

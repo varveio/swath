@@ -508,3 +508,41 @@ func TestLiveErrorDocuments(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveXMLDeclarationNewline pins the bytes before the root element.
+// Live S3 answered list-type=2&max-keys=1 with
+//
+//	<?xml version="1.0" encoding="UTF-8"?>\n<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>
+//
+// and list-type=2&max-keys=-1 with 400 and
+//
+//	<?xml version="1.0" encoding="UTF-8"?>\n<Error><Code>InvalidArgument</Code>...
+//
+// on 2026-11-07: the declaration with version before encoding, both
+// double-quoted, upper-case UTF-8, then one LF, in a listing and in an
+// error document alike.
+func TestLiveXMLDeclarationNewline(t *testing.T) {
+	const decl = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+	req, err := ParseRequest("bkt", "list-type=2&max-keys=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := (&Pager{Store: memstore.Keys(memstore.Options{}, liveKeys...)}).List(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(AppendList(nil, res)), decl+`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bkt</Name>`; !strings.HasPrefix(got, want) {
+		t.Errorf("listing:\n got %.120q\nwant %q...", got, want)
+	}
+	_, err = ParseHTTP("GET", "/bkt", "list-type=2&max-keys=-1", "bkt")
+	var e *Error
+	if !errors.As(err, &e) || e.Status != 400 {
+		t.Fatalf("max-keys=-1: %v", err)
+	}
+	want := decl + "<Error><Code>InvalidArgument</Code><Message>Argument maxKeys must be an integer between 0 and 2147483647</Message>" +
+		"<ArgumentName>maxKeys</ArgumentName><ArgumentValue>-1</ArgumentValue>" +
+		"<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>"
+	if got := string(AppendError(nil, e)); got != want {
+		t.Errorf("error document:\n got %q\nwant %q", got, want)
+	}
+}

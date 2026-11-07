@@ -29,7 +29,8 @@ import (
 // delimiter relists the prefix it ends in; encoding-type is checked;
 // marker is refused; encoding-type=url writes a space as '+' and leaves
 // '*'; a NUL in the prefix or start-after is refused; key parameters are
-// read as UTF-8 with replacement.
+// read as UTF-8 with replacement; and every listing and error document
+// has a newline after its XML declaration (declNewline).
 //
 // Against the Java server every S3 request therefore goes through
 // compareS3 instead of a byte comparison of the two answers to the same
@@ -549,7 +550,7 @@ func (d *driver) compareS3(r request) (*response, diff, error) {
 			return a, diff{}, fmt.Errorf("%s: %w", d.got.name, err)
 		}
 		d.count(2)
-		df := (bytesComparator{}).compare(masked(a), masked(b))
+		df := (bytesComparator{}).compare(masked(withDeclNewline(a)), masked(b))
 		if df.OK && !bytes.Equal(a.Body, b.Body) {
 			d.noteTokenBytes(r.Name)
 		}
@@ -606,7 +607,9 @@ func (d *driver) compareS3(r request) (*response, diff, error) {
 		}
 	}
 	if df.OK {
-		same := (bytesComparator{}).compare(masked(asSent), masked(got)).OK
+		// The declaration's newline is on every document, so it is
+		// applied here as well and never makes a request a divergence.
+		same := (bytesComparator{}).compare(masked(withDeclNewline(asSent)), masked(got)).OK
 		switch {
 		case !same:
 			d.noteDivergence(r.Name, asSent, got, plan.reasons)
@@ -635,9 +638,9 @@ func expectedS3(exp *response, plan s3Plan, r request, query, bucket string, rea
 		return &response{Status: plan.refusal.status, Header: exp.Header, Body: plan.refusal.body()}
 	}
 	if exp.Status != 200 {
-		return exp
+		return withDeclNewline(exp)
 	}
-	body := bytes.Clone(exp.Body)
+	body := declNewline(bytes.Clone(exp.Body))
 	for _, f := range plan.fixes {
 		if next := f.apply(body); !bytes.Equal(next, body) {
 			body = next
@@ -714,6 +717,28 @@ func bucketName(r request, bucket string) string {
 		return name
 	}
 	return seg
+}
+
+// javaDecl is the XML declaration the Java server writes, with nothing
+// after it; live S3 writes it followed by a newline, in listings and in
+// error documents (probed on 2026-11-07), and so does the Go route
+// (internal/replay/s3 TestLiveXMLDeclarationNewline).
+const javaDecl = `<?xml version="1.0" encoding="UTF-8"?>`
+
+// declNewline is b with a newline after its leading XML declaration,
+// where it has none.
+func declNewline(b []byte) []byte {
+	rest, ok := bytes.CutPrefix(b, []byte(javaDecl))
+	if !ok || bytes.HasPrefix(rest, []byte("\n")) {
+		return b
+	}
+	out := make([]byte, 0, len(b)+1)
+	out = append(out, javaDecl+"\n"...)
+	return append(out, rest...)
+}
+
+func withDeclNewline(r *response) *response {
+	return &response{Status: r.Status, Header: r.Header, Body: declNewline(r.Body)}
 }
 
 // controlReferences writes each C0 control character but TAB, LF and CR
