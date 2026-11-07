@@ -65,6 +65,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	arrived := time.Now()
 	path, rawQuery := requestTarget(r)
+	if s.serveOtherRoute(w, r, path, rawQuery) {
+		return
+	}
 	// The request ceiling queues a request beyond it, as a full worker
 	// pool would; shutdown releases the queue with a refusal.
 	slot := false
@@ -248,13 +251,9 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, path string,
 // and a write deadline that starts when writing does, so an injected delay
 // never counts against it.
 func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body [][]byte, reason string, arrived time.Time) {
-	n := 0
-	for _, v := range body {
-		n += len(v)
-	}
 	h := w.Header()
 	h["Content-Type"] = []string{"application/xml"}
-	h["Content-Length"] = []string{strconv.Itoa(n)}
+	h["Content-Length"] = []string{strconv.Itoa(viewsLen(body))}
 	h["x-amz-request-id"] = []string{"S3LISTINGREPLAY"}
 	h["x-amz-id-2"] = []string{"S3LISTINGREPLAY"}
 	if reason != "" {
@@ -270,19 +269,37 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body 
 	w.WriteHeader(status)
 	var err error
 	if r.Method != http.MethodHead {
-		for _, v := range body {
-			for len(v) > 0 && err == nil {
-				n := min(len(v), OutputChunkBytes)
-				_, err = w.Write(v[:n])
-				v = v[n:]
-			}
-		}
+		err = writeViews(w, body)
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocolS3, "total_deadline").Inc()
 	}
 	s.reg.Get(metrics.RequestStageLatency, protocolS3, "write").Record(time.Since(writeStart))
 	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
+}
+
+// viewsLen is a body's length.
+func viewsLen(body [][]byte) int {
+	n := 0
+	for _, v := range body {
+		n += len(v)
+	}
+	return n
+}
+
+// writeViews writes a body's views in writes of at most OutputChunkBytes,
+// stopping at the first error.
+func writeViews(w http.ResponseWriter, body [][]byte) error {
+	for _, v := range body {
+		for len(v) > 0 {
+			n := min(len(v), OutputChunkBytes)
+			if _, err := w.Write(v[:n]); err != nil {
+				return err
+			}
+			v = v[n:]
+		}
+	}
+	return nil
 }
 
 // logIfSlow logs a request whose own cost reached the slow-request

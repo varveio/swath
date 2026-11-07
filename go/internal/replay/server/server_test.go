@@ -735,3 +735,60 @@ func TestContinuationPagesDrawDistinctJitter(t *testing.T) {
 		t.Errorf("8 continuation pages drew %d distinct delays", len(seen))
 	}
 }
+
+// TestRoutesShareTheResponseCeiling: the GCS and Azure routes go through
+// the same admission as S3's. With every response permit held by slow S3
+// readers (and no execution slot), a request on either other route is
+// refused response_count_exhausted at once; when the readers leave, both
+// answer again and every byte of the budget is back.
+func TestRoutesShareTheResponseCeiling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("receive buffer sizing")
+	}
+	cfg := config(memstore.Keys(memstore.Options{}, spaceKeys(1000)...))
+	cfg.Bucket = "bucket"
+	cfg.Protocols = []string{ProtocolS3, ProtocolGCS, ProtocolAzure}
+	cfg.AzureAccount = DefaultAzureAccount
+	cfg.MaxConcurrentRequests = MinMaxConcurrentRequests
+	cfg.WriteTimeout = time.Minute
+	s := start(t, cfg)
+	var conns []net.Conn
+	for range cfg.MaxResponses() {
+		conns = append(conns, slowReader(t, s, bigPage))
+	}
+	waitFor(t, "every response permit held and no slot", func() bool {
+		return s.responses.Load() == int64(cfg.MaxResponses()) && len(s.slots) == 0
+	})
+	client := http.Client{Timeout: 5 * time.Second}
+	for _, target := range []string{"/storage/v1/b/bucket/o?maxResults=1", "/replay/bucket?restype=container&comp=list&maxresults=1"} {
+		req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d%s", s.Port(), target), nil)
+		req.Header.Set("x-ms-version", "2026-06-06")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: not answered: %v", target, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "response_count_exhausted" {
+			t.Errorf("%s: %d %v", target, resp.StatusCode, resp.Header)
+		}
+	}
+	for _, c := range conns {
+		c.Close()
+	}
+	waitFor(t, "the permits and bytes to come back", func() bool { return s.responses.Load() == 0 && s.budget.Charged() == 0 })
+	for _, target := range []string{"/storage/v1/b/bucket/o?maxResults=1", "/replay/bucket?restype=container&comp=list&maxresults=1"} {
+		req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d%s", s.Port(), target), nil)
+		req.Header.Set("x-ms-version", "2026-06-06")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Errorf("%s after: %d", target, resp.StatusCode)
+		}
+	}
+	if s.budget.Charged() != 0 {
+		t.Errorf("charged %d", s.budget.Charged())
+	}
+}

@@ -229,11 +229,7 @@ func Open(ctx context.Context, path string, expect []sortedparquet.Column, files
 		}
 	}()
 	for _, name := range names {
-		opened, err := os.Open(name)
-		if err != nil {
-			return nil, err
-		}
-		file, err := files.Add(name, opened)
+		file, err := files.Open(ctx, name, nil)
 		if err != nil {
 			return nil, err
 		}

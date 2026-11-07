@@ -8,15 +8,18 @@ is [../replay.md](../replay.md).
 | Package | Role | Imports |
 |---|---|---|
 | `cmd/swath-replay` | flags (standard `flag`, the Java launcher's names and defaults), the startup line, signals, opening the fixture; `sort-fixture` as a thin command over `internal/replay/sortfixture` | server, latency, store, memstore, sortfixture |
-| `internal/replay/server` | the HTTP server: request-target checks, the S3 route's request flow, admission, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, latency, metrics, output, store, sortedparquet (its disorder error) |
+| `internal/replay/server` | the HTTP server: request-target checks, route classification, the S3, GCS and Azure routes' request flow, admission, response memory, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, gcs, azure, latency, metrics, output, store, sortedparquet (its disorder error) |
+| `internal/replay/gcs` | objects.list: request parsing, the pager over `store.Store` (or the GCS schema's columns through `store.Sorted`), `gcs1.` tokens, the JSON page (rendered into an `output.Output`) and error envelope, the request's latency key | s3 (key carries), output, store, sortedparquet |
+| `internal/replay/azure` | Azure flat List Blobs: request parsing, the UTF-16-ordered cursor, the pager, markers, the XML (rendered into an `output.Output`) and error bodies, the request's latency key | s3, output, store, latency |
 | `internal/replay/s3` | ListObjectsV2: request parsing, the pager, continuation tokens, the XML documents, the request's latency key | output, javanum, store |
-| `internal/replay/output` | the response byte budget and the chunked sink responses are rendered into | – |
+| `internal/replay/output` | the response byte budget and the chunked sink every route renders into | – |
 | `internal/replay/javanum` | the contract's number grammar: BMP-digit integers, the latency profile's floats, saturating conversion | – |
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | javanum |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances) and the schema-2 JSON | – |
 | `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open` | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
+| `internal/replay/evidence` | the provider evidence replay (tests only) | server, sortfixture, store |
 
 `internal/replay` imports nothing from the lister's pipeline; the lister imports nothing from it.
 
@@ -123,6 +126,13 @@ overrun with the excess when there is none. Parsing reads numbers with the contr
 
 ## Admission and shutdown
 
+- Every route goes through the same path: the request-target check, one execution slot, one response permit,
+  one `output.Output` charged against one budget, and a write after the slot is released. A GCS or Azure
+  request is refused `response_count_exhausted` when slow S3 readers hold every permit
+  (`TestRoutesShareTheResponseCeiling`). The GCS and Azure renderers format one entry at a time and write it
+  into the sink, so a refusal stops them before the next entry; their append units are an entry, not the
+  contract's own (its JSON renderer writes through a buffering generator), so at the exact edge of the cap or
+  the budget the refused entry can differ by one.
 - The request target is checked first (`targetProblem`), as the contract's HTTP layer checks it before any
   route: an ambiguous or illegal target is a 400 with an HTML page, counted by no meter
   (`TestRejectsAmbiguousTargets`). The rules were established by sending each raw target to the Java server.
@@ -220,3 +230,179 @@ every walk compared byte for byte (`sorted_differential_test.go`, the contract's
 | metrics port | `server` `TestMetricsPort`, `TestAttestation`; `metrics` `TestSnapshotIsStableAndTyped` |
 | the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143), `TestSigtermWithActiveWorkIsBoundedAndIdempotent`, `TestSortFixtureThenServe` (a Java-era capture sorted by the command and listed through the S3 route), `TestSortFixtureRefusals` (stderr line and exit codes) |
 | the Java server | `bench/replaydiff` against the Java launcher (not a unit test: it needs the Java build and a fixture) |
+
+## The GCS route
+
+`internal/replay/gcs` is the second route over the same store seam; `server/gcs.go` gives it the S3 route's
+admission (the execution slot released before the write), response memory (reservation `1024 + 384 ×
+pageSize`, first chunk sized from the entries returned, the page rendered into the shared `output.Output` one
+entry at a time), delay deadline and shutdown. The hooks into the shared server are a `Protocols` field, one
+classification call at the top of `ServeHTTP` (`serveOtherRoute`, which returns false when only S3 is enabled,
+so the S3 path is unchanged), and the protocols and profiles in the metrics payload and startup line.
+
+- **Parsing** (`Parse`). The request line's query is first read as UTF-8 with maximal-subpart replacement
+  (`requestText`, `TestRequestTextGrouping`): unlike the S3 route, a raw non-ASCII byte reaches the parameter
+  as itself, not as `?`. Then each `&`-separated part is percent-decoded strictly and must be valid UTF-8, and
+  the checks run in the wire contract's order (`TestParseRefusals` holds each reason to the Java server's).
+- **The pager** (`Pager.List`). The lower bound is the latest of the prefix (inclusive), `startOffset`
+  (inclusive) and the token's boundary; the upper bound the earlier of the prefix's `PrefixUpper` and
+  `endOffset`; a lower bound at or after the upper is an empty, final page. Without a delimiter one read of
+  `pageSize + 1` rows answers the page. With one, the store's rollup answers when it accepts (`/` on the sorted
+  store), with `suppressPrefixAtOrBeforeFloor` false: GCS lists a prefix even when `startOffset` lands inside
+  it. Otherwise the pager walks in batches of up to 4,096 rows, emitting an object or the rolled-up prefix and
+  resuming at the prefix's `Successor`, and decides truncation by the next row in range. A page ending on a
+  prefix resumes inclusive at its successor, one ending on an object exclusive at it.
+  `TestRollupMatchesWalkAndReference` holds the two paths to each other and every full walk to the listing
+  computed directly, over random keyspaces, prefixes, offset pairs, delimiters and page sizes.
+- **Tokens.** `gcs1.` + unpadded base64url of a flag byte, a progress byte (0), 16 bytes of
+  SHA-256 over the length-prefixed scope (`gcs-json-v1`, `synthetic-v1`, the fixture identity, bucket, prefix,
+  delimiter, startOffset, endOffset, the pagination profile) and the boundary key. Decoding accepts correct
+  padding and refuses line breaks, as the contract's decoder does (`TestTokenShapes`). A token from another
+  scope or fixture is refused before the request takes a response permit (`TestTokenRejectsAnotherScopeOrFixture`).
+  The same state gives the same bytes on either server (`TestRenderGolden` checks Java tokens against the
+  binding).
+- **The renderer** (`AppendPage`) appends bytes: compact, fields in the contract's order, strings escaped only
+  for `"`, `\` and C0 controls (`\b \t \n \f \r`, else `\u00XX` upper-case), so DEL, U+2028 and every
+  non-ASCII character are written as UTF-8; `encoding/json` would escape `<`, `>`, `&` and U+2028.
+  `TestRenderGolden` rebuilds five pages the Java server answered over the evidence corpus (control characters,
+  a BOM, U+2028, backslashes and quotes, a full projection, delimiter pages with offsets) and requires the same
+  bytes. Rows the API cannot represent are refused while rendering with the contract's reasons.
+- **Native metadata.** `NewPager` reads a `swath/gcs-objects/v1` fixture's columns by name through
+  `store.Sorted.ReadRows` and `RollupRows` (the same cursor and reader slots); any other store goes through
+  `Rows` and the synthetic profile. `TestNativeSchemaRendersTheBucketsMetadata` lists a fake bucket with the
+  Go lister, serves the dataset and checks each item against the fake's objects.
+
+### The GCS driver and the evidence replay
+
+`replaydiff -protocol gcs` builds `gcsMatrix` (the parameter table's values, `maxResults` edges, prefixes at
+every depth with `/` and a two-byte delimiter, offsets around keys and inside subtrees, malformed, foreign and
+rescoped tokens, wrong buckets, paths and methods, raw and escaped non-ASCII), `gcsWalks` (bucket, offset window
+and top-level prefixes, with and without the delimiter, at each page size) and a random walk. `gcsComparator`
+compares status, the compared headers plus `Allow`, and the body byte for byte (both servers are deterministic);
+a difference only in `nextPageToken` is named, and walks follow each server's own tokens, so tokens are judged by
+their effect. Measured with zero differences (the Java oracle at swath `main` 01dd55b, `--parquet-connections 2`,
+default `-walks 1,7,1000`, `-walk-limit 300` and a separate full `-walks 1000` run on the large fixtures): the
+GCS evidence corpus (1,051 compared), synthetic 10k (2,065), synthetic 1M rolled into 6 parts and 110 row groups
+(2,065 plus 1,551 with the full 1,000-page walks), and the recordings of `noaa-normals-pds` (1,227 + 701) and
+`giab` (2,119 + 1,569).
+
+`internal/replay/evidence` ports the conformance comparison: `compare_test.go` is the GCS field policy and
+exchange comparator with the suite's messages (the pins match on message prefixes, `TestComparatorMessages`), a
+small order-keeping JSON node with duplicate-member and trailing-token refusal stands in for the suite's strict
+parser, and `evidence_test.go` is the capture replay (token mapping and mutation, receipt checks of the request
+scope, walks, SDK runs). `TestEvidenceRejectsCorruptedReplayResults` corrupts matched answers (a dropped,
+repeated or reordered item, a decoded name, an early end, a repeated prefix, a wrong status or reason) and
+requires each to be rejected.
+
+| Contract | Test |
+|---|---|
+| GCS parsing | `gcs` `TestParseRefusals`, `TestParseValues`, `TestRequestTextGrouping` |
+| GCS pager | `gcs` `TestFlatBoundsAreInclusiveThenExclusiveAndTokenSurvivesPageSizeChange`, `TestDelimiterOffsetInsideSubtreeEmitsPrefix`, `TestEmptyIntersection`, `TestRollupMatchesWalkAndReference` |
+| GCS tokens and JSON | `gcs` `TestTokenShapes`, `TestTokenRejectsAnotherScopeOrFixture`, `TestRenderGolden`, `TestLatencyKeyGolden` |
+| GCS native metadata | `gcs` `TestNativeSchemaRendersTheBucketsMetadata` |
+| GCS serving | `server` `TestServesGCSObjectsList`, `TestGCSErrorsAreJSONEnvelopes`, `TestRouteClassification`, `TestGCSAdmissionRefusals`, `TestGCSFixtureAndStoreFailures`, `TestGCSInjectedDelayUsesTheSharedShapes`, `TestValidateProtocols`; `cmd/swath-replay` `TestProtocolSelection`, `TestServeGCSEndToEnd` |
+| GCS driver | `replaydiff` `TestGCSComparator`, `TestGCSMatrixNamesAreUnique`, `TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk` |
+| GCS evidence | `evidence` `TestGCSNativeCapturesMatchReplay`, `TestEvidenceRejectsCorruptedReplayResults`, `TestExpectationRules`, `TestComparatorMessages` (with `SWATH_REPLAY_FIXTURES`) |
+
+## The Azure route
+
+### Routing
+
+`serveOtherRoute` hands the Azure route, after the GCS check, a request whose raw path is
+`/{account}/{one segment}` and whose query has a `restype` or `comp` name (percent-decoded), before the method
+is looked at, so a POST to the Azure route is the Azure route's `405`. A claimed request that also has
+`list-type` is the replay's ambiguous `400`; an unclaimed one goes to the S3 handler, or, without S3, gets the
+replay's `404`. The Azure flow takes the same request
+slot (released before the write), `begin`/`end` store registration, response permit and response memory as S3
+(reservation `2048 + 512 × pageSize`, first chunk sized from the entries returned, the XML rendered into the
+shared `output.Output` one entry at a time), applies the latency profile as a deadline, and answers shutdown
+with `503 ServerBusy`.
+
+### Order
+
+Azure lists names in UTF-16 code-unit order. For valid UTF-8 that is byte order except at the first differing
+byte, where lead bytes F0..F4 (a surrogate pair in UTF-16) rank before EE..EF (U+E000 to U+FFFF): byte ranks
+`00..ED, F0..F4, EE..EF, F5..FF` (`rank`, `Compare`). A prefix window is contiguous in both orders, and the
+orders disagree only between an EE/EF branch and an F0..F4 branch under the same parent, so provider order over
+a byte range is the byte order with each such pair of sibling branches swapped. Two pieces build it on the
+byte-sorted store:
+
+- `rangesFrom(lower, inclusive, prefix)` turns a lower bound into byte ranges in provider order: the subtree
+  below the bound and, outward position by position, the siblings that rank after the bound's byte, which are
+  one range except at an EE..F4 byte (two or three). A 4,096-byte bound of U+10000 is 2,049 ranges.
+- `cursor` reads each range in byte order, a batch at a time. When the next item has an EE/EF byte whose F0..F4
+  siblings are still inside its range (`firstSwap`), the range splits into the F0..F4 branch, the EE/EF branch
+  from that item, and the rest; items already read go to their part, so a split costs a read only for a part
+  not yet read. Most parts of a long bound are empty: when a read comes back empty, one probe for the first key
+  at or after the lowest unread store position settles every part below that key (`probeLowest`, `learn`), and
+  parts split later inherit the finding. A page whose names have no such bytes costs the same reads as byte
+  order; the 4,096-byte U+10000 bound costs under ten (`TestLongStartFromCostBound`).
+
+### The pager
+
+`Pager.List` takes the later, in provider order, of the prefix, `startFrom` (inclusive) and the marker's
+boundary; a bound past the prefix window is an empty last page. Flat pages read rows through the cursor. With a
+delimiter, a bound inside a rolled prefix first decides that prefix alone (listed when a name of it is at or
+after the bound, read with a flat cursor over its subtree), then continues at the prefix's provider-order upper
+bound (`upperOf`), so every later range holds whole subtrees; the remaining ranges are read through the store's
+rollup when it accepts the delimiter (`suppressPrefixAtOrBeforeFloor` false: the range bounds decide membership)
+or a row walk that seeks past each rolled prefix. A page ends one item early to learn truncation; the marker
+resumes after a Blob's name (exclusive) or at a BlobPrefix's `upperOf` (inclusive).
+
+Markers are `az1.` + base64url(flag, progress (always 0), 16 bytes of SHA-256 over the length-prefixed scope,
+boundary). The scope digest is the Java server's, so markers are the same bytes for the same fixture identity
+(`TestMarkerGolden`); decoding accepts padding and spare trailing bits and refuses CR/LF, a foreign scope, a
+flag or progress above 1, and boundaries over 4,096 bytes (`TestMarkerDecodeLeniency`).
+
+### Text and the wire
+
+The raw query is read as UTF-8 with each maximal ill-formed subsequence one U+FFFD (`requestLineText`; unlike
+the S3 route, valid non-ASCII passes through, which the Java server does on this route). Components are then
+percent-decoded strictly and must be valid UTF-8. The body is appended byte by byte: the BOM and
+`<?xml version="1.0" encoding="utf-8"?>` and a newline, the echoes in the order Prefix, Marker, MaxResults,
+Delimiter (each when the parameter was sent, `MaxResults` as sent), five-character XML escaping, CR in a name as
+`&#13;`, `Encoded="true"` percent-encoding (RFC 3986 unreserved bytes literal, upper-case hex) for a name holding
+U+FFFE or U+FFFF, `Last-Modified` in RFC 1123 at second precision (`TestRenderListGolden` is the Java server's
+answer over the same rows). The route drops the Java server's 254-segment limit on blob names: native Azure lists
+a 255-segment name (`TestRenderRefusals`; evidence capture `azure-12a`).
+
+### The driver's Azure section
+
+`replaydiff -protocol azure` serves both sides with `--protocols s3,azure --azure-account replay` and runs
+`azureMatrix` (both versions; `maxresults` edges and garbage; prefixes at directory and inside-segment depths;
+delimiters `/`, multi-byte, astral, empty; `startFrom` around names, inside rolled prefixes and with EE..F4
+characters including the 4,096-byte U+10000 bound; header, `Accept`, query-grammar and raw-byte refusals;
+routing, HEAD, POST, DELETE), marker cases in which each server resumes with its own marker (page 2, other
+scope, other version, truncated, flipped, padded), marker walks at `-walks` sizes (default 1, 7, 5000), and a
+seeded random set. `azureComparator` requires the same status and classified headers (`Content-Type`,
+`x-ms-version`, `x-ms-error-code`, `x-ms-client-request-id`, `Allow`, `x-swath-replay-error`), a well-formed
+`x-ms-request-id` and `Date` on each side, the BOM, and the same body bytes after masking the
+`ServiceEndpoint` authority and replacing every marker by its effect (flag, progress, boundary); it counts the
+answers that matched only by effect, which is zero when both servers report the same fixture identity. With
+`-java-args "... --serving-mode duckdb"` and `-go-fixture` it compares the Java server serving an unsorted
+capture with the Go server serving the same rows sorted; `-accept-segment-improvement` then counts the Java
+server's `too_many_segments` refusals answered by the Go route as the known improvement.
+
+### The evidence replay
+
+`azure` `TestAzureEvidenceReplay` (`SWATH_REPLAY_FIXTURES`) extracts `docs/replay-provider-evidence.tar.gz`, serves
+the archive's corpus (names up to 2,010 bytes, sorted with a 4,096-byte key limit and checked against the
+manifest) on the Azure route alone, and replays each capture as the conformance tree's
+`NativeEvidenceReplayTest` does, with a port of its comparators (`evidencecmp_test.go`) whose failure messages
+are spelled as the pins in `azure/replay-expectations.json` spell them. SDK runs are replayed as the requests
+the SDK sends (captured headers, client request ids `prefix-N`). A pinned match must match; a pinned mismatch
+must reproduce or improve; `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-outcomes.json`.
+
+### Azure tests
+
+| Contract | Test |
+|---|---|
+| provider order, flat and delimited, against brute force | `azure` `TestProviderOrderMatchesUTF16`, `TestStartFromInsideRolledPrefix` |
+| empty-read settlement cost | `azure` `TestLongStartFromCostBound` |
+| markers | `azure` `TestMarkerGolden`, `TestMarkerDecodeLeniency` |
+| request checks and their order | `azure` `TestParseRefusalOrder`, `TestAcceptRule`, `TestRequestLineText` |
+| bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals` |
+| latency key | `azure` `TestLatencyKeyGolden` |
+| routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
+| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself` |
+| native captures | `azure` `TestAzureEvidenceReplay` (fixture tier) |

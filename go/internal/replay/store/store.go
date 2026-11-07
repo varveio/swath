@@ -103,7 +103,7 @@ type Options struct {
 	// MaxOpenFiles bounds the descriptors the fixture's parts hold open,
 	// whatever their number: an evicted part is reopened when next read.
 	// Zero selects sortedparquet.DefaultMaxOpenFiles(), half the soft
-	// descriptor limit within 64..4,096.
+	// descriptor limit, at most 4,096.
 	MaxOpenFiles int
 }
 

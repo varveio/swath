@@ -123,7 +123,11 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   that tree from this checkout with the Java replay distribution on `PATH` and `JAVA_HOME` set: DuckDB
   captures (synthetic 10k and 1M rows, the GCS and Azure evidence corpora), sorted by the Java
   `sort-fixture`. The script fixes every file's modification time, so the fixture identity the test
-  compares with the Java server's is reproducible.
+  compares with the Java server's is reproducible. CI runs this tier, except `TestRecordings`, in the
+  `go-fixtures` job ([replay.md](replay.md#continuous-integration)).
+  The same variable runs the GCS evidence replay (`go/internal/replay/evidence`, see
+  [replay.md](replay.md#the-gcs-evidence-replay)); it needs only the committed archive and uses
+  `ROOT/fixtures/evidence-gcs/sorted` when present.
 - **Policy toggles:** Java's policy layer can be switched off per mechanism with the hidden
   `--engine-toggle NAME=off`. The names are `owner_split`, `density_ewma`, `radix_bands`,
   `structure_probes`, `far_ahead`, `alphabet_pivots`, `reflect`, `confetti_feedback`, `reflect_lift`,

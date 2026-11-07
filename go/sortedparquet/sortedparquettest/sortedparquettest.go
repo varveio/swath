@@ -179,7 +179,7 @@ func Write(path string, part Part) error {
 // (its column chunks empty, without page indexes) at each zero: parquet-go
 // skips empty groups when it writes, but other writers leave them.
 func insertEmptyGroups(path string, groups []int) error {
-	return rewriteFooter(path, func(meta *format.FileMetaData) error {
+	return RewriteFooter(path, func(meta *format.FileMetaData) error {
 		if len(meta.RowGroups) == 0 {
 			return errors.New("a part of empty groups only is not supported")
 		}
@@ -211,7 +211,7 @@ func insertEmptyGroups(path string, groups []int) error {
 // dropKeyPageIndex rewrites the footer of the part at path so that the key
 // column's chunks reference no ColumnIndex and no OffsetIndex.
 func dropKeyPageIndex(path string) error {
-	return rewriteFooter(path, func(meta *format.FileMetaData) error {
+	return RewriteFooter(path, func(meta *format.FileMetaData) error {
 		for g := range meta.RowGroups {
 			chunk := &meta.RowGroups[g].Columns[0]
 			chunk.ColumnIndexOffset, chunk.ColumnIndexLength = 0, 0
@@ -221,9 +221,10 @@ func dropKeyPageIndex(path string) error {
 	})
 }
 
-// rewriteFooter applies change to the footer of the part at path and
-// writes the part back with the new footer.
-func rewriteFooter(path string, change func(*format.FileMetaData) error) error {
+// RewriteFooter applies change to the footer of the Parquet file at path
+// and writes the file back with the new footer: for tests of footers no
+// writer produces.
+func RewriteFooter(path string, change func(*format.FileMetaData) error) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err

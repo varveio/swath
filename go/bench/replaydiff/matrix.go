@@ -41,6 +41,8 @@ type request struct {
 	// before the server sees them (its page and Content-Type are the
 	// parser's). Empty compares everything.
 	Compare string `json:"compare,omitempty"`
+	// Header holds request headers, a name repeated when sent twice.
+	Header [][2]string `json:"-"`
 }
 
 // walk is a token walk: the same request repeated with each answer's

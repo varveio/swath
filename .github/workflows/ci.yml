@@ -292,10 +292,12 @@ jobs:
   # `if: always()` is not optional. Without it a failed dependency SKIPS this job, a skipped
   # required check never reports a conclusion, and the pull request waits forever instead of
   # going red.
-  # Go port (go/, see AGENTS.md "Go port"): vet, race tests and static cross-builds. The
-  # job always runs but does its work only when go/** or this workflow changed (or on manual
-  # dispatch), so Java-only changes pay a checkout and nothing else. It feeds ci-gate: a job that
-  # did its work and failed, or one skipped on a pull request, fails the gate.
+  # Go port (go/, see AGENTS.md "Go port"): vet, race tests, static cross-builds of both
+  # commands, and the Go replay image built and smoked. The job always runs but does its work
+  # only when go/**, this workflow, Dockerfile.replay-go (and its ignore file) or the replay
+  # smoke script changed (or on manual dispatch), so Java-only changes pay a checkout and nothing
+  # else. It feeds ci-gate: a job that did its work and failed, or one skipped on a pull
+  # request, fails the gate.
   go:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -317,7 +319,7 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
             echo "go=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$BASE" HEAD | grep -qE '^(go/|\.github/workflows/ci\.yml$)'; then
+          elif git diff --name-only "$BASE" HEAD | grep -qE '^(go/|\.github/workflows/ci\.yml$|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$)'; then
             echo "go=true" >> "$GITHUB_OUTPUT"
           else
             echo "go=false" >> "$GITHUB_OUTPUT"
@@ -343,21 +345,177 @@ jobs:
         run: |
           set -euo pipefail
           for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
-            echo "building $target"
-            GOOS="${target%/*}" GOARCH="${target#*/}" SWATH_REVISION="$GITHUB_SHA" ./build.sh -o "$RUNNER_TEMP/swath-${target%/*}-${target#*/}"
+            for cmd in swath swath-replay; do
+              echo "building $cmd for $target"
+              GOOS="${target%/*}" GOARCH="${target#*/}" SWATH_REVISION="$GITHUB_SHA" \
+                ./build.sh -o "$RUNNER_TEMP/$cmd-${target%/*}-${target#*/}" "./cmd/$cmd"
+            done
           done
-          # The CI build names its commit (build.sh stamps it).
-          "$RUNNER_TEMP/swath-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+          # Each CI build names its commit (build.sh stamps it).
+          for cmd in swath swath-replay; do
+            "$RUNNER_TEMP/$cmd-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+          done
+
+      # The Go replay image, built like docker-check builds the Java ones: both architectures
+      # (no push), then the builder-native one loaded for the smoke. No QEMU: the build stage
+      # cross-compiles and the scratch runtime stage has no RUN, so the arm64 build here also
+      # guards against a runtime stage that would need emulation.
+      - name: Set up Docker Buildx
+        if: steps.changes.outputs.go == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Build Go replay image (both architectures, no push)
+        if: steps.changes.outputs.go == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.replay-go
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: SWATH_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=swath-replay-go
+          # ignore-error: a fork PR can't write the base repo's Actions cache.
+          cache-to: type=gha,scope=swath-replay-go,mode=max,ignore-error=true
+
+      - name: Build Go replay image (builder-native arch) + load for smoke
+        if: steps.changes.outputs.go == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.replay-go
+          load: true
+          tags: swath-replay-go:ci
+          build-args: SWATH_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=swath-replay-go
+
+      # The fixture is the Go lister's dataset of a fake bucket (bench/s3fake), written here, so
+      # the smoke needs no network, no Java and no recording; the dataset is sorted, so the
+      # server opens it as it is.
+      - name: Smoke — Go replay image serves a Go lister dataset
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm swath-replay-go:ci --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+          smoke="$RUNNER_TEMP/replay-smoke"
+          mkdir -p "$smoke"
+          go build -o "$smoke/s3fake" ./bench/s3fake
+          awk 'BEGIN { for (i = 0; i < 2000; i++) printf "logs/p%02d/obj-%05d.json\t%d\n", i % 37, i, 1767225600000000 + i * 1000000 }' >"$smoke/keys.tsv"
+          "$smoke/s3fake" -keys "$smoke/keys.tsv" -bucket smoke -addr 127.0.0.1:19400 &
+          fake=$!
+          trap 'kill "$fake"' EXIT
+          for _ in $(seq 80); do curl -fs -o /dev/null http://127.0.0.1:19400/smoke && break; sleep 0.25; done
+          "$RUNNER_TEMP/swath-linux-amd64" list s3://smoke -endpoint http://127.0.0.1:19400 -path-style -anonymous \
+            -o "$smoke/dataset"
+          ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/dataset" sorted
+
+  # The Go replay's fixture tier: the store's tests on fixtures the Java replay distribution
+  # writes (bench/replay/make-fixtures.sh: DuckDB captures sorted by the Java sort-fixture),
+  # gated in the tests on SWATH_REPLAY_FIXTURES and skipped everywhere else. A separate job, so
+  # the Gradle build runs beside the go job rather than inside its budget. Same always-runs,
+  # works-on-change shape as the go job; the Java replay module and the evidence archive are
+  # inputs here too.
+  go-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Go changes
+        id: changes
+        working-directory: .
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE" HEAD | grep -qE '^(go/|\.github/workflows/ci\.yml$|swath-replay/|docs/replay-provider-evidence\.tar\.gz$)'; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go (version from go/go.mod)
+        if: steps.changes.outputs.go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Set up JDK 25
+        if: steps.changes.outputs.go == 'true'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      # This job runs the wrapper itself, so it validates it itself (see fast-tests).
+      - name: Validate Gradle wrapper
+        if: steps.changes.outputs.go == 'true'
+        uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v6.4.0
+
+      - name: Set up Gradle
+        if: steps.changes.outputs.go == 'true'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v6.4.0
+
+      - name: Java replay distribution
+        if: steps.changes.outputs.go == 'true'
+        working-directory: .
+        run: ./gradlew --no-daemon --stacktrace :swath-replay:installDist
+
+      - name: Java-written replay fixtures
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          PATH="$GITHUB_WORKSPACE/swath-replay/build/install/swath-replay/bin:$PATH" \
+            bench/replay/make-fixtures.sh "$RUNNER_TEMP/replay-fixtures/fixtures"
+
+      # FIXTURE_PACKAGES and FIXTURE_TESTS select the gated tests this tier runs; a new gated
+      # test is added to both. Every named test must run and pass: a name that matches nothing,
+      # or a test that skips (the gate it reads unset), would otherwise pass vacuously.
+      - name: Gated replay tests on the Java-written fixtures
+        if: steps.changes.outputs.go == 'true'
+        env:
+          SWATH_REPLAY_FIXTURES: ${{ runner.temp }}/replay-fixtures
+          FIXTURE_PACKAGES: ./internal/replay/store ./internal/replay/evidence
+          FIXTURE_TESTS: >-
+            TestJavaWrittenFixtures
+            TestSortsTheAzureEvidenceCorpus
+            TestStartupCost
+            TestSortFixtureMemory
+            TestGCSNativeCapturesMatchReplay
+            TestEvidenceRejectsCorruptedReplayResults
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/fixture-tests.log"
+          # shellcheck disable=SC2086 # FIXTURE_PACKAGES is a word list.
+          go test -count=1 -v -run "^($(tr ' ' '|' <<<"$FIXTURE_TESTS"))\$" $FIXTURE_PACKAGES | tee "$log"
+          if grep -q -- '--- SKIP' "$log"; then
+            echo "::error::a fixture-tier test skipped"
+            exit 1
+          fi
+          want=$(tr ' ' '\n' <<<"$FIXTURE_TESTS" | sort -u)
+          ran=$(sed -n 's/^--- PASS: \([^ ]*\) .*/\1/p' "$log" | sort -u)
+          if [ "$ran" != "$want" ]; then
+            echo "::error::fixture-tier tests that did not run: $(comm -23 <(echo "$want") <(echo "$ran") | paste -sd' ' -)"
+            exit 1
+          fi
 
   ci-gate:
-    needs: [fast-tests, integration-tests, docker-check, go]
+    needs: [fast-tests, integration-tests, docker-check, go, go-fixtures]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # A skipped dependency passes the gate only OFF pull_request, where jobs are legitimately
       # event-gated (docker-check is PR-only, so it skips on every main merge). On a pull request
-      # all four dependencies run, so there `skipped` is not a pass: that is what stops a future
+      # all five dependencies run, so there `skipped` is not a pass: that is what stops a future
       # `if:` from quietly removing a tier from the gate while the check stays green.
       - name: Every gating job passed
         env:

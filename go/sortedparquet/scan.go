@@ -87,7 +87,7 @@ func (r *Reader) Read(ctx context.Context, rng Range, stats *Stats) ([]Row, erro
 // reports that the range's upper bound was reached.
 func (r *Reader) readGroup(ctx context.Context, grp group, from []byte, inclusive bool, rng Range, want int, last []byte, stats *Stats) ([]Row, bool, error) {
 	p := r.parts[grp.part]
-	index, err := p.keyIndex(grp.physical)
+	index, err := p.keyIndex(ctx, grp.physical)
 	if err != nil {
 		return nil, false, err
 	}
@@ -265,7 +265,7 @@ func (s *rollupScan) run(ctx context.Context) ([]Entry, error) {
 				s.cursor.close()
 			}
 			p := r.parts[grp.part]
-			index, err := p.keyIndex(grp.physical)
+			index, err := p.keyIndex(ctx, grp.physical)
 			if err != nil {
 				return nil, err
 			}

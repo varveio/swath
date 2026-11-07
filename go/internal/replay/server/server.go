@@ -73,6 +73,12 @@ type Config struct {
 	FixtureIdentity string
 	// Log receives the slow-request and shutdown lines.
 	Log io.Writer
+	// Protocols are the enabled listing routes (ProtocolS3, ProtocolGCS,
+	// ProtocolAzure); empty is S3 only.
+	Protocols []string
+	// AzureAccount is the Azure route's account path segment and
+	// AdvertisedHost the host its ServiceEndpoint names (Host when empty).
+	AzureAccount, AdvertisedHost string
 }
 
 // Validate checks the bounds the server relies on (not the store, which is
@@ -88,7 +94,7 @@ func (c *Config) Validate() error {
 	case c.StopTimeout <= 0 || c.IdleTimeout <= 0 || c.WriteTimeout <= 0:
 		return errors.New("serve timeouts must be positive")
 	}
-	return nil
+	return c.validateAzure()
 }
 
 // MaxResponses is the response-count ceiling: twice the request ceiling.
@@ -121,6 +127,8 @@ type Server struct {
 	ln, metricsLn       net.Listener
 	accepting           atomic.Bool
 	s3Active            atomic.Int64
+	routes              *routes // nil: the S3 route answers every request
+	azure               *azureRoute
 }
 
 // New returns a server for cfg; Listen binds it.
@@ -145,6 +153,7 @@ func New(cfg Config) (*Server, error) {
 		s.reg.Get(metrics.ResponseChunkAllocation, r.String()).Inc()
 		s.reg.Get(metrics.ResponseChunkCapacityBytes, r.String()).Observe(float64(n))
 	})
+	s.initRoutes()
 	s.pager = &s3.Pager{Store: cfg.Store, OnDelimiterPath: func(p string) { s.reg.Get(metrics.DelimiterPath, p).Inc() }}
 	// The meters every scrape shows from the start, so a reader can tell a
 	// zero from a meter that is not there.
@@ -163,6 +172,7 @@ func New(cfg Config) (*Server, error) {
 	s.reg.SetGauge(metrics.ResponseBytesPeak, func() float64 { return float64(s.budget.Peak()) })
 	s.reg.SetGauge(metrics.ResponseActive, func() float64 { return float64(s.responses.Load()) })
 	s.reg.SetGauge(metrics.ProtocolRequestsActive, func() float64 { return float64(s.s3Active.Load()) }, "s3")
+	s.newAzureRoute()
 	s.httpSrv = &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: cfg.IdleTimeout,

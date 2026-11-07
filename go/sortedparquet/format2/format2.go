@@ -171,7 +171,7 @@ func Open(ctx context.Context, dir string, expect []sortedparquet.Column, files 
 		}
 	}()
 	for _, part := range manifest.Parts {
-		source, err := openPart(root, dir, files, manifest, part)
+		source, err := openPart(ctx, root, dir, files, manifest, part)
 		if source.File != nil {
 			sources = append(sources, source)
 		}
@@ -191,29 +191,26 @@ func Open(ctx context.Context, dir string, expect []sortedparquet.Column, files 
 }
 
 // openPart opens a part through root, which refuses a path escaping the
-// dataset, and adds it to files under its path in dir: the cache reopens
-// it by that path and requires the same file.
-func openPart(root *os.Root, dir string, files *sortedparquet.FileCache, manifest Manifest, part Part) (sortedparquet.PartSource, error) {
-	opened, err := root.Open(part.Path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s is missing", part.Path)
-		}
+// dataset, into files under its path in dir: the cache reopens it by that
+// path and requires the same file.
+func openPart(ctx context.Context, root *os.Root, dir string, files *sortedparquet.FileCache, manifest Manifest, part Part) (sortedparquet.PartSource, error) {
+	file, err := files.Open(ctx, filepath.Join(dir, filepath.FromSlash(part.Path)), func() (*os.File, error) {
+		return root.OpenFile(part.Path, sortedparquet.OpenFlags, 0)
+	})
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s is missing", part.Path)
+	case errors.Is(err, sortedparquet.ErrNotRegular):
+		return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s is not a regular file", part.Path)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return sortedparquet.PartSource{}, err
+	case err != nil:
 		// os.Root refuses a path that escapes the dataset.
 		return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonInvalidManifest, "%s: %v", part.Path, err)
 	}
-	info, err := opened.Stat()
-	if err != nil {
-		_ = opened.Close()
-		return sortedparquet.PartSource{}, err
-	}
-	if !info.Mode().IsRegular() || info.Size() != part.Bytes {
-		_ = opened.Close()
-		return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s is %d bytes, its manifest entry %d", part.Path, info.Size(), part.Bytes)
-	}
-	file, err := files.Add(filepath.Join(dir, filepath.FromSlash(part.Path)), opened)
-	if err != nil {
-		return sortedparquet.PartSource{}, err
+	if file.Size() != part.Bytes {
+		_ = file.Close()
+		return sortedparquet.PartSource{}, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s is %d bytes, its manifest entry %d", part.Path, file.Size(), part.Bytes)
 	}
 	source := sortedparquet.PartSource{Name: part.Path, File: file, Size: file.Size()}
 	footer, err := sortedparquet.OpenFooter(file, file.Size())

@@ -23,6 +23,10 @@
 //
 // -dump-tsv FILE writes the reference's full listing as a memstore TSV
 // fixture and exits.
+//
+// -protocol azure compares the Azure List Blobs route instead (both servers
+// serve s3,azure): the matrix in azure.go, marker walks in which each
+// server follows its own markers, and a structural comparator.
 package main
 
 import (
@@ -53,10 +57,12 @@ import (
 
 type options struct {
 	java, goBin, fixture, goFixture, bucket, report, live, dumpTSV string
+	protocol                                                       string
 	javaArgs, goArgs, logDir                                       string
 	walkSizes                                                      string
 	random, parallel, walkLimit, maxPrefixes, maxTop               int
 	seed                                                           uint64
+	acceptSegments                                                 bool
 }
 
 func main() {
@@ -65,6 +71,7 @@ func main() {
 	flag.StringVar(&o.goBin, "go", "", "the Go swath-replay binary")
 	flag.StringVar(&o.fixture, "fixture", "", "the fixture both servers serve")
 	flag.StringVar(&o.goFixture, "go-fixture", "", "a different fixture path for the Go server (e.g. a .tsv dump of the same listing)")
+	flag.StringVar(&o.protocol, "protocol", "s3", "the route to compare: s3, gcs (both servers get --protocols gcs) or azure (both get --protocols s3,azure)")
 	flag.StringVar(&o.bucket, "bucket", "bucket", "the bucket name")
 	flag.StringVar(&o.javaArgs, "java-args", "--parquet-connections 2", "extra serve flags for the Java server")
 	flag.StringVar(&o.goArgs, "go-args", "--parquet-connections 2", "extra serve flags for the Go server")
@@ -79,6 +86,8 @@ func main() {
 	flag.IntVar(&o.random, "random", 500, "requests in the seeded random walk")
 	flag.Uint64Var(&o.seed, "seed", 1, "the random walk's seed")
 	flag.IntVar(&o.parallel, "parallel", 4, "requests in flight")
+	flag.BoolVar(&o.acceptSegments, "accept-segment-improvement", false,
+		"azure: count a reference 500 too_many_segments answered 200 by the Go server as the known improvement, not a difference")
 	flag.Parse()
 	if err := run(o); err != nil {
 		log.Fatal(err)
@@ -120,6 +129,9 @@ func (t *target) do(bucket string, r request) (*response, error) {
 	if err != nil {
 		return nil, err
 	}
+	for _, h := range r.Header {
+		req.Header[h[0]] = append(req.Header[h[0]], h[1])
+	}
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -146,7 +158,11 @@ func (t *target) doRaw(bucket string, r request) (*response, error) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(time.Minute))
 	target := rawTarget(t, bucket, r)
-	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", r.Method, target, host); err != nil {
+	var extra strings.Builder
+	for _, h := range r.Header {
+		extra.WriteString(h[0] + ": " + h[1] + "\r\n")
+	}
+	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: %s\r\n%sConnection: close\r\n\r\n", r.Method, target, host, extra.String()); err != nil {
 		return nil, err
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: r.Method})
@@ -193,10 +209,20 @@ type report struct {
 }
 
 func run(o options) error {
+	if o.protocol == "gcs" {
+		return runGCS(o)
+	}
 	ctx := context.Background()
 	if o.goBin == "" && o.dumpTSV == "" || o.java == "" && o.live == "" || o.fixture == "" && o.live == "" {
 		flag.Usage()
 		return fmt.Errorf("-go, -java (or -live-endpoint) and -fixture are required")
+	}
+	if o.protocol == "azure" {
+		o.javaArgs += azureServeArgs
+		o.goArgs += azureServeArgs
+		if o.walkSizes == "1,7,1000" {
+			o.walkSizes = azureWalkSizes
+		}
 	}
 	client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: o.parallel * 2}, Timeout: 5 * time.Minute}
 	var ref *target
@@ -234,6 +260,11 @@ func run(o options) error {
 	rng := rand.New(rand.NewPCG(o.seed, 0x5eed))
 	d := &driver{o: o, ref: ref, got: got, comp: comp, rep: rep}
 
+	if o.protocol == "azure" {
+		d.runAzure(keys, rng)
+		rep.Seconds = time.Since(rep.Started).Seconds()
+		return d.write()
+	}
 	cases := s3Matrix(keys, rng, o.maxPrefixes)
 	if o.live != "" {
 		live := cases[:0]
@@ -266,7 +297,10 @@ func run(o options) error {
 }
 
 func serveArgs(fixture, bucket, extra string) []string {
-	args := []string{"--fixture", fixture, "--bucket", bucket, "--host", "127.0.0.1", "--port", "0", "--metrics-port", "0", "--serving-mode", "sorted"}
+	args := []string{"--fixture", fixture, "--bucket", bucket, "--host", "127.0.0.1", "--port", "0", "--metrics-port", "0"}
+	if !strings.Contains(extra, "--serving-mode") {
+		args = append(args, "--serving-mode", "sorted")
+	}
 	return append(args, strings.Fields(extra)...)
 }
 
