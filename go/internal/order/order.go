@@ -255,6 +255,11 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) {
 // Test hooks that widen race windows; nil in production.
 var hookBeforeDrain, hookAfterExpand func()
 
+// hookStopCallback runs (tests) in the context's stop callback before it
+// sets stopped: delaying it opens the window in which only a latch taken
+// with the failure keeps the drainer from passing a failed node.
+var hookStopCallback func()
+
 // hookMarkers sees the marker bytes held after each publish, hookDrained
 // the bytes and marker bytes still counted when the drain ends (tests;
 // mu held).
@@ -480,7 +485,11 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 	if opt.Shared != nil {
 		opt.Shared.setWake(wake)
 	}
+	hook := hookStopCallback // read now: the callback may outlive the run
 	stop := context.AfterFunc(ctx, func() {
+		if hook != nil {
+			hook()
+		}
 		o.stopped.Store(true)
 		wake()
 	})
@@ -550,8 +559,13 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 	}
 	if err != nil {
 		// Latch the failure before the node is exposed as done: otherwise
-		// the drainer could see a finished tree and succeed first.
+		// the drainer could see a finished tree and succeed first, or pass
+		// the failed node and hand on its siblings' rows (a gap: the rows
+		// it emitted are dropped, those after it are not). stopped is set
+		// here, under mu, not only by the context's AfterFunc, which runs
+		// later on its own goroutine.
 		o.cancel(err)
+		o.stopped.Store(true)
 	}
 	if err != nil { // children emitted but never published will not be expanded
 		if d, ok := o.p.(source.Disposer[R]); ok {

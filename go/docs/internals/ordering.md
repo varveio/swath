@@ -26,6 +26,12 @@ same protection as Parquet. The stage also counts the rows its emitters received
 unless it handed on exactly as many (spill, compaction and replay conserve rows); the pipeline compares both
 counts with the provider's and the router's.
 
+A failed range stops the stream at its node: the failure is latched under the stage's mutex before the node is
+marked done, so the drainer never passes it and hands on a later sibling's rows. What a sink received is then
+a prefix of the keyspace without a gap, the prefix a resume continues after (`TestFailedRangeStopsTheStream`;
+before, the stop flag was set only by the context's callback on another goroutine, and a seeded run killed at
+a range end could publish later tiles' rows past the failed one's).
+
 ## The budget
 
 `Options.Budget` is a byte budget, `--row-budget`, for rows in flight. A row counts its value (`schema.Row[P]`, the
