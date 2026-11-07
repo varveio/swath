@@ -26,6 +26,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -35,6 +36,7 @@ import (
 	"io"
 	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -92,6 +94,9 @@ type target struct {
 }
 
 func (t *target) url(bucket string, r request) string {
+	if r.Raw != "" {
+		return t.base + " " + rawTarget(t, bucket, r)
+	}
 	path := r.Path
 	switch {
 	case t.vhost:
@@ -108,11 +113,43 @@ func (t *target) url(bucket string, r request) string {
 }
 
 func (t *target) do(bucket string, r request) (*response, error) {
+	if r.Raw != "" {
+		return t.doRaw(bucket, r)
+	}
 	req, err := http.NewRequest(r.Method, t.url(bucket, r), nil)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := t.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	return &response{Status: resp.StatusCode, Header: resp.Header, Body: body}, err
+}
+
+// rawTarget fills r's raw target in: {bucket}, and {host} with the
+// target's own host and port (the Host header the request carries).
+func rawTarget(t *target, bucket string, r request) string {
+	return strings.NewReplacer("{bucket}", bucket, "{host}", strings.TrimPrefix(t.base, "http://")).Replace(r.Raw)
+}
+
+// doRaw sends r's raw target as the request line on a connection of its
+// own and reads the one answer.
+func (t *target) doRaw(bucket string, r request) (*response, error) {
+	host := strings.TrimPrefix(t.base, "http://")
+	conn, err := net.DialTimeout("tcp", host, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(time.Minute))
+	target := rawTarget(t, bucket, r)
+	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", r.Method, target, host); err != nil {
+		return nil, err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: r.Method})
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +169,9 @@ type result struct {
 	Error   string `json:"error,omitempty"`
 	FailAt  int    `json:"fail_at_page,omitempty"`
 	Partial bool   `json:"partial,omitempty"` // a walk stopped by -walk-limit
+	// Skipped is a request that depends on another's token when that
+	// answer had none: it was not sent, and it neither passes nor fails.
+	Skipped string `json:"skipped,omitempty"`
 	*diff
 }
 
@@ -148,6 +188,7 @@ type report struct {
 	Compared  int       `json:"compared"`
 	Passed    int       `json:"passed"`
 	Failed    int       `json:"failed"`
+	Skipped   int       `json:"skipped"`
 	Results   []result  `json:"results"`
 }
 
@@ -241,13 +282,17 @@ type driver struct {
 func (d *driver) record(r result) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.rep.Results = append(d.rep.Results, r)
+	if r.Skipped != "" {
+		d.rep.Skipped++
+		return
+	}
 	d.rep.Compared++
 	if r.Pass {
 		d.rep.Passed++
 	} else {
 		d.rep.Failed++
 	}
-	d.rep.Results = append(d.rep.Results, r)
 }
 
 func (d *driver) count(n int) {
@@ -267,7 +312,25 @@ func (d *driver) compareOne(r request) (*response, diff, error) {
 		return a, diff{}, fmt.Errorf("%s: %w", d.got.name, err)
 	}
 	d.count(2)
-	return a, d.comp.compare(a, b), nil
+	return a, narrow(r.Compare, d.comp.compare(a, b), a, b), nil
+}
+
+// narrow applies a request's Compare mode to a verdict: "headers" sets the
+// body aside and adds Cache-Control to the compared headers; "status"
+// keeps the status alone.
+func narrow(mode string, df diff, a, b *response) diff {
+	switch mode {
+	case "headers":
+		df.Offset, df.RefExcerpt, df.GotExcerpt = -1, "", ""
+		if x, y := values(a.Header, "Cache-Control"), values(b.Header, "Cache-Control"); x != y {
+			df.HeaderDiffs = append(df.HeaderDiffs, fmt.Sprintf("cache-control: %q | %q", x, y))
+		}
+		df.OK = df.Status[0] == df.Status[1] && len(df.HeaderDiffs) == 0
+	case "status":
+		df.Offset, df.RefExcerpt, df.GotExcerpt, df.HeaderDiffs = -1, "", "", nil
+		df.OK = df.Status[0] == df.Status[1]
+	}
+	return df
 }
 
 func (d *driver) runCases(kind string, cases []request) {
@@ -287,9 +350,13 @@ func (d *driver) runCases(kind string, cases []request) {
 			wg.Go(func() {
 				for c := range work {
 					if c.TokenFrom != "" {
-						if tok, ok := d.refTokens.Load(c.TokenFrom); ok {
-							c.Query += "&continuation-token=" + s3.PercentEncode([]byte(tok.(string)))
+						tok, ok := d.refTokens.Load(c.TokenFrom)
+						if !ok {
+							d.record(result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c),
+								Skipped: fmt.Sprintf("%q issued no continuation token on this fixture", c.TokenFrom)})
+							continue
 						}
+						c.Query += "&continuation-token=" + s3.PercentEncode([]byte(tok.(string)))
 					}
 					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c)}
 					a, df, err := d.compareOne(c)
@@ -452,25 +519,32 @@ func (d *driver) write() error {
 	rep := d.rep
 	var text bytes.Buffer
 	fmt.Fprintf(&text, "replaydiff: reference=%s fixture=%s bucket=%s keys=%d seed=%d\n", rep.Reference, rep.Fixture, rep.Bucket, rep.Keys, rep.Seed)
-	kinds := map[string][2]int{}
+	kinds := map[string][3]int{}
 	for _, r := range rep.Results {
 		k := kinds[r.Kind]
-		if r.Pass {
+		switch {
+		case r.Skipped != "":
+			k[2]++
+		case r.Pass:
 			k[0]++
-		} else {
+		default:
 			k[1]++
 		}
 		kinds[r.Kind] = k
 	}
 	for _, kind := range []string{"case", "walk", "random"} {
 		if k, ok := kinds[kind]; ok {
-			fmt.Fprintf(&text, "  %-6s %6d passed %6d failed\n", kind, k[0], k[1])
+			fmt.Fprintf(&text, "  %-6s %6d passed %6d failed %4d skipped\n", kind, k[0], k[1], k[2])
 		}
 	}
 	partial := 0
 	for _, r := range rep.Results {
 		if r.Partial {
 			partial++
+		}
+		if r.Skipped != "" {
+			fmt.Fprintf(&text, "SKIP %s %q: %s\n", r.Kind, r.Name, r.Skipped)
+			continue
 		}
 		if r.Pass {
 			continue
@@ -496,7 +570,7 @@ func (d *driver) write() error {
 	if partial > 0 {
 		fmt.Fprintf(&text, "%d walks stopped at -walk-limit %d pages\n", partial, d.o.walkLimit)
 	}
-	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed)
+	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, rep.Skipped)
 	os.Stdout.Write(text.Bytes())
 	if d.o.report != "" {
 		j, err := json.MarshalIndent(rep, "", " ")
