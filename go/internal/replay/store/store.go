@@ -65,6 +65,10 @@ type Object struct {
 	OwnerDisplayName  *string
 	ChecksumAlgorithm *string
 	ChecksumType      *string
+	// ContentType and MD5 are a GCS recording's content type and MD5
+	// (base64, as stored), read only with Projection.Content.
+	ContentType *string
+	MD5         *string
 }
 
 // Projection selects the columns a read materialises. The owner columns are
@@ -72,6 +76,10 @@ type Object struct {
 // decoding them and leaves OwnerID and OwnerDisplayName nil.
 type Projection struct {
 	Owner bool
+	// Content reads ContentType and MD5 (the Azure route's Content-Type
+	// and Content-MD5). A schema without those columns ignores it, so its
+	// reads share the window cache with reads without it.
+	Content bool
 }
 
 // DelimitedEntry is one entry of a DelimitedRollup: exactly one of

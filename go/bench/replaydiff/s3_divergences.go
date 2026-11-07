@@ -20,7 +20,8 @@ import (
 )
 
 // The Go S3 route answers as live S3 does in request shapes where the
-// Java server answers otherwise (docs/replay.md, "The S3 route"; each was
+// Java server answers otherwise (the S3 divergence table under "Where the
+// answers differ, and why" in docs/internals/replay-java.md; each was
 // probed on live S3 on 2026-11-07): an empty start-after is echoed; a
 // parameter with a malformed escape is dropped; the first of duplicated
 // parameters wins; '+' is a space; an empty, altered or Java-form

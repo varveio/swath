@@ -200,7 +200,7 @@ func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool
 		// Room for a window up front, never more: a read of a huge
 		// limit over a short range must not allocate for rows it will
 		// not find, and a longer read grows as it goes.
-		sink = s.objects.packer(columns, min(limit, s.windowRows()), s.arenaLimit)
+		sink = s.objects.packer(columns, proj, min(limit, s.windowRows()), s.arenaLimit)
 		sink.stop = stop
 		var stats sortedparquet.Stats
 		defer s.record(&stats, false)
@@ -276,6 +276,7 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 // Rows implements Store with the Object projection, through the window
 // cache when it is on.
 func (s *Sorted) Rows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, limit int, proj Projection) ([]Object, error) {
+	proj = s.objects.projection(proj)
 	if s.prefetch != nil && limit > 0 {
 		return s.prefetch.serve(ctx, from, fromInclusive, toExclusive, limit, proj)
 	}
@@ -290,7 +291,7 @@ func (s *Sorted) objectRows(ctx context.Context, from []byte, fromInclusive bool
 	}
 	out := make([]Object, len(rows))
 	for i := range rows {
-		out[i] = s.objects.object(&rows[i])
+		out[i] = s.objects.object(&rows[i], proj)
 	}
 	return out, nil
 }
@@ -308,7 +309,7 @@ func (s *Sorted) DelimitedRollup(ctx context.Context, from []byte, fromInclusive
 			out[i] = DelimitedEntry{CommonPrefix: entry.CommonPrefix}
 			continue
 		}
-		object := s.objects.object(entry.Row)
+		object := s.objects.object(entry.Row, proj)
 		out[i] = DelimitedEntry{Object: &object}
 	}
 	return out, true, nil
@@ -331,8 +332,16 @@ type objectProjection struct {
 	size, lastModified, etag, storageClass                     string
 	ownerID, ownerDisplayName, checksumAlgorithm, checksumType string
 	// md5 names the column of a GCS recording's MD5 (base64). When set,
-	// the ETag is not the etag column's value but gcsETag of the two.
+	// the ETag is not the etag column's value but gcsETag of the two, and
+	// the MD5 field (with Projection.Content) is the column's value.
 	md5 string
+	// contentType names the content type column, read with
+	// Projection.Content.
+	contentType string
+	// fixedETag and fixedStorageClass, when set, are the placeholder
+	// every row answers with, for a schema with no column the field maps
+	// from.
+	fixedETag, fixedStorageClass string
 }
 
 // s3Objects is the projection of the S3-shaped schemas: the Java-era
@@ -349,7 +358,7 @@ var s3Objects = objectProjection{
 // 2026-11-07, server TestLiveGCSXMLAPIContents): the ETag from the MD5 or
 // the etag (gcsETag), and no StorageClass, Owner or checksum element,
 // which that API's listing never carries, whatever the object's class.
-var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", etag: "etag", md5: "md5"}
+var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", etag: "etag", md5: "md5", contentType: "content_type"}
 
 // objectProjections maps declared schema ids to the Object projection.
 // A schema id not listed projects keys only.
@@ -358,41 +367,79 @@ var objectProjections = map[string]objectProjection{
 	"swath/s3-objects/v1":     s3Objects,
 	"swath-replay/objects/v1": s3Objects,
 	"swath/gcs-objects/v1":    gcsObjects,
-	"swath-local/v1":          {size: "size", lastModified: "last_modified"},
+	"swath-local/v1":          localObjects,
 }
 
-// syntheticGCSETag is the S3 ETag of a GCS recording's row that holds
-// neither an MD5 nor an etag (Cloud Storage lists every object with an
-// etag, so only a recording made otherwise lacks both). Neither 32
+// localObjects is the S3 view of a local tree's recording, which holds
+// nothing S3's ETag or StorageClass maps from. S3 lists every object with
+// both, so each takes a placeholder: syntheticETag, and STANDARD, the
+// class S3 stores an object in unless the upload names another. Owner
+// stays absent under fetch-owner=true: an S3 owner id names an account,
+// which nothing in a local tree does (its uid names a user of one host),
+// so a placeholder would invent one; live S3 drops an owner field it does
+// not return (DisplayName, probed 2026-11-07) rather than filling it, and
+// the route answers fetch-owner=true without an Owner for every recording
+// that holds none (server TestLocalRecordingOnTheS3Route).
+var localObjects = objectProjection{size: "size", lastModified: "last_modified", fixedETag: syntheticETag, fixedStorageClass: "STANDARD"}
+
+// syntheticETag is the S3 ETag of a row with no source value for one: a
+// GCS recording's row that holds neither an MD5 nor an etag (Cloud
+// Storage lists every object with an etag, so only a recording made
+// otherwise lacks both), and every row of a local recording. Neither 32
 // hexadecimal digits (an MD5, S3's or the XML API's) with an optional
 // "-N" part count (an S3 multipart upload), nor "-" and base64 (the XML
 // API's composite object), it cannot be taken for a real ETag.
-const syntheticGCSETag = "swath-s3-synthetic-v1"
+const syntheticETag = "swath-s3-synthetic-v1"
 
 // gcsETag appends the S3 ETag of a GCS object, as the XML API forms it:
 // the MD5 in lower-case hexadecimal when the object has one; otherwise
 // (a composite object) "-" and the JSON API's etag; otherwise
-// syntheticGCSETag. An md5 value that is not the standard base64 of 16
+// syntheticETag. An md5 value that is not the standard base64 of 16
 // bytes is not an MD5, and the etag answers. Empty (a null) is no value.
 func gcsETag(dst []byte, md5, etag string) []byte {
-	if len(md5) == base64.StdEncoding.EncodedLen(16) {
-		var sum [18]byte // DecodedLen(24)
-		if n, err := base64.StdEncoding.Strict().Decode(sum[:], []byte(md5)); err == nil && n == 16 {
-			return hex.AppendEncode(dst, sum[:16])
-		}
+	if sum, ok := decodeMD5(md5); ok {
+		return hex.AppendEncode(dst, sum[:])
 	}
 	if etag != "" {
 		return append(append(dst, '-'), etag...)
 	}
-	return append(dst, syntheticGCSETag...)
+	return append(dst, syntheticETag...)
+}
+
+// decodeMD5 decodes the standard base64 of 16 bytes, the form GCS lists
+// an MD5 in and Azure's Content-MD5 takes; anything else is no MD5.
+func decodeMD5(s string) (sum [16]byte, ok bool) {
+	if len(s) != base64.StdEncoding.EncodedLen(16) {
+		return sum, false
+	}
+	var buf [18]byte // DecodedLen(24)
+	n, err := base64.StdEncoding.Strict().Decode(buf[:], []byte(s))
+	copy(sum[:], buf[:])
+	return sum, err == nil && n == 16
+}
+
+// IsMD5 reports whether s is an MD5 in the standard base64 of 16 bytes.
+func IsMD5(s string) bool {
+	_, ok := decodeMD5(s)
+	return ok
 }
 
 func objectProjectionFor(schemaID string) objectProjection {
 	return objectProjections[schemaID]
 }
 
+// projection is proj as this schema reads it: Content dropped when the
+// schema has no column it reads, so such reads key the window cache as
+// reads without it do.
+func (p objectProjection) projection(proj Projection) Projection {
+	if p.contentType == "" && p.md5 == "" {
+		proj.Content = false
+	}
+	return proj
+}
+
 // columns returns the columns proj needs decoded: owner columns only with
-// Owner.
+// Owner, the content type only with Content.
 func (p objectProjection) columns(proj Projection) []string {
 	var names []string
 	for _, name := range []string{p.size, p.lastModified, p.etag, p.storageClass, p.checksumAlgorithm, p.checksumType, p.md5} {
@@ -407,10 +454,13 @@ func (p objectProjection) columns(proj Projection) []string {
 			}
 		}
 	}
+	if proj.Content && p.contentType != "" {
+		names = append(names, p.contentType)
+	}
 	return names
 }
 
-func (p objectProjection) object(row *sortedparquet.Row) Object {
+func (p objectProjection) object(row *sortedparquet.Row, proj Projection) Object {
 	o := Object{Key: row.Key}
 	if v, ok := value(row, p.size); ok {
 		size := v.Int64()
@@ -432,11 +482,23 @@ func (p objectProjection) object(row *sortedparquet.Row) Object {
 		etag := string(gcsETag(nil, md5, stored))
 		o.ETag = &etag
 	}
+	if p.fixedETag != "" {
+		etag := p.fixedETag
+		o.ETag = &etag
+	}
 	o.StorageClass = text(row, p.storageClass)
+	if p.fixedStorageClass != "" {
+		class := p.fixedStorageClass
+		o.StorageClass = &class
+	}
 	o.OwnerID = text(row, p.ownerID)
 	o.OwnerDisplayName = text(row, p.ownerDisplayName)
 	o.ChecksumAlgorithm = text(row, p.checksumAlgorithm)
 	o.ChecksumType = text(row, p.checksumType)
+	if proj.Content {
+		o.ContentType = text(row, p.contentType)
+		o.MD5 = text(row, p.md5)
+	}
 	return o
 }
 

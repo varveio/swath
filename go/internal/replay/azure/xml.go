@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/replay/output"
+	"github.com/varveio/swath/go/internal/replay/store"
 )
 
 // The body is assembled byte by byte: the BOM before the declaration, the
@@ -26,7 +27,11 @@ const (
 	prolog          = BOM + `<?xml version="1.0" encoding="utf-8"?>` + "\n"
 	propertiesStart = "<Properties><Last-Modified>"
 	afterTime       = "</Last-Modified><Etag>0x000000000000001</Etag><Content-Length>"
-	afterSize       = "</Content-Length><Content-Type>application/octet-stream</Content-Type><BlobType>BlockBlob</BlobType>" +
+	afterSize       = "</Content-Length><Content-Type>"
+	// placeholderContentType is the Content-Type of a row with no content
+	// type Azure could hold.
+	placeholderContentType = "application/octet-stream"
+	afterContent           = "<BlobType>BlockBlob</BlobType>" +
 		"<AccessTier>Hot</AccessTier><AccessTierInferred>true</AccessTierInferred>" +
 		"<LeaseStatus>unlocked</LeaseStatus><LeaseState>available</LeaseState></Properties></Blob>"
 	// HTTPTime is the Last-Modified and Date spelling.
@@ -136,11 +141,53 @@ func RenderList(o *output.Output, res *Result, endpoint string) error {
 		buf = append(buf, afterTime...)
 		buf = strconv.AppendInt(buf, size, 10)
 		buf = append(buf, afterSize...)
+		buf = appendContent(buf, o)
+		buf = append(buf, afterContent...)
 	}
 	buf = append(buf, "</Blobs><NextMarker>"...)
 	buf = appendEscaped(buf, res.NextMarker)
 	o.Write(append(buf, "</NextMarker></EnumerationResults>"...))
 	return nil
+}
+
+// appendContent appends a Blob's Content-Type text and its Content-MD5
+// element. A GCS recording maps both (Projection.Content): its content
+// type, and its MD5, which GCS lists in the form Content-MD5 takes (the
+// standard base64 of 16 bytes); every other row has the placeholder type
+// and no Content-MD5. A content type Azure could not hold (empty, not
+// UTF-8, or with a control character, which a header value cannot carry)
+// takes the placeholder, and an MD5 in any other form is none. Native
+// listings write Content-MD5 after Content-Type and the content
+// properties the profile omits (Content-Encoding, Content-Language,
+// Content-CRC64) and before BlobType (server
+// TestGCSRecordingOnTheAzureRoute).
+func appendContent(dst []byte, o *store.Object) []byte {
+	if o.ContentType != nil && holdable(*o.ContentType) {
+		dst = appendEscaped(dst, *o.ContentType)
+	} else {
+		dst = append(dst, placeholderContentType...)
+	}
+	dst = append(dst, "</Content-Type>"...)
+	if o.MD5 != nil && store.IsMD5(*o.MD5) {
+		dst = append(dst, "<Content-MD5>"...)
+		dst = append(dst, *o.MD5...)
+		dst = append(dst, "</Content-MD5>"...)
+	}
+	return dst
+}
+
+// holdable reports whether a content type can be an Azure Content-Type:
+// non-empty UTF-8 without a C0 control character or DEL.
+func holdable(s string) bool {
+	if s == "" || !utf8.ValidString(s) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // AppendList appends what RenderList renders, outside any budget.

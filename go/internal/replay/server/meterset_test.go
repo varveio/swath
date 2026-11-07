@@ -104,7 +104,8 @@ func meterLines(p scrape) []string {
 // without the meters the Go server has no counterpart for (the sort
 // progress counter, the JVM and host meters) and
 // with the handle_cache meters that stand for the Java delimiter reader
-// pool. The docs' meter table (docs/replay.md) lists every difference.
+// pool. docs/internals/replay-java.md (the meters side by side) lists
+// every difference.
 // The test then sums the http.requests count as the bench scripts do.
 func TestMeterSetMatchesTheContract(t *testing.T) {
 	st, meta := sortedFixture(t, logKeys(10_000), 6_000, 2_000, 2)

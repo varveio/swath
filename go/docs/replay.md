@@ -272,11 +272,11 @@ as they are (each is listed below the table).
 |---|---|---|---|
 | S3: `Key` | exact | mapped from the object name (the same bytes) | mapped from the relative path |
 | S3: `LastModified` | exact, milliseconds (the epoch when null) | mapped from `last_modified` (GCS `updated`), milliseconds; open (a) | mapped from the modification time, milliseconds |
-| S3: `ETag` | exact, absent when null | mapped: the MD5 in lower-case hex; without an MD5, `-` and the etag; neither: placeholder `swath-s3-synthetic-v1` | open (b): absent |
+| S3: `ETag` | exact, absent when null | mapped: the MD5 in lower-case hex; without an MD5, `-` and the etag; neither: placeholder `swath-s3-synthetic-v1` | placeholder `swath-s3-synthetic-v1` (S3 lists every object with an ETag) |
 | S3: `Size` | exact (`0` when null) | mapped from `size` (the same value) | mapped from the file size |
-| S3: `StorageClass` | exact, absent when null | absent (the XML API sends none, whatever the class) | open (b): absent |
+| S3: `StorageClass` | exact, absent when null | absent (the XML API sends none, whatever the class) | placeholder `STANDARD` (S3 lists every object with a class) |
 | S3: `ChecksumAlgorithm`, `ChecksumType` | exact, absent when null | absent (the XML API sends none) | absent (S3 sends none for an object stored without a checksum) |
-| S3: `Owner` (`fetch-owner=true`) | exact, absent when both columns are null | absent (not stored; the XML API sent none) | open (b): absent |
+| S3: `Owner` (`fetch-owner=true`) | exact, absent when both columns are null | absent (not stored; the XML API sent none) | absent, no real equivalent: an S3 owner `ID` names an account, nothing in a local tree does (its uid names a user of one host), and a placeholder would invent one. Live S3 drops an owner field it does not return rather than filling it (2026-11-07: `Owner` with `ID` alone, no `DisplayName`); the route answers `fetch-owner=true` without `Owner` for every recording that holds none |
 | GCS: `name`, `size` | mapped from the key and size (`0` when null) | exact | mapped from the path and file size |
 | GCS: `updated` | mapped from `last_modified` (six digits; the epoch when null) | exact | mapped from the modification time |
 | GCS: `etag` | placeholder `swath-gcs-synthetic-v1` (an S3 ETag is not a GCS etag) | exact (`swath-gcs-synthetic-v1` when null) | placeholder `swath-gcs-synthetic-v1` |
@@ -288,8 +288,8 @@ as they are (each is listed below the table).
 | Azure: `Name`, `Content-Length` | mapped from the key and size | mapped from the name and size | mapped from the path and file size |
 | Azure: `Last-Modified` | mapped, seconds (Azure's precision) | mapped from `last_modified`, seconds | mapped, seconds |
 | Azure: `Etag` | placeholder `0x000000000000001` | placeholder `0x000000000000001` | placeholder `0x000000000000001` |
-| Azure: `Content-Type` | placeholder `application/octet-stream` | open (c): placeholder `application/octet-stream` | placeholder `application/octet-stream` |
-| Azure: `Content-MD5` | absent | open (c): absent | absent |
+| Azure: `Content-Type` | placeholder `application/octet-stream` | mapped from `content_type`; placeholder `application/octet-stream` when null or a value Azure cannot hold (a control character, not UTF-8) | placeholder `application/octet-stream` |
+| Azure: `Content-MD5` | absent | mapped from `md5` (GCS lists it as the standard base64 of 16 bytes, the form `Content-MD5` takes), after `Content-Type` and before `BlobType`, where native listings place it; absent when null or in any other form | absent |
 | Azure: `BlobType`, `AccessTier`, `AccessTierInferred`, `LeaseStatus`, `LeaseState` | placeholders `BlockBlob`, `Hot`, `true`, `unlocked`, `available` | the same placeholders | the same placeholders |
 
 The S3 view of a `swath/gcs-objects/v1` recording is Cloud Storage's own S3-compatible XML API's answer for
@@ -310,10 +310,6 @@ Open cells:
 - (a) The XML API's `LastModified` is the object's `timeCreated`, which a recording does not store; the route
   sends `updated`. They differ only for an object whose metadata changed after it was written (metageneration
   above 1).
-- (b) S3 lists every object with an `ETag` and a `StorageClass`, and with `Owner` under `fetch-owner=true`; a
-  local recording has no source value for them and the route omits them, where the rule asks for a placeholder.
-- (c) A GCS recording stores the content type and the MD5 (base64, the form Azure's `Content-MD5` takes), but
-  the Azure route sends its placeholder content type and no `Content-MD5`.
 
 The S3-shaped schemas' answers on every route are the replay wire contract's
 (`server` `TestEmptyAndNullStringsEndToEnd`).

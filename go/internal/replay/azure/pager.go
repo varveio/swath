@@ -226,7 +226,7 @@ func (p *Pager) rollups(prefix, delimiter []byte) source {
 	return func(ctx context.Context, from []byte, inclusive bool, upper []byte, limit int) ([]item, error) {
 		if path != walking {
 			entries, ok, err := p.Store.DelimitedRollup(ctx, storeKey(from, inclusive), inclusive, upper, prefix, delimiter,
-				limit-1, store.Projection{}, false)
+				limit-1, store.Projection{Content: true}, false)
 			if err != nil {
 				return nil, err
 			}
@@ -312,7 +312,7 @@ func (p *Pager) firstKey(ctx context.Context, from []byte, inclusive bool) ([]by
 }
 
 func (p *Pager) rows(ctx context.Context, from []byte, inclusive bool, upper []byte, limit int) ([]store.Object, error) {
-	return p.Store.Rows(ctx, storeKey(from, inclusive), inclusive, upper, limit, store.Projection{})
+	return p.Store.Rows(ctx, storeKey(from, inclusive), inclusive, upper, limit, store.Projection{Content: true})
 }
 
 // storeKey is a store lower bound: an inclusive empty bound is the open

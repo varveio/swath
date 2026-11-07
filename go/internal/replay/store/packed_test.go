@@ -21,7 +21,7 @@ func TestPackerStopsAtTheArenaLimit(t *testing.T) {
 	for _, overflow := range []string{"keys", "text"} {
 		t.Run(overflow, func(t *testing.T) {
 			stops := 0
-			k := s3Objects.packer([]string{"etag"}, 4, 16)
+			k := s3Objects.packer([]string{"etag"}, Projection{}, 4, 16)
 			k.stop = func() { stops++ }
 			k.Keys([][]byte{[]byte("aaaa"), []byte("bbbb")})
 			k.Values(0, []parquet.Value{parquet.ByteArrayValue([]byte("eeeeeee")), parquet.ByteArrayValue([]byte("fffffff"))})
