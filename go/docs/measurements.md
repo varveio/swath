@@ -41,70 +41,123 @@ distinct timestamps: parquet-go cannot switch from dictionary to delta mid-chunk
 
 ## Replayed recordings: Go against Java defaults
 
-**Build.** The Go rows of this section, the next one and [Policy switches](#policy-switches) were measured during
-the port, before it merged as `01dd55b`: that engine's pivot policy (the spec pivot with a clamped density
-refinement) and its single-page seed, not the engine campaign's anchor reflection, gallop, admission gates and
-seed descent. They have not been rerun on the current engine ([Skipped or not measured](#skipped-or-not-measured)),
-and the request and split explanations below are about that older policy.
+**Run `recordings1`, 2026-11-07.** One n4-highcpu-16 VM in GCP us-east1 (150 GB disk). The Java CLI and
+swath-replay were built from this repository at `62b224f8` with Temurin 25.0.5. The four recordings were made
+again that day by listing the live buckets anonymously with that Java CLI (64 concurrency, sorted Parquet), and
+their object counts equal the earlier recordings'. `bench/policy_replay.sh` then served each recording at its
+worker-page p50 latency (99, 164, 99 and 103 ms on every request shape). Four arms ran interleaved, 3
+repetitions each, all with sorted Parquet output:
 
-Replay at each recording's worker-page p50 latency, 64 workers, `--seed`, sorted Parquet output, 3 interleaved
-repetitions (Java defaults interleaved with the Go arm), median (min–max). Requests per 1k keys are computed
-from the medians.
+- Java at its defaults;
+- Go at main `62b224f8`;
+- Go at `7b05605`;
+- Go at this head, `4ad9eecc`.
 
-| Recording (objects, latency) | Arm | Wall s | Requests | Requests per 1k keys | Splits | Empty children | Overfetched keys | Mean active |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| noaa-eri-pds (845,693, 99 ms) | Java | 43.4 (43.0–43.5) | 1,353 | 1.60 | 94 | 100 | 148,904 | 7.7 |
-| | Go | **3.7** (3.7–3.8) | 1,228 | 1.45 | 466 | 150 | 378,597 | 35.6 |
-| pansurg-curation-raw-open-data (501,262, 164 ms) | Java | 66.4 (66.1–68.8) | 1,174 | 2.34 | 77 | 99 | 310,056 | 6.8 |
-| | Go | **6.0** (5.1–6.2) | 803 | 1.60 | 395 | 168 | 298,042 | 22.9 |
-| noaa-nws-fourcastnetgfs-pds (4,081,170, 99 ms) | Java | 83.2 (80.8–92.4) | 4,913 | 1.20 | 296 | 55 | 171,414 | 8.3 |
-| | Go | **14.8** (14.6–15.6) | 5,803 | 1.42 | 2,337 | 1,106 | 1,720,578 | 43.6 |
-| nara-1950-census (13,540,310, 103 ms) | Java | 109.4 (108.8–111.3) | 14,942 | 1.10 | 994 | 170 | 715,051 | 19.6 |
-| | Go | **57.2** (55.9–58.1) | 20,928 | 1.55 | 9,847 | 4,504 | 7,383,588 | 40.4 |
+The Go arms use 64 workers and `--seed`. The table gives the median, with (min–max) on wall. Requests are the
+replay server's HTTP count, and requests per 1k keys come from the medians. `7b05605` is within a few percent
+of the head on every column and is left out of the table; the head adds only telemetry.
 
-Java's splits are its owner splits plus steals; its empty children are `CHILD_MASS/empty`; its overfetched
-keys are `swath.page.raw_keys` minus objects. Go is 12x and 11x faster on the shallow recordings and 5.6x and
-1.9x on the deep ones, at about 40 of 64 ranges active where Java runs 8–20. On the deep recordings it sends
-more requests (+18 % and +40 % here) and overfetches far more keys; the next section explains why. Replay
-inflates Java's serial tail; the live runs below are smaller wins.
+**Row identity.** For each Go build and recording, one more run without injected latency wrote a dataset.
+`bench/diffds.py` compared it with the Java recording, and all 12 were row-identical.
 
-**Reproduce:** with the replay oracle built and the recording under `$BENCH_DATA/recordings/BUCKET/`,
+| Recording (objects, latency) | Arm | Wall s | Requests | Requests per 1k keys | Splits | Empty children | Overfetched keys | Structure probes | Mean active |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds (845,693, 99 ms) | Java | 42.0 (42.0–42.5) | 1,356 | 1.60 | 94 | 100 | 148,904 | 355 | 7.6 |
+| | Go main | 3.6 (3.4–3.6) | 1,234 | 1.46 | 475 | 154 | 384,597 | 0 | 35.8 |
+| | Go head | **3.1** (3.1–3.1) | 1,389 | 1.64 | 223 | 109 | 342,612 | 142 | 42.3 |
+| pansurg-curation-raw-open-data (501,262, 164 ms) | Java | 68.2 (65.1–69.7) | 1,188 | 2.37 | 83 | 99 | 308,056 | 362 | 6.0 |
+| | Go main | 5.8 (4.9–5.9) | 793 | 1.58 | 390 | 164 | 288,042 | 0 | 23.1 |
+| | Go head | **5.2** (5.0–5.2) | 839 | 1.67 | 167 | 54 | 247,439 | 40 | 25.5 |
+| noaa-nws-fourcastnetgfs-pds (4,081,170, 99 ms) | Java | 82.8 (75.8–85.1) | 4,954 | 1.21 | 313 | 61 | 182,414 | 672 | 8.1 |
+| | Go main | 14.3 (14.1–15.2) | 5,844 | 1.43 | 2,445 | 1,123 | 1,761,578 | 0 | 42.3 |
+| | Go head | **11.6** (11.3–11.6) | 5,503 | 1.35 | 1,129 | 442 | 809,578 | 616 | 46.4 |
+| nara-1950-census (13,540,310, 103 ms) | Java | 102.3 (102.3–103.2) | 14,929 | 1.10 | 990 | 166 | 708,051 | 679 | 19.9 |
+| | Go main | 53.7 (50.4–54.3) | 20,547 | 1.52 | 9,410 | 4,181 | 7,002,326 | 0 | 40.4 |
+| | Go head | **29.6** (29.6–30.4) | 14,396 | 1.06 | 918 | 260 | 781,326 | 60 | 51.5 |
+
+How the columns are counted. Java's splits are its owner splits plus steals, and its empty children are
+`CHILD_MASS/empty`. Its overfetched keys are `swath.page.raw_keys` minus objects. Its probes are all of its
+probe kinds, while Go's are structure probes, which are delimiter requests.
+
+**Wall.**
+- Against Java, the head is 13.5x and 13.1x faster on the shallow recordings and 7.1x and 3.5x on the deep
+  ones.
+- Against main it is 0.86x, 0.90x, 0.81x and 0.55x the wall.
+- The deep recordings gain the most. On nara, splits fall from 9,410 to 918 and empty children from 4,181 to
+  260. Overfetched keys fall from 7.0M to 0.78M, against Java's 0.71M, and mean active rises from 40 to 51 of
+  64.
+
+**Requests.** They fall where the old policy over-split: −30 % against main on nara, now 3.6 % below Java's,
+and −6 % on fourcastnetgfs, 11 % above Java's. On the shallow recordings they rise:
+- +12.6 % against main on eri, to 1.64 per 1k keys, 2.4 % above Java;
+- +5.8 % on pansurg, still 29 % below Java.
+
+The rise is the structure probes the head sends on its evidence (142 and 40 per run), which more than cancel
+the requests saved by fewer splits. Replay charges nothing for a request, so these runs show the wall gain and
+the probe cost side by side but not what the probes cost under throttling.
+
+Replay inflates Java's serial tail, so the live runs below are smaller wins.
+
+**Reproduce:** build the replay oracle and put the recording under `$BENCH_DATA/recordings/BUCKET/`, then:
 
 ```bash
-printf 'java-default\tjava\t\ngo-base\tgo\t/path/to/swath\n' > arms.tsv
+printf 'java-default\tjava\t\ngo-head\tgo\t/path/to/swath\n' > arms.tsv
 REPLAY_ENV=/path/to/env.sh bench/policy_replay.sh arms.tsv noaa-eri-pds 99 19300 3 out/eri
 python3 bench/policy_table.py out/eri
 ```
 
-The harness runs Go arms as `swath diag list` with 64 workers and `--seed`; latencies are 99, 164, 99 and
+The harness runs Go arms as `swath diag list` with 64 workers and `--seed`. The latencies are 99, 164, 99 and
 103 ms for the four recordings.
+
+### Before the engine campaign (pre-merge build)
+
+The port measured these recordings before it merged as `01dd55b`, on a container that no longer exists, using
+the recordings of that time. That build had the spec pivot with a clamped density refinement and a single-page
+seed, and none of the engine campaign's work: no anchor reflection, gallop, admission gates or seed descent.
+Same configuration, 3 interleaved repetitions, median (min–max):
+
+| Recording (objects, latency) | Arm | Wall s | Requests | Requests per 1k keys | Splits | Empty children | Overfetched keys | Mean active |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| noaa-eri-pds (845,693, 99 ms) | Java | 43.4 (43.0–43.5) | 1,353 | 1.60 | 94 | 100 | 148,904 | 7.7 |
+| | Go | 3.7 (3.7–3.8) | 1,228 | 1.45 | 466 | 150 | 378,597 | 35.6 |
+| pansurg-curation-raw-open-data (501,262, 164 ms) | Java | 66.4 (66.1–68.8) | 1,174 | 2.34 | 77 | 99 | 310,056 | 6.8 |
+| | Go | 6.0 (5.1–6.2) | 803 | 1.60 | 395 | 168 | 298,042 | 22.9 |
+| noaa-nws-fourcastnetgfs-pds (4,081,170, 99 ms) | Java | 83.2 (80.8–92.4) | 4,913 | 1.20 | 296 | 55 | 171,414 | 8.3 |
+| | Go | 14.8 (14.6–15.6) | 5,803 | 1.42 | 2,337 | 1,106 | 1,720,578 | 43.6 |
+| nara-1950-census (13,540,310, 103 ms) | Java | 109.4 (108.8–111.3) | 14,942 | 1.10 | 994 | 170 | 715,051 | 19.6 |
+| | Go | 57.2 (55.9–58.1) | 20,928 | 1.55 | 9,847 | 4,504 | 7,383,588 | 40.4 |
+
+`recordings1`'s main arm (`62b224f8`) reproduces these rows to within a few percent.
 
 ## Splits, overfetch and requests on the deep recordings
 
-A second interleaved session on the deep recordings (same configuration, 3 repetitions, median (min–max)):
+These figures come from `recordings1`'s medians, above.
 
-| Recording | Arm | Wall s | Requests | Splits | Empty children | Overfetched keys | Mean active |
-|---|---|---:|---:|---:|---:|---:|---:|
-| fourcastnetgfs | Java | 81.8 (80.2–84.3) | 4,916 | 287 | 54 | 177,414 | 8.6 |
-| | Go | 16.4 (16.0–17.0) | 6,078 | 2,464 | 1,093 | 1,751,569 | 40.4 |
-| nara-1950-census | Java | 111.4 (109.9–114.0) | 14,961 | 1,015 | 170 | 709,051 | 19.3 |
-| | Go | 55.0 (49.6–57.2) | 19,128 | 7,131 | 2,908 | 5,360,246 | 39.1 |
+| Recording | Arm | Splits | Overfetched keys per split | Empty children per split | Requests against Java |
+|---|---|---:|---:|---:|---:|
+| fourcastnetgfs | Java | 313 | 583 | 0.19 | – |
+| | Go main | 2,445 | 720 | 0.46 | +18 % |
+| | Go head | 1,129 | 717 | 0.39 | +11 % |
+| nara-1950-census | Java | 990 | 715 | 0.17 | – |
+| | Go main | 9,410 | 744 | 0.44 | +38 % |
+| | Go head | 918 | 851 | 0.28 | −4 % |
 
-Divided by the splits (medians): overfetched keys 711 (Go) against 618 (Java) on fourcastnetgfs and 752 against
-699 on nara; empty children 0.44 against 0.19 and 0.41 against 0.17.
+- **Main.** It split 7.8x and 9.5x as often as Java. Each split adds a trimmed last page and a child's first
+  page, so its requests and overfetched keys followed.
+- **The head.** It splits 3.6x as often as Java on fourcastnetgfs and slightly less often than Java on nara.
+  It holds 46–52 ranges active against Java's 8–20, so the remaining gap to Java is concurrency, not split
+  count. Its overfetch per split is higher than main's on nara because it has fewer splits over a similar
+  number of range ends.
+- **Reading the ratios.** Overfetch per split is total overfetch over all splits. It includes every range's
+  last page, seeded and split ranges alike, so it is not the marginal cost of a split. The empty-children
+  count adds lower and upper children together.
+- **S3 against GCS.** S3 has no end bound, so a range's last page reads past it. GCS ranges send `endOffset`
+  and overfetch nothing ([GCS route parity](#gcs-route-parity)).
 
-- Go splits 8.6x and 7.0x as often as Java. That buys about 40 active ranges against Java's 9–19 and 5.0x and
-  2.0x less wall. Each split adds a trimmed last page and a child's first page, so requests (+24 % and +28 %)
-  and overfetched keys follow.
-- Go's overfetched keys divided by its splits are within 15 % of Java's. That is total overfetch (every range's
-  last page, seeded and split ranges alike) over all splits, not the overfetch one split adds, so it does not
-  say what a split costs at the margin. The empty-children count aggregates lower and upper children, so it does
-  not attribute the excess to empty upper children either; Java probes the pivot from an idle thief, and the
-  1-key probe below is the only measurement of what probing removes.
-- S3 has no end bound, so a range's last page reads past it; GCS ranges send `endOffset` and overfetch nothing
-  ([GCS route parity](#gcs-route-parity)).
+A second session of the pre-merge build gave Go 6,078 and 19,128 requests and 2,464 and 7,131 splits on
+fourcastnetgfs and nara, in line with `recordings1`'s main arm.
 
-**Reproduce:** as above, on `noaa-nws-fourcastnetgfs-pds` (99 ms) and `nara-1950-census` (103 ms).
+**Reproduce:** run the commands above on `noaa-nws-fourcastnetgfs-pds` (99 ms) and `nara-1950-census` (103 ms).
 
 ## Engine campaign, 2026-11-07 (prod key lists through a fake at 50 ms)
 
@@ -342,8 +395,9 @@ http://127.0.0.1:19600 --path-style --anonymous --region us-east-1 --count-only 
 
 ## Policy switches
 
-Same session and configuration as [the four recordings](#replayed-recordings-go-against-java-defaults), Go
-arms only, on the pre-merge build named [there](#replayed-recordings-go-against-java-defaults); wall s / requests,
+Pre-merge build, in the session of [Before the engine campaign](#before-the-engine-campaign-pre-merge-build), Go
+arms only; not rerun on the current engine, which sends structure probes by default on their evidence
+(`auto`; 40–616 per run in `recordings1`, [above](#replayed-recordings-go-against-java-defaults)); wall s / requests,
 median of 3. `--floors` and `--structure` are `swath diag list` switches (`--structure` here is that build's
 boolean switch, before the `auto` mode and the structure probes of the engine campaign); the
 seed descent was measured as `--seed` with the hybrid descent, since deleted.
@@ -362,7 +416,7 @@ seed descent was measured as `--seed` with the hybrid descent, since deleted.
   requests). Off: on replay requests cost nothing and nothing throttles.
 - All three: slower than structure probes alone everywhere.
 
-**1-key pivot probe** (deleted), deep recordings, the session of the previous section: with the probe, empty
+**1-key pivot probe** (deleted), deep recordings, the pre-merge build's second session ([above](#splits-overfetch-and-requests-on-the-deep-recordings)): with the probe, empty
 children fell 1,093 → 201 and 2,908 → 443, but it sent 2.8 and 2.3 probes per split, 31 % and 27 % more
 requests, and took 2.3x and 2.2x the wall (fourcastnetgfs 38.0 s, nara 119.9 s), because the owner waits for
 the probe. For a fixed stream of split proposals, an asynchronous probe would save at most one request per
@@ -681,8 +735,7 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 
 - Live GCS beyond the one private in-region run above, which measured the port before the engine campaign; the
   campaign's in-region GCS gate (that bucket within 12 s) has not run. GCS's own latency profile.
-- The four replay recordings (noaa-eri-pds, pansurg, fourcastnetgfs, nara) on the campaign's engine: the
-  recordings are not on the measuring host and have to be made again with the Java CLI (live, anonymous) first.
+- The policy switches on the campaign's engine (the four recordings themselves were rerun, `recordings1`).
 - Throttling against real S3 or GCS; Java under the sustained-throttle fault.
 - The resume ramp-up after a restart, and the defaults and resume-storm campaigns (smoke only, above).
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.
