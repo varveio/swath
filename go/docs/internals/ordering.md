@@ -371,8 +371,15 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   admitted after listing (each writer's working set, `parquetout.EncoderBytes`, is that admission's), one per
   processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
   spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
-  leaves beside the workers' connections, the part files and the reserve). On sentinel-cogs (1.09B keys, 32
-  cores) a fixed cap of 8 was the bound: 8 workers busy through a 146 s tail. Before listing is done nothing changes either: the drainer walks the tree as
+  leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
+  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. Measured: at 16 vCPU 8 workers
+  beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
+  cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
+- **What bounds the tail now.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing
+  (the parts' encoding), 714 s reading spill frames and 621 s decoding them: about 68 % of 32 cores through
+  the 140 s tail. The tail is CPU-bound on Parquet encoding and spill read-back, near its floor on that
+  machine. The next levers are cheaper encoding per row, or overlapping the drain with listing (claiming
+  nearer the publish frontier), not more workers. Before listing is done nothing changes either: the drainer walks the tree as
   always, and it asks again each time it has handed rows on while the rule cannot be stated yet.
 - **Where the parts end.** Every spill marker records its frame's rows and their logical bytes
   (`schema.LogicalBytes`, summed when the frame is written); in-memory rows are summed when the rest is

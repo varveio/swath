@@ -85,6 +85,15 @@ const (
 	SegmentNotListedDone = "listing_active" // the drain ended before listing did
 )
 
+// minSegmentWorkers and a worker per two processors cap the segment
+// workers: each drives its part's encoder as well as reading and decoding,
+// so two processors per worker are about what one keeps busy. Measured
+// (sorted Parquet, 2026-11-07): at 16 vCPU, 8 workers beat 15 (0.75× against
+// 0.81× of the serial build's wall on 64 lists); at 32 cores 31 workers
+// bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS (6.3 against
+// 3.4 GB), the tail then CPU-bound on encoding and spill read-back.
+const minSegmentWorkers = 8
+
 // The segment workers are at most the encoders admitted (each feeds one
 // part's writer, admitted by its working set, parquetout.EncoderBytes),
 // one per spare processor (spareProcs: each reads and decodes, with its own
@@ -152,7 +161,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		return false, nil
 	}
 	o.seg.tried = true
-	k := min(pl.Encoders, spareProcs())
+	k := min(pl.Encoders, spareProcs(), max(minSegmentWorkers, aheadProcs()/2))
 	if c := o.opt.SegmentWorkers; c > 0 {
 		k = min(k, c)
 	}

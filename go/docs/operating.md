@@ -155,6 +155,8 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
   boundaries do not depend on timing. Once listing is done and the rest of a sorted run is written as parallel
   segments (`resources.drain.segments.reason` `engaged`), the interval closes no part: the tail is cut by
   size and row count only ([ordering](internals/ordering.md#segments-parts-written-in-parallel-after-listing)).
+  The tail's workers are at most one per two processors (at least 8); with them the tail is CPU-bound on
+  Parquet encoding and spill read-back (`resources.drain.segments.write_ns`, `read_ns`, `decode_ns`).
 - **`--stall-timeout`** (default 10 min; 0: never) stops a run with no progress and no usable answer from the
   service for that long (exit 75). A warning is printed at half.
 
