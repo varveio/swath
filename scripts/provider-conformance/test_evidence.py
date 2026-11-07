@@ -3,12 +3,16 @@
 
 import base64
 import importlib.util
+import io
+import os
 import pathlib
 import hashlib
 import json
+import tarfile
 import tempfile
 import subprocess
 import unittest
+from unittest import mock
 
 MODULE = pathlib.Path(__file__).with_name("evidence.py")
 SPEC = importlib.util.spec_from_file_location("provider_evidence", MODULE)
@@ -564,6 +568,16 @@ cd "$(dirname "$0")"
 [ "$1" = -o ] && [ "$3" = ./cmd/swath-replay ]
 { cat main.go; printf '%s/%s cgo=%s %s' "$GOOS" "$GOARCH" "$CGO_ENABLED" "$(git rev-parse HEAD)"; } > "$2"
 """
+# A stand-in for the go command: `go test` writes the outcome reports FAKE_OUTCOMES names.
+FAKE_GO = """#!/bin/sh
+set -eu
+[ "$1" = test ]
+mkdir -p "$SWATH_PROVIDER_REPORT/generated" "$SWATH_REPLAY_PROVIDER_REPORT"
+cat "$FAKE_OUTCOMES/gcs.json" > "$SWATH_PROVIDER_REPORT/generated/gcs-outcomes.json"
+cat "$FAKE_OUTCOMES/azure.json" > "$SWATH_REPLAY_PROVIDER_REPORT/azure-outcomes.json"
+"""
+
+
 class GoReceiptTest(unittest.TestCase):
     """A `producer: go` receipt binds the Go evidence test sources and go/build.sh's binary at its
     commit; both are recomputed there by `validate`, and the commit must be an ancestor."""
@@ -749,6 +763,47 @@ class GoReceiptTest(unittest.TestCase):
             evidence.validate_version_equivalence({"provider": "azure", "id": "azure-03a"}, "2026-10-06",
                                                   {"go_replay": {}}, {}, self.root)
 
+    def test_go_receipts_written_from_the_go_replay_outcomes_validate(self):
+        index = {"provider": "gcs", "captures": {"gcs-basic": {"file": "captures/gcs-basic.json"},
+                                                 "gcs-other": {"file": "captures/gcs-basic.json"}}}
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            for name, payload in (("gcs/index.json", json.dumps(index).encode()),
+                                  ("gcs/captures/gcs-basic.json", self.capture),
+                                  ("azure/index.json", b'{"provider": "azure", "captures": {}}')):
+                info = tarfile.TarInfo(name)
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+        (self.root / "docs").mkdir()
+        (self.root / "docs/replay-provider-evidence.tar.gz").write_bytes(buffer.getvalue())
+        self.receipt_commit = self.commit("archive")
+        tools = self.root.parent / "tools"
+        outcomes = self.root.parent / "outcomes"
+        for directory in (tools, outcomes):
+            directory.mkdir()
+        (tools / "go").write_text(FAKE_GO, encoding="utf-8")
+        (tools / "go").chmod(0o755)
+        (outcomes / "gcs.json").write_text('{"gcs-basic": "match", "gcs-other": "mismatch: x"}')
+        (outcomes / "azure.json").write_text("{}")
+        environment = {"PATH": f"{tools}{os.pathsep}{os.environ['PATH']}", "FAKE_OUTCOMES": str(outcomes)}
+        out = self.root / "evidence"
+        with mock.patch.dict(os.environ, environment):
+            self.write("untracked", "dirty")
+            with self.assertRaisesRegex(ValueError, "clean tested source tree"):
+                evidence.write_go_receipts(self.root, self.root.parent, out)
+            (self.root / "untracked").unlink()
+            self.assertEqual(evidence.write_go_receipts(self.root, self.root.parent, out), {"azure": 0, "gcs": 1})
+        written = evidence.strict_json((out / "gcs/receipts/go/gcs-basic.json").read_text())
+        self.assertEqual(written, self.receipt())
+        self.assertFalse((out / "gcs/receipts/go/gcs-other.json").exists())
+        row = self.row(written)
+        self.assertEqual(row["evidence"]["json-v1"]["go_replay"]["replay_result_sha256"],
+                         hashlib.sha256((out / "gcs/receipts/go/gcs-basic.json").read_bytes()).hexdigest())
+        self.validate(row)
+        # An outcome report that misses an archived capture writes nothing.
+        (outcomes / "gcs.json").write_text('{"gcs-basic": "match"}')
+        with mock.patch.dict(os.environ, environment), self.assertRaisesRegex(ValueError, "does not cover"):
+            evidence.write_go_receipts(self.root, self.root.parent, self.root.parent / "elsewhere")
 
 
 if __name__ == "__main__":

@@ -112,6 +112,15 @@ GO_EVIDENCE_TEST_SOURCES = ("go/go.mod", "go/go.sum",
                             "go/internal/replay/azure/evidence_test.go",
                             "go/internal/replay/azure/evidencecmp_test.go",
                             "go/internal/replay/azure/sdk_test.go")
+# Per provider: the Go evidence test, the file that declares it, the variable naming its outcome
+# report directory, and the report files under that directory (one per corpus it replays).
+GO_EVIDENCE_TESTS = {
+    "gcs": ("TestGCSNativeCapturesMatchReplay", "go/internal/replay/evidence/evidence_test.go",
+            "SWATH_PROVIDER_REPORT", "*/gcs-outcomes.json"),
+    "azure": ("TestAzureEvidenceReplay", "go/internal/replay/azure/evidence_test.go",
+              "SWATH_REPLAY_PROVIDER_REPORT", "azure-outcomes.json"),
+}
+GO_TEST_PACKAGES = ("./internal/replay/evidence", "./internal/replay/azure")
 # The binary a Go receipt binds: `go/build.sh`'s static linux/amd64 replay server.
 GO_DISTRIBUTION_NAME = "swath-replay-linux-amd64"
 # Build settings that change the binary's bytes; everything else comes from the receipt commit.
@@ -998,6 +1007,64 @@ def go_distribution_sha256(repo_root: Path, commit: str) -> str:
         return build_go_distribution(tree, toolchain, tree.parent / GO_DISTRIBUTION_NAME)
 
 
+def go_outcomes(report: Path, pattern: str) -> list[dict[str, str]]:
+    """Every outcome report a Go evidence test wrote under `report`, one per corpus it replayed."""
+    reports = [strict_json(path.read_text(encoding="utf-8")) for path in sorted(report.glob(pattern))]
+    if not reports:
+        raise ValueError(f"the Go evidence test wrote no {pattern} under {report}")
+    return reports
+
+
+def write_go_receipts(repo_root: Path, fixtures: Path, out: Path) -> dict[str, int]:
+    """Run the Go evidence replays at the clean HEAD commit and write a `producer: go` receipt to
+    OUT/<provider>/receipts/go/<capture>.json for each capture every corpus matched."""
+    if git_output(repo_root, "status", "--porcelain", "--untracked-files=all").strip():
+        raise ValueError("receipt requires a clean tested source tree")
+    commit = git_output(repo_root, "rev-parse", "HEAD").decode("ascii").strip()
+    toolchain = go_toolchain(repo_root, commit)
+    sources = go_test_sources(repo_root, commit)
+    written = {}
+    with go_checkout(repo_root, commit) as tree, tempfile.TemporaryDirectory(prefix="go-outcomes-") as temp:
+        distribution = build_go_distribution(tree, toolchain, Path(temp) / GO_DISTRIBUTION_NAME)
+        names = [test for test, _, _, _ in GO_EVIDENCE_TESTS.values()]
+        env = go_environment(toolchain, False)
+        env["SWATH_REPLAY_FIXTURES"] = str(fixtures.resolve())
+        for provider, (_, _, variable, _) in GO_EVIDENCE_TESTS.items():
+            env[variable] = str(Path(temp) / provider)
+        run = subprocess.run(["go", "test", "-count=1", "-p", "1", "-run", "^(" + "|".join(names) + ")$",
+                              *GO_TEST_PACKAGES], cwd=tree / "go", env=env, capture_output=True)
+        if run.returncode != 0:
+            raise ValueError("Go evidence replay failed:\n" + run.stdout.decode("utf-8", "replace")[-4000:])
+        with evidence_root(tree / EVIDENCE_ARCHIVE.relative_to(REPO_ROOT)) as root:
+            for provider, (test, test_path, _, pattern) in GO_EVIDENCE_TESTS.items():
+                reports = go_outcomes(Path(temp) / provider, pattern)
+                index = strict_json((root / provider / "index.json").read_text(encoding="utf-8"))
+                if any(set(report) != set(index["captures"]) for report in reports):
+                    raise ValueError(f"a {provider} outcome report does not cover the archived captures")
+                written[provider] = 0
+                for key, entry in sorted(index["captures"].items()):
+                    if any(report[key] != "match" for report in reports):
+                        continue
+                    payload = read_evidence(checked_child(root / provider, entry["file"]))
+                    capture = strict_json(payload.decode("utf-8"))
+                    steps = 1 if capture["schema_version"] == "provider-capture-v1" else len(capture["steps"])
+                    receipt = {"schema_version": "provider-match-receipt-v2", "producer": "go",
+                               "comparison": "ProviderExchangeComparator", "status": "PASS", "test": test,
+                               "test_path": test_path, "test_sources": sorted(sources),
+                               "test_source_sha256": go_test_source_sha256(sources),
+                               "api_version": capture["api_version"],
+                               "evidence_kind": capture.get("evidence_kind", "exchange"),
+                               "compared_steps": steps, "capture_sha256": hashlib.sha256(payload).hexdigest(),
+                               "replay_commit": commit, "go_toolchain": toolchain,
+                               "distribution_sha256": distribution, "distribution_name": GO_DISTRIBUTION_NAME}
+                    path = out / provider / "receipts" / "go" / f"{key}.json"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(receipt, ensure_ascii=False, separators=(",", ":")) + "\n",
+                                    encoding="utf-8")
+                    written[provider] += 1
+    return written
+
+
 def checked_child(root: Path, relative: str) -> Path:
     if not relative or Path(relative).is_absolute():
         raise ValueError("evidence path must be relative")
@@ -1071,7 +1138,16 @@ def main() -> None:
                        "loaded when no --manifest is given")
     check.add_argument("--repo-root", type=Path)
     check.add_argument("--distribution", type=Path)
+    go = sub.add_parser("go-receipts", help="run the Go evidence replays at the clean HEAD commit and write "
+                        "a producer: go receipt for each capture they match")
+    go.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    go.add_argument("--fixtures", type=Path, required=True, help="the SWATH_REPLAY_FIXTURES root")
+    go.add_argument("--out", type=Path, required=True,
+                    help="evidence directory; receipts go to OUT/<provider>/receipts/go/")
     args = parser.parse_args()
+    if args.command == "go-receipts":
+        print(json.dumps(write_go_receipts(args.repo_root.resolve(), args.fixtures, args.out), sort_keys=True))
+        return
     if args.command == "validate":
         manifests = {}
         for manifest_path in args.manifest:
