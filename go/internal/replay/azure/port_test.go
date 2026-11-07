@@ -5,6 +5,7 @@ package azure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/replay/latency"
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -278,5 +280,49 @@ func TestUnrenderableYearsAndNegativeEpoch(t *testing.T) {
 func TestHTTPDatePadsSingleDigitDay(t *testing.T) {
 	if got := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Format(HTTPTime); got != "Thu, 01 Oct 2026 00:00:00 GMT" {
 		t.Errorf("%s", got)
+	}
+}
+
+// TestRenderErrorPrecedence pins the order of sink writes and fixture
+// checks under a small cap, the replay wire contract's: with a 256-byte
+// cap a valid 1,024-byte name is a write the cap refuses
+// (response_too_large) before the year-10000 time after it is checked,
+// while a negative size, checked before the entry is opened, and a
+// control character in a short name, checked before the name is written,
+// are fixture refusals; with room for the name the time is the refusal.
+func TestRenderErrorPrecedence(t *testing.T) {
+	r := parse(t, "")
+	r.Container = "bucket"
+	year10000 := time.UnixMicro(253402300800000000).UTC()
+	ok := time.Unix(1_700_000_000, 0).UTC()
+	obj := func(name string, size int64, tm time.Time) store.Object {
+		return store.Object{Key: []byte(name), Size: &size, LastModified: &tm}
+	}
+	for _, c := range []struct {
+		name   string
+		obj    store.Object
+		cap    int
+		reason string // "" for the cap's refusal
+	}{
+		{"long name, bad year, small cap", obj(strings.Repeat("q", 1024), 1, year10000), 256, ""},
+		{"long name, bad year, room", obj(strings.Repeat("q", 1024), 1, year10000), 1 << 20, "timestamp_year_out_of_range"},
+		{"negative size, small cap", obj("neg", -1, ok), 256, "negative_size"},
+		{"control character, small cap", obj("c\x01", 1, ok), 256, "control_character"},
+		{"over-long name, small cap", obj(strings.Repeat("r", 1025), 1, ok), 256, "name_too_long"},
+	} {
+		o, err := output.New(output.NewBudget(1<<30, nil), 64, c.cap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o2 := c.obj
+		err = RenderList(o, &Result{Request: r, Entries: []Entry{{Object: &o2}}}, "http://127.0.0.1:1/replay/")
+		var fe *Error
+		switch {
+		case c.reason == "" && (err != nil || o.Err() != output.ErrTooLarge):
+			t.Errorf("%s: %v, sink %v; want the cap's refusal", c.name, err, o.Err())
+		case c.reason != "" && (!errors.As(err, &fe) || fe.Reason != c.reason):
+			t.Errorf("%s: %v, sink %v; want %s", c.name, err, o.Err(), c.reason)
+		}
+		o.Close()
 	}
 }
