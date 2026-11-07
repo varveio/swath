@@ -4,6 +4,7 @@
 package azure
 
 import (
+	"encoding/xml"
 	"runtime"
 	"strings"
 	"testing"
@@ -50,4 +51,39 @@ func TestOversizedContentTypeStaysBounded(t *testing.T) {
 		t.Errorf("%d still charged", budget.Charged())
 	}
 	t.Logf("allocated %d bytes", allocated)
+}
+
+// TestContentTypeOutsideXMLTakesThePlaceholder renders recorded content
+// types holding U+FFFE or U+FFFF, valid UTF-8 that XML 1.0's Char
+// production excludes (the surrogates it also excludes cannot occur in
+// valid UTF-8), and requires the body to parse with encoding/xml and carry
+// the placeholder; the neighbours XML allows (U+FFFD, U+10000, U+E000,
+// U+D7FF) are kept. Before, the two were written as they are and the body
+// did not parse.
+func TestContentTypeOutsideXMLTakesThePlaceholder(t *testing.T) {
+	for _, c := range []struct{ ct, want string }{
+		{"text/\ufffe", placeholderContentType},
+		{"text/\uffff", placeholderContentType},
+		{"\uffff", placeholderContentType},
+		{"text/plain; x=\ufffd\U00010000\ue000\ud7ff", "text/plain; x=\ufffd\U00010000\ue000\ud7ff"},
+	} {
+		ct := c.ct
+		res := &Result{Request: parse(t, ""), Entries: []Entry{{Object: &store.Object{Key: []byte("a"), ContentType: &ct}}}}
+		body, err := AppendList(nil, res, "http://h:1/replay/")
+		if err != nil {
+			t.Fatalf("%+q: %v", c.ct, err)
+		}
+		var doc struct {
+			Blobs []struct {
+				ContentType string `xml:"Properties>Content-Type"`
+			} `xml:"Blobs>Blob"`
+		}
+		if err := xml.Unmarshal([]byte(strings.TrimPrefix(string(body), BOM)), &doc); err != nil {
+			t.Errorf("%+q: the body does not parse: %v", c.ct, err)
+			continue
+		}
+		if len(doc.Blobs) != 1 || doc.Blobs[0].ContentType != c.want {
+			t.Errorf("%+q: %+q, want Content-Type %+q", c.ct, doc.Blobs, c.want)
+		}
+	}
 }

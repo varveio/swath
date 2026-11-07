@@ -157,8 +157,9 @@ func RenderList(o *output.Output, res *Result, endpoint string) error {
 // element. A GCS recording maps both (Projection.Content): its content
 // type, and its MD5, which GCS lists in the form Content-MD5 takes (the
 // standard base64 of 16 bytes); every other row has the placeholder type
-// and no Content-MD5. A content type Azure could not hold (empty, not
-// UTF-8, or with a control character, which a header value cannot carry)
+// and no Content-MD5. A content type Azure could not hold or the body
+// could not carry (empty, not UTF-8, with a control character, which a
+// header value cannot carry, or with a character XML 1.0 excludes: holdable)
 // takes the placeholder, and an MD5 in any other form is none. Native
 // listings write Content-MD5 after Content-Type and the content
 // properties the profile omits (Content-Encoding, Content-Language,
@@ -189,14 +190,18 @@ func appendContent(o *output.Output, dst []byte, obj *store.Object) []byte {
 	return dst
 }
 
-// holdable reports whether a content type can be an Azure Content-Type:
-// non-empty UTF-8 without a C0 control character or DEL.
+// holdable reports whether a content type can be an Azure Content-Type
+// in an XML 1.0 body: non-empty UTF-8 without a C0 control character or
+// DEL, which a header value cannot carry, and without U+FFFE or U+FFFF,
+// the code points of valid UTF-8 outside XML 1.0's Char production (the
+// surrogates it also excludes cannot be encoded in valid UTF-8), which a
+// parser refuses (TestContentTypeOutsideXMLTakesThePlaceholder).
 func holdable(s string) bool {
 	if s == "" || !utf8.ValidString(s) {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < 0x20 || s[i] == 0x7f {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || r == 0xfffe || r == 0xffff {
 			return false
 		}
 	}
