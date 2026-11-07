@@ -29,3 +29,14 @@ func TestRequestMeterSpans(t *testing.T) {
 		t.Errorf("request latency %d, requests %d", count(s, metrics.HTTPRequestLatency), count(s, metrics.HTTPRequests))
 	}
 }
+
+// TestAzureErrorHasNoWriteStage: on the Azure route too only a page
+// records the write stage.
+func TestAzureErrorHasNoWriteStage(t *testing.T) {
+	s := start(t, azureConfig("s3", "azure"))
+	azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list", "x-ms-version", "2026-06-06")
+	azureDo(t, s, "GET", "/replay/other?restype=container&comp=list", "x-ms-version", "2026-06-06")
+	if n := count(s, metrics.RequestStageLatency, "azure", "write"); n != 1 {
+		t.Errorf("azure write stage %d, want the one page", n)
+	}
+}
