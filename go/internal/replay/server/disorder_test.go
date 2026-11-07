@@ -46,7 +46,9 @@ func TestDisorderedFixtureNamesOnlyThePart(t *testing.T) {
 
 // TestDisorderedPartOverHTTP serves a stamped part whose one row group
 // holds a, c, b, d through the real store: the read that meets the
-// disorder answers fixture_disordered with the complete Java message.
+// disorder answers fixture_disordered with the complete Java message, and
+// each refused read, a range read or a "/" rollup, is counted in
+// serving.refused{reason=row_group_disorder} and parquet.query.errors.
 func TestDisorderedPartOverHTTP(t *testing.T) {
 	dir := t.TempDir()
 	var rows []sortedparquettest.Row
@@ -71,5 +73,11 @@ func TestDisorderedPartOverHTTP(t *testing.T) {
 		`<Resource>/bucket</Resource><RequestId>S3LISTINGREPLAY</RequestId></Error>`
 	if r.status != 500 || r.header.Get("x-swath-replay-error") != "fixture_disordered" || r.body != want {
 		t.Errorf("%d %v\n%s", r.status, r.header, r.body)
+	}
+	if r := get(t, s, "/bucket?list-type=2&delimiter=/"); r.status != 500 {
+		t.Errorf("rollup: %d", r.status)
+	}
+	if n := count(s, metrics.ServingRefused, "row_group_disorder"); n != 2 || count(s, metrics.ParquetQueryErrors) != 2 {
+		t.Errorf("serving.refused %d, parquet.query.errors %d, want 2 each", n, count(s, metrics.ParquetQueryErrors))
 	}
 }

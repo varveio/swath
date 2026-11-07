@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/javanum"
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/output"
@@ -103,7 +104,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	hold.out = out
 
-	ctx, cancel := context.WithCancel(r.Context())
+	// A client that leaves does not cancel its page: the page is read,
+	// rendered and counted as served, and only its write fails, as the
+	// replay wire contract's server does (TestClientGoneFinishesThePage).
+	// Shutdown still cancels it.
+	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancel()
 	defer context.AfterFunc(s.stopCtx, cancel)()
 
@@ -250,14 +255,19 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body 
 		s.reg.Get(metrics.HTTPErrors).Inc()
 	}
 	s.reg.Get(metrics.ProtocolHTTPRequests, protocolS3, strconv.Itoa(status/100)+"xx").Inc()
+	// The request latency ends where the write begins, and only a page
+	// has a write stage: the replay wire contract's meter semantics
+	// (TestRequestMeterSpans).
+	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
 	if err := sendBody(w, r, body); errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocolS3, "total_deadline").Inc()
 	}
-	s.reg.Get(metrics.RequestStageLatency, protocolS3, "write").Record(time.Since(writeStart))
-	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
+	if status/100 == 2 {
+		s.reg.Get(metrics.RequestStageLatency, protocolS3, "write").Record(time.Since(writeStart))
+	}
 }
 
 // viewsLen is a body's length.
@@ -371,7 +381,7 @@ func (s *Server) logIfSlow(req *s3.Request, res *s3.Result, cost time.Duration, 
 		cont = "yes"
 	}
 	fmt.Fprintf(s.cfg.Log, "replay slow request shape=%s ms=%s prefix=%s delimiter=%s start_after=%s continuation=%s max_keys=%d entries=%d truncated=%v\n",
-		shape.Upper(), strconv.FormatFloat(float64(cost.Nanoseconds())/1e6, 'f', -1, 64), logBytes(req.Prefix),
+		shape.Upper(), javanum.FormatDouble(float64(cost.Nanoseconds())/1e6), logBytes(req.Prefix),
 		logBytes(req.Delimiter), logBytes(req.StartAfter), cont, req.MaxKeys, len(res.Entries), res.Truncated)
 }
 

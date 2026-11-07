@@ -226,7 +226,11 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 	}
 	hold.out = out
 
-	ctx, cancel := context.WithCancel(r.Context())
+	// A client that leaves does not cancel its page: the page is read,
+	// rendered and counted as served, and only its write fails, as the
+	// replay wire contract's server does (TestClientGoneFinishesThePage).
+	// Shutdown still cancels it.
+	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancel()
 	defer context.AfterFunc(s.stopCtx, cancel)()
 
@@ -358,5 +362,7 @@ func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, 
 	if err := sendBody(w, r, body); errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, ProtocolAzure, "total_deadline").Inc()
 	}
-	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "write").Record(time.Since(writeStart))
+	if status/100 == 2 {
+		s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "write").Record(time.Since(writeStart))
+	}
 }

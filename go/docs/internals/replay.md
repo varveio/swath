@@ -15,7 +15,7 @@ is [../replay.md](../replay.md).
 | `internal/replay/output` | the response byte budget and the chunked sink every route renders into | – |
 | `internal/replay/javanum` | the contract's number grammar: BMP-digit integers, the latency profile's floats, saturating conversion | – |
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | javanum |
-| `internal/replay/metrics` | the meter registry (definitions, tagged instances) and the schema-2 JSON | – |
+| `internal/replay/metrics` | the meter registry (definitions, tagged instances, timer windows) and the schema-2 JSON | – |
 | `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open` | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
@@ -165,9 +165,29 @@ overrun with the excess when there is none. Parsing reads numbers with the contr
 
 A meter is a `metrics.Def` (name, kind, tag keys); a tagged instance is created on first use, and the snapshot
 sorts by name, then by the tag list spelled `[tag(k=v), ...]`, the order the Java server's snapshot uses. Adding
-a meter is adding a `Def` to `defs.go`; the names and tags are the Java server's, so a dashboard reads either.
-The meters that must read zero rather than be absent (requests, errors, the latency timers per shape, the
-serving path) are created when the server starts.
+a meter is adding a `Def` to `defs.go`; the names and tags are the Java server's, so a dashboard reads either
+([replay.md](../replay.md#the-meters) lists the few that differ). The meters the Java server registers at startup
+are created when the server starts, so a scrape tells a zero from a meter that is not there.
+
+- **Timers** keep a lifetime count and sum, and a rotating window for the max and percentiles (`window.go`): three
+  log-linear histograms (exact below 32 ns, then 32 buckets per power of two), each sample recorded into all
+  three, the oldest read and cleared every 40 s. That is the window a Micrometer timer publishes with its
+  defaults, so a scrape of either server covers the last 80 to 120 s. A percentile is the upper bound of the
+  bucket holding the nearest-rank sample, capped at the window's max. A bounded reservoir of recent samples was
+  the first design; it covers a sample count, which at a few thousand requests a second is under a second.
+  `Def.NoPercentiles` renders `null` percentiles for the one-off timers the Java server builds without them.
+- **Function counters and gauges** (`SetCounter`, `SetGauge`) read a count another package keeps at each
+  snapshot: the store's reader-slot counters and the descriptor cache's `FileCacheStats`.
+- **The store's measurements** arrive through `store.Meters`, installed by `server.New` when the store is a
+  `*store.Sorted` (`storemeters.go`): the slot hold time of each read (`page.read.latency`), each call with its
+  rows and failure (`parquet.query.*`), each rollup's `sortedparquet.Stats` (`delimiter.skipscan.*`) and each
+  read-time refusal (`serving.refused`). The fixture open's duration and routing entries come from the command
+  (`Config.IndexLoad`, `Config.IndexEntries`).
+- **Spans.** `http.request.latency` ends where the write begins, and only a page records the `write` stage, as on
+  the Java server, whose request meter stops when the response is handed to the write
+  (`TestRequestMeterSpans`, `TestAzureErrorHasNoWriteStage`). A page's reads run under a context that a client
+  disconnect does not cancel, only shutdown, so a page whose client left is finished and counted as served
+  (`TestClientGoneFinishesThePage`).
 
 ## The differential driver
 
@@ -229,6 +249,9 @@ every walk compared byte for byte (`sorted_differential_test.go`, the contract's
 | serving | `server` `TestServesPathStyleListObjectsV2`, `TestErrorsAreS3Answers`, `TestStoreFailureCarriesNoDetail`, `TestEchoesMaxKeysButClampsThePage`, `TestConcurrentRequests`, `TestRequestCeilingQueues`, `TestInjectedDelayIsADeadline`, `TestShutdownInterruptsALongDelay`, `TestUninterruptibleReadDefersStoreClose`, `TestShutdownBoundsABlockingStoreClose`, `TestShutdownIsIdempotentAndSurfacesCloseFailureOnce`, `TestRejectsAmbiguousTargets`, `TestDisorderedFixtureNamesOnlyThePart`, `TestDisorderedPartOverHTTP` |
 | sorted serving | `server` `sorted_differential_test.go` (eleven cases of the contract's `SortedServingFullDifferentialTest`) |
 | metrics port | `server` `TestMetricsPort`, `TestAttestation`; `metrics` `TestSnapshotIsStableAndTyped` |
+| meters | `server` `TestMeterSetMatchesTheContract` (names, types and tags after a three-route mix against `testdata/meters.txt`, the Java scrape's set; the bench scripts' `http.requests` extraction), `TestStoreMetersFollowTheReads`, `TestRequestMeterSpans`, `TestAzureErrorHasNoWriteStage`, `TestClientGoneFinishesThePage`, `TestDisorderedPartOverHTTP` (`serving.refused`); `metrics` `TestTimerWindowCoversTheLastTwoMinutes`, `TestHistogramBuckets`, `TestCounterFunc`; `sortedparquet` `TestFileCacheBoundsHandles` and `TestCacheWaitEndsWithContextAndClose` (evictions, waits) |
+| diagnostics | `server` `TestSlowRequestLogLine`; `javanum` `TestFormatDouble` |
+| resource bounds under load (`SWATH_REPLAY_LOAD=1`) | `server` `TestLoadRequestCeilingUnderFaultProxy`, `TestLoadReadersBoundPageDecodes`, `TestLoadNoOverrunAtSixtyFourWalks`; `cmd/swath-replay` `TestServeWithinADescriptorLimit` (default suite) |
 | the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143), `TestSigtermWithActiveWorkIsBoundedAndIdempotent`, `TestSortFixtureThenServe` (a Java-era capture sorted by the command and listed through the S3 route), `TestSortFixtureRefusals` (stderr line and exit codes) |
 | the Java server | `bench/replaydiff` against the Java launcher (not a unit test: it needs the Java build and a fixture) |
 

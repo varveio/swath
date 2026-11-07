@@ -108,7 +108,7 @@ func Write(path string, part Part) error {
 		return err
 	}
 	options := []parquet.WriterOption{
-		parquet.NewSchema("swath_listing", parquet.SchemaOf(Row{})),
+		parquet.NewSchema("swath_listing", keyOrdered{parquet.SchemaOf(Row{})}),
 		parquet.PageBufferSize(max(part.PageBytes, 0)),
 		parquet.ColumnIndexSizeLimit(func([]string) int { return cmpOr(part.BoundBytes, 64) }),
 		parquet.DataPageStatistics(true),
@@ -352,4 +352,54 @@ func WriteFormat2(dir string, d Dataset) (Manifest, error) {
 		return m, err
 	}
 	return m, os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o644)
+}
+
+// keyOrdered is the canonical schema with the key column's ColumnIndex
+// declaring BoundaryOrder ASCENDING whenever its pages' bounds are in
+// ascending order, as the Java writer (parquet-mr) declares it for sorted
+// output, the Go writer's ascendingKey adapter for its one-page indexes,
+// and the Java server's rollup requires. parquet-go alone declares a
+// one-page index UNORDERED. Bounds that descend keep parquet-go's order,
+// as parquet-mr's would. It goes through parquet-go's public column
+// indexer factory, not a footer rewrite.
+type keyOrdered struct{ parquet.Node }
+
+func (n keyOrdered) Fields() []parquet.Field {
+	fields := append([]parquet.Field(nil), n.Node.Fields()...)
+	for i, f := range fields {
+		if f.Name() == "key" {
+			fields[i] = ascendingKey{f}
+		}
+	}
+	return fields
+}
+
+type ascendingKey struct{ parquet.Field }
+
+func (f ascendingKey) Type() parquet.Type { return ascendingType{f.Field.Type()} }
+
+type ascendingType struct{ parquet.Type }
+
+func (t ascendingType) NewColumnIndexer(sizeLimit int) parquet.ColumnIndexer {
+	return ascendingIndexer{t.Type.NewColumnIndexer(sizeLimit)}
+}
+
+type ascendingIndexer struct{ parquet.ColumnIndexer }
+
+func (ix ascendingIndexer) ColumnIndex() format.ColumnIndex {
+	index := ix.ColumnIndexer.ColumnIndex()
+	if index.BoundaryOrder != format.Ascending && nondescending(index.MinValues) && nondescending(index.MaxValues) {
+		index.BoundaryOrder = format.Ascending
+	}
+	return index
+}
+
+// nondescending reports whether values never descend (bytewise).
+func nondescending(values [][]byte) bool {
+	for i := 1; i < len(values); i++ {
+		if string(values[i-1]) > string(values[i]) {
+			return false
+		}
+	}
+	return true
 }

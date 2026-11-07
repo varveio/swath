@@ -64,8 +64,8 @@ and `no_page_index` (a non-empty row group whose key column lacks a ColumnIndex 
   maximum is either raised above the last key or, when its bytes are all 0xFF, a prefix of it, so a bound
   that may be truncated only bounds the keys below its successor; a page is skipped only when that
   conservative bound rules it out. A violation is an error wrapping `ErrCorrupt`; keys out of order inside
-  one row group are a `*DisorderError` naming the part, row group and row, whose reason (`ReasonOf`) is
-  `row_group_disorder`.
+  one row group are a `*DisorderError` naming the part, row group, row and key, whose reason (`ReasonOf`)
+  is `row_group_disorder`, and so are key page bounds that descend from one page to the next (row -1).
 - Values come back as stored: a null size or time is null. Rendering policy belongs to the caller.
 - `RollupRead` returns the entries a one-key-at-a-time walk over `Read` would: each common prefix costs one
   routing hop and at most one page-index landing past it, and a row group whose first key and the next
@@ -83,3 +83,10 @@ and `no_page_index` (a non-empty row group whose key column lacks a ColumnIndex 
 Keys it never decodes; value columns beyond their Parquet type; part MD5 digests and manifest coverage
 (a dataset that stopped early is served as what it holds); that file contents stay unchanged after `Open`
 (a part replaced by another file is refused when it is reopened, not when it is rewritten in place).
+
+The key ColumnIndex's declared `BoundaryOrder` is not read: the reader checks the page bounds themselves,
+on every read path. The Java replay server instead refuses a row group whose key index does not declare
+`ASCENDING`, and only on its delimiter (rollup) path, when it reads that group; so a part whose bounds
+ascend but whose index declares `UNORDERED` (parquet-go's default for a one-page index) is served by both
+on plain listings and refused by the Java server alone on delimiter listings. The Java writer and the Go
+writer both declare `ASCENDING` for sorted output, as `sortedparquettest` does.

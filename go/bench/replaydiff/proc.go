@@ -42,6 +42,7 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 		return nil, err
 	}
 	cmd.Stdout = io.Discard
+	detach(cmd)
 	logf, err := os.Create(logPath)
 	if err != nil {
 		return nil, err
@@ -102,17 +103,27 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 	return s, nil
 }
 
-// stop sends SIGTERM to the process (by pid), and kills it if it has not
-// exited ten seconds later.
+// stop sends SIGTERM to the server's process group, kills the group if
+// the server has not exited ten seconds later, and waits for it. It is
+// safe to call more than once.
 func (s *process) stop() {
 	if s == nil || s.cmd.Process == nil {
 		return
 	}
-	s.cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-s.exited:
+		return
+	default:
+	}
+	if signalGroup(s.cmd.Process, syscall.SIGTERM) != nil {
+		s.cmd.Process.Signal(syscall.SIGTERM)
+	}
 	select {
 	case <-s.exited:
 	case <-time.After(10 * time.Second):
-		s.cmd.Process.Kill()
+		if signalGroup(s.cmd.Process, syscall.SIGKILL) != nil {
+			s.cmd.Process.Kill()
+		}
 		<-s.exited
 	}
 }
