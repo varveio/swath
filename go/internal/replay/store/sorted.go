@@ -188,15 +188,18 @@ func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool
 	if err != nil {
 		return packed{}, err
 	}
-	columns := s.objects.columns(proj)
 	// An arena overflow ends the scan: its rows are read again unpacked.
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
-	// Room for a window up front; a longer read grows as it goes.
-	sink := s.objects.packer(columns, min(limit, DefaultPrefetchWindowRows+limit), s.arenaLimit)
-	sink.stop = stop
+	var sink *packer
 	err = func() error {
 		defer release()
+		columns := s.objects.columns(proj)
+		// Room for a window up front, never more: a read of a huge
+		// limit over a short range must not allocate for rows it will
+		// not find, and a longer read grows as it goes.
+		sink = s.objects.packer(columns, min(limit, s.windowRows()), s.arenaLimit)
+		sink.stop = stop
 		var stats sortedparquet.Stats
 		defer s.record(&stats, false)
 		return s.reader.Scan(ctx, sortedparquet.Range{
@@ -213,6 +216,15 @@ func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool
 		return packed{}, err
 	}
 	return sink.packed()
+}
+
+// windowRows is the window cache's window size, which bounds a packed
+// read's initial capacity.
+func (s *Sorted) windowRows() int {
+	if s.prefetch != nil {
+		return s.prefetch.windowRows
+	}
+	return DefaultPrefetchWindowRows
 }
 
 // finished meters a store call that read and counts an error the replay
