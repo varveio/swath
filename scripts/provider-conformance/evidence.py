@@ -10,11 +10,13 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import functools
 import gzip
 import hashlib
 import html
 import io
 import json
+import os
 import re
 import subprocess
 import tarfile
@@ -91,6 +93,39 @@ VERSION_EQUIVALENCE_SCHEMA = "provider-version-equivalence-v1"
 VERSION_NORMALIZED_HEADERS = VOLATILE_ID_HEADERS | {"x-ms-version", "x-ms-client-request-id", "date", "expires"}
 # Capture provenance that names its own version, manifest and capture time.
 VERSION_PROVENANCE_FIELDS = ("api_version", "manifest_sha256", "captured_at")
+
+# A replay match receipt names its producer: `java` (implied when the field is absent) or `go`.
+RECEIPT_PRODUCERS = ("java", "go")
+JAVA_RECEIPT_FIELDS = {"schema_version", "comparison", "status", "test", "test_path", "test_source_sha256",
+                       "api_version", "evidence_kind", "compared_steps", "capture_sha256", "replay_commit",
+                       "distribution_sha256", "distribution_name"}
+GO_RECEIPT_FIELDS = JAVA_RECEIPT_FIELDS | {"producer", "test_sources", "go_toolchain"}
+# The Go test sources a Go receipt binds. A path ending in `/` stands for every file git tracks
+# directly in that directory (not its subdirectories). The set is what the Go evidence replays
+# compile and read beyond the replay binary itself: the GCS evidence package, the test-only fixture
+# writer it imports, the Azure route's evidence replay with its comparator and SDK runner (the
+# route's other test files are not compiled into that replay), and go.mod and go.sum, which pin
+# the SDK versions the SDK runs use.
+GO_EVIDENCE_TEST_SOURCES = ("go/go.mod", "go/go.sum",
+                            "go/internal/replay/evidence/",
+                            "go/sortedparquet/sortedparquettest/",
+                            "go/internal/replay/azure/evidence_test.go",
+                            "go/internal/replay/azure/evidencecmp_test.go",
+                            "go/internal/replay/azure/sdk_test.go")
+# Per provider: the Go evidence test, the file that declares it, the variable naming its outcome
+# report directory, and the report files under that directory (one per corpus it replays).
+GO_EVIDENCE_TESTS = {
+    "gcs": ("TestGCSNativeCapturesMatchReplay", "go/internal/replay/evidence/evidence_test.go",
+            "SWATH_PROVIDER_REPORT", "*/gcs-outcomes.json"),
+    "azure": ("TestAzureEvidenceReplay", "go/internal/replay/azure/evidence_test.go",
+              "SWATH_REPLAY_PROVIDER_REPORT", "azure-outcomes.json"),
+}
+GO_TEST_PACKAGES = ("./internal/replay/evidence", "./internal/replay/azure")
+# The binary a Go receipt binds: `go/build.sh`'s static linux/amd64 replay server.
+GO_DISTRIBUTION_NAME = "swath-replay-linux-amd64"
+# Build settings that change the binary's bytes; everything else comes from the receipt commit.
+GO_BUILD_ENV = {"GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1", "CGO_ENABLED": "0",
+                "GOFLAGS": "", "GOEXPERIMENT": ""}
 
 
 def canonical(value: object) -> bytes:
@@ -683,7 +718,7 @@ def validate_version_equivalence(row: dict, version: str, proof: dict,
     record; the cited capture is then validated at that reference version."""
     if captures is None:
         raise ValueError("version equivalence needs the evidence directory")
-    if "replay_test" in proof:
+    if "replay_test" in proof or "go_replay" in proof:
         # The record shows the two native versions agree; replay was only run at the reference.
         raise ValueError("version equivalence cannot carry a replay match")
     record = strict_json(checked_child(captures, proof["version_equivalence_file"]).read_text(encoding="utf-8"))
@@ -791,44 +826,243 @@ def validate_promotion(row: dict, version: str, proof: dict, manifest: dict,
             if identity not in sdk_values:
                 raise ValueError("SDK run lacks exact pinned product/version token")
     if status == "REPLAY_MATCH":
-        if repo_root is None or not proof.get("replay_test") or not proof.get("replay_test_path") \
-                or not SHA256.fullmatch(proof.get("replay_result_sha256", "")) \
-                or replay_commit is None or distribution is None:
+        if distribution is None:
             raise ValueError("replay match lacks verifiable test/result")
+        validate_receipt(proof, version, kind, len(exchanges), "java", captures, repo_root, replay_commit,
+                         distribution)
+    if "go_replay" in proof:
+        go_proof = proof["go_replay"]
+        if not isinstance(go_proof, dict) or set(go_proof) != {"replay_test", "replay_test_path",
+                                                              "replay_result_file", "replay_result_sha256"}:
+            raise ValueError("Go replay proof needs exactly its test, test path, result file and checksum")
+        validate_receipt({**go_proof, "capture_sha256": proof["capture_sha256"]}, version, kind, len(exchanges),
+                         "go", captures, repo_root, replay_commit, None)
+
+
+def validate_receipt(proof: dict, version: str, kind: str, steps: int, producer: str, captures: Path,
+                     repo_root: Path | None, replay_commit: str | None, distribution: Path | None) -> None:
+    """Check one producer's PASS receipt for a capture: the fields both producers share, then what
+    that producer binds (a Java receipt: the test source in the tree and the jar given; a Go
+    receipt: the test sources and `go/build.sh`'s binary, both recomputed at the receipt commit),
+    then that the receipt commit is an ancestor of the current replay source."""
+    if repo_root is None or not proof.get("replay_test") or not proof.get("replay_test_path") \
+            or not SHA256.fullmatch(proof.get("replay_result_sha256", "")) or replay_commit is None:
+        raise ValueError("replay match lacks verifiable test/result")
+    if producer == "java":
         test_path = checked_child(repo_root, proof["replay_test_path"])
-        source = test_path.read_text(encoding="utf-8")
-        method = re.escape(proof["replay_test"])
-        if test_path.suffix == ".java":
-            found = re.search(rf'@(?:Test|ParameterizedTest|RepeatedTest)\b[^@{{}}]*?'
-                              rf'\bvoid\s+{method}\s*\(', source, re.DOTALL)
-        elif test_path.suffix == ".py":
-            found = re.search(rf'^\s*def\s+{method}\s*\(\s*self\b', source, re.MULTILINE)
-        else:
-            found = None
-        if not found:
+        if not declares_test(test_path.suffix, test_path.read_text(encoding="utf-8"), proof["replay_test"]):
             raise ValueError("replay test identifier does not resolve to source")
-        result_path = checked_child(captures, proof.get("replay_result_file", ""))
-        result_bytes = result_path.read_bytes()
-        if hashlib.sha256(result_bytes).hexdigest() != proof["replay_result_sha256"]:
-            raise ValueError("replay result SHA-256 differs from ledger")
-        result = strict_json(result_bytes.decode("utf-8"))
-        if result.get("status") != "PASS" or result.get("capture_sha256") != proof["capture_sha256"] \
-                or result.get("test") != proof["replay_test"] or result.get("api_version") != version \
-                or result.get("test_path") != proof["replay_test_path"] \
-                or result.get("test_source_sha256") != hashlib.sha256(test_path.read_bytes()).hexdigest() \
-                or result.get("schema_version") != "provider-match-receipt-v2" \
-                or result.get("comparison") != "ProviderExchangeComparator" \
-                or result.get("evidence_kind") != kind \
-                or result.get("compared_steps") != len(exchanges) \
-                or not isinstance(result.get("replay_commit"), str) \
-                or not re.fullmatch(r"[0-9a-f]{40}", result["replay_commit"]) \
+    result_path = checked_child(captures, proof.get("replay_result_file", ""))
+    result_bytes = result_path.read_bytes()
+    if hashlib.sha256(result_bytes).hexdigest() != proof["replay_result_sha256"]:
+        raise ValueError("replay result SHA-256 differs from ledger")
+    result = strict_json(result_bytes.decode("utf-8"))
+    if result.get("producer", "java") != producer:
+        raise ValueError(f"replay result receipt is not a {producer} receipt")
+    if result.get("status") != "PASS" or result.get("capture_sha256") != proof["capture_sha256"] \
+            or result.get("test") != proof["replay_test"] or result.get("api_version") != version \
+            or result.get("test_path") != proof["replay_test_path"] \
+            or result.get("schema_version") != "provider-match-receipt-v2" \
+            or result.get("comparison") != "ProviderExchangeComparator" \
+            or result.get("evidence_kind") != kind \
+            or result.get("compared_steps") != steps \
+            or not isinstance(result.get("replay_commit"), str) \
+            or not re.fullmatch(r"[0-9a-f]{40}", result["replay_commit"]):
+        raise ValueError("replay result receipt does not prove matched capture/test/version")
+    if producer == "java":
+        if set(result) - JAVA_RECEIPT_FIELDS - {"producer"}:
+            raise ValueError("Java receipt carries fields of another producer")
+        if result.get("test_source_sha256") != hashlib.sha256(test_path.read_bytes()).hexdigest() \
                 or result.get("distribution_sha256") != hashlib.sha256(distribution.read_bytes()).hexdigest() \
                 or result.get("distribution_name") != distribution.name:
             raise ValueError("replay result receipt does not prove matched capture/test/version")
-        ancestor = subprocess.run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor",
-                                   result["replay_commit"], replay_commit], capture_output=True)
-        if ancestor.returncode != 0:
-            raise ValueError("receipt commit is not an ancestor of current replay source")
+    commit = result["replay_commit"]
+    ancestor = subprocess.run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor",
+                               commit, replay_commit], capture_output=True)
+    if ancestor.returncode != 0:
+        raise ValueError("receipt commit is not an ancestor of current replay source")
+    if producer == "go":
+        validate_go_receipt(result, repo_root, replay_commit)
+
+
+def declares_test(suffix: str, source: str, name: str) -> bool:
+    """Whether `source` declares the test `name`: a Java test method, a Python test method or a Go
+    test function."""
+    method = re.escape(name)
+    if suffix == ".java":
+        return re.search(rf'@(?:Test|ParameterizedTest|RepeatedTest)\b[^@{{}}]*?'
+                         rf'\bvoid\s+{method}\s*\(', source, re.DOTALL) is not None
+    if suffix == ".py":
+        return re.search(rf'^\s*def\s+{method}\s*\(\s*self\b', source, re.MULTILINE) is not None
+    if suffix == ".go":
+        return re.search(rf'^func\s+{method}\s*\(\s*\w+\s+\*testing\.T\s*\)', source, re.MULTILINE) is not None
+    return False
+
+
+def validate_go_receipt(result: dict, repo_root: Path, replay_commit: str) -> None:
+    """A Go receipt's own bindings, recomputed at its commit: the evidence test sources (which must
+    also be unchanged at the current replay commit, as a Java receipt's test source must be), the
+    pinned toolchain, and the SHA-256 of the binary `go/build.sh` builds there."""
+    if set(result) != GO_RECEIPT_FIELDS or result.get("distribution_name") != GO_DISTRIBUTION_NAME:
+        raise ValueError("Go receipt carries fields of another producer")
+    commit = result["replay_commit"]
+    sources = go_test_sources(repo_root, commit)
+    if result["test_sources"] != sorted(sources) or result["test_path"] not in sources \
+            or not result["test_path"].endswith("_test.go") \
+            or result["test_source_sha256"] != go_test_source_sha256(sources):
+        raise ValueError("Go receipt test sources differ from its commit")
+    if go_test_sources(repo_root, replay_commit) != sources:
+        raise ValueError("Go evidence test sources changed since the receipt commit")
+    if not declares_test(".go", git_blob(repo_root, commit, result["test_path"]).decode("utf-8"), result["test"]):
+        raise ValueError("replay test identifier does not resolve to source")
+    if result["go_toolchain"] != go_toolchain(repo_root, commit):
+        raise ValueError("Go receipt toolchain differs from go/go.mod at its commit")
+    if result["distribution_sha256"] != go_distribution_sha256(repo_root, commit):
+        raise ValueError("Go receipt binary differs from go/build.sh's build at its commit")
+
+
+def git_output(repo_root: Path, *arguments: str) -> bytes:
+    run = subprocess.run(["git", "-C", str(repo_root), *arguments], capture_output=True)
+    if run.returncode != 0:
+        raise ValueError(f"git {arguments[0]} failed: {run.stderr.decode('utf-8', 'replace').strip()}")
+    return run.stdout
+
+
+def git_blob(repo_root: Path, commit: str, path: str) -> bytes:
+    return git_output(repo_root, "cat-file", "blob", f"{commit}:{path}")
+
+
+def go_test_sources(repo_root: Path, commit: str) -> dict[str, str]:
+    """Each file of GO_EVIDENCE_TEST_SOURCES at `commit`, mapped to its SHA-256."""
+    sources = {}
+    for entry in GO_EVIDENCE_TEST_SOURCES:
+        paths = [entry]
+        if entry.endswith("/"):
+            listing = git_output(repo_root, "ls-tree", "-z", "--full-tree", commit, entry).decode("utf-8")
+            paths = [line.split("\t", 1)[1] for line in listing.split("\0") if line and line.split()[1] == "blob"]
+            if not paths:
+                raise ValueError(f"Go evidence test source {entry} is absent at {commit}")
+        for path in paths:
+            sources[path] = hashlib.sha256(git_blob(repo_root, commit, path)).hexdigest()
+    return sources
+
+
+def go_test_source_sha256(sources: dict[str, str]) -> str:
+    """The SHA-256 of the canonical JSON object mapping each Go test source path to its SHA-256."""
+    return hashlib.sha256(canonical(sources)).hexdigest()
+
+
+def go_toolchain(repo_root: Path, commit: str) -> str:
+    """The toolchain go/go.mod pins at `commit`: its `toolchain` line, else its `go` line."""
+    mod = git_blob(repo_root, commit, "go/go.mod").decode("utf-8")
+    pinned = re.search(r"^toolchain\s+(go[0-9][0-9A-Za-z.\-]*)\s*$", mod, re.MULTILINE)
+    if pinned:
+        return pinned.group(1)
+    version = re.search(r"^go\s+([0-9][0-9A-Za-z.\-]*)\s*$", mod, re.MULTILINE)
+    if not version:
+        raise ValueError("go/go.mod names no Go version")
+    return "go" + version.group(1)
+
+
+@contextlib.contextmanager
+def go_checkout(repo_root: Path, commit: str) -> Iterator[Path]:
+    """A clean detached worktree of `commit`, removed afterwards. A worktree rather than an
+    exported tree: build.sh and the Go toolchain both stamp the binary from the checkout's VCS
+    state, so a receipt and its validation build the same bytes only from the same kind of tree."""
+    with tempfile.TemporaryDirectory(prefix="go-receipt-") as temp:
+        tree = Path(temp) / "src"
+        git_output(repo_root, "worktree", "add", "--detach", "--quiet", str(tree), commit)
+        try:
+            yield tree
+        finally:
+            subprocess.run(["git", "-C", str(repo_root), "worktree", "remove", "--force", str(tree)],
+                           capture_output=True)
+
+
+def go_environment(toolchain: str, build: bool) -> dict[str, str]:
+    """The caller's environment with the pinned toolchain, and for a build the target settings,
+    so the binary depends only on the receipt commit."""
+    env = {key: value for key, value in os.environ.items()
+           if key not in GO_BUILD_ENV and key not in {"GOTOOLCHAIN", "SWATH_REVISION"}}
+    env["GOTOOLCHAIN"] = toolchain
+    if build:
+        env.update(GO_BUILD_ENV)
+    return env
+
+
+def build_go_distribution(tree: Path, toolchain: str, out: Path) -> str:
+    """Build the replay server with the tree's go/build.sh and return the binary's SHA-256."""
+    run = subprocess.run(["sh", str(tree / "go" / "build.sh"), "-o", str(out), "./cmd/swath-replay"],
+                         env=go_environment(toolchain, True), capture_output=True)
+    if run.returncode != 0:
+        raise ValueError("go/build.sh failed: " + run.stderr.decode("utf-8", "replace").strip())
+    return hashlib.sha256(out.read_bytes()).hexdigest()
+
+
+@functools.cache
+def go_distribution_sha256(repo_root: Path, commit: str) -> str:
+    """The SHA-256 of the static linux/amd64 `swath-replay` that go/build.sh builds at `commit`."""
+    toolchain = go_toolchain(repo_root, commit)
+    with go_checkout(repo_root, commit) as tree:
+        return build_go_distribution(tree, toolchain, tree.parent / GO_DISTRIBUTION_NAME)
+
+
+def go_outcomes(report: Path, pattern: str) -> list[dict[str, str]]:
+    """Every outcome report a Go evidence test wrote under `report`, one per corpus it replayed."""
+    reports = [strict_json(path.read_text(encoding="utf-8")) for path in sorted(report.glob(pattern))]
+    if not reports:
+        raise ValueError(f"the Go evidence test wrote no {pattern} under {report}")
+    return reports
+
+
+def write_go_receipts(repo_root: Path, fixtures: Path, out: Path) -> dict[str, int]:
+    """Run the Go evidence replays at the clean HEAD commit and write a `producer: go` receipt to
+    OUT/<provider>/receipts/go/<capture>.json for each capture every corpus matched."""
+    if git_output(repo_root, "status", "--porcelain", "--untracked-files=all").strip():
+        raise ValueError("receipt requires a clean tested source tree")
+    commit = git_output(repo_root, "rev-parse", "HEAD").decode("ascii").strip()
+    toolchain = go_toolchain(repo_root, commit)
+    sources = go_test_sources(repo_root, commit)
+    written = {}
+    with go_checkout(repo_root, commit) as tree, tempfile.TemporaryDirectory(prefix="go-outcomes-") as temp:
+        distribution = build_go_distribution(tree, toolchain, Path(temp) / GO_DISTRIBUTION_NAME)
+        names = [test for test, _, _, _ in GO_EVIDENCE_TESTS.values()]
+        env = go_environment(toolchain, False)
+        env["SWATH_REPLAY_FIXTURES"] = str(fixtures.resolve())
+        for provider, (_, _, variable, _) in GO_EVIDENCE_TESTS.items():
+            env[variable] = str(Path(temp) / provider)
+        run = subprocess.run(["go", "test", "-count=1", "-p", "1", "-run", "^(" + "|".join(names) + ")$",
+                              *GO_TEST_PACKAGES], cwd=tree / "go", env=env, capture_output=True)
+        if run.returncode != 0:
+            raise ValueError("Go evidence replay failed:\n" + run.stdout.decode("utf-8", "replace")[-4000:])
+        with evidence_root(tree / EVIDENCE_ARCHIVE.relative_to(REPO_ROOT)) as root:
+            for provider, (test, test_path, _, pattern) in GO_EVIDENCE_TESTS.items():
+                reports = go_outcomes(Path(temp) / provider, pattern)
+                index = strict_json((root / provider / "index.json").read_text(encoding="utf-8"))
+                if any(set(report) != set(index["captures"]) for report in reports):
+                    raise ValueError(f"a {provider} outcome report does not cover the archived captures")
+                written[provider] = 0
+                for key, entry in sorted(index["captures"].items()):
+                    if any(report[key] != "match" for report in reports):
+                        continue
+                    payload = read_evidence(checked_child(root / provider, entry["file"]))
+                    capture = strict_json(payload.decode("utf-8"))
+                    steps = 1 if capture["schema_version"] == "provider-capture-v1" else len(capture["steps"])
+                    receipt = {"schema_version": "provider-match-receipt-v2", "producer": "go",
+                               "comparison": "ProviderExchangeComparator", "status": "PASS", "test": test,
+                               "test_path": test_path, "test_sources": sorted(sources),
+                               "test_source_sha256": go_test_source_sha256(sources),
+                               "api_version": capture["api_version"],
+                               "evidence_kind": capture.get("evidence_kind", "exchange"),
+                               "compared_steps": steps, "capture_sha256": hashlib.sha256(payload).hexdigest(),
+                               "replay_commit": commit, "go_toolchain": toolchain,
+                               "distribution_sha256": distribution, "distribution_name": GO_DISTRIBUTION_NAME}
+                    path = out / provider / "receipts" / "go" / f"{key}.json"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(receipt, ensure_ascii=False, separators=(",", ":")) + "\n",
+                                    encoding="utf-8")
+                    written[provider] += 1
+    return written
 
 
 def checked_child(root: Path, relative: str) -> Path:
@@ -848,9 +1082,9 @@ def validate_matrix(matrix: str, ledger: dict) -> None:
         if not line.startswith(("| gcs-", "| azure-", "| s3-")):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) != 7:
+        if len(cells) != 8:
             raise ValueError("matrix row has wrong column count")
-        row_id, provider_display, feature, promise, checksum, replay_test, status = cells
+        row_id, provider_display, feature, promise, checksum, replay_test, go_test, status = cells
         if row_id not in rows or row_id in seen:
             raise ValueError("matrix row missing from ledger or repeated")
         seen.add(row_id)
@@ -864,8 +1098,10 @@ def validate_matrix(matrix: str, ledger: dict) -> None:
         if row["provider"] != provider or row["feature"] != feature \
                 or row["profile_promise"] != promise or row["status"] != status:
             raise ValueError("matrix differs from evidence ledger")
-        if status == "UNMEASURED" and (checksum != "—" or replay_test != "—"):
+        if status == "UNMEASURED" and (checksum != "—" or replay_test != "—" or go_test != "—"):
             raise ValueError("unmeasured matrix row claims capture or replay test")
+        if go_test != go_matrix_cell(row):
+            raise ValueError("matrix Go replay test differs from ledger")
         if status != "UNMEASURED":
             proofs = row["evidence"]
             expected_checksum = "; ".join(
@@ -881,6 +1117,15 @@ def validate_matrix(matrix: str, ledger: dict) -> None:
                     raise ValueError("matrix replay test differs from ledger")
     if seen != rows.keys():
         raise ValueError("matrix and ledger have different row sets")
+
+
+def go_matrix_cell(row: dict) -> str:
+    """The matrix's Go cell: each service version whose capture has a Go receipt, with its test.
+    Unlike the Java column it names a version of a row that is not matched at every version."""
+    proofs = row.get("evidence") or {}
+    tests = [f"{version}:{proofs[version]['go_replay']['replay_test']}" for version in row["api_versions"]
+             if "go_replay" in proofs.get(version, {})]
+    return "`" + "; ".join(tests) + "`" if tests else "—"
 
 
 def main() -> None:
@@ -904,7 +1149,16 @@ def main() -> None:
                        "loaded when no --manifest is given")
     check.add_argument("--repo-root", type=Path)
     check.add_argument("--distribution", type=Path)
+    go = sub.add_parser("go-receipts", help="run the Go evidence replays at the clean HEAD commit and write "
+                        "a producer: go receipt for each capture they match")
+    go.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    go.add_argument("--fixtures", type=Path, required=True, help="the SWATH_REPLAY_FIXTURES root")
+    go.add_argument("--out", type=Path, required=True,
+                    help="evidence directory; receipts go to OUT/<provider>/receipts/go/")
     args = parser.parse_args()
+    if args.command == "go-receipts":
+        print(json.dumps(write_go_receipts(args.repo_root.resolve(), args.fixtures, args.out), sort_keys=True))
+        return
     if args.command == "validate":
         manifests = {}
         for manifest_path in args.manifest:
