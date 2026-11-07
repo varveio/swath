@@ -8,13 +8,15 @@ is [../replay.md](../replay.md).
 | Package | Role | Imports |
 |---|---|---|
 | `cmd/swath-replay` | flags (standard `flag`, the Java launcher's names and defaults), the startup line, signals, opening the fixture | server, latency, store, memstore |
-| `internal/replay/server` | the HTTP server: the S3 route's request flow, admission, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, latency, metrics, store |
+| `internal/replay/server` | the HTTP server: route classification, the S3 and GCS routes' request flow, admission, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, latency, metrics, store |
+| `internal/replay/gcs` | objects.list: request parsing, the pager over `store.Store` (or the GCS schema's columns through `store.Sorted`), `gcs1.` tokens, the JSON page and error envelope, the request's latency key | s3 (key carries), store, sortedparquet |
 | `internal/replay/s3` | ListObjectsV2: request parsing, the pager, continuation tokens, the XML documents, the request's latency key | store |
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | – |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances) and the schema-2 JSON | – |
 | `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open` | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
+| `internal/replay/evidence` | the provider evidence replay (tests only) | server, sortfixture, store |
 
 `internal/replay` imports nothing from the lister's pipeline; the lister imports nothing from it.
 
@@ -173,3 +175,74 @@ In the package's own tests the driver compares two Go servers over the same keys
 | metrics port | `server` `TestMetricsPort`, `TestAttestation`; `metrics` `TestSnapshotIsStableAndTyped` |
 | the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143) |
 | the Java server | `bench/replaydiff` against the Java launcher (not a unit test: it needs the Java build and a fixture) |
+
+## The GCS route
+
+`internal/replay/gcs` is the second route over the same store seam; `server/gcs.go` gives it the S3 route's
+admission, budget, delay deadline and shutdown. The hooks into the shared server are a `Protocols` field, one
+classification call at the top of `ServeHTTP` (`serveOtherRoute`, which returns false when only S3 is enabled,
+so the S3 path is unchanged), and the protocols and profiles in the metrics payload and startup line.
+
+- **Parsing** (`Parse`). The request line's query is first read as UTF-8 with maximal-subpart replacement
+  (`requestText`, `TestRequestTextGrouping`): unlike the S3 route, a raw non-ASCII byte reaches the parameter
+  as itself, not as `?`. Then each `&`-separated part is percent-decoded strictly and must be valid UTF-8, and
+  the checks run in the wire contract's order (`TestParseRefusals` holds each reason to the Java server's).
+- **The pager** (`Pager.List`). The lower bound is the latest of the prefix (inclusive), `startOffset`
+  (inclusive) and the token's boundary; the upper bound the earlier of the prefix's `PrefixUpper` and
+  `endOffset`; a lower bound at or after the upper is an empty, final page. Without a delimiter one read of
+  `pageSize + 1` rows answers the page. With one, the store's rollup answers when it accepts (`/` on the sorted
+  store), with `suppressPrefixAtOrBeforeFloor` false: GCS lists a prefix even when `startOffset` lands inside
+  it. Otherwise the pager walks in batches of up to 4,096 rows, emitting an object or the rolled-up prefix and
+  resuming at the prefix's `Successor`, and decides truncation by the next row in range. A page ending on a
+  prefix resumes inclusive at its successor, one ending on an object exclusive at it.
+  `TestRollupMatchesWalkAndReference` holds the two paths to each other and every full walk to the listing
+  computed directly, over random keyspaces, prefixes, offset pairs, delimiters and page sizes.
+- **Tokens.** `gcs1.` + unpadded base64url of a flag byte, a progress byte (0), 16 bytes of
+  SHA-256 over the length-prefixed scope (`gcs-json-v1`, `synthetic-v1`, the fixture identity, bucket, prefix,
+  delimiter, startOffset, endOffset, the pagination profile) and the boundary key. Decoding accepts correct
+  padding and refuses line breaks, as the contract's decoder does (`TestTokenShapes`). A token from another
+  scope or fixture is refused before the request takes a response permit (`TestTokenRejectsAnotherScopeOrFixture`).
+  The same state gives the same bytes on either server (`TestRenderGolden` checks Java tokens against the
+  binding).
+- **The renderer** (`AppendPage`) appends bytes: compact, fields in the contract's order, strings escaped only
+  for `"`, `\` and C0 controls (`\b \t \n \f \r`, else `\u00XX` upper-case), so DEL, U+2028 and every
+  non-ASCII character are written as UTF-8; `encoding/json` would escape `<`, `>`, `&` and U+2028.
+  `TestRenderGolden` rebuilds five pages the Java server answered over the evidence corpus (control characters,
+  a BOM, U+2028, backslashes and quotes, a full projection, delimiter pages with offsets) and requires the same
+  bytes. Rows the API cannot represent are refused while rendering with the contract's reasons.
+- **Native metadata.** `NewPager` reads a `swath/gcs-objects/v1` fixture's columns by name through
+  `store.Sorted.ReadRows` and `RollupRows` (the same cursor and reader slots); any other store goes through
+  `Rows` and the synthetic profile. `TestNativeSchemaRendersTheBucketsMetadata` lists a fake bucket with the
+  Go lister, serves the dataset and checks each item against the fake's objects.
+
+### The GCS driver and the evidence replay
+
+`replaydiff -protocol gcs` builds `gcsMatrix` (the parameter table's values, `maxResults` edges, prefixes at
+every depth with `/` and a two-byte delimiter, offsets around keys and inside subtrees, malformed, foreign and
+rescoped tokens, wrong buckets, paths and methods, raw and escaped non-ASCII), `gcsWalks` (bucket, offset window
+and top-level prefixes, with and without the delimiter, at each page size) and a random walk. `gcsComparator`
+compares status, the compared headers plus `Allow`, and the body byte for byte (both servers are deterministic);
+a difference only in `nextPageToken` is named, and walks follow each server's own tokens, so tokens are judged by
+their effect. Measured with zero differences (the Java oracle at swath `main` 01dd55b, `--parquet-connections 2`,
+default `-walks 1,7,1000`, `-walk-limit 300` and a separate full `-walks 1000` run on the large fixtures): the
+GCS evidence corpus (1,051 compared), synthetic 10k (2,065), synthetic 1M rolled into 6 parts and 110 row groups
+(2,065 plus 1,551 with the full 1,000-page walks), and the recordings of `noaa-normals-pds` (1,227 + 701) and
+`giab` (2,119 + 1,569).
+
+`internal/replay/evidence` ports the conformance comparison: `compare_test.go` is the GCS field policy and
+exchange comparator with the suite's messages (the pins match on message prefixes, `TestComparatorMessages`), a
+small order-keeping JSON node with duplicate-member and trailing-token refusal stands in for the suite's strict
+parser, and `evidence_test.go` is the capture replay (token mapping and mutation, receipt checks of the request
+scope, walks, SDK runs). `TestEvidenceRejectsCorruptedReplayResults` corrupts matched answers (a dropped,
+repeated or reordered item, a decoded name, an early end, a repeated prefix, a wrong status or reason) and
+requires each to be rejected.
+
+| Contract | Test |
+|---|---|
+| GCS parsing | `gcs` `TestParseRefusals`, `TestParseValues`, `TestRequestTextGrouping` |
+| GCS pager | `gcs` `TestFlatBoundsAreInclusiveThenExclusiveAndTokenSurvivesPageSizeChange`, `TestDelimiterOffsetInsideSubtreeEmitsPrefix`, `TestEmptyIntersection`, `TestRollupMatchesWalkAndReference` |
+| GCS tokens and JSON | `gcs` `TestTokenShapes`, `TestTokenRejectsAnotherScopeOrFixture`, `TestRenderGolden`, `TestLatencyKeyGolden` |
+| GCS native metadata | `gcs` `TestNativeSchemaRendersTheBucketsMetadata` |
+| GCS serving | `server` `TestServesGCSObjectsList`, `TestGCSErrorsAreJSONEnvelopes`, `TestRouteClassification`, `TestGCSAdmissionRefusals`, `TestGCSFixtureAndStoreFailures`, `TestGCSInjectedDelayUsesTheSharedShapes`, `TestValidateProtocols`; `cmd/swath-replay` `TestProtocolSelection`, `TestServeGCSEndToEnd` |
+| GCS driver | `replaydiff` `TestGCSComparator`, `TestGCSMatrixNamesAreUnique`, `TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk` |
+| GCS evidence | `evidence` `TestGCSNativeCapturesMatchReplay`, `TestEvidenceRejectsCorruptedReplayResults`, `TestExpectationRules`, `TestComparatorMessages` (with `SWATH_REPLAY_FIXTURES`) |
