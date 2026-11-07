@@ -173,6 +173,9 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `child_small.upper` | count | ranges | split | upper split children that ended or split having listed fewer keys than one page (empty ones included) |
 | `split.frontier_handout_keys` | count | keys | split | keys listed inside the lower children of frontier splits (the child and its descendants): over split.accepted_frontier, the work a frontier split hands out |
 | `resumed_ranges` | count | ranges | resume | ranges a resume started with: (K, ⊤], or the seed's tiling of it |
+| `reuse.ranges` | count | ranges | resume | reused coverage certificates a resume replays from durable spill instead of listing them |
+| `reuse.gaps` | count | ranges | resume | ranges a resume with reused certificates lists: the gaps between them, tiled |
+| `reuse.boundary_overfetch_keys` | count | keys | resume | keys a gap listed past its end, a reused certificate's start, and dropped (also in overfetch_keys) |
 | `max_active` | max | ranges |  | peak ranges in Expand at once |
 | `max_queued` | max | ranges | split | peak ranges queued for a worker |
 | `busy_ns` | count | ns |  | sum of Expand wall time |
