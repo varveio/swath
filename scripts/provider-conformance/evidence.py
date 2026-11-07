@@ -979,12 +979,26 @@ def go_checkout(repo_root: Path, commit: str) -> Iterator[Path]:
                            capture_output=True)
 
 
+# Go environment variables that stay as the caller set them: where modules and caches live and how
+# they are fetched. Module contents are verified against go.sum, so none of these can change what
+# a test or build compiles. Every other GO* or CGO_* variable, and the C toolchain's, is dropped:
+# each can change which sources are compiled or with what flags (GOFLAGS, GOROOT, GODEBUG,
+# GOEXPERIMENT, GOFIPS140, GOOS, GOARCH, CGO_CFLAGS, CC, ...).
+GO_KEPT_ENV = {"GOPATH", "GOMODCACHE", "GOCACHE", "GOPROXY", "GOSUMDB", "GONOSUMDB", "GONOSUMCHECK",
+               "GOINSECURE", "GOPRIVATE", "GONOPROXY", "GOVCS", "GOAUTH", "GOTMPDIR", "GOTELEMETRY",
+               "GOTELEMETRYDIR"}
+GO_DROPPED_TOOLS = {"CC", "CXX", "FC", "AR", "PKG_CONFIG"}
+
+
 def go_environment(toolchain: str, build: bool) -> dict[str, str]:
-    """The caller's environment with the pinned toolchain, and for a build the target settings,
-    so the binary depends only on the receipt commit."""
+    """A hermetic environment for a Go build or test: the pinned toolchain, no Go configuration
+    file (`GOENV=off`, since its `GOFLAGS=-overlay=...` could substitute evidence sources while git
+    stays clean), no workspace (`GOWORK=off`), no inherited flags, and for a build the target
+    settings, so the result depends only on the commit's tree."""
     env = {key: value for key, value in os.environ.items()
-           if key not in GO_BUILD_ENV and key not in {"GOTOOLCHAIN", "SWATH_REVISION"}}
-    env["GOTOOLCHAIN"] = toolchain
+           if key in GO_KEPT_ENV or not (key.startswith(("GO", "CGO_")) or key in GO_DROPPED_TOOLS
+                                         or key == "SWATH_REVISION")}
+    env.update({"GOENV": "off", "GOWORK": "off", "GOFLAGS": "", "GOEXPERIMENT": "", "GOTOOLCHAIN": toolchain})
     if build:
         env.update(GO_BUILD_ENV)
     return env
