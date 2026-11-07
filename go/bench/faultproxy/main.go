@@ -8,6 +8,13 @@
 // timeline (TSV, 100 ms buckets since the first request) and prints the
 // totals.
 //
+// With -record FILE it also writes every exchange it forwards (and every
+// answer it injects) to FILE as JSON lines (record.go): run a client
+// through it against a live provider endpoint (-target
+// https://s3.REGION.amazonaws.com for path-style S3, or
+// https://storage.googleapis.com) and replay the capture with
+// replaydiff -capture.
+//
 //	go run ./bench/faultproxy -target http://127.0.0.1:19090 -listen 127.0.0.1:19091 \
 //	  -window throttle:10s-25s:0.5 -timeline storm.tsv
 package main
@@ -43,6 +50,7 @@ func main() {
 	target := flag.String("target", "", "listing server `URL` (http://host:port)")
 	listen := flag.String("listen", "127.0.0.1:19091", "listen address")
 	timeline := flag.String("timeline", "", "write the timeline TSV to this `file` on exit")
+	record := flag.String("record", "", "write every exchange to this `file` as JSON lines")
 	flag.Uint64Var(&plan.Seed, "seed", 1, "decision seed")
 	flag.StringVar(&plan.Dialect, "dialect", "s3", "throttle answer: s3 (503 SlowDown) or gcs (429 rateLimitExceeded)")
 	flag.Float64Var(&plan.RateCap, "rate-cap", 0, "throttle requests beyond `N` per trailing second (0: off)")
@@ -57,7 +65,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	go func() { _ = http.Serve(ln, p) }()
+	var h http.Handler = p
+	var rec *recorder
+	if *record != "" {
+		f, err := os.Create(*record)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer f.Close()
+		rec = newRecorder(p, *target, f)
+		h = rec
+	}
+	go func() { _ = http.Serve(ln, h) }()
 	fmt.Fprintf(os.Stderr, "faultproxy %s -> %s plan %+v\n", ln.Addr(), *target, plan)
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -65,6 +84,11 @@ func main() {
 	if *timeline != "" {
 		if err := os.WriteFile(*timeline, []byte(faulttest.TSV(p.Timeline())), 0o644); err != nil {
 			log.Fatal(err)
+		}
+	}
+	if rec != nil {
+		if err := rec.Err(); err != nil {
+			log.Fatalf("recording: %v", err)
 		}
 	}
 	s := p.Stats()
