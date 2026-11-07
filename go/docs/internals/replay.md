@@ -432,6 +432,7 @@ comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorrupte
 | request checks and their order | `azure` `TestParseRefusalOrder`, `TestAcceptRule`, `TestRequestLineText` |
 | bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals`, `TestUnrenderableYearsAndNegativeEpoch`, `TestHTTPDatePadsSingleDigitDay` |
 | client request id | `azure` `TestClientRequestIDLength`; `server` `TestAzureErrorEchoUsesTheClientIDRule` |
+| response bounds with escaping-heavy names | `server` `TestAzureEscapingHeavyPageStopsAtTheCap`, `TestAzureConcurrentBudgetExhaustion` |
 | the evidence comparator itself | `azure` `TestComparatorAcceptsTheProfile`, `TestComparatorOmitsNativeOrMetadata`, `TestComparatorAcceptsTheRenderer`, `TestComparatorRefusesChanges`, `TestComparatorWalkBoundaries`, `TestComparatorRefusesCrossPagePrefixRepeat`, `TestNamespaceMapping`, `TestExchangeChecksVersionClientIDAndErrorCode`, `TestWalkChecksVersionAndPreamble`, `TestWalkRequestsCarryClientIDAndRefuseDuplicates`, `TestPageParsing` |
 | latency key | `azure` `TestLatencyKeyGolden` |
 | routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
