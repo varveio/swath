@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -978,3 +979,92 @@ func TestDurableReplacedOutput(t *testing.T) {
 }
 
 var _ = io.EOF
+
+// TestDurableReplacedMidCycle: ownership is verified before each mutation,
+// not once per batch. A barrier at each step of a flusher cycle (the
+// append, the ledger sync, the unlink) and of recovery's retirement (the
+// ledger sync, the unlinks, the directory sync) replaces the output after
+// the earlier steps ran: the next mutation is refused, no file is
+// unlinked, and the replacement is fatal (the run's cause, recovery's
+// error).
+func TestDurableReplacedMidCycle(t *testing.T) {
+	replaced := errors.New("the output directory was moved or replaced")
+	for _, point := range []string{"spill-ledger-append", "spill-ledger-sync", "spill-unlink"} {
+		t.Run(point, func(t *testing.T) {
+			c, root, _ := newDurable(t)
+			var bad atomic.Bool
+			c.verify = func() error {
+				if bad.Load() {
+					return replaced
+				}
+				return nil
+			}
+			defer faults.Set(func(p string) error {
+				if p == point {
+					bad.Store(true) // the barrier: ownership changes here
+				}
+				return nil
+			})()
+			var cause atomic.Value
+			c.Start(64, 0, func(err error) { cause.Store(err) })
+			var ds []*Cert
+			for range 3 {
+				d := &Cert{id: randomID(), certified: true, slot: true}
+				d.name = fileName(d.id)
+				root.WriteFile(filepath.Join(DurableDir, d.name), []byte("x"), 0o644)
+				ds = append(ds, d)
+			}
+			c.mu.Lock()
+			for _, d := range ds {
+				c.retireLocked(d, retireEvicted)
+			}
+			c.mu.Unlock()
+			c.Close()
+			for _, d := range ds {
+				if _, err := root.Stat(filepath.Join(DurableDir, d.name)); err != nil {
+					t.Fatalf("%s unlinked after the output was replaced: %v", d.name, err)
+				}
+			}
+			if err, _ := cause.Load().(error); !errors.Is(err, replaced) || !errors.Is(c.Err(), replaced) {
+				t.Fatalf("cause %v, cache error %v", err, c.Err())
+			}
+			if c.st.LedgerFailed.Load() != 0 {
+				t.Fatal("a replacement latched as a ledger failure")
+			}
+		})
+	}
+	for _, point := range []string{"spill-recovery-sync", "spill-recovery-unlink", "spill-recovery-dirsync"} {
+		t.Run(point, func(t *testing.T) {
+			root, _ := sealedSpill(t, 6)
+			files := func() int {
+				ents, _ := root.FS().(fs.ReadDirFS).ReadDir(DurableDir)
+				return len(ents)
+			}
+			before := files()
+			if before < 3 {
+				t.Fatalf("%d durable entries", before)
+			}
+			var bad atomic.Bool
+			verify := func() error {
+				if bad.Load() {
+					return replaced
+				}
+				return nil
+			}
+			defer faults.Set(func(p string) error {
+				if p == point {
+					bad.Store(true)
+				}
+				return nil
+			})()
+			top := "~" // K above every certificate: recovery retires them all
+			_, err := RecoverDurable(root, verify, testUUID, "ident", &top)
+			if !errors.Is(err, replaced) {
+				t.Fatalf("recovery after the replacement: %v", err)
+			}
+			if point != "spill-recovery-dirsync" && files() != before {
+				t.Fatalf("%d of %d entries left: unlinked after the replacement", files(), before)
+			}
+		})
+	}
+}

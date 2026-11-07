@@ -84,15 +84,16 @@ func (c *Cache) ensureDirs() error {
 		made = append(made, rel)
 	}
 	for _, rel := range made {
-		err := faults.At("spill-dir-sync")
-		if err == nil {
-			err = dataset.SyncDirIn(c.root, rel)
-		}
-		if err == nil {
-			err = dataset.SyncDirIn(c.root, filepath.Dir(rel))
-		}
-		if err != nil {
+		if err := faults.At("spill-dir-sync"); err != nil {
 			return c.unavailable(err)
+		}
+		for _, dir := range []string{rel, filepath.Dir(rel)} {
+			if err := c.verify(); err != nil {
+				return err
+			}
+			if err := dataset.SyncDirIn(c.root, dir); err != nil {
+				return c.unavailable(err)
+			}
 		}
 		c.st.DirsCreated.Add(1)
 	}
@@ -100,7 +101,7 @@ func (c *Cache) ensureDirs() error {
 }
 
 // newLedger replaces the ledger with one holding only its header, synced,
-// and its name synced in the directory.
+// and its name synced in the directory; Lock.Verify precedes each step.
 func (c *Cache) newLedger() error {
 	if err := c.verify(); err != nil {
 		return err
@@ -112,22 +113,28 @@ func (c *Cache) newLedger() error {
 			return c.unavailable(err)
 		}
 	}
+	if err := c.verify(); err != nil {
+		return err
+	}
 	f, err := c.root.OpenFile(c.rel(ledgerName), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return c.unavailable(err)
 	}
 	hdr := frame2(nil, ledgerHeader, c.ledgerHeaderBody())
-	if _, err := faults.Write(f, hdr); err != nil {
-		f.Close()
-		return c.unavailable(err)
+	steps := []func() error{
+		func() error { _, err := faults.Write(f, hdr); return err },
+		func() error { return faults.Sync(f) },
+		func() error { return dataset.SyncDirIn(c.root, DurableDir) },
 	}
-	if err := faults.Sync(f); err != nil {
-		f.Close()
-		return c.unavailable(err)
-	}
-	if err := dataset.SyncDirIn(c.root, DurableDir); err != nil {
-		f.Close()
-		return c.unavailable(err)
+	for _, step := range steps {
+		if err := c.verify(); err != nil {
+			f.Close()
+			return err
+		}
+		if err := step(); err != nil {
+			f.Close()
+			return c.unavailable(err)
+		}
 	}
 	c.ledger, c.lend, c.durable = f, int64(len(hdr)), int64(len(hdr))
 	c.hist = 0
@@ -275,6 +282,10 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 		if err := f.Truncate(off); err != nil {
 			f.Close()
 			return nil, c.unavailable(err)
+		}
+		if err := c.verify(); err != nil {
+			f.Close()
+			return nil, err
 		}
 		if err := faults.Sync(f); err != nil {
 			f.Close()
@@ -461,14 +472,20 @@ func (c *Cache) retireNow(ds []*Cert) error {
 	}
 	c.lockLedger()
 	defer c.lmu.Unlock()
-	if err := c.verify(); err != nil {
+	if err := faults.At("spill-recovery-retire"); err != nil {
 		return err
 	}
-	if err := faults.At("spill-recovery-retire"); err != nil {
+	if err := c.verify(); err != nil {
 		return err
 	}
 	if _, err := faults.Write(c.ledger, buf); err != nil {
 		return c.unavailable(err)
+	}
+	if err := faults.At("spill-recovery-sync"); err != nil {
+		return err
+	}
+	if err := c.verify(); err != nil {
+		return err
 	}
 	if err := faults.Sync(c.ledger); err != nil {
 		return c.unavailable(err)
@@ -477,15 +494,21 @@ func (c *Cache) retireNow(ds []*Cert) error {
 	c.durable = c.lend
 	c.hist += len(ds)
 	for _, d := range ds {
-		if err := c.verify(); err != nil {
+		if err := faults.At("spill-recovery-unlink"); err != nil {
 			return err
 		}
-		if err := faults.At("spill-recovery-unlink"); err != nil {
+		if err := c.verify(); err != nil {
 			return err
 		}
 		if err := c.root.Remove(c.rel(d.name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return c.unavailable(err)
 		}
+	}
+	if err := faults.At("spill-recovery-dirsync"); err != nil {
+		return err
+	}
+	if err := c.verify(); err != nil {
+		return err
 	}
 	if err := dataset.SyncDirIn(c.root, DurableDir); err != nil {
 		return c.unavailable(err)

@@ -352,9 +352,10 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   certificate is then validated against its self-describing file. A foreign or unreadable header discards
   the ledger and every spill file (`TestDurableLedgerPrefix`).
 - **The flusher** belongs to the attempt's cache (`order.Cache`), not to `order.Run`. One goroutine owns
-  every ledger append and every durable file's unlink: per cycle, at most every 100 ms, `Lock.Verify`, a
-  sync of `spill/durable/` (covering every name handed to it), the queued records, a ledger sync, then the
-  queued unlinks. It never takes the order mutex, and no code holding that mutex takes the ledger mutex
+  every ledger append and every durable file's unlink: per cycle, at most every 100 ms, a sync of
+  `spill/durable/` (covering every name handed to it), the queued records, a ledger sync, then the queued
+  unlinks, with `Lock.Verify` immediately before each of these mutations, not once per cycle: a
+  replacement while an earlier step was blocked stops the next one (`TestDurableReplacedMidCycle`). It never takes the order mutex, and no code holding that mutex takes the ledger mutex
   (`ledgerOrder` asserts it in the durable tests). An unlink's credit lowers the live spill bytes and
   signals a one-slot channel that `order.Run`'s waker turns into a wake (`TestDurableCreditWithoutOrderLock`:
   credit returns with the order mutex held throughout). A ledger failure latches: no new slot, queued
@@ -372,7 +373,8 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   its unlink; a refused frame evicts the oldest drained one (`evicted`, never an undrained file:
   `TestDurableEviction`). A live-only durable file is unlinked when drained.
 - **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
-  `Lock.Verify` before each mutation): K from part records only; the ledger's prefix (at most 10,000 live
+  `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
+  every unlink): K from part records only; the ledger's prefix (at most 10,000 live
   certificates, the largest cap any attempt has); the directory streamed, every file no record names
   unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's
   CRC, the header (run UUID, file ID, identity), every rows frame's claimed rows and storage within the

@@ -593,9 +593,10 @@ func (c *Cache) lockLedger() {
 	}
 }
 
-// cycle is one flusher cycle: Lock.Verify, the directory sync (covering
-// every name handed over), the queued records appended, the ledger synced,
-// then the queued unlinks, each returning its credit.
+// cycle is one flusher cycle: the directory sync (covering every name
+// handed over), the queued records appended, the ledger synced, then the
+// queued unlinks, each returning its credit; Lock.Verify precedes each of
+// these mutations (owned).
 func (c *Cache) cycle() {
 	c.lockLedger()
 	defer c.lmu.Unlock()
@@ -612,12 +613,12 @@ func (c *Cache) cycle() {
 		c.st.FlushNs.Add(int64(time.Since(start)))
 		c.st.FlushCycles.Add(1)
 	}()
-	if err := c.verify(); err != nil {
-		c.fail(err)
-		return
-	}
 	if len(recs) > 0 && !failed {
-		if err := c.appendRecords(recs); errors.Is(err, faults.ErrCrash) {
+		var re *replacedError
+		if err := c.appendRecords(recs); errors.As(err, &re) {
+			c.fail(re.err) // the output replaced: nothing more is touched
+			return
+		} else if errors.Is(err, faults.ErrCrash) {
 			c.fail(err) // an injected kill: nothing more is written
 			return
 		} else if err != nil {
@@ -626,16 +627,43 @@ func (c *Cache) cycle() {
 	}
 	for _, d := range unl {
 		if err := c.unlink(d); err != nil {
+			var re *replacedError
+			if errors.As(err, &re) {
+				err = re.err
+			}
 			c.fail(err)
 			return
 		}
 	}
 }
 
+// replacedError is Lock.Verify's failure before a mutation: the output (or
+// its lock file) was replaced, which is fatal, never a ledger failure.
+type replacedError struct{ err error }
+
+func (e *replacedError) Error() string { return e.err.Error() }
+func (e *replacedError) Unwrap() error { return e.err }
+
+// owned is Lock.Verify immediately before one durable-spill mutation
+// (directory sync, append, sync, truncate, create, unlink): a replacement
+// detected while an earlier step was blocked stops the next one, so a
+// replaced output is never touched (contract §2, §4). It is checked per
+// mutation, not per batch: a single check before a cycle's many steps
+// would let them continue after the output changed hands.
+func (c *Cache) owned() error {
+	if err := c.verify(); err != nil {
+		return &replacedError{err}
+	}
+	return nil
+}
+
 // appendRecords is the ledger step of a cycle: the directory sync, the
 // records, the ledger sync (lmu held).
 func (c *Cache) appendRecords(recs []ledgerRec) error {
 	err := faults.At("spill-ledger-dirsync")
+	if err == nil {
+		err = c.owned()
+	}
 	if err == nil {
 		err = dataset.SyncDirIn(c.root, DurableDir)
 	}
@@ -653,6 +681,9 @@ func (c *Cache) appendRecords(recs []ledgerRec) error {
 	if err := faults.At("spill-ledger-append"); err != nil {
 		return err
 	}
+	if err := c.owned(); err != nil {
+		return err
+	}
 	if _, err := faults.Write(c.ledger, buf); err != nil {
 		// A partial append leaves a torn tail: the next recovery reads the
 		// prefix before it; this ledger takes no more records.
@@ -660,6 +691,9 @@ func (c *Cache) appendRecords(recs []ledgerRec) error {
 	}
 	c.lend += int64(len(buf))
 	if err := faults.At("spill-ledger-sync"); err != nil {
+		return err
+	}
+	if err := c.owned(); err != nil {
 		return err
 	}
 	if err := faults.Sync(c.ledger); err != nil {
@@ -695,9 +729,12 @@ func (c *Cache) fail(err error) {
 }
 
 // unlink removes d's file through the root and returns its credit; a file
-// already gone is no error (lmu held, after Verify).
+// already gone is no error (lmu held; Verify immediately before it).
 func (c *Cache) unlink(d *Cert) error {
 	if err := faults.At("spill-unlink"); err != nil {
+		return err
+	}
+	if err := c.owned(); err != nil {
 		return err
 	}
 	if err := c.root.Remove(c.rel(d.name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
