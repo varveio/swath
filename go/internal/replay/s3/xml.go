@@ -203,11 +203,39 @@ func (t *timestamps) appendMillis(dst []byte, epochMicros int64) []byte {
 	sec := floorDiv(epochMicros, 1_000_000)
 	if t.prefix == nil || sec != t.second {
 		t.second = sec
-		t.prefix = time.Unix(sec, 0).UTC().AppendFormat(t.prefix[:0], "2006-01-02T15:04:05.")
+		t.prefix = appendCalendarSecond(t.prefix[:0], sec)
 	}
 	dst = append(dst, t.prefix...)
 	ms := (epochMicros - sec*1_000_000) / 1000
 	return append(dst, byte('0'+ms/100), byte('0'+ms/10%10), byte('0'+ms%10), 'Z')
+}
+
+// appendCalendarSecond appends the UTC calendar second as
+// yyyy-MM-ddTHH:mm:ss. with the replay wire contract's year: the year of
+// era (year 0 is 1, year -1 is 2, as before the common era), four digits
+// zero-padded, and a '+' before a year of more than four digits
+// (+10000-01-01T00:00:00.). Go's layout writes the signed proleptic year
+// instead, so it would differ from year 10000 on and at or before year 0
+// (TestLastModifiedYears).
+func appendCalendarSecond(dst []byte, sec int64) []byte {
+	t := time.Unix(sec, 0).UTC()
+	year := int64(t.Year())
+	if year <= 0 {
+		year = 1 - year
+	}
+	if year > 9999 {
+		dst = append(dst, '+')
+		dst = strconv.AppendInt(dst, year, 10)
+	} else {
+		dst = append(dst, byte('0'+year/1000), byte('0'+year/100%10), byte('0'+year/10%10), byte('0'+year%10))
+	}
+	two := func(dst []byte, v int, sep byte) []byte { return append(dst, sep, byte('0'+v/10), byte('0'+v%10)) }
+	dst = two(dst, int(t.Month()), '-')
+	dst = two(dst, t.Day(), '-')
+	dst = two(dst, t.Hour(), 'T')
+	dst = two(dst, t.Minute(), ':')
+	dst = two(dst, t.Second(), ':')
+	return append(dst, '.')
 }
 
 func floorDiv(a, b int64) int64 {

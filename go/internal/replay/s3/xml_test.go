@@ -149,3 +149,31 @@ func TestRenderError(t *testing.T) {
 		t.Errorf("got %s", got)
 	}
 }
+
+// TestLastModifiedYears pins LastModified outside four-digit common-era
+// years: each want is the Java server's own rendering of the same second.
+func TestLastModifiedYears(t *testing.T) {
+	for sec, want := range map[int64]string{
+		253402300800:   "+10000-01-01T00:00:00.000Z",
+		253402300799:   "9999-12-31T23:59:59.000Z",
+		-62135596800:   "0001-01-01T00:00:00.000Z",   // 1 CE
+		-62135596801:   "0001-12-31T23:59:59.000Z",   // the last second of year 0 (1 BCE)
+		-62167219200:   "0001-01-01T00:00:00.000Z",   // the first second of year 0
+		-62167219201:   "0002-12-31T23:59:59.000Z",   // year -1 (2 BCE)
+		-62198755200:   "0002-01-01T00:00:00.000Z",   // year -1
+		-377705116800:  "+10000-01-01T00:00:00.000Z", // year -9999 (10000 BCE)
+		-30610224000:   "1000-01-01T00:00:00.000Z",
+		-9223372036854: "+290309-12-21T19:59:06.000Z", // the earliest whole second in signed microseconds
+		9223372036854:  "+294247-01-10T04:00:54.000Z", // the latest
+		0:              "1970-01-01T00:00:00.000Z",
+	} {
+		var ts timestamps
+		if got := string(ts.appendMillis(nil, sec*1_000_000)); got != want {
+			t.Errorf("second %d: %s, want %s", sec, got, want)
+		}
+	}
+	var ts timestamps
+	if got := string(ts.appendMillis(nil, 253402300800_123_999)); got != "+10000-01-01T00:00:00.123Z" {
+		t.Errorf("milliseconds: %s", got)
+	}
+}
