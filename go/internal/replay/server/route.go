@@ -264,6 +264,10 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body 
 		s.reg.Get(metrics.HTTPErrors).Inc()
 	}
 	s.reg.Get(metrics.ProtocolHTTPRequests, protocolS3, strconv.Itoa(status/100)+"xx").Inc()
+	// The request latency ends where the write begins, and only a page
+	// has a write stage: the replay wire contract's meter semantics
+	// (TestRequestMeterSpans).
+	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
@@ -274,8 +278,9 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body 
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocolS3, "total_deadline").Inc()
 	}
-	s.reg.Get(metrics.RequestStageLatency, protocolS3, "write").Record(time.Since(writeStart))
-	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
+	if status/100 == 2 {
+		s.reg.Get(metrics.RequestStageLatency, protocolS3, "write").Record(time.Since(writeStart))
+	}
 }
 
 // viewsLen is a body's length.

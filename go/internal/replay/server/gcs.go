@@ -403,6 +403,10 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, protocol stri
 		s.reg.Get(metrics.HTTPErrors).Inc()
 	}
 	s.reg.Get(metrics.ProtocolHTTPRequests, protocol, strconv.Itoa(status/100)+"xx").Inc()
+	// The request latency ends where the write begins, and only a page
+	// has a write stage: the replay wire contract's meter semantics
+	// (TestRequestMeterSpans).
+	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
@@ -413,8 +417,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, protocol stri
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocol, "total_deadline").Inc()
 	}
-	if protocol != protocolReplay {
+	if protocol != protocolReplay && status/100 == 2 {
 		s.reg.Get(metrics.RequestStageLatency, protocol, "write").Record(time.Since(writeStart))
 	}
-	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
 }
