@@ -23,7 +23,7 @@ func TestProtocolSelection(t *testing.T) {
 		ok              bool
 	}{
 		{"gcs", "gcs", true}, {"s3,gcs", "gcs,s3", true}, {" GCS , s3 ", "gcs,s3", true}, {"s3", "s3", true},
-		{"azure", "", false}, {"s3,", "", false}, {"", "", false}, {"gcs,ftp", "", false},
+		{"azure,gcs", "azure,gcs", true}, {"ftp", "", false}, {"s3,", "", false}, {"", "", false}, {"gcs,ftp", "", false},
 	} {
 		f, err := parseServe(append(append([]string{}, base...), "--protocols", c.protocols), io.Discard)
 		if err != nil {

@@ -14,7 +14,7 @@ import (
 
 // A page token is "gcs1." + unpadded base64url of
 //
-//	flag (0 exclusive, 1 inclusive) | progress (0) | binding (16 bytes) | boundary key
+//	flag (0 exclusive, 1 inclusive) | progress (0 or 1) | binding (16 bytes) | boundary key
 //
 // The binding is the first 16 bytes of a SHA-256 over the request's scope
 // (route profile, metadata profile, fixture identity, bucket, prefix,
@@ -36,19 +36,36 @@ const paginationProfile = "short=0;empty-first=false"
 
 var errToken = errors.New("invalid GCS pageToken")
 
-// cursor is a decoded token: where the next page resumes.
+// cursor is a decoded token: where the next page resumes, and the
+// progress byte it carried.
 type cursor struct {
 	inclusive bool
 	boundary  []byte
+	progress  byte
 }
 
-func encodeToken(inclusive bool, boundary, binding []byte) string {
+// tokenState is what every token a request issues carries besides its
+// boundary: the scope binding and the progress byte. The progress byte
+// marks a walk that has passed a test profile's injected empty first page;
+// the production profile never sets it, but a token that carries it keeps
+// it on every later page, so a walk's tokens are the wire contract's bytes
+// whichever page it resumed from (TestTokenProgressIsRetained).
+type tokenState struct {
+	binding  []byte
+	progress byte
+}
+
+func (s tokenState) encode(inclusive bool, boundary []byte) string {
+	return encodeToken(inclusive, boundary, s.binding, s.progress)
+}
+
+func encodeToken(inclusive bool, boundary, binding []byte, progress byte) string {
 	raw := make([]byte, 0, 2+bindingBytes+len(boundary))
 	flag := byte(0)
 	if inclusive {
 		flag = 1
 	}
-	raw = append(raw, flag, 0)
+	raw = append(raw, flag, progress)
 	raw = append(raw, binding...)
 	raw = append(raw, boundary...)
 	return tokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
@@ -63,7 +80,7 @@ func decodeToken(token string, binding []byte) (cursor, error) {
 		subtle.ConstantTimeCompare(raw[2:2+bindingBytes], binding) != 1 {
 		return cursor{}, errToken
 	}
-	return cursor{inclusive: raw[0] == 1, boundary: raw[2+bindingBytes:]}, nil
+	return cursor{inclusive: raw[0] == 1, boundary: raw[2+bindingBytes:], progress: raw[1]}, nil
 }
 
 // decodeBase64URL decodes the URL-safe alphabet with padding optional, as

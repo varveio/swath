@@ -147,13 +147,14 @@ func TestGCSAdmissionRefusals(t *testing.T) {
 		t.Errorf("count: %d %v %s", r.status, r.header, r.body)
 	}
 	s.responses.Store(0)
-	s.budget.charged.Store(s.budget.limit)
+	held := s.budget.Limit() - s.budget.Charged()
+	s.budget.TryCharge(held)
 	if r := get(t, s, gcsList+"?maxResults=1"); r.status != 503 || r.header.Get("x-swath-replay-error") != "response_budget_exhausted" {
 		t.Errorf("budget: %d %v", r.status, r.header)
 	}
-	s.budget.charged.Store(0)
-	if r := get(t, s, gcsList+"?maxResults=5"); r.status != 200 || s.budget.charged.Load() != 0 {
-		t.Errorf("after: %d charged %d", r.status, s.budget.charged.Load())
+	s.budget.Release(held)
+	if r := get(t, s, gcsList+"?maxResults=5"); r.status != 200 || s.budget.Charged() != 0 {
+		t.Errorf("after: %d charged %d", r.status, s.budget.Charged())
 	}
 	for _, reason := range []string{"response_too_large", "response_count_exhausted", "response_budget_exhausted"} {
 		if count(s, metrics.ResponseAdmissionRefused, "gcs", reason) != 1 {
@@ -226,7 +227,8 @@ func TestValidateProtocols(t *testing.T) {
 		{[]string{"gcs"}, "my-bucket", true},
 		{[]string{"s3", "gcs"}, "my.bucket_1", true},
 		{nil, "bkt", false},
-		{[]string{"azure"}, "bkt", false},
+		{[]string{"azure"}, "bkt", true},
+		{[]string{"ftp"}, "bkt", false},
 		{[]string{"s3", "gcs"}, "storage", false},
 		{[]string{"gcs"}, "storage", true},
 		{[]string{"gcs"}, "b", false},
@@ -243,5 +245,45 @@ func TestValidateProtocols(t *testing.T) {
 		if err := ValidateProtocols(c.protocols, c.bucket); (err == nil) != c.ok {
 			t.Errorf("%v %q: %v", c.protocols, c.bucket, err)
 		}
+	}
+}
+
+// TestGCSShapeCountsAndRejectionMeter: each page counts its objects and
+// prefixes under its shape, a structure probe's delay charges each
+// prefix returned, and a fixture row the API cannot represent counts its
+// reason under provider.path.
+func TestGCSShapeCountsAndRejectionMeter(t *testing.T) {
+	cfg := gcsConfig(memstore.Keys(memstore.Options{}, "a/1", "a/2", "b/1", "c"), ProtocolGCS)
+	cfg.Latency, _ = latency.Parse("worker_page=1ms,pivot_probe=1ms,structure_probe=1ms+60ms/cp", 0, 1)
+	s := start(t, cfg)
+	began := time.Now()
+	get(t, s, gcsList+"?delimiter=%2F&maxResults=1")
+	if took := time.Since(began); took < 61*time.Millisecond || took > 115*time.Millisecond {
+		t.Errorf("one prefix: %v", took)
+	}
+	began = time.Now()
+	get(t, s, gcsList+"?delimiter=%2F")
+	if took := time.Since(began); took < 121*time.Millisecond {
+		t.Errorf("two prefixes: %v", took)
+	}
+	get(t, s, gcsList+"?maxResults=1")
+	for _, c := range []struct {
+		def  metrics.Def
+		tags []string
+		want int64
+	}{
+		{metrics.ProtocolObjects, []string{"gcs", "delimiter"}, 1},
+		{metrics.ProtocolPrefixes, []string{"gcs", "delimiter"}, 3},
+		{metrics.ProtocolObjects, []string{"gcs", "seek"}, 1},
+		{metrics.ProtocolPrefixes, []string{"gcs", "seek"}, 0},
+	} {
+		if got := count(s, c.def, c.tags...); got != c.want {
+			t.Errorf("%s %v: %d, want %d", c.def.Name, c.tags, got, c.want)
+		}
+	}
+	bad := start(t, gcsConfig(memstore.Keys(memstore.Options{}, "\xff"), ProtocolGCS))
+	get(t, bad, gcsList)
+	if count(bad, ProviderPath, "gcs", "fixture_rejected", "invalid_utf8_name") != 1 {
+		t.Errorf("rejection meter: %s", bad.reg.AppendMeters(nil))
 	}
 }

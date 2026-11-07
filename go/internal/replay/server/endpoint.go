@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/store"
 )
 
 // The metrics port is a second listener on purpose: a scrape never waits
@@ -53,10 +52,16 @@ func (s *Server) Snapshot(now time.Time) []byte {
 	out = c.appendServingProtocols(out)
 	out = append(out, `,"bucket":`...)
 	out = metrics.AppendString(out, c.Bucket)
-	out = append(out, `,"azure_account":null,"fixture_identity":`...)
+	out = append(out, `,"azure_account":`...)
+	if s.azure == nil {
+		out = append(out, "null"...)
+	} else {
+		out = metrics.AppendString(out, c.AzureAccount)
+	}
+	out = append(out, `,"fixture_identity":`...)
 	out = metrics.AppendString(out, c.FixtureIdentity)
 	out = append(out, `,"ordering_profile":`...)
-	out = metrics.AppendString(out, store.OrderingProfile)
+	out = metrics.AppendString(out, c.OrderingProfile())
 	out = append(out, `,"metadata_policy":"fixture-plus-synthetic"`...)
 	for _, f := range []struct {
 		name string
@@ -68,8 +73,8 @@ func (s *Server) Snapshot(now time.Time) []byte {
 		{"response_buffer_budget", c.ResponseBufferBudget},
 		{"max_response_bytes", int64(c.MaxResponseBytes)},
 		{"output_chunk_bytes", OutputChunkBytes},
-		{"charged_response_bytes", s.budget.charged.Load()},
-		{"peak_charged_response_bytes", s.budget.peak.Load()},
+		{"charged_response_bytes", s.budget.Charged()},
+		{"peak_charged_response_bytes", s.budget.Peak()},
 		{"active_responses", s.responses.Load()},
 		{"stop_timeout_ms", c.StopTimeout.Milliseconds()},
 		{"idle_timeout_ms", c.IdleTimeout.Milliseconds()},

@@ -26,8 +26,23 @@ type request struct {
 	// (virtual-host style, so no bucket in the path).
 	Live bool `json:"-"`
 	// TokenFrom, when set, names a request whose reference answer's
-	// NextContinuationToken is appended to this one's query.
+	// NextContinuationToken is appended to this one's query. When that
+	// answer has no token the request is not sent and is reported as
+	// skipped, never as passing.
 	TokenFrom string `json:"-"`
+	// Raw, when set, is the whole request target, sent byte for byte on
+	// its own connection ({bucket} replaced), for targets a URL-building
+	// client would normalize or refuse to send.
+	Raw string `json:"raw,omitempty"`
+	// Compare narrows the comparison for answers the contract's HTTP layer
+	// writes itself: "headers" compares the status and the headers but
+	// not the HTML error page (this server's page is its own); "status"
+	// compares the status only, for request lines Go's HTTP parser refuses
+	// before the server sees them (its page and Content-Type are the
+	// parser's). Empty compares everything.
+	Compare string `json:"compare,omitempty"`
+	// Header holds request headers, a name repeated when sent twice.
+	Header [][2]string `json:"-"`
 }
 
 // walk is a token walk: the same request repeated with each answer's
@@ -124,12 +139,20 @@ func s3Matrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 		add("token "+tok.name, false, "continuation-token", tok.v, "max-keys", "5")
 		add("token "+tok.name+" with start-after", false, "continuation-token", tok.v, "start-after", "a", "max-keys", "5")
 	}
+	// Seed pages of one entry, so any fixture of two or more keys
+	// truncates and issues the token the dependent requests need; the
+	// delimiter seed lists the first prefix (the root when it qualifies)
+	// that rolls up to two or more entries.
+	seed := delimiterSeed(keys)
 	out = append(out,
-		request{Name: "token page 1", Method: "GET", Query: q("list-type", "2", "max-keys", "3")},
+		request{Name: "token page 1", Method: "GET", Query: q("list-type", "2", "max-keys", "1")},
 		request{Name: "token page 2 + earlier start-after", Method: "GET", Query: q("list-type", "2", "max-keys", "3", "start-after", "\x01"), TokenFrom: "token page 1"},
 		request{Name: "token page 2 + later start-after", Method: "GET", Query: q("list-type", "2", "max-keys", "3", "start-after", "\xff"), TokenFrom: "token page 1"},
-		request{Name: "delimiter token page 1", Method: "GET", Query: q("list-type", "2", "max-keys", "1", "delimiter", "/")},
-		request{Name: "delimiter token page 2", Method: "GET", Query: q("list-type", "2", "max-keys", "1", "delimiter", "/"), TokenFrom: "delimiter token page 1"},
+		request{Name: "token page 2 + blank start-after", Method: "GET", Query: q("list-type", "2", "max-keys", "3", "start-after", ""), TokenFrom: "token page 1"},
+		request{Name: "delimiter token page 1", Method: "GET", Query: q("list-type", "2", "prefix", seed, "max-keys", "1", "delimiter", "/")},
+		request{Name: "delimiter token page 2", Method: "GET", Query: q("list-type", "2", "prefix", seed, "max-keys", "1", "delimiter", "/"), TokenFrom: "delimiter token page 1"},
+		request{Name: "delimiter token page 2 + start-after", Method: "GET", Query: q("list-type", "2", "prefix", seed, "max-keys", "1", "delimiter", "/", "start-after", "\xff"), TokenFrom: "delimiter token page 1"},
+		request{Name: "delimiter token page 2 url", Method: "GET", Query: q("list-type", "2", "prefix", seed, "max-keys", "2", "delimiter", "/", "encoding-type", "url"), TokenFrom: "delimiter token page 1"},
 	)
 	// Malformed and unusual requests.
 	out = append(out,
@@ -137,6 +160,11 @@ func s3Matrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 		request{Name: "list-type=1", Method: "GET", Query: "list-type=1"},
 		request{Name: "encoded names", Method: "GET", Query: "list%2Dtype=2&max%2Dkeys=2&pre%66ix=" + s3.PercentEncode([]byte(firstSegment(keys)))},
 		request{Name: "duplicate max-keys", Method: "GET", Query: "list-type=2&max-keys=1&max-keys=2"},
+		// Digits from other scripts: a BMP fullwidth one and Arabic-Indic
+		// zero (a digit), and a mathematical one outside the BMP (not a
+		// digit: its UTF-16 form is a surrogate pair).
+		request{Name: "max-keys BMP digits", Method: "GET", Query: "list-type=2&max-keys=%EF%BC%91%D9%A0"},
+		request{Name: "max-keys supplementary digit", Method: "GET", Query: "list-type=2&max-keys=%F0%9D%9F%99"},
 		request{Name: "raw plus and broken escape", Method: "GET", Query: "list-type=2&prefix=a+b%2&max-keys=1"},
 		request{Name: "unknown bucket", Method: "GET", Path: "/no-such-bucket-here", Query: "list-type=2"},
 		request{Name: "escaped bucket", Method: "GET", Path: "/%62ucket", Query: "list-type=2"},
@@ -146,17 +174,64 @@ func s3Matrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 		request{Name: "POST", Method: "POST", Query: "list-type=2"},
 		request{Name: "DELETE unknown bucket", Method: "DELETE", Path: "/no-such-bucket-here", Query: "list-type=2"},
 	)
+	return append(out, rawTargets()...)
+}
+
+// rawTargets are request targets sent byte for byte: the ones the
+// contract's HTTP layer refuses before routing (compared on status and
+// headers), the unusual ones it lets through to the S3 route (compared in
+// full), and request lines Go's HTTP parser refuses itself (status only).
+func rawTargets() []request {
+	var out []request
+	add := func(method, compare string, targets ...string) {
+		for _, t := range targets {
+			out = append(out, request{Name: fmt.Sprintf("raw %s %q", method, t), Method: method, Raw: t, Compare: compare})
+		}
+	}
+	add("GET", "headers",
+		"//{bucket}?list-type=2", "/{bucket}%2Fchild?list-type=2", "/{bucket}%2fchild?list-type=2", "/%2F{bucket}?list-type=2",
+		"/{bucket}/x%2Fy?list-type=2", "/{bucket}//x?list-type=2", "/{bucket}/x//?list-type=2", "/;/{bucket}?list-type=2",
+		"/{bucket}/;p/x?list-type=2", "/{bucket}/%2e%2e/x?list-type=2", "/{bucket}/.%2e?list-type=2", "/%2e/{bucket}?list-type=2",
+		"/{bucket}/%2E?list-type=2", "/{bucket}/..;/x?list-type=2", "/../{bucket}?list-type=2", "/{bucket}/../../x?list-type=2",
+		"/%2e%2e?list-type=2", "/{bucket}%00?list-type=2", "/{bucket}%25?list-type=2", "/{bucket}%5C?list-type=2",
+		"/{bucket}%01?list-type=2", "/{bucket}%7F?list-type=2", "/{bucket}%0A?list-type=2", "/{bucket}\\x?list-type=2",
+		"/{bucket}\xc3\xa9?list-type=2", "/{bucket}\xff?list-type=2", "/{bucket}\"?list-type=2", "/{bucket}|?list-type=2",
+		"/{bucket}[?list-type=2", "/{bucket}^?list-type=2", "/{bucket}#frag?list-type=2", "/{bucket}?list-type=2#frag",
+		"/{bucket}%C0%AF?list-type=2", "/{bucket}%FF?list-type=2", "/{bucket}%ED%A0%80?list-type=2", "*",
+		"http://{host}//{bucket}?list-type=2", "http://{host}/{bucket}%2F?list-type=2",
+		"http://user@{host}/{bucket}?list-type=2")
+	add("HEAD", "headers", "//{bucket}?list-type=2", "/{bucket}%2Fx?list-type=2")
+	add("POST", "headers", "//{bucket}?list-type=2")
+	add("GET", "",
+		"/{bucket}/../{bucket}?list-type=2&max-keys=2", "/{bucket}/.?list-type=2&max-keys=2", "/{bucket}/..?list-type=2&max-keys=2",
+		"/./{bucket}?list-type=2", "/{bucket};p?list-type=2", "/;{bucket}?list-type=2", "/{bucket}/x;/?list-type=2&max-keys=2",
+		"/{bucket}/%3B?list-type=2&max-keys=2", "/{bucket}/a%2Eb?list-type=2&max-keys=2", "/{bucket}%20x?list-type=2",
+		"/{bucket}%C3%A9?list-type=2", "/{bucket}/%3Fx?list-type=2&max-keys=2", "/{bucket}%3F?list-type=2",
+		"/{bucket}!$&'()*+,=:@~?list-type=2", "http://{host}/{bucket}?list-type=2&max-keys=2",
+		"HTTP://{host}/{bucket}?list-type=2&max-keys=2", "http://{host}?list-type=2", "ftp://{host}/{bucket}?list-type=2&max-keys=2",
+		"http:/{bucket}?list-type=2&max-keys=2", "/{bucket}?", "/{bucket}??list-type=2",
+		"/{bucket}?list-type=2&prefix=\xc3\xa9&max-keys=2", "/{bucket}?list-type=2&prefix=\"<>`{|}^[]\\&max-keys=2",
+		"/{bucket}?list-type=2&prefix=%&max-keys=2", "/{bucket}/x%20/?list-type=2&max-keys=2", "/", "/?list-type=2")
+	add("GET", "status",
+		"/{bucket}%zz?list-type=2", "/{bucket}%?list-type=2", "/{bucket}%u0041?list-type=2", "{bucket}?list-type=2",
+		"/{bucket}?list-type=2&prefix=a b&max-keys=1", "/{bucket}?list-type=2&prefix=\x01&max-keys=1",
+		"/{bucket}?list-type=2&prefix=a\x7f&max-keys=1", "/{bucket}\t?list-type=2")
 	return out
 }
 
 // s3Walks lists the token walks: the whole bucket and every top-level
-// prefix, with and without the delimiter, at each page size.
+// prefix, with and without the delimiter, at each page size; and, for a
+// few common prefixes, walks that begin with a start-after at the prefix
+// itself (the boundary of a rolled-up prefix), inside it (at its first
+// key) and at its successor, at the root and inside the parent prefix.
+// Every page after the first carries both the token and the start-after.
 func s3Walks(keys [][]byte, pageSizes []int, maxTop int) []walk {
 	var out []walk
 	tops := topLevel(keys)
 	if len(tops) > maxTop {
 		tops = tops[:maxTop]
 	}
+	boundaries := boundaryPrefixes(keys, 4)
 	for _, mk := range pageSizes {
 		m := fmt.Sprint(mk)
 		out = append(out,
@@ -167,8 +242,73 @@ func s3Walks(keys [][]byte, pageSizes []int, maxTop int) []walk {
 				walk{"prefix=" + t + " max-keys=" + m, q("list-type", "2", "prefix", t, "max-keys", m, "encoding-type", "url", "fetch-owner", "true")},
 				walk{"prefix=" + t + " delimiter=/ max-keys=" + m, q("list-type", "2", "prefix", t, "delimiter", "/", "max-keys", m)})
 		}
+		for _, p := range boundaries {
+			parent := parentPrefix(p)
+			next, _ := s3.Successor([]byte(p))
+			for _, sa := range []struct{ name, v string }{{"at", p}, {"inside", firstKeyUnder(keys, p)}, {"successor", string(next)}} {
+				out = append(out,
+					walk{"start-after " + sa.name + " " + p + " delimiter=/ max-keys=" + m,
+						q("list-type", "2", "delimiter", "/", "start-after", sa.v, "max-keys", m, "encoding-type", "url")},
+					walk{"prefix=" + parent + " start-after " + sa.name + " " + p + " delimiter=/ max-keys=" + m,
+						q("list-type", "2", "prefix", parent, "delimiter", "/", "start-after", sa.v, "max-keys", m)})
+			}
+		}
 	}
 	return out
+}
+
+// delimiterSeed is the first of the root and the directory prefixes whose
+// "/" listing has at least two entries.
+func delimiterSeed(keys [][]byte) string {
+	for _, p := range append([]string{""}, directoryPrefixes(keys)...) {
+		seen := map[string]bool{}
+		for _, k := range keys {
+			if !bytes.HasPrefix(k, []byte(p)) {
+				continue
+			}
+			rest := k[len(p):]
+			if i := bytes.IndexByte(rest, '/'); i >= 0 {
+				rest = rest[:i+1]
+			}
+			seen[string(rest)] = true
+			if len(seen) >= 2 {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// boundaryPrefixes picks up to n directory prefixes spread over the
+// keyspace, preferring ones below the top level so the parent-prefix walks
+// have a parent.
+func boundaryPrefixes(keys [][]byte, n int) []string {
+	all := directoryPrefixes(keys)
+	var deep []string
+	for _, p := range all {
+		if strings.Count(p, "/") > 1 {
+			deep = append(deep, p)
+		}
+	}
+	if len(deep) == 0 {
+		deep = all
+	}
+	if len(deep) <= n {
+		return deep
+	}
+	var out []string
+	for i := range n {
+		out = append(out, deep[i*len(deep)/n])
+	}
+	return out
+}
+
+func firstKeyUnder(keys [][]byte, p string) string {
+	i, _ := slices.BinarySearchFunc(keys, []byte(p), bytes.Compare)
+	if i < len(keys) && bytes.HasPrefix(keys[i], []byte(p)) {
+		return string(keys[i])
+	}
+	return p
 }
 
 // randomRequest draws one request from the key space.

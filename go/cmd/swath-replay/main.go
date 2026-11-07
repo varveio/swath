@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/server"
+	"github.com/varveio/swath/go/internal/replay/sortfixture"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -38,6 +40,10 @@ var revision string
 // usageError is a bad command line: exit 2.
 type usageError struct{ error }
 
+// ownMessage is a failure whose message already names the command
+// ("sort-fixture: ..."), printed as it is: exit 1.
+type ownMessage struct{ error }
+
 func main() {
 	err := run(os.Args[1:], os.Stdout, os.Stderr)
 	var sig exitSignal
@@ -48,6 +54,9 @@ func main() {
 	case errors.As(err, new(usageError)):
 		fmt.Fprintln(os.Stderr, "swath-replay:", err)
 		os.Exit(2)
+	case errors.As(err, new(ownMessage)):
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	default:
 		fmt.Fprintln(os.Stderr, "swath-replay:", err)
 		os.Exit(1)
@@ -68,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "serve":
 		return serve(args[1:], stderr)
 	case "sort-fixture":
-		return sortFixture(args[1:], stderr)
+		return sortFixture(args[1:], stdout, stderr)
 	case "version", "-version", "--version", "-V":
 		fmt.Fprintln(stdout, version())
 		return nil
@@ -88,7 +97,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 func usage(w io.Writer) {
 	fmt.Fprint(w, `usage:
   swath-replay serve --fixture PATH --bucket NAME [flags]   serve a fixture through the S3 route
-  swath-replay sort-fixture --capture DIR --output DIR       sort a capture into a fixture
+  swath-replay sort-fixture --capture PATH --output DIR [--key-limit N]
+                                                            sort a capture into a fixture
   swath-replay --version                                     print the build
 Run "swath-replay serve -h" for the serve flags.
 `)
@@ -121,15 +131,30 @@ func version() string {
 	return "swath-replay-go " + v + " (" + rev + ")"
 }
 
-func sortFixture(args []string, stderr io.Writer) error {
+// sortFixture sorts an unsorted capture into a format-2 fixture. The
+// summary line goes to stdout and a refusal to stderr as one line, exit 1,
+// the split a launcher script reading the summary relies on.
+func sortFixture(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("sort-fixture", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.String("capture", "", "capture directory (Parquet parts)")
-	fs.String("output", "", "output directory")
+	capture := fs.String("capture", "", "the unsorted capture: one part file or a directory of *.parquet parts")
+	output := fs.String("output", "", "the new or empty directory the sorted dataset is published into")
+	keyLimit := fs.Int("key-limit", 0, fmt.Sprintf("the key cap in bytes, at most %d (0: %d)", sortfixture.MaxKeyLimit, sortfixture.DefaultKeyLimit))
 	if err := fs.Parse(args); err != nil {
 		return usageError{err}
 	}
-	return errors.New("sort-fixture is not built in this binary; use the Java swath-replay sort-fixture")
+	switch {
+	case fs.NArg() > 0:
+		return usageError{fmt.Errorf("sort-fixture: unexpected argument %q", fs.Arg(0))}
+	case *capture == "" || *output == "":
+		return usageError{errors.New("sort-fixture: --capture and --output are required")}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if _, err := sortfixture.Run(ctx, sortfixture.Options{Capture: *capture, Output: *output, KeyLimit: *keyLimit}, stdout); err != nil {
+		return ownMessage{err}
+	}
+	return nil
 }
 
 // serveFlags are the serve command's flags, with the defaults of the
@@ -156,9 +181,9 @@ func parseServe(args []string, stderr io.Writer) (*serveFlags, error) {
 	fs.StringVar(&f.bucket, "bucket", "", "the bucket name to expose")
 	fs.StringVar(&f.host, "host", "127.0.0.1", "bind host")
 	fs.IntVar(&f.port, "port", 0, "bind port; 0 chooses a free port, reported in the startup line")
-	fs.StringVar(&f.protocols, "protocols", "s3", "comma-separated listing routes: s3, gcs (azure is reserved)")
-	fs.StringVar(&f.azureAccount, "azure-account", "", "Azure account path segment (reserved: needs azure in --protocols)")
-	fs.StringVar(&f.advertisedHost, "advertised-host", "", "host to advertise in native response URLs (reserved)")
+	fs.StringVar(&f.protocols, "protocols", "s3", "comma-separated listing routes: s3, gcs, azure")
+	fs.StringVar(&f.azureAccount, "azure-account", "", "Azure account path segment (default replay; needs azure in --protocols)")
+	fs.StringVar(&f.advertisedHost, "advertised-host", "", "host to advertise in native response URLs (the Azure ServiceEndpoint)")
 	fs.StringVar(&f.servingMode, "serving-mode", "sorted", "how to serve the fixture: sorted")
 	fs.IntVar(&f.parquetConnections, "parquet-connections", 0, "concurrent fixture page decodes; 0 is max(8, min(32, GOMAXPROCS))")
 	fs.IntVar(&f.maxConcurrentRequests, "max-concurrent-requests", server.DefaultMaxConcurrentRequests,
@@ -242,9 +267,13 @@ func serve(args []string, stderr io.Writer) error {
 	fmt.Fprintln(stderr, startupLine(f, srv, cfg, readers))
 	select {
 	case err := <-served:
-		srv.Shutdown(cfg.StopTimeout)
+		if _, cerr := srv.Shutdown(cfg.StopTimeout); err == nil {
+			err = cerr
+		}
 		return err
 	case sig := <-sigs:
+		// A store close failure is already in the log; the hook line
+		// follows either way, as the launcher's shutdown hook prints it.
 		srv.Shutdown(cfg.StopTimeout)
 		fmt.Fprintln(stderr, "swath_replay_shutdown_hook complete")
 		if s, ok := sig.(syscall.Signal); ok {
@@ -303,9 +332,9 @@ func (f *serveFlags) config() (server.Config, error) {
 	if err := server.ValidateProtocols(protocols, f.bucket); err != nil {
 		return cfg, err
 	}
-	cfg.Protocols = protocols
-	if f.azureAccount != "" {
-		return cfg, errors.New("--azure-account requires azure in --protocols")
+	cfg.Protocols, cfg.AzureAccount, cfg.AdvertisedHost = protocols, f.azureAccount, f.advertisedHost
+	if f.azureAccount == "" && slices.Contains(protocols, server.ProtocolAzure) {
+		cfg.AzureAccount = server.DefaultAzureAccount
 	}
 	if f.advertisedHost != "" && !validAdvertisedHost(f.advertisedHost) {
 		return cfg, errors.New("--advertised-host must be a concrete host without scheme or port")
@@ -322,16 +351,13 @@ func (f *serveFlags) config() (server.Config, error) {
 	return cfg, cfg.Validate()
 }
 
-// parseProtocols reads a comma-separated subset of s3, gcs and azure;
-// azure is not built in this binary.
+// parseProtocols reads a comma-separated subset of s3, gcs and azure.
 func parseProtocols(v string) ([]string, error) {
 	var out []string
 	for _, p := range strings.Split(v, ",") {
 		switch p := strings.ToLower(strings.TrimSpace(p)); p {
-		case server.ProtocolS3, server.ProtocolGCS:
+		case server.ProtocolS3, server.ProtocolGCS, server.ProtocolAzure:
 			out = append(out, p)
-		case "azure":
-			return nil, errors.New("--protocols: the azure route is not built yet; this build serves s3 and gcs")
 		default:
 			return nil, errors.New("--protocols must be a comma-separated subset of s3,gcs,azure")
 		}
@@ -452,7 +478,7 @@ func startupLine(f *serveFlags, srv *server.Server, cfg server.Config, readers i
 		"ordering_profile=%s metadata_policy=fixture-plus-synthetic profiles=%s native_endpoints=%s",
 		f.host, srv.Port(), f.bucket, fixture, cfg.ServingMode, readers, inject, decimalString(f.latencyScale),
 		metricsEndpoint, cfg.MaxConcurrentRequests, cfg.ProtocolList(), cfg.ResponseBufferBudget, cfg.MaxResponseBytes, cfg.MaxResponses(),
-		server.OutputChunkBytes, cfg.FixtureIdentity, store.OrderingProfile, cfg.ProfilesString(),
+		server.OutputChunkBytes, cfg.FixtureIdentity, cfg.OrderingProfile(), cfg.ProfilesString(),
 		nativeEndpoints(f, cfg, srv.Port()))
 }
 
@@ -468,6 +494,11 @@ func nativeEndpoints(f *serveFlags, cfg server.Config, port int) string {
 	for _, p := range cfg.Protocols {
 		if p == server.ProtocolGCS {
 			out = append(out, "gcs:"+base+"/storage/v1/b/"+f.bucket+"/o")
+		}
+	}
+	for _, p := range cfg.Protocols {
+		if p == server.ProtocolAzure {
+			out = append(out, "azure:"+base+"/"+cfg.AzureAccount+"/"+f.bucket+"?restype=container&comp=list")
 		}
 	}
 	return strings.Join(out, ",")

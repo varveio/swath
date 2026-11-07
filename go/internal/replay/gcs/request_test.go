@@ -131,3 +131,25 @@ func TestLatencyKeyGolden(t *testing.T) {
 		t.Errorf("got %d", got)
 	}
 }
+
+// TestCompetingFeaturesUseTheFixedOrder: with several refused features
+// the reason is the first in the fixed order. Across the two groups that
+// is also the Java server's (the boolean group is checked first); within
+// a group the Java server's choice varies by JVM launch.
+func TestCompetingFeaturesUseTheFixedOrder(t *testing.T) {
+	for query, want := range map[string]string{
+		"softDeleted=true&versions=true":                           "feature_versions",
+		"includeTrailingDelimiter=true&includeFoldersAsPrefixes=x": "feature_includeFoldersAsPrefixes",
+		"fields=x&filter=x&matchGlob=x":                            "feature_matchGlob",
+		"fields=x&filter=x":                                        "feature_filter",
+		"fields=x&includeTrailingDelimiter=true":                   "feature_includeTrailingDelimiter",
+		"alt=xml&fields=x":                                         "feature_fields",
+		"versions=false&softDeleted=true&maxResults=0":             "feature_softDeleted",
+	} {
+		_, err := Parse("bkt", query)
+		var f *Failure
+		if !errors.As(err, &f) || f.Reason != want || !f.Unsupported {
+			t.Errorf("%s: %v, want %s", query, err, want)
+		}
+	}
+}

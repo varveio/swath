@@ -5,11 +5,13 @@ package s3
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -147,5 +149,112 @@ func TestRenderError(t *testing.T) {
 	const want = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><Resource>/b%6Bt</Resource><RequestId>S3LISTINGREPLAY</RequestId></Error>`
 	if got != want {
 		t.Errorf("got %s", got)
+	}
+}
+
+// TestLastModifiedYears pins LastModified outside four-digit common-era
+// years: each want is the Java server's own rendering of the same second.
+func TestLastModifiedYears(t *testing.T) {
+	for sec, want := range map[int64]string{
+		253402300800:   "+10000-01-01T00:00:00.000Z",
+		253402300799:   "9999-12-31T23:59:59.000Z",
+		-62135596800:   "0001-01-01T00:00:00.000Z",   // 1 CE
+		-62135596801:   "0001-12-31T23:59:59.000Z",   // the last second of year 0 (1 BCE)
+		-62167219200:   "0001-01-01T00:00:00.000Z",   // the first second of year 0
+		-62167219201:   "0002-12-31T23:59:59.000Z",   // year -1 (2 BCE)
+		-62198755200:   "0002-01-01T00:00:00.000Z",   // year -1
+		-377705116800:  "+10000-01-01T00:00:00.000Z", // year -9999 (10000 BCE)
+		-30610224000:   "1000-01-01T00:00:00.000Z",
+		-9223372036854: "+290309-12-21T19:59:06.000Z", // the earliest whole second in signed microseconds
+		9223372036854:  "+294247-01-10T04:00:54.000Z", // the latest
+		0:              "1970-01-01T00:00:00.000Z",
+	} {
+		var ts timestamps
+		if got := string(ts.appendMillis(nil, sec*1_000_000)); got != want {
+			t.Errorf("second %d: %s, want %s", sec, got, want)
+		}
+	}
+	var ts timestamps
+	if got := string(ts.appendMillis(nil, 253402300800_123_999)); got != "+10000-01-01T00:00:00.123Z" {
+		t.Errorf("milliseconds: %s", got)
+	}
+}
+
+// TestOneKeyAndEmptyPagesUseSmallFirstChunks is the contract's
+// actualS3OneKeyAndEmptyPagesUseSmallPostPageFirstChunks: a max-keys=1000
+// request reserves for a full page before paging, but a page of one key or
+// none renders into a single 4 KiB chunk and gives the rest back.
+func TestOneKeyAndEmptyPagesUseSmallFirstChunks(t *testing.T) {
+	for _, keys := range [][]string{{"a"}, nil} {
+		p := pager(keys...)
+		req, err := ParseRequest("bucket", "list-type=2&max-keys=1000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		budget := output.NewBudget(1<<20, nil)
+		o, err := output.New(budget, EstimateSize(req.PageSize()), 64<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if budget.Charged() != 320_512 {
+			t.Errorf("reserved %d", budget.Charged())
+		}
+		res := list(t, p, req)
+		o.SetFirstChunkHint(EstimateSize(len(res.Entries)))
+		RenderList(o, res)
+		n := 0
+		for _, v := range o.Body() {
+			n += len(v)
+		}
+		if o.Err() != nil || n >= 4096 || o.Capacity() != 4096 || budget.Charged() != 4096 {
+			t.Errorf("%d keys: err %v body %d capacity %d charged %d", len(keys), o.Err(), n, o.Capacity(), budget.Charged())
+		}
+		o.Close()
+		if budget.Charged() != 0 {
+			t.Errorf("charged %d after close", budget.Charged())
+		}
+	}
+}
+
+// TestRenderStopsAtTheCap renders a thousand ~1 KiB keys against an 8 KiB
+// cap: rendering stops at the cap with response_too_large, and nothing past
+// the cap was ever charged (so nothing past it was allocated).
+func TestRenderStopsAtTheCap(t *testing.T) {
+	keys := make([]string, 1000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("%04d/%s", i, strings.Repeat("k ", 500))
+	}
+	req, _ := ParseRequest("bucket", "list-type=2&max-keys=1000&encoding-type=url")
+	res := list(t, pager(keys...), req)
+	budget := output.NewBudget(1<<30, nil)
+	o, err := output.New(budget, min(8192, EstimateSize(req.PageSize())), 8192)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.SetFirstChunkHint(EstimateSize(len(res.Entries)))
+	RenderList(o, res)
+	if o.Err() != output.ErrTooLarge || budget.Peak() != 8192 || o.Capacity() != 8192 || o.Len() > 8192 {
+		t.Errorf("err %v peak %d capacity %d len %d", o.Err(), budget.Peak(), o.Capacity(), o.Len())
+	}
+	o.Close()
+}
+
+// TestRenderSurrogateBytesUnencoded is the lone-UTF-16-surrogate case of
+// the contract's adversarial rendering test in the form a byte key can
+// take: the bytes ED A0 80, a surrogate encoded as UTF-8 (which UTF-8
+// forbids), render as the single U+FFFD the contract's decoder makes of
+// them, and as %ED%A0%80 with encoding-type=url.
+func TestRenderSurrogateBytesUnencoded(t *testing.T) {
+	key := []byte{'k', 0xED, 0xA0, 0x80, 'z'}
+	for _, enc := range []bool{false, true} {
+		req := &Request{Bucket: "b", MaxKeys: 1, EncodingURL: enc}
+		got := string(AppendList(nil, &Result{Request: req, Entries: []Entry{{Object: &store.Object{Key: key}}}}))
+		want := "<Key>k\uFFFDz</Key>"
+		if enc {
+			want = "<Key>k%ED%A0%80z</Key>"
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("url=%v: %s", enc, got)
+		}
 	}
 }

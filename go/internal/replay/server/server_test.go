@@ -9,17 +9,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -169,6 +173,13 @@ type syncWriter struct {
 	w  io.Writer
 }
 
+// String reads what was written, under the same lock.
+func (s *syncWriter) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.(fmt.Stringer).String()
+}
+
 func (s *syncWriter) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -238,49 +249,180 @@ func TestRequestCeilingQueues(t *testing.T) {
 	}
 }
 
-func TestResponseCountAndBudgetRefusals(t *testing.T) {
-	s := start(t, config(memstore.Keys(memstore.Options{}, "a")))
-	s.responses.Store(int64(s.cfg.MaxResponses()))
-	r := get(t, s, "/bucket?list-type=2")
-	if r.status != 503 || r.header.Get("x-swath-replay-error") != "response_count_exhausted" || !strings.Contains(r.body, "<Code>ServiceUnavailable</Code>") {
-		t.Errorf("count: %d %v %s", r.status, r.header, r.body)
+// spaceKeys are n keys of about 1 KiB that encoding-type=url triples, so a
+// max-keys=1000 page is about 3 MB.
+func spaceKeys(n int) []string {
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("%04d %s", i, strings.Repeat(" ", 1000))
 	}
-	s.responses.Store(0)
-	if r := get(t, s, "/bucket?list-type=2"); r.status != 200 {
-		t.Errorf("after the permits came back: %d", r.status)
+	return keys
+}
+
+const bigPage = "/bucket?list-type=2&max-keys=1000&encoding-type=url"
+
+// slowReader opens a connection with a small receive buffer, sends one
+// request and never reads the answer, so the server's write blocks.
+func slowReader(t *testing.T, s *Server, target string) net.Conn {
+	t.Helper()
+	d := net.Dialer{Control: func(_, _ string, c syscall.RawConn) error {
+		var serr error
+		c.Control(func(fd uintptr) { serr = setReceiveBuffer(fd, 4096) })
+		return serr
+	}}
+	conn, err := d.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	s.budget.charged.Store(s.budget.limit)
-	r = get(t, s, "/bucket?list-type=2")
-	if r.status != 503 || r.header.Get("x-swath-replay-error") != "response_budget_exhausted" {
-		t.Errorf("budget: %d %v", r.status, r.header)
+	if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: replay\r\n\r\n", target); err != nil {
+		t.Fatal(err)
 	}
-	s.budget.charged.Store(0)
-	if count(s, metrics.ResponseAdmissionRefused, "s3", "response_count_exhausted") != 1 ||
-		count(s, metrics.ResponseAdmissionRefused, "s3", "response_budget_exhausted") != 1 {
-		t.Errorf("refusal meters: %s", s.reg.AppendMeters(nil))
-	}
-	if r := get(t, s, "/bucket?list-type=2"); r.status != 200 || s.budget.charged.Load() != 0 {
-		t.Errorf("after the budget came back: %d, charged %d", r.status, s.budget.charged.Load())
+	return conn
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-func TestOversizedResponseIsRefusedAndTheBudgetRecovers(t *testing.T) {
-	keys := make([]string, 200)
+// TestSlowReadersReachTheResponseCeiling: clients that stop reading hold
+// their responses (count and bytes) but not their execution slots, so with
+// a request ceiling of 8 there can be 16 outstanding responses, and the
+// next request is answered 503 response_count_exhausted at once rather
+// than queued behind the stalled writes. When the readers go away every
+// permit and byte comes back.
+func TestSlowReadersReachTheResponseCeiling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("receive buffer sizing")
+	}
+	cfg := config(memstore.Keys(memstore.Options{}, spaceKeys(1000)...))
+	cfg.MaxConcurrentRequests = MinMaxConcurrentRequests
+	cfg.WriteTimeout = time.Minute
+	s := start(t, cfg)
+	var conns []net.Conn
+	for range cfg.MaxResponses() {
+		conns = append(conns, slowReader(t, s, bigPage))
+	}
+	// Every response is admitted and writing, and no execution slot is
+	// held by a response that is only writing.
+	waitFor(t, "16 outstanding responses holding no execution slot", func() bool {
+		return s.responses.Load() == int64(cfg.MaxResponses()) && len(s.slots) == 0
+	})
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/bucket?list-type=2&max-keys=1", s.Port()))
+	if err != nil {
+		t.Fatalf("the request past the ceiling was not answered: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "response_count_exhausted" ||
+		!strings.Contains(string(body), "<Message>response buffer budget exhausted</Message>") {
+		t.Errorf("%d %v %s", resp.StatusCode, resp.Header, body)
+	}
+	if count(s, metrics.ResponseAdmissionRefused, "s3", "response_count_exhausted") != 1 {
+		t.Errorf("refusal meters: %s", s.reg.AppendMeters(nil))
+	}
+	for _, c := range conns {
+		c.Close()
+	}
+	waitFor(t, "the permits and bytes to come back", func() bool { return s.responses.Load() == 0 && s.budget.Charged() == 0 })
+	if r := get(t, s, "/bucket?list-type=2&max-keys=1"); r.status != 200 {
+		t.Errorf("after the readers left: %d", r.status)
+	}
+}
+
+// TestSparseResponsesReturnTheirReservation is the review's scenario: with
+// a 400,000-byte budget, a max-keys=1000 request reserves 320,512 bytes
+// before paging, but a one-object page renders into one 4 KiB chunk and
+// gives the rest back before its injected delay, so an overlapping request
+// fits.
+func TestSparseResponsesReturnTheirReservation(t *testing.T) {
+	cfg := config(memstore.Keys(memstore.Options{}, "a"))
+	cfg.ResponseBufferBudget, cfg.MaxResponseBytes = 400_000, 400_000
+	cfg.Latency, _ = latency.Parse("worker_page=600ms", 0, 1)
+	s := start(t, cfg)
+	results := make(chan response, 2)
+	go func() { results <- get(t, s, "/bucket?list-type=2&max-keys=1000") }()
+	waitFor(t, "the first request's delay", func() bool { return s.responses.Load() == 1 && s.budget.Charged() == 4096 })
+	go func() { results <- get(t, s, "/bucket?list-type=2&max-keys=1000") }()
+	for range 2 {
+		if r := <-results; r.status != 200 {
+			t.Errorf("%d %v", r.status, r.header)
+		}
+	}
+	if s.budget.Peak() != 4096+320_512 {
+		t.Errorf("peak %d", s.budget.Peak())
+	}
+}
+
+// TestBudgetRefusesAnOverlappingPage: a response holding its rendered
+// chunks through its delay leaves too little budget for the next
+// request's reservation, which is refused 503 response_budget_exhausted;
+// once it is written the budget is whole again.
+func TestBudgetRefusesAnOverlappingPage(t *testing.T) {
+	keys := make([]string, 1000)
 	for i := range keys {
-		keys[i] = fmt.Sprintf("%s%03d", strings.Repeat("x", 100), i)
+		keys[i] = fmt.Sprintf("%04d/%s", i, strings.Repeat("k", 300))
 	}
 	cfg := config(memstore.Keys(memstore.Options{}, keys...))
+	cfg.ResponseBufferBudget, cfg.MaxResponseBytes = 600_000, 600_000
+	cfg.Latency, _ = latency.Parse("worker_page=600ms", 0, 1)
+	s := start(t, cfg)
+	first := make(chan response, 1)
+	go func() { first <- get(t, s, "/bucket?list-type=2&max-keys=1000") }()
+	waitFor(t, "the first request's delay", func() bool { return s.responses.Load() == 1 && s.budget.Charged() > 300_000 })
+	r := get(t, s, "/bucket?list-type=2&max-keys=1000")
+	if r.status != 503 || r.header.Get("x-swath-replay-error") != "response_budget_exhausted" {
+		t.Errorf("overlapping: %d %v", r.status, r.header)
+	}
+	if r := <-first; r.status != 200 {
+		t.Errorf("first: %d", r.status)
+	}
+	if count(s, metrics.ResponseAdmissionRefused, "s3", "response_budget_exhausted") != 1 {
+		t.Errorf("refusal meters: %s", s.reg.AppendMeters(nil))
+	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
+	if r := get(t, s, "/bucket?list-type=2&max-keys=10"); r.status != 200 {
+		t.Errorf("after: %d", r.status)
+	}
+}
+
+// TestOversizedResponseStopsAtTheCap asks for a ~3 MB page against an 8 KiB
+// cap: the answer is 500 response_too_large, rendering stopped at the cap
+// (the budget never held more than the cap, and the request allocated far
+// less than the page would encode to), and the budget recovers.
+func TestOversizedResponseStopsAtTheCap(t *testing.T) {
+	cfg := config(memstore.Keys(memstore.Options{}, spaceKeys(1000)...))
 	cfg.MaxResponseBytes = 8 << 10
 	s := start(t, cfg)
-	r := get(t, s, "/bucket?list-type=2")
+	get(t, s, "/bucket?list-type=2&max-keys=1") // warm the connection pool and the meters
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	r := get(t, s, bigPage)
+	runtime.ReadMemStats(&after)
 	if r.status != 500 || r.header.Get("x-swath-replay-error") != "response_too_large" || !strings.Contains(r.body, "<Code>InternalError</Code>") {
 		t.Errorf("%d %v %s", r.status, r.header, r.body)
+	}
+	// The page itself (a thousand 1 KiB keys) is about 1 MB; its encoding
+	// would be about 3 MB more.
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 2<<20 {
+		t.Errorf("the refused request allocated %d bytes", allocated)
+	}
+	if peak := s.budget.Peak(); peak > int64(cfg.MaxResponseBytes) {
+		t.Errorf("peak charged %d above the %d cap", peak, cfg.MaxResponseBytes)
 	}
 	if r := get(t, s, "/bucket?list-type=2&max-keys=5"); r.status != 200 {
 		t.Errorf("a small page after the refusal: %d", r.status)
 	}
-	if s.budget.charged.Load() != 0 || s.budget.peak.Load() == 0 {
-		t.Errorf("charged %d peak %d", s.budget.charged.Load(), s.budget.peak.Load())
+	if s.budget.Charged() != 0 {
+		t.Errorf("charged %d", s.budget.Charged())
 	}
 }
 
@@ -341,8 +483,8 @@ func TestShutdownInterruptsALongDelay(t *testing.T) {
 	go func() { got <- get(t, s, "/bucket?list-type=2") }()
 	time.Sleep(100 * time.Millisecond)
 	began := time.Now()
-	if !s.Shutdown(2 * time.Second) {
-		t.Error("shutdown incomplete")
+	if complete, err := s.Shutdown(2 * time.Second); !complete || err != nil {
+		t.Errorf("shutdown: complete %v, %v", complete, err)
 	}
 	if d := time.Since(began); d > time.Second {
 		t.Errorf("shutdown took %v", d)
@@ -377,7 +519,7 @@ func TestUninterruptibleReadDefersStoreClose(t *testing.T) {
 		}
 	}()
 	<-entered
-	if s.Shutdown(200 * time.Millisecond) {
+	if complete, _ := s.Shutdown(200 * time.Millisecond); complete {
 		t.Error("shutdown reported complete with a read outstanding")
 	}
 	if st.closed.Load() {
@@ -393,6 +535,76 @@ func TestUninterruptibleReadDefersStoreClose(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "shutdown_incomplete") {
 		t.Errorf("log: %s", log.String())
+	}
+}
+
+// closeStore wraps a store with a Close that blocks until release and then
+// fails, counting its calls.
+type closeStore struct {
+	store.Store
+	release chan struct{}
+	calls   atomic.Int32
+	err     error
+}
+
+func (c *closeStore) Close() error {
+	c.calls.Add(1)
+	if c.release != nil {
+		<-c.release
+	}
+	c.Store.Close()
+	return c.err
+}
+
+// TestShutdownBoundsABlockingStoreClose: with every request finished, a
+// store Close that blocks cannot hold Shutdown past its deadline; it
+// reports shutdown_incomplete and the Close still completes, once, in the
+// background, its failure logged.
+func TestShutdownBoundsABlockingStoreClose(t *testing.T) {
+	st := &closeStore{Store: memstore.Keys(memstore.Options{}, "a"), release: make(chan struct{}), err: errors.New("boom")}
+	cfg := config(st)
+	log := &syncWriter{w: &strings.Builder{}}
+	cfg.Log = log
+	s, _ := New(cfg)
+	if err := s.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve()
+	if r := get(t, s, "/bucket?list-type=2"); r.status != 200 {
+		t.Fatalf("%d", r.status)
+	}
+	began := time.Now()
+	complete, err := s.Shutdown(50 * time.Millisecond)
+	if took := time.Since(began); took > time.Second || complete || err != nil {
+		t.Errorf("took %v, complete %v, err %v", took, complete, err)
+	}
+	if !strings.Contains(log.String(), "shutdown_incomplete active replay work retained its resources for deferred cleanup") {
+		t.Errorf("log: %s", log.String())
+	}
+	close(st.release)
+	waitFor(t, "the deferred close", func() bool { return strings.Contains(log.String(), "replay store cleanup failed: boom") })
+	if st.calls.Load() != 1 {
+		t.Errorf("Close called %d times", st.calls.Load())
+	}
+}
+
+// TestShutdownIsIdempotentAndSurfacesCloseFailureOnce is the contract's
+// closeIsIdempotentAndSurfacesFixtureCloseFailureOnlyOnce: the first
+// Shutdown returns the store's Close failure, the second neither closes
+// the store again nor repeats the failure.
+func TestShutdownIsIdempotentAndSurfacesCloseFailureOnce(t *testing.T) {
+	st := &closeStore{Store: memstore.Keys(memstore.Options{}, "a"), err: errors.New("boom")}
+	s, _ := New(config(st))
+	if err := s.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve()
+	complete, err := s.Shutdown(time.Second)
+	if !complete || err == nil || !strings.Contains(err.Error(), "failed to close S3 listing replay fixture") || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("first: complete %v, %v", complete, err)
+	}
+	if complete, err := s.Shutdown(time.Second); !complete || err != nil || st.calls.Load() != 1 {
+		t.Errorf("second: complete %v, %v, %d closes", complete, err, st.calls.Load())
 	}
 }
 
@@ -474,3 +686,109 @@ func TestAttestation(t *testing.T) {
 }
 
 func jsonString(s string) string { b, _ := json.Marshal(s); return string(b) }
+
+// TestCountsNoOverrunWhenInjectionIsOff is the contract's
+// countsNoOverrunWhenInjectionIsOff, with its
+// recordsFixtureListLatencyMetricOnList: without a profile no overrun is
+// counted, however slow the read, and every list is timed.
+func TestCountsNoOverrunWhenInjectionIsOff(t *testing.T) {
+	st := &hookStore{Store: memstore.Keys(memstore.Options{}, "a"), hook: func(context.Context) error { time.Sleep(20 * time.Millisecond); return nil }}
+	s := start(t, config(st))
+	for range 2 {
+		if r := get(t, s, "/bucket?list-type=2"); r.status != 200 {
+			t.Fatalf("%d", r.status)
+		}
+	}
+	if count(s, metrics.InjectOverrun, "worker_page") != -1 || count(s, metrics.RequestStageLatency, "s3", "delay") != -1 {
+		t.Errorf("an overrun or a delay was recorded with injection off: %s", s.reg.AppendMeters(nil))
+	}
+	if count(s, metrics.FixtureListLatency) != 2 {
+		t.Errorf("fixture list latency counted %d", count(s, metrics.FixtureListLatency))
+	}
+}
+
+// TestContinuationPagesDrawDistinctJitter is the contract's
+// continuationPagesDrawDistinctJitter: successive pages of one walk differ
+// only in their token, and must not all draw the same jitter.
+func TestContinuationPagesDrawDistinctJitter(t *testing.T) {
+	keys := make([]string, 40)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%03d", i)
+	}
+	p := &s3.Pager{Store: memstore.Keys(memstore.Options{}, keys...)}
+	profile, _ := latency.Parse("worker_page=1000ms", 0.5, 1)
+	seen := map[time.Duration]bool{}
+	query := "list-type=2&max-keys=2"
+	for page := 0; page < 8; page++ {
+		req, err := s3.ParseRequest("bucket", query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := p.List(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[profile.Delay(latency.WorkerPage, 0, req.LatencyKey())] = true
+		query = "list-type=2&max-keys=2&continuation-token=" + s3.PercentEncode([]byte(res.NextToken))
+	}
+	if len(seen) < 6 {
+		t.Errorf("8 continuation pages drew %d distinct delays", len(seen))
+	}
+}
+
+// TestRoutesShareTheResponseCeiling: the GCS and Azure routes go through
+// the same admission as S3's. With every response permit held by slow S3
+// readers (and no execution slot), a request on either other route is
+// refused response_count_exhausted at once; when the readers leave, both
+// answer again and every byte of the budget is back.
+func TestRoutesShareTheResponseCeiling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("receive buffer sizing")
+	}
+	cfg := config(memstore.Keys(memstore.Options{}, spaceKeys(1000)...))
+	cfg.Bucket = "bucket"
+	cfg.Protocols = []string{ProtocolS3, ProtocolGCS, ProtocolAzure}
+	cfg.AzureAccount = DefaultAzureAccount
+	cfg.MaxConcurrentRequests = MinMaxConcurrentRequests
+	cfg.WriteTimeout = time.Minute
+	s := start(t, cfg)
+	var conns []net.Conn
+	for range cfg.MaxResponses() {
+		conns = append(conns, slowReader(t, s, bigPage))
+	}
+	waitFor(t, "every response permit held and no slot", func() bool {
+		return s.responses.Load() == int64(cfg.MaxResponses()) && len(s.slots) == 0
+	})
+	client := http.Client{Timeout: 5 * time.Second}
+	for _, target := range []string{"/storage/v1/b/bucket/o?maxResults=1", "/replay/bucket?restype=container&comp=list&maxresults=1"} {
+		req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d%s", s.Port(), target), nil)
+		req.Header.Set("x-ms-version", "2026-06-06")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: not answered: %v", target, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "response_count_exhausted" {
+			t.Errorf("%s: %d %v", target, resp.StatusCode, resp.Header)
+		}
+	}
+	for _, c := range conns {
+		c.Close()
+	}
+	waitFor(t, "the permits and bytes to come back", func() bool { return s.responses.Load() == 0 && s.budget.Charged() == 0 })
+	for _, target := range []string{"/storage/v1/b/bucket/o?maxResults=1", "/replay/bucket?restype=container&comp=list&maxresults=1"} {
+		req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d%s", s.Port(), target), nil)
+		req.Header.Set("x-ms-version", "2026-06-06")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Errorf("%s after: %d", target, resp.StatusCode)
+		}
+	}
+	if s.budget.Charged() != 0 {
+		t.Errorf("charged %d", s.budget.Charged())
+	}
+}

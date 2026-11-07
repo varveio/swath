@@ -90,12 +90,12 @@ func TestTokenProperties(t *testing.T) {
 		if got, _, err := DecodeToken(v1); err != nil || !bytes.Equal(got.Boundary, boundary) || got.Inclusive {
 			t.Fatalf("v1 of %x: %+v %v", boundary, got, err)
 		}
-		if _, _, err := DecodeToken(tok + "*"); err == nil {
-			t.Fatalf("%q with a non-alphabet byte accepted", tok+"*")
+		if _, _, err := DecodeToken(tok + "*"); !isBadToken(err) {
+			t.Fatalf("%q with a non-alphabet byte: %v, want 400 InvalidArgument", tok+"*", err)
 		}
 		payload := append([]byte{byte(2 + r.IntN(254))}, boundary...)
-		if _, _, err := DecodeToken("v2:" + base64.RawURLEncoding.EncodeToString(payload)); err == nil {
-			t.Fatalf("flag byte %#x accepted", payload[0])
+		if _, _, err := DecodeToken("v2:" + base64.RawURLEncoding.EncodeToString(payload)); !isBadToken(err) {
+			t.Fatalf("flag byte %#x: %v, want 400 InvalidArgument", payload[0], err)
 		}
 		// One mutated body character is rejected, decodes to a different
 		// cursor, or is a pure base64 alias of the same payload.
@@ -114,6 +114,9 @@ func TestTokenProperties(t *testing.T) {
 		got, _, err = DecodeToken("v2:" + string(body))
 		switch {
 		case err != nil:
+			if !isBadToken(err) {
+				t.Fatalf("mutated token %q: %v, want 400 InvalidArgument", body, err)
+			}
 			rejected++
 		case bytes.Equal(got.Boundary, boundary) && got.Inclusive == inclusive:
 			t.Fatalf("mutated token %q decodes to the original cursor", body)
@@ -145,4 +148,11 @@ func TestHasTokenAgreesWithDecode(t *testing.T) {
 			t.Errorf("token %q: HasToken %v, decode ok=%v err=%v", s, req.HasToken(), ok, err)
 		}
 	}
+}
+
+// isBadToken is the contract's answer to a malformed token: an S3 error,
+// 400 InvalidArgument, never another error type.
+func isBadToken(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status == 400 && e.Code == "InvalidArgument"
 }

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 	"unicode/utf8"
+
+	"github.com/varveio/swath/go/internal/replay/output"
 )
 
 // ContentType is the Content-Type of every answer on the route, errors
@@ -24,9 +26,9 @@ const (
 	syntheticContentType  = "application/octet-stream"
 )
 
-// EstimateSize is the response size charged to the byte budget before a
-// page of n entries is rendered: the synthetic metadata is roughly 220
-// bytes per item before its name.
+// EstimateSize is the response size reserved before a page of n entries
+// is read, and, with at least 4 KiB, the first chunk's size once it is:
+// the synthetic metadata is roughly 220 bytes per item before its name.
 func EstimateSize(n int) int { return 1024 + 384*n }
 
 // FixtureProblem is a fixture row the route cannot render as an object
@@ -37,70 +39,99 @@ type FixtureProblem struct{ Reason string }
 
 func (e *FixtureProblem) Error() string { return "fixture incompatible with GCS listing: " + e.Reason }
 
-// AppendPage renders page as the objects resource list: kind, then items
-// and prefixes when non-empty, then nextPageToken when there is one, with
-// no insignificant whitespace (prettyPrint is accepted and ignored). The
-// bytes are the wire contract's, field order and escapes included
-// (TestRenderGolden).
-func AppendPage(dst []byte, r *Request, page *Page) ([]byte, error) {
-	dst = append(dst, `{"kind":"storage#objects"`...)
+// RenderPage renders page as the objects resource list into o: kind, then
+// items and prefixes when non-empty, then nextPageToken when there is one,
+// with no insignificant whitespace (prettyPrint is accepted and ignored).
+// The bytes are the wire contract's, field order and escapes included
+// (TestRenderGolden). Each item and prefix is formatted on its own and
+// then written, so no more than one entry is ever held outside o; a
+// refusal by o (its cap or budget, o.Err) stops rendering before the next
+// entry, and a fixture row the route cannot render is a *FixtureProblem.
+func RenderPage(o *output.Output, r *Request, page *Page) error {
+	var buf []byte
+	flush := func() bool {
+		o.Write(buf)
+		buf = buf[:0]
+		return o.Err() == nil
+	}
+	buf = append(buf, `{"kind":"storage#objects"`...)
 	if len(page.Items) > 0 {
-		dst = append(dst, `,"items":[`...)
+		buf = append(buf, `,"items":[`...)
 		day, date := int64(-1<<63), ""
 		for i := range page.Items {
+			if !flush() {
+				return nil
+			}
 			it := &page.Items[i]
 			if err := validateName(it.Key); err != nil {
-				return nil, err
+				return err
 			}
 			if it.Size < 0 {
-				return nil, &FixtureProblem{"negative_size"}
+				return &FixtureProblem{"negative_size"}
 			}
 			sec, frac := floorDiv(it.Updated, 1_000_000)
 			if d, _ := floorDiv(sec, 86_400); d != day {
 				t := time.Unix(d*86_400, 0).UTC()
 				if t.Year() < 0 || t.Year() > 9999 {
-					return nil, &FixtureProblem{"timestamp_out_of_range"}
+					return &FixtureProblem{"timestamp_out_of_range"}
 				}
 				day, date = d, t.Format("2006-01-02")
 			}
 			if i > 0 {
-				dst = append(dst, ',')
+				buf = append(buf, ',')
 			}
-			dst = append(dst, `{"kind":"storage#object","bucket":`...)
-			dst = appendString(dst, []byte(r.Bucket))
-			dst = append(dst, `,"name":`...)
-			dst = appendString(dst, it.Key)
-			dst = append(dst, `,"size":"`...)
-			dst = strconv.AppendInt(dst, it.Size, 10)
-			dst = append(dst, `","updated":"`...)
-			dst = appendUpdated(dst, date, sec, frac)
-			dst = append(dst, '"')
-			dst = appendMetadata(dst, it.Native)
+			buf = append(buf, `{"kind":"storage#object","bucket":`...)
+			buf = appendString(buf, []byte(r.Bucket))
+			buf = append(buf, `,"name":`...)
+			buf = appendString(buf, it.Key)
+			buf = append(buf, `,"size":"`...)
+			buf = strconv.AppendInt(buf, it.Size, 10)
+			buf = append(buf, `","updated":"`...)
+			buf = appendUpdated(buf, date, sec, frac)
+			buf = append(buf, '"')
+			buf = appendMetadata(buf, it.Native)
 			if r.FullProjection {
-				dst = append(dst, `,"acl":[]`...)
+				buf = append(buf, `,"acl":[]`...)
 			}
-			dst = append(dst, '}')
+			buf = append(buf, '}')
 		}
-		dst = append(dst, ']')
+		buf = append(buf, ']')
 	}
 	if len(page.Prefixes) > 0 {
-		dst = append(dst, `,"prefixes":[`...)
+		buf = append(buf, `,"prefixes":[`...)
 		for i, p := range page.Prefixes {
+			if !flush() {
+				return nil
+			}
 			if err := validateUTF8(p); err != nil {
-				return nil, err
+				return err
 			}
 			if i > 0 {
-				dst = append(dst, ',')
+				buf = append(buf, ',')
 			}
-			dst = appendString(dst, p)
+			buf = appendString(buf, p)
 		}
-		dst = append(dst, ']')
+		buf = append(buf, ']')
 	}
 	if page.Token != "" {
-		dst = append(dst, `,"nextPageToken":`...)
-		dst = appendString(dst, []byte(page.Token))
+		buf = append(buf, `,"nextPageToken":`...)
+		buf = appendString(buf, []byte(page.Token))
 	}
-	return append(dst, '}'), nil
+	o.Write(append(buf, '}'))
+	return nil
+}
+
+// AppendPage appends what RenderPage renders, outside any budget.
+func AppendPage(dst []byte, r *Request, page *Page) ([]byte, error) {
+	o := output.Standalone(max(4096, EstimateSize(len(page.Items)+len(page.Prefixes))))
+	defer o.Close()
+	if err := RenderPage(o, r, page); err != nil {
+		return nil, err
+	}
+	for _, v := range o.Body() {
+		dst = append(dst, v...)
+	}
+	return dst, nil
 }
 
 // appendUpdated writes an RFC 3339 UTC time with six fractional digits:

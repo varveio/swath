@@ -26,6 +26,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/store"
 )
@@ -72,9 +73,12 @@ type Config struct {
 	FixtureIdentity string
 	// Log receives the slow-request and shutdown lines.
 	Log io.Writer
-	// Protocols are the enabled listing routes (ProtocolS3, ProtocolGCS);
-	// empty is S3 only.
+	// Protocols are the enabled listing routes (ProtocolS3, ProtocolGCS,
+	// ProtocolAzure); empty is S3 only.
 	Protocols []string
+	// AzureAccount is the Azure route's account path segment and
+	// AdvertisedHost the host its ServiceEndpoint names (Host when empty).
+	AzureAccount, AdvertisedHost string
 }
 
 // Validate checks the bounds the server relies on (not the store, which is
@@ -90,7 +94,7 @@ func (c *Config) Validate() error {
 	case c.StopTimeout <= 0 || c.IdleTimeout <= 0 || c.WriteTimeout <= 0:
 		return errors.New("serve timeouts must be positive")
 	}
-	return nil
+	return c.validateAzure()
 }
 
 // MaxResponses is the response-count ceiling: twice the request ceiling.
@@ -104,7 +108,7 @@ type Server struct {
 
 	slots     chan struct{}
 	responses atomic.Int64
-	budget    budget
+	budget    *output.Budget
 
 	stopCtx  context.Context
 	stop     context.CancelFunc
@@ -124,6 +128,7 @@ type Server struct {
 	accepting           atomic.Bool
 	s3Active            atomic.Int64
 	routes              *routes // nil: the S3 route answers every request
+	azure               *azureRoute
 }
 
 // New returns a server for cfg; Listen binds it.
@@ -141,10 +146,13 @@ func New(cfg Config) (*Server, error) {
 		cfg:     cfg,
 		reg:     metrics.NewRegistry(),
 		slots:   make(chan struct{}, cfg.MaxConcurrentRequests),
-		budget:  budget{limit: cfg.ResponseBufferBudget},
 		started: time.Now(),
 	}
 	s.stopCtx, s.stop = context.WithCancel(context.Background())
+	s.budget = output.NewBudget(cfg.ResponseBufferBudget, func(r output.Reason, n int) {
+		s.reg.Get(metrics.ResponseChunkAllocation, r.String()).Inc()
+		s.reg.Get(metrics.ResponseChunkCapacityBytes, r.String()).Observe(float64(n))
+	})
 	s.initRoutes()
 	s.pager = &s3.Pager{Store: cfg.Store, OnDelimiterPath: func(p string) { s.reg.Get(metrics.DelimiterPath, p).Inc() }}
 	// The meters every scrape shows from the start, so a reader can tell a
@@ -156,10 +164,15 @@ func New(cfg Config) (*Server, error) {
 		s.reg.Get(metrics.RequestLatency, sh.String())
 	}
 	s.reg.Get(metrics.ServingPath, servingPathTag(cfg.ServingMode))
-	s.reg.SetGauge(metrics.ResponseBytesLive, func() float64 { return float64(s.budget.charged.Load()) })
-	s.reg.SetGauge(metrics.ResponseBytesPeak, func() float64 { return float64(s.budget.peak.Load()) })
+	for _, r := range output.Reasons {
+		s.reg.Get(metrics.ResponseChunkAllocation, r.String())
+		s.reg.Get(metrics.ResponseChunkCapacityBytes, r.String())
+	}
+	s.reg.SetGauge(metrics.ResponseBytesLive, func() float64 { return float64(s.budget.Charged()) })
+	s.reg.SetGauge(metrics.ResponseBytesPeak, func() float64 { return float64(s.budget.Peak()) })
 	s.reg.SetGauge(metrics.ResponseActive, func() float64 { return float64(s.responses.Load()) })
 	s.reg.SetGauge(metrics.ProtocolRequestsActive, func() float64 { return float64(s.s3Active.Load()) }, "s3")
+	s.newAzureRoute()
 	s.httpSrv = &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: cfg.IdleTimeout,
@@ -231,11 +244,14 @@ func (s *Server) Serve() error {
 // Shutdown stops the server within timeout: new requests are refused,
 // requests waiting for admission or sleeping in an injected delay are
 // answered 503 at once, and the store is closed once every request that
-// holds it has returned. It reports false (and logs shutdown_incomplete)
-// when the deadline passed first; a store read that does not stop on
-// cancellation then keeps the store open until it returns.
-func (s *Server) Shutdown(timeout time.Duration) bool {
-	complete := true
+// holds it has returned. Everything, the store's Close included, is bounded
+// by the one deadline: past it Shutdown logs shutdown_incomplete, reports
+// false and leaves the remaining cleanup to finish in the background (a
+// store read that ignores cancellation keeps the store open until it
+// returns). A store Close failure is logged and returned once. A second
+// call does nothing and reports true, nil.
+func (s *Server) Shutdown(timeout time.Duration) (bool, error) {
+	complete, failed := true, error(nil)
 	s.shutOnce.Do(func() {
 		deadline := time.Now().Add(timeout)
 		s.opMu.Lock()
@@ -268,44 +284,30 @@ func (s *Server) Shutdown(timeout time.Duration) bool {
 			fmt.Fprintln(s.cfg.Log, "shutdown_incomplete HTTP server stop exceeded its deadline")
 			complete = false
 		}
+		// The store closes after the last request that holds it, on its
+		// own goroutine, so a Close that blocks cannot outlast the
+		// deadline.
+		cleaned := make(chan error, 1)
+		go func() {
+			<-drained
+			err := s.cfg.Store.Close()
+			if err != nil {
+				fmt.Fprintf(s.cfg.Log, "replay store cleanup failed: %v\n", err)
+			}
+			cleaned <- err
+		}()
 		select {
-		case <-drained:
-			s.cfg.Store.Close()
+		case err := <-cleaned:
+			if err != nil {
+				failed = fmt.Errorf("failed to close S3 listing replay fixture: %w", err)
+			}
 		case <-ctx.Done():
 			fmt.Fprintln(s.cfg.Log, "shutdown_incomplete active replay work retained its resources for deferred cleanup")
 			complete = false
-			go func() { <-drained; s.cfg.Store.Close() }()
 		}
 	})
-	return complete
+	return complete, failed
 }
-
-// budget is the response byte budget: encoded responses are charged
-// before they are rendered (an estimate) and settled after; a request
-// that cannot be charged is refused rather than queued.
-type budget struct {
-	limit         int64
-	charged, peak atomic.Int64
-}
-
-func (b *budget) tryCharge(n int64) bool {
-	for {
-		cur := b.charged.Load()
-		if cur+n > b.limit {
-			return false
-		}
-		if b.charged.CompareAndSwap(cur, cur+n) {
-			for {
-				p := b.peak.Load()
-				if cur+n <= p || b.peak.CompareAndSwap(p, cur+n) {
-					return true
-				}
-			}
-		}
-	}
-}
-
-func (b *budget) release(n int64) { b.charged.Add(-n) }
 
 // begin registers a request that will use the store; false once shutdown
 // has begun.
