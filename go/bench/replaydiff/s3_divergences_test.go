@@ -128,7 +128,7 @@ func TestJavaFirstRefusals(t *testing.T) {
 	} {
 		query, _ := requestQuery(c.r)
 		got := javaFirstRefusal(c.exp, c.r, query, "bkt")
-		if got == nil || string(got.body()) != `<?xml version="1.0" encoding="UTF-8"?><Error>`+c.want+tail {
+		if got == nil || string(got.body()) != `<?xml version="1.0" encoding="UTF-8"?>`+"\n"+`<Error>`+c.want+tail {
 			t.Errorf("%+v: %v", c.r, got)
 		}
 	}
@@ -201,9 +201,13 @@ func TestDivergenceCases(t *testing.T) {
 // TestDivergenceAssertsTheGoSide: against a reference named java, a
 // request the probed rules cover passes when the Go answer is the
 // expectation and is listed as a documented divergence with the Java
-// answer; a Go answer that moves fails.
+// answer; a Go answer that moves fails. The Java server writes no newline
+// after the XML declaration and the Go route must write one (live S3
+// does), without that making a request a divergence or a token-bytes
+// difference.
 func TestDivergenceAssertsTheGoSide(t *testing.T) {
 	const javaPage = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>bkt</Name><Prefix></Prefix><KeyCount>0</KeyCount></ListBucketResult>`
+	goPage := strings.Replace(javaPage, "?>", "?>\n", 1)
 	serve := func(body string) string {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/xml")
@@ -214,18 +218,39 @@ func TestDivergenceAssertsTheGoSide(t *testing.T) {
 	}
 	java := &target{name: "java", base: serve(javaPage), client: http.DefaultClient}
 	for _, c := range []struct {
-		goBody string
-		pass   bool
+		query, goBody string
+		pass          bool
+		divergences   int
 	}{
-		{strings.Replace(javaPage, "</Prefix>", "</Prefix><StartAfter></StartAfter>", 1), true},
-		{javaPage, false},
+		{"list-type=2&start-after=", strings.Replace(goPage, "</Prefix>", "</Prefix><StartAfter></StartAfter>", 1), true, 1},
+		{"list-type=2&start-after=", strings.Replace(javaPage, "</Prefix>", "</Prefix><StartAfter></StartAfter>", 1), false, 0},
+		{"list-type=2&start-after=", goPage, false, 0},
+		{"list-type=2", goPage, true, 0},
+		{"list-type=2", javaPage, false, 0},
 	} {
 		rep := &report{}
 		d := &driver{o: options{bucket: "bkt", parallel: 1}, ref: java, got: &target{name: "go", base: serve(c.goBody), client: http.DefaultClient},
 			comp: bytesComparator{}, rep: rep}
-		d.runCases("case", []request{{Name: "empty start-after", Method: "GET", Query: "list-type=2&start-after="}})
-		if (rep.Passed == 1) != c.pass || (len(rep.Divergences) == 1) != c.pass {
-			t.Errorf("go %s: passed %d failed %d divergences %v", c.goBody, rep.Passed, rep.Failed, rep.Divergences)
+		d.runCases("case", []request{{Name: "case", Method: "GET", Query: c.query}})
+		if (rep.Passed == 1) != c.pass || len(rep.Divergences) != c.divergences || len(rep.TokenBytes) != 0 {
+			t.Errorf("%s, go %q: passed %d failed %d divergences %v token bytes %v", c.query, c.goBody, rep.Passed, rep.Failed, rep.Divergences, rep.TokenBytes)
+		}
+	}
+}
+
+// TestDeclNewline: the newline is inserted after the declaration only
+// where it is missing, and nothing else is touched.
+func TestDeclNewline(t *testing.T) {
+	for in, want := range map[string]string{
+		javaDecl + "<a/>":       javaDecl + "\n<a/>",
+		javaDecl + "\n<a/>":     javaDecl + "\n<a/>",
+		javaDecl:                javaDecl + "\n",
+		"<a/>":                  "<a/>",
+		"":                      "",
+		" " + javaDecl + "<a/>": " " + javaDecl + "<a/>",
+	} {
+		if got := string(declNewline([]byte(in))); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
 		}
 	}
 }

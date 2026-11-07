@@ -5,12 +5,16 @@ package s3
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
 	"math/rand/v2"
+	"net/url"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
 
 // TestTokenGolden pins the wire bytes. They are this server's own: the
@@ -122,4 +126,39 @@ func TestTokenProperties(t *testing.T) {
 func isBadToken(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Status == 400 && e.Code == "InvalidArgument"
+}
+
+// TestTokenIsNotBound pins what the checksum does not establish: a
+// token issued over one fixture resumes a pager over another at the
+// same boundary, and a token built by a client for a boundary of its
+// choosing is accepted, one past every key giving an empty page.
+func TestTokenIsNotBound(t *testing.T) {
+	list := func(keys []string, query string) *Result {
+		t.Helper()
+		req, err := ParseRequest("bkt", query)
+		if err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		res, err := (&Pager{Store: memstore.Keys(memstore.Options{}, keys...)}).List(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return res
+	}
+	a := list([]string{"a/1", "a/2", "a/3"}, "list-type=2&max-keys=2")
+	if a.NextToken == "" {
+		t.Fatal("no token")
+	}
+	other := []string{"a/1", "a/2x", "a/3", "b/9"}
+	if got := render(list(other, "list-type=2&continuation-token="+url.QueryEscape(a.NextToken))); got != "O:a/2x O:a/3 O:b/9" {
+		t.Errorf("another fixture, the issued token: %s", got)
+	}
+	built := EncodeToken([]byte("a/3"), false)
+	if got := render(list(other, "list-type=2&continuation-token="+url.QueryEscape(built))); got != "O:b/9" {
+		t.Errorf("a built token: %s", got)
+	}
+	past := list(other, "list-type=2&continuation-token="+url.QueryEscape(EncodeToken([]byte("zzz"), false)))
+	if len(past.Entries) != 0 || past.NextToken != "" {
+		t.Errorf("a built token past every key: %s", render(past))
+	}
 }

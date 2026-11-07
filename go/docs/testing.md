@@ -206,7 +206,8 @@ resets their connection; a rate cap throttles requests beyond N per trailing sec
 the same faults for the same seed and plan. It records a timeline (100 ms buckets: arrivals, faults, most
 requests in flight). A request counts as in flight from its arrival until the proxy releases its answer, so a
 client that sends its next request on the previous answer is never seen with two; answers are forwarded
-whole, not streamed. `bench/faultproxy` serves it:
+whole, not streamed, and `Plan.MaxBody` bounds what is buffered: a longer upstream body is answered `502` with
+`X-Faulttest-Body-Limit` (`TestMaxBodyBoundsTheBuffer`). `bench/faultproxy` serves it:
 
 ```bash
 go run ./bench/faultproxy -target http://127.0.0.1:19090 -listen 127.0.0.1:19091 \

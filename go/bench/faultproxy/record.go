@@ -6,16 +6,23 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
+	"mime"
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
 )
 
 // Exchange is one line of a -record capture: a request the proxy
@@ -25,13 +32,17 @@ import (
 // apart (the raw path and query) and the timestamps. A body that is
 // valid UTF-8 is written as text, any other as base64. Credentials a
 // client sends (Authorization and the signing headers) are never
-// written.
+// written. LimitExceeded, when set, says the answer's body was over the
+// recording's limit (-record-max-body): the response carries the
+// provider's status and headers, no body, and the client was answered
+// 502 instead.
 type Exchange struct {
-	Seq        uint64   `json:"seq"`
-	StartedAt  string   `json:"started_at"`
-	CapturedAt string   `json:"captured_at"`
-	Request    Request  `json:"request"`
-	Response   Response `json:"response"`
+	Seq           uint64   `json:"seq"`
+	StartedAt     string   `json:"started_at"`
+	CapturedAt    string   `json:"captured_at"`
+	LimitExceeded string   `json:"limit_exceeded,omitempty"`
+	Request       Request  `json:"request"`
+	Response      Response `json:"response"`
 }
 
 // Request is the forwarded request as the client sent it: Path and Query
@@ -62,33 +73,102 @@ type Header struct {
 // redacted are the request headers whose values are credentials.
 var redacted = map[string]bool{"authorization": true, "x-amz-security-token": true, "cookie": true, "proxy-authorization": true}
 
-// recorder writes every exchange through next as one JSON line.
+// recorder writes every exchange through next as one JSON line, before
+// the client receives any byte of its answer: the answer is held while
+// the exchange is serialized and written, then released. A client sends
+// the request that carries a page token only after it has the answer that
+// issued it, so the issuing exchange always precedes, in the file and in
+// sequence numbers, every exchange that uses its token, and a capture is
+// replayed in one pass (replaydiff -capture) without reordering. Writing
+// before the release costs each answer the time of one buffered write;
+// numbering exchanges as they arrive and reordering them in a writer
+// instead would hold a window of finished exchanges in memory and still
+// need the same rule for the order a client can observe.
 type recorder struct {
-	next   http.Handler
-	target string
-	mu     sync.Mutex
-	w      *bufio.Writer
-	seq    uint64
-	err    error
+	next    http.Handler
+	target  string
+	maxBody int64 // the largest answer body recorded (and released)
+	mu      sync.Mutex
+	w       *bufio.Writer
+	enc     *json.Encoder // into line
+	line    bytes.Buffer
+	seq     uint64
+	err     error
+	// exceeded counts the answers over maxBody.
+	exceeded int
+	// closed refuses new requests once Close began; inflight counts the
+	// handlers still to record their exchange (Add only under adm while
+	// open, so Close's Wait never races an Add). adm is apart from mu so
+	// a stalled write cannot hold Close past its deadline.
+	adm      sync.Mutex
+	closed   bool
+	active   int
+	inflight sync.WaitGroup
 }
 
-func newRecorder(next http.Handler, target string, w io.Writer) *recorder {
-	return &recorder{next: next, target: strings.TrimSuffix(target, "/"), w: bufio.NewWriter(w)}
+// newRecorder records the exchanges through next to w; an answer whose
+// body is over maxBody bytes is recorded without it and answered 502
+// (the proxy in front of a provider is given the same bound, so it never
+// buffers more: faulttest.Plan.MaxBody).
+func newRecorder(next http.Handler, target string, w io.Writer, maxBody int64) *recorder {
+	rec := &recorder{next: next, target: strings.TrimSuffix(target, "/"), maxBody: maxBody, w: bufio.NewWriter(w)}
+	rec.enc = json.NewEncoder(&rec.line)
+	// '<', '>' and '&' as they are: an XML body escaped for HTML would
+	// take six bytes for each.
+	rec.enc.SetEscapeHTML(false)
+	return rec
+}
+
+func (rec *recorder) begin() bool {
+	rec.adm.Lock()
+	defer rec.adm.Unlock()
+	if rec.closed {
+		return false
+	}
+	rec.active++
+	rec.inflight.Add(1)
+	return true
+}
+
+func (rec *recorder) end() {
+	rec.adm.Lock()
+	rec.active--
+	rec.adm.Unlock()
+	rec.inflight.Done()
 }
 
 func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !rec.begin() {
+		http.Error(w, "faultproxy: the recording is closed", http.StatusServiceUnavailable)
+		return
+	}
+	defer rec.end()
 	started := time.Now().UTC()
-	cw := &captureWriter{ResponseWriter: w}
+	cw := &captureWriter{ResponseWriter: w, limit: rec.maxBody}
+	path, query, _ := strings.Cut(r.RequestURI, "?")
+	x := Exchange{StartedAt: started.Format(time.RFC3339Nano),
+		Request: Request{Method: r.Method, URL: rec.target + r.RequestURI, Path: path, Query: query, Headers: headers(r.Header, r.Host, true)}}
 	defer func() {
-		path, query, _ := strings.Cut(r.RequestURI, "?")
-		x := Exchange{StartedAt: started.Format(time.RFC3339Nano), CapturedAt: time.Now().UTC().Format(time.RFC3339Nano),
-			Request: Request{Method: r.Method, URL: rec.target + r.RequestURI, Path: path, Query: query, Headers: headers(r.Header, r.Host, true)}}
-		if !cw.hijacked {
-			x.Response.Status = cw.status
-			if x.Response.Status == 0 {
-				x.Response.Status = http.StatusOK
-			}
-			x.Response.Headers = headers(cw.Header(), "", false)
+		// A handler that panics (http.ErrAbortHandler: the upstream
+		// answer broke off) gives the client a closed connection, no
+		// answer: recorded as status 0, like a reset.
+		if p := recover(); p != nil {
+			x.CapturedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			rec.write(&x)
+			panic(p)
+		}
+	}()
+	rec.next.ServeHTTP(cw, r)
+	x.CapturedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if !cw.hijacked {
+		x.Response.Status = cw.code()
+		x.Response.Headers = headers(cw.Header(), "", false)
+		switch {
+		case cw.over:
+			x.LimitExceeded = fmt.Sprintf("the answer's body is over %d bytes", rec.maxBody)
+		case cw.Header().Get(faulttest.BodyLimitHeader) != "":
+			x.LimitExceeded = fmt.Sprintf("the provider's answer body is over %s bytes; the proxy answered 502", cw.Header().Get(faulttest.BodyLimitHeader))
+		default:
 			body := cw.body.Bytes()
 			if utf8.Valid(body) {
 				s := string(body)
@@ -98,9 +178,14 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				x.Response.BodyBase64 = &s
 			}
 		}
-		rec.write(&x)
-	}()
-	rec.next.ServeHTTP(cw, r)
+	}
+	rec.write(&x)
+	if x.LimitExceeded != "" {
+		log.Printf("faultproxy: recording exchange %d (%s %s): %s, recorded without its body", x.Seq, r.Method, r.RequestURI, x.LimitExceeded)
+	}
+	if !cw.hijacked {
+		cw.release(rec.maxBody)
+	}
 }
 
 func (rec *recorder) write(x *Exchange) {
@@ -108,10 +193,16 @@ func (rec *recorder) write(x *Exchange) {
 	defer rec.mu.Unlock()
 	rec.seq++
 	x.Seq = rec.seq
-	line, err := json.Marshal(x)
+	if x.LimitExceeded != "" {
+		rec.exceeded++
+	}
+	rec.line.Reset()
+	err := rec.enc.Encode(x) // one line, '\n' included
 	if err == nil {
-		line = append(line, '\n')
-		_, err = rec.w.Write(line)
+		_, err = rec.w.Write(rec.line.Bytes())
+	}
+	if rec.line.Cap() > 1<<20 {
+		rec.line = bytes.Buffer{} // a large answer's buffer is not kept
 	}
 	if err == nil {
 		err = rec.w.Flush()
@@ -119,6 +210,40 @@ func (rec *recorder) write(x *Exchange) {
 	if rec.err == nil {
 		rec.err = err
 	}
+}
+
+// Close refuses requests from now on, waits until every request in
+// flight has recorded its exchange or ctx ends, and returns the first
+// write error. A reset is recorded after the client already saw its
+// connection close, and a client may give up on an answer it was still
+// waiting for, so a shutdown without this wait could lose those
+// exchanges.
+func (rec *recorder) Close(ctx context.Context) error {
+	rec.adm.Lock()
+	rec.closed = true
+	rec.adm.Unlock()
+	done := make(chan struct{})
+	go func() {
+		rec.inflight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		rec.adm.Lock()
+		n := rec.active
+		rec.adm.Unlock()
+		return fmt.Errorf("%d exchanges still in flight at shutdown were not recorded: %w", n, ctx.Err())
+	}
+	if err := rec.Err(); err != nil {
+		return err
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.exceeded > 0 {
+		return fmt.Errorf("%d answers were over the body limit of %d bytes (-record-max-body): recorded without their bodies, answered 502", rec.exceeded, rec.maxBody)
+	}
+	return nil
 }
 
 // Err is the first write error, if any.
@@ -151,11 +276,16 @@ func headers(h http.Header, host string, request bool) []Header {
 	return out
 }
 
-// captureWriter tees the answer written to the client.
+// captureWriter holds the answer the handler writes until release: the
+// status, the body up to limit bytes (the headers are the client's own
+// map, sent with the status); over marks a body that went past limit,
+// whose bytes beyond it are dropped.
 type captureWriter struct {
 	http.ResponseWriter
+	limit    int64
 	status   int
 	body     bytes.Buffer
+	over     bool
 	hijacked bool
 }
 
@@ -163,15 +293,69 @@ func (c *captureWriter) WriteHeader(code int) {
 	if c.status == 0 {
 		c.status = code
 	}
-	c.ResponseWriter.WriteHeader(code)
 }
 
 func (c *captureWriter) Write(b []byte) (int, error) {
 	if c.status == 0 {
 		c.status = http.StatusOK
 	}
-	c.body.Write(b)
-	return c.ResponseWriter.Write(b)
+	if c.over || c.limit > 0 && int64(c.body.Len()+len(b)) > c.limit {
+		c.over = true
+		c.body = bytes.Buffer{}
+		return len(b), nil
+	}
+	return c.body.Write(b)
+}
+
+// code is the answer's status, 200 when the handler set none (as
+// net/http answers).
+func (c *captureWriter) code() int {
+	if c.status == 0 {
+		return http.StatusOK
+	}
+	return c.status
+}
+
+// release sends the held answer to the client; one whose body went past
+// limit is answered 502, marked as the proxy marks its own, never cut.
+//
+// The client is a listing client, never a browser, but the body is the
+// provider's and passes through unread, so it is sent with a Content-Type
+// set here and never sniffed: the provider's own type, unless it is an
+// HTML one (served as text/plain: no listing API answers HTML, and the
+// recording keeps the provider's header as it was), and
+// application/octet-stream when the provider named none (net/http would
+// otherwise sniff one from the bytes, text/html included), with
+// X-Content-Type-Options: nosniff.
+func (c *captureWriter) release(limit int64) {
+	w := c.ResponseWriter
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
+	if c.over {
+		clear(h)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set(faulttest.BodyLimitHeader, strconv.FormatInt(limit, 10))
+		h.Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, "faultproxy: the answer's body is over %d bytes\n", limit)
+		return
+	}
+	h.Set("Content-Type", servedType(h.Get("Content-Type")))
+	w.WriteHeader(c.code())
+	_, _ = w.Write(c.body.Bytes())
+}
+
+// servedType is the Content-Type the client is sent for a provider
+// answer of type ct.
+func servedType(ct string) string {
+	if ct == "" {
+		return "application/octet-stream"
+	}
+	mt, _, err := mime.ParseMediaType(ct)
+	if err != nil || mt == "text/html" || mt == "application/xhtml+xml" {
+		return "text/plain; charset=utf-8"
+	}
+	return ct
 }
 
 // Hijack lets the proxy reset the connection; the exchange is recorded

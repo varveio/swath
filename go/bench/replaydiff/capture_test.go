@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/replay/server"
 )
@@ -73,8 +75,8 @@ func captureWalk(t *testing.T, base, path, query, tokenParam string, next func([
 // captured with the provider's own tokens, replays against the Go server
 // with each captured token mapped to the server's own for the same
 // point, and passes; a capture whose answer named another object fails
-// at that request, and a token no earlier answer issued is skipped (and
-// with it the rest of that walk).
+// at that request, and a token no earlier answer issued fails its
+// request, the rest of that walk skipped with the reason.
 func TestCaptureReplaysAClientStream(t *testing.T) {
 	keys := liveKeys()
 	for _, c := range []struct {
@@ -104,10 +106,10 @@ func TestCaptureReplaysAClientStream(t *testing.T) {
 		got := &target{name: "go", base: startGoProtocols(t, protocols, keys...), client: &http.Client{}}
 		run := func(xs []capturedExchange) *report {
 			rep := &report{}
-			replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep}, c.protocol, gcsSynthetic, xs)
+			replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, c.protocol, gcsSynthetic, exchangeItems(xs), testLimits)
 			return rep
 		}
-		if rep := run(xs); rep.Failed != 0 || rep.Passed != len(xs) || len(rep.Skipped) != 0 {
+		if rep := run(xs); rep.Failed != 0 || rep.Passed != len(xs) || len(rep.Skipped) != 0 || len(rep.Results) != 0 {
 			for _, r := range rep.Results {
 				if !r.Pass {
 					t.Errorf("%s %q: %s %+v", c.protocol, r.Name, r.Error, r.diff)
@@ -137,12 +139,190 @@ func TestCaptureReplaysAClientStream(t *testing.T) {
 		body = strings.Replace(body, "data/", "date/", 1)
 		changed[1].Response.Body = &body
 		rep := run(changed)
-		if rep.Failed != 1 || !strings.HasPrefix(rep.Results[1].Name, fmt.Sprintf("capture %d ", xs[1].Seq)) || rep.Results[1].Pass {
+		if rep.Failed != 1 || len(rep.Results) != 1 || !strings.HasPrefix(rep.Results[0].Name, fmt.Sprintf("capture %d ", xs[1].Seq)) || rep.Results[0].Pass {
 			t.Errorf("%s: a changed answer: %d failed", c.protocol, rep.Failed)
 		}
+		// A capture that starts mid-walk, and one with a continuation
+		// before the answer that issued its token: the request is a
+		// failure, never skipped, and the rest of its walk is skipped
+		// naming it.
 		orphan := append([]capturedExchange(nil), xs[1:]...)
-		if rep := run(orphan); len(rep.Skipped) != len(orphan) {
-			t.Errorf("%s: a token no answer issued: skipped %v", c.protocol, rep.Skipped)
+		swapped := append([]capturedExchange{xs[1], xs[0]}, xs[2:]...)
+		for _, cc := range []struct {
+			name string
+			xs   []capturedExchange
+			pass int
+		}{{"mid-walk", orphan, 0}, {"out of order", swapped, 1}} {
+			rep := run(cc.xs)
+			if rep.Failed != 1 || rep.Passed != cc.pass || len(rep.Skipped) != len(cc.xs)-1-cc.pass ||
+				!strings.Contains(rep.Results[0].Error, "not issued by an earlier captured answer") ||
+				!strings.HasPrefix(rep.Results[0].Name, fmt.Sprintf("capture %d ", xs[1].Seq)) {
+				t.Errorf("%s %s: %d failed %d passed, skipped %v, %+v", c.protocol, cc.name, rep.Failed, rep.Passed, rep.Skipped, rep.Results)
+			}
+			for _, sk := range rep.Skipped {
+				if !strings.Contains(sk, fmt.Sprintf("issued by capture %d, whose replay failed", xs[1].Seq)) {
+					t.Errorf("%s %s: %s", c.protocol, cc.name, sk)
+				}
+			}
 		}
+	}
+}
+
+var testLimits = captureLimits{maxBody: 1 << 24, maxDecoded: 1 << 26, maxTokens: 1 << 20}
+
+func captureLine(t *testing.T, x *capturedExchange) []byte {
+	t.Helper()
+	b, err := json.Marshal(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(b, '\n')
+}
+
+// s3CaptureWalk captures a walk of data/ at page size 7 through a fake
+// provider in front of a Go server holding keys.
+func s3CaptureWalk(t *testing.T, keys []string) []capturedExchange {
+	t.Helper()
+	f := &fakeProvider{backend: startGoProtocols(t, []string{server.ProtocolS3}, keys...), tokenParam: "continuation-token",
+		tokenRe: regexp.MustCompile(`(<NextContinuationToken>)([^<]*)<`), extra: http.Header{"X-Amz-Request-Id": {"R1"}, "Server": {"AmazonS3"}}, tokens: map[string]string{}}
+	live := httptest.NewServer(f)
+	t.Cleanup(live.Close)
+	return captureWalk(t, live.URL, "/bkt", "list-type=2&prefix=data/&max-keys=7", "continuation-token", nextToken, false)
+}
+
+// TestCaptureFailedIssuerSkipsItsWalk: where the Go server issues no
+// token for a page the provider continued, that page fails and every
+// later page of the walk is skipped naming it, not reported as an orphan.
+func TestCaptureFailedIssuerSkipsItsWalk(t *testing.T) {
+	keys := liveKeys()
+	xs := s3CaptureWalk(t, keys)
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, keys[:5]...), client: &http.Client{}}
+	rep := &report{}
+	replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep}, "s3", gcsSynthetic, exchangeItems(xs[:4]), testLimits)
+	if rep.Failed != 1 || len(rep.Skipped) != 3 {
+		t.Fatalf("%d failed, skipped %v", rep.Failed, rep.Skipped)
+	}
+	for _, sk := range rep.Skipped {
+		if !strings.Contains(sk, "issued by capture 1, whose replay failed") {
+			t.Error(sk)
+		}
+	}
+}
+
+// TestCaptureLimits: a captured body over -capture-max-body, a gzip body
+// that decodes past -capture-max-decoded, a line over the line limit, an
+// exchange the recorder marked as over its own limit, and a token map
+// past -capture-max-tokens each fail explicitly; the exchanges after a
+// failing one (but the last) are still replayed.
+func TestCaptureLimits(t *testing.T) {
+	keys := liveKeys()
+	xs := s3CaptureWalk(t, keys)
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, keys...), client: &http.Client{}}
+	run := func(items func(yield func(captureItem) bool), lim captureLimits) *report {
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep}, "s3", gcsSynthetic, items, lim)
+		return rep
+	}
+	wantErr := func(name string, rep *report, i int, sub string) {
+		t.Helper()
+		if i >= len(rep.Results) || rep.Results[i].Pass || !strings.Contains(rep.Results[i].Error, sub) {
+			t.Errorf("%s: want result %d failing with %q: %+v", name, i, sub, rep.Results)
+		}
+	}
+	first := xs[0]
+	body := len(*first.Response.Body)
+
+	lim := testLimits
+	lim.maxBody = int64(body - 1)
+	rep := run(exchangeItems([]capturedExchange{first}), lim)
+	wantErr("body", rep, 0, "-capture-max-body")
+	lim.maxBody = int64(body)
+	if rep := run(exchangeItems([]capturedExchange{first}), lim); rep.Passed != 1 {
+		t.Errorf("a body at the limit: %+v", rep.Results)
+	}
+
+	var bomb bytes.Buffer
+	zw := gzip.NewWriter(&bomb)
+	zw.Write(make([]byte, 4<<20))
+	zw.Close()
+	gz := first
+	b64 := base64.StdEncoding.EncodeToString(bomb.Bytes())
+	gz.Response.Body, gz.Response.BodyBase64 = nil, &b64
+	gz.Response.Headers = append(append([]capturedHeader(nil), first.Response.Headers...), capturedHeader{"Content-Encoding", "gzip"})
+	lim = testLimits
+	lim.maxDecoded = 1 << 20
+	wantErr("decoded", run(exchangeItems([]capturedExchange{gz, first}), lim), 0, "-capture-max-decoded")
+
+	over := first
+	over.LimitExceeded = "the answer's body is over 1000 bytes"
+	over.Response.Body = nil
+	rep = run(exchangeItems([]capturedExchange{over, first}), testLimits)
+	wantErr("recorder", rep, 0, "body limit was exceeded")
+	if rep.Passed != 1 {
+		t.Errorf("after the recorder's limit: %d passed", rep.Passed)
+	}
+
+	var file bytes.Buffer
+	file.Write(captureLine(t, &first))
+	file.WriteString(`{"seq":2,"request":{"path":"` + strings.Repeat("x", 3<<20) + `"}}` + "\n")
+	second := first
+	second.Seq = 3
+	file.Write(captureLine(t, &second))
+	rep = run(captureLines(&file, 1<<20), testLimits)
+	if rep.Passed != 2 || rep.Failed != 1 {
+		t.Errorf("a long line: %+v", rep.Results)
+	}
+	wantErr("line", rep, 1, "line 2 is over 1048576 bytes")
+
+	lim = testLimits
+	lim.maxTokens = 1
+	rep = run(exchangeItems(xs), lim)
+	if rep.Compared != 2 || rep.Passed != 1 {
+		t.Errorf("tokens: %d compared %d passed", rep.Compared, rep.Passed)
+	}
+	wantErr("tokens", rep, 1, "-capture-max-tokens")
+}
+
+// TestCaptureStreams: the replay reads a capture one exchange at a time:
+// the first exchange reaches the Go server before the second line is
+// written.
+func TestCaptureStreams(t *testing.T) {
+	keys := liveKeys()
+	xs := s3CaptureWalk(t, keys)
+	backend := startGoProtocols(t, []string{server.ProtocolS3}, keys...)
+	seen := make(chan struct{}, len(xs))
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- struct{}{}
+		resp, err := http.Get(backend + r.RequestURI)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer resp.Body.Close()
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	defer front.Close()
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		for i := range xs {
+			pw.Write(captureLine(t, &xs[i]))
+			select {
+			case <-seen:
+			case <-time.After(5 * time.Second):
+				t.Errorf("exchange %d was not replayed before the next line was written", i+1)
+				return
+			}
+		}
+	}()
+	rep := &report{}
+	replayCapture(&driver{o: options{bucket: "bkt"}, got: &target{name: "go", base: front.URL, client: &http.Client{}}, rep: rep},
+		"s3", gcsSynthetic, captureLines(pr, 1<<20), testLimits)
+	if rep.Passed != len(xs) {
+		t.Errorf("%d of %d passed: %+v", rep.Passed, len(xs), rep.Results)
 	}
 }

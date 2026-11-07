@@ -112,12 +112,15 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   the Basic Multilingual Plane (`١٢` is 12); a digit outside it (such as U+1D7D9) is not an integer.
 - Refusals, each `400 InvalidArgument` with live S3's message, checked in S3's order after `max-keys`: a `marker`
   (ListObjects V1's, even empty); an `encoding-type` other than `url` in any case (the empty one included); a
-  `continuation-token` that is empty, blank or not a token this server issued unaltered; a NUL in `prefix`, or
+  `continuation-token` that is empty, blank, not in this server's token form or whose checksum fails; a NUL in `prefix`, or
   in a `start-after` that is used (a token wins over it).
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
   omits the ignored `StartAfter`. A token is unpadded base64url of the resume boundary and a CRC-32, so a
   flipped or dropped character is refused as S3 refuses it (S3 serves some alterations of its own decoded
-  bytes; this server refuses every one). A flat page's token sent with a delimiter resumes
+  bytes; this server refuses every one). The checksum covers only the flag and the boundary: it shows a token was
+  not altered, not where it came from. No bucket, fixture, process or secret is bound in, so a token survives a
+  restart, is accepted by a server on another fixture, and one a client builds for any boundary is accepted
+  (one past the fixture's keys gives an empty page), as a `start-after` would be (`TestTokenIsNotBound`). A flat page's token sent with a delimiter resumes
   at its key and rolls up what follows, the common prefix that key falls in included; a `start-after` inside a
   common prefix passes it. Replay tokens and S3's are not interchangeable, and neither are the Java server's
   (`v2:...`), which this server refuses.
@@ -128,11 +131,14 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   and a C0 control character other than TAB, LF and CR as a lower-case hexadecimal character reference
   (`&#x0;`, `&#x1;`, `&#xb;`, `&#x1f;`); TAB, LF, CR, DEL and every other character are written as they are.
   This holds in `Key`, `Prefix`, `StartAfter`, `Delimiter` and `CommonPrefixes/Prefix`.
-- The rules in the three items above, the form reading and the refusals answer as live S3 does (probed on
+- A listing and an error document both start with `<?xml version="1.0" encoding="UTF-8"?>` and a newline (LF),
+  then the root element, the bytes live S3 wrote on 2026-11-07 (`TestLiveXMLDeclarationNewline`).
+- The rules in the four items above, the form reading and the refusals answer as live S3 does (probed on
   2026-11-07 against a public `us-east-1` bucket, anonymous) and differ from the Java server, which keeps `+`
   and malformed escapes as bytes, takes the last of duplicates, treats a blank token or `encoding-type` value
   as absent, ignores `marker`, serves a NUL, reads key parameters as raw bytes, escapes a space and `*`, writes
-  control characters raw, issues and accepts unchecked tokens, and writes its own error document (`Resource`
+  control characters raw, writes no newline after the XML declaration, issues and accepts unchecked tokens, and
+  writes its own error document (`Resource`
   in place of S3's elements, other messages for `max-keys` and the method). ListObjects V1 (no `list-type`) and
   `list-type=3` stay refused (`400 InvalidArgument`), as on the Java server, where S3 serves them; `fetch-owner=true` renders `Owner` only
   where the fixture holds owner columns.
@@ -573,7 +579,13 @@ refuses it, the replay decodes it), `gcs-11e`, `11f`, `11g`, `11i` (`fields`, `v
 
 `bench/faultproxy -record FILE` writes every exchange it forwards as a JSON line (the campaign's raw-exchange
 shape: method, URL, raw path and query, request headers with credentials redacted, status, response headers, body,
-timestamps). Running the lister through it against the provider records the listing and the client's whole
+timestamps). Each exchange is written before its answer is released to the client, so the answer that issued a
+page token precedes, in the file and in sequence numbers, every request that carries that token
+(`TestRecordPersistsBeforeRelease`). The client is sent the provider's body with its Content-Type set and never
+sniffed (`X-Content-Type-Options: nosniff`; `application/octet-stream` where the provider named none, `text/plain`
+for an HTML type), while the file keeps the provider's headers as sent (`TestRecordReleasesWithAContentType`). On SIGINT or SIGTERM the proxy stops accepting connections and waits up to
+`-drain` (30 s) for the requests in flight to be answered and recorded, a reset included, before it closes the
+file (`TestRecordDrainsOnShutdown`); an exchange still in flight then is reported and the proxy exits 1. Running the lister through it against the provider records the listing and the client's whole
 request stream in one go; `replaydiff -capture FILE` then replays every captured request, in order, against the Go
 server serving the dataset that same run wrote, maps each captured token to the token the Go server issued for the
 same request, and compares each answer with the captured one under the policy above (a gzip-coded captured body is
@@ -587,6 +599,23 @@ kill -INT %1
 /tmp/replaydiff -capture /tmp/capture.jsonl -go ./swath-replay -fixture /tmp/rec -bucket noaa-normals-pds
 # GCS: -target https://storage.googleapis.com and swath list gs://B/P --gcs-anonymous --gcs-endpoint http://127.0.0.1:19401/storage/v1/
 ```
+
+The capture is read and replayed one exchange at a time (`TestCaptureStreams`): one exchange, the token map and
+the report's failures stay in memory, and the report lists the failing and skipped exchanges while it counts the
+passing ones. Because the recorder writes an issuing answer before any request that uses its token, a token no
+earlier exchange issued fails its request (the capture is out of order or starts mid-walk), and the rest of that
+walk is skipped naming it, as it is after a page whose replay failed (`TestCaptureReplaysAClientStream`,
+`TestCaptureFailedIssuerSkipsItsWalk`). Every size is bounded, and a bound that is reached is a failure of that
+exchange, never a cut body (`TestRecordBodyLimit`, `TestCaptureLimits`):
+
+| Flag | Default | Bounds | When exceeded |
+|---|---|---|---|
+| `faultproxy -record-max-body` | 16 MiB | the answer body the proxy buffers and records (the proxy reads no further than one byte past it) | the client is answered `502` with `X-Faulttest-Body-Limit`, the exchange is recorded with `limit_exceeded` and no body, logged, and the proxy exits 1 at shutdown with the count |
+| `replaydiff -capture-max-body` | 16 MiB | a captured body as recorded; a capture line may be six times this plus 1 MiB (JSON escaping) | the exchange (or the line, read to its end) fails and the replay goes on |
+| `replaydiff -capture-max-decoded` | 64 MiB | a body once its content coding (gzip) is undone | the exchange fails |
+| `replaydiff -capture-max-tokens` | 1,048,576 | the page tokens remembered for the walks still to be replayed | the replay fails at that exchange and stops |
+
+An exchange the recorder marked `limit_exceeded` fails in the replay as well.
 
 On 2026-11-07 (the Go lister's own requests, 16 workers, ranges split by the lister):
 

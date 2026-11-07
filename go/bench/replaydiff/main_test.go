@@ -4,7 +4,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -186,5 +188,77 @@ func TestResidualsStandApart(t *testing.T) {
 	d.runCases("case", residual)
 	if len(rep.Residuals) != 0 || rep.Compared != 1 || rep.Failed != 1 || rep.Results[0].Error == "" {
 		t.Errorf("errored: residuals %v, compared %d failed %d, %+v", rep.Residuals, rep.Compared, rep.Failed, rep.Results)
+	}
+}
+
+// wireServer answers every connection with the bytes of reply once the
+// request head has arrived, then closes it, or holds it open when hold
+// is set.
+func wireServer(t *testing.T, reply string, hold bool) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				for {
+					line, err := br.ReadString('\n')
+					if err != nil || line == "\r\n" {
+						break
+					}
+				}
+				io.WriteString(c, reply)
+				if hold {
+					time.Sleep(2 * time.Second)
+				}
+			}()
+		}
+	}()
+	return "http://" + ln.Addr().String()
+}
+
+// TestWireAnswersMustBeWhole: a byte-stream request passes only on
+// answers read whole up to a clean end of the connection: a body shorter
+// than its Content-Length, a successor answer that does not parse and a
+// connection held open past the deadline are errors, not the last answer
+// read so far.
+func TestWireAnswersMustBeWhole(t *testing.T) {
+	defer func(d time.Duration) { wireDeadline = d }(wireDeadline)
+	wireDeadline = 500 * time.Millisecond
+	const ok = "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: 5\r\n\r\nhello"
+	req := request{Method: "GET", Wire: func(b, h string) string {
+		return "GET /" + b + "?list-type=2 HTTP/1.1\r\nHost: " + h + "\r\nConnection: close\r\n\r\n"
+	}}
+	for _, c := range []struct {
+		name, reply string
+		hold, pass  bool
+	}{
+		{"whole, then closed", ok, false, true},
+		{"two whole answers", ok + ok, false, true},
+		{"a body one byte short", strings.Replace(ok, "Content-Length: 5", "Content-Length: 6", 1), false, false},
+		{"a whole answer, then a short one", ok + strings.Replace(ok, "Content-Length: 5", "Content-Length: 6", 1), false, false},
+		{"a malformed successor", ok + "garbage\r\n\r\n", false, false},
+		{"held open past the deadline", ok, true, false},
+		{"nothing", "", false, false},
+		{"a body framed by the close", "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nhello", false, true},
+		{"a chunked body cut short", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n", false, false},
+	} {
+		tg := &target{name: "x", base: wireServer(t, c.reply, c.hold), client: http.DefaultClient}
+		resp, err := tg.do("bkt", req)
+		if c.pass && (err != nil || resp == nil || string(resp.Body) != "hello") {
+			t.Errorf("%s: %v %+v", c.name, err, resp)
+		}
+		if !c.pass && err == nil {
+			t.Errorf("%s: answered %d %q, want an error", c.name, resp.Status, resp.Body)
+		}
 	}
 }

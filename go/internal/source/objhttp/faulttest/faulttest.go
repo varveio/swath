@@ -14,9 +14,13 @@
 package faulttest
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -66,7 +70,20 @@ type Plan struct {
 	// RateCap, if positive, throttles every request beyond RateCap in the
 	// trailing second (served requests only count).
 	RateCap float64
+	// MaxBody, if positive, bounds the upstream answer's body the proxy
+	// buffers: a longer one is read no further than MaxBody+1 bytes and
+	// answered 502 with BodyLimitHeader set to MaxBody, so a recording
+	// behind the proxy learns of it and never holds a cut body as whole.
+	// The proxy buffers every answer, so this is its memory bound.
+	MaxBody int64
 }
+
+// BodyLimitHeader marks the 502 the proxy answers in place of an
+// upstream answer whose body exceeds Plan.MaxBody; its value is the
+// limit in bytes.
+const BodyLimitHeader = "X-Faulttest-Body-Limit"
+
+var errBodyLimit = errors.New("faulttest: the upstream answer's body exceeds the limit")
 
 // Bucket is one Step of the timeline.
 type Bucket struct {
@@ -123,6 +140,9 @@ func New(target string, plan Plan) (*Proxy, error) {
 	t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
 	rp := httputil.NewSingleHostReverseProxy(u)
 	rp.Transport = t
+	if plan.MaxBody > 0 {
+		limitBody(rp, plan.MaxBody)
+	}
 	if u.Scheme == "https" {
 		direct := rp.Director
 		rp.Director = func(r *http.Request) {
@@ -131,6 +151,40 @@ func New(target string, plan Plan) (*Proxy, error) {
 		}
 	}
 	return &Proxy{plan: plan, next: rp, now: time.Now}, nil
+}
+
+// limitBody makes rp read an upstream body only up to max bytes before
+// it is buffered (ModifyResponse runs before the copy), and answer one
+// over max with a marked 502. Considered: http.MaxBytesReader, which
+// bounds request bodies and answers the client itself.
+func limitBody(rp *httputil.ReverseProxy, max int64) {
+	rp.ModifyResponse = func(resp *http.Response) error {
+		if resp.ContentLength > max {
+			return errBodyLimit
+		}
+		b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		if int64(len(b)) > max {
+			return errBodyLimit
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(b))
+		return nil
+	}
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if errors.Is(err, errBodyLimit) {
+			w.Header().Set(BodyLimitHeader, strconv.FormatInt(max, 10))
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprintf(w, "faulttest: the upstream answer's body is over %d bytes\n", max)
+			return
+		}
+		// What ReverseProxy's default error handler does.
+		log.Printf("http: proxy error: %v", err)
+		w.WriteHeader(http.StatusBadGateway)
+	}
 }
 
 // Draw is the deterministic uniform [0, 1) value of request n for window i.

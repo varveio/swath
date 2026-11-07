@@ -57,7 +57,7 @@ func TestEmptyAndNullStringsEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	const (
-		s3Want = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Prefix></Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>` +
+		s3Want = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Prefix></Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>` +
 			`<Contents><Key>empty</Key><LastModified>2026-01-01T00:00:01.000Z</LastModified><ETag>&quot;&quot;</ETag><ChecksumAlgorithm></ChecksumAlgorithm><ChecksumType></ChecksumType><Size>1</Size><StorageClass></StorageClass><Owner><ID></ID><DisplayName></DisplayName></Owner></Contents>` +
 			`<Contents><Key>null</Key><LastModified>2026-01-01T00:00:02.000Z</LastModified><Size>2</Size></Contents></ListBucketResult>`
 		gcsWant = `{"kind":"storage#objects","items":[` +

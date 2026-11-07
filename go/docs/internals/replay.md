@@ -77,8 +77,12 @@ change to the text changes the decoded bytes or fails to decode, and a changed p
 altered token is `400 InvalidArgument` (`TestTokenProperties`). Live S3 refuses its own token with the last
 character replaced or four characters dropped (`TestLiveAlteredTokenIsRefused`), but of five single decoded-byte
 flips it refused one and served the rest (three from the first key, the last byte as if unaltered); this server
-refuses them all, so the live matrix's `flip-decoded` case answers `400` where S3 answers `200`. It is a checksum, not a signature: a forged token
-chooses a resume point the client could already choose with `start-after`.
+refuses them all, so the live matrix's `flip-decoded` case answers `400` where S3 answers `200`. The CRC covers
+only `flag || boundary`: it establishes that a token was not altered, and nothing about who issued it. It binds no
+bucket, fixture, scope, process or secret, so a token survives restarts, is accepted across fixtures, and a token
+a client constructs for any boundary is accepted, one outside the fixture giving an empty page
+(`TestTokenIsNotBound`). It is a checksum, not a signature or an authorization: a constructed token chooses a
+resume point the client could already choose with `start-after`.
 
 The Java server's tokens (`v2:` + base64url of flag and boundary, `v1:` + the key) carry no check and are
 refused here; for the same boundary this server issues different bytes (`TestTokenGolden` records both). The
@@ -256,7 +260,10 @@ recording of the same bucket. The requests are then the provider conformance mat
 names, bound either to the corpus (where it renders the campaign's own query byte for byte,
 `TestProviderMatrixMatchesTheCampaign`, which runs the campaign's Python) or to names of the recording chosen to
 keep each name's part (`deriveRoles`: a directory of six objects and a gap between two of them, a name that is a
-byte prefix of the next, a directory with two subtrees, the smallest directory over 1,000 names, ...). A case
+byte prefix of the next, a directory with two subtrees, the smallest directory over 1,000 names, ...). The
+recording's names come from the Go server's own `encoding-type=url` listing, decoded in the response grammar (a
+`+` is a space, `%2B` a plus sign) and required to rise strictly in byte order, which the roles' binary search
+assumes (`TestListScopeDecodesListedNames`). A case
 whose question needs names an owned bucket holds (the Unicode, reserved-character, control-character and
 name-limit groups) or an official client library is listed as not sent, with the reason. Token cases take each
 side's own token from the source walk and apply the campaign's mutations (`mutateToken`). The comparison
@@ -265,22 +272,28 @@ profile comparators): the status; on both sides only classified headers, the med
 matches the body and a padded GMT date; then the page field by field, or the S3 error `Code` or the GCS error's
 first `reason`. Request ids, dates, token values (compared by presence and by where they lead) and owner values
 are the only things set aside. `-capture` replays a client's recorded stream (`capture.go`) under the same
-policy, mapping each captured token to the one the Go server issued for the same request
-(`TestCaptureReplaysAClientStream`); `TestLiveModesAgreeWithAFaithfulProvider` runs both live modes against a
+policy, one exchange at a time, mapping each captured token to the one the Go server issued for the same request
+(`TestCaptureReplaysAClientStream`). The recorder (`bench/faultproxy`, `record.go`) writes each exchange before it
+releases the answer, so an issuing answer precedes every use of its token and an unknown token is a failure,
+not a skip; bodies, decoded bodies, lines and the token map are bounded by flags, and a bound reached fails the
+exchange explicitly ([replay.md](../replay.md#live-capture)); `TestLiveModesAgreeWithAFaithfulProvider` runs both live modes against a
 stand-in provider with tokens and headers of its own.
 
 On the S3 route "identical" has exceptions by decision: the route answers as live S3 does where the Java server
 does not (the form reading of the query, the first of duplicates, key parameters as UTF-8, the empty
 `start-after` echo, `encoding-type` checked and echoed, `marker`, NUL and token refusals, checksummed tokens, a
-flat token's relisting, the `+`/`*` encoding table, control characters as references and S3's error
-document). Against the Java launcher every S3 request goes
+flat token's relisting, the `+`/`*` encoding table, control characters as references, S3's error
+document and the newline after the XML declaration). Against the Java launcher every S3 request goes
 through `compareS3` (`s3_divergences.go`): `planS3` reads the request as the route does (the driver's own
 reading) and derives the Go answer from the Java server's, either a probed refusal or the Java answer to the
 equivalent request with the probed echo and encoding rules applied; the Go answer must equal it with token
 values masked, and a request whose Java answer as sent differs is listed under `documented_divergences` with
 both answers and the rules involved, counted as passed or failed on the Go side. A refusal the Java server makes
 first (bucket, method, `list-type`, `max-keys`) is expected in live S3's document (`javaFirstRefusal`).
-`s3DivergenceCases` adds one case per rule with a pin from the live probe. Tests: `TestS3PlanRules`,
+The newline after the XML declaration is on every listing and error, so the driver inserts it after the Java
+server's declaration in every expectation and in the as-sent comparison (`declNewline`), and it alone makes no
+request a divergence (`TestDivergenceAssertsTheGoSide`). `s3DivergenceCases` adds one case per rule with a pin
+from the live probe. Tests: `TestS3PlanRules`,
 `TestS3PlanFixes`, `TestJavaFirstRefusals`,
 `TestUTF8ReplacedMatchesTheRoute`, `TestTokenTranslation`, `TestDivergenceCases`,
 `TestDivergenceAssertsTheGoSide`; the route's own pins are the `TestLive*` tests in `s3/livegolden_test.go`.

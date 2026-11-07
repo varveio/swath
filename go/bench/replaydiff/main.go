@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -48,6 +49,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/varveio/swath/go/internal/replay/s3"
@@ -67,6 +69,7 @@ type options struct {
 	liveScripted                                                   bool
 	liveWalkPages                                                  int
 	capture                                                        string
+	captureLimits                                                  captureLimits
 	maskMetadata                                                   bool
 	pins                                                           string
 }
@@ -91,6 +94,9 @@ func main() {
 	flag.StringVar(&o.pins, "live-pins", "", "live: a replay-expectations.json of the provider evidence; a difference whose message is its case's pinned mismatch is marked PINNED")
 	flag.BoolVar(&o.maskMetadata, "gcs-mask-metadata", false, "gcs: compare with each item's metadata fields removed (a native fixture on the Go server against the same rows, S3-shaped, on the Java server)")
 	flag.StringVar(&o.capture, "capture", "", "replay a bench/faultproxy -record capture against the Go server on -fixture and compare with the captured answers")
+	flag.Int64Var(&o.captureLimits.maxBody, "capture-max-body", 16<<20, "capture: the largest captured body in `bytes`, as recorded; an exchange over it fails")
+	flag.Int64Var(&o.captureLimits.maxDecoded, "capture-max-decoded", 64<<20, "capture: the largest body in `bytes` once its content coding is undone; an exchange over it fails")
+	flag.IntVar(&o.captureLimits.maxTokens, "capture-max-tokens", 1<<20, "capture: the most page tokens remembered for walks still to be replayed; past it the replay fails and stops")
 	flag.IntVar(&o.liveWalkPages, "live-walk-pages", 300, "live: walk a prefix at a page size only when the walk takes at most this many pages")
 	flag.StringVar(&o.dumpTSV, "dump-tsv", "", "write the reference listing as a TSV fixture here and exit")
 	flag.StringVar(&o.logDir, "log-dir", os.TempDir(), "where the servers' stderr logs go")
@@ -170,8 +176,17 @@ func rawTarget(t *target, bucket string, r request) string {
 	return strings.NewReplacer("{bucket}", bucket, "{host}", strings.TrimPrefix(t.base, "http://")).Replace(r.Raw)
 }
 
+// wireDeadline bounds a byte-stream request's whole connection.
+var wireDeadline = time.Minute
+
 // doWire sends r's whole byte stream on a connection of its own and
-// returns the last answer read before the connection ends.
+// returns the last answer read before the connection ends. Each answer
+// must be read whole: a body cut short (fewer bytes than its
+// Content-Length, a broken chunk; a body framed by the connection's end
+// is whole when it ends) is an error, as is a successor answer
+// that starts and does not parse, or a connection still open at the
+// deadline. Only a connection that ends (EOF or reset) before any byte of
+// a further answer ends the stream cleanly.
 func (t *target) doWire(bucket string, r request) (*response, error) {
 	host := strings.TrimPrefix(t.base, "http://")
 	conn, err := net.DialTimeout("tcp", host, 10*time.Second)
@@ -179,25 +194,37 @@ func (t *target) doWire(bucket string, r request) (*response, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(time.Minute))
+	conn.SetDeadline(time.Now().Add(wireDeadline))
 	go io.WriteString(conn, r.Wire(bucket, host))
 	br := bufio.NewReader(conn)
 	var last *response
 	for {
+		if _, err := br.Peek(1); err != nil && last != nil && (err == io.EOF || errors.Is(err, syscall.ECONNRESET)) {
+			return last, nil
+		}
 		resp, err := http.ReadResponse(br, nil)
 		if err != nil {
 			if last == nil {
 				return nil, err
 			}
-			return last, nil
+			return nil, fmt.Errorf("after answer %d %s: %w", last.Status, http.StatusText(last.Status), err)
 		}
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		last = &response{Status: resp.StatusCode, Header: resp.Header, Body: body}
-		if err != nil {
-			return last, nil
+		if err != nil && !(closeDelimited(resp) && errors.Is(err, syscall.ECONNRESET)) {
+			return nil, fmt.Errorf("answer %d: its body: %w", resp.StatusCode, err)
 		}
+		last = &response{Status: resp.StatusCode, Header: resp.Header, Body: body}
 	}
+}
+
+// closeDelimited reports whether resp's body ends where the connection
+// does (no Content-Length, not chunked), as net/http's answer to a
+// request it cannot parse is framed. A reset ends such a body as an EOF
+// would: the framing cannot tell a cut one from a whole one. (A server
+// that closes with the client's bytes unread resets the connection.)
+func closeDelimited(resp *http.Response) bool {
+	return resp.ContentLength < 0 && len(resp.TransferEncoding) == 0
 }
 
 // doRaw sends r's raw target as the request line on a connection of its
@@ -397,6 +424,10 @@ type driver struct {
 	refTokens sync.Map // request name -> its reference answer's next token
 	// tokenNames are the names already listed in TokenBytes.
 	tokenNames map[string]bool
+	// countPasses keeps passing results out of the report's list (they
+	// are counted): a capture's report then grows with its failures,
+	// not with every exchange.
+	countPasses bool
 }
 
 func (d *driver) record(r result) {
@@ -406,7 +437,9 @@ func (d *driver) record(r result) {
 		d.rep.Skipped = append(d.rep.Skipped, fmt.Sprintf("%s %q: %s", r.Kind, r.Name, r.Skipped))
 		return
 	}
-	d.rep.Results = append(d.rep.Results, r)
+	if !r.Pass || !d.countPasses {
+		d.rep.Results = append(d.rep.Results, r)
+	}
 	d.rep.Compared++
 	if r.Pass {
 		d.rep.Passed++
@@ -625,9 +658,7 @@ func listAll(t *target, bucket string) ([][]byte, []store.Object, error) {
 			return nil, nil, err
 		}
 		for _, c := range page.Contents {
-			// S3 and the Go server write a space as '+'; the Java server
-			// escapes '+' itself, so reading '+' as a space suits all three.
-			k := s3.PercentDecode(strings.ReplaceAll(c.Key, "+", "%20"))
+			k := listedKey(c.Key)
 			keys = append(keys, k)
 			o := store.Object{Key: k, Size: c.Size, StorageClass: c.StorageClass, ChecksumAlgorithm: c.ChecksumAlgorithm, ChecksumType: c.ChecksumType}
 			if c.ETag != nil {
@@ -649,6 +680,15 @@ func listAll(t *target, bucket string) ([][]byte, []store.Object, error) {
 		}
 		query = base + "&continuation-token=" + s3.PercentEncode([]byte(page.NextContinuationToken))
 	}
+}
+
+// listedKey decodes a name an encoding-type=url listing carries. S3 and
+// the Go server write a space as '+' and a '+' as %2B; the Java server
+// escapes '+' itself, so reading '+' as a space suits all three. A
+// percent-decoder that keeps '+' (s3.PercentDecode, the request
+// grammar's) would turn "a b/1" into "a+b/1".
+func listedKey(s string) []byte {
+	return s3.PercentDecode(strings.ReplaceAll(s, "+", "%20"))
 }
 
 func dump(path string, objs []store.Object) error {
