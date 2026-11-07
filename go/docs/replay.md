@@ -207,7 +207,9 @@ shape but not absolute time (server and client CPU do not scale).
 ## The metrics port
 
 `--metrics-port` serves three paths on a second listener, which never waits behind the request ceiling, never
-reads the fixture and never moves a listing meter:
+reads the fixture and never moves a listing meter. Its connections are bounded by time instead: an idle
+keep-alive connection, reading a request and reading its body take `--idle-timeout`, writing an answer
+`--write-timeout`, the serving listener's values:
 
 - `GET /healthz`: `ok` once the server is accepting. Poll it before starting a client.
 - `GET /metrics`: JSON, `{schema_version: 2, serving_mode, serving: {...}, uptime_ms, sampled_at_epoch_ms,

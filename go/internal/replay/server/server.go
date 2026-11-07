@@ -132,6 +132,7 @@ type Server struct {
 	httpSrv, metricsSrv *http.Server
 	ln, metricsLn       net.Listener
 	accepting           atomic.Bool
+	metricsConns        atomic.Int64 // open metrics connections
 	s3Active            atomic.Int64
 	routes              *routes // nil: the S3 route answers every request
 	azure               *azureRoute
@@ -216,7 +217,27 @@ func (s *Server) Listen() error {
 			return fmt.Errorf("metrics port: %w", err)
 		}
 		s.metricsLn = mln
-		s.metricsSrv = &http.Server{Handler: http.HandlerFunc(s.serveMetrics), ReadHeaderTimeout: 10 * time.Second}
+		// The metrics listener bypasses listing admission, so its
+		// connections are bounded by time instead: the serving
+		// listener's --idle-timeout for an idle keep-alive connection, for
+		// reading a request and for its body, and --write-timeout for
+		// writing an answer to a client that stopped reading
+		// (TestMetricsConnectionsTimeOut).
+		s.metricsSrv = &http.Server{
+			Handler:           http.HandlerFunc(s.serveMetrics),
+			ReadHeaderTimeout: s.cfg.IdleTimeout,
+			ReadTimeout:       s.cfg.IdleTimeout,
+			WriteTimeout:      s.cfg.WriteTimeout,
+			IdleTimeout:       s.cfg.IdleTimeout,
+			ConnState: func(_ net.Conn, st http.ConnState) {
+				switch st {
+				case http.StateNew:
+					s.metricsConns.Add(1)
+				case http.StateClosed, http.StateHijacked:
+					s.metricsConns.Add(-1)
+				}
+			},
+		}
 	}
 	return nil
 }
