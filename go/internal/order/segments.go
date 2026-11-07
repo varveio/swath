@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/schema"
 )
 
@@ -249,7 +250,13 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		o.sp.closeReaders() // the drainer reads no more frames
 	}
 	o.stalled()
-	err = o.runSegments(units, segs, o.seg.st.Workers)
+	err = faults.At("segments-begun") // tests: killed with the segments planned, none opened
+	if err == nil {
+		err = o.runSegments(units, segs, o.seg.st.Workers)
+	}
+	if err == nil {
+		err = faults.At("segments-written") // tests: killed with every row handed on, the last part held
+	}
 	o.advanced = time.Now()
 	o.mu.Lock()
 	if err != nil {

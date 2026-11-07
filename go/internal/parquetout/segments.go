@@ -119,6 +119,7 @@ func (r *Router[P]) OpenSegment(ctx context.Context, continueOpen bool) (*Segmen
 			return nil, errors.New("parquet router: no open part to continue")
 		}
 		p := r.cur
+		p.segment = true
 		r.cur, r.full = nil, false
 		return &Segment[P]{r: r, p: p}, nil
 	}
@@ -160,7 +161,7 @@ func (r *Router[P]) OpenSegment(ctx context.Context, continueOpen bool) (*Segmen
 			dataset.ErrPartLimit, o, rows, r.opt.PartSize, r.opt.MaxRows)
 	}
 	p := &part[P]{ordinal: o, opened: time.Now(), segs: make(chan batch[P], segmentQueue), done: make(chan struct{}),
-		published: make(chan struct{}), limit: r.limit}
+		published: make(chan struct{}), limit: r.limit, segment: true}
 	if n := len(r.parts); n > 0 {
 		p.prev = r.parts[n-1]
 	}

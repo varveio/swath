@@ -413,7 +413,10 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   turns out to be one part. The read-ahead's reads in flight end before the segments read.
 - **Failure.** Any failure stops every worker. A segment that did not finish leaves its part unclosed, and
   the router's abort discards it: no partial part is published (`TestSegmentsFailureClosesNoPart`). The
-  parts before it that finished may publish, in order: a durable prefix, as always.
+  parts before it that finished may publish, in order: a durable prefix, as always. A process killed inside
+  the tail (segments planned, a segment's part published with later ones open, every row handed on with the
+  last part held) resumes from that prefix like any other run, and with `--part-interval=0` the resumed
+  parts are the uninterrupted run's, byte for byte (`TestSIGKILLInSegments`).
 - **Memory.** No rows are queued beyond the serial drain's: beside its writer each worker holds one decoded
   frame, one batch and its part's queue of two batches (`parquetout.segmentQueue`), about 3 × 4,096 rows, and
   the tree's in-memory rows stay where they were until the drain ends (`TestSegmentsMemoryIsBounded`). The

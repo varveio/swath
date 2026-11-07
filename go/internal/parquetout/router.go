@@ -156,6 +156,7 @@ type part[P any] struct {
 	pinned    bool  // its boundary is Options.Cut
 	bySize    bool  // closed because it reached the size target
 	final     bool
+	segment   bool  // written as a segment (OpenSegment)
 	closed    bool  // its queue is closed (r.mu)
 	limit     int64 // logical bytes per part in effect after this part
 	rows      int64 // rows in parts 0..ordinal
@@ -500,6 +501,10 @@ func (r *Router[P]) encode(p *part[P]) {
 	if r.opt.Publish != nil && !r.aborted.Load() {
 		if p.info, p.err = r.opt.Publish(p.ordinal, p.info, p.limit, p.rows, p.final); p.err != nil {
 			r.fail(p.err)
+		} else if p.segment {
+			if p.err = faults.At("segment-published"); p.err != nil { // tests: killed with later segments open
+				r.fail(p.err)
+			}
 		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -173,6 +174,121 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestSIGKILLInSegments makes the real process SIGKILL itself inside the
+// segment-parallel tail (faults.SegmentPoints: the segments committed and
+// none opened; a segment's part published with later ones open; every row
+// handed on and the last part held before the router's Close), resumes,
+// and requires the parts byte-identical, and the manifest but for its
+// observation times, to an
+// uninterrupted run's. The fixture is sized so the tail engages: listing
+// against an undelayed bucket outruns four encoders, the rows wait, and
+// part 0 freezes the size limit long before listing ends. The
+// clean run must report segments engaged with more than one worker, and
+// every kill must be reached, so a fixture that stops reaching the tail
+// fails instead of passing vacuously. Two arms: a row budget that holds
+// the rest in memory (three workers), and one that spills it, so the
+// segments read spill frames on their own descriptors (two workers: the
+// budget caps them). The child runs at GOMAXPROCS 4
+// whatever the box (segments need two processors beside the drainer), and
+// with --part-interval=0, so part boundaries are the size rule's alone.
+func TestSIGKILLInSegments(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := filepath.Join(t.TempDir(), "swath")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(60000, 13))))
+	env := append(os.Environ(), "GOMAXPROCS=4")
+	for _, arm := range []struct {
+		name, budget string
+		spilled      bool // the segments read spill frames
+	}{{"memory", "16MiB", false}, {"spill", "512KiB", true}} {
+		runtime := []string{"--part-interval=0", "--encoders", "4", "--row-budget", arm.budget}
+		args := func(out string, extra ...string) []string {
+			a := []string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "8",
+				"-part-size", "16KiB", "-o", out}
+			return append(append(a, runtime...), extra...)
+		}
+		ref := filepath.Join(t.TempDir(), "ref")
+		report := filepath.Join(t.TempDir(), "report.json")
+		cmd := exec.Command(bin, args(ref, "--report", report)...)
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s reference run: %v\n%s", arm.name, err, out)
+		}
+		var rep struct {
+			Resources struct {
+				Drain struct {
+					Segments *struct {
+						Reason     string `json:"reason"`
+						Segments   int    `json:"segments"`
+						Workers    int    `json:"workers"`
+						MaxWorkers int    `json:"max_workers"`
+						Rows       int64  `json:"rows"`
+						ReadNs     int64  `json:"read_ns"`
+					} `json:"segments"`
+				} `json:"drain"`
+			} `json:"resources"`
+		}
+		if b, err := os.ReadFile(report); err != nil || json.Unmarshal(b, &rep) != nil {
+			t.Fatalf("%s report: %v", arm.name, err)
+		}
+		sg := rep.Resources.Drain.Segments
+		if sg == nil || sg.Reason != "engaged" || sg.Workers < 2 || sg.MaxWorkers < 2 || sg.Segments < 4 || (sg.ReadNs > 0) != arm.spilled {
+			t.Fatalf("%s: the fixture does not reach the segment tail it means to: %+v", arm.name, sg)
+		}
+		t.Logf("%s reference: %d segments, %d workers (cap %d), %d rows, %d ns reading spill", arm.name, sg.Segments, sg.Workers, sg.MaxWorkers, sg.Rows, sg.ReadNs)
+		for _, point := range faults.SegmentPoints {
+			nths := []string{"1"}
+			if point == "segment-published" {
+				nths = append(nths, "2")
+			}
+			for _, nth := range nths {
+				at := arm.name + " " + point + ":" + nth
+				out := filepath.Join(t.TempDir(), "ds")
+				cmd := exec.Command(bin, args(out)...)
+				cmd.Env = append(env, "SWATH_TEST_KILL_AT="+point+":"+nth)
+				o, err := cmd.CombinedOutput()
+				if err == nil {
+					t.Fatalf("%s not reached: the run completed\n%s", at, o)
+				}
+				if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+					t.Fatalf("%s: not killed: %v\n%s", at, err, o)
+				}
+				res := exec.Command(bin, append(append([]string{"resume"}, runtime...), out)...)
+				res.Env = env
+				if o, err := res.CombinedOutput(); err != nil {
+					t.Fatalf("%s resume: %v\n%s", at, err, o)
+				}
+				sameParts(t, at, ref, out)
+				if a, b := manifestBytes(t, ref), manifestBytes(t, out); !bytes.Equal(a, b) {
+					t.Fatalf("%s: the manifest differs:\n%s\n%s", at, a, b)
+				}
+			}
+		}
+	}
+}
+
+// manifestBytes is dir's manifest without its observation times
+// (published_at, the listing's start and finish), which differ between
+// runs whose datasets agree.
+func manifestBytes(t *testing.T, dir string) []byte {
+	t.Helper()
+	var m dataset.Manifest
+	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		t.Fatalf("manifest of %s: %v", dir, err)
+	}
+	m.PublishedAt, m.Coverage.ListingStartedAt, m.Coverage.ListingFinishedAt = time.Time{}, time.Time{}, time.Time{}
+	b, err = json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // sameRows compares the keys of two datasets, in manifest order: parts
