@@ -156,3 +156,41 @@ func TestValidateAzure(t *testing.T) {
 		}
 	}
 }
+
+// TestAzureErrorEchoUsesTheClientIDRule pins the error echo to the same
+// length rule as the refusal: 512 raw 0xE9 bytes are echoed, 513 are not.
+func TestAzureErrorEchoUsesTheClientIDRule(t *testing.T) {
+	s := start(t, azureConfig("azure"))
+	for n, echoed := range map[int]bool{512: true, 513: false} {
+		id := strings.Repeat("\xe9", n)
+		r := azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list", "x-ms-version", "bad", "x-ms-client-request-id", id)
+		if r.status != 400 || (r.header.Get("x-ms-client-request-id") == id) != echoed {
+			t.Errorf("%d bytes: %d echo %d bytes", n, r.status, len(r.header.Get("x-ms-client-request-id")))
+		}
+	}
+	r := azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list", "x-ms-version", "2026-06-06",
+		"x-ms-client-request-id", strings.Repeat("\xe9", 513))
+	if r.status != 400 || r.header.Get("x-swath-replay-error") != "invalid_client_request_id" || r.header.Get("x-ms-client-request-id") != "" {
+		t.Errorf("%+v", r.header)
+	}
+}
+
+// TestAzureEngagementMeters pins the provider.path meters the server
+// publishes for an encoded name and an empty window.
+func TestAzureEngagementMeters(t *testing.T) {
+	cfg := config(memstore.Keys(memstore.Options{Rollup: true}, "u/\uffff", "u/\ufffe/x"))
+	cfg.Protocols, cfg.AzureAccount = []string{"azure"}, DefaultAzureAccount
+	s := start(t, cfg)
+	for _, q := range []string{"prefix=u/&delimiter=/", "prefix=a&startFrom=b"} {
+		if r := azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list&"+q, "x-ms-version", "2026-06-06"); r.status != 200 {
+			t.Fatalf("%s: %+v", q, r)
+		}
+	}
+	for _, c := range []struct{ path, reason string }{
+		{"encoded_name", "blob_xml_forbidden"}, {"encoded_name", "prefix_xml_forbidden"}, {"empty_window", "lower_bound_past_prefix"},
+	} {
+		if n := count(s, ProviderPath, "azure", c.path, c.reason); n != 1 {
+			t.Errorf("%s %s: %d", c.path, c.reason, n)
+		}
+	}
+}

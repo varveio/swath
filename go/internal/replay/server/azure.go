@@ -334,7 +334,7 @@ func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, 
 	if req.Version == azure.Version20260606 || req.Version == azure.Version20261006 {
 		h["x-ms-version"] = []string{req.Version}
 	}
-	if req.HasClientRequestID && len(req.ClientRequestID) <= 1024 && !strings.ContainsAny(req.ClientRequestID, "\r\n") {
+	if req.HasClientRequestID && azure.ValidClientRequestID(req.ClientRequestID) {
 		h["x-ms-client-request-id"] = []string{req.ClientRequestID}
 	}
 	if e != nil {
