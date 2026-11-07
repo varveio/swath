@@ -663,6 +663,8 @@ func (d *driver) write() error {
 		for _, c := range rep.Coverage {
 			if !strings.Contains(c, ": sent ") {
 				fmt.Fprintf(&text, "  NOT SENT %s\n", c)
+			} else if strings.Contains(c, " [reduced shape: ") {
+				fmt.Fprintf(&text, "  REDUCED SHAPE %s\n", c)
 			}
 		}
 	}

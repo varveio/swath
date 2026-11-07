@@ -136,6 +136,18 @@ func TestFixtureRolesKeepTheirParts(t *testing.T) {
 	if _, ok := n["b/0"]; ok || f.missing["b/0"] == "" {
 		t.Errorf("b/0 bound without a directory of exactly 1,000 names: %q", n["b/0"])
 	}
+	if len(f.reduced) != 0 {
+		t.Errorf("reduced roles on a full shape: %v", f.reduced)
+	}
+
+	// Without a directory of six objects, one of three stands in, and the
+	// cases over it say so.
+	small := deriveRoles([]string{"p/a/1", "p/a/2", "p/a/3", "p/b/x"}, "p/")
+	if small.names["r/"] != "p/a/" || small.names["r/k07"] != "p/a/3" || small.names["r/k04"] != "p/a/3 " ||
+		small.reducedShape(&providerCase{Tmpl: "prefix={r/}&start-after={r/k02}"}) == "" ||
+		small.reducedShape(&providerCase{Tmpl: "prefix={d/}"}) != "" {
+		t.Errorf("reduced r/: %v %v", small.names, small.reduced)
+	}
 	sent, owned, missing := 0, 0, 0
 	for _, c := range append(s3ProviderCases(), gcsProviderCases()...) {
 		q, why := f.instantiate(&c)

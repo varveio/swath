@@ -382,6 +382,7 @@ func corpusBinding(runPrefix string) func(string, bool) (string, bool) {
 type fixtureRoles struct {
 	names   map[string]string
 	missing map[string]string // role -> why the fixture has none
+	reduced map[string]string // role -> how its binding falls short of the corpus's shape
 }
 
 func (f *fixtureRoles) bind(name string, value bool) (string, bool) {
@@ -463,7 +464,7 @@ func successor(p string) string {
 
 // deriveRoles binds the roles over the sorted keys under scope.
 func deriveRoles(keys []string, scope string) *fixtureRoles {
-	f := &fixtureRoles{names: map[string]string{"": scope}, missing: map[string]string{}}
+	f := &fixtureRoles{names: map[string]string{"": scope}, missing: map[string]string{}, reduced: map[string]string{}}
 	dirs := scanDirectories(keys, scope)
 	sorted := slices.SortedFunc(func(yield func(*directory) bool) {
 		for _, d := range dirs {
@@ -484,25 +485,37 @@ func deriveRoles(keys []string, scope string) *fixtureRoles {
 
 	// r/: a directory of at least six objects (no subdirectories when one
 	// exists), k01..k07 its first six and the gap k04 between the third
-	// and the fourth.
-	gapAfter := func(d *directory) (string, bool) {
-		if len(d.objects) < 6 {
+	// and the fourth. Without one, the smallest directory of three to five
+	// objects stands in on a reduced shape: the later names repeat its
+	// last object and the gap follows the third.
+	gapAfter := func(d *directory, want int) (string, bool) {
+		if len(d.objects) < want {
 			return "", false
 		}
 		g := d.objects[2] + " "
-		return g, g < d.objects[3]
+		return g, len(d.objects) == 3 || g < d.objects[3]
 	}
-	r := smallest(func(d *directory) bool { _, ok := gapAfter(d); return ok && len(d.subdirs) == 0 })
-	if r == nil {
-		r = smallest(func(d *directory) bool { _, ok := gapAfter(d); return ok })
+	var r *directory
+	for _, want := range []int{6, 3} {
+		r = smallest(func(d *directory) bool { _, ok := gapAfter(d, want); return ok && len(d.subdirs) == 0 })
+		if r == nil {
+			r = smallest(func(d *directory) bool { _, ok := gapAfter(d, want); return ok })
+		}
+		if r != nil {
+			break
+		}
 	}
 	if r == nil {
-		f.missing["r/"] = "no directory holds six objects with a gap between the third and fourth"
+		f.missing["r/"] = "no directory holds three objects with a gap after the third"
 	} else {
-		g, _ := gapAfter(r)
+		g, _ := gapAfter(r, 3)
 		o := r.objects
-		for k, v := range map[string]string{"r/": r.prefix, "r/k01": o[0], "r/k02": o[1], "r/k03": o[2], "r/k04": g,
-			"r/k05": o[3], "r/k06": o[4], "r/k07": o[5], "s": successor(r.prefix), "zzz": successor(r.prefix)} {
+		at := func(i int) string { return o[min(i, len(o)-1)] }
+		if len(o) < 6 {
+			f.reduced["r/"] = fmt.Sprintf("r/ is a directory of %d objects, not six", len(o))
+		}
+		for k, v := range map[string]string{"r/": r.prefix, "r/k01": at(0), "r/k02": at(1), "r/k03": at(2), "r/k04": g,
+			"r/k05": at(3), "r/k06": at(4), "r/k07": at(5), "s": successor(r.prefix), "zzz": successor(r.prefix)} {
 			f.names[k] = v
 		}
 	}
@@ -632,6 +645,26 @@ func deriveRoles(keys []string, scope string) *fixtureRoles {
 		}
 	}
 	return f
+}
+
+// reducedShape says how the roles c uses fall short of the corpus's
+// shape ("" when none does): such a case is sent, and reported as run on
+// a reduced shape.
+func (f *fixtureRoles) reducedShape(c *providerCase) string {
+	var notes []string
+	parseTemplate(c.Tmpl, func(_ string, p *placeholder) {
+		if p == nil || p.value {
+			return
+		}
+		name := p.name
+		if alias, ok := c.Bind[name]; ok {
+			name = alias
+		}
+		if n, ok := f.reduced[roleOf(name)]; ok && !slices.Contains(notes, n) {
+			notes = append(notes, n)
+		}
+	})
+	return strings.Join(notes, "; ")
 }
 
 // instantiate renders c over the fixture's roles: the query, or why it

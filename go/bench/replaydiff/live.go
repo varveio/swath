@@ -243,7 +243,11 @@ func (lr *liveRun) run(keys []string) {
 			continue
 		}
 		lc := liveCase{id: c.ID, kind: c.Kind, query: lr.scoped(q), header: c.Header, src: &c}
-		lr.d.rep.Coverage = append(lr.d.rep.Coverage, c.ID+": sent "+lc.query)
+		line := c.ID + ": sent " + lc.query
+		if note := lr.roles.reducedShape(&c); note != "" {
+			line += " [reduced shape: " + note + "]"
+		}
+		lr.d.rep.Coverage = append(lr.d.rep.Coverage, line)
 		switch c.Kind {
 		case "exchange":
 			exchanges = append(exchanges, lc)
