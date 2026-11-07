@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -47,8 +46,13 @@ type group struct {
 	cmd    *exec.Cmd
 	exited chan struct{} // closed when the leader has exited (not reaped)
 
-	mu      sync.Mutex
-	lost    atomic.Bool // the leader was reaped elsewhere: never signal its id
+	mu sync.Mutex
+	// sigMu orders ownership against signals: the loss of ownership is
+	// published, and every group signal checks ownership and is sent,
+	// each under it, so no signal follows a published loss. It is held
+	// only for that, never while waiting.
+	sigMu   sync.Mutex
+	lost    bool // the leader was reaped elsewhere: never signal its id
 	retired bool
 	empty   bool  // the group was verified empty when retired
 	waitErr error // the leader's Wait
@@ -96,7 +100,9 @@ func (g *group) watch() {
 	switch {
 	case err == nil:
 	case errors.Is(err, unix.ECHILD):
-		g.lost.Store(true)
+		g.sigMu.Lock()
+		g.lost = true
+		g.sigMu.Unlock()
 	default:
 		for live, ok := liveProcess(pid); !ok || live; live, ok = liveProcess(pid) {
 			time.Sleep(20 * time.Millisecond)
@@ -199,11 +205,6 @@ func (g *group) stop(grace time.Duration) {
 	if g.retired {
 		return
 	}
-	if g.lost.Load() {
-		g.retired = true
-		return
-	}
-	pgid := g.cmd.Process.Pid
 	exited := func() bool {
 		select {
 		case <-g.exited:
@@ -219,13 +220,26 @@ func (g *group) stop(grace time.Duration) {
 		any, ok := g.members()
 		return ok && !any
 	}
-	if !quiet() {
-		killGroup(pgid, syscall.SIGTERM)
-		waitFor(quiet, grace)
+	// Each wait also ends when ownership is lost, and each signal is sent
+	// only while ownership holds.
+	if !g.owned() {
+		g.retired = true
+		return
 	}
-	killGroup(pgid, syscall.SIGKILL)
+	if !quiet() {
+		if g.send(syscall.SIGTERM) {
+			waitFor(func() bool { return !g.owned() || quiet() }, grace)
+		}
+	}
+	if !g.send(syscall.SIGKILL) {
+		g.retired = true
+		return
+	}
 	emptyRuns := 0
 	verified := waitFor(func() bool {
+		if !g.owned() {
+			return true
+		}
 		if quiet() {
 			emptyRuns++
 		} else {
@@ -233,7 +247,7 @@ func (g *group) stop(grace time.Duration) {
 		}
 		return emptyRuns >= 2
 	}, 10*time.Second)
-	if g.lost.Load() {
+	if !g.owned() {
 		g.retired = true
 		return
 	}
@@ -250,6 +264,25 @@ func (g *group) stop(grace time.Duration) {
 	g.retired = true
 }
 
+// owned reports whether the group still owns its id.
+func (g *group) owned() bool {
+	g.sigMu.Lock()
+	defer g.sigMu.Unlock()
+	return !g.lost
+}
+
+// send signals the group if it still owns its id, checking and sending
+// under sigMu; false when ownership is lost.
+func (g *group) send(sig syscall.Signal) bool {
+	g.sigMu.Lock()
+	defer g.sigMu.Unlock()
+	if g.lost {
+		return false
+	}
+	killGroup(g.cmd.Process.Pid, sig)
+	return true
+}
+
 // clean reports whether the group was retired and verified empty.
 func (g *group) clean() bool {
 	g.mu.Lock()
@@ -262,7 +295,7 @@ func (g *group) clean() bool {
 func (g *group) kill() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !g.retired && !g.lost.Load() {
-		killGroup(g.cmd.Process.Pid, syscall.SIGKILL)
+	if !g.retired {
+		g.send(syscall.SIGKILL)
 	}
 }

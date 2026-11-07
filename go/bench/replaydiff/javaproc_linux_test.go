@@ -370,3 +370,52 @@ func TestUnreadableProcIsNotEmpty(t *testing.T) {
 		t.Fatal("the group did not stop once /proc could be read")
 	}
 }
+
+// TestOwnershipLostDuringCleanup: the leader is reaped elsewhere (ECHILD)
+// just after cleanup has sent SIGTERM. The fake observer reports the loss
+// only once SIGTERM is being sent, and the signal wrapper holds that
+// signal until the loss is observed (or two seconds pass, when the loss
+// is ordered after the signal): no SIGKILL may follow, and the group is
+// retired without being reported clean.
+func TestOwnershipLostDuringCleanup(t *testing.T) {
+	origObserve, origKill := observeExit, killGroup
+	t.Cleanup(func() { observeExit, killGroup = origObserve, origKill })
+	termSent := make(chan struct{})
+	observeExit = func(int) error {
+		<-termSent
+		return unix.ECHILD
+	}
+	dir := t.TempDir()
+	cmd := exec.Command(script(t, dir, "reaped-later", "exec sleep 3600\n"))
+	g, err := startGroup(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	var mu sync.Mutex
+	var sent []syscall.Signal
+	killGroup = func(pgid int, sig syscall.Signal) error {
+		mu.Lock()
+		sent = append(sent, sig)
+		first := len(sent) == 1
+		mu.Unlock()
+		if first {
+			close(termSent)
+			select {
+			case <-g.exited:
+			case <-time.After(2 * time.Second):
+			}
+		}
+		return nil // the real leader is left for the deferred kill
+	}
+	g.stop(10 * time.Second)
+	g.kill()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 1 || sent[0] != syscall.SIGTERM {
+		t.Errorf("signals %v; want only SIGTERM, none after the loss", sent)
+	}
+	if g.clean() {
+		t.Error("a group whose leader was reaped elsewhere was reported clean")
+	}
+}
