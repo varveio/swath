@@ -1,7 +1,8 @@
 # Replay server internals
 
 How `cmd/swath-replay` is put together, and what holds it to the Java server's wire behaviour. The user's view
-is [../replay.md](../replay.md).
+is [../replay.md](../replay.md); [replay-java.md](replay-java.md) lists every difference from the Java server
+and why.
 
 ## Packages
 
@@ -196,8 +197,8 @@ overrun with the excess when there is none. Parsing reads numbers with the contr
 A meter is a `metrics.Def` (name, kind, tag keys); a tagged instance is created on first use, and the snapshot
 sorts by name, then by the tag list spelled `[tag(k=v), ...]`, the order the Java server's snapshot uses. Adding
 a meter is adding a `Def` to `defs.go`; the names and tags are the Java server's, so a dashboard reads either
-([replay.md](../replay.md#the-meters) lists the few that differ). The meters the Java server registers at startup
-are created when the server starts, so a scrape tells a zero from a meter that is not there.
+([replay-java.md](replay-java.md#the-meters-side-by-side) lists the few that differ). The meters the Java server
+registers at startup are created when the server starts, so a scrape tells a zero from a meter that is not there.
 
 - **Windows** (`window.go`). Timers and distributions keep lifetime counts and sums; the maxima and the timers'
   percentiles follow the Java server's registry, Micrometer 1.17's `SimpleMeterRegistry` in cumulative mode,
@@ -244,8 +245,8 @@ and sends both servers the same requests:
 - raw request targets, sent byte for byte on their own connection: the ones the contract's HTTP layer refuses
   (compared on status, the compared headers and `Cache-Control`, since each server's error page is its own),
   unusual ones it lets through (compared in full), and request lines Go's HTTP parser refuses itself (status
-  only); each case's name carries its comparison (`[headers]`, `[full]`, `[status]`), and the user page's limits
-  list these residuals;
+  only); each case's name carries its comparison (`[headers]`, `[full]`, `[status]`), and
+  [replay-java.md](replay-java.md#request-framing) lists these residuals;
 - token walks to the end at each page size (`-walks`, default 1, 7, 1000) over the bucket and each top-level
   prefix, with and without the delimiter, and walks that begin with a `start-after` at, inside and at the
   successor of a few directory prefixes (at the root and inside the parent prefix), carrying the token and the
