@@ -20,6 +20,9 @@ type Request struct {
 	Prefix     []byte
 	Delimiter  []byte
 	StartAfter []byte
+	// StartAfterSet says whether start-after was present at all: an empty
+	// one bounds nothing, but S3 echoes it as an empty StartAfter.
+	StartAfterSet bool
 	// Token is the continuation-token parameter as text; TokenSet says
 	// whether the parameter was present at all.
 	Token       string
@@ -79,6 +82,7 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 		Delimiter:  nonEmpty(q["delimiter"]),
 		StartAfter: nonEmpty(q["start-after"]),
 	}
+	_, r.StartAfterSet = q["start-after"]
 	r.Token, r.TokenSet = q.text("continuation-token")
 	mk, err := maxKeys(q)
 	if err != nil {

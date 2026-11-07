@@ -56,10 +56,11 @@ func RenderList(o *output.Output, res *Result) {
 	byteElement(o, "Prefix", req.Prefix, req.EncodingURL)
 	// With both a token and a start-after the pager resumed at the token,
 	// so the response echoes the token and omits the start-after it
-	// ignored.
+	// ignored. A present but empty start-after is echoed empty, as S3
+	// does (TestLiveEmptyStartAfterIsEchoed).
 	if req.HasToken() {
 		textElement(o, "ContinuationToken", req.Token)
-	} else if req.StartAfter != nil {
+	} else if req.StartAfter != nil || req.StartAfterSet {
 		byteElement(o, "StartAfter", req.StartAfter, req.EncodingURL)
 	}
 	if res.NextToken != "" {
