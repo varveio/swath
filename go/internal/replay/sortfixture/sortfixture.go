@@ -333,6 +333,11 @@ func countRows(ctx context.Context, files []string) (objects, others int64, err 
 		total += n
 		objects += o
 	}
+	// Each group's objects are at most its rows, so this holds; it is
+	// checked here because the counts size allocations.
+	if objects < 0 || objects > total {
+		return 0, 0, fmt.Errorf("%w: %d OBJECT rows counted among %d", ErrMalformedCapture, objects, total)
+	}
 	return objects, total - objects, nil
 }
 
@@ -358,6 +363,10 @@ func countPart(ctx context.Context, name string) (objects, rows int64, err error
 	if !ok {
 		return 0, rows, nil // readCapture refuses the part
 	}
+	if leaf.MaxRepetitionLevel > 0 {
+		// Values would not be rows: refuse before counting them.
+		return 0, 0, fmt.Errorf("%w: the row_type column is repeated", ErrMalformedCapture)
+	}
 	for i, rg := range file.Metadata().RowGroups {
 		switch rowTypes := rg.Columns[leaf.ColumnIndex].MetaData.Statistics; {
 		case rg.NumRows == 0:
@@ -368,6 +377,9 @@ func countPart(ctx context.Context, name string) (objects, rows int64, err error
 			n, err := countObjects(ctx, file.RowGroups()[i].ColumnChunks()[leaf.ColumnIndex])
 			if err != nil {
 				return 0, 0, fmt.Errorf("row group %d: count row types: %w", i, err)
+			}
+			if n > rg.NumRows {
+				return 0, 0, fmt.Errorf("%w: row group %d declares %d rows and holds %d OBJECT row types", ErrMalformedCapture, i, rg.NumRows, n)
 			}
 			objects += n
 		}

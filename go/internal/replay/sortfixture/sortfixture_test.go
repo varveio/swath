@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -433,5 +434,49 @@ func TestReplacedOutputDuringCaptureRead(t *testing.T) {
 	got := tree(t, out)
 	if strings.Count(got, "\n") != 3 || !strings.Contains(got, filepath.Join(dataset.Workspace, dataset.LockName)) {
 		t.Fatalf("the replacement output changed:\n%s", got)
+	}
+}
+
+// TestRefusesUndercountedRowGroup rewrites a capture of two OBJECT rows
+// in one group so that the file and the group declare one row, and clears
+// the group's row_type statistics: the counting pass finds two OBJECT
+// values in a group of one row and refuses the part with
+// ErrMalformedCapture. Before, the other-row count came out at -1 and the
+// allocation from it panicked.
+func TestRefusesUndercountedRowGroup(t *testing.T) {
+	in := capture(t, []sortedparquettest.Row{obj("a", 0), obj("b", 1)})
+	part := filepath.Join(in, "part-a.parquet")
+	if err := sortedparquettest.RewriteFooter(part, func(m *format.FileMetaData) error {
+		m.NumRows, m.RowGroups[0].NumRows = 1, 1
+		for i := range m.RowGroups[0].Columns {
+			if md := &m.RowGroups[0].Columns[i].MetaData; slices.Equal(md.PathInSchema, []string{"row_type"}) {
+				md.Statistics = format.Statistics{}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrMalformedCapture) {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// TestRefusesRepeatedRowType refuses a capture whose row_type column is
+// repeated: its values are not one per row.
+func TestRefusesRepeatedRowType(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "capture")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	type repeated struct {
+		Key     string   `parquet:"key"`
+		RowType []string `parquet:"row_type"`
+	}
+	if err := parquet.WriteFile(filepath.Join(dir, "c.parquet"), []repeated{{Key: "a", RowType: []string{"OBJECT", "OBJECT"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), Options{Capture: dir, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrMalformedCapture) {
+		t.Fatalf("run: %v", err)
 	}
 }
