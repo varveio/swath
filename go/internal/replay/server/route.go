@@ -60,6 +60,15 @@ func requestTarget(r *http.Request) (path, query string) {
 // refused with response_count_exhausted, not queued
 // (TestSlowReadersReachTheResponseCeiling).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength != 0 {
+		// Registered first, so it runs last: after the route's own
+		// deferred work has given back the permit and the output.
+		defer ignoreBody(w)()
+	}
+	if status, problem := headProblem(r, s.cfg.headLimit()); status != 0 {
+		rejectRequest(w, r, status, problem)
+		return
+	}
 	if problem := targetProblem(r.RequestURI); problem != "" {
 		rejectTarget(w, r, problem)
 		return
@@ -277,6 +286,22 @@ func viewsLen(body [][]byte) int {
 		n += len(v)
 	}
 	return n
+}
+
+// ignoreBody answers a request that declares a body (a Content-Length or
+// chunked) without reading it: the listing routes take none. The answer
+// is the one the request would get without a body, as the contract's
+// server gives it, and the connection is closed after it rather than
+// drained, which is also what the contract's server does. Two things
+// stop net/http from reading a body that may never arrive: Connection:
+// close on the answer, which skips the drain before the answer is
+// committed (inside the handler, while the response permit is held), and
+// an immediate read deadline, set as the handler returns, which ends the
+// read net/http makes when it closes the body afterwards
+// (TestUnsentBodyHoldsNothing).
+func ignoreBody(w http.ResponseWriter) (done func()) {
+	w.Header()["Connection"] = []string{"close"}
+	return func() { _ = http.NewResponseController(w).SetReadDeadline(time.Now()) }
 }
 
 // releasingWriter gives back a request's execution slot and store

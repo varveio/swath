@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -859,4 +860,51 @@ func TestPipelinedSmallResponsesStayWithinTheCeiling(t *testing.T) {
 	if r := get(t, s, "/bucket?list-type=2&max-keys=1"); r.status != 200 {
 		t.Errorf("after the readers left: %d", r.status)
 	}
+}
+
+// TestMetricsConnectionsTimeOut: the metrics listener holds no
+// connection past its timeouts. An idle keep-alive connection is closed
+// after --idle-timeout, and a client that pipelines /metrics requests
+// and stops reading is cut off after --write-timeout.
+func TestMetricsConnectionsTimeOut(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("receive buffer sizing")
+	}
+	cfg := config(memstore.Keys(memstore.Options{}, "a"))
+	cfg.IdleTimeout, cfg.WriteTimeout = 300*time.Millisecond, 300*time.Millisecond
+	s := start(t, cfg)
+	addr := fmt.Sprintf("127.0.0.1:%d", s.MetricsPort())
+
+	idle, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idle.Close()
+	fmt.Fprintf(idle, "GET /healthz HTTP/1.1\r\nHost: m\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(idle), nil)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("healthz: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	waitFor(t, "the idle metrics connection to be closed", func() bool { return s.metricsConns.Load() == 0 })
+
+	d := net.Dialer{Control: func(_, _ string, c syscall.RawConn) error {
+		var serr error
+		c.Control(func(fd uintptr) { serr = setReceiveBuffer(fd, 4096) })
+		return serr
+	}}
+	stalled, err := d.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stalled.Close()
+	go func() {
+		for range 5000 {
+			if _, err := fmt.Fprintf(stalled, "GET /metrics HTTP/1.1\r\nHost: m\r\n\r\n"); err != nil {
+				return
+			}
+		}
+	}()
+	waitFor(t, "the stalled metrics connection to open", func() bool { return s.metricsConns.Load() == 1 })
+	waitFor(t, "the stalled metrics connection to be cut off", func() bool { return s.metricsConns.Load() == 0 })
 }

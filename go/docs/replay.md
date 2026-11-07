@@ -57,7 +57,7 @@ held in memory while it is sorted (about 300 bytes per row), so it suits capture
 | `--bucket NAME` | required | the bucket name the S3 route answers for; any other is `NoSuchBucket` |
 | `--host`, `--port` | `127.0.0.1`, `0` | bind address; port `0` binds a free port, reported in the startup line |
 | `--metrics-port` | `-1` | the metrics port (below); negative disables it, `0` binds a free one |
-| `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`) |
+| `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`). The serving listener holds at most four times this many connections; one more is closed as soon as it is accepted |
 | `--parquet-connections` | `0` | concurrent fixture page decodes; `0` is `max(8, min(32, GOMAXPROCS))` |
 | `--inject-latency SPEC` | off | target latency by request shape (below) |
 | `--latency-jitter F` | `0` | jitter fraction in [0, 1), drawn from the request so a repeated request gets the same delay |
@@ -117,6 +117,12 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   `response_too_large`; `500 InternalError` with `fixture_disordered` when a row group's keys turn out not to
   ascend (the message names the row group and the part's file name, never its directory); and
   `500 InternalError` (`internal`, no detail) when the fixture read fails otherwise.
+- A request head (request line, headers, blank line) may be 8 KiB with the S3 route alone and 64 KiB with a
+  native route enabled, the Java server's limits: a request line longer than that is `414 URI Too Long`, a
+  longer head `431 Request Header Fields Too Large`, both with the HTML refusal page below.
+- The listing routes take no request body. A request that declares one (`Content-Length` or chunked) is answered
+  as it would be without it, and its connection is then closed instead of drained, as on the Java server; a
+  body that never arrives holds nothing.
 - Some request targets are refused before the route, with `400`, an HTML page and
   `Cache-Control: must-revalidate,no-cache,no-store`, as the Java server's HTTP layer refuses them: a fragment
   (`#`), an empty path segment other than the last (`//bucket`, `/;/bucket`), an encoded `/` or `%`, an encoded
@@ -204,7 +210,9 @@ shape but not absolute time (server and client CPU do not scale).
 ## The metrics port
 
 `--metrics-port` serves three paths on a second listener, which never waits behind the request ceiling, never
-reads the fixture and never moves a listing meter:
+reads the fixture and never moves a listing meter. Its connections are bounded by time instead: an idle
+keep-alive connection, reading a request and reading its body take `--idle-timeout`, writing an answer
+`--write-timeout`, the serving listener's values:
 
 - `GET /healthz`: `ok` once the server is accepting. Poll it before starting a client.
 - `GET /metrics`: JSON, `{schema_version: 2, serving_mode, serving: {...}, uptime_ms, sampled_at_epoch_ms,
@@ -445,7 +453,7 @@ Every run exited 0. The scripts behave the same on either server; nothing in the
     this server's own page naming the problem, not a copy of the Java server's HTTP layer's page.
   - A request line Go's HTTP parser refuses before any handler runs: whitespace or a control byte in the target,
     a malformed `%` escape (`%zz`, a lone `%`, `%uXXXX`) in the path, a target with neither a leading `/` nor a
-    scheme. Both servers answer `400`; this one with Go's `text/plain; charset=utf-8` page and no
+    scheme, and a request head over about 132 KiB (`431` from both servers). Both servers answer `400`; this one with Go's `text/plain; charset=utf-8` page and no
     `Cache-Control`.
   - An absolute target whose authority differs from the `Host` header (`GET http://other.invalid/bucket?...`
     with `Host: localhost`). The Java server refuses it with `400`; this server serves it, because Go's HTTP
