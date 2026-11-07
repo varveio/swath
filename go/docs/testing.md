@@ -168,7 +168,8 @@ python3 verify.py /tmp/go-ds                                         # the forma
 
 The Go `swath-replay` ([replay.md](replay.md)) is held to the Java one by `bench/replaydiff`: both servers on one
 fixture, the same scripted matrix, token walks and seeded random requests to each, and every answer's status,
-compared headers and body bytes required equal ([internals/replay.md](internals/replay.md#the-differential-driver)):
+compared headers and body bytes required equal ([internals/replay.md](internals/replay.md#the-differential-driver);
+[internals/replay-java.md](internals/replay-java.md) lists the documented divergences and residuals):
 
 ```bash
 go build -o /tmp/replaydiff ./bench/replaydiff && ./build.sh -o swath-replay ./cmd/swath-replay

@@ -1,11 +1,12 @@
 # swath-replay (Go)
 
 `swath-replay` serves a recorded listing back through the S3 `ListObjectsV2` API, so a lister can be tested
-and benchmarked against a real bucket's shape without the bucket. It is a contributor tool, built from the same
-module as `swath`, a separate binary (`cmd/swath-replay`), and a drop-in for the Java `swath-replay serve`
-([`../../docs/swath-replay.md`](../../docs/swath-replay.md)): the same flags, the same startup line, the same
-metrics endpoint and the same bytes on the wire for the S3 route ([internals/replay.md](internals/replay.md)
-says what "the same" covers and how it is checked).
+and benchmarked against a real bucket's shape without the bucket; with `--protocols` it also serves the Cloud
+Storage JSON API's `objects.list` and Azure Blob's flat `List Blobs` from the same recording. It is a
+contributor tool, built from the same module as `swath`, a separate binary (`cmd/swath-replay`).
+[internals/replay.md](internals/replay.md) says how it is built and which tests hold its answers;
+[internals/replay-java.md](internals/replay-java.md) compares it with the Java `swath-replay serve` it was
+ported from.
 
 It is not an object store: no object data, no writes, no authentication, path-style addressing only, current
 objects only.
@@ -48,8 +49,8 @@ held in memory while it is sorted (about 300 bytes per row), so it suits capture
 
 ## Flags
 
-`serve` takes the Java launcher's flags, in either `--flag value` or `--flag=value` form, with or without the
-`serve` command word.
+`serve` takes its flags in either `--flag value` or `--flag=value` form, with or without the `serve` command
+word.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -78,7 +79,7 @@ held in memory while it is sorted (about 300 bytes per row), so it suits capture
 The durations take `500ms`, `10s` or ISO-8601 (`PT10S`). A bad value is a usage error (exit 2) naming the
 flag; a fixture that cannot be opened exits 1.
 
-When both ports are bound the server prints one line to stderr, in the Java launcher's `key=value` shape:
+When both ports are bound the server prints one line to stderr, `key=value` pairs in a fixed order:
 
 ```text
 swath_replay endpoint=http://127.0.0.1:19090 bucket=noaa-normals-pds fixture=/data/... serving_mode=SORTED
@@ -122,8 +123,7 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   restart, is accepted by a server on another fixture, and one a client builds for any boundary is accepted
   (one past the fixture's keys gives an empty page), as a `start-after` would be (`TestTokenIsNotBound`). A flat page's token sent with a delimiter resumes
   at its key and rolls up what follows, the common prefix that key falls in included; a `start-after` inside a
-  common prefix passes it. Replay tokens and S3's are not interchangeable, and neither are the Java server's
-  (`v2:...`), which this server refuses.
+  common prefix passes it. Replay tokens and S3's are not interchangeable.
 - An empty `start-after` bounds nothing and is echoed as `<StartAfter></StartAfter>`.
 - `encoding-type=url` writes letters, digits, `-`, `_`, `.`, `/` and `*` as they are, a space as `+`, and every
   other byte as `%XX` with upper-case hex; `EncodingType` echoes the value as sent (`URL`). Without it, key
@@ -134,14 +134,9 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
 - A listing and an error document both start with `<?xml version="1.0" encoding="UTF-8"?>` and a newline (LF),
   then the root element, the bytes live S3 wrote on 2026-11-07 (`TestLiveXMLDeclarationNewline`).
 - The rules in the four items above, the form reading and the refusals answer as live S3 does (probed on
-  2026-11-07 against a public `us-east-1` bucket, anonymous) and differ from the Java server, which keeps `+`
-  and malformed escapes as bytes, takes the last of duplicates, treats a blank token or `encoding-type` value
-  as absent, ignores `marker`, serves a NUL, reads key parameters as raw bytes, escapes a space and `*`, writes
-  control characters raw, writes no newline after the XML declaration, issues and accepts unchecked tokens, and
-  writes its own error document (`Resource`
-  in place of S3's elements, other messages for `max-keys` and the method). ListObjects V1 (no `list-type`) and
-  `list-type=3` stay refused (`400 InvalidArgument`), as on the Java server, where S3 serves them; `fetch-owner=true` renders `Owner` only
-  where the fixture holds owner columns.
+  2026-11-07 against a public `us-east-1` bucket, anonymous; the `TestLive*` tests of `s3` pin each).
+  ListObjects V1 (no `list-type`) and `list-type=3` are refused (`400 InvalidArgument`), where S3 serves them;
+  `fetch-owner=true` renders `Owner` only where the fixture holds owner columns.
 - `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
   `Owner` appears only with `fetch-owner=true`. Which fields a `Contents` element carries, and from what, depends
   on the recording's schema ([Item fields by route and recording schema](#item-fields-by-route-and-recording-schema)):
@@ -164,18 +159,21 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   ascend (the message names the row group and the part's file name, never its directory); and
   `500 InternalError` (`internal`, no detail) when the fixture read fails otherwise.
 - A request head (request line, headers, blank line) may be 8 KiB with the S3 route alone and 64 KiB with a
-  native route enabled, the Java server's limits: a request line longer than that is `414 URI Too Long`, a
-  longer head `431 Request Header Fields Too Large`, both with the HTML refusal page below.
+  native route enabled, the replay wire contract's limits (`server` `TestRequestHeadLimits`): a request line
+  longer than that is `414 URI Too Long`, a longer head `431 Request Header Fields Too Large`, both with the HTML
+  refusal page below.
 - The listing routes take no request body. A request that declares one (`Content-Length` or chunked) is answered
-  as it would be without it, and its connection is then closed instead of drained, as on the Java server; a
-  body that never arrives holds nothing.
-- Some request targets are refused before the route, with `400`, an HTML page and
-  `Cache-Control: must-revalidate,no-cache,no-store`, as the Java server's HTTP layer refuses them: a fragment
+  as it would be without it, and its connection is then closed instead of drained; a body that never arrives
+  holds nothing (`server` `TestUnsentBodyHoldsNothing`).
+- Some request targets are refused before the route, with `400`, `Content-Type: text/html;charset=iso-8859-1`
+  and `Cache-Control: must-revalidate,no-cache,no-store`, by the replay wire contract's rules
+  (`server` `TestRejectsAmbiguousTargets`): a fragment
   (`#`), an empty path segment other than the last (`//bucket`, `/;/bucket`), an encoded `/` or `%`, an encoded
   dot segment (`%2e%2e`) or a dot segment with a parameter (`..;`), a raw `\` or a raw byte outside the path
   characters (`"`, `<`, `|`, non-ASCII, ...), an encoded control character or `\`, invalid UTF-8 once decoded,
   a malformed escape or an encoded NUL, a path that climbs above the root (`/../bucket`), and user information
-  in an absolute target. The page is this server's own.
+  in an absolute target. The body is a short HTML page naming the problem. Some malformed request lines are
+  answered by the HTTP layer itself (Limits).
 
 Response memory (the same on every route). A request reserves room for a full page (on S3 320 bytes an entry,
 at least 4 KiB; on GCS `1024 + 384` an entry; on Azure `2048 + 512` an entry; at most `--max-response-bytes`)
@@ -210,11 +208,8 @@ Windows are evicted least recently used first, past `--prefetch-max-windows` win
 windows serves 96 walks); a window's rows are held packed, the keys and each text column in one array
 apiece (about 130 bytes a row for the canonical schema with 44-byte keys). With the defaults the cache holds
 up to 2.4 million rows (the server's resident memory under load is in Measurements below). `0` for either flag
-turns the cache off: every read then decodes its pages from the fixture. The Java server reads the same
-settings from the system properties `swath.replay.prefetch.window-rows`, `swath.replay.prefetch.max-windows` and
-`swath.replay.prefetch.enabled`, with the same window size and 96 windows (it does not read ahead), and
-publishes the same meters (below); a read-ahead is counted as a fill (`prefetch.window.fill`,
-`prefetch.fill.rows`), not as a miss.
+turns the cache off: every read then decodes its pages from the fixture. The cache's meters are `prefetch.*`
+(below); a read-ahead is counted as a fill (`prefetch.window.fill`, `prefetch.fill.rows`), not as a miss.
 
 ## The Azure route
 
@@ -246,7 +241,8 @@ or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
   is at or after `startFrom`.
 - `NextMarker` is `az1.` and base64url of the resume point, bound to the listing scope (account, container,
   version, prefix, delimiter, `startFrom`, fixture identity): a marker used with another scope is
-  `400 InvalidQueryParameterValue`. Markers are the Java server's bytes for the same fixture identity.
+  `400 InvalidQueryParameterValue`. A marker's bytes depend only on its scope and resume point, so a restart on
+  the same fixture identity issues the same markers (`azure` `TestMarkerGolden`).
 - Every body, errors included, starts with a UTF-8 byte order mark before the XML declaration. `Blob` carries
   `Name` and synthetic `Properties`: `Last-Modified` (second precision), `Etag` `0x000000000000001`,
   `Content-Length`, `Content-Type` `application/octet-stream`, `BlockBlob`, `Hot` (inferred), `unlocked`,
@@ -259,14 +255,14 @@ or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
 - The injected latency profile applies alike: a delimiter request is a structure probe, `maxresults=1` a pivot
   probe.
 
-Unlike the Java server, a name of more than 254 `/`-separated segments is listed: native Azure lists one (the
-evidence archive's capture `azure-12a`), where the Java server answers `500 too_many_segments`.
+A name of more than 254 `/`-separated segments is listed, as native Azure lists it (the evidence archive's
+capture `azure-12a`; `azure` `TestRenderRefusals`).
 
 ## Item fields by route and recording schema
 
 The rule: a recording served on its own provider's API answers exactly as stored; on any other API, each field
 is either mapped to the equivalent value, where a real equivalent exists, or a fixed placeholder. The S3-shaped
-schemas are S3's own (`swath/canonical` is the Java-era capture schema, `swath/s3-objects/v1` the Go lister's S3
+schemas are S3's own (`swath/canonical` is the format-1 schema, `swath/s3-objects/v1` the Go lister's S3
 datasets, `swath-replay/objects/v1` what `sort-fixture` writes from a capture; all three hold the same nine
 columns); `swath/gcs-objects/v1` is GCS's own; `swath-local/v1` (a local tree's size and modification time) has
 no provider API, so every route maps or fills it. Cells marked "open" do not follow the rule today and are kept
@@ -319,8 +315,8 @@ Open cells:
 - (c) A GCS recording stores the content type and the MD5 (base64, the form Azure's `Content-MD5` takes), but
   the Azure route sends its placeholder content type and no `Content-MD5`.
 
-The S3-shaped schemas' answers on every route are the replay wire contract's (the Java server reads
-`swath/canonical`; `server` `TestEmptyAndNullStringsEndToEnd`).
+The S3-shaped schemas' answers on every route are the replay wire contract's
+(`server` `TestEmptyAndNullStringsEndToEnd`).
 
 ## Injected latency
 
@@ -333,8 +329,9 @@ swath-replay serve ... --inject-latency prod-commoncrawl --latency-scale 50
 A request with a delimiter is a `structure_probe`, a delimiter-free request with `max-keys` at most 1 a
 `pivot_probe`, anything else a `worker_page` (aliases `structure`, `pivot`, `page`). A delay is `223ms`, `6.9s`
 or a bare millisecond count; `+55ms/cp` (structure probes only) adds a term per common prefix returned. An
-unlisted shape gets none. The number before `ms` or `s` is read as a floating-point number in the Java
-grammar (`1.5e3ms`, `2dms`, `0x1p0s`); a delay too long to represent saturates at about 292 years rather than
+unlisted shape gets none. The number before `ms` or `s` is a decimal or hexadecimal floating-point number with
+an optional `d` or `f` suffix (`1.5e3ms`, `2dms`, `0x1p0s`), the replay wire contract's grammar (`latency`
+`TestNumberGrammar`); a delay too long to represent saturates at about 292 years rather than
 wrapping to none. `prod-commoncrawl` is the built-in reference profile (223 ms pages, 121 ms pivots,
 223 ms + 55 ms per prefix for structure probes).
 
@@ -365,9 +362,9 @@ keep-alive connection, reading a request and reading its body take `--idle-timeo
   `{value, error}` pair: a missing, unreadable or invalid source is an explicit error.
 
 A timer's `count` and `sum_ms`, and a distribution's `count` and `total`, cover the server's life. A timer's
-`max_ms`, `p50_ms` and `p99_ms` and a distribution's `max` cover recent samples, by the rules of the Java server's
-registry (Micrometer's `SimpleMeterRegistry`: a one-minute expiry, three buffers), with two different windows,
-both counted from the meter's creation and rotated when a sample is recorded or the meter is read:
+`max_ms`, `p50_ms` and `p99_ms` and a distribution's `max` cover recent samples, with a one-minute expiry and
+three buffers (the replay wire contract's windows), in two different windows, both counted from the meter's
+creation and rotated when a sample is recorded or the meter is read:
 
 - **The maximum** is kept in three slots, each sample raising all three. Each minute the slot read is cleared and
   the next becomes the one read; after three minutes without a rotation all three are cleared. A sample stays
@@ -378,92 +375,82 @@ both counted from the meter's creation and rotated when a sample is recorded or 
   next few scrapes keep clearing until the clock catches up.
 
 For example, after 900 ms at 0 s and 10 ms at 79 s, a scrape at 79 s reads `p50_ms` 10 and `max_ms` 900, at 121 s
-`p50_ms` 0 and `max_ms` 900, at 181 s `max_ms` 10 (`TestWindowsFollowTheJavaRegistry`). The histograms are
-log-linear (32 buckets per power of two), so a percentile is within 3.1% above the sample it stands for.
+`p50_ms` 0 and `max_ms` 900, at 181 s `max_ms` 10 (`metrics` `TestWindowsFollowTheJavaRegistry`). The histograms
+are log-linear (32 buckets per power of two), so a percentile is within 3.1% above the sample it stands for.
 Read a measured window's mean as the difference of two scrapes' `sum_ms` over the difference
-of their `count`. `index.load.latency` and `sortfixture.build.latency` publish no percentiles (`null`), as on
-the Java server.
+of their `count`. `index.load.latency` and `sortfixture.build.latency` publish no percentiles (`null`).
 
 ### The meters
 
-All names begin `swath.replay.`; the Java server's are in [`../../docs/swath-replay.md`](../../docs/swath-replay.md#metrics-and-tuning).
-A scrape after the same requests lists the same meters with the same types and tags on either server, apart from
-the rows marked absent or renamed below (`server` `TestMeterSetMatchesTheContract` compares the set with a Java
-scrape, `testdata/meters.txt`). Meters marked "from startup" are there, at zero, before the first request; the
-others appear on first use.
+All names begin `swath.replay.`. Meters marked "from startup" are there, at zero, before the first request; the
+others appear on first use. `server` `TestMeterSetMatchesTheContract` pins the names, types and tags a scrape
+lists after a request mix on all three routes (`testdata/meters.txt`). The server publishes no process or host
+meters: read the process from `/proc` and its limits from `/runtime-attestation`.
 
-| Meter | Go server | Notes |
+| Meter | Published | Meaning |
 |---|---|---|
-| `http.requests`, `http.errors`, `http.request.latency` | present, from startup | every answer on the serving port; `errors` the 5xx. The latency runs from arrival to the start of the write. The bench scripts sum `http.requests` `count` |
-| `request.latency{shape}` | present, from startup | the S3 route's own cost per shape (`worker_page`, `pivot_probe`, `structure_probe`), injected delay excluded |
-| `request.stage.latency{protocol,stage}` | present | `page`, `render`, `delay`, `write` of a page; an error answer has no write stage |
-| `fixture.list.latency`, `serving.path{mode}` | present, from startup | one S3 pager operation |
-| `serving.fallback{reason}` | absent | there is no other serving mode to fall back to: a fixture sorted serving refuses ends startup with the reason (the Java server's `--serving-mode sorted` does the same and records nothing) |
-| `serving.refused{reason}` | present | `row_group_disorder`, counted for every read that finds it, a range read or a rollup (the Java server counts the rollup's only) |
-| `index.load.latency{source=derived}`, `index.entries` | present, from startup | the fixture open (footers, routing keys); one routing entry per non-empty row group |
-| `page.read.latency` | present, from startup | how long a store read holds its reader slot, slot wait excluded |
-| `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | present, from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read, on either server; a read answered from a window is none |
-| `parquet.queries.in_flight`, `parquet.queries.peak` | present, from startup | reads holding one of the `--parquet-connections` slots, now and at most. One pool serves every read, so the peak is at most the flag; the Java server has a pool per file and per read kind, so its peak can exceed the flag |
-| `delimiter.path{path}` | present | `rollup` or `walk` for an S3 delimiter page |
-| `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | present, from startup | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks. A key cursor stays open on its group for the whole rollup and decodes whole key pages, so `row_group_opens` is lower and `decoded_key_rows` higher than the Java server's for the same rollup |
-| `delimiter.reader_pool.open.latency`, `delimiter.reader_pool.readers_opened` | renamed: `handle_cache.*` | the Java server opens a row-group reader pool per file on its first rollup; the Go reader has no reader pools. Every part is read through one descriptor cache instead: `handle_cache.opens` (first opens and reopens after eviction), `.evictions`, `.waits` (reads that waited for a descriptor) as counters, and `.open`, `.peak`, `.limit` (half the soft descriptor limit, at most 4,096) as gauges, from startup |
-| `sortfixture.build.latency`, `sortfixture.output.bytes` | present, from startup, zero | recorded by `sort-fixture`, never by a server |
-| `sort.progress`, `sort.steal_reason{outcome,reason}` | absent | the Java sorter's own scheduling; `sort-fixture` here sorts in memory |
-| `prefetch.window.hit`, `.window.miss{reason}`, `.window.fill`, `.fill.rows`, `.anchor{event}`, `.window.ramp_ceiling_rows`, `.window.eviction`, `.window.row_budget_eviction`, `.window.selection{reason}`, `.window.join{reason}`, `.window.uncached{reason}`, `.windows.live`, `.anchors.live`, `.rows.live` | present while the window cache is on (the counters without a reason tag, the anchors' three events and the gauges from startup) | the window cache (above): reads answered from windows; misses by `continuation` or `cold`; each fill's time and the rows it asked for; continuation anchors `registered`, `claimed`, `evicted_before_claim` and a claimed one's ramp ceiling; windows evicted, and those the row bound forced; how a read was served (`single_exact_bound`, `single_contained_bound`, `two_window_join`, `insufficient`, `no_cover`); a declined join's reason; `request_exceeds_window`, `rounded_exceeds_row_budget`, `window_exceeds_row_budget`; and the windows, anchors and rows held |
-| `response.admission.refused{protocol,reason}`, `response.bytes.live`, `response.bytes.peak`, `response.active` | present (gauges from startup) | refusals by `shutdown`, `response_count_exhausted`, `response_budget_exhausted`, `response_too_large` |
-| `response.chunk.allocation{reason}`, `response.chunk.capacity.bytes{reason}` | present, from startup | chunks by `initial`, `initial_cap_partial`, `continuation`, `cap_partial` |
-| `response.percent.encoding.path{protocol,reason}`, `response.write.deadline{protocol,reason}` | present | |
-| `protocol.requests.active{protocol}` | present, from startup | per enabled route, until the answer is written |
-| `protocol.http.requests{protocol,status_class}`, `protocol.objects`, `protocol.prefixes`, `protocol.encoded.bytes{protocol,shape}`, `provider.path{protocol,path,reason}` | present | |
-| `inject.overrun{shape}`, `inject.overrun.ms{shape}` | present | absent while nothing overran; zero is the healthy state |
-| `jvm.*`, `process.*`, `system.*` | absent | the Java runtime's and host meters; read the process from `/proc` and the limits from `/runtime-attestation` |
+| `http.requests`, `http.errors`, `http.request.latency` | from startup | every answer on the serving port; `errors` the 5xx. The latency runs from arrival to the start of the write. The bench scripts sum `http.requests` `count` |
+| `request.latency{shape}` | from startup | the S3 route's own cost per shape (`worker_page`, `pivot_probe`, `structure_probe`), injected delay excluded |
+| `request.stage.latency{protocol,stage}` | on first use | `page`, `render`, `delay`, `write` of a page; an error answer has no write stage |
+| `fixture.list.latency`, `serving.path{mode}` | from startup | one S3 pager operation |
+| `serving.refused{reason}` | on first use | `row_group_disorder`, counted for every read that finds it, a range read or a rollup |
+| `index.load.latency{source=derived}`, `index.entries` | from startup | the fixture open (footers, routing keys); one routing entry per non-empty row group |
+| `page.read.latency` | from startup | how long a store read holds its reader slot, slot wait excluded |
+| `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read; a read answered from a window is none |
+| `parquet.queries.in_flight`, `parquet.queries.peak` | from startup | reads holding one of the `--parquet-connections` slots, now and at most. One pool serves every read, so the peak is at most the flag |
+| `delimiter.path{path}` | on first use | `rollup` or `walk` for an S3 delimiter page |
+| `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | from startup | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks. A key cursor stays open on its group for the whole rollup and decodes whole key pages |
+| `handle_cache.opens`, `.evictions`, `.waits`, `.open`, `.peak`, `.limit` | from startup | every part is read through one descriptor cache: first opens and reopens after eviction, evictions, and reads that waited for a descriptor as counters; descriptors open, at most, and the limit (half the soft descriptor limit, at most 4,096) as gauges |
+| `sortfixture.build.latency`, `sortfixture.output.bytes` | from startup, zero | recorded by `sort-fixture`, never by a server |
+| `prefetch.window.hit`, `.window.miss{reason}`, `.window.fill`, `.fill.rows`, `.anchor{event}`, `.window.ramp_ceiling_rows`, `.window.eviction`, `.window.row_budget_eviction`, `.window.selection{reason}`, `.window.join{reason}`, `.window.uncached{reason}`, `.windows.live`, `.anchors.live`, `.rows.live` | while the window cache is on (the counters without a reason tag, the anchors' three events and the gauges from startup) | the window cache (above): reads answered from windows; misses by `continuation` or `cold`; each fill's time and the rows it asked for; continuation anchors `registered`, `claimed`, `evicted_before_claim` and a claimed one's ramp ceiling; windows evicted, and those the row bound forced; how a read was served (`single_exact_bound`, `single_contained_bound`, `two_window_join`, `insufficient`, `no_cover`); a declined join's reason; `request_exceeds_window`, `rounded_exceeds_row_budget`, `window_exceeds_row_budget`; and the windows, anchors and rows held |
+| `response.admission.refused{protocol,reason}`, `response.bytes.live`, `response.bytes.peak`, `response.active` | on first use (gauges from startup) | refusals by `shutdown`, `response_count_exhausted`, `response_budget_exhausted`, `response_too_large` |
+| `response.chunk.allocation{reason}`, `response.chunk.capacity.bytes{reason}` | from startup | chunks by `initial`, `initial_cap_partial`, `continuation`, `cap_partial` |
+| `response.percent.encoding.path{protocol,reason}`, `response.write.deadline{protocol,reason}` | on first use | |
+| `protocol.requests.active{protocol}` | from startup | per enabled route, until the answer is written |
+| `protocol.http.requests{protocol,status_class}`, `protocol.objects`, `protocol.prefixes`, `protocol.encoded.bytes{protocol,shape}`, `provider.path{protocol,path,reason}` | on first use | |
+| `inject.overrun{shape}`, `inject.overrun.ms{shape}` | on first use | absent while nothing overran; zero is the healthy state |
 
 ### Diagnostics
 
-- **Slow requests.** `--slow-request-log-ms N` (or `SWATH_REPLAY_SLOW_REQUEST_LOG_MS`; the Java server's
-  `swath.replay.slow-request-log-ms` system property) logs every S3 page whose own cost reaches N ms, with the
-  Java server's message and fields, without its logger's time and level prefix (`TestSlowRequestLogLine`):
+- **Slow requests.** `--slow-request-log-ms N` (or `SWATH_REPLAY_SLOW_REQUEST_LOG_MS`) logs every S3 page whose
+  own cost reaches N ms, as one line with no time or level prefix (`TestSlowRequestLogLine`):
 
   ```text
   replay slow request shape=STRUCTURE_PROBE ms=0.690114 prefix=logs/ delimiter=/ start_after=logs/a continuation=none max_keys=7 entries=4 truncated=false
   ```
 
-- **The startup line** has the Java launcher's keys in its order (`TestServeEndToEnd`) and the same values for the
-  same flags and fixture; `fixture_identity` is also in the payload's `serving` object.
+- **The startup line** has its keys in a fixed order (`TestServeEndToEnd`); `fixture_identity` is also in the
+  payload's `serving` object.
 - **Refusals** are typed: `serving.refused{reason}` for the fixture, `response.admission.refused{protocol,reason}`
   for admission, and the `x-swath-replay-error` header on the answer.
-- **Not here:** the Java `bench` command (an in-process token-walk benchmark; `bench/replayload` drives a running
-  server instead, below), the DuckDB serving mode, and the Java server's
-  `swath_replay_metrics` summary line at shutdown (logged below the Java launcher's default log level; poll the
-  endpoint instead).
+- **At shutdown** the server logs no summary of its meters; scrape `/metrics` before stopping it to keep them.
 - **Profiles.** `SWATH_CPUPROFILE=FILE` and `SWATH_MEMPROFILE=FILE` (the lister's variables) write a CPU and an
   allocation profile for `go tool pprof`, covering the server's life from the startup line; both are written when
   SIGINT or SIGTERM stops it.
 - A client that disconnects while its page is being read does not cancel the read: the page is read, rendered and
-  counted as served (`2xx`, nothing in `http.errors`, no log line), and only its write fails, as on the Java
-  server (`TestClientGoneFinishesThePage`). Shutdown still interrupts it. A client that leaves while its request
+  counted as served (`2xx`, nothing in `http.errors`, no log line), and only its write fails
+  (`TestClientGoneFinishesThePage`). Shutdown still interrupts it. A client that leaves while its request
   sleeps in an injected delay is not noticed either: the delay runs out and the write fails without a log line
   (`bench/resume_storm.sh`, which kills a listing with 64 requests in flight, leaves the server log clean).
 
 ## With the bench scripts
 
 `bench/fault_replay.sh`, `bench/policy_replay.sh` and `bench/defaults_replay.sh` start `swath-replay` from
-`PATH` after sourcing `$REPLAY_ENV`. To run them on the Go server, point `REPLAY_ENV` at a file that puts it
-first:
+`PATH` after sourcing `$REPLAY_ENV`. To run them on this server, point `REPLAY_ENV` at a file that puts its
+directory first:
 
 ```bash
 cat > /tmp/go-replay.env <<EOF2
-export PATH=$PWD:\$PATH            # the directory holding the Go swath-replay
+export PATH=$PWD:\$PATH            # the directory holding this swath-replay
 EOF2
 REPLAY_ENV=/tmp/go-replay.env RECORDINGS=/data/rec FAULTPROXY=/tmp/faultproxy \
   bench/fault_replay.sh arms.tsv noaa-normals-pds 95 19090 1 /tmp/out
 ```
 
-The scripts' flags (`--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024
---inject-latency ...`) and their reading of `/healthz` and `swath.replay.http.requests` are the same on
-either server.
+The server takes the scripts' flags (`--serving-mode sorted --parquet-connections 8 --max-concurrent-requests
+1024 --inject-latency ...`) and answers their reading of `/healthz` and `swath.replay.http.requests`.
 
-`bench/replayload` drives a running server (either one) with concurrent S3 token walks and prints one line: walks,
+`bench/replayload` drives a running server with concurrent S3 token walks and prints one line: walks,
 seconds, requests, objects, rows per second, the request latency's p50 and p99, retried `503`s, errors, and with
 `-metrics` the server's request count, `inject.overrun` total and `parquet.queries.peak`. With `-fixture` each
 walk starts at its own row group's routing key; a walk that reaches the end starts over:
@@ -479,18 +466,6 @@ The server's load tests (`TestLoadRequestCeilingUnderFaultProxy`, `TestLoadReade
 `SWATH_REPLAY_FIXTURES=ROOT` they serve `ROOT/fixtures/synthetic-1m/sorted-rolled`, otherwise a generated fixture of
 the same key shape.
 
-## Comparing with the Java server
-
-`bench/replaydiff` starts both servers on one fixture and compares every answer byte for byte (see
-[internals/replay.md](internals/replay.md#the-differential-driver)):
-
-```bash
-go build -o /tmp/replaydiff ./bench/replaydiff
-/tmp/replaydiff -java $JAVA_ROOT/swath-replay/build/install/swath-replay/bin/swath-replay -go ./swath-replay \
-  -fixture /data/sorted -bucket bkt -report /tmp/diff.json     # exit 1 and FAIL lines on a difference
-/tmp/replaydiff -protocol azure -walk-limit 300 ...                   # the Azure route, both servers on s3,azure
-```
-
 ## Live conformance
 
 `bench/replaydiff -live-endpoint` compares the Go server with the provider itself: anonymous requests to live S3
@@ -500,6 +475,7 @@ scope as its prefix) and `-live-stable-before` refuses to run unless every recor
 before the given time (the recording's start).
 
 ```bash
+go build -o /tmp/replaydiff ./bench/replaydiff
 /tmp/replaydiff -live-endpoint https://s3.us-east-1.amazonaws.com -protocol s3 -go ./swath-replay \
   -fixture /data/rec/noaa-normals-pds/dataset/data -bucket noaa-normals-pds -report /tmp/live.json
 /tmp/replaydiff -live-endpoint https://s3.eu-central-1.amazonaws.com -protocol s3 -go ./swath-replay \
@@ -525,8 +501,8 @@ dot-segment names; names at the length limits) or an official client library, an
 recording lacks (a directory of exactly 1,000 names, of six objects, a name that is a byte prefix of another).
 The report lists every case with its query or the reason it was not sent.
 
-**Comparison.** The conformance suite's field policy (the Java `ProviderExchangeComparator` with its S3 and GCS
-profile comparators, and the campaign's `evidence.py` normalizations): the same status; on each side only the
+**Comparison.** The conformance suite's field policy (its exchange comparator with the S3 and GCS profile
+comparators, and the campaign's `evidence.py` normalizations): the same status; on each side only the
 classified headers (S3: `Content-Type`, `Date`, `x-amz-request-id`, `x-amz-id-2`, `x-amz-bucket-region`,
 `Content-Length`, `Server`, `Transfer-Encoding`, `Connection`, `x-swath-replay-error`; GCS: `Content-Type`,
 `Date`, `x-goog-request-id`, `Content-Length`, `Server`, `Cache-Control`, `Vary`, `Transfer-Encoding`,
@@ -565,28 +541,27 @@ objects each, so the cases that need a directory of six objects or a name that i
 not sent there. `s3-07x` (a decoded byte of an issued token flipped) is skipped where either side's token is
 not base64 (live S3's own token is skipped on `giab`).
 
-Every difference the first runs found, by matrix case (the same on each bucket where the case was sent). The
-Java server answers each as the replay first did; the S3 route now answers twelve of them as live S3 does
-(The S3 route, above), each a documented divergence from the Java server in the differential driver. The S3
-rows of `docs/replay-provider-conformance.md` are `UNMEASURED`.
+Every difference the first runs found, by matrix case (the same on each bucket where the case was sent). The S3
+route now answers twelve of them as live S3 does (The S3 route, above). The S3 rows of
+`docs/replay-provider-conformance.md` are `UNMEASURED`.
 
-| Case | Request | Live S3 | Replay |
-|---|---|---|---|
-| `s3-01c`, `s3-01g` | `start-after=` (empty) | echoes an empty `<StartAfter></StartAfter>` | Java server: omits `StartAfter`; replay: as live S3 |
-| `s3-05e`, `s3-05f` | `prefix=...a%ZZ`, `prefix=...pct%` (malformed escape) | drops the prefix: lists the bucket from its first key, `<Prefix></Prefix>` | Java server: lists the literal prefix (empty); replay: as live S3 |
-| `s3-05i` | `prefix` twice with different values | the first | Java server: the last; replay: as live S3 |
-| `s3-06m` | `max-keys=1&max-keys=2` | the first | Java server: the last; replay: as live S3 |
-| `s3-06k` | `max-keys=+2` (raw `+`) | `400 InvalidArgument` (the `+` read as a space) | Java server: accepts the sign: 2; replay: as live S3 |
-| `s3-07w` | `continuation-token=` (empty) | `400 InvalidArgument` ("The continuation token provided is incorrect") | Java server: blank is absent: the first page; replay: as live S3 |
-| `s3-07r`, `s3-07s` | an issued token with its last character changed, or cut by four | `400 InvalidArgument` | Java server: the altered `v2:` token still decodes to a position: a page; replay: as live S3 |
-| `s3-07k` | a token from a flat walk sent with `delimiter=/` | resumes at the token's key and lists the common prefix that holds it again | Java server: resumes after that whole prefix; replay: as live S3 |
-| `s3-08d` | `encoding-type=bogus` | `400 InvalidArgument` | Java server: ignored; replay: as live S3 |
-| `s3-12e` | `marker` with `list-type=2` | `400 InvalidArgument` ("Marker unsupported ... in list-type=2") | Java server: ignored; replay: as live S3 |
-| `s3-12a`, `s3-12b`, `s3-12c` | ListObjects V1 (no `list-type`, or `list-type=3`) | a V1 listing | `400` (V2 only, see Limits) |
-| walks of `giab` | `encoding-type=url` over a key with spaces | a space is `+` (`Karyotype+Report+-+...`) | Java server: `%20`; replay: as live S3 |
-| scripted, 22 requests | `start-after` holding U+0000 | `400 InvalidArgument` ("cannot include Null") | Java server: a listing; replay: as live S3 |
-| scripted, 2 requests | `start-after` with a byte that is not UTF-8 (`%FF`) | read as U+FFFD (echoed `%EF%BF%BD`) | Java server: the byte as sent; replay: as live S3 |
-| `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID` | no `Owner`: the recording was made without owners (a fixture with owner columns renders them) |
+| Case | Request | Live S3 | Replay at the first runs | Replay now |
+|---|---|---|---|---|
+| `s3-01c`, `s3-01g` | `start-after=` (empty) | echoes an empty `<StartAfter></StartAfter>` | omits `StartAfter` | as live S3 |
+| `s3-05e`, `s3-05f` | `prefix=...a%ZZ`, `prefix=...pct%` (malformed escape) | drops the prefix: lists the bucket from its first key, `<Prefix></Prefix>` | lists the literal prefix (empty) | as live S3 |
+| `s3-05i` | `prefix` twice with different values | the first | the last | as live S3 |
+| `s3-06m` | `max-keys=1&max-keys=2` | the first | the last | as live S3 |
+| `s3-06k` | `max-keys=+2` (raw `+`) | `400 InvalidArgument` (the `+` read as a space) | accepts the sign: 2 | as live S3 |
+| `s3-07w` | `continuation-token=` (empty) | `400 InvalidArgument` ("The continuation token provided is incorrect") | blank is absent: the first page | as live S3 |
+| `s3-07r`, `s3-07s` | an issued token with its last character changed, or cut by four | `400 InvalidArgument` | the altered `v2:` token still decodes to a position: a page | as live S3 |
+| `s3-07k` | a token from a flat walk sent with `delimiter=/` | resumes at the token's key and lists the common prefix that holds it again | resumes after that whole prefix | as live S3 |
+| `s3-08d` | `encoding-type=bogus` | `400 InvalidArgument` | ignored | as live S3 |
+| `s3-12e` | `marker` with `list-type=2` | `400 InvalidArgument` ("Marker unsupported ... in list-type=2") | ignored | as live S3 |
+| `s3-12a`, `s3-12b`, `s3-12c` | ListObjects V1 (no `list-type`, or `list-type=3`) | a V1 listing | `400` | `400` (V2 only, see Limits) |
+| walks of `giab` | `encoding-type=url` over a key with spaces | a space is `+` (`Karyotype+Report+-+...`) | `%20` | as live S3 |
+| scripted, 22 requests | `start-after` holding U+0000 | `400 InvalidArgument` ("cannot include Null") | a listing | as live S3 |
+| scripted, 2 requests | `start-after` with a byte that is not UTF-8 (`%FF`) | read as U+FFFD (echoed `%EF%BF%BD`) | the byte as sent | as live S3 |
+| `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID` | no `Owner` | no `Owner`: the recording was made without owners (a fixture with owner columns renders them) |
 
 Rerun after the change (same recordings and flags): `noaa-normals-pds` with `-live-scripted -max-prefixes 40`,
 provider cases 67 passed and 5 differing, scripted 336 / 1, walks 10 / 0 (1,908 requests); `giab` 67 / 4, walks
@@ -697,29 +672,16 @@ The first replay of `cloud-samples-data` found the one difference this check has
 content type is listed by GCS without `contentType`, which the native rendering filled with
 `application/octet-stream`; the native rendering now omits it (`TestNativeNullContentTypeIsOmitted`).
 
-### The native rendering against the Java server
-
-The Java server does not read `swath/gcs-objects/v1`, so the cross-check on real names is the `cloud-samples-data`
-rows written into the S3 capture columns and sorted by the Java `sort-fixture`: `replaydiff -protocol gcs` with
-both servers on that fixture compared 2,343 requests (matrix 1,558, walks 285 with `-walk-limit 300`, random 500)
-with no difference; with the Go server on the native dataset (`-go-fixture`) and `-gcs-mask-metadata`, every
-name, size, time, prefix, status and page boundary agreed, and the only differences were the page tokens' bytes
-(453 pages; each token is bound to its fixture's identity) and the 8 token cases that send the Java server's token
-to the Go server, which refuses a token of another fixture (`invalid_page_token`).
-
 ## Measurements
 
 Configuration, unless a table says otherwise. Host: a 4 vCPU session container (Intel Xeon @ 2.10 GHz) shared
 with other jobs, 15 GiB RAM, Linux 6.18; **4 vCPU shared host, not the corridor's eight isolated cores**, and the
-client runs on the same four vCPUs over loopback, so these numbers are the pair's, not the server's alone. Go
+client runs on the same four vCPUs over loopback, so these numbers are the pair's, not the server's alone. The
 server: this module at the commit that last updated this section, `./build.sh`, GOMAXPROCS 4, the window cache's
-defaults. Java server: swath `main` at `01dd55b` (0.3.3-SNAPSHOT) on Temurin 25.0.5+8 with the launcher's heap
-defaults and `JAVA_TOOL_OPTIONS` as the host sets it (trust store and proxy properties only), as
-`bench/fault_replay.sh` leaves it, its window cache at its defaults. One server at a time, nothing else running,
-the two measured back to back for each configuration (2026-11-07, 12:50 to 12:58 UTC), both with
-`--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`. Fixtures, page cache warm:
-`synthetic-1m/sorted-rolled` (synthetic, 1,000,000 keys, 6 parts, 110 row groups, 22.7 MB, written by the Java
-`sort-fixture`) and the `noaa-gk2a-pds` recording (a public bucket's listing, 18,472,015 keys, 2 parts, 55 row
+defaults, `--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`, nothing else running
+(2026-11-07, 12:50 to 12:58 UTC). Fixtures, page cache warm: `synthetic-1m/sorted-rolled` (synthetic, 1,000,000
+keys, 6 parts, 110 row groups, 22.7 MB, written by `bench/replay/make-fixtures.sh`) and the `noaa-gk2a-pds`
+recording (a public bucket's listing, 18,472,015 keys, 2 parts, 55 row
 groups, 461 MB; not in the repository). Runs vary by about 15% from one to the next on this host.
 
 ### Throughput and memory
@@ -730,29 +692,23 @@ Each run: `swath-replay serve --fixture F --bucket B --port P --metrics-port M -
 walks, 50 s for 64), with the server's `VmRSS` read from `/proc/PID/status` every second from the client's start:
 the 64-walk rows are one minute of samples. RSS is the measured window's mean and maximum.
 
-| Server | Fixture | Walks | Object rows/s | Request p50 / p99 ms | RSS mean / max MB | Reader peak |
-|---|---|---|---|---|---|---|
-| Go | synthetic-1m rolled | 16 | 1,868,585 | 6.9 / 21.6 | 401 / 402 | 8 |
-| Java | synthetic-1m rolled | 16 | 1,261,226 | 10.4 / 32.9 | 1,056 / 1,105 | 16 |
-| Go | synthetic-1m rolled | 64 | 2,602,299 | 21.8 / 66.6 | 677 / 678 | 8 |
-| Java | synthetic-1m rolled | 64 | 1,876,586 | 29.7 / 90.9 | 1,472 / 1,473 | 46 |
-| Go | noaa-gk2a-pds | 16 | 1,224,641 | 10.6 / 33.0 | 887 / 894 | 8 |
-| Java | noaa-gk2a-pds | 16 | 738,430 | 16.2 / 83.9 | 1,752 / 1,860 | 10 |
-| Go | noaa-gk2a-pds | 64 | 1,811,143 | 30.1 / 96.9 | 900 / 909 | 8 |
-| Java | noaa-gk2a-pds | 64 | 1,039,262 | 50.6 / 183.3 | 2,043 / 2,595 | 16 |
+| Fixture | Walks | Object rows/s | Request p50 / p99 ms | RSS mean / max MB | Reader peak |
+|---|---|---|---|---|---|
+| synthetic-1m rolled | 16 | 1,868,585 | 6.9 / 21.6 | 401 / 402 | 8 |
+| synthetic-1m rolled | 64 | 2,602,299 | 21.8 / 66.6 | 677 / 678 | 8 |
+| noaa-gk2a-pds | 16 | 1,224,641 | 10.6 / 33.0 | 887 / 894 | 8 |
+| noaa-gk2a-pds | 64 | 1,811,143 | 30.1 / 96.9 | 900 / 909 | 8 |
 
-The Go server serves 1.4 to 1.7 times the Java server's rows a second here, in about half its memory. Idle, the
-Go server holds 14 MB and answers `/healthz` 0.22 s after it starts on either fixture; the Java server holds
-about 175 MB and answers after 2.0 to 2.2 s. Both serve a walk's pages from their window caches (above): at 64
-walks over the recording the Go server read the fixture 7,617 times (12,821 rows a fill on average, read-aheads
-included) for 108,248 pages answered from windows, the Java server 4,062 times for 54,840. The Go server's memory
-is the cache (2.39 million rows held over the recording, 2.29 million over the synthetic fixture, whose walks
-overlap) and the in-flight responses (`response.bytes.peak` 20 to 24 MB at 64 walks), not the fixture's object
-count. With the cache off (`--prefetch-window-rows 0`) the same 64-walk synthetic run served 756,214 rows/s in
-45 MB, every page decoded from the fixture. With 256 walks the Go server served 3,582,394 rows/s (25 s, 680 MB,
+Idle, the server holds 14 MB and answers `/healthz` 0.22 s after it starts on either fixture. It serves a walk's
+pages from its window cache (above): at 64 walks over the recording it read the fixture 7,617 times (12,821 rows
+a fill on average, read-aheads included) for 108,248 pages answered from windows. Its memory is the cache (2.39
+million rows held over the recording, 2.29 million over the synthetic fixture, whose walks overlap) and the
+in-flight responses (`response.bytes.peak` 20 to 24 MB at 64 walks), not the fixture's object count. With the
+cache off (`--prefetch-window-rows 0`) the same 64-walk synthetic run served 756,214 rows/s in
+45 MB, every page decoded from the fixture. With 256 walks the server served 3,582,394 rows/s (25 s, 680 MB,
 `parquet.queries.peak` 8).
 
-Where the Go server's CPU goes at 64 walks over the synthetic fixture (`SWATH_CPUPROFILE`, 40 s, 2.4 million rows
+Where the server's CPU goes at 64 walks over the synthetic fixture (`SWATH_CPUPROFILE`, 40 s, 2.4 million rows
 a second): rendering the S3 document 40% (XML escaping 15%), slicing pages out of windows 29% (unpacking rows
 into objects 11%), the response write 13% (mostly the `write` system call), fixture reads 5%, the collector under
 1%.
@@ -762,16 +718,15 @@ into objects 11%), the response write 13% (mostly the `write` system call), fixt
 `--inject-latency worker_page=50ms,pivot_probe=50ms,structure_probe=50ms`, 64 walks, 30 s, synthetic-1m rolled,
 `replayload ... -walks 64 -max-keys K -duration 30s`. 64 walks at 50 ms ask for 1,280 pages a second.
 
-| Server | max-keys | Object rows/s | Request p50 / p99 ms | Requests | `inject.overrun` |
-|---|---|---|---|---|---|
-| Go | 1000 | 1,185,970 | 52.2 / 76.6 | 35,611 | 51 |
-| Java | 1000 | 988,981 | 54.5 / 204.3 | 29,719 | 262 |
-| Go | 100 | 124,415 | 51.1 / 56.2 | 37,337 | 0 |
+| max-keys | Object rows/s | Request p50 / p99 ms | Requests | `inject.overrun` |
+|---|---|---|---|---|
+| 1000 | 1,185,970 | 52.2 / 76.6 | 35,611 | 51 |
+| 100 | 124,415 | 51.1 / 56.2 | 37,337 | 0 |
 
-At 1,000-key pages the profile asks for 1.28 million rows a second; with the client on the same four vCPUs both
-servers fall a little short, the Go server overrunning 0.14% of its pages and the Java server 0.9%. At 100-key
-pages (128,000 rows a second) the Go server holds the profile with no overrun (`TestLoadNoOverrunAtSixtyFourWalks`
-pins this). Check `inject.overrun` against the request count before trusting a run with a profile.
+At 1,000-key pages the profile asks for 1.28 million rows a second; with the client on the same four vCPUs the
+server falls a little short, overrunning 0.14% of its pages. At 100-key pages (128,000 rows a second) it holds
+the profile with no overrun (`TestLoadNoOverrunAtSixtyFourWalks` pins this). Check `inject.overrun` against the
+request count before trusting a run with a profile.
 
 ### Request ceiling, reader slots and descriptors
 
@@ -797,60 +752,43 @@ From the load tests (`SWATH_REPLAY_LOAD=1 SWATH_REPLAY_FIXTURES=ROOT go test -ru
 two arms: `baseline` (no proxy fault) and `storm` (`-window throttle:5s-15s:0.5`). Wall seconds and the proxy's
 requests (throttled):
 
-| Injected latency | Server | baseline | storm |
-|---|---|---|---|
-| 95 ms | Go | 1.38 s, 251 | 1.34 s, 249 (0) |
-| 95 ms | Java | 1.98 s, 253 | 1.40 s, 251 (0) |
-| 1,000 ms | Go | 11.26 s, 248 | 35.30 s, 266 (15) |
-| 1,000 ms | Java | 11.38 s, 244 | 35.37 s, 268 (15) |
+| Injected latency | baseline | storm |
+|---|---|---|
+| 95 ms | 1.38 s, 251 | 1.34 s, 249 (0) |
+| 1,000 ms | 11.26 s, 248 | 35.30 s, 266 (15) |
 
 At 95 ms the listing ends before the throttle window opens at 5 s; 1,000 ms puts the window inside the run.
 `KILL_AT=5 PHASE=25 bench/resume_storm.sh noaa-normals-pds 1000 29300 1 OUT 64` (the list SIGKILLed at 5 s,
 resumed at once through a proxy throttling 20% of requests until 25 s), list then resume seconds, requests
 (throttled):
 
-| Server | shipped | slowstart | off |
-|---|---|---|---|
-| Go | 5.1 + 45.4 s, 301 (19) | 5.1 + 45.3 s, 271 (10) | 5.1 + 11.6 s, 398 (80) |
-| Java | 5.1 + 45.4 s, 303 (19) | 5.1 + 46.3 s, 274 (10) | 5.1 + 11.6 s, 399 (80) |
+| shipped | slowstart | off |
+|---|---|---|
+| 5.1 + 45.4 s, 301 (19) | 5.1 + 45.3 s, 271 (10) | 5.1 + 11.6 s, 398 (80) |
 
-Every run exited 0. The scripts behave the same on either server; nothing in the Go server needed a change for them.
+Every run exited 0.
 
 ## Limits
 
 - Three routes (S3 `ListObjectsV2`, path-style, the GCS JSON `objects.list` and the Azure flat `List Blobs`
   subset below) and one serving mode (sorted). Version listing, object data and
   authentication are not served.
-- The S3 route's live-S3 answers above differ from the Java server's by decision. The differential driver holds
-  the Go answer to what the Java server's answers imply under those rules (the Java answer to the equivalent
-  request, or the probed refusal), lists each request whose Java answer differs as a `DOCUMENTED DIVERGENCE`
-  line with both answers, and follows each server's own tokens through a walk, listing the requests whose
-  answers differ only in token bytes.
-- Five request cases are not byte-identical with the Java server, by decision. The differential driver compares
-  the first three on the status and the headers the Java server sets, sends the last two and reports what each
-  server answered (`DOCUMENTED RESIDUAL` lines and a count of their own, outside the compared, passed and failed
-  counts; a residual request that gets no answer fails the run), and says which in each case's name:
-  - The error page of a target refused before routing (above). Status `400`, `Content-Type:
-    text/html;charset=iso-8859-1` and `Cache-Control: must-revalidate,no-cache,no-store` match; the HTML body is
-    this server's own page naming the problem, not a copy of the Java server's HTTP layer's page.
-  - A request line Go's HTTP parser refuses before any handler runs: whitespace or a control byte in the target,
-    a malformed `%` escape (`%zz`, a lone `%`, `%uXXXX`) in the path, a target with neither a leading `/` nor a
-    scheme, and a request head over about 132 KiB (`431` from both servers). Both servers answer `400`; this one with Go's `text/plain; charset=utf-8` page and no
-    `Cache-Control`.
+- Request framing is decided by Go's HTTP layer before any handler runs:
+  - A request line it refuses (whitespace or a control byte in the target, a malformed `%` escape (`%zz`, a lone
+    `%`, `%uXXXX`) in the path, a target with neither a leading `/` nor a scheme) is answered `400`, and a request
+    head over about 132 KiB `431`, with the layer's own `text/plain; charset=utf-8` page and no `Cache-Control`.
   - An absolute target whose authority differs from the `Host` header (`GET http://other.invalid/bucket?...`
-    with `Host: localhost`). The Java server refuses it with `400`; this server serves it, because Go's HTTP
-    layer drops the `Host` header for an absolute target, as RFC 9112 section 3.2.2 has an origin server
-    ignore it, so the disagreement cannot be seen. The driver does not send this case.
-  - More than four CR or LF bytes between a request without a body (a `POST` with `Content-Length: 0`) and the
-    next request line on the same connection. The Java server skips them all and answers the next request; Go's
-    HTTP parser discards four, answers what follows as a malformed request line with `400` and closes the
-    connection (a client still sending may see the connection reset). Up to four are skipped by both and not
-    counted toward the next request's head.
-  - A CRLF before the request line with no request in front of it on the connection. The Java server counts the
-    two bytes toward the head (a GET whose head is exactly the limit then gets `431`); Go's HTTP parser refuses
-    the empty request line with `400` and closes the connection.
-- Timer percentiles are histogram estimates on both servers (within 3.1% here; the Java registry's default
-  precision is coarser), so the two servers' `p50_ms` and `p99_ms` agree in window, not in digits.
+    with `Host: localhost`) is served: the layer drops the `Host` header for an absolute target, as RFC 9112
+    section 3.2.2 has an origin server ignore it.
+  - Up to four CR or LF bytes between a request without a body (a `POST` with `Content-Length: 0`) and the next
+    request line on the same connection are skipped and not counted toward the next request's head; with more,
+    what follows the fourth is answered as a malformed request line with `400` and the connection is closed (a
+    client still sending may see the connection reset).
+  - A CRLF before the request line with no request in front of it on the connection is an empty request line:
+    `400`, and the connection is closed.
+- Timer percentiles are histogram estimates, within 3.1% above the sample they stand for.
+- `sort-fixture` holds the capture in memory while it sorts it, about 300 bytes a row, so it suits captures of a
+  few million rows.
 - One process does not reproduce distributed service capacity or network faults; put `bench/faultproxy` in
   front for those.
 
@@ -890,11 +828,7 @@ to valid UTF-8 (`invalid_percent_escape`, `invalid_utf8`); a raw `+` stays `+`. 
 (2,048 for `pageToken`) is `field_too_long_NAME`. A request with several faults reports the first in this
 order: unknown or repeated names and bad escapes (left to right), the four boolean features (`versions`,
 `softDeleted`, `includeFoldersAsPrefixes`, `includeTrailingDelimiter`), `matchGlob`, `filter`, `fields`,
-`alt`, `prettyPrint`, `projection`, `maxResults`, the field lengths, then the token. The Java server checks the
-two feature groups in the same order, but within a group it takes its set's iteration order, which is
-randomized each time the JVM starts: with two refused features of one group (say `versions=true&softDeleted=true`
-or `fields=x&filter=x`) its `x-swath-replay-error` names either, while this server's order is fixed as listed.
-The status and the envelope are the same either way.
+`alt`, `prettyPrint`, `projection`, `maxResults`, the field lengths, then the token.
 
 The answer is `{"kind":"storage#objects"}` plus `items` and `prefixes` when non-empty and `nextPageToken` when
 there is more. Errors are the JSON API envelope `{"error":{"code":N,"message":...,"errors":[{"message":...,
@@ -929,8 +863,7 @@ fixture's declared schema id:
 | `acl` | `[]` with `projection=full` | `[]` with `projection=full` |
 | `id`, `selfLink`, `mediaLink`, `timeCreated`, `owner`, `metadata` and the rest | absent (not stored) | absent |
 
-The synthetic values are the wire contract's, so the Java server and this one answer a non-GCS fixture
-identically; the Java server does not read `swath/gcs-objects/v1` datasets. The table in
+The synthetic values are the replay wire contract's (`gcs` `TestRenderGolden`). The table in
 [Item fields by route and recording schema](#item-fields-by-route-and-recording-schema) holds every route's
 fields for every schema.
 
@@ -943,7 +876,7 @@ corpus written in the test and sorted by sort-fixture) under the bucket `replay-
 `gcs/captures/*.json`: an exchange as captured with the bucket placeholder mapped and a native page token
 replaced by the replay's token for the same position (or its tampered, flipped or truncated form), and a walk
 re-walked with the replay's own tokens. An SDK run is executed by an official client library, the Go one
-(`google.golang.org/api/storage/v1`; the captures were made with the Java one): pointed at the server with its
+(`google.golang.org/api/storage/v1`): pointed at the server with its
 endpoint override, anonymous, auto-paginating, one attempt per call. Its requests must carry the captured
 scope as decoded parameters (its own `alt=json` and `prettyPrint=false` aside) and identify the Go client,
 its answers are compared as a walk, and its own decoded inventory must equal the provider's. Each answer is compared with the provider's under the conformance field policy: status, classified
@@ -952,7 +885,7 @@ unbroken token chains) or the error envelope's first reason. Each outcome must b
 `gcs/replay-expectations.json` (with `docs/replay-provider-expectations.json` applied) or better: a pinned
 mismatch must be reproduced as the whole message (only a replay token's body after a pin ending at the token's
 prefix is open), and a pinned mismatch that now matches is logged as an improvement. `SWATH_PROVIDER_REPORT=DIR` writes the per-capture
-outcomes to `DIR/<fixture>/gcs-outcomes.json`, in the shape of the Java suite's `-PproviderReport` file.
+outcomes to `DIR/<fixture>/gcs-outcomes.json`.
 `scripts/provider-conformance/evidence.py go-receipts` runs this replay and the Azure one at a clean commit and
 writes a `producer: go` receipt for each capture they match (see
 [Go receipts](../../docs/replay-provider-conformance.md#go-receipts)).
@@ -963,15 +896,6 @@ SWATH_REPLAY_FIXTURES=/data/replay SWATH_PROVIDER_REPORT=/tmp/report go test -v 
 
 Today 77 of the 110 GCS captures match, the 77 pinned `match`; the other 33 meet their pinned mismatches.
 
-### Comparing the GCS route with the Java server
-
-```bash
-/tmp/replaydiff -protocol gcs -java $JAVA_ROOT/swath-replay/build/install/swath-replay/bin/swath-replay \
-  -go ./swath-replay -fixture /data/sorted -bucket bkt -report /tmp/gcs-diff.json
-```
-
-starts both servers with `--protocols gcs` and compares the GCS request matrix, token walks and a seeded random
-walk ([internals/replay.md](internals/replay.md#the-gcs-route)).
 ## Container image
 
 `Dockerfile.replay-go` (at the repository root) builds an image that holds the static binary and nothing else:
@@ -1005,9 +929,8 @@ docker run --rm --user "$(id -u):$(id -g)" -v /data/capture:/capture:ro -v /data
 of sorted parts, or a dataset directory) as bucket `smoke` with a metrics port, waits for `/healthz` to answer
 `ok`, requires a `ListBucketResult` naming the bucket and holding a key, `/metrics` with `schema_version` 2,
 and the container's user `10001:10001`. When the server refuses the fixture as not servable sorted (a capture,
-or a `swath list` dataset written without `--sort` by the Java lister), the smoke sorts it with the image's
-own `sort-fixture` into a temporary directory and serves that. Without the third argument, or with `duckdb`,
-the script smokes the Java replay image as before.
+or a format-1 dataset written unsorted), the smoke sorts it with the image's own `sort-fixture` into a temporary
+directory and serves that.
 
 ## Continuous integration
 
@@ -1018,18 +941,18 @@ inputs changed (or on a manual run); `ci-gate` needs both.
   `go vet`, `go test -race`, the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
   darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit), then the image:
   built for linux/amd64 and linux/arm64 without pushing, the native one loaded as `swath-replay-go:ci` and
-  smoked twice on fixtures written in the job, so neither needs network, Java or a recording: the Go
+  smoked twice on fixtures written in the job, so neither needs network or a recording: the Go
   lister's dataset of a `bench/s3fake` bucket of 2,000 keys (sorted, served as it is), and an unsorted
   capture from `bench/replay/capture` (2,000 objects in descending key order, no stamps), which the server
   refuses, so the smoke sorts it with the image's `sort-fixture` first; the step requires that it did.
-- `go-fixtures` (inputs: `go/`, the workflow, the Java `swath-replay`, `swath-core` and `swath-model` modules,
+- `go-fixtures` (inputs: `go/`, the workflow, the `swath-replay`, `swath-core` and `swath-model` Gradle modules,
   the shared Gradle build and wrapper (`build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`,
   `gradle/`, `build-logic/`, `gradlew`), `docs/replay-provider-evidence.tar.gz`,
   `docs/replay-provider-expectations.json`, the replay smoke script): JDK 25,
   `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh` into the runner's temporary
   directory, then the gated tests named in the step's `FIXTURE_PACKAGES` and `FIXTURE_TESTS` with
-  `SWATH_REPLAY_FIXTURES` set: the store's Java-written fixture tests (`internal/replay/store`), the GCS
+  `SWATH_REPLAY_FIXTURES` set: the store's fixture tests (`internal/replay/store`), the GCS
   evidence replay (`internal/replay/evidence`) and the Azure evidence replay (`internal/replay/azure`
-  `TestAzureEvidenceReplay`, on the Java-written `evidence-azure/capture` it sorts itself; serving the
+  `TestAzureEvidenceReplay`, on the `evidence-azure/capture` it sorts itself; serving the
   manifest from memory instead fails the step). Every named test must run and pass: one that skips, or a
   name that matches no test, fails the step. A new gated test is added to those two lists.
