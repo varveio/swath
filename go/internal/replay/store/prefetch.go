@@ -430,7 +430,13 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	// A fill that read before close returns its rows, as a read in
-	// progress at close does uncached; publish keeps nothing after it.
+	// progress at close does uncached, and keeps nothing: once close has
+	// marked the store closed, a read-ahead registered here could join
+	// the wait group after close's wait began, and a window or anchors
+	// kept here would outlive close's cleanup.
+	if p.closed {
+		return served, nil
+	}
 	if w != nil {
 		p.publish(w)
 		p.readAhead(w, n, limit)
@@ -455,7 +461,7 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 // for itself. One is skipped when maxAhead are registered, and
 // cancelled when w is evicted. Called under mu.
 func (p *prefetcher) readAhead(w *window, served, limit int) {
-	if !w.walk || w.final || w.rows.len()-served > w.fill/4 || p.ctx.Err() != nil {
+	if p.closed || !w.walk || w.final || w.rows.len()-served > w.fill/4 || p.ctx.Err() != nil {
 		return
 	}
 	last := bytes.Clone(w.rows.key(w.rows.len() - 1))

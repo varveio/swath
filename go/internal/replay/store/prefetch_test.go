@@ -401,3 +401,68 @@ func TestReadAheadsPendingStayWithinTheirBound(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// TestFillCompletingDuringCloseKeepsNothing completes a walk's fill while
+// the store closes. The walk's anchor asks for 40 rows and its
+// continuation for 35, so the 40-row fill leaves 5 unread, within its
+// last quarter: on an open store the fill is published and its read-ahead
+// registered. A fill that completes once close has begun returns the rows
+// it read and keeps nothing, neither when close has only marked the store
+// closed (a read-ahead registered then would add to the wait group close
+// is about to wait on) nor when close has finished (anchors registered then
+// would outlive the cleanup).
+func TestFillCompletingDuringCloseKeepsNothing(t *testing.T) {
+	for _, stage := range []string{"closing", "closed"} {
+		t.Run(stage, func(t *testing.T) {
+			keys := &syntheticKeys{rows: 1_000_000, release: make(chan struct{})}
+			defer close(keys.release) // read-aheads are held until close cancels them
+			gate, entered := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int64
+			read := func(ctx context.Context, from []byte, inclusive bool, to []byte, limit int, proj Projection) (packed, error) {
+				if ctx.Value(walkCtxKey{}) != nil && calls.Add(1) == 2 {
+					close(entered)
+					<-gate
+				}
+				return keys.read(ctx, from, inclusive, to, limit, proj)
+			}
+			p := newPrefetcher(Prefetch{WindowRows: 100, MaxWindows: 10}, read, nil)
+			ctx := context.WithValue(context.Background(), walkCtxKey{}, true)
+			rows, err := p.serve(ctx, []byte("k00000000"), true, nil, 10, Projection{})
+			if err != nil || len(rows) != 10 {
+				t.Fatalf("anchor page: %d rows, %v", len(rows), err)
+			}
+			type result struct {
+				rows []Object
+				err  error
+			}
+			done := make(chan result, 1)
+			go func() {
+				rows, err := p.serve(ctx, rows[len(rows)-1].Key, false, nil, 35, Projection{})
+				done <- result{rows, err}
+			}()
+			<-entered
+			if stage == "closing" {
+				// close's first step; its cancel and wait follow below.
+				p.mu.Lock()
+				p.closed = true
+				p.mu.Unlock()
+			} else {
+				p.close()
+			}
+			before := p.stats()
+			close(gate)
+			r := <-done
+			if r.err != nil || len(r.rows) != 35 {
+				t.Fatalf("continuation: %d rows, %v; want the 35 rows it read", len(r.rows), r.err)
+			}
+			p.mu.Lock()
+			ahead, windows, anchors := len(p.ahead), len(p.windows), len(p.anchors)
+			p.mu.Unlock()
+			if ahead != 0 || windows != before.Windows || anchors != before.Anchors {
+				t.Fatalf("after a fill completed %s: %d read-aheads, %d windows, %d anchors; want none and %d, %d",
+					stage, ahead, windows, anchors, before.Windows, before.Anchors)
+			}
+			p.close()
+		})
+	}
+}
