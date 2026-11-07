@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -81,7 +82,7 @@ func runLive(o options) error {
 	if err != nil {
 		return err
 	}
-	ref := &target{name: "live", base: base, client: client,
+	ref := &target{name: "live", base: base, client: client, recorder: o.liveRecord,
 		vhost: o.protocol == "s3" && strings.HasPrefix(u.Host, o.bucket+".")}
 
 	keys, newest, err := listScope(got, o.protocol, o.bucket, o.livePrefix)
@@ -330,13 +331,19 @@ func (lr *liveRun) nextToken(body []byte) string {
 	return nextToken(body)
 }
 
-// send asks both sides, each with its own token, and compares.
-func (lr *liveRun) send(query string, header [][2]string, refTok, gotTok string) (a, b *response, df diff, err error) {
+// send asks both sides, each with its own token, and compares. how says
+// how the token was formed (recordNote), for a recording proxy.
+func (lr *liveRun) send(c liveCase, refTok, gotTok, how string) (a, b *response, df diff, err error) {
 	d := lr.d
-	if a, err = d.ref.do(d.o.bucket, lr.request(lr.withToken(query, refTok), header)); err != nil {
+	query := c.query
+	ra := lr.request(lr.withToken(query, refTok), c.header)
+	if d.ref.recorder {
+		ra.Header = append(slices.Clone(ra.Header), recordNote{caseID: c.id, token: how}.headers()...)
+	}
+	if a, err = d.ref.do(d.o.bucket, ra); err != nil {
 		return nil, nil, df, fmt.Errorf("live: %w", err)
 	}
-	if b, err = d.got.do(d.o.bucket, lr.request(lr.withToken(query, gotTok), header)); err != nil {
+	if b, err = d.got.do(d.o.bucket, lr.request(lr.withToken(query, gotTok), c.header)); err != nil {
 		return a, nil, df, fmt.Errorf("go: %w", err)
 	}
 	d.count(2)
@@ -363,11 +370,30 @@ func (lr *liveRun) result(c liveCase) result {
 
 func (lr *liveRun) exchange(c liveCase) {
 	res := lr.result(c)
-	_, _, df, err := lr.send(c.query, c.header, "", "")
-	lr.finish(&res, df, err)
+	how := ""
+	if t, _, ok := queryToken(c.query, lr.tokenParam()); ok && t != "" {
+		how = tokenVerbatim // a token the case wrote itself, no answer issued
+	}
+	a, b, df, err := lr.send(c, "", "", how)
+	lr.finish(&res, lr.judgement(c, "", "", "", a, b, df), err)
 }
 
-func (lr *liveRun) finish(res *result, df diff, err error) {
+// judgement is what the documented differences are matched against.
+func (lr *liveRun) judgement(c liveCase, mutation, refTok, gotTok string, a, b *response, df diff) judgement {
+	return judgement{protocol: lr.protocol, bucket: lr.d.o.bucket, caseID: c.id, query: c.query, mutation: mutation,
+		refTok: refTok, gotTok: gotTok, ref: a, got: b, df: df}
+}
+
+// finish records a case's verdict: a documented difference
+// (documentedDifference) is listed apart, outside the verdict counts.
+func (lr *liveRun) finish(res *result, j judgement, err error) {
+	df := j.df
+	if err == nil {
+		if why := documentedDifference(j, lr.pins); why != "" {
+			lr.d.noteDocumented(res.Name, why, df)
+			return
+		}
+	}
 	if err != nil {
 		res.Error = err.Error()
 	} else {
@@ -409,7 +435,7 @@ func (lr *liveRun) walk(c liveCase) {
 	refTok, gotTok := "", ""
 	limit := lr.d.o.walkLimit
 	for {
-		a, b, df, err := lr.send(c.query, c.header, refTok, gotTok)
+		a, b, df, err := lr.send(c, refTok, gotTok, "")
 		res.Pages++
 		if err != nil || !df.OK {
 			res.Pass, res.FailAt = false, res.Pages
@@ -443,8 +469,10 @@ func (lr *liveRun) token(c liveCase) {
 	res := lr.result(c)
 	src := c.src
 	var toks [2]string
+	how, mutation := "", src.Mutation
 	if src.Mutation == "tampered" {
 		toks = [2]string{tamperedToken, tamperedToken}
+		how, mutation = tokenVerbatim, ""
 	} else {
 		lr.mu.Lock()
 		walked, ok := lr.tokens[src.TokenFrom]
@@ -461,9 +489,12 @@ func (lr *liveRun) token(c liveCase) {
 			}
 			toks[i] = t
 		}
+		if mutation != "" {
+			how = tokenNote(mutation, walked[0][src.Page])
+		}
 	}
-	_, _, df, err := lr.send(c.query, c.header, toks[0], toks[1])
-	lr.finish(&res, df, err)
+	a, b, df, err := lr.send(c, toks[0], toks[1], how)
+	lr.finish(&res, lr.judgement(c, mutation, toks[0], toks[1], a, b, df), err)
 }
 
 // mutateToken is the campaign's token alteration (matrix.py

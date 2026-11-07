@@ -10,10 +10,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -420,5 +422,134 @@ func TestCaptureStreams(t *testing.T) {
 		"s3", gcsSynthetic, captureLines(pr, 1<<20), testLimits)
 	if rep.Passed != len(xs) {
 		t.Errorf("%d of %d passed: %+v", rep.Passed, len(xs), rep.Results)
+	}
+}
+
+// testRecorder stands for bench/faultproxy -record in front of a
+// provider: each exchange is kept, in the -record shape, before its
+// answer is released; a request's X-Record-* headers are kept as the
+// exchange's annotations and not forwarded; and the answer released
+// carries the X-Content-Type-Options the proxy sets.
+type testRecorder struct {
+	next http.Handler
+	mu   sync.Mutex
+	xs   []capturedExchange
+}
+
+func (rec *testRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var x capturedExchange
+	for k, vs := range r.Header {
+		if strings.HasPrefix(k, "X-Record-") {
+			for _, v := range vs {
+				x.Annotations = append(x.Annotations, capturedHeader{k, v})
+			}
+			delete(r.Header, k)
+		}
+	}
+	path, query, _ := strings.Cut(r.RequestURI, "?")
+	x.Request.Method, x.Request.Path, x.Request.Query = r.Method, path, query
+	rw := httptest.NewRecorder()
+	rec.next.ServeHTTP(rw, r)
+	x.Response.Status = rw.Code
+	for k, vs := range rw.Header() {
+		for _, v := range vs {
+			x.Response.Headers = append(x.Response.Headers, capturedHeader{k, v})
+		}
+	}
+	body := rw.Body.String()
+	x.Response.Body = &body
+	rec.mu.Lock()
+	x.Seq = uint64(len(rec.xs) + 1)
+	rec.xs = append(rec.xs, x)
+	rec.mu.Unlock()
+	maps.Copy(w.Header(), rw.Header())
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(rw.Code)
+	io.WriteString(w, body)
+}
+
+// TestLiveMatrixRecordedReplaysOffline: the live matrix (provider cases,
+// walks, token cases with altered and invented tokens, the scripted
+// matrix) sent once through a recording proxy with -live-record replays
+// from the recording alone with the live run's verdicts: no failure the
+// live run did not have, each live failure again a failure, and the
+// documented differences documented in both. Every exchange is
+// accounted for (compared, documented or skipped), and a second replay
+// gives the same report. The same recording without its annotations
+// fails the requests whose tokens no answer issued.
+func TestLiveMatrixRecordedReplaysOffline(t *testing.T) {
+	keys := liveKeys()
+	for _, protocol := range []string{"s3", "gcs"} {
+		rec := &testRecorder{}
+		live := runFakeLiveThrough(t, protocol, nil, rec, true)
+		if live.Compared < 50 || len(rec.xs) < live.Requests/2 {
+			t.Fatalf("%s: live compared %d, %d requests, %d recorded", protocol, live.Compared, live.Requests, len(rec.xs))
+		}
+		liveFailed := map[string]string{}
+		for _, r := range live.Results {
+			if !r.Pass {
+				liveFailed[r.Name] = r.Detail
+			}
+		}
+		protocols := []string{server.ProtocolS3}
+		if protocol == "gcs" {
+			protocols = []string{server.ProtocolGCS}
+		}
+		got := &target{name: "go", base: startGoProtocols(t, protocols, keys...), client: &http.Client{}}
+		replay := func(xs []capturedExchange) *report {
+			rep := &report{}
+			replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, protocol, gcsSynthetic, exchangeItems(xs), testLimits)
+			return rep
+		}
+		rep := replay(rec.xs)
+		if n := rep.Compared + len(rep.Residuals) + rep.SkippedCount; n != len(rec.xs) {
+			t.Errorf("%s: %d exchanges, %d accounted for", protocol, len(rec.xs), n)
+		}
+		caseOf := func(line string) string { return strings.SplitN(strings.SplitN(line, "[", 2)[1], "]", 2)[0] }
+		capFailed := map[string]string{}
+		for _, r := range rep.Results {
+			capFailed[caseOf(r.Name)] = r.Detail
+			if r.Error != "" {
+				t.Errorf("%s %s: %s", protocol, r.Name, r.Error)
+			}
+		}
+		if fmt.Sprint(capFailed) != fmt.Sprint(liveFailed) {
+			t.Errorf("%s: the replay failed %v, the live run %v", protocol, capFailed, liveFailed)
+		}
+		var liveDoc, capDoc []string
+		for _, l := range live.Residuals {
+			liveDoc = append(liveDoc, strings.SplitN(l, ":", 2)[0])
+		}
+		for _, l := range rep.Residuals {
+			capDoc = append(capDoc, caseOf(l))
+		}
+		if fmt.Sprint(liveDoc) != fmt.Sprint(capDoc) {
+			t.Errorf("%s: documented in the replay %v, in the live run %v", protocol, capDoc, liveDoc)
+		}
+		// A case the live run skipped was never sent, so never recorded.
+		if len(rep.Skipped) != 0 {
+			t.Errorf("%s: skipped %v", protocol, rep.Skipped)
+		}
+		again := replay(rec.xs)
+		strip := func(r *report) string { b, _ := json.Marshal(r); return string(b) }
+		if strip(again) != strip(rep) {
+			t.Errorf("%s: a second replay differs", protocol)
+		}
+		bare := make([]capturedExchange, len(rec.xs))
+		copy(bare, rec.xs)
+		for i := range bare {
+			bare[i].Annotations = nil
+		}
+		orphans := 0
+		for _, r := range replay(bare).Results {
+			if strings.Contains(r.Error, "not issued by an earlier captured answer") {
+				orphans++
+			}
+		}
+		if orphans == 0 {
+			t.Errorf("%s: without annotations no request's token was unknown", protocol)
+		}
+		t.Logf("%s: %d exchanges: %d compared (%d passed, %d failed), %d documented, %d skipped; live %d failed, %d documented",
+			protocol, len(rec.xs), rep.Compared, rep.Passed, rep.Failed, len(rep.Residuals), rep.SkippedCount, live.Failed, len(live.Residuals))
 	}
 }

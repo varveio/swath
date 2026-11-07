@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/server"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -118,6 +119,14 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func runFakeLive(t *testing.T, protocol string, edit func(string, []byte) []byte) *report {
 	t.Helper()
+	return runFakeLiveThrough(t, protocol, edit, nil, false)
+}
+
+// runFakeLiveThrough is runFakeLive with the provider behind rec, when
+// set (the live driver then runs with -live-record), and with the
+// scripted matrix when scripted is set.
+func runFakeLiveThrough(t *testing.T, protocol string, edit func(string, []byte) []byte, rec *testRecorder, scripted bool) *report {
+	t.Helper()
 	keys := liveKeys()
 	protocols := []string{server.ProtocolS3}
 	f := &fakeProvider{tokenParam: "continuation-token", tokenRe: regexp.MustCompile(`(<NextContinuationToken>)([^<]*)<`),
@@ -130,12 +139,20 @@ func runFakeLive(t *testing.T, protocol string, edit func(string, []byte) []byte
 			"Cache-Control": {"private, max-age=0"}}
 	}
 	f.backend = startGoProtocols(t, protocols, keys...)
-	live := httptest.NewServer(f)
+	var h http.Handler = f
+	if rec != nil {
+		rec.next, h = f, rec
+	}
+	live := httptest.NewServer(h)
 	t.Cleanup(live.Close)
 	client := &http.Client{}
 	got := &target{name: "go", base: startGoProtocols(t, protocols, keys...), client: client}
-	ref := &target{name: "live", base: live.URL, client: client}
-	o := options{bucket: "bkt", parallel: 4, maxTop: 5, walkSizes: "7,1000", liveWalkPages: 300, livePrefix: "data/"}
+	ref := &target{name: "live", base: live.URL, client: client, recorder: rec != nil}
+	o := options{bucket: "bkt", parallel: 4, maxTop: 5, walkSizes: "7,1000", liveWalkPages: 300, livePrefix: "data/",
+		liveScripted: scripted, liveRecord: rec != nil, maxPrefixes: 5, seed: 1}
+	if rec != nil {
+		o.walkSizes = "1000" // the scope walks at 7 add pages, not shapes
+	}
 	listed, _, err := listScope(got, protocol, "bkt", "data/")
 	if err != nil {
 		t.Fatal(err)
@@ -175,20 +192,26 @@ func TestLiveModesAgreeWithAFaithfulProvider(t *testing.T) {
 		// token of its own to a position; the S3 route refuses any
 		// alteration (its token carries a checksum), so of the S3 token
 		// mutations only the decoded-byte flip, sent now that the token is
-		// base64 as a whole, differs.
-		expected := map[string]bool{"gcs-07r": true, "gcs-07s": true, "s3-07x": true}
+		// base64 as a whole, differs: a documented difference, listed
+		// apart, not a failure.
+		expected := map[string]bool{"gcs-07r": true, "gcs-07s": true}
+		documented := 0
 		if protocol == "s3" {
-			delete(expected, "gcs-07r")
-			delete(expected, "gcs-07s")
-		} else {
-			delete(expected, "s3-07x")
+			expected = map[string]bool{}
+			documented = 1
+			if len(rep.Residuals) != 1 || !strings.HasPrefix(rep.Residuals[0], "s3-07x: an issued token with a decoded byte flipped") {
+				t.Errorf("s3: documented %q", rep.Residuals)
+			}
+		}
+		if len(rep.Residuals) != documented {
+			t.Errorf("%s: documented %q", protocol, rep.Residuals)
 		}
 		for _, r := range rep.Results {
 			if r.Pass == expected[r.Name] {
 				t.Errorf("%s %s %q: pass %v %s %+v", protocol, r.Kind, r.Name, r.Pass, r.Error, r.diff)
 			}
 		}
-		if rep.Failed != len(expected) || rep.Passed < sent-len(expected) {
+		if rep.Failed != len(expected) || rep.Passed < sent-len(expected)-documented {
 			t.Fatalf("%s: %d passed, %d failed, skipped %v", protocol, rep.Passed, rep.Failed, rep.Skipped)
 		}
 		for _, s := range rep.Skipped {
@@ -207,7 +230,7 @@ func TestLiveModesAgreeWithAFaithfulProvider(t *testing.T) {
 	for _, protocol := range []string{"s3", "gcs"} {
 		rep := runFakeLive(t, protocol, edit)
 		// More than the token differences of the faithful run.
-		if base := map[string]int{"s3": 1, "gcs": 2}[protocol]; rep.Failed <= base {
+		if base := map[string]int{"s3": 0, "gcs": 2}[protocol]; rep.Failed <= base {
 			t.Errorf("%s: a changed name compared equal", protocol)
 		}
 	}
@@ -340,13 +363,20 @@ func TestReadPins(t *testing.T) {
 	if err != nil || len(pins) != 1 || pins["gcs-03p"] != "GCS HTTP status differs: expected=200 actual=400" {
 		t.Errorf("%v %v", pins, err)
 	}
-	lr := &liveRun{d: &driver{rep: &report{}}, pins: pins}
+	// A pinned mismatch is a documented difference, listed apart; any
+	// other difference of the same case fails.
+	lr := &liveRun{d: &driver{rep: &report{}}, protocol: "gcs", pins: pins}
 	res := result{Name: "gcs-03p"}
-	lr.finish(&res, diff{Detail: pins["gcs-03p"]}, nil)
+	ref, got := &response{Status: 200}, &response{Status: 400}
+	lr.finish(&res, judgement{protocol: "gcs", caseID: "gcs-03p", ref: ref, got: got, df: diff{Detail: pins["gcs-03p"]}}, nil)
 	other := result{Name: "gcs-03p"}
-	lr.finish(&other, diff{Detail: "GCS HTTP status differs: expected=200 actual=500"}, nil)
-	if r := lr.d.rep.Results; len(r) != 2 || !r[0].Pinned || r[1].Pinned {
+	lr.finish(&other, judgement{protocol: "gcs", caseID: "gcs-03p", ref: ref, got: got,
+		df: diff{Detail: "GCS HTTP status differs: expected=200 actual=500"}}, nil)
+	if r := lr.d.rep.Results; len(r) != 1 || r[0].Pinned || r[0].Pass || lr.d.rep.Failed != 1 {
 		t.Errorf("%+v", r)
+	}
+	if r := lr.d.rep.Residuals; len(r) != 1 || !strings.Contains(r[0], "pins this mismatch for gcs-03p") {
+		t.Errorf("%q", r)
 	}
 }
 
@@ -394,6 +424,73 @@ func TestGCSLiveRejectsTrailingData(t *testing.T) {
 		}
 		if d := gcsLive(&response{200, h, []byte(page + suffix)}, ref, "b", false, gcsNative); d.OK {
 			t.Errorf("reference side %q passed", suffix)
+		}
+	}
+}
+
+// TestDocumentedDifferences: each documented difference is matched by
+// the request's shape and both answers' shapes, so the same request
+// answered any other way, or a near request, still fails.
+func TestDocumentedDifferences(t *testing.T) {
+	xmlHeader := func() http.Header { return http.Header{"Content-Type": {"application/xml"}} }
+	page := func(extra, contents string) *response {
+		return &response{Status: 200, Header: xmlHeader(), Body: []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+			`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bkt</Name><Prefix>a/</Prefix>` + extra +
+			`<KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>` + contents + `</ListBucketResult>`)}
+	}
+	contents := func(key, owner string) string {
+		return `<Contents><Key>` + key + `</Key><LastModified>2026-01-02T03:04:05.000Z</LastModified><ETag>"e"</ETag><Size>1</Size>` +
+			owner + `<StorageClass>STANDARD</StorageClass></Contents>`
+	}
+	v1 := &response{Status: 200, Header: xmlHeader(), Body: []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bkt</Name><Prefix>a/</Prefix><Marker>a/0</Marker>` +
+		`<MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>` + contents("a/1", "") + `</ListBucketResult>`)}
+	refusal := func(arg string) *response {
+		return &response{Status: 400, Header: xmlHeader(), Body: s3.AppendError(nil, &s3.Error{Status: 400, Code: "InvalidArgument",
+			Message: "m", Details: []s3.Detail{{Name: "ArgumentName", Value: arg}}})}
+	}
+	owner := `<Owner><ID>abc</ID></Owner>`
+	gcsJSON := func(status int, body string) *response {
+		return &response{Status: status, Header: http.Header{"Content-Type": {"application/json; charset=UTF-8"}}, Body: []byte(body)}
+	}
+	gcsPage := gcsJSON(200, `{"kind":"storage#objects"}`)
+	gcsRefusal := func(reason string) *response {
+		return gcsJSON(400, `{"error":{"code":400,"message":"m","errors":[{"domain":"global","reason":"`+reason+`","message":"m"}]}}`)
+	}
+	for _, c := range []struct {
+		name, protocol, query, mutation string
+		ref, got                        *response
+		want                            string // a prefix of the reason; "" for not documented
+	}{
+		{"V1 refused", "s3", "prefix=a/&marker=a/0", "", v1, refusal("list-type"), "ListObjects V1"},
+		{"V1 list-type=3", "s3", "list-type=3&prefix=a/", "", v1, refusal("list-type"), "ListObjects V1"},
+		{"V1 refused otherwise", "s3", "prefix=a/&marker=a/0", "", v1, refusal("marker"), ""},
+		{"V1 answered", "s3", "prefix=a/&marker=a/0", "", v1, page("", contents("a/1", "")), ""},
+		{"V2 refused", "s3", "list-type=2&prefix=a/", "", page("", contents("a/1", "")), refusal("list-type"), ""},
+		{"owner missing", "s3", "list-type=2&prefix=a/&fetch-owner=true", "", page("", contents("a/1", owner)), page("", contents("a/1", "")), "fetch-owner=true over a recording"},
+		{"owner missing, key differs", "s3", "list-type=2&prefix=a/&fetch-owner=true", "", page("", contents("a/1", owner)), page("", contents("a/2", "")), ""},
+		{"owner missing, not asked exactly", "s3", "list-type=2&prefix=a/&fetch-owner=TRUE", "", page("", contents("a/1", owner)), page("", contents("a/1", "")), ""},
+		{"owner where none asked", "s3", "list-type=2&prefix=a/", "", page("", contents("a/1", owner)), page("", contents("a/1", "")), ""},
+		{"decoded flip refused", "s3", "list-type=2&prefix=a/", "flip-decoded", page("", contents("a/1", "")), refusal("continuation-token"), "an issued token with a decoded byte flipped"},
+		{"decoded flip answered", "s3", "list-type=2&prefix=a/", "flip-decoded", page("", contents("a/1", "")), page("", contents("a/2", "")), ""},
+		{"last character flip refused", "s3", "list-type=2&prefix=a/", "flip", page("", contents("a/1", "")), refusal("continuation-token"), ""},
+		{"softDeleted refused", "gcs", "prefix=a/&softDeleted=true", "", gcsPage, gcsRefusal("invalid"), "softDeleted=true"},
+		{"softDeleted refused otherwise", "gcs", "prefix=a/&softDeleted=true", "", gcsPage, gcsRefusal("required"), ""},
+		{"softDeleted=false refused", "gcs", "prefix=a/&softDeleted=false", "", gcsPage, gcsRefusal("invalid"), ""},
+	} {
+		var df diff
+		if c.protocol == "gcs" {
+			df = gcsLive(c.ref, c.got, "bkt", false, gcsSynthetic)
+		} else {
+			df = s3Live(c.ref, c.got, "bkt", "", "")
+		}
+		if df.OK {
+			t.Fatalf("%s: the answers agree", c.name)
+		}
+		why := documentedDifference(judgement{protocol: c.protocol, bucket: "bkt", query: c.query, mutation: c.mutation,
+			ref: c.ref, got: c.got, df: df}, nil)
+		if c.want == "" && why != "" || !strings.HasPrefix(why, c.want) {
+			t.Errorf("%s: %q (%s)", c.name, why, df.Detail)
 		}
 	}
 }

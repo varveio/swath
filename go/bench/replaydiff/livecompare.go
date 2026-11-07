@@ -799,3 +799,104 @@ func gcsFullProjection(query string) bool {
 	}
 	return false
 }
+
+// --- Documented differences ----------------------------------------------
+
+// judgement is one request and the two answers the live comparators
+// held to each other, with what is known of how the request was formed:
+// what a documented difference is matched against. The live modes judge
+// the provider's answer as it arrives; the capture mode judges the one a
+// recording holds, by the same rules.
+type judgement struct {
+	protocol, bucket string
+	caseID           string // the matrix case, when known
+	query            string // the query the provider was sent
+	mutation         string // the alteration of an issued token the request carries, if any
+	refTok, gotTok   string // the tokens each side was sent (decoded)
+	ref, got         *response
+	df               diff
+}
+
+// documentedDifference reports why a failed comparison is a difference
+// the replay is known to keep, or "" when it is not one. Each rule
+// matches the request's shape and both answers' shapes, never the case
+// name alone, so the same difference in another request is documented
+// too and any other answer to the same request still fails:
+//
+//   - a mismatch the provider evidence pins for the case (pins, from
+//     -live-pins), message for message;
+//   - S3 ListObjects V1 (list-type absent or not 2): the provider lists,
+//     the replay refuses list-type (it serves ListObjectsV2 only);
+//   - S3 fetch-owner=true where the provider writes Owner and the replay
+//     writes none (a recording made without owners), the pages otherwise
+//     agreeing;
+//   - S3, an issued token with a decoded byte flipped (s3-07x): the
+//     provider serves its own token so altered as if unaltered, the
+//     replay refuses every altered token;
+//   - GCS softDeleted=true (gcs-11h): a provider bucket that keeps
+//     soft-deleted objects lists them, the replay refuses the parameter.
+func documentedDifference(j judgement, pins map[string]string) string {
+	if j.df.OK {
+		return ""
+	}
+	if p := pins[j.caseID]; p != "" && p == j.df.Detail {
+		return "the provider evidence pins this mismatch for " + j.caseID
+	}
+	if j.protocol == "gcs" {
+		if v, ok := firstParam(j.query, "softDeleted"); ok && v == "true" && j.ref.Status == 200 &&
+			j.got.Status == 400 && gcsReasonIs(j.got, "invalid") {
+			return "softDeleted=true: the provider lists the soft-deleted objects its bucket keeps; the replay holds none and refuses the parameter"
+		}
+		return ""
+	}
+	if j.ref.Status != 200 || !bytes.Contains(j.ref.Body, []byte("<ListBucketResult")) {
+		return ""
+	}
+	if lt, ok := firstParam(j.query, "list-type"); (!ok || lt != "2") && bytes.Contains(j.ref.Body, []byte("<Marker>")) &&
+		s3Refused(j.got, "list-type") {
+		return "ListObjects V1: the provider lists; the replay serves ListObjectsV2 only and refuses list-type"
+	}
+	if v, ok := firstParam(j.query, "fetch-owner"); ok && v == "true" && j.got.Status == 200 &&
+		bytes.Contains(j.ref.Body, []byte("<Owner>")) && !bytes.Contains(j.got.Body, []byte("<Owner>")) {
+		body := dropOwners(j.ref.Body)
+		h := j.ref.Header.Clone()
+		if h.Get("Content-Length") != "" {
+			h.Set("Content-Length", strconv.Itoa(len(body)))
+		}
+		if s3Live(&response{Status: j.ref.Status, Header: h, Body: body}, j.got, j.bucket, j.refTok, j.gotTok).OK {
+			return "fetch-owner=true over a recording made without owners: the provider writes Owner, the replay has none to write"
+		}
+	}
+	if j.mutation == "flip-decoded" && s3Refused(j.got, "continuation-token") {
+		return "an issued token with a decoded byte flipped: the provider serves its own token so altered as if unaltered; the replay refuses every altered token (its token carries a checksum)"
+	}
+	return ""
+}
+
+// firstParam is the first value of the query parameter name as the
+// provider reads a raw query (s3Params: malformed escapes dropped, '+' a
+// space).
+func firstParam(query, name string) (string, bool) {
+	params, _ := s3Params(query)
+	for _, p := range params {
+		if p.name == name {
+			return string(p.value), true
+		}
+	}
+	return "", false
+}
+
+var s3ArgumentName = regexp.MustCompile(`<ArgumentName>([^<]*)</ArgumentName>`)
+
+// s3Refused reports whether r is S3's 400 InvalidArgument naming argument.
+func s3Refused(r *response, argument string) bool {
+	c, a := errorCode.FindSubmatch(r.Body), s3ArgumentName.FindSubmatch(r.Body)
+	return r.Status == 400 && c != nil && string(c[1]) == "InvalidArgument" && a != nil && string(a[1]) == argument
+}
+
+// gcsReasonIs reports whether r is a GCS error whose first reason is
+// reason.
+func gcsReasonIs(r *response, reason string) bool {
+	var got string
+	return profileCheck(r, r, func() { got = gcsErrorReason(r) }).OK && got == reason
+}

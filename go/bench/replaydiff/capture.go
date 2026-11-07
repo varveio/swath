@@ -38,6 +38,78 @@ import (
 // precedes every request that carries it; a token no earlier exchange
 // issued is a failure, not a skip.
 
+// A recording of the live matrix (-live-endpoint through the recording
+// proxy with -live-record) holds requests a client's walks never send:
+// tokens the driver wrote itself or altered from an issued one. Its
+// driver annotates each request (recordNote; the proxy writes the
+// annotations with the exchange and never forwards them), and the
+// replay forms the Go server's request from them: a token the case wrote
+// is sent as it was, an altered one is the Go server's token for the
+// unaltered one with the same alteration. The answers are judged as the
+// live mode judges them (s3Live, gcsLive, documentedDifference), with
+// the case's pins (-live-pins).
+
+// The annotation headers the live driver sends through a recording
+// proxy (-live-record). Values are query-escaped: a case name or token
+// may hold any byte.
+const (
+	recordCaseHeader  = "X-Record-Case"
+	recordTokenHeader = "X-Record-Token"
+	// tokenVerbatim: the request's token is the case's own (a constant,
+	// an invented value), issued by no answer; the replay sends it as is.
+	tokenVerbatim = "verbatim"
+)
+
+// recordNote is what the live driver tells a recording proxy about one
+// request: the case it belongs to, and how its token was formed: "" for
+// a token an earlier answer issued (or none), tokenVerbatim, or
+// tokenNote's mutation and the unaltered token it was applied to.
+type recordNote struct{ caseID, token string }
+
+func (n recordNote) headers() [][2]string {
+	h := [][2]string{{recordCaseHeader, url.QueryEscape(n.caseID)}}
+	if n.token != "" {
+		h = append(h, [2]string{recordTokenHeader, n.token})
+	}
+	return h
+}
+
+// tokenNote is the X-Record-Token value of a token made by applying
+// mutation (mutateToken) to the issued token source.
+func tokenNote(mutation, source string) string {
+	return mutation + " " + url.QueryEscape(source)
+}
+
+// readRecordNote reads an exchange's annotations.
+func readRecordNote(notes []capturedHeader) (recordNote, error) {
+	var n recordNote
+	for _, h := range notes {
+		switch http.CanonicalHeaderKey(h.Name) {
+		case recordCaseHeader:
+			id, err := url.QueryUnescape(h.Value)
+			if err != nil {
+				return n, fmt.Errorf("annotation %s: %w", h.Name, err)
+			}
+			n.caseID = id
+		case recordTokenHeader:
+			n.token = h.Value
+		}
+	}
+	return n, nil
+}
+
+// noteMutation splits a tokenNote value.
+func noteMutation(note string) (mutation, source string, err error) {
+	mutation, esc, ok := strings.Cut(note, " ")
+	if !ok || mutation != "flip" && mutation != "truncate" && mutation != "flip-decoded" {
+		return "", "", fmt.Errorf("annotation %s %q: want verbatim, or flip, truncate or flip-decoded and the token", recordTokenHeader, note)
+	}
+	if source, err = url.QueryUnescape(esc); err != nil {
+		return "", "", fmt.Errorf("annotation %s: %w", recordTokenHeader, err)
+	}
+	return mutation, source, nil
+}
+
 // captureLimits bound what one exchange may hold. A body over a limit is
 // reported as a failure of its exchange, never cut and compared.
 type captureLimits struct {
@@ -55,9 +127,10 @@ func (l captureLimits) maxLine() int {
 
 // capturedExchange is one line of a faultproxy -record capture.
 type capturedExchange struct {
-	Seq           uint64 `json:"seq"`
-	CapturedAt    string `json:"captured_at"`
-	LimitExceeded string `json:"limit_exceeded"`
+	Seq           uint64           `json:"seq"`
+	CapturedAt    string           `json:"captured_at"`
+	LimitExceeded string           `json:"limit_exceeded"`
+	Annotations   []capturedHeader `json:"annotations"`
 	Request       struct {
 		Method  string           `json:"method"`
 		Path    string           `json:"path"`
@@ -308,6 +381,11 @@ func runCapture(o options) error {
 			return err
 		}
 	}
+	if o.pins != "" {
+		if d.pins, err = readPins(o.pins); err != nil {
+			return err
+		}
+	}
 	replayCapture(d, protocol, meta, items, lim)
 	rep.Seconds = time.Since(rep.Started).Seconds()
 	return d.write()
@@ -351,7 +429,15 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			continue
 		}
 		x := it.x
+		note, noteErr := readRecordNote(x.Annotations)
 		name := fmt.Sprintf("capture %d %s %s?%s", x.Seq, x.Request.Method, clip(x.Request.Path), clip(x.Request.Query))
+		if note.caseID != "" {
+			name = fmt.Sprintf("capture %d [%s] %s %s?%s", x.Seq, clip(note.caseID), x.Request.Method, clip(x.Request.Path), clip(x.Request.Query))
+		}
+		if noteErr != nil {
+			d.record(result{Kind: "capture", Name: name, Error: noteErr.Error()})
+			continue
+		}
 		if x.LimitExceeded != "" {
 			unread++
 			d.record(result{Kind: "capture", Name: name, Error: "the recording's body limit was exceeded: " + x.LimitExceeded})
@@ -389,9 +475,20 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 		}
 		query := x.Request.Query
 		refTok, rest, hasTok := queryToken(query, tokenParam)
-		gotTok := ""
-		if hasTok && refTok != "" {
-			t, ok := tokens[refTok]
+		gotTok, mutation, source := "", "", refTok
+		switch {
+		case note.token == tokenVerbatim:
+			gotTok = refTok
+		case note.token != "":
+			var err error
+			if mutation, source, err = noteMutation(note.token); err != nil {
+				failed(x.Seq)
+				d.record(result{Kind: "capture", Name: name, Error: err.Error()})
+				continue
+			}
+		}
+		if hasTok && refTok != "" && note.token != tokenVerbatim {
+			t, ok := tokens[source]
 			switch {
 			case !ok:
 				msg := "its token was not issued by an earlier captured answer: the capture is out of order or does not start at the walk's first page"
@@ -407,6 +504,14 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 				continue
 			}
 			gotTok = t.got
+			if mutation != "" {
+				var err error
+				if gotTok, err = mutateToken(gotTok, mutation); err != nil {
+					failed(x.Seq)
+					d.record(result{Kind: "capture", Name: name, Skipped: "go token: " + err.Error()})
+					continue
+				}
+			}
 			query = rest + "&" + tokenParam + "=" + campaignEscape(gotTok, "")
 			query = strings.TrimPrefix(query, "&")
 		}
@@ -430,6 +535,11 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			tokens[issued] = capturedToken{got: t}
 		} else {
 			failed(x.Seq) // the Go server issued no token where the provider did
+		}
+		if why := documentedDifference(judgement{protocol: protocol, bucket: d.o.bucket, caseID: note.caseID,
+			query: rest, mutation: mutation, refTok: refTok, gotTok: gotTok, ref: ref, got: b, df: df}, d.pins); why != "" {
+			d.noteDocumented(name, why, df)
+			continue
 		}
 		res.Pass = df.OK
 		if !df.OK {
