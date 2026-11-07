@@ -885,6 +885,9 @@ unbroken token chains) or the error envelope's first reason. Each outcome must b
 mismatch must be reproduced as the whole message (only a replay token's body after a pin ending at the token's
 prefix is open), and a pinned mismatch that now matches is logged as an improvement. `SWATH_PROVIDER_REPORT=DIR` writes the per-capture
 outcomes to `DIR/<fixture>/gcs-outcomes.json`, in the shape of the Java suite's `-PproviderReport` file.
+`scripts/provider-conformance/evidence.py go-receipts` runs this replay and the Azure one at a clean commit and
+writes a `producer: go` receipt for each capture they match (see
+[Go receipts](../../docs/replay-provider-conformance.md#go-receipts)).
 
 ```bash
 SWATH_REPLAY_FIXTURES=/data/replay SWATH_PROVIDER_REPORT=/tmp/report go test -v ./internal/replay/evidence
