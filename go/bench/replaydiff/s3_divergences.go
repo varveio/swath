@@ -550,8 +550,9 @@ func (d *driver) compareS3(r request) (*response, diff, error) {
 			return a, diff{}, fmt.Errorf("%s: %w", d.got.name, err)
 		}
 		d.count(2)
-		df := (bytesComparator{}).compare(masked(withDeclNewline(a)), masked(b))
-		if df.OK && !bytes.Equal(a.Body, b.Body) {
+		want := withDeclNewline(a)
+		df := (bytesComparator{}).compare(masked(want), masked(b))
+		if df.OK && !bytes.Equal(want.Body, b.Body) {
 			d.noteTokenBytes(r.Name)
 		}
 		return a, df, nil
@@ -609,11 +610,12 @@ func (d *driver) compareS3(r request) (*response, diff, error) {
 	if df.OK {
 		// The declaration's newline is on every document, so it is
 		// applied here as well and never makes a request a divergence.
-		same := (bytesComparator{}).compare(masked(withDeclNewline(asSent)), masked(got)).OK
+		sent := withDeclNewline(asSent)
+		same := (bytesComparator{}).compare(masked(sent), masked(got)).OK
 		switch {
 		case !same:
 			d.noteDivergence(r.Name, asSent, got, plan.reasons)
-		case !bytes.Equal(asSent.Body, got.Body):
+		case !bytes.Equal(sent.Body, got.Body):
 			d.noteTokenBytes(r.Name)
 		}
 	}

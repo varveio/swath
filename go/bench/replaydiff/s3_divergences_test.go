@@ -203,7 +203,8 @@ func TestDivergenceCases(t *testing.T) {
 // expectation and is listed as a documented divergence with the Java
 // answer; a Go answer that moves fails. The Java server writes no newline
 // after the XML declaration and the Go route must write one (live S3
-// does), without that making a request a divergence.
+// does), without that making a request a divergence or a token-bytes
+// difference.
 func TestDivergenceAssertsTheGoSide(t *testing.T) {
 	const javaPage = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>bkt</Name><Prefix></Prefix><KeyCount>0</KeyCount></ListBucketResult>`
 	goPage := strings.Replace(javaPage, "?>", "?>\n", 1)
@@ -231,8 +232,8 @@ func TestDivergenceAssertsTheGoSide(t *testing.T) {
 		d := &driver{o: options{bucket: "bkt", parallel: 1}, ref: java, got: &target{name: "go", base: serve(c.goBody), client: http.DefaultClient},
 			comp: bytesComparator{}, rep: rep}
 		d.runCases("case", []request{{Name: "case", Method: "GET", Query: c.query}})
-		if (rep.Passed == 1) != c.pass || len(rep.Divergences) != c.divergences {
-			t.Errorf("%s, go %q: passed %d failed %d divergences %v", c.query, c.goBody, rep.Passed, rep.Failed, rep.Divergences)
+		if (rep.Passed == 1) != c.pass || len(rep.Divergences) != c.divergences || len(rep.TokenBytes) != 0 {
+			t.Errorf("%s, go %q: passed %d failed %d divergences %v token bytes %v", c.query, c.goBody, rep.Passed, rep.Failed, rep.Divergences, rep.TokenBytes)
 		}
 	}
 }
