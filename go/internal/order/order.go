@@ -844,12 +844,12 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	releaseEvery := max(1, o.opt.Budget/16)
 	frames := []drainFrame[R, P]{{n: root}}
 	o.advanced = time.Now()
+	defer o.stalled() // after the final flush too: a sink write that blocks is a stall
 	o.mu.Lock()
 	root.onPath.Store(true)
 	for len(frames) > 0 {
 		if o.stopped.Load() {
 			o.mu.Unlock()
-			o.stalled()
 			return st, context.Cause(o.ctx)
 		}
 		f := &frames[len(frames)-1]
@@ -877,7 +877,6 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		}
 		if err != nil {
 			o.mu.Unlock()
-			o.stalled()
 			return st, err
 		}
 		if child != nil {
@@ -891,14 +890,14 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		hookDrained(o.buffered, o.meta)
 	}
 	o.mu.Unlock()
-	o.stalled()
 	return st, o.flush()
 }
 
 // stalled closes the interval since the drainer last handed rows on into
-// stuck. Every drain exit calls it, cancellation and errors included: an
-// interrupted run's last stall (a frontier that never answered before the
-// stop) is the one its report most needs.
+// stuck. Every drain exit runs it, deferred, after the final flush,
+// cancellation and errors included: an interrupted run's last stall (a
+// frontier that never answered, or a sink whose last write blocked until
+// the stop) is the one its report most needs.
 func (o *run[R, P]) stalled() { o.stuck = max(o.stuck, time.Since(o.advanced)) }
 
 // drainFinished drains a finished node's items up to its next child,

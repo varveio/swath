@@ -231,6 +231,31 @@ func TestInterruptedRunReportsStall(t *testing.T) {
 	}
 }
 
+// blockedSink accepts nothing: every Write waits for the run's context.
+type blockedSink struct{}
+
+func (blockedSink) Write(ctx context.Context, _ [][]schema.Row[tp]) error {
+	<-ctx.Done()
+	return context.Cause(ctx)
+}
+
+// TestFinalFlushReportsStall: a run whose one row is batched until the
+// drain's final flush, and whose sink then blocks until the deadline,
+// reports that wait as FrontierStuck (the interval is closed after the
+// flush, not before it).
+func TestFinalFlushReportsStall(t *testing.T) {
+	const stall = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), stall)
+	defer cancel()
+	st, err := Run[rng, tp](ctx, &tree{depth: 0, fanout: 1, rowsPer: 1}, blockedSink{}, &testSchema, Options{Workers: 1, Budget: 1000})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+	if st.FrontierStuck < stall/2 {
+		t.Fatalf("the final write blocked for %v: FrontierStuck %v", stall, st.FrontierStuck)
+	}
+}
+
 // failingRoot's root emits nothing and fails, the shape where the drainer
 // could find the tree finished between the node's completion and the
 // failure being recorded.

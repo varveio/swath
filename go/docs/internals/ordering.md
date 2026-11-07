@@ -234,7 +234,8 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   open spill reader. The report's `resources` carries `peak_nodes`, `peak_markers`, `peak_ahead_rows` (rows received and
   not yet handed on, in memory or spilled), `frontier_stuck_max_ns` (the longest interval in which the
   drainer handed nothing on, closed on every drain exit, so a cancelled or failed run reports its last
-  stall: `TestInterruptedRunReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
+  stall: `TestInterruptedRunReportsStall`; the interval is closed after the final flush, so a last sink write that
+  blocks counts: `TestFinalFlushReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
   `reserve_bytes`, `dir` and `fs_type` (the spill filesystem: on `tmpfs` spill is memory, and the run warns
   at start); `progress.json` carries the same as live values with their peaks
   under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin). The summary
