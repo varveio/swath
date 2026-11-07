@@ -60,14 +60,14 @@ type Meter struct {
 	sort  string
 	count atomic.Int64
 	// timers: the sum in nanoseconds over the meter's life; the max and
-	// percentiles over the window (window.go).
+	// percentiles over their windows (window.go).
 	sum atomic.Int64
-	// Under mu: distribution totals, the timer window, a gauge's or
-	// function counter's source.
+	// Under mu: a distribution's total, the windows (from the meter's
+	// creation), a gauge's or function counter's source.
 	mu      sync.Mutex
 	fsum    float64
-	fmax    float64
-	window  *timeWindow
+	max     windowMax       // timers (ns) and distributions
+	hist    windowHistogram // timers
 	gauge   func() float64
 	counter func() int64
 }
@@ -82,21 +82,20 @@ func (m *Meter) Inc() { m.count.Add(1) }
 func (m *Meter) Record(d time.Duration) {
 	m.count.Add(1)
 	m.sum.Add(int64(d))
-	now := m.reg.now()
+	now := m.reg.nowMillis()
 	m.mu.Lock()
-	if m.window == nil {
-		m.window = newTimeWindow(now)
-	}
-	m.window.record(now, int64(d))
+	m.max.record(now, float64(d))
+	m.hist.record(now, int64(d))
 	m.mu.Unlock()
 }
 
 // Observe records one distribution sample.
 func (m *Meter) Observe(v float64) {
+	now := m.reg.nowMillis()
 	m.mu.Lock()
 	m.count.Add(1)
 	m.fsum += v
-	m.fmax = max(m.fmax, v)
+	m.max.record(now, v)
 	m.mu.Unlock()
 }
 
@@ -121,11 +120,12 @@ type Registry struct {
 	clock func() time.Time
 }
 
-func (r *Registry) now() time.Time {
+// nowMillis is the wall clock in milliseconds, the windows' clock.
+func (r *Registry) nowMillis() int64 {
 	if r.clock != nil {
-		return r.clock()
+		return r.clock().UnixMilli()
 	}
-	return time.Now()
+	return time.Now().UnixMilli()
 }
 
 // NewRegistry returns an empty registry.
@@ -142,7 +142,8 @@ func (r *Registry) Get(d Def, tagValues ...string) *Meter {
 	defer r.mu.Unlock()
 	m := r.meters[id]
 	if m == nil {
-		m = &Meter{reg: r, def: d, tags: slices.Clone(tagValues)}
+		now := r.nowMillis()
+		m = &Meter{reg: r, def: d, tags: slices.Clone(tagValues), max: newWindowMax(now), hist: newWindowHistogram(now)}
 		m.sort = sortKey(m)
 		r.meters[id] = m
 	}
@@ -251,13 +252,12 @@ func (m *Meter) appendJSON(dst []byte) []byte {
 			mean = sum / float64(n)
 		}
 		dst = number(dst, "mean_ms", mean)
-		var maxv, p50, p99 int64
+		now := m.reg.nowMillis()
 		m.mu.Lock()
-		if m.window != nil {
-			maxv, p50, p99 = m.window.read(m.reg.now())
-		}
+		maxv := m.max.read(now)
+		p50, p99 := m.hist.read(now)
 		m.mu.Unlock()
-		dst = number(dst, "max_ms", float64(maxv)/1e6)
+		dst = number(dst, "max_ms", maxv/1e6)
 		if m.def.NoPercentiles {
 			dst = append(dst, `,"p50_ms":null,"p99_ms":null`...)
 		} else {
@@ -266,7 +266,7 @@ func (m *Meter) appendJSON(dst []byte) []byte {
 		}
 	case Distribution:
 		m.mu.Lock()
-		n, total, mx := m.count.Load(), m.fsum, m.fmax
+		n, total, mx := m.count.Load(), m.fsum, m.max.read(m.reg.nowMillis())
 		m.mu.Unlock()
 		dst = append(dst, `,"count":`...)
 		dst = strconv.AppendInt(dst, n, 10)

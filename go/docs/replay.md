@@ -57,7 +57,7 @@ held in memory while it is sorted (about 300 bytes per row), so it suits capture
 | `--bucket NAME` | required | the bucket name the S3 route answers for; any other is `NoSuchBucket` |
 | `--host`, `--port` | `127.0.0.1`, `0` | bind address; port `0` binds a free port, reported in the startup line |
 | `--metrics-port` | `-1` | the metrics port (below); negative disables it, `0` binds a free one |
-| `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`) |
+| `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`). The serving listener holds at most four times this many connections; one more is closed as soon as it is accepted |
 | `--parquet-connections` | `0` | concurrent fixture page decodes; `0` is `max(8, min(32, GOMAXPROCS))` |
 | `--inject-latency SPEC` | off | target latency by request shape (below) |
 | `--latency-jitter F` | `0` | jitter fraction in [0, 1), drawn from the request so a repeated request gets the same delay |
@@ -117,6 +117,12 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   `response_too_large`; `500 InternalError` with `fixture_disordered` when a row group's keys turn out not to
   ascend (the message names the row group and the part's file name, never its directory); and
   `500 InternalError` (`internal`, no detail) when the fixture read fails otherwise.
+- A request head (request line, headers, blank line) may be 8 KiB with the S3 route alone and 64 KiB with a
+  native route enabled, the Java server's limits: a request line longer than that is `414 URI Too Long`, a
+  longer head `431 Request Header Fields Too Large`, both with the HTML refusal page below.
+- The listing routes take no request body. A request that declares one (`Content-Length` or chunked) is answered
+  as it would be without it, and its connection is then closed instead of drained, as on the Java server; a
+  body that never arrives holds nothing.
 - Some request targets are refused before the route, with `400`, an HTML page and
   `Cache-Control: must-revalidate,no-cache,no-store`, as the Java server's HTTP layer refuses them: a fragment
   (`#`), an empty path segment other than the last (`//bucket`, `/;/bucket`), an encoded `/` or `%`, an encoded
@@ -204,7 +210,9 @@ shape but not absolute time (server and client CPU do not scale).
 ## The metrics port
 
 `--metrics-port` serves three paths on a second listener, which never waits behind the request ceiling, never
-reads the fixture and never moves a listing meter:
+reads the fixture and never moves a listing meter. Its connections are bounded by time instead: an idle
+keep-alive connection, reading a request and reading its body take `--idle-timeout`, writing an answer
+`--write-timeout`, the serving listener's values:
 
 - `GET /healthz`: `ok` once the server is accepting. Poll it before starting a client.
 - `GET /metrics`: JSON, `{schema_version: 2, serving_mode, serving: {...}, uptime_ms, sampled_at_epoch_ms,
@@ -219,11 +227,23 @@ reads the fixture and never moves a listing meter:
   `memory.swap.max` of the process's own cgroup and `/proc/self/status` `Cpus_allowed_list`, each a
   `{value, error}` pair: a missing, unreadable or invalid source is an explicit error.
 
-A timer's `count` and `sum_ms` cover the server's life; its `max_ms`, `p50_ms` and `p99_ms` cover recent
-samples, the window a Java server's timers publish: every sample goes into three histograms, the oldest is read,
-and every 40 seconds the oldest is cleared, so a scrape covers the last 80 to 120 seconds. The histograms are
-log-linear (32 buckets per power of two), so a percentile is within 3.1% above the sample it stands for and never
-above `max_ms`. Read a measured window's mean as the difference of two scrapes' `sum_ms` over the difference
+A timer's `count` and `sum_ms`, and a distribution's `count` and `total`, cover the server's life. A timer's
+`max_ms`, `p50_ms` and `p99_ms` and a distribution's `max` cover recent samples, by the rules of the Java server's
+registry (Micrometer's `SimpleMeterRegistry`: a one-minute expiry, three buffers), with two different windows,
+both counted from the meter's creation and rotated when a sample is recorded or the meter is read:
+
+- **The maximum** is kept in three slots, each sample raising all three. Each minute the slot read is cleared and
+  the next becomes the one read; after three minutes without a rotation all three are cleared. A sample stays
+  the maximum for two to three minutes.
+- **The percentiles** come from three histograms, each sample recorded in all three. Every 20 seconds the one read
+  is cleared and the next becomes the one read, so they describe the last 40 to 60 seconds. One rotation clears
+  at most three histograms and moves the rotation clock 20 seconds per histogram, so after a long idle spell the
+  next few scrapes keep clearing until the clock catches up.
+
+For example, after 900 ms at 0 s and 10 ms at 79 s, a scrape at 79 s reads `p50_ms` 10 and `max_ms` 900, at 121 s
+`p50_ms` 0 and `max_ms` 900, at 181 s `max_ms` 10 (`TestWindowsFollowTheJavaRegistry`). The histograms are
+log-linear (32 buckets per power of two), so a percentile is within 3.1% above the sample it stands for.
+Read a measured window's mean as the difference of two scrapes' `sum_ms` over the difference
 of their `count`. `index.load.latency` and `sortfixture.build.latency` publish no percentiles (`null`), as on
 the Java server.
 
@@ -445,7 +465,7 @@ Every run exited 0. The scripts behave the same on either server; nothing in the
     this server's own page naming the problem, not a copy of the Java server's HTTP layer's page.
   - A request line Go's HTTP parser refuses before any handler runs: whitespace or a control byte in the target,
     a malformed `%` escape (`%zz`, a lone `%`, `%uXXXX`) in the path, a target with neither a leading `/` nor a
-    scheme. Both servers answer `400`; this one with Go's `text/plain; charset=utf-8` page and no
+    scheme, and a request head over about 132 KiB (`431` from both servers). Both servers answer `400`; this one with Go's `text/plain; charset=utf-8` page and no
     `Cache-Control`.
   - An absolute target whose authority differs from the `Host` header (`GET http://other.invalid/bucket?...`
     with `Host: localhost`). The Java server refuses it with `400`; this server serves it, because Go's HTTP
@@ -625,5 +645,8 @@ inputs changed (or on a manual run); `ci-gate` needs both.
   `docs/replay-provider-expectations.json`, the replay smoke script): JDK 25,
   `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh` into the runner's temporary
   directory, then the gated tests named in the step's `FIXTURE_PACKAGES` and `FIXTURE_TESTS` with
-  `SWATH_REPLAY_FIXTURES` set. Every named test must run and pass: one that skips, or a name that matches no
-  test, fails the step. A new gated test is added to those two lists.
+  `SWATH_REPLAY_FIXTURES` set: the store's Java-written fixture tests (`internal/replay/store`), the GCS
+  evidence replay (`internal/replay/evidence`) and the Azure evidence replay (`internal/replay/azure`
+  `TestAzureEvidenceReplay`, on the Java-written `evidence-azure/capture` it sorts itself; serving the
+  manifest from memory instead fails the step). Every named test must run and pass: one that skips, or a
+  name that matches no test, fails the step. A new gated test is added to those two lists.
