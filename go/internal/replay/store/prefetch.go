@@ -14,6 +14,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/varveio/swath/go/sortedparquet"
 )
 
 // The window cache's defaults: 192 windows of 12,500 rows, 2.4 million
@@ -230,7 +232,10 @@ type prefetcher struct {
 	// ones: a queue would grow with every walk reaching its threshold.
 	aheadSlots chan struct{}
 
-	mu      sync.Mutex
+	mu sync.Mutex
+	// closed fails every read after close with sortedparquet.ErrClosed,
+	// a hit as a fill, as the store's Close promises.
+	closed  bool
 	ahead   map[windowKey]*pending // read-aheads in flight
 	windows []*window              // least recently used first
 	live    int64
@@ -285,6 +290,9 @@ func call[T any](f func(T), v T) {
 
 // serve answers a range read from the windows, or fills one.
 func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to []byte, limit int, proj Projection) ([]Object, error) {
+	if p.isClosed() {
+		return nil, sortedparquet.ErrClosed
+	}
 	// A walk that reaches its window's end while the next window's
 	// read-ahead is in flight waits for it rather than read the same rows.
 	if from != nil && !inclusive {
@@ -336,8 +344,12 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 			} else {
 				call(m.Selection, "single_contained_bound")
 			}
-			call(m.Hit, struct{}{})
 			p.mu.Lock()
+			if p.closed {
+				p.mu.Unlock()
+				return nil, sortedparquet.ErrClosed
+			}
+			call(m.Hit, struct{}{})
 			p.touch(w)
 			p.registerAnchors(page, p.ceilingRows(limit))
 			p.readAhead(w, pr.start+len(page), limit)
@@ -353,10 +365,14 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 		pr, _ := w.probe(from, inclusive, to)
 		page, second, reason := p.join(w, pr, all, to, limit, proj)
 		if page != nil {
+			p.mu.Lock()
+			if p.closed {
+				p.mu.Unlock()
+				return nil, sortedparquet.ErrClosed
+			}
 			call(m.Join, "hit")
 			call(m.Selection, "two_window_join")
 			call(m.Hit, struct{}{})
-			p.mu.Lock()
 			p.touch(w)
 			p.touch(second)
 			p.registerAnchors(page, p.ceilingRows(limit))
@@ -408,6 +424,8 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// A fill that read before close returns its rows, as a read in
+	// progress at close does uncached; publish keeps nothing after it.
 	if w != nil {
 		p.publish(w)
 		p.readAhead(w, n, limit)
@@ -473,10 +491,24 @@ func (p *prefetcher) readAhead(w *window, served, limit int) {
 	}()
 }
 
-// close stops the read-aheads and waits for them.
+// close fails the reads after it, stops the read-aheads, waits for them
+// and releases the windows and anchors.
 func (p *prefetcher) close() {
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
 	p.cancel()
 	p.wg.Wait()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.windows, p.live = nil, 0
+	p.anchors, p.order = make(map[string]*list.Element), list.New()
+}
+
+func (p *prefetcher) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
 }
 
 // fill reads from the fixture.
@@ -563,6 +595,9 @@ func (p *prefetcher) touch(w *window) {
 // publish adds w, replacing a window of the same key, evicting the least
 // recently used windows past either bound. Called under mu.
 func (p *prefetcher) publish(w *window) {
+	if p.closed {
+		return
+	}
 	n := int64(w.rows.len())
 	if n > p.maxRows {
 		call(p.meters.Uncached, "window_exceeds_row_budget")
