@@ -41,6 +41,10 @@ type request struct {
 	// before the server sees them (its page and Content-Type are the
 	// parser's). Empty compares everything.
 	Compare string `json:"compare,omitempty"`
+	// BucketPad, when positive, is the length of an X-Pad header the raw
+	// request carries after its other headers, less the bucket name's
+	// length (so the head's size does not depend on the bucket).
+	BucketPad int `json:"-"`
 	// Header holds request headers, a name repeated when sent twice.
 	Header [][2]string `json:"-"`
 }
@@ -236,6 +240,16 @@ func rawTargets() []request {
 				Header: [][2]string{{"X-Pad", pad}}, Compare: "headers"},
 			request{Name: fmt.Sprintf("raw GET [headers] %d-byte request line", n), Method: "GET",
 				Raw: "/{bucket}?list-type=2&max-keys=1&prefix=" + pad, Compare: "headers"})
+	}
+	// A head just past the S3-only limit as sent, but under it once
+	// Transfer-Encoding is dropped: the limit counts the bytes on the wire.
+	// (The driver sends Host: 127.0.0.1 and a five-digit port, X-Pad, then
+	// Connection: close.)
+	{
+		fixed := len("GET /") + len("?list-type=2&max-keys=1 HTTP/1.1\r\nHost: 127.0.0.1:12345\r\nTransfer-Encoding: chunked\r\nX-Pad: \r\nConnection: close\r\n\r\n")
+		out = append(out, request{Name: "raw GET [headers] chunked head past the limit as sent", Method: "GET",
+			Raw: "/{bucket}?list-type=2&max-keys=1", BucketPad: 8192 + 10 - fixed,
+			Header: [][2]string{{"Transfer-Encoding", "chunked"}}, Compare: "headers"})
 	}
 	add("GET", "status",
 		"/{bucket}%zz?list-type=2", "/{bucket}%?list-type=2", "/{bucket}%u0041?list-type=2", "{bucket}?list-type=2",

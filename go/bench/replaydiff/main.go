@@ -162,6 +162,9 @@ func (t *target) doRaw(bucket string, r request) (*response, error) {
 	for _, h := range r.Header {
 		extra.WriteString(h[0] + ": " + h[1] + "\r\n")
 	}
+	if r.BucketPad > 0 {
+		extra.WriteString("X-Pad: " + strings.Repeat("a", max(0, r.BucketPad-len(bucket))) + "\r\n")
+	}
 	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: %s\r\n%sConnection: close\r\n\r\n", r.Method, target, host, extra.String()); err != nil {
 		return nil, err
 	}

@@ -187,7 +187,12 @@ func New(cfg Config) (*Server, error) {
 		ReadHeaderTimeout: cfg.IdleTimeout,
 		IdleTimeout:       cfg.IdleTimeout,
 		MaxHeaderBytes:    cfg.maxHeaderBytes(),
-		ErrorLog:          nil,
+		// Each request's raw head size reaches the handler through the
+		// connection (headCounter), and every request must reach the
+		// handler to take its own: OPTIONS * included.
+		ConnContext:                  connContext,
+		DisableGeneralOptionsHandler: true,
+		ErrorLog:                     nil,
 	}
 	return s, nil
 }
