@@ -342,7 +342,10 @@ inputs changed (or on a manual run); `ci-gate` needs both.
   built for linux/amd64 and linux/arm64 without pushing, the native one loaded as `swath-replay-go:ci` and
   smoked. The smoke's fixture is written in the job: `bench/s3fake` serves 2,000 keys and the Go lister's
   dataset of that bucket is the fixture, so the smoke needs no network, Java or recording.
-- `go-fixtures` (inputs: `go/`, the workflow, the Java `swath-replay` module, the evidence archive): JDK 25,
+- `go-fixtures` (inputs: `go/`, the workflow, the Java `swath-replay`, `swath-core` and `swath-model` modules,
+  the shared Gradle build and wrapper (`build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`,
+  `gradle/`, `build-logic/`, `gradlew`), `docs/replay-provider-evidence.tar.gz`,
+  `docs/replay-provider-expectations.json`, the replay smoke script): JDK 25,
   `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh` into the runner's temporary
   directory, then the gated tests named in the step's `FIXTURE_PACKAGES` and `FIXTURE_TESTS` with
   `SWATH_REPLAY_FIXTURES` set. Every named test must run and pass: one that skips, or a name that matches no

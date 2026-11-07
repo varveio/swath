@@ -412,8 +412,9 @@ jobs:
   # writes (bench/replay/make-fixtures.sh: DuckDB captures sorted by the Java sort-fixture),
   # gated in the tests on SWATH_REPLAY_FIXTURES and skipped everywhere else. A separate job, so
   # the Gradle build runs beside the go job rather than inside its budget. Same always-runs,
-  # works-on-change shape as the go job; the Java replay module and the evidence archive are
-  # inputs here too.
+  # works-on-change shape as the go job. Its inputs are wider: the Java replay module and the
+  # modules it builds on (swath-core, swath-model), the shared Gradle build and wrapper, the
+  # evidence archive and expectations the tests read, and the replay smoke script.
   go-fixtures:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -435,7 +436,7 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
             echo "go=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$BASE" HEAD | grep -qE '^(go/|\.github/workflows/ci\.yml$|swath-replay/|docs/replay-provider-evidence\.tar\.gz$)'; then
+          elif git diff --name-only "$BASE" HEAD | grep -qE '^(go/|\.github/workflows/ci\.yml$|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)'; then
             echo "go=true" >> "$GITHUB_OUTPUT"
           else
             echo "go=false" >> "$GITHUB_OUTPUT"
