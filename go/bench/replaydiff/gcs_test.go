@@ -98,6 +98,9 @@ func TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk(t *testing.T) {
 		return rep
 	}
 	rep := run(&target{name: "rollup", base: start(true, keys), client: client})
+	if len(rep.Skipped) != 0 {
+		t.Errorf("skipped over %d keys: %v", len(keys), rep.Skipped)
+	}
 	if rep.Failed != 0 || rep.Passed < 700 {
 		for _, r := range rep.Results {
 			if !r.Pass {
@@ -109,5 +112,26 @@ func TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk(t *testing.T) {
 	}
 	if rep := run(&target{name: "short", base: start(true, keys[1:]), client: client}); rep.Failed == 0 {
 		t.Error("a server missing a key compared equal")
+	}
+
+	// Over one key no source page truncates: every token case is
+	// reported skipped, none is compared.
+	one := &target{name: "one", base: start(false, []string{"a"}), client: client}
+	rep = &report{}
+	d := &driver{o: o, ref: one, got: &target{name: "one-rollup", base: start(true, []string{"a"}), client: client}, comp: gcsComparator{}, rep: rep}
+	d.runGCSCases("case", gcsMatrix([][]byte{[]byte("a")}, rand.New(rand.NewPCG(1, 1)), 10))
+	tokenCases := 0
+	for _, c := range gcsMatrix([][]byte{[]byte("a")}, rand.New(rand.NewPCG(1, 1)), 10) {
+		if c.TokenFrom != "" {
+			tokenCases++
+		}
+	}
+	for _, r := range rep.Results {
+		if strings.HasPrefix(r.Name, "token page 2") || strings.HasPrefix(r.Name, "delimiter token page 2") {
+			t.Errorf("%q ran without a token", r.Name)
+		}
+	}
+	if len(rep.Skipped) != tokenCases || tokenCases < 10 {
+		t.Errorf("%d skipped of %d token cases: %v", len(rep.Skipped), tokenCases, rep.Skipped)
 	}
 }

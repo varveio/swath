@@ -150,7 +150,11 @@ type report struct {
 	Compared  int       `json:"compared"`
 	Passed    int       `json:"passed"`
 	Failed    int       `json:"failed"`
-	Results   []result  `json:"results"`
+	// Skipped names the cases that could not run as designed (a token
+	// case whose source page issued no token), with the reason: missing
+	// coverage, never a pass.
+	Skipped []string `json:"skipped,omitempty"`
+	Results []result `json:"results"`
 }
 
 func run(o options) error {
@@ -500,6 +504,9 @@ func (d *driver) write() error {
 	}
 	if partial > 0 {
 		fmt.Fprintf(&text, "%d walks stopped at -walk-limit %d pages\n", partial, d.o.walkLimit)
+	}
+	for _, s := range rep.Skipped {
+		fmt.Fprintf(&text, "SKIP %s\n", s)
 	}
 	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed)
 	os.Stdout.Write(text.Bytes())

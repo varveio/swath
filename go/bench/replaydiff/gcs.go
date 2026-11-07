@@ -6,8 +6,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"path/filepath"
@@ -204,8 +206,19 @@ func equalMaskedTokens(a, b []byte) bool {
 	return reflect.DeepEqual(x, y)
 }
 
+// skip records a case that could not run as designed; it is neither
+// compared nor passed.
+func (d *driver) skip(name, reason string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.rep.Skipped = append(d.rep.Skipped, name+": "+reason)
+}
+
 // runGCSCases is runCases with GCS page tokens: a request naming
-// TokenFrom gets the reference's nextPageToken for that request.
+// TokenFrom gets the reference's nextPageToken for that request, edited
+// by gcsTokenEdits when the case names one. A source page that issued no
+// token leaves the case skipped: without a token it would be an ordinary
+// listing passing for a token test.
 func (d *driver) runGCSCases(kind string, cases []request) {
 	var first, second []request
 	for _, c := range cases {
@@ -223,9 +236,16 @@ func (d *driver) runGCSCases(kind string, cases []request) {
 			wg.Go(func() {
 				for c := range work {
 					if c.TokenFrom != "" {
-						if tok, ok := d.refTokens.Load(c.TokenFrom); ok {
-							c.Query += "&pageToken=" + gcsEscape(tok.(string))
+						tok, ok := d.refTokens.Load(c.TokenFrom)
+						if !ok {
+							d.skip(c.Name, "the source page "+strconv.Quote(c.TokenFrom)+" issued no token")
+							continue
 						}
+						t := tok.(string)
+						if edit := gcsTokenEdits[editOf(c.Name)]; edit != nil {
+							t = edit(t)
+						}
+						c.Query += "&pageToken=" + gcsEscape(t)
 					}
 					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c)}
 					a, df, err := d.compareOne(c)
@@ -440,25 +460,34 @@ func gcsMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 	} {
 		add("token "+tok.name, "pageToken", tok.v, "maxResults", "5")
 	}
+	// Token cases take a token the reference issued. Each source page is
+	// one entry of a window that holds more, so it is truncated whenever
+	// the fixture has two keys (two root entries, two keys at the middle).
 	pageOne := func(name string, params ...string) {
 		out = append(out, request{Name: name, Method: "GET", Query: gcsQuery(params...)})
 	}
 	next := func(name, from string, params ...string) {
 		out = append(out, request{Name: name, Method: "GET", Query: gcsQuery(params...), TokenFrom: from})
 	}
-	pageOne("token page 1", "maxResults", "3")
-	next("token page 2", "token page 1", "maxResults", "3")
+	pageOne("token page 1", "maxResults", "1")
+	next("token page 2", "token page 1", "maxResults", "1")
 	next("token page 2 other size", "token page 1", "maxResults", "1000")
-	next("token page 2 other prefix", "token page 1", "maxResults", "3", "prefix", "a")
-	next("token page 2 with delimiter", "token page 1", "maxResults", "3", "delimiter", "/")
-	next("token page 2 with startOffset", "token page 1", "maxResults", "3", "startOffset", "\x01")
+	next("token page 2 other prefix", "token page 1", "maxResults", "1", "prefix", "a")
+	next("token page 2 with delimiter", "token page 1", "maxResults", "1", "delimiter", "/")
+	next("token page 2 with startOffset", "token page 1", "maxResults", "1", "startOffset", "\x01")
+	next("token page 2 with endOffset", "token page 1", "maxResults", "1", "endOffset", "\U0010FFFF")
+	for _, edit := range slices.Sorted(maps.Keys(gcsTokenEdits)) {
+		next("token page 2 "+edit, "token page 1", "maxResults", "1")
+	}
 	pageOne("delimiter token page 1", "maxResults", "1", "delimiter", "/")
 	next("delimiter token page 2", "delimiter token page 1", "maxResults", "1", "delimiter", "/")
-	if len(keys) > 0 {
-		mid := string(keys[len(keys)/2])
-		pageOne("offset token page 1", "maxResults", "2", "startOffset", mid, "endOffset", mid+"\U0010FFFF")
-		next("offset token page 2", "offset token page 1", "maxResults", "2", "startOffset", mid, "endOffset", mid+"\U0010FFFF")
-		next("offset token page 2 other end", "offset token page 1", "maxResults", "2", "startOffset", mid)
+	next("delimiter token page 2 without delimiter", "delimiter token page 1", "maxResults", "1")
+	if len(keys) >= 3 {
+		lo, hi := string(keys[len(keys)/2-1]), string(keys[len(keys)/2+1])
+		pageOne("offset token page 1", "maxResults", "1", "startOffset", lo, "endOffset", hi)
+		next("offset token page 2", "offset token page 1", "maxResults", "1", "startOffset", lo, "endOffset", hi)
+		next("offset token page 2 other end", "offset token page 1", "maxResults", "1", "startOffset", lo)
+		next("offset token page 2 other start", "offset token page 1", "maxResults", "1", "endOffset", hi)
 	}
 	out = append(out,
 		request{Name: "unknown bucket", Method: "GET", Path: "/storage/v1/b/no-such-bucket-here/o", Query: "maxResults=1"},
@@ -477,6 +506,36 @@ func gcsMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 	)
 	return out
 }
+
+// gcsTokenEdits alter a genuinely issued token (the reference's) before
+// it is sent: the native probe runner's mutations, and the padding and
+// line-break spellings the token decoder must judge. A case "token page 2
+// EDIT" applies gcsTokenEdits[EDIT].
+var gcsTokenEdits = map[string]func(string) string{
+	"flip": func(t string) string {
+		last := byte('A')
+		if t[len(t)-1] == 'A' {
+			last = 'B'
+		}
+		return t[:len(t)-1] + string(last)
+	},
+	"truncate": func(t string) string { return t[:max(1, len(t)-4)] },
+	"flip-decoded": func(t string) string {
+		body, ok := strings.CutPrefix(t, "gcs1.")
+		raw, err := base64.RawURLEncoding.DecodeString(body)
+		if !ok || err != nil || len(raw) == 0 {
+			return t + "!"
+		}
+		raw[len(raw)-1] ^= 1
+		return "gcs1." + base64.RawURLEncoding.EncodeToString(raw)
+	},
+	"padded":      func(t string) string { return t + strings.Repeat("=", (4-len(strings.TrimPrefix(t, "gcs1."))%4)%4) },
+	"overpadded":  func(t string) string { return t + "===" },
+	"line break":  func(t string) string { return t[:len(t)/2] + "\n" + t[len(t)/2:] },
+	"gcs2 prefix": func(t string) string { return "gcs2." + strings.TrimPrefix(t, "gcs1.") },
+}
+
+func editOf(name string) string { return strings.TrimPrefix(name, "token page 2 ") }
 
 func trim(s string) string {
 	if len(s) > 20 {
