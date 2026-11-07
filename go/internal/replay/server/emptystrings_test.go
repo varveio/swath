@@ -31,7 +31,9 @@ func emptyAndNull() []sortedparquettest.Row {
 // TestEmptyAndNullStringsEndToEnd serves a stamped Java-era part and the
 // format-2 dataset sort-fixture makes of the same rows (captured unsorted)
 // on the S3, GCS and Azure routes. Every answer is the Java server's for
-// the Java-era part, byte for byte (recorded from it): on S3 an empty
+// the Java-era part, byte for byte (recorded from it), but for Owner,
+// which the S3 route writes before StorageClass as live S3 does
+// (s3.TestLiveOwnerBeforeStorageClass): on S3 an empty
 // string renders as an empty element (<ETag>&quot;&quot;</ETag>, an empty
 // StorageClass, owner and checksum) and a null one not at all; GCS and
 // Azure render their synthetic values for both. Before, sort-fixture wrote
@@ -58,7 +60,7 @@ func TestEmptyAndNullStringsEndToEnd(t *testing.T) {
 	}
 	const (
 		s3Want = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Prefix></Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>` +
-			`<Contents><Key>empty</Key><LastModified>2026-01-01T00:00:01.000Z</LastModified><ETag>&quot;&quot;</ETag><ChecksumAlgorithm></ChecksumAlgorithm><ChecksumType></ChecksumType><Size>1</Size><StorageClass></StorageClass><Owner><ID></ID><DisplayName></DisplayName></Owner></Contents>` +
+			`<Contents><Key>empty</Key><LastModified>2026-01-01T00:00:01.000Z</LastModified><ETag>&quot;&quot;</ETag><ChecksumAlgorithm></ChecksumAlgorithm><ChecksumType></ChecksumType><Size>1</Size><Owner><ID></ID><DisplayName></DisplayName></Owner><StorageClass></StorageClass></Contents>` +
 			`<Contents><Key>null</Key><LastModified>2026-01-01T00:00:02.000Z</LastModified><Size>2</Size></Contents></ListBucketResult>`
 		gcsWant = `{"kind":"storage#objects","items":[` +
 			`{"kind":"storage#object","bucket":"bucket","name":"empty","size":"1","updated":"2026-01-01T00:00:01.000000Z","etag":"swath-gcs-synthetic-v1","generation":"1","metageneration":"1","storageClass":"STANDARD","contentType":"application/octet-stream"},` +
