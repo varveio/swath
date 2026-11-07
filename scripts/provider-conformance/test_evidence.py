@@ -566,12 +566,14 @@ FAKE_BUILD = """#!/bin/sh
 set -eu
 cd "$(dirname "$0")"
 [ "$1" = -o ] && [ "$3" = ./cmd/swath-replay ]
+[ -z "${FAKE_ENV_LOG:-}" ] || env >> "$FAKE_ENV_LOG"
 { cat main.go; printf '%s/%s cgo=%s %s' "$GOOS" "$GOARCH" "$CGO_ENABLED" "$(git rev-parse HEAD)"; } > "$2"
 """
 # A stand-in for the go command: `go test` writes the outcome reports FAKE_OUTCOMES names.
 FAKE_GO = """#!/bin/sh
 set -eu
 [ "$1" = test ]
+[ -z "${FAKE_ENV_LOG:-}" ] || env >> "$FAKE_ENV_LOG"
 mkdir -p "$SWATH_PROVIDER_REPORT/generated" "$SWATH_REPLAY_PROVIDER_REPORT"
 cat "$FAKE_OUTCOMES/gcs.json" > "$SWATH_PROVIDER_REPORT/generated/gcs-outcomes.json"
 cat "$FAKE_OUTCOMES/azure.json" > "$SWATH_REPLAY_PROVIDER_REPORT/azure-outcomes.json"
@@ -722,6 +724,37 @@ class GoReceiptTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "changed since the receipt commit"):
             self.validate(self.row(self.receipt()))
 
+    def test_dirty_evidence_sources_are_refused_and_unrelated_edits_pass(self):
+        """The working tree's bytes are checked too: staged, unstaged and added sources are refused,
+        an edit outside the named set is not."""
+        row = self.row(self.receipt())
+        self.validate(row)
+        self.write("docs/ledger-note.md", "unrelated unstaged edit\n")
+        self.write("go/internal/replay/azure/port_test.go", "package azure // unrelated unstaged edit\n")
+        self.validate(row)
+        self.git("add", "docs/ledger-note.md")
+        self.validate(row)
+        source = "go/internal/replay/evidence/evidence_test.go"
+        original = (self.root / source).read_text()
+        for name, change in (("unstaged", lambda: self.write(source, original + "// edited\n")),
+                             ("staged", lambda: (self.write(source, original + "// edited\n"),
+                                                 self.git("add", source))),
+                             ("added", lambda: self.write("go/internal/replay/evidence/extra_test.go",
+                                                          "package evidence\n")),
+                             ("added in a staged directory", lambda: (
+                                 self.write("go/sortedparquet/sortedparquettest/extra.go", "package x\n"),
+                                 self.git("add", "go/sortedparquet/sortedparquettest/extra.go"))),
+                             ("go.sum", lambda: self.write("go/go.sum", "x\n")),
+                             ("deleted", lambda: (self.root / source).unlink())):
+            with self.subTest(name):
+                change()
+                with self.assertRaisesRegex(ValueError, "working tree differ"):
+                    self.validate(row)
+                self.git("reset", "-q", "--hard", "HEAD")
+                self.git("clean", "-qfd", "go")
+                self.git("reset", "-q")
+                self.validate(row)
+
     def test_non_ancestor_commit_is_refused(self):
         main = self.git("rev-parse", "--abbrev-ref", "HEAD")
         self.git("checkout", "-q", "-b", "side")
@@ -805,6 +838,33 @@ class GoReceiptTest(unittest.TestCase):
         (outcomes / "gcs.json").write_text('{"gcs-basic": "match"}')
         with mock.patch.dict(os.environ, environment), self.assertRaisesRegex(ValueError, "does not cover"):
             evidence.write_go_receipts(self.root, self.root.parent, self.root.parent / "elsewhere")
+
+    def test_go_build_and_test_ignore_inherited_go_configuration(self):
+        """A Go config file or workspace can add `-overlay=` and so substitute evidence sources while
+        git stays clean; every Go build and test runs with the configuration disabled."""
+        self.test_go_receipts_written_from_the_go_replay_outcomes_validate()
+        tools = self.root.parent / "tools"
+        log = self.root.parent / "env.log"
+        config = self.root.parent / "goenv"
+        config.write_text("GOFLAGS=-overlay=/elsewhere/overlay.json\n", encoding="utf-8")
+        hostile = {"GOENV": str(config), "GOFLAGS": "-overlay=/elsewhere/overlay.json", "GOWORK": "/elsewhere/go.work",
+                   "GOROOT": "/elsewhere/goroot", "GODEBUG": "x=1", "GOFIPS140": "latest", "CGO_CFLAGS": "-DX",
+                   "GOPROXY": "https://proxy.example.invalid", "GOEXPERIMENT": "boringcrypto",
+                   "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}", "FAKE_ENV_LOG": str(log),
+                   "FAKE_OUTCOMES": str(self.root.parent / "outcomes")}
+        (self.root.parent / "outcomes" / "gcs.json").write_text('{"gcs-basic": "match", "gcs-other": "match"}')
+        evidence.go_distribution_sha256.cache_clear()
+        with mock.patch.dict(os.environ, hostile):
+            evidence.write_go_receipts(self.root, self.root.parent, self.root.parent / "out")
+            evidence.go_distribution_sha256(self.root, self.git("rev-parse", "HEAD"))
+        # Three runs: the receipt build, the replay test, and validate's rebuild.
+        text = log.read_text()
+        self.assertEqual(text.count("GOENV=off\n"), 3)
+        self.assertEqual(text.count("GOWORK=off\n"), 3)
+        self.assertEqual(text.count("GOFLAGS=\n"), 3)
+        for dropped in ("GOROOT=", "GODEBUG=", "GOFIPS140=", "CGO_CFLAGS=", "overlay", "boringcrypto", "/elsewhere"):
+            self.assertNotIn(dropped, text)
+        self.assertEqual(text.count("GOPROXY=https://proxy.example.invalid\n"), 3)
 
 
 if __name__ == "__main__":

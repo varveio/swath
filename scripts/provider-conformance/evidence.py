@@ -913,6 +913,8 @@ def validate_go_receipt(result: dict, repo_root: Path, replay_commit: str) -> No
         raise ValueError("Go receipt test sources differ from its commit")
     if go_test_sources(repo_root, replay_commit) != sources:
         raise ValueError("Go evidence test sources changed since the receipt commit")
+    if go_worktree_sources(repo_root) != sources:
+        raise ValueError("Go evidence test sources in the working tree differ from the receipt commit")
     if not declares_test(".go", git_blob(repo_root, commit, result["test_path"]).decode("utf-8"), result["test"]):
         raise ValueError("replay test identifier does not resolve to source")
     if result["go_toolchain"] != go_toolchain(repo_root, commit):
@@ -944,6 +946,21 @@ def go_test_sources(repo_root: Path, commit: str) -> dict[str, str]:
                 raise ValueError(f"Go evidence test source {entry} is absent at {commit}")
         for path in paths:
             sources[path] = hashlib.sha256(git_blob(repo_root, commit, path)).hexdigest()
+    return sources
+
+
+def go_worktree_sources(repo_root: Path) -> dict[str, str]:
+    """Each file of GO_EVIDENCE_TEST_SOURCES as it is on disk now, mapped to its SHA-256: the bytes
+    the Go toolchain would compile, whatever git has staged or tracks. An expanded directory lists
+    every regular file directly in it, tracked or not, so an added source is seen; the ledger,
+    archive and other files outside the set are not read."""
+    sources = {}
+    for entry in GO_EVIDENCE_TEST_SOURCES:
+        path = repo_root / entry
+        files = sorted(child for child in path.iterdir() if child.is_file()) if entry.endswith("/") \
+            and path.is_dir() else [path] if path.is_file() else []
+        for file in files:
+            sources[file.relative_to(repo_root).as_posix()] = hashlib.sha256(file.read_bytes()).hexdigest()
     return sources
 
 
@@ -979,12 +996,26 @@ def go_checkout(repo_root: Path, commit: str) -> Iterator[Path]:
                            capture_output=True)
 
 
+# Go environment variables that stay as the caller set them: where modules and caches live and how
+# they are fetched. Module contents are verified against go.sum, so none of these can change what
+# a test or build compiles. Every other GO* or CGO_* variable, and the C toolchain's, is dropped:
+# each can change which sources are compiled or with what flags (GOFLAGS, GOROOT, GODEBUG,
+# GOEXPERIMENT, GOFIPS140, GOOS, GOARCH, CGO_CFLAGS, CC, ...).
+GO_KEPT_ENV = {"GOPATH", "GOMODCACHE", "GOCACHE", "GOPROXY", "GOSUMDB", "GONOSUMDB", "GONOSUMCHECK",
+               "GOINSECURE", "GOPRIVATE", "GONOPROXY", "GOVCS", "GOAUTH", "GOTMPDIR", "GOTELEMETRY",
+               "GOTELEMETRYDIR"}
+GO_DROPPED_TOOLS = {"CC", "CXX", "FC", "AR", "PKG_CONFIG"}
+
+
 def go_environment(toolchain: str, build: bool) -> dict[str, str]:
-    """The caller's environment with the pinned toolchain, and for a build the target settings,
-    so the binary depends only on the receipt commit."""
+    """A hermetic environment for a Go build or test: the pinned toolchain, no Go configuration
+    file (`GOENV=off`, since its `GOFLAGS=-overlay=...` could substitute evidence sources while git
+    stays clean), no workspace (`GOWORK=off`), no inherited flags, and for a build the target
+    settings, so the result depends only on the commit's tree."""
     env = {key: value for key, value in os.environ.items()
-           if key not in GO_BUILD_ENV and key not in {"GOTOOLCHAIN", "SWATH_REVISION"}}
-    env["GOTOOLCHAIN"] = toolchain
+           if key in GO_KEPT_ENV or not (key.startswith(("GO", "CGO_")) or key in GO_DROPPED_TOOLS
+                                         or key == "SWATH_REVISION")}
+    env.update({"GOENV": "off", "GOWORK": "off", "GOFLAGS": "", "GOEXPERIMENT": "", "GOTOOLCHAIN": toolchain})
     if build:
         env.update(GO_BUILD_ENV)
     return env
