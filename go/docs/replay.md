@@ -581,7 +581,9 @@ refuses it, the replay decodes it), `gcs-11e`, `11f`, `11g`, `11i` (`fields`, `v
 shape: method, URL, raw path and query, request headers with credentials redacted, status, response headers, body,
 timestamps). Each exchange is written before its answer is released to the client, so the answer that issued a
 page token precedes, in the file and in sequence numbers, every request that carries that token
-(`TestRecordPersistsBeforeRelease`). On SIGINT or SIGTERM the proxy stops accepting connections and waits up to
+(`TestRecordPersistsBeforeRelease`). The client is sent the provider's body with its Content-Type set and never
+sniffed (`X-Content-Type-Options: nosniff`; `application/octet-stream` where the provider named none, `text/plain`
+for an HTML type), while the file keeps the provider's headers as sent (`TestRecordReleasesWithAContentType`). On SIGINT or SIGTERM the proxy stops accepting connections and waits up to
 `-drain` (30 s) for the requests in flight to be answered and recorded, a reset included, before it closes the
 file (`TestRecordDrainsOnShutdown`); an exchange still in flight then is reported and the proxy exits 1. Running the lister through it against the provider records the listing and the client's whole
 request stream in one go; `replaydiff -capture FILE` then replays every captured request, in order, against the Go
