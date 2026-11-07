@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,7 +15,6 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -22,6 +22,7 @@ import (
 type process struct {
 	name     string
 	cmd      *exec.Cmd
+	group    *group
 	endpoint string // http://host:port
 	metrics  string // http://host:port, empty when the metrics port is off
 	exited   chan struct{}
@@ -50,16 +51,16 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 	// A descendant that outlives the server and keeps its stderr open
 	// must not keep Wait (and so stop) waiting forever.
 	cmd.WaitDelay = 5 * time.Second
-	detach(cmd)
 	logf, err := os.Create(logPath)
 	if err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	g, err := startGroup(cmd)
+	if err != nil {
 		logf.Close()
 		return nil, err
 	}
-	s := &process{name: name, cmd: cmd, exited: make(chan struct{})}
+	s := &process{name: name, cmd: cmd, group: g, exited: g.exited}
 	defer func() {
 		if err != nil {
 			s.stop()
@@ -80,7 +81,6 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 			}
 		}
 	}()
-	go func() { cmd.Wait(); close(s.exited) }()
 	select {
 	case line := <-startup:
 		s.endpoint = endpointRe.FindStringSubmatch(line)[1]
@@ -118,35 +118,15 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 }
 
 // stop stops the server and every process of its group, whether or not
-// the launcher has already exited: SIGTERM to the group, a ten-second
-// grace in which the launcher must have exited and the group emptied,
-// then SIGKILL to the group, and a wait until no member remains (at most
-// ten seconds more). A launcher that exits on SIGTERM while a child
-// ignores it is not taken as the group having stopped. It is safe to
-// call more than once.
+// the launcher has already exited (see group.stop: SIGTERM, ten seconds'
+// grace, SIGKILL, then the group is retired). It is serialized and safe to
+// call any number of times: once the group is retired it is never
+// signalled again.
 func (s *process) stop() {
-	if s == nil || s.cmd.Process == nil {
+	if s == nil || s.group == nil {
 		return
 	}
-	p := s.cmd.Process
-	if signalGroup(p, syscall.SIGTERM) != nil {
-		p.Signal(syscall.SIGTERM)
-	}
-	stopped := func() bool {
-		select {
-		case <-s.exited:
-			return !groupAlive(p)
-		default:
-			return false
-		}
-	}
-	if waitFor(stopped, 10*time.Second) {
-		return
-	}
-	if signalGroup(p, syscall.SIGKILL) != nil {
-		p.Kill()
-	}
-	waitFor(stopped, 10*time.Second)
+	s.group.stop(10 * time.Second)
 }
 
 // waitFor polls done until it holds or within passes.
@@ -162,19 +142,31 @@ func waitFor(done func() bool, within time.Duration) bool {
 }
 
 // runBounded runs a one-shot command (the Java sort-fixture) as the
-// servers are run: in a process group of its own, the whole group killed
-// when ctx ends, Wait bounded when a descendant keeps the output pipe
-// open, and any member left after the command returns killed and waited
-// for, so neither a stuck command nor its descendants outlive the caller.
+// servers are run: as the leader of a process group of its own, the whole
+// group killed when ctx ends, and, once the leader has exited, any member
+// left killed and the group retired before the output is returned (Wait
+// bounded when a descendant held the output pipe). The group's id stays
+// owned until then (see group), so the sweep cannot reach another group.
 func runBounded(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	detach(cmd)
-	cmd.Cancel = func() error { return signalGroup(cmd.Process, syscall.SIGKILL) }
+	cmd := exec.Command(name, args...)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
 	cmd.WaitDelay = 5 * time.Second
-	out, err := cmd.CombinedOutput()
-	if cmd.Process != nil {
-		signalGroup(cmd.Process, syscall.SIGKILL)
-		waitFor(func() bool { return !groupAlive(cmd.Process) }, 10*time.Second)
+	g, err := startGroup(cmd)
+	if err != nil {
+		return nil, err
 	}
-	return out, err
+	select {
+	case <-g.exited:
+	case <-ctx.Done():
+		g.kill()
+	}
+	g.stop(0)
+	if !g.clean() {
+		return nil, fmt.Errorf("%s: its process group did not stop", name)
+	}
+	if ctx.Err() != nil {
+		return out.Bytes(), ctx.Err()
+	}
+	return out.Bytes(), g.waitErr
 }
