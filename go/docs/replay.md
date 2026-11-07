@@ -469,6 +469,12 @@ the same key shape.
 
 ## Live conformance
 
+The Go server is held to the provider by recordings: a client's requests and the provider's answers, captured
+once by the recording proxy and replayed offline as often as needed (Live capture, below). The recording that
+carries the edge cases is the live matrix described here, sent once through the proxy (The recorded live
+matrix, below); a live run is how such a recording is made, and a replay of it judges every answer by the same
+comparison as the live run did.
+
 `bench/replaydiff -live-endpoint` compares the Go server with the provider itself: anonymous requests to live S3
 or GCS, and the same requests to the Go server serving a recording of the same bucket. A live bucket changes, so
 `-live-prefix` keeps every request inside one scope (a request of the matrix that names no prefix is given the
@@ -523,6 +529,17 @@ set fails the comparison, as it fails the suite. Two S3 checks go beyond the sui
 compared as its whole document, every element's name and text as written in order, `RequestId` and `HostId` by
 presence only; and the key-carrying elements of a page (`Key`, `Prefix`, `StartAfter`, `Delimiter`) are
 compared as written as well as decoded, so a character reference and the raw character differ.
+
+**Documented differences.** A difference the replay is known to keep is listed apart, with its reason, under
+`documented_residuals` (`DOCUMENTED RESIDUAL` in the text), and is neither passed nor failed. Each rule matches
+the request's shape and both answers' shapes, never the case name alone, so the same request answered any other
+way still fails (`TestDocumentedDifferences`): a mismatch the provider evidence pins for its case, message for
+message (`-live-pins`; on a walk, the page that differs ends the walk); S3 ListObjects V1 (`list-type` absent or
+not 2) listed by the provider and refused by the replay (V2 only, see Limits); S3 `fetch-owner=true` where the
+provider writes `Owner` and the replay writes none (a recording made without owners), the pages otherwise equal;
+S3, an issued token with a decoded byte flipped (`s3-07x`), served by the provider as if unaltered and refused by
+the replay; GCS `softDeleted=true` (`gcs-11h`) listed by a bucket that keeps soft-deleted objects and refused by
+the replay. The live run and the replay of its recording apply the same rules.
 
 ### Live S3, 2026-11-07
 
@@ -608,7 +625,8 @@ Four public buckets recorded with the Go lister the same day (native `swath/gcs-
 base64 as a whole, the pinned "no analogue" of the evidence. On `nexrad-l2` no directory holds six objects, so a
 directory of three stands in for `r/`; those cases are listed as run on a reduced shape (`REDUCED SHAPE`).
 
-Pinned differences: every difference but the ones below reproduces, message for message, the mismatch the
+Pinned differences (counted as differing in the table above; the comparison now lists them as documented):
+every difference but the ones below reproduces, message for message, the mismatch the
 owned-bucket evidence pins for its case (`docs/replay-provider-conformance.md`): `gcs-03p` (`includeTrailingDelimiter`
 refused), `gcs-05e` to `gcs-05i` (malformed escapes, invalid UTF-8 and duplicate parameters refused; live GCS
 serves them), `gcs-06a`, `06b`, `06l`, `06m` (`maxResults` 0, leading zeros and duplicates refused), `gcs-06e`
@@ -664,7 +682,7 @@ exchange, never a cut body (`TestRecordBodyLimit`, `TestCaptureLimits`):
 | `faultproxy -record-max-body` | 16 MiB | the answer body the proxy buffers and records (the proxy reads no further than one byte past it) | the client is answered `502` with `X-Faulttest-Body-Limit`, the exchange is recorded with `limit_exceeded` and no body, logged, and the proxy exits 1 at shutdown with the count |
 | `replaydiff -capture-max-body` | 16 MiB | a captured body as recorded (a `body_base64` body by its decoded length); a capture line may be six times this plus 1 MiB (JSON escaping) | the exchange (or the line, read to its end) fails and the replay goes on |
 | `replaydiff -capture-max-decoded` | 64 MiB | a body once its content coding (gzip) is undone | the exchange fails |
-| `replaydiff -capture-max-tokens` | 1,048,576 | the page tokens remembered for the walks still to be replayed | the replay fails at that exchange and stops |
+| `replaydiff -capture-max-tokens` | 1,048,576 | the page tokens remembered for the walks still to be replayed (one entry per issuing request) | the replay fails at that exchange and stops |
 | `replaydiff -capture-max-details` | 1,000 | the failing exchanges, and apart from them the skipped ones, the report details | the rest are counted, not detailed, and the report says how many |
 
 An exchange the recorder marked `limit_exceeded` fails in the replay as well.
@@ -682,6 +700,68 @@ On 2026-11-07 (the Go lister's own requests, 16 workers, ranges split by the lis
 The first replay of `cloud-samples-data` found the one difference this check has found: an object stored without a
 content type is listed by GCS without `contentType`, which the native rendering filled with
 `application/octet-stream`; the native rendering now omits it (`TestNativeNullContentTypeIsOmitted`).
+
+### The recorded live matrix
+
+A client's own recording holds only ordinary requests. The edge cases (an empty `start-after=`, malformed
+escapes, duplicated parameters, control characters, altered and invented tokens, the error documents) are the
+live matrix's, so the live matrix is recorded too: the live mode is pointed at the recording proxy with
+`-live-record`, and the recording is replayed with `-capture`:
+
+```bash
+/tmp/faultproxy -target https://s3.us-east-1.amazonaws.com -listen 127.0.0.1:19401 -record /tmp/live-matrix.jsonl &
+/tmp/replaydiff -live-endpoint http://127.0.0.1:19401 -live-record -protocol s3 -go ./swath-replay \
+  -fixture /data/rec/noaa-normals-pds/dataset/data -bucket noaa-normals-pds -live-scripted -max-prefixes 40
+kill -INT %1
+/tmp/replaydiff -capture /tmp/live-matrix.jsonl -go ./swath-replay -fixture /data/rec/noaa-normals-pds/dataset/data \
+  -bucket noaa-normals-pds -report /tmp/replay.json
+# GCS: -target https://storage.googleapis.com, -protocol gcs, -live-prefix P and -live-pins on both runs
+```
+
+With `-live-record` each request to the provider carries annotations as `X-Record-*` headers, which the proxy
+writes to the exchange (`annotations`) and removes before forwarding, so the provider is asked exactly what it
+would be asked directly (`TestRecordAnnotations`): `X-Record-Case`, the matrix case; `X-Record-Token`, how a token
+the driver formed itself was made: `verbatim` (the tampered constant, a scripted invented token: issued by no
+answer, sent to the replay as it was) or the alteration (`flip`, `truncate`, `flip-decoded`) and the issued token
+it was applied to; and `X-Record-Token-From`, the walk a token case takes its token from. The replay sends an
+altered token as the Go server's token for the same issued one, altered the same way, and applies `-live-pins` by
+the annotated case. The driver also drops the `X-Content-Type-Options` the proxy adds to every answer it releases
+(the file keeps the provider's headers as sent).
+
+A provider may issue the same token from requests of different scope (a GCS token names the object its page ends
+at, whatever the query asked), while the Go server's tokens carry their scope and are refused with another. The
+replay therefore keeps one Go token per issuing request: a request continues the token its own walk was issued
+(the same query without the token), else the one the annotated source walk was issued, else the latest
+(`TestCaptureTokenIssuedByTwoScopes`, `TestTokenMapLookup`). A live run sent through a recorder replays with the
+live run's verdicts: no failure the live run did not have, every documented difference documented again, and a
+second replay gives the same report (`TestLiveMatrixRecordedReplaysOffline`,
+`TestPinnedDifferencesAreDocumentedInBoth`).
+
+On 2026-11-07 (fixtures recorded the same day: `noaa-normals-pds` with the Java lister, `--no-sign-request
+--sort`, no owners; the `gcp-public-data-landsat` prefix with the Go lister, a native dataset; the Go server at
+this commit, `-parallel 4`, default walk sizes 7 and 1,000, anonymous requests through the session's proxy; each
+recording replayed twice, the two reports identical apart from their timing):
+
+| Recording | Exchanges | Passed | Documented | Failed |
+|---|---|---|---|---|
+| `s3://noaa-normals-pds`, live matrix with `-live-scripted -max-prefixes 40` | 963 | 957 | 6 | 0 |
+| `gs://gcp-public-data-landsat/LC08/01/001/`, live matrix with `-live-pins` | 971 | 940 | 31 | 0 |
+
+The six S3 documented differences are ListObjects V1 (`s3-12a`, `s3-12b`, `s3-12c`), `fetch-owner=true` over a
+recording made without owners (`s3-11a` and its scripted twin) and `s3-07x`; the 31 GCS ones are the 30 cases whose
+mismatch the evidence pins (`gcs-06b` among them, a walk) and `gcs-11h`. The live runs that made the recordings
+gave the same verdicts (S3 422 compared, 422 passed; GCS 178 compared, 178 passed, `gcs-07v` not sent: the replay's
+token is not base64 as a whole). On the GCS route the driver's own scripted matrix (`-live-scripted`) is not part
+of the live check: it was written against the Java server, and 48 of its requests differ from live GCS, the same
+48 in the live run and in the replay of its recording (parameters live GCS accepts and the replay refuses, the
+error reason `invalid` where GCS writes `invalidParameter` or `required`, and root listings outside the recorded
+scope).
+
+Recordings of real buckets are never committed: they hold a third party's listing. They are made locally (a
+live run through the proxy) and replayed locally against the dataset of the same run. The recorded flows CI runs
+use inputs of the repository alone: the fake providers and in-test recorders of `bench/replaydiff` and
+`bench/faultproxy` (the tests named above), and the owned-bucket provider evidence committed under `docs/`
+(The GCS evidence replay, below; the Azure evidence replay).
 
 ## Measurements
 

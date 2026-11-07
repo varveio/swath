@@ -177,6 +177,15 @@ go build -o /tmp/replaydiff ./bench/replaydiff && ./build.sh -o swath-replay ./c
   -report /tmp/diff.json
 ```
 
+Against the providers themselves the check is a recording: the live matrix (provider cases, walks, altered and
+invented tokens, the scripted matrix) is sent once through `bench/faultproxy -record` with `replaydiff
+-live-record`, and `replaydiff -capture` replays the recording offline as often as needed, judging each answer by
+the live comparison and its documented differences ([replay.md](replay.md#the-recorded-live-matrix)). A live run
+is only how a recording is made. Recordings of real buckets stay local and are never committed; the tests CI
+runs record fake providers in-process (`bench/replaydiff` `TestLiveMatrixRecordedReplaysOffline`,
+`TestPinnedDifferencesAreDocumentedInBoth`; `bench/faultproxy` `TestRecordAnnotations`), and the provider
+evidence they replay is the owned-bucket archive committed under `docs/`.
+
 ## The fake bucket
 
 `bench/s3fake` serves a gofakes3 bucket loaded from a key list:
