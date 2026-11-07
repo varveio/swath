@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -40,6 +41,8 @@ type liveRun struct {
 	mu       sync.Mutex
 	// tokens holds each walk case's next tokens per page, per side.
 	tokens map[string][2][]string
+	// pins are the provider evidence's pinned mismatches by case id.
+	pins map[string]string
 }
 
 func liveClient(parallel int) *http.Client {
@@ -104,6 +107,11 @@ func runLive(o options) error {
 		roles: deriveRoles(keys, o.livePrefix), tokens: map[string][2][]string{}}
 	if o.protocol == "gcs" {
 		if lr.meta, err = gcsMetadataOf(got, o); err != nil {
+			return err
+		}
+	}
+	if o.pins != "" {
+		if lr.pins, err = readPins(o.pins); err != nil {
 			return err
 		}
 	}
@@ -357,9 +365,31 @@ func (lr *liveRun) finish(res *result, df diff, err error) {
 		res.Pass = df.OK
 		if !df.OK {
 			res.diff = &df
+			res.Pinned = lr.pins[res.Name] != "" && lr.pins[res.Name] == df.Detail
 		}
 	}
 	lr.d.record(*res)
+}
+
+// readPins reads a replay-expectations.json: case id to "match" or to
+// {"mismatch": message}.
+func readPins(path string) (map[string]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	pins := map[string]string{}
+	for id, v := range raw {
+		var m struct{ Mismatch string }
+		if json.Unmarshal(v, &m) == nil && m.Mismatch != "" {
+			pins[id] = m.Mismatch
+		}
+	}
+	return pins, nil
 }
 
 // walk follows each side's own tokens to the end, comparing every page.
@@ -378,6 +408,7 @@ func (lr *liveRun) walk(c liveCase) {
 				res.Error = err.Error()
 			} else {
 				res.diff = &df
+				res.Pinned = lr.pins[res.Name] != "" && lr.pins[res.Name] == df.Detail
 			}
 			break
 		}

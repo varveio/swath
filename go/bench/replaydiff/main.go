@@ -67,6 +67,8 @@ type options struct {
 	liveScripted                                                   bool
 	liveWalkPages                                                  int
 	capture                                                        string
+	maskMetadata                                                   bool
+	pins                                                           string
 }
 
 func main() {
@@ -86,6 +88,8 @@ func main() {
 	flag.StringVar(&o.stableBefore, "live-stable-before", "", "live: refuse to run unless every fixture name under the scope was modified before this RFC 3339 time")
 	flag.StringVar(&o.gcsMeta, "gcs-metadata", "auto", "live gcs: compare item metadata as native (exact) or synthetic (masked); auto reads the fixture")
 	flag.BoolVar(&o.liveScripted, "live-scripted", false, "live: also send the driver's own scripted matrix")
+	flag.StringVar(&o.pins, "live-pins", "", "live: a replay-expectations.json of the provider evidence; a difference whose message is its case's pinned mismatch is marked PINNED")
+	flag.BoolVar(&o.maskMetadata, "gcs-mask-metadata", false, "gcs: compare with each item's metadata fields removed (a native fixture on the Go server against the same rows, S3-shaped, on the Java server)")
 	flag.StringVar(&o.capture, "capture", "", "replay a bench/faultproxy -record capture against the Go server on -fixture and compare with the captured answers")
 	flag.IntVar(&o.liveWalkPages, "live-walk-pages", 300, "live: walk a prefix at a page size only when the walk takes at most this many pages")
 	flag.StringVar(&o.dumpTSV, "dump-tsv", "", "write the reference listing as a TSV fixture here and exit")
@@ -241,6 +245,9 @@ type result struct {
 	// answer had none, keeps it out of the results: it was not sent, and
 	// the report lists it under skipped, neither passed nor failed.
 	Skipped string `json:"skipped,omitempty"`
+	// Pinned marks a live difference that reproduces, message for
+	// message, the mismatch the provider evidence pins for its case.
+	Pinned bool `json:"pinned_mismatch,omitempty"`
 	*diff
 }
 
@@ -681,7 +688,11 @@ func (d *driver) write() error {
 		if r.Pass {
 			continue
 		}
-		fmt.Fprintf(&text, "FAIL %s %q %s %s", r.Kind, r.Name, r.Method, r.Target)
+		pinned := ""
+		if r.Pinned {
+			pinned = " PINNED"
+		}
+		fmt.Fprintf(&text, "FAIL%s %s %q %s %s", pinned, r.Kind, r.Name, r.Method, r.Target)
 		if r.FailAt > 0 {
 			fmt.Fprintf(&text, " (page %d)", r.FailAt)
 		}
@@ -711,6 +722,9 @@ func (d *driver) write() error {
 	for _, s := range rep.Residuals {
 		fmt.Fprintf(&text, "DOCUMENTED RESIDUAL %s\n", s)
 	}
+	if pinned := countPinned(rep.Results); pinned > 0 {
+		fmt.Fprintf(&text, "%d of the %d differences reproduce the provider evidence's pinned mismatch for their case\n", pinned, rep.Failed)
+	}
 	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals\n",
 		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped), len(rep.Residuals))
 	os.Stdout.Write(text.Bytes())
@@ -730,4 +744,14 @@ func (d *driver) write() error {
 		return fmt.Errorf("%d differences", rep.Failed)
 	}
 	return nil
+}
+
+func countPinned(rs []result) int {
+	n := 0
+	for _, r := range rs {
+		if r.Pinned {
+			n++
+		}
+	}
+	return n
 }

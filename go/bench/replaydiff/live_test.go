@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -301,5 +302,24 @@ func TestMutateToken(t *testing.T) {
 	}
 	if _, err := mutateToken("v2:AA", "flip-decoded"); err == nil {
 		t.Error("a token that is not base64 was flipped")
+	}
+}
+
+func TestReadPins(t *testing.T) {
+	path := t.TempDir() + "/pins.json"
+	if err := os.WriteFile(path, []byte(`{"gcs-01a":"match","gcs-03p":{"mismatch":"GCS HTTP status differs: expected=200 actual=400"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pins, err := readPins(path)
+	if err != nil || len(pins) != 1 || pins["gcs-03p"] != "GCS HTTP status differs: expected=200 actual=400" {
+		t.Errorf("%v %v", pins, err)
+	}
+	lr := &liveRun{d: &driver{rep: &report{}}, pins: pins}
+	res := result{Name: "gcs-03p"}
+	lr.finish(&res, diff{Detail: pins["gcs-03p"]}, nil)
+	other := result{Name: "gcs-03p"}
+	lr.finish(&other, diff{Detail: "GCS HTTP status differs: expected=200 actual=500"}, nil)
+	if r := lr.d.rep.Results; len(r) != 2 || !r[0].Pinned || r[1].Pinned {
+		t.Errorf("%+v", r)
 	}
 }
