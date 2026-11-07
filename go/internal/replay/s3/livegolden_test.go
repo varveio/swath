@@ -124,3 +124,25 @@ func TestLiveMalformedEscapeDropsTheParameter(t *testing.T) {
 		"O:r/k01 O:r/k02 O:r/k03 O:r/k04 O:r/k05 O:r/k06")
 	wantLivePage(t, "list-type=2&prefix=r/a%ZZ&prefix=r/&max-keys=2", inR, "O:r/k01 O:r/k02")
 }
+
+// The first of duplicated parameters wins: S3 answered
+// prefix=P&prefix=P/key with P's listing, max-keys=1&max-keys=2 with one
+// key and MaxKeys 1, an empty max-keys before a 2 with the default, and
+// an empty start-after before a key with the empty echo and P's first
+// keys.
+func TestLiveFirstDuplicateWins(t *testing.T) {
+	wantLivePage(t, "list-type=2&prefix=r/&prefix=r/k01",
+		"<Name>bkt</Name><Prefix>r/</Prefix><KeyCount>6</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>",
+		"O:r/k01 O:r/k02 O:r/k03 O:r/k04 O:r/k05 O:r/k06")
+	wantLivePage(t, "list-type=2&prefix=r/&max-keys=1&max-keys=2",
+		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
+			"<KeyCount>1</KeyCount><MaxKeys>1</MaxKeys><IsTruncated>true</IsTruncated>",
+		"O:r/k01")
+	wantLivePage(t, "list-type=2&prefix=r/&max-keys=&max-keys=2",
+		"<Name>bkt</Name><Prefix>r/</Prefix><KeyCount>6</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>",
+		"O:r/k01 O:r/k02 O:r/k03 O:r/k04 O:r/k05 O:r/k06")
+	wantLivePage(t, "list-type=2&prefix=r/&start-after=&start-after=r/k01&max-keys=2",
+		"<Name>bkt</Name><Prefix>r/</Prefix><StartAfter></StartAfter><NextContinuationToken>T</NextContinuationToken>"+
+			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
+		"O:r/k01 O:r/k02")
+}

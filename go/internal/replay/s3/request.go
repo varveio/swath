@@ -45,7 +45,8 @@ func (r *Request) HasToken() bool {
 }
 
 // query is a parsed query string: parameter names are text, values raw
-// bytes. A repeated name keeps its last value.
+// bytes. A repeated name keeps its first value, as live S3 does
+// (TestLiveFirstDuplicateWins).
 type query map[string][]byte
 
 // parseQuery splits the raw query into parameters. A name or value that
@@ -64,9 +65,16 @@ func parseQuery(raw string) query {
 		if !okName || !okValue {
 			continue
 		}
-		q[decodeText(n)] = v
+		if key := decodeText(n); !q.has(key) {
+			q[key] = v
+		}
 	}
 	return q
+}
+
+func (q query) has(name string) bool {
+	_, ok := q[name]
+	return ok
 }
 
 func (q query) text(name string) (string, bool) {

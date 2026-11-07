@@ -24,15 +24,15 @@ func TestParseRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Empty values are absent, a later duplicate wins, names are
+	// Empty values are absent, the first of duplicates wins, names are
 	// percent-decoded, a parameter with a broken escape is dropped, and
 	// only "url" (any case not) selects URL encoding.
-	if string(r.Prefix) != "q" || r.MaxKeys != 1000 || r.EncodingURL || r.FetchOwner || r.TokenSet {
+	if r.Prefix != nil || r.MaxKeys != 1000 || r.EncodingURL || r.FetchOwner || r.TokenSet {
 		t.Errorf("parsed %+v", r)
 	}
-	r, _ = ParseRequest("bkt", "list-type=2&max-keys=%D9%A1%D9%A2&max-keys=+3")
+	r, _ = ParseRequest("bkt", "list-type=2&max-keys=%2B3")
 	if r.MaxKeys != 3 {
-		t.Errorf("max-keys=+3 parsed as %d", r.MaxKeys)
+		t.Errorf("max-keys=%%2B3 parsed as %d", r.MaxKeys)
 	}
 	r, _ = ParseRequest("bkt", "list-type=2&max-keys=%D9%A1%D9%A2")
 	if r.MaxKeys != 12 {
@@ -56,7 +56,7 @@ func TestParseRequestErrors(t *testing.T) {
 		"list-type=2&max-keys=%201":         "max-keys must be an integer",
 		"list-type=%32&max-keys=%2D%31":     "max-keys must be non-negative",
 		"list%2Dtype=2&max-keys=-5":         "max-keys must be non-negative",
-		"list-type=2&max-keys=-1&max-keys=": "",
+		"list-type=2&max-keys=&max-keys=-1": "",
 		// A mathematical digit one, outside the BMP: two UTF-16 code units, neither a digit.
 		"list-type=2&max-keys=%F0%9D%9F%99":    "max-keys must be an integer",
 		"list-type=2&max-keys=%EF%BC%91%D9%A0": "",
