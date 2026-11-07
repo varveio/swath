@@ -489,7 +489,7 @@ a 255-segment name (`TestRenderRefusals`; evidence capture `azure-12a`).
 delimiters `/`, multi-byte, astral, empty; `startFrom` around names, inside rolled prefixes and with EE..F4
 characters including the 4,096-byte U+10000 bound; header, `Accept`, query-grammar and raw-byte refusals;
 routing, HEAD, POST, DELETE), marker cases in which each server resumes with its own marker (page 2, other
-scope, other version, truncated, flipped, padded; each source asks for one result in a scope with at least two
+scope, other version, truncated, flipped, padded, progress byte set to 1; each source asks for one result in a scope with at least two
 entries, and a case whose sources agree without a marker is reported as skipped, not passed), marker walks at `-walks` sizes (default 1, 7, 5000), and a
 seeded random set. `azureComparator` requires the same status and classified headers (`Content-Type`,
 `x-ms-version`, `x-ms-error-code`, `x-ms-client-request-id`, `Allow`, `x-swath-replay-error`), a well-formed
@@ -536,6 +536,6 @@ comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorrupte
 | the evidence comparator itself | `azure` `TestComparatorAcceptsTheProfile`, `TestComparatorOmitsNativeOrMetadata`, `TestComparatorAcceptsTheRenderer`, `TestComparatorRefusesChanges`, `TestComparatorWalkBoundaries`, `TestComparatorRefusesCrossPagePrefixRepeat`, `TestNamespaceMapping`, `TestExchangeChecksVersionClientIDAndErrorCode`, `TestWalkChecksVersionAndPreamble`, `TestWalkRequestsCarryClientIDAndRefuseDuplicates`, `TestPageParsing` |
 | latency key | `azure` `TestLatencyKeyGolden` |
 | routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
-| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself`, `TestMarkerCasesRunOrSkip` |
+| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself`, `TestMarkerCasesRunOrSkip`, `TestProgressMarkerCaseKeepsProgress` |
 | native captures | `azure` `TestAzureEvidenceReplay` (fixture tier), `TestEvidenceRejectsCorruptedReplayResults`, `TestPinRules`, `TestPinAdjustments` |
 | the official SDK | `azure` `TestSDKDecodesEncodedNamesAndProperties`, `TestSDKConsumesFiveThousandPages`, `TestSDKFixtureFaultAndRetries`; the SDK runs of `TestAzureEvidenceReplay` |

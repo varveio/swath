@@ -269,6 +269,11 @@ func azureMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) ([]request, []a
 		{name: "marker padded", source: src("maxresults", "1"), follow: func(m string) request {
 			return follow("maxresults", "3")(m + strings.Repeat("=", (4-(len(m)-4)%4)%4))
 		}},
+		// Progress sits outside the scope digest: a marker that carries 1
+		// is accepted, and the next marker must keep it.
+		{name: "marker progress 1", source: src("maxresults", "1"), follow: func(m string) request {
+			return follow("maxresults", "1")(markerWithProgress(m, 1))
+		}},
 	}
 	return out, marks
 }
@@ -577,6 +582,22 @@ func markerEffect(m string) string {
 		return m
 	}
 	return fmt.Sprintf("az1(flag=%d progress=%d boundary=%s)", b[0], b[1], hex.EncodeToString(b[18:]))
+}
+
+// markerWithProgress is m with its progress byte (the second payload
+// byte) set to v and re-encoded unpadded; m unchanged when it is not a
+// decodable marker.
+func markerWithProgress(m string, v byte) string {
+	raw, ok := strings.CutPrefix(m, "az1.")
+	if !ok {
+		return m
+	}
+	b, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(raw, "="))
+	if err != nil || len(b) < 2 {
+		return m
+	}
+	b[1] = v
+	return "az1." + base64.RawURLEncoding.EncodeToString(b)
 }
 
 // azureComparator compares Azure answers structurally: the same status;
