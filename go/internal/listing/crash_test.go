@@ -54,7 +54,9 @@ func crashConfig(url, out string, resume bool) Config {
 // as a kill would) at every crash point, at its first and a later
 // occurrence, then resumes; the final dataset must be byte-identical to an
 // uninterrupted run. It is the step-2 gate (contracts I1, I5, I6), for each
-// journaled provider (spill is provider-neutral: S3 runs it both ways).
+// journaled provider (spill is provider-neutral: S3 runs it both ways; with
+// spill on its durable spill is sealed, ledgered and retired, and the kill
+// points include each of those steps: the resume replays what it accepts).
 // With the part interval on, part boundaries depend on timing (the crashed
 // run's and the resume's differ): the resume must then complete without a
 // refusal and hold exactly the clean run's rows, in order. The object
@@ -94,7 +96,7 @@ func TestCrashMatrix(t *testing.T) {
 		for _, mode := range []struct {
 			spill    bool
 			interval time.Duration
-		}{{false, off}, {true, off}, {false, time.Millisecond}, {false, 4 * time.Millisecond}} {
+		}{{false, off}, {true, off}, {false, time.Millisecond}, {true, time.Millisecond}, {false, 4 * time.Millisecond}} {
 			spill := mode.spill
 			if !slices.Contains(prov.spill, spill) || !slices.Contains(prov.intervals, mode.interval) {
 				continue
