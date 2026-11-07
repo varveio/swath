@@ -5,10 +5,12 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +177,56 @@ func TestBlankLinesBetweenRequestsAreNotAHead(t *testing.T) {
 			}
 		}
 		conn.Close()
+	}
+}
+
+// TestEveryLineEndingFramesTheHead: net/http accepts a header line ending
+// in CRLF or LF and a blank line of CRLF or LF; the head counter frames
+// all four, so a head of exactly the limit is served and one byte more is
+// 431, as on the Java server, which accepts the same four.
+func TestEveryLineEndingFramesTheHead(t *testing.T) {
+	for _, c := range []struct {
+		protocols []string
+		limit     int
+	}{{[]string{ProtocolS3}, 8192}, {[]string{ProtocolS3, ProtocolGCS}, 65536}} {
+		cfg := config(memstore.Keys(memstore.Options{}, "a"))
+		cfg.Protocols = c.protocols
+		s := start(t, cfg)
+		for _, e := range []struct{ name, mid, last, blank string }{
+			{"crlf", "\r\n", "\r\n", "\r\n"}, {"lf last line, crlf blank", "\r\n", "\n", "\r\n"},
+			{"crlf last line, lf blank", "\r\n", "\r\n", "\n"}, {"all lf", "\n", "\n", "\n"},
+		} {
+			head := func(total int) string {
+				h := func(pad string) string {
+					return "GET /bucket?list-type=2&max-keys=1 HTTP/1.1" + e.mid + "Host: 127.0.0.1" + e.mid + "Connection: close" + e.mid +
+						"X-Pad: " + pad + e.last + e.blank
+				}
+				return h(strings.Repeat("a", total-len(h(""))))
+			}
+			if st, _ := rawHead(t, s, head(c.limit)); st != 200 {
+				t.Errorf("%v %s: a %d-byte head got %d", c.protocols, e.name, c.limit, st)
+			}
+			if st, _ := rawHead(t, s, head(c.limit+1)); st != 431 {
+				t.Errorf("%v %s: a %d-byte head got %d", c.protocols, e.name, c.limit+1, st)
+			}
+		}
+	}
+}
+
+// TestAnUnframedHeadIsRefused: on a connection that counts heads, a
+// request whose head the counter has no size for is refused 431, never
+// measured from its parsed form.
+func TestAnUnframedHeadIsRefused(t *testing.T) {
+	h := &headCounter{}
+	r := httptest.NewRequest("GET", "/bucket?list-type=2", nil)
+	r = r.WithContext(context.WithValue(r.Context(), headCounterKey{}, h))
+	if status, _ := headProblem(r, headLimitS3); status != http.StatusRequestHeaderFieldsTooLarge {
+		t.Errorf("unframed: %d", status)
+	}
+	h.feed([]byte("GET /bucket?list-type=2 HTTP/1.1\r\nHost: x\r\n\r\n"))
+	r = httptest.NewRequest("GET", "/bucket?list-type=2", nil)
+	r = r.WithContext(context.WithValue(r.Context(), headCounterKey{}, h))
+	if status, _ := headProblem(r, headLimitS3); status != 0 {
+		t.Errorf("framed: %d", status)
 	}
 }

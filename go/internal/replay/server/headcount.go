@@ -49,7 +49,10 @@ func (h *headCounter) feed(p []byte) {
 		}
 		h.cur++
 		h.window = h.window<<8 | uint32(b)
-		if h.window == 0x0d0a0d0a || h.window&0xffff == 0x0a0a {
+		// A head ends at a blank line (CRLF or LF) after a line that
+		// ended in CRLF or LF: net/http's line reader accepts all four
+		// combinations, so the head ends at LF LF or LF CR LF.
+		if h.window&0xffff == 0x0a0a || h.window&0xffffff == 0x0a0d0a {
 			h.heads = append(h.heads, h.cur)
 			h.cur, h.window = 0, 0
 		}
@@ -78,11 +81,14 @@ func connContext(ctx context.Context, c net.Conn) context.Context {
 	return ctx
 }
 
-// rawHeadSize is the size of r's head as sent, when its connection
-// counted it.
-func rawHeadSize(r *http.Request) (int, bool) {
-	if h, ok := r.Context().Value(headCounterKey{}).(*headCounter); ok {
-		return h.next()
+// rawHeadSize is the size of r's head as sent. counted reports whether
+// r's connection counts heads; on such a connection a head it did not
+// frame has no size (ok false), which the caller treats as over the limit
+// rather than measuring the parsed request instead.
+func rawHeadSize(r *http.Request) (size int, ok, counted bool) {
+	if h, has := r.Context().Value(headCounterKey{}).(*headCounter); has {
+		size, ok = h.next()
+		return size, ok, true
 	}
-	return 0, false
+	return 0, false, false
 }
