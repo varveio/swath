@@ -625,5 +625,8 @@ inputs changed (or on a manual run); `ci-gate` needs both.
   `docs/replay-provider-expectations.json`, the replay smoke script): JDK 25,
   `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh` into the runner's temporary
   directory, then the gated tests named in the step's `FIXTURE_PACKAGES` and `FIXTURE_TESTS` with
-  `SWATH_REPLAY_FIXTURES` set. Every named test must run and pass: one that skips, or a name that matches no
-  test, fails the step. A new gated test is added to those two lists.
+  `SWATH_REPLAY_FIXTURES` set: the store's Java-written fixture tests (`internal/replay/store`), the GCS
+  evidence replay (`internal/replay/evidence`) and the Azure evidence replay (`internal/replay/azure`
+  `TestAzureEvidenceReplay`, on the Java-written `evidence-azure/capture` it sorts itself; serving the
+  manifest from memory instead fails the step). Every named test must run and pass: one that skips, or a
+  name that matches no test, fails the step. A new gated test is added to those two lists.

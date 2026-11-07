@@ -504,7 +504,7 @@ jobs:
         if: steps.changes.outputs.go == 'true'
         env:
           SWATH_REPLAY_FIXTURES: ${{ runner.temp }}/replay-fixtures
-          FIXTURE_PACKAGES: ./internal/replay/store ./internal/replay/evidence
+          FIXTURE_PACKAGES: ./internal/replay/store ./internal/replay/evidence ./internal/replay/azure
           FIXTURE_TESTS: >-
             TestJavaWrittenFixtures
             TestSortsTheAzureEvidenceCorpus
@@ -512,6 +512,7 @@ jobs:
             TestSortFixtureMemory
             TestGCSNativeCapturesMatchReplay
             TestEvidenceRejectsCorruptedReplayResults
+            TestAzureEvidenceReplay
         run: |
           set -euo pipefail
           log="$RUNNER_TEMP/fixture-tests.log"
@@ -519,6 +520,14 @@ jobs:
           go test -count=1 -v -run "^($(tr ' ' '|' <<<"$FIXTURE_TESTS"))\$" $FIXTURE_PACKAGES | tee "$log"
           if grep -q -- '--- SKIP' "$log"; then
             echo "::error::a fixture-tier test skipped"
+            exit 1
+          fi
+          # The Azure evidence replay falls back to the manifest in memory when the Java-written
+          # capture under the fixture root is missing; here the capture is the point, so that
+          # fallback fails the tier. (The Azure corruption test serves from memory by design and
+          # logs the root-less path, which this does not match.)
+          if grep -qF "no $SWATH_REPLAY_FIXTURES/fixtures/evidence-azure/capture:" "$log"; then
+            echo "::error::the Azure evidence replay did not use fixtures/evidence-azure/capture"
             exit 1
           fi
           want=$(tr ' ' '\n' <<<"$FIXTURE_TESTS" | sort -u)

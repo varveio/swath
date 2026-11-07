@@ -127,7 +127,9 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   `go-fixtures` job ([replay.md](replay.md#continuous-integration)).
   The same variable runs the GCS evidence replay (`go/internal/replay/evidence`, see
   [replay.md](replay.md#the-gcs-evidence-replay)); it needs only the committed archive and uses
-  `ROOT/fixtures/evidence-gcs/sorted` when present.
+  `ROOT/fixtures/evidence-gcs/sorted` when present. The Azure evidence replay (`go/internal/replay/azure`
+  `TestAzureEvidenceReplay`) runs on the same variable and sorts `ROOT/fixtures/evidence-azure/capture`
+  itself; CI's `go-fixtures` job runs both evidence replays.
 - **Policy toggles:** Java's policy layer can be switched off per mechanism with the hidden
   `--engine-toggle NAME=off`. The names are `owner_split`, `density_ewma`, `radix_bands`,
   `structure_probes`, `far_ahead`, `alphabet_pivots`, `reflect`, `confetti_feedback`, `reflect_lift`,
