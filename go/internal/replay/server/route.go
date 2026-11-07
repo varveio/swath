@@ -70,32 +70,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The request ceiling queues a request beyond it, as a full worker
-	// pool would; shutdown releases the queue with a refusal.
-	slot := false
-	select {
-	case s.slots <- struct{}{}:
-		slot = true
-	case <-s.stopCtx.Done():
-	}
-	releaseSlot := func() {
-		if slot {
-			slot = false
-			<-s.slots
-		}
-	}
-	defer releaseSlot()
-	if !s.begin() {
+	// pool would; shutdown releases the queue with a refusal. The slot is
+	// given back as the answer starts, whatever the answer.
+	release, ok := s.admit()
+	defer release()
+	rw := releasing(w, release)
+	w = rw
+	if !ok {
 		s.refuse(w, r, path, arrived, errStopping)
 		return
 	}
-	operating := true
-	endOperation := func() {
-		if operating {
-			operating = false
-			s.end()
-		}
-	}
-	defer endOperation()
 	s.s3Active.Add(1)
 	defer s.s3Active.Add(-1)
 
@@ -108,7 +92,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, path, arrived, errCount)
 		return
 	}
-	defer s.responses.Add(-1)
+	hold := &responseHold{s: s}
+	defer hold.drop()
+	rw.hold = hold
 	// Reserve for a full page before reading it; the reservation shrinks
 	// to what the page needs once it is rendered.
 	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, s3.EstimateSize(req.PageSize())), s.cfg.MaxResponseBytes)
@@ -116,7 +102,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, path, arrived, errBudget)
 		return
 	}
-	defer out.Close()
+	hold.out = out
 
 	// A client that leaves does not cancel its page: the page is read,
 	// rendered and counted as served, and only its write fails, as the
@@ -194,8 +180,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if fallback > 0 {
 		s.reg.Get(metrics.ResponsePercentEncodingPath, protocolS3, "exact_length_fallback").Add(int64(fallback))
 	}
-	endOperation()
-	releaseSlot()
+	release()
 	s.write(w, r, 200, body, "", arrived)
 }
 
@@ -248,6 +233,7 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, path string, arr
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, path string, arrived time.Time, e *s3.Error) {
+	dropResponse(w)
 	s.write(w, r, e.Status, [][]byte{s3.AppendError(nil, e, path)}, e.Reason, arrived)
 }
 
@@ -276,11 +262,7 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, status int, body 
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
-	var err error
-	if r.Method != http.MethodHead {
-		err = writeViews(w, body)
-	}
-	if errors.Is(err, os.ErrDeadlineExceeded) {
+	if err := sendBody(w, r, body); errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocolS3, "total_deadline").Inc()
 	}
 	if status/100 == 2 {
@@ -295,6 +277,82 @@ func viewsLen(body [][]byte) int {
 		n += len(v)
 	}
 	return n
+}
+
+// releasingWriter gives back a request's execution slot and store
+// registration when its answer starts, so no answer, refusals included,
+// is written while holding a slot: the contract's workers hand every
+// answer to an asynchronous write. A response permit, where the request
+// holds one, stays held until the handler returns, after the flush.
+type releasingWriter struct {
+	http.ResponseWriter
+	release func()
+	hold    *responseHold
+}
+
+func releasing(w http.ResponseWriter, release func()) *releasingWriter {
+	return &releasingWriter{ResponseWriter: w, release: release}
+}
+
+// responseHold is a request's response permit and, once reserved, its
+// output. A successful answer drops it when the handler returns, after the
+// flush; an error answer drops it before it is written (dropResponse), as
+// the contract closes the output and returns the permit before sending its
+// small, unbudgeted error.
+type responseHold struct {
+	s       *Server
+	out     *output.Output
+	dropped bool
+}
+
+func (h *responseHold) drop() {
+	if h.dropped {
+		return
+	}
+	h.dropped = true
+	if h.out != nil {
+		h.out.Close()
+	}
+	h.s.responses.Add(-1)
+}
+
+// dropResponse drops the response hold of the request w answers, if it
+// has one: an error answer holds neither permit nor output.
+func dropResponse(w http.ResponseWriter) {
+	if rw, ok := w.(*releasingWriter); ok && rw.hold != nil {
+		rw.hold.drop()
+	}
+}
+
+func (w *releasingWriter) WriteHeader(code int) {
+	w.release()
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *releasingWriter) Write(b []byte) (int, error) {
+	w.release()
+	return w.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the connection's deadline
+// and flush.
+func (w *releasingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// sendBody writes a body (none for HEAD) and then flushes it, all under
+// the write deadline the caller set. The flush is what makes the response
+// ownership real: small writes only copy into the server's buffers, and
+// without it the final flush would happen after the handler returned and
+// released the response permit, so a client that stops reading could
+// hold buffered responses the ceiling no longer counts
+// (TestPipelinedSmallResponsesStayWithinTheCeiling). A flush error is the
+// write's error.
+func sendBody(w http.ResponseWriter, r *http.Request, body [][]byte) error {
+	if r.Method != http.MethodHead {
+		if err := writeViews(w, body); err != nil {
+			return err
+		}
+	}
+	return http.NewResponseController(w).Flush()
 }
 
 // writeViews writes a body's views in writes of at most OutputChunkBytes,

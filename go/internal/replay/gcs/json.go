@@ -43,23 +43,31 @@ func (e *FixtureProblem) Error() string { return "fixture incompatible with GCS 
 // items and prefixes when non-empty, then nextPageToken when there is one,
 // with no insignificant whitespace (prettyPrint is accepted and ignored).
 // The bytes are the wire contract's, field order and escapes included
-// (TestRenderGolden). Each item and prefix is formatted on its own and
-// then written, so no more than one entry is ever held outside o; a
-// refusal by o (its cap or budget, o.Err) stops rendering before the next
-// entry, and a fixture row the route cannot render is a *FixtureProblem.
+// (TestRenderGolden).
+//
+// Rendering goes through a fixed 8,000-byte staging buffer that is written
+// to o only when it fills (and at the end), at the points the wire
+// contract's JSON generator flushes its own buffer (jsonWriter), and each
+// item and prefix is validated before any of it is staged. So nothing
+// larger than the buffer is ever held outside o, whatever the size of a
+// name or a native metadata value, o charges every byte before it grows,
+// and when an invalid fixture row and o's cap meet, the one reported is
+// the contract's: the row's problem unless a flush before it already
+// passed the cap (TestRenderOrderMatchesTheContract). A refusal by o (its
+// cap or budget, o.Err) stops rendering at that flush; a fixture row the
+// route cannot render is a *FixtureProblem.
 func RenderPage(o *output.Output, r *Request, page *Page) error {
-	var buf []byte
-	flush := func() bool {
-		o.Write(buf)
-		buf = buf[:0]
-		return o.Err() == nil
-	}
-	buf = append(buf, `{"kind":"storage#objects"`...)
+	w := newJSONWriter(o)
+	w.startObject()
+	w.field("kind", true)
+	w.ascii("storage#objects")
 	if len(page.Items) > 0 {
-		buf = append(buf, `,"items":[`...)
+		w.field("items", false)
+		w.startArray()
 		day, date := int64(-1<<63), ""
+		var updated [27]byte
 		for i := range page.Items {
-			if !flush() {
+			if w.failed() {
 				return nil
 			}
 			it := &page.Items[i]
@@ -78,46 +86,52 @@ func RenderPage(o *output.Output, r *Request, page *Page) error {
 				day, date = d, t.Format("2006-01-02")
 			}
 			if i > 0 {
-				buf = append(buf, ',')
+				w.byte(',')
 			}
-			buf = append(buf, `{"kind":"storage#object","bucket":`...)
-			buf = appendString(buf, []byte(r.Bucket))
-			buf = append(buf, `,"name":`...)
-			buf = appendString(buf, it.Key)
-			buf = append(buf, `,"size":"`...)
-			buf = strconv.AppendInt(buf, it.Size, 10)
-			buf = append(buf, `","updated":"`...)
-			buf = appendUpdated(buf, date, sec, frac)
-			buf = append(buf, '"')
-			buf = appendMetadata(buf, it.Native)
+			w.startObject()
+			w.field("kind", true)
+			w.ascii("storage#object")
+			w.field("bucket", false)
+			w.ascii(r.Bucket)
+			w.field("name", false)
+			w.utf8(it.Key)
+			w.field("size", false)
+			w.utf8(strconv.AppendInt(updated[:0], it.Size, 10))
+			w.field("updated", false)
+			w.utf8(appendUpdated(updated[:0], date, sec, frac))
+			w.metadata(it.Native)
 			if r.FullProjection {
-				buf = append(buf, `,"acl":[]`...)
+				w.field("acl", false)
+				w.startArray()
+				w.byte(']')
 			}
-			buf = append(buf, '}')
+			w.byte('}')
 		}
-		buf = append(buf, ']')
+		w.byte(']')
 	}
 	if len(page.Prefixes) > 0 {
-		buf = append(buf, `,"prefixes":[`...)
+		w.field("prefixes", false)
+		w.startArray()
 		for i, p := range page.Prefixes {
-			if !flush() {
+			if w.failed() {
 				return nil
 			}
 			if err := validateUTF8(p); err != nil {
 				return err
 			}
 			if i > 0 {
-				buf = append(buf, ',')
+				w.byte(',')
 			}
-			buf = appendString(buf, p)
+			w.utf8(p)
 		}
-		buf = append(buf, ']')
+		w.byte(']')
 	}
 	if page.Token != "" {
-		buf = append(buf, `,"nextPageToken":`...)
-		buf = appendString(buf, []byte(page.Token))
+		w.field("nextPageToken", false)
+		w.ascii(page.Token)
 	}
-	o.Write(append(buf, '}'))
+	w.byte('}')
+	w.flush()
 	return nil
 }
 
@@ -158,43 +172,6 @@ func append2(dst []byte, v int64) []byte {
 	return append(dst, byte('0'+v/10), byte('0'+v%10))
 }
 
-// appendMetadata writes etag, generation, metageneration, storageClass and
-// contentType (and md5Hash and crc32c when the fixture has them): the
-// fixture's values for a native row, the synthetic profile otherwise or
-// where a native column is null.
-func appendMetadata(dst []byte, n *Native) []byte {
-	if n == nil {
-		return append(dst, `,"etag":"`+syntheticETag+`","generation":"`+syntheticGeneration+`","metageneration":"`+
-			syntheticGeneration+`","storageClass":"`+syntheticStorageClass+`","contentType":"`+syntheticContentType+`"`...)
-	}
-	str := func(dst []byte, name string, v *string, fallback string) []byte {
-		if v == nil {
-			if fallback == "" {
-				return dst
-			}
-			v = &fallback
-		}
-		dst = append(dst, `,"`+name+`":`...)
-		return appendString(dst, []byte(*v))
-	}
-	num := func(dst []byte, name string, v *int64) []byte {
-		dst = append(dst, `,"`+name+`":"`...)
-		if v == nil {
-			dst = append(dst, syntheticGeneration...)
-		} else {
-			dst = strconv.AppendInt(dst, *v, 10)
-		}
-		return append(dst, '"')
-	}
-	dst = str(dst, "etag", n.ETag, syntheticETag)
-	dst = num(dst, "generation", n.Generation)
-	dst = num(dst, "metageneration", n.Metageneration)
-	dst = str(dst, "storageClass", n.StorageClass, syntheticStorageClass)
-	dst = str(dst, "contentType", n.ContentType, syntheticContentType)
-	dst = str(dst, "md5Hash", n.MD5, "")
-	return str(dst, "crc32c", n.CRC32C, "")
-}
-
 func floorDiv(a, b int64) (q, r int64) {
 	q, r = a/b, a%b
 	if r < 0 {
@@ -206,53 +183,6 @@ func floorDiv(a, b int64) (q, r int64) {
 func floorMod(a, b int64) int64 {
 	_, r := floorDiv(a, b)
 	return r
-}
-
-const hexDigits = "0123456789ABCDEF"
-
-// appendString writes s as a JSON string with the wire contract's escapes:
-// '"' and '\\' backslashed, BS, TAB, LF, FF and CR as \b \t \n \f \r, the
-// other C0 controls as \u00XX with upper-case hex, everything else
-// (DEL, U+2028, all non-ASCII) as its UTF-8 bytes. An ill-formed UTF-8
-// sequence (possible only in a native metadata value; names are validated
-// first) is written as U+FFFD so the document stays valid.
-func appendString(dst, s []byte) []byte {
-	dst = append(dst, '"')
-	for len(s) > 0 {
-		c := s[0]
-		if c >= utf8.RuneSelf {
-			r, n := utf8.DecodeRune(s)
-			if r == utf8.RuneError && n == 1 {
-				dst = append(dst, "\uFFFD"...)
-			} else {
-				dst = append(dst, s[:n]...)
-			}
-			s = s[n:]
-			continue
-		}
-		s = s[1:]
-		switch c {
-		case '"', '\\':
-			dst = append(dst, '\\', c)
-		case '\b':
-			dst = append(dst, '\\', 'b')
-		case '\t':
-			dst = append(dst, '\\', 't')
-		case '\n':
-			dst = append(dst, '\\', 'n')
-		case '\f':
-			dst = append(dst, '\\', 'f')
-		case '\r':
-			dst = append(dst, '\\', 'r')
-		default:
-			if c < 0x20 {
-				dst = append(dst, '\\', 'u', '0', '0', hexDigits[c>>4], hexDigits[c&0xf])
-			} else {
-				dst = append(dst, c)
-			}
-		}
-	}
-	return append(dst, '"')
 }
 
 var acmePrefix = []byte(".well-known/acme-challenge/")
