@@ -165,7 +165,9 @@ and `limit` (the adaptive limiter's current limit), and `cost_usd` on AWS S3 or 
 report, under
 `source.stats.counters.values`: `attempts`, `requests`, `retries`, `throttles`, `timeouts`, `inflight.max_active`,
 `inflight.busy_ns` (divided by the listing time, `timings.listing_ms`, it is the mean in flight), the attempt
-latency percentiles `inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns`, `limiter.decreases`,
+latency percentiles `inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns` (9223372036854775807 when the
+percentile falls among attempts of 2^40 ns, about 18 min 20 s, or longer, which `inflight.latency_overflow`
+counts), `limiter.decreases`,
 `limiter.increases`, `limiter.max_depth`, `limiter.waits`, and `source.stats.mean_active` (mean active ranges). The
 report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stuck_max_ns`, `peak_nodes`,
 `peak_markers`, `peak_ahead_rows`, `peak_heap_live_bytes`, `part_time_cuts` and `spill.peak_bytes`,
@@ -174,9 +176,11 @@ report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stu
 | Signal | Healthy | Act when |
 |---|---|---|
 | `part_age_ms` | under a minute | several minutes: durable progress has stalled and a crash now loses all of it |
-| `order.spill_live_bytes` | small and transient | climbing for minutes: the frontier is stalled while other ranges finish; disk exposure |
+| `order.spill_live_bytes` | on a sorted run of a large list, most of the rows listed: today's ordered emission spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
-| `order.ahead_rows` | about the row budget's worth | rising for minutes: rows pile up ahead of a held-up frontier (spill grows with it) |
+| `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-max`, not by `--row-budget`; a count-only run holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
+| `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (at `--spill-max` 2 × the row budget, 56 of 64 large lists did not finish in 900 s) |
+| `resources.frontier_stuck_max_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on the campaign's sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
 | `resources.peak_heap_live_bytes` against `row_budget_bytes` (report) | a few times the budget plus the pages in flight | far beyond: memory the budget does not see |
 | `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; point `TMPDIR` (or the output) at a disk |
 | `objects` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
@@ -186,6 +190,7 @@ report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stu
 | `resources.budget_wait_ns` (report) | near 0 with spill on | large: workers blocked on a full row budget |
 | `mean_active` against mean in flight (report) | both near `--workers` | active high, in flight low: requests held by the limiter or admission |
 | `inflight.p99_ns` against `inflight.p50_ns` (report) | a few times p50 | p99 tens of times p50: a tail of slow attempts (timeouts, a throttled route) |
+| `inflight.latency_overflow` (report) | 0 | above 0: attempts of 18 min 20 s or longer; a percentile among them reads 9223372036854775807, open-ended, not a measured bound |
 | `idle_demand_ns` against `busy_ns` (report) | small | comparable: workers sat idle with work wanted; the split policy could not hand out work (see the split counters) |
 | exit 75 on the same output | never twice | a second 75 in a row needs a person |
 

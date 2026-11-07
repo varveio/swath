@@ -156,8 +156,15 @@ provider), the progress file's `ordered` counter, and a per-range order check: e
 ascending across its `Rows` calls, and after `Options.After` (`TestCountGuardsEachRange`). What it does not
 verify is the stream-wide guard across ranges: two ranges that overlap, each ascending, are counted
 twice where `Run` would fail on the repeated key. Coverage and disjointness are the provider's tiling in
-either case; the guard was defence in depth against a provider that breaks it, and it still runs on every
-run that writes.
+either case, and the object-store providers check it per range: the range engine sends each range's first
+request after its `lo`, refuses any key at or below the last one (`lo` first) and trims keys past its `hi`
+(`keyrange` `expandRange`), so a service answering out of bounds cannot make two ranges overlap; only
+intervals that overlap from the engine's own splits or seed cuts could, which T1, the metamorphic laws and
+`TestSeedListsEveryKey` test. A local directory's children are its distinct subdirectories. The guard
+across ranges was defence in depth against a provider that breaks its tiling, and it still runs on every
+run that writes. `Count` cannot apply it cheaply: the stream order is a tree walk, and checking it means
+keeping each finished range's first and last key until its neighbours finish, the tree `Count` exists to
+avoid.
 
 ## Cancellation
 
@@ -224,7 +231,8 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   is replayed (`TestSpillMarkersInByteMode`, the one order test in byte mode). A failed run closes every
   open spill reader. The report's `resources` carries `peak_nodes`, `peak_markers`, `peak_ahead_rows` (rows received and
   not yet handed on, in memory or spilled), `frontier_stuck_max_ns` (the longest interval in which the
-  drainer handed nothing on) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
+  drainer handed nothing on, closed on every drain exit, so a cancelled or failed run reports its last
+  stall: `TestInterruptedRunReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
   `reserve_bytes`, `dir` and `fs_type` (the spill filesystem: on `tmpfs` spill is memory, and the run warns
   at start); `progress.json` carries the same as live values with their peaks
   under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin). The summary
