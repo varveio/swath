@@ -139,6 +139,19 @@ at once. Publishing only children never waits (`TestChildOnlyPublishIsAdmitted`)
 waits for providers and spill I/O to return: a stop wakes every condition variable but cannot interrupt
 arbitrary I/O, which the command's forced-exit grace covers.
 
+The sink's own waits are outside these: the drainer hands a batch to the sink and waits for it to return,
+holding the drained bytes until then. A Parquet router's is `encoder_wait_ns` (a full part queue); a text
+sink's is `output.text.sink_wait_ns`. A text file's rows are formatted by `--encoders` goroutines: the drainer
+hands each batch, numbered by its order, to their queue (two batches per formatter) and returns; a sequencer
+writes the formatted chunks to the one stream in that order, waiting for each (`output_wait_ns`: the
+compressor's, a synchronous encoder or every parallel job's slot full, or the file's). A queued batch's row
+bytes are charged to the shared budget (`Shared`, as a Parquet part queue's) from hand-off until its chunk is
+written or dropped, so the drainer's wait is the queue full and listing waits on the budget as for any
+storage. With one formatter (stdout, or `--encoders 1`) the drainer formats and writes itself. An abort stops
+the formatters at their next batch, drops the queue (releasing its bytes) and joins them before the
+compressor. The compressor queues bytes, not rows: its sections are bounded by its jobs (`textout.JobBytes`
+each, admitted apart from the budget) and nothing it holds is charged to the budget.
+
 ## Counting without order
 
 A dry run (`--count-only`: no dataset, no text) consumes no row in order, so the pipeline runs `order.Count`
@@ -189,7 +202,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   markers are published, so the drainer never reads ahead of the writer.
 - **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
   range larger than the remaining budget therefore never blocks; this is what the slow-frontier shape needs.
-- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (or the temp directory for a text output; a dry run never spills).
+- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, the temp directory; a dry run never spills).
   Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`swath diag list --spill-compress`, level 1),
   or a trailer with the row count. A rows frame holds each row's key and the producer's payload encoded by
   its `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values, `s3.Object` its

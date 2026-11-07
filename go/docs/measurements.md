@@ -591,6 +591,47 @@ count-only run peaked at 438 MiB before and 97 MiB after. The ordered run's rema
 (157 MiB live against the 128 MiB budget) and the garbage collector's headroom. The in-repository guard is
 `TestRetainedBoundsDoNotPinPages` (synthetic: `scalefake`, 400,000 keys, [ordering](internals/ordering.md#what-a-waiting-range-retains)).
 
+## Text sink, 2026-11-07
+
+Local fake (keyfake, 50 ms a page), the first 2.5M keys of aws-public-blockchain, 64 workers, 4 vCPU,
+`-o out.tsv.zst`; wall s, two quiet runs each (a third round on a shared, loaded box ran 1.5 to 2 times
+slower across all arms and is not used). The fake's rows compress 35x (one ETag for every object), so
+compression here is cheap and formatting dominates.
+
+| Arm | Wall | CPU | RSS MiB | Spill MiB | Mean active | Sink wait s |
+|---|---|---|---|---|---|---|
+| Parquet `-o out` | 5.0, 5.3 | 9.3 | 410-430 | 210-230 | 41 | - |
+| text before (spill under `/tmp`, ext4 here) | 5.9, 6.0 | 9.1 | 430-450 | 220-245 | 33-35 | - |
+| text before, `TMPDIR` beside the output | 5.9, 6.0 | 9.1 | 440 | 217-235 | 34 | - |
+| placement + 4 parallel zstd jobs | 5.6, 5.7 | 8.8 | 440 | 227-239 | 35-36 | 1.8 |
+| + run-at-a-time escaper (this change) | 5.2, 5.2 | 8.3 | 450-460 | 230 | 38 | 1.2-1.3 |
+| this change, `--encoders 1` (synchronous) | 5.7, 5.8 | 8.3 | 400 | 215-245 | 36 | 1.5 (0.5 output) |
+
+Placement does not move the local wall (`/tmp` is the same ext4 here); in the study container `/tmp` was
+the overlay filesystem. Before the change the order stage spent 1.68 s of a 6.1 s run in the sink, 1.56 s
+of it formatting rows (`appendEscaped` alone 0.95 s, byte by byte). Every decompressed output equals the
+uncompressed TSV byte for byte.
+
+The compressor alone (klauspost v1.19.1, level default, a 400 MB TSV of the same keys with per-object ETags,
+sizes and times: ratio 4.4, as the blockchain's 4.26 GB output suggests): one synchronous stream 249 MB/s;
+the old default (concurrency GOMAXPROCS without concurrent blocks: one block overlapped) 283 MB/s; 4 jobs
+at the 8 MiB window 459 MB/s and 449 MiB allocated; 4 jobs at a 1 MiB window 492 MB/s, 70 MiB, the same
+ratio (4.42). `BenchmarkSink` (the order stage's cost, rows to a `.tsv.zst` file): 135 MB/s with one
+synchronous encoder, 205 MB/s with 4 jobs.
+
+Batch (orchestrator, the three largest lists, 130-145M keys, 256 workers, 8 cores, fake at 50 ms): the
+change above took `.tsv.zst` from 216/115/151 s to 167/105/140 s (Parquet 129/74/99 s), with
+`output.text.sink_wait_ns` still 64/51/63 s: one formatting stream. Parallel formatters (`--encoders`
+goroutines, one ordered stream), on the local fake above, box shared and loaded, three interleaved rounds:
+
+| Workers | Before (7b05605) | One formatter (f4653660) | 4 formatters | Sink wait s: one / four |
+|---|---|---|---|---|
+| 64 | 9.96, 7.93, 8.16 | 7.17, 7.95, 7.35 | 7.27, 6.88, 6.75 | 1.9-2.4 / 0.54-0.77 |
+| 256 | 9.74, 9.43, 8.41 | 9.83, 9.39, 8.63 | 9.30, 7.23, 6.91 | 3.0-3.8 / 0.58-1.17 |
+
+Mean active at 256 workers rose from 105-114 (before) to 132-137. The output equals the serial path's byte
+for byte.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured

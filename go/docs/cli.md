@@ -71,7 +71,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
   -dualstack
         S3: use the dual-stack (IPv6) endpoint
   -encoders int
-        Parquet encoder goroutines (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
+        Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
   -endpoint URL
         S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   -endpoint-url string
@@ -202,7 +202,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
   -dualstack
         S3: use the dual-stack (IPv6) endpoint
   -encoders int
-        Parquet encoder goroutines (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
+        Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
   -endpoint URL
         S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   -endpoint-url string
@@ -458,7 +458,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   `swath resume DIR` must be given it again (`swath resume DIR --bearer-token-command CMD`) and refuses with a
   message saying so otherwise (exit 2).
 - **Spill:** when the reorder budget is full, rows of ranges ahead of the frontier go to disposable files
-  under `DIR/.swath/spill/` instead of stalling the workers. `--spill-max` is the one disk budget: spill stops
+  under `DIR/.swath/spill/` (a text file's in a scratch directory of its attempt beside it,
+  `.NAME.swath-ATTEMPT-RANDOM/spill/`, removed when the attempt ends; stdout's under `$TMPDIR`) instead of
+  stalling the workers. `--spill-max` is the one disk budget: spill stops
   (and listing waits instead) at that many bytes on disk (default 0: half the space free on the spill
   filesystem when the run starts, after the reserve) or when the filesystem would drop below the reserve, one
   part per encoder at full size and at least 1 GiB (room for the parts being written on the same filesystem).
@@ -468,7 +470,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Encoders:** the default count is GOMAXPROCS lowered to what the resources carry: one writer's working set
   (24 MiB) each from an allowance equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,
   the workers' connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given;
-  when the resources cannot carry it, a warning names the shortfall.
+  when the resources cannot carry it, a warning names the shortfall. For a `.zst` text file the same flag
+  is the zstd jobs compressed at once, 16 MiB each from that allowance (no descriptor each); one job is a
+  synchronous encoder ([operating.md](operating.md#sizing-a-run), Memory).
 - **Row bound per part:** `--part-rotation-max-rows N` (default 0: off; Java's default was 2,000,000 with
   256 MB parts) also closes a part at N rows. The cut depends on the rows only, so it is part of the resume
   identity, a resume reproduces the boundaries, and a row-cut part does not calibrate the size ratio (only a part

@@ -81,12 +81,15 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
 | Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder queues). Not a cap on resident memory |
-| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. A warning names a shortfall |
-| Spill disk | `--spill-max` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/` (a text output's under `$TMPDIR`; `--count-only` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
+| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. A warning names a shortfall. For a `.zst` text file it is the zstd jobs compressed at once, 16 MiB each of the same allowance (the default admits 8; see Memory) |
+| Spill disk | `--spill-max` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `--count-only` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
 **Disk for the worst case** is the dataset itself plus the spill cap plus the reserve, all on the output's
-filesystem (spill lives under the output directory). Estimate the dataset from a representative prefix: the
+filesystem (spill lives under the output directory, or beside a text file). A text file's scratch directory
+is its attempt's own (created exclusively, named for the file and the attempt), so two runs writing sibling
+files, or the same one, never share or remove each other's; the attempt removes it when it ends, after
+success or failure. Only a killed run leaves one behind, with its `.NAME.*.tmp`: delete both. Estimate the dataset from a representative prefix: the
 report's `output.bytes` over `output.rows_committed`. If the dataset outgrows the disk the run stops with exit
 74 and resumes once there is space; spill alone never fails a run.
 
@@ -100,6 +103,16 @@ report's `output.bytes` over `output.rows_committed`. If the dataset outgrows th
   the worst case, about 300 KB for 1,000 keys of 120 bytes), the encoders' writers (24 MiB each),
   compression scratch, and the garbage collector's headroom (with the default `GOGC`, up to about twice
   the live heap).
+- **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
+  (default GOMAXPROCS, lowered to what 16 MiB each of an allowance equal to `--row-budget` carries; one
+  job compresses synchronously on the order stage). A job is a 4 MiB input section (four 1 MiB windows:
+  sorted listings match between neighbouring keys, and a 1 MiB window measured the ratio and speed of
+  the 8 MiB default at a seventh of the memory), its output, the overlap the next job takes and its
+  encoder; measured at 5 to 13 MiB a job. Gzip is one stream. The report's `output.text.compressor`
+  names the jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`). A file's
+  rows are also formatted by `--encoders` goroutines (`output.text.formatters`) into one ordered stream;
+  their queued batches are rows in flight, charged to `--row-budget`, and the chunks they format are about
+  the same size.
 - **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-max`. On tmpfs (a
   common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
   report names the filesystem (`resources.spill.fs_type`) and the run warns at start.
@@ -182,7 +195,8 @@ report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stu
 | `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (at `--spill-max` 2 × the row budget, 56 of 64 large lists did not finish in 900 s) |
 | `resources.frontier_stuck_max_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on the campaign's sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
 | `resources.peak_heap_live_bytes` against `row_budget_bytes` (report) | a few times the budget plus the pages in flight | far beyond: memory the budget does not see |
-| `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; point `TMPDIR` (or the output) at a disk |
+| `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
+| `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
 | `objects` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
 | `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
 | `throttles` | flat | rising steadily: see Throttling |
