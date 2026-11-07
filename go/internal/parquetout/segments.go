@@ -153,10 +153,18 @@ func (r *Router[P]) OpenSegment(ctx context.Context, continueOpen bool) (*Segmen
 		}
 		rows := r.rows + r.segRows.Load()
 		r.mu.Unlock()
+		defer func() { <-r.slots }()
 		if last != nil {
-			<-last.published
+			// The refusal waits for the durable prefix, but not past a
+			// cancellation: a segment that failed leaves its part open
+			// (never published) until the pipeline's Abort, which runs
+			// only once every segment worker has returned.
+			select {
+			case <-last.published:
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			}
 		}
-		<-r.slots
 		return nil, fmt.Errorf("%w: part %d cannot be opened (%d rows so far; part size %d bytes, row cap %d)",
 			dataset.ErrPartLimit, o, rows, r.opt.PartSize, r.opt.MaxRows)
 	}
