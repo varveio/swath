@@ -40,7 +40,12 @@ resume point (the client already has it), while a route whose inclusive start of
 (GCS) passes false.
 
 `Object`'s fields other than the key are nullable; rendering policy is the route's: a null size is `0`, a null
-time the epoch, a null ETag, storage class, checksum or owner field an absent element.
+time the epoch, a null ETag, storage class, checksum or owner field an absent element. The store fills an
+`Object` by the recording's declared schema id, never by the columns present: the S3-shaped schemas column for
+column; a `swath/gcs-objects/v1` recording with the S3 route's view of it, the ETag derived from the `md5` and
+`etag` columns (`gcsETag`: the MD5 in hex, else `-` and the etag, else `swath-s3-synthetic-v1`) and no storage
+class. The window cache's packer holds the `md5` column apart and derives the ETag column once per fill, so a
+window's rows are the bare reader's (`store` `TestGCSRecordingS3View`).
 
 ## The pager
 
@@ -320,6 +325,7 @@ every walk compared byte for byte (`sorted_differential_test.go`, the contract's
 | the 0xFF carry | `s3` `TestPrefixUpperAndSuccessor`, `TestPrefixRangeLaw` |
 | tokens | `s3` `TestTokenGolden`, `TestTokenRoundTripsAndLegacyV1`, `TestBlankTokenIsAbsent`, `TestMalformedTokensAreRejected`, `TestTokenProperties`, `TestHasTokenAgreesWithDecode` |
 | response memory | `output` (the contract's sink tests by name), `s3` `TestOneKeyAndEmptyPagesUseSmallFirstChunks`, `TestRenderStopsAtTheCap`; `server` `TestSparseResponsesReturnTheirReservation`, `TestBudgetRefusesAnOverlappingPage`, `TestOversizedResponseStopsAtTheCap`, `TestSlowReadersReachTheResponseCeiling` |
+| the S3 view of a GCS recording | `store` `TestGCSETag`, `TestGCSRecordingS3View` (window cache, bare reader, arena overflow, rollup), `TestPackerDerivedETagsStopAtTheArenaLimit`; `server` `TestLiveGCSXMLAPIContents` (the XML API's probed `Contents`), `TestGCSRecordingOnTheS3Route` |
 | the window cache | `store` `TestWindowCacheMatchesTheFixture` (every conformance fixture through a small cache against the bare reader: walks, probes, joins, evictions, reads past a window, concurrent walkers), `TestWindowCacheHitsTakeNoReaderSlot`, `TestWindowCacheReadsAhead`; `sortedparquet` `TestScanMatchesRead`; `server` `TestMeterSetMatchesTheContract` (`prefetch.*`) |
 | XML | `s3` `TestRowFastPathMatchesUnits` (whole elements appended where they fit against unit-by-unit rendering: bytes, refusal, chunks, percent-encoding counts), `TestTimestampCacheMatchesFreshFormatting`, `TestRenderListGolden`, `TestRenderListElementsAndOrder`, `TestRenderAdversarialUnencodedValues`, `TestRenderSurrogateBytesUnencoded`, `TestLastModifiedYears`, `TestRenderNullSizeAndTimeAsZeroAndEpoch`, `TestPercentEncodesEveryUnsafeByte`, `TestTokenSuppressesTheIgnoredStartAfter`, `TestRenderError`, `TestPercentEncodeMatchesS3` |
 | latency | `latency` `TestClassify`, `TestDelayByShapeAndPerCommonPrefix`, `TestScaleDividesEveryTerm`, `TestParseRejects`, `TestJitterIsDeterministicAndBounded`, `TestNumberGrammar`, `TestHugeDelaysSaturate`; `s3` `TestLatencyKeyGolden`; `server` `TestContinuationPagesDrawDistinctJitter`, `TestCountsNoOverrunWhenInjectionIsOff` |

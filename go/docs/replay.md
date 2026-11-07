@@ -143,7 +143,9 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   `list-type=3` stay refused (`400 InvalidArgument`), as on the Java server, where S3 serves them; `fetch-owner=true` renders `Owner` only
   where the fixture holds owner columns.
 - `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
-  `Owner` appears only with `fetch-owner=true`.
+  `Owner` appears only with `fetch-owner=true`. Which fields a `Contents` element carries, and from what, depends
+  on the recording's schema ([Item fields by route and recording schema](#item-fields-by-route-and-recording-schema)):
+  a `swath/gcs-objects/v1` recording is listed as Cloud Storage's own S3-compatible XML API lists it.
 - Errors are S3's XML error document, as live S3 wrote each: `Code`, `Message`, then the elements of that
   error, then `RequestId` and `HostId` (the `x-amz-request-id` and `x-amz-id-2` values; S3's change with every
   request, the replay's are `S3LISTINGREPLAY`). `400 InvalidArgument` carries `ArgumentName` and, except for a
@@ -259,6 +261,66 @@ or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
 
 Unlike the Java server, a name of more than 254 `/`-separated segments is listed: native Azure lists one (the
 evidence archive's capture `azure-12a`), where the Java server answers `500 too_many_segments`.
+
+## Item fields by route and recording schema
+
+The rule: a recording served on its own provider's API answers exactly as stored; on any other API, each field
+is either mapped to the equivalent value, where a real equivalent exists, or a fixed placeholder. The S3-shaped
+schemas are S3's own (`swath/canonical` is the Java-era capture schema, `swath/s3-objects/v1` the Go lister's S3
+datasets, `swath-replay/objects/v1` what `sort-fixture` writes from a capture; all three hold the same nine
+columns); `swath/gcs-objects/v1` is GCS's own; `swath-local/v1` (a local tree's size and modification time) has
+no provider API, so every route maps or fills it. Cells marked "open" do not follow the rule today and are kept
+as they are (each is listed below the table).
+
+| Route: field | S3-shaped: `swath/canonical`, `swath/s3-objects/v1`, `swath-replay/objects/v1` | `swath/gcs-objects/v1` | `swath-local/v1` |
+|---|---|---|---|
+| S3: `Key` | exact | mapped from the object name (the same bytes) | mapped from the relative path |
+| S3: `LastModified` | exact, milliseconds (the epoch when null) | mapped from `last_modified` (GCS `updated`), milliseconds; open (a) | mapped from the modification time, milliseconds |
+| S3: `ETag` | exact, absent when null | mapped: the MD5 in lower-case hex; without an MD5, `-` and the etag; neither: placeholder `swath-s3-synthetic-v1` | open (b): absent |
+| S3: `Size` | exact (`0` when null) | mapped from `size` (the same value) | mapped from the file size |
+| S3: `StorageClass` | exact, absent when null | absent (the XML API sends none, whatever the class) | open (b): absent |
+| S3: `ChecksumAlgorithm`, `ChecksumType` | exact, absent when null | absent (the XML API sends none) | absent (S3 sends none for an object stored without a checksum) |
+| S3: `Owner` (`fetch-owner=true`) | exact, absent when both columns are null | absent (not stored; the XML API sent none) | open (b): absent |
+| GCS: `name`, `size` | mapped from the key and size (`0` when null) | exact | mapped from the path and file size |
+| GCS: `updated` | mapped from `last_modified` (six digits; the epoch when null) | exact | mapped from the modification time |
+| GCS: `etag` | placeholder `swath-gcs-synthetic-v1` (an S3 ETag is not a GCS etag) | exact (`swath-gcs-synthetic-v1` when null) | placeholder `swath-gcs-synthetic-v1` |
+| GCS: `generation`, `metageneration` | placeholder `1` | exact (`1` when null) | placeholder `1` |
+| GCS: `storageClass` | placeholder `STANDARD` | exact (`STANDARD` when null) | placeholder `STANDARD` |
+| GCS: `contentType` | placeholder `application/octet-stream` (S3 lists no content type) | exact, absent when null | placeholder `application/octet-stream` |
+| GCS: `md5Hash`, `crc32c` | absent (an S3 ETag is an MD5 only for some uploads, and the listing cannot tell which) | exact, absent when null | absent |
+| GCS: `acl` (`projection=full`) | `[]` | `[]` | `[]` |
+| Azure: `Name`, `Content-Length` | mapped from the key and size | mapped from the name and size | mapped from the path and file size |
+| Azure: `Last-Modified` | mapped, seconds (Azure's precision) | mapped from `last_modified`, seconds | mapped, seconds |
+| Azure: `Etag` | placeholder `0x000000000000001` | placeholder `0x000000000000001` | placeholder `0x000000000000001` |
+| Azure: `Content-Type` | placeholder `application/octet-stream` | open (c): placeholder `application/octet-stream` | placeholder `application/octet-stream` |
+| Azure: `Content-MD5` | absent | open (c): absent | absent |
+| Azure: `BlobType`, `AccessTier`, `AccessTierInferred`, `LeaseStatus`, `LeaseState` | placeholders `BlockBlob`, `Hot`, `true`, `unlocked`, `available` | the same placeholders | the same placeholders |
+
+The S3 view of a `swath/gcs-objects/v1` recording is Cloud Storage's own S3-compatible XML API's answer for
+the same objects, probed on 2026-11-07 (`storage.googleapis.com`, anonymous `list-type=2` on public buckets,
+with and without `fetch-owner=true`): `ETag` is the object's MD5 in lower-case hex, quoted; a composite object,
+which has no MD5, has `-` and its JSON API `etag`, quoted (the etag already carries the metageneration); no
+`StorageClass`, `Owner`, `ChecksumAlgorithm` or `ChecksumType` element appears for a STANDARD, NEARLINE or
+MULTI_REGIONAL object (no public COLDLINE or ARCHIVE object was found to probe). An `md5` value that is not the
+standard base64 of 16 bytes is not taken for an MD5. The placeholder `swath-s3-synthetic-v1` is neither 32
+hexadecimal digits with an optional `-N` part count (an S3 ETag) nor `-` and base64 (the XML API's composite
+form), so a client cannot take it for a real ETag; Cloud Storage lists every object with an etag, so only a
+recording made some other way lacks both. The route writes no `Generation` or `MetaGeneration` element, which
+the XML API adds and S3 does not have, and writes the ETag's quotation marks as `&quot;`, as live S3 does
+(`server` `TestLiveGCSXMLAPIContents` pins the probed elements, `TestGCSRecordingOnTheS3Route` the edge rows).
+
+Open cells:
+
+- (a) The XML API's `LastModified` is the object's `timeCreated`, which a recording does not store; the route
+  sends `updated`. They differ only for an object whose metadata changed after it was written (metageneration
+  above 1).
+- (b) S3 lists every object with an `ETag` and a `StorageClass`, and with `Owner` under `fetch-owner=true`; a
+  local recording has no source value for them and the route omits them, where the rule asks for a placeholder.
+- (c) A GCS recording stores the content type and the MD5 (base64, the form Azure's `Content-MD5` takes), but
+  the Azure route sends its placeholder content type and no `Content-MD5`.
+
+The S3-shaped schemas' answers on every route are the replay wire contract's (the Java server reads
+`swath/canonical`; `server` `TestEmptyAndNullStringsEndToEnd`).
 
 ## Injected latency
 
@@ -854,7 +916,7 @@ fixture's declared schema id:
 
 | Field | `swath/gcs-objects/v1` (the lister's GCS datasets) | every other schema (S3, canonical, sort-fixture output, local) |
 |---|---|---|
-| `name`, `size`, `updated` | exact | exact (a null size is `0`, a null time the epoch) |
+| `name`, `size`, `updated` | exact | mapped: the same values (a null size is `0`, a null time the epoch) |
 | `etag` | exact (`swath-gcs-synthetic-v1` when null) | synthetic: `swath-gcs-synthetic-v1` (an S3 ETag is not a GCS etag) |
 | `generation`, `metageneration` | exact (`1` when null) | synthetic: `1` |
 | `storageClass` | exact (`STANDARD` when null) | synthetic: `STANDARD` |
@@ -864,7 +926,9 @@ fixture's declared schema id:
 | `id`, `selfLink`, `mediaLink`, `timeCreated`, `owner`, `metadata` and the rest | absent (not stored) | absent |
 
 The synthetic values are the wire contract's, so the Java server and this one answer a non-GCS fixture
-identically; the Java server does not read `swath/gcs-objects/v1` datasets.
+identically; the Java server does not read `swath/gcs-objects/v1` datasets. The table in
+[Item fields by route and recording schema](#item-fields-by-route-and-recording-schema) holds every route's
+fields for every schema.
 
 ### The GCS evidence replay
 
