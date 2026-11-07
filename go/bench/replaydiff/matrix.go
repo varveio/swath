@@ -39,8 +39,14 @@ type request struct {
 	// not the HTML error page (this server's page is its own); "status"
 	// compares the status only, for request lines Go's HTTP parser refuses
 	// before the server sees them (its page and Content-Type are the
-	// parser's). Empty compares everything.
+	// parser's); "residual" sends a documented difference and reports what
+	// each server answered without passing or failing it. Empty compares
+	// everything.
 	Compare string `json:"compare,omitempty"`
+	// Wire, when set, builds the whole byte stream sent on a connection of
+	// its own (several requests, odd line endings); the last answer is the
+	// one compared.
+	Wire func(bucket, host string) string `json:"-"`
 	// BucketPad, when positive, is the length of an X-Pad header the raw
 	// request carries after its other headers, less the bucket name's
 	// length (so the head's size does not depend on the bucket).
@@ -251,6 +257,40 @@ func rawTargets() []request {
 			Raw: "/{bucket}?list-type=2&max-keys=1", BucketPad: 8192 + 10 - fixed,
 			Header: [][2]string{{"Transfer-Encoding", "chunked"}}, Compare: "headers"})
 	}
+	// Heads framed the ways net/http also accepts, sized one byte past the
+	// S3-only limit: a CRLF blank line after an LF-ended last header, and a
+	// GET pipelined after a bodyless POST and a stray CRLFCRLF (which is
+	// not counted as a head).
+	getHead := func(bucket, host, ending, blank string, total int) string {
+		h := func(pad string) string {
+			return "GET /" + bucket + "?list-type=2&max-keys=1 HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\nX-Pad: " + pad + ending + blank
+		}
+		return h(strings.Repeat("a", total-len(h(""))))
+	}
+	out = append(out,
+		request{Name: "raw GET [headers] LF-ended last header, CRLF blank line, one byte past the limit", Method: "GET", Compare: "headers",
+			Wire: func(b, h string) string { return getHead(b, h, "\n", "\r\n", 8193) }},
+		request{Name: "raw GET [headers] after a bodyless POST and CRLFCRLF, one byte past the limit", Method: "GET", Compare: "headers",
+			Wire: func(b, h string) string {
+				return "POST /" + b + "?list-type=2 HTTP/1.1\r\nHost: " + h + "\r\nContent-Length: 0\r\n\r\n\r\n\r\n" + getHead(b, h, "\r\n", "\r\n", 8193)
+			}},
+		request{Name: "raw GET [full] after a bodyless POST and CRLFCRLF, at the limit", Method: "GET",
+			Wire: func(b, h string) string {
+				return "POST /" + b + "?list-type=2 HTTP/1.1\r\nHost: " + h + "\r\nContent-Length: 0\r\n\r\n\r\n\r\n" + getHead(b, h, "\r\n", "\r\n", 8192)
+			}})
+	// The two parser-level differences the user page documents, sent so
+	// they show in every report: more than four CR or LF after a bodyless
+	// POST (the reference serves the next request, Go's parser answers
+	// 400 and closes), and a CRLF before a GET with nothing in front (the
+	// reference counts it and answers 431 at the limit, Go answers 400).
+	out = append(out,
+		request{Name: "raw GET [residual] after a bodyless POST and five LF", Method: "GET", Compare: "residual",
+			Wire: func(b, h string) string {
+				return "POST /" + b + "?list-type=2 HTTP/1.1\r\nHost: " + h + "\r\nContent-Length: 0\r\n\r\n\n\n\n\n\n" +
+					getHead(b, h, "\r\n", "\r\n", 200)
+			}},
+		request{Name: "raw GET [residual] CRLF before the request line, head at the limit", Method: "GET", Compare: "residual",
+			Wire: func(b, h string) string { return "\r\n" + getHead(b, h, "\r\n", "\r\n", 8192) }})
 	add("GET", "status",
 		"/{bucket}%zz?list-type=2", "/{bucket}%?list-type=2", "/{bucket}%u0041?list-type=2", "{bucket}?list-type=2",
 		"/{bucket}?list-type=2&prefix=a b&max-keys=1", "/{bucket}?list-type=2&prefix=\x01&max-keys=1",

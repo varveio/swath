@@ -458,8 +458,9 @@ Every run exited 0. The scripts behave the same on either server; nothing in the
 - Three routes (S3 `ListObjectsV2`, path-style, the GCS JSON `objects.list` and the Azure flat `List Blobs`
   subset below) and one serving mode (sorted). Version listing, object data and
   authentication are not served.
-- Three request-target cases are not byte-identical with the Java server, by decision; the differential driver
-  compares them on the status and the headers the Java server sets, and says which in each case's name:
+- Five request cases are not byte-identical with the Java server, by decision. The differential driver compares
+  the first three on the status and the headers the Java server sets, sends the last two and reports what each
+  server answered (`DOCUMENTED RESIDUAL` lines, neither pass nor failure), and says which in each case's name:
   - The error page of a target refused before routing (above). Status `400`, `Content-Type:
     text/html;charset=iso-8859-1` and `Cache-Control: must-revalidate,no-cache,no-store` match; the HTML body is
     this server's own page naming the problem, not a copy of the Java server's HTTP layer's page.
@@ -471,6 +472,14 @@ Every run exited 0. The scripts behave the same on either server; nothing in the
     with `Host: localhost`). The Java server refuses it with `400`; this server serves it, because Go's HTTP
     layer drops the `Host` header for an absolute target, as RFC 9112 section 3.2.2 has an origin server
     ignore it, so the disagreement cannot be seen. The driver does not send this case.
+  - More than four CR or LF bytes between a request without a body (a `POST` with `Content-Length: 0`) and the
+    next request line on the same connection. The Java server skips them all and answers the next request; Go's
+    HTTP parser discards four, answers what follows as a malformed request line with `400` and closes the
+    connection (a client still sending may see the connection reset). Up to four are skipped by both and not
+    counted toward the next request's head.
+  - A CRLF before the request line with no request in front of it on the connection. The Java server counts the
+    two bytes toward the head (a GET whose head is exactly the limit then gets `431`); Go's HTTP parser refuses
+    the empty request line with `400` and closes the connection.
 - Timer percentiles are histogram estimates on both servers (within 3.1% here; the Java registry's default
   precision is coarser), so the two servers' `p50_ms` and `p99_ms` agree in window, not in digits.
 - One process does not reproduce distributed service capacity or network faults; put `bench/faultproxy` in

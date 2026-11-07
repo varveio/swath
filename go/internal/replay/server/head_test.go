@@ -5,10 +5,12 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -141,5 +143,90 @@ func TestRawHeadsStayAlignedOnAConnection(t *testing.T) {
 		if resp.StatusCode != want {
 			t.Errorf("answer %d: %d, want %d", i, resp.StatusCode, want)
 		}
+	}
+}
+
+// TestBlankLinesBetweenRequestsAreNotAHead: net/http discards the CR and
+// LF a client sends after a bodyless POST before its next request; the
+// head counter must too, or the stray bytes take the next request's place
+// in the queue. A POST with Content-Length: 0, then CRLFCRLF, then a GET
+// head one byte over the limit: 405 for the POST, 431 for the GET (and a
+// GET of exactly the limit is served), as on the Java server.
+func TestBlankLinesBetweenRequestsAreNotAHead(t *testing.T) {
+	s := start(t, config(memstore.Keys(memstore.Options{}, "a")))
+	post := "POST /bucket?list-type=2 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"
+	for _, c := range []struct {
+		total, want int
+	}{{8192, 200}, {8193, 431}} {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		go io.WriteString(conn, post+"\r\n\r\n"+padded(c.total, false))
+		br := bufio.NewReader(conn)
+		for i, want := range []int{405, c.want} {
+			resp, err := http.ReadResponse(br, nil)
+			if err != nil {
+				t.Fatalf("%d-byte GET, answer %d: %v", c.total, i, err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != want {
+				t.Errorf("%d-byte GET, answer %d: %d, want %d", c.total, i, resp.StatusCode, want)
+			}
+		}
+		conn.Close()
+	}
+}
+
+// TestEveryLineEndingFramesTheHead: net/http accepts a header line ending
+// in CRLF or LF and a blank line of CRLF or LF; the head counter frames
+// all four, so a head of exactly the limit is served and one byte more is
+// 431, as on the Java server, which accepts the same four.
+func TestEveryLineEndingFramesTheHead(t *testing.T) {
+	for _, c := range []struct {
+		protocols []string
+		limit     int
+	}{{[]string{ProtocolS3}, 8192}, {[]string{ProtocolS3, ProtocolGCS}, 65536}} {
+		cfg := config(memstore.Keys(memstore.Options{}, "a"))
+		cfg.Protocols = c.protocols
+		s := start(t, cfg)
+		for _, e := range []struct{ name, mid, last, blank string }{
+			{"crlf", "\r\n", "\r\n", "\r\n"}, {"lf last line, crlf blank", "\r\n", "\n", "\r\n"},
+			{"crlf last line, lf blank", "\r\n", "\r\n", "\n"}, {"all lf", "\n", "\n", "\n"},
+		} {
+			head := func(total int) string {
+				h := func(pad string) string {
+					return "GET /bucket?list-type=2&max-keys=1 HTTP/1.1" + e.mid + "Host: 127.0.0.1" + e.mid + "Connection: close" + e.mid +
+						"X-Pad: " + pad + e.last + e.blank
+				}
+				return h(strings.Repeat("a", total-len(h(""))))
+			}
+			if st, _ := rawHead(t, s, head(c.limit)); st != 200 {
+				t.Errorf("%v %s: a %d-byte head got %d", c.protocols, e.name, c.limit, st)
+			}
+			if st, _ := rawHead(t, s, head(c.limit+1)); st != 431 {
+				t.Errorf("%v %s: a %d-byte head got %d", c.protocols, e.name, c.limit+1, st)
+			}
+		}
+	}
+}
+
+// TestAnUnframedHeadIsRefused: on a connection that counts heads, a
+// request whose head the counter has no size for is refused 431, never
+// measured from its parsed form.
+func TestAnUnframedHeadIsRefused(t *testing.T) {
+	h := &headCounter{}
+	r := httptest.NewRequest("GET", "/bucket?list-type=2", nil)
+	r = r.WithContext(context.WithValue(r.Context(), headCounterKey{}, h))
+	if status, _ := headProblem(r, headLimitS3); status != http.StatusRequestHeaderFieldsTooLarge {
+		t.Errorf("unframed: %d", status)
+	}
+	h.feed([]byte("GET /bucket?list-type=2 HTTP/1.1\r\nHost: x\r\n\r\n"))
+	r = httptest.NewRequest("GET", "/bucket?list-type=2", nil)
+	r = r.WithContext(context.WithValue(r.Context(), headCounterKey{}, h))
+	if status, _ := headProblem(r, headLimitS3); status != 0 {
+		t.Errorf("framed: %d", status)
 	}
 }
