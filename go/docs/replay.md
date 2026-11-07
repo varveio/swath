@@ -482,6 +482,82 @@ the wire contract, not fixed here:
 | scripted, 2 requests | `start-after` with a byte that is not UTF-8 (`%FF`) | read as U+FFFD (echoed `%EF%BF%BD`) | the byte as sent |
 | `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID` | no `Owner`: the recording was made without owners (a fixture with owner columns renders them) |
 
+### Live GCS, 2026-11-07
+
+Four public buckets recorded with the Go lister the same day (native `swath/gcs-objects/v1` datasets, anonymous
+`--gcs-anonymous`, through `faultproxy -record`; below), each served by the Go server and compared with live
+`storage.googleapis.com` inside the recorded prefix, `-live-pins` set to the evidence archive's
+`gcs/replay-expectations.json`, item metadata compared exactly (native).
+
+| Bucket and scope (recorded) | Objects | Matrix cases sent | Matrix passed / differing (of them pinned) | Walks passed / differing | HTTP requests |
+|---|---|---|---|---|---|
+| `cloud-samples-data`, whole bucket (13:09Z) | 164,869 | 87 of 110 | 56 / 30 (29) | 166 / 0 | 2,024 |
+| `gcp-public-data-sentinel-2`, `L2/tiles/32/T/NS/` (13:09Z) | 284,292 | 86 of 110 | 54 / 31 (29) | 202 / 0 | 7,274 |
+| `gcp-public-data-landsat`, `LC08/01/001/` (13:10Z) | 314,390 | 86 of 110 | 54 / 31 (30) | 124 / 0 | 1,942 |
+| `gcp-public-data-nexrad-l2`, `1991/06/` (13:11Z) | 12 | 83 of 110 (r/ on a reduced shape) | 54 / 28 (27) | 36 / 0 | 278 |
+
+`gcs-07v` (a decoded byte of an issued token flipped) is skipped on every run: the replay's `gcs1.` token is not
+base64 as a whole, the pinned "no analogue" of the evidence. On `nexrad-l2` no directory holds six objects, so a
+directory of three stands in for `r/`; those cases are listed as run on a reduced shape (`REDUCED SHAPE`).
+
+Pinned differences: every difference but the ones below reproduces, message for message, the mismatch the
+owned-bucket evidence pins for its case (`docs/replay-provider-conformance.md`): `gcs-03p` (`includeTrailingDelimiter`
+refused), `gcs-05e` to `gcs-05i` (malformed escapes, invalid UTF-8 and duplicate parameters refused; live GCS
+serves them), `gcs-06a`, `06b`, `06l`, `06m` (`maxResults` 0, leading zeros and duplicates refused), `gcs-06e`
+(live GCS returns 1,001 items for `maxResults=1001`; the replay caps at 1,000), `gcs-06f`, `06g`, `06i`, `06j`, `06k`,
+`06n`, `11c` (error reason `invalid` where live says `invalidParameter`), `gcs-07i`, `07k`, `07l`, `07o`, `07t`, `07u`
+(a token sent with another scope: refused by the replay, honoured by GCS), `gcs-07r`, `07s` (an altered token: GCS
+refuses it, the replay decodes it), `gcs-11e`, `11f`, `11g`, `11i` (`fields`, `versions`, `matchGlob`,
+`includeFoldersAsPrefixes` refused). The differences the evidence does not pin:
+
+| Case | Bucket | Request | Live GCS | Replay |
+|---|---|---|---|---|
+| `gcs-11h` | all four | `softDeleted=true` | `200`, a listing (these buckets keep soft-deleted objects; the evidence bucket had soft delete disabled and answered `400`) | `400 invalid`, `feature_softDeleted` |
+| `gcs-07r` | sentinel-2 | an issued token with its last character changed | accepted (the changed character only touched unused bits) and resumes at the token's position | the altered `gcs1.` token decodes to another position |
+
+### Live capture
+
+`bench/faultproxy -record FILE` writes every exchange it forwards as a JSON line (the campaign's raw-exchange
+shape: method, URL, raw path and query, request headers with credentials redacted, status, response headers, body,
+timestamps). Running the lister through it against the provider records the listing and the client's whole
+request stream in one go; `replaydiff -capture FILE` then replays every captured request, in order, against the Go
+server serving the dataset that same run wrote, maps each captured token to the token the Go server issued for the
+same request, and compares each answer with the captured one under the policy above (a gzip-coded captured body is
+decoded first):
+
+```bash
+go build -o /tmp/faultproxy ./bench/faultproxy
+/tmp/faultproxy -target https://s3.us-east-1.amazonaws.com -listen 127.0.0.1:19401 -record /tmp/capture.jsonl &
+./swath list s3://noaa-normals-pds/ -o /tmp/rec --anonymous --endpoint http://127.0.0.1:19401 --region us-east-1 --workers 16
+kill -INT %1
+/tmp/replaydiff -capture /tmp/capture.jsonl -go ./swath-replay -fixture /tmp/rec -bucket noaa-normals-pds
+# GCS: -target https://storage.googleapis.com and swath list gs://B/P --gcs-anonymous --gcs-endpoint http://127.0.0.1:19401/storage/v1/
+```
+
+On 2026-11-07 (the Go lister's own requests, 16 workers, ranges split by the lister):
+
+| Capture | Exchanges | Passed | Differing |
+|---|---|---|---|
+| `s3://noaa-normals-pds` (whole bucket) | 233 | 233 | 0 |
+| `gs://cloud-samples-data` (whole bucket) | 274 | 274 | 0 |
+| `gs://gcp-public-data-sentinel-2/L2/tiles/32/T/NS/` | 417 | 417 | 0 |
+| `gs://gcp-public-data-landsat/LC08/01/001/` | 509 | 509 | 0 |
+| `gs://gcp-public-data-nexrad-l2/1991/06/` | 1 | 1 | 0 |
+
+The first replay of `cloud-samples-data` found the one difference this check has found: an object stored without a
+content type is listed by GCS without `contentType`, which the native rendering filled with
+`application/octet-stream`; the native rendering now omits it (`TestNativeNullContentTypeIsOmitted`).
+
+### The native rendering against the Java server
+
+The Java server does not read `swath/gcs-objects/v1`, so the cross-check on real names is the `cloud-samples-data`
+rows written into the S3 capture columns and sorted by the Java `sort-fixture`: `replaydiff -protocol gcs` with
+both servers on that fixture compared 2,343 requests (matrix 1,558, walks 285 with `-walk-limit 300`, random 500)
+with no difference; with the Go server on the native dataset (`-go-fixture`) and `-gcs-mask-metadata`, every
+name, size, time, prefix, status and page boundary agreed, and the only differences were the page tokens' bytes
+(453 pages; each token is bound to its fixture's identity) and the 8 token cases that send the Java server's token
+to the Go server, which refuses a token of another fixture (`invalid_page_token`).
+
 ## Measurements
 
 Configuration, unless a table says otherwise. Host: a 4 vCPU session container (Intel Xeon @ 2.10 GHz) shared
