@@ -57,12 +57,13 @@ func EstimateSize(pageSize int) int { return 2048 + pageSize*512 }
 // to 9999, an empty, over-long or invalid-UTF-8 name, a control character)
 // is a FixtureIncompatible error naming the reason. Each entry is
 // formatted on its own and written, so no more than one entry is held
-// outside o; a refusal by o (its cap or budget, o.Err) stops rendering.
-// The writes and the checks keep the replay wire contract's order: the
-// entry's opening tag is written before its name is checked, and the name
-// and the properties' opening before its time is, so under a small cap a
-// write the cap refuses is reported (response_too_large) before a fixture
-// value the profile refuses further on (TestRenderErrorPrecedence).
+// outside o (nor its recorded content type: appendContent); a refusal by
+// o (its cap or budget, o.Err) stops rendering. The writes and the checks
+// keep the replay wire contract's order: the entry's opening tag is
+// written before its name is checked, and the name and the properties'
+// opening before its time is, so under a small cap a write the cap refuses
+// is reported (response_too_large) before a fixture value the profile
+// refuses further on (TestRenderErrorPrecedence).
 func RenderList(o *output.Output, res *Result, endpoint string) error {
 	var buf []byte
 	flush := func() bool {
@@ -107,13 +108,13 @@ func RenderList(o *output.Output, res *Result, endpoint string) error {
 			buf = append(buf, "</BlobPrefix>"...)
 			continue
 		}
-		o := e.Object
+		obj := e.Object
 		var size, micros int64 // a null size renders as 0, a null time as the epoch
-		if o.Size != nil {
-			size = *o.Size
+		if obj.Size != nil {
+			size = *obj.Size
 		}
-		if o.LastModified != nil {
-			micros = o.LastModified.UnixMicro()
+		if obj.LastModified != nil {
+			micros = obj.LastModified.UnixMicro()
 		}
 		if size < 0 {
 			return fail(FixtureIncompatible, "negative_size")
@@ -123,7 +124,7 @@ func RenderList(o *output.Output, res *Result, endpoint string) error {
 			return nil
 		}
 		var err error
-		if buf, err = appendName(buf, o.Key, false, res.onPath); err != nil {
+		if buf, err = appendName(buf, obj.Key, false, res.onPath); err != nil {
 			return err
 		}
 		buf = append(buf, propertiesStart...)
@@ -141,7 +142,9 @@ func RenderList(o *output.Output, res *Result, endpoint string) error {
 		buf = append(buf, afterTime...)
 		buf = strconv.AppendInt(buf, size, 10)
 		buf = append(buf, afterSize...)
-		buf = appendContent(buf, o)
+		if buf = appendContent(o, buf, obj); o.Err() != nil {
+			return nil
+		}
 		buf = append(buf, afterContent...)
 	}
 	buf = append(buf, "</Blobs><NextMarker>"...)
@@ -161,16 +164,26 @@ func RenderList(o *output.Output, res *Result, endpoint string) error {
 // properties the profile omits (Content-Encoding, Content-Language,
 // Content-CRC64) and before BlobType (server
 // TestGCSRecordingOnTheAzureRoute).
-func appendContent(dst []byte, o *store.Object) []byte {
-	if o.ContentType != nil && holdable(*o.ContentType) {
-		dst = appendEscaped(dst, *o.ContentType)
+//
+// A recorded content type has no length bound of its own, so it is not
+// staged: dst is written to o and the escaped value goes straight into o,
+// which admits it against the cap and the budget as it grows and stops at a
+// refusal (o.Err), so an oversized value costs no more than the cap
+// (TestOversizedContentTypeStaysBounded). o.Escaped writes the bytes
+// appendEscaped would: holdable leaves no control character for it to
+// write as a reference.
+func appendContent(o *output.Output, dst []byte, obj *store.Object) []byte {
+	if obj.ContentType != nil && holdable(*obj.ContentType) {
+		o.Write(dst)
+		dst = dst[:0]
+		o.Escaped(*obj.ContentType)
 	} else {
 		dst = append(dst, placeholderContentType...)
 	}
 	dst = append(dst, "</Content-Type>"...)
-	if o.MD5 != nil && store.IsMD5(*o.MD5) {
+	if obj.MD5 != nil && store.IsMD5(*obj.MD5) {
 		dst = append(dst, "<Content-MD5>"...)
-		dst = append(dst, *o.MD5...)
+		dst = append(dst, *obj.MD5...)
 		dst = append(dst, "</Content-MD5>"...)
 	}
 	return dst
