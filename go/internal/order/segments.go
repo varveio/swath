@@ -128,6 +128,7 @@ type unit[P any] struct {
 	f          *spillFile
 	at         spillAt
 	n, logical int64
+	units      int64 // what its rows count against the row budget
 }
 
 // segment is one part's rows: from row r0 of unit u0 to row r1 of unit u1
@@ -188,6 +189,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	t := time.Now()
 	units, files, released, releasedMeta, nodes, markers := o.flatten()
 	o.mu.Unlock()
+	k = min(k, o.segmentBudget(units))
 	// Every spill file's trailer must count the rows replayed from it
 	// before any segment's part is closed: a part closed is a part the
 	// router may journal.
@@ -261,6 +263,27 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	return true, nil
 }
 
+// segmentHold is the batches a segment worker holds at once, in rows of
+// batchRows: the frame it decodes, the batch it gathers, its part's queue
+// (parquetout.segmentQueue, two) and the batch its encoder is writing.
+const segmentHold = 5
+
+// segmentBudget caps the segment workers by the row budget: what they hold
+// beside the tree (segmentHold batches each, at the rows' mean budget
+// bytes) stays within it; at least two.
+func (o *run[R, P]) segmentBudget(units []unit[P]) int {
+	var rows, bytes int64
+	for i := range units {
+		rows += units[i].n
+		bytes += units[i].units
+	}
+	if rows == 0 {
+		return 2
+	}
+	per := max(1, bytes/rows)
+	return int(max(2, o.opt.Budget/(segmentHold*batchRows*per)))
+}
+
 // hookSegmenter runs (tests) just before the drainer calls its Segmenter;
 // mu is the stage's lock, which must not be held then.
 var hookSegmenter func(mu *sync.Mutex)
@@ -293,13 +316,13 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 			meta += it.units
 			markers++
 			files[it.spill] += it.at.rows
-			units = append(units, unit[P]{f: it.spill, at: it.at, n: it.at.rows, logical: it.at.logical})
+			units = append(units, unit[P]{f: it.spill, at: it.at, n: it.at.rows, logical: it.at.logical, units: it.at.units})
 		case len(it.rows) > 0:
 			var l int64
 			for i := range it.rows {
 				l += o.schema.LogicalBytes(&it.rows[i])
 			}
-			units = append(units, unit[P]{rows: it.rows, n: int64(len(it.rows)), logical: l})
+			units = append(units, unit[P]{rows: it.rows, n: int64(len(it.rows)), logical: l, units: it.units})
 		}
 	}
 	return units, files, released, meta, nodes, markers

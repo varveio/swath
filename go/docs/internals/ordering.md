@@ -372,7 +372,10 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
   spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
   leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
-  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. Measured: at 16 vCPU 8 workers
+  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. And the row budget: each worker
+  holds about five batches of 4,096 rows beside the tree (the frame it decodes, the batch it gathers, two
+  queued, one being encoded; `segmentHold`), at the remaining rows' mean budget bytes, and the workers' total
+  stays within `--row-budget` (at least two workers): about 21 at the default 128 MiB and 300-byte rows. Measured: at 16 vCPU 8 workers
   beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
   cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
 - **What bounds the tail now.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing
@@ -387,7 +390,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   to the frozen limit, or else at `--part-rotation-max-rows` rows. A frame that may hold a boundary is decoded
   to find the row; the others pass whole. The first segment continues the open part. So the parts are the
   ones the serial drain writes, row for row, and their bytes the same (`TestSegmentsCutWhereTheSinkWould`,
-  2, 3 and 8 workers against the serial drain, with and without a row cap).
+  2, 3 and 8 encoders admitted against the serial drain, with and without a row cap).
 - **The part interval stops.** Once segments begin, the rest is cut by size and row count only:
   `--part-interval` closes no part in the tail. Its purpose, a recent durable point behind a slow frontier,
   does not arise there: every row is listed, and the parts publish as fast as they encode. With
@@ -397,8 +400,17 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   drainer's last key), and closes the part. The router publishes in ordinal order, each part checked against
   the one before it (`adjacent`) before it is journaled, so a later part never becomes durable before an
   earlier one; the order stage checks each seam again. A seam that descends stops the run before the first
-  row of the later segment is published (`TestSegmentsSeamError`). Each spill file's trailer is checked
-  against the rows the segments and the drainer replayed from it.
+  row of the later segment is published (`TestSegmentsSeamError`). Every spill file's trailer is checked
+  against the rows the drainer and the segments replay from it before any segment opens
+  (`TestSegmentsTrailerFailureClosesNoPart`), and the last segment does not close its part: it hands it
+  back as the router's open part, which the router's `Close` marks final once the stage's conservation
+  check and the pipeline's reconciliation have passed, as on the serial path. A resume therefore never
+  finds a final record from a run that failed its checks.
+- **Locks.** The drainer calls the router without the stage's lock: the router's interval cut holds the
+  router's lock while it waits for part 0's encoder, whose byte accounting wakes the stage under its lock
+  (`TestSegmenterCalledUnlocked`). `BeginSegments` stops the interval cut and states the rule in one step,
+  so no cut closes the open part after it was planned against; `AbandonSegments` restarts it when the rest
+  turns out to be one part. The read-ahead's reads in flight end before the segments read.
 - **Failure.** Any failure stops every worker. A segment that did not finish leaves its part unclosed, and
   the router's abort discards it: no partial part is published (`TestSegmentsFailureClosesNoPart`). The
   parts before it that finished may publish, in order: a durable prefix, as always.

@@ -191,7 +191,8 @@ func withProcs(t *testing.T, n int) {
 // until the rest has listed and spilled, replayed by segments after
 // listing; the parts (their rows, order, count, the last marked final) are
 // exactly the serial drain's, with a byte limit alone and with a row cap,
-// for 2, 3 and 8 workers; every row passes the guard once (the oracle).
+// for 2, 3 and 8 encoders admitted (the tiny budgets hold the workers to
+// two: segmentBudget); every row passes the guard once (the oracle).
 func TestSegmentsCutWhereTheSinkWould(t *testing.T) {
 	engaged := 0
 	for seed := range uint64(16) {
@@ -375,7 +376,7 @@ func TestSegmentWorkersCap(t *testing.T) {
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
 	f.left.Store(int64(f.siblings))
 	s := &partSink{limit: 3000, encoders: 8}
-	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir(), SegmentWorkers: 3})
+	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 1 << 30, SegmentWorkers: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
