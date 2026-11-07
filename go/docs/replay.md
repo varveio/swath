@@ -117,6 +117,9 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   `response_too_large`; `500 InternalError` with `fixture_disordered` when a row group's keys turn out not to
   ascend (the message names the row group and the part's file name, never its directory); and
   `500 InternalError` (`internal`, no detail) when the fixture read fails otherwise.
+- The listing routes take no request body. A request that declares one (`Content-Length` or chunked) is answered
+  as it would be without it, and its connection is then closed instead of drained, as on the Java server; a
+  body that never arrives holds nothing.
 - Some request targets are refused before the route, with `400`, an HTML page and
   `Cache-Control: must-revalidate,no-cache,no-store`, as the Java server's HTTP layer refuses them: a fragment
   (`#`), an empty path segment other than the last (`//bucket`, `/;/bucket`), an encoded `/` or `%`, an encoded

@@ -220,6 +220,12 @@ func rawTargets() []request {
 		"http:/{bucket}?list-type=2&max-keys=2", "/{bucket}?", "/{bucket}??list-type=2",
 		"/{bucket}?list-type=2&prefix=\xc3\xa9&max-keys=2", "/{bucket}?list-type=2&prefix=\"<>`{|}^[]\\&max-keys=2",
 		"/{bucket}?list-type=2&prefix=%&max-keys=2", "/{bucket}/x%20/?list-type=2&max-keys=2", "/", "/?list-type=2")
+	// A declared body that never arrives: answered as without one, the
+	// connection closed rather than drained.
+	for _, framing := range [][2]string{{"Content-Length", "1"}, {"Transfer-Encoding", "chunked"}} {
+		out = append(out, request{Name: fmt.Sprintf("raw GET [full] unsent body %s", framing[0]), Method: "GET",
+			Raw: "/{bucket}?list-type=2&max-keys=2", Header: [][2]string{framing}})
+	}
 	add("GET", "status",
 		"/{bucket}%zz?list-type=2", "/{bucket}%?list-type=2", "/{bucket}%u0041?list-type=2", "{bucket}?list-type=2",
 		"/{bucket}?list-type=2&prefix=a b&max-keys=1", "/{bucket}?list-type=2&prefix=\x01&max-keys=1",
