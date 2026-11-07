@@ -4,6 +4,7 @@
 package s3
 
 import (
+	"bytes"
 	"strings"
 	"unicode/utf16"
 )
@@ -91,7 +92,8 @@ func (q query) text(name string) (string, bool) {
 // ParseRequest parses a ListObjectsV2 query (the raw query string, as sent)
 // for bucket. It refuses what live S3 refuses, in S3's order: anything but
 // list-type=2, a max-keys that is not a non-negative integer, a marker, an
-// encoding-type other than url, and a continuation-token that is not one.
+// encoding-type other than url, a continuation-token that is not one, and
+// a NUL in the prefix or the start-after.
 func ParseRequest(bucket, rawQuery string) (*Request, error) {
 	q := parseQuery(rawQuery)
 	if lt, _ := q.text("list-type"); lt != "2" {
@@ -127,6 +129,11 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 		if _, _, err := DecodeToken(r.Token); err != nil {
 			return nil, err
 		}
+	}
+	// A NUL in the prefix, or in a start-after that bounds the page (a
+	// token wins over it), is refused (TestLiveNULIsRefused).
+	if bytes.IndexByte(r.Prefix, 0) >= 0 || !r.TokenSet && bytes.IndexByte(r.StartAfter, 0) >= 0 {
+		return nil, errNUL
 	}
 	owner, _ := q.text("fetch-owner")
 	r.FetchOwner = strings.EqualFold(owner, "true")

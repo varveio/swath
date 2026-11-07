@@ -25,5 +25,6 @@ var (
 	errMaxKeysInteger   = &Error{Status: 400, Code: "InvalidArgument", Message: "max-keys must be an integer"}
 	// The answers below are live S3's code and message.
 	errMarker       = &Error{Status: 400, Code: "InvalidArgument", Message: "Marker unsupported with REST.GET.BUCKET in list-type=2"}
+	errNUL          = &Error{Status: 400, Code: "InvalidArgument", Message: "Value must be a sequence of Unicode characters and cannot include Null."}
 	errEncodingType = &Error{Status: 400, Code: "InvalidArgument", Message: "Invalid Encoding Method specified in Request"}
 )

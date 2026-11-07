@@ -328,3 +328,31 @@ func TestLiveURLEncodingTable(t *testing.T) {
 		}
 	}
 }
+
+// A NUL is refused in the prefix and in a start-after: S3 answered
+// prefix=P%00, start-after=P%00 and start-after=a%00b with 400
+// InvalidArgument "Value must be a sequence of Unicode characters and
+// cannot include Null." (ArgumentName prefix or key-marker), after a bad
+// max-keys, encoding-type or continuation-token, the prefix's before the
+// start-after's. With a valid token the start-after is not read and its
+// NUL is not refused; a NUL delimiter is served (S3 writes it as the
+// character reference &#x0;, the replay as the raw byte: control
+// characters in text are a documented difference).
+func TestLiveNULIsRefused(t *testing.T) {
+	const msg = "Value must be a sequence of Unicode characters and cannot include Null."
+	for _, q := range []string{"prefix=r/%00", "prefix=r/&start-after=r/%00", "prefix=r/&start-after=a%00b", "prefix=a%00&start-after=b%00"} {
+		wantLiveError(t, "list-type=2&max-keys=2&"+q, 400, "InvalidArgument", msg)
+	}
+	wantLiveError(t, "list-type=2&start-after=a%00&max-keys=abc", 400, "InvalidArgument", "max-keys must be an integer")
+	wantLiveError(t, "list-type=2&start-after=a%00&encoding-type=bogus", 400, "InvalidArgument", "Invalid Encoding Method specified in Request")
+	wantLiveError(t, "list-type=2&prefix=a%00&continuation-token=", 400, "InvalidArgument", "The continuation token provided is incorrect")
+	tok := EncodeToken([]byte("r/k02"), false)
+	wantLivePage(t, "list-type=2&prefix=r/&max-keys=2&start-after=a%00&continuation-token="+url.QueryEscape(tok),
+		"<Name>bkt</Name><Prefix>r/</Prefix><ContinuationToken>T</ContinuationToken><NextContinuationToken>T</NextContinuationToken>"+
+			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
+		"O:r/k03 O:r/k04")
+	wantLivePage(t, "list-type=2&prefix=r/&delimiter=%00&max-keys=2",
+		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
+			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><Delimiter>\x00</Delimiter><IsTruncated>true</IsTruncated>",
+		"O:r/k01 O:r/k02")
+}
