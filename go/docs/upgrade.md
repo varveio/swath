@@ -117,7 +117,8 @@ logical schema (`schema_id`, kept when a column is added as optional; see "The d
 schema id" below), the private journal (version 7, never read by readers; an interrupted run of an earlier build is finished
 with that build or started over with `--overwrite`) and the writer recipe
 (`parquetout.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
-parts are byte-identical within a build only.
+parts are byte-identical within a build only; a part claimed but not recorded when a run stopped is reproduced
+on resume with its own footer's columns and `created_by`, so that one part does not depend on the build that resumes.
 
 ## Run report and counters
 
