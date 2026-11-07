@@ -213,11 +213,17 @@ func azureMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) ([]request, []a
 		request{Name: "DELETE", Method: "DELETE", Path: azurePath, Query: aq(), Header: h},
 		request{Name: "wrong container", Method: "GET", Path: "/replay/no-such-container", Query: aq(), Header: h},
 		request{Name: "HEAD wrong container", Method: "HEAD", Path: "/replay/no-such-container", Query: aq(), Header: h},
-		request{Name: "wrong account", Method: "GET", Path: "/other/{bucket}", Query: aq(), Header: h},
-		request{Name: "extra segment", Method: "GET", Path: "/replay/{bucket}/x", Query: aq(), Header: h},
+		// The next four are answered by the S3 route. Here they test the
+		// routing: the same status and classified headers, so the same
+		// route answered. Their bodies are the S3 route's, which answers
+		// as live S3 does where the Java server does not (the error
+		// document, the continuation token); the S3 section holds those
+		// bodies through its divergence rules.
+		request{Name: "wrong account", Method: "GET", Path: "/other/{bucket}", Query: aq(), Header: h, Compare: "headers"},
+		request{Name: "extra segment", Method: "GET", Path: "/replay/{bucket}/x", Query: aq(), Header: h, Compare: "headers"},
 		request{Name: "ambiguous selectors", Method: "GET", Path: azurePath, Query: aq("list-type", "2"), Header: h},
-		request{Name: "S3 beside Azure", Method: "GET", Path: "", Query: "list-type=2&max-keys=2"},
-		request{Name: "account root", Method: "GET", Path: "/replay/", Query: aq(), Header: h},
+		request{Name: "S3 beside Azure", Method: "GET", Path: "", Query: "list-type=2&max-keys=2", Compare: "headers"},
+		request{Name: "account root", Method: "GET", Path: "/replay/", Query: aq(), Header: h, Compare: "headers"},
 	)
 	// Marker cases: each server resumes with its own marker.
 	base := request{Method: "GET", Path: azurePath, Header: h}
@@ -268,6 +274,11 @@ func azureMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) ([]request, []a
 		}},
 		{name: "marker padded", source: src("maxresults", "1"), follow: func(m string) request {
 			return follow("maxresults", "3")(m + strings.Repeat("=", (4-(len(m)-4)%4)%4))
+		}},
+		// Progress sits outside the scope digest: a marker that carries 1
+		// is accepted, and the next marker must keep it.
+		{name: "marker progress 1", source: src("maxresults", "1"), follow: func(m string) request {
+			return follow("maxresults", "1")(markerWithProgress(m, 1))
 		}},
 	}
 	return out, marks
@@ -577,6 +588,22 @@ func markerEffect(m string) string {
 		return m
 	}
 	return fmt.Sprintf("az1(flag=%d progress=%d boundary=%s)", b[0], b[1], hex.EncodeToString(b[18:]))
+}
+
+// markerWithProgress is m with its progress byte (the second payload
+// byte) set to v and re-encoded unpadded; m unchanged when it is not a
+// decodable marker.
+func markerWithProgress(m string, v byte) string {
+	raw, ok := strings.CutPrefix(m, "az1.")
+	if !ok {
+		return m
+	}
+	b, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(raw, "="))
+	if err != nil || len(b) < 2 {
+		return m
+	}
+	b[1] = v
+	return "az1." + base64.RawURLEncoding.EncodeToString(b)
 }
 
 // azureComparator compares Azure answers structurally: the same status;

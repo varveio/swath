@@ -475,9 +475,12 @@ rollup when it accepts the delimiter (`suppressPrefixAtOrBeforeFloor` false: the
 or a row walk that seeks past each rolled prefix. A page ends one item early to learn truncation; the marker
 resumes after a Blob's name (exclusive) or at a BlobPrefix's `upperOf` (inclusive).
 
-Markers are `az1.` + base64url(flag, progress (always 0), 16 bytes of SHA-256 over the length-prefixed scope,
-boundary). The scope digest is the Java server's, so markers are the same bytes for the same fixture identity
-(`TestMarkerGolden`); decoding accepts padding and spare trailing bits and refuses CR/LF, a foreign scope, a
+Markers are `az1.` + base64url(flag, progress, 16 bytes of SHA-256 over the length-prefixed scope, boundary).
+The progress byte (0 or 1) marks a walk past a pagination test profile's injected empty first page. This route
+serves only the production profile, which injects no page and never sets it, but the byte sits outside the
+scope digest and a marker that carries 1 passes it to the next marker, flat, delimited, native rollup or walk
+(`TestMarkerProgressIsRetained`, the Java server's markers over the keys a, b, c). The scope digest is the Java
+server's, so markers are the same bytes for the same fixture identity (`TestMarkerGolden`); decoding accepts padding and spare trailing bits and refuses CR/LF, a foreign scope, a
 flag or progress above 1, and boundaries over 4,096 bytes (`TestMarkerDecodeLeniency`).
 
 ### Text and the wire
@@ -498,8 +501,9 @@ a 255-segment name (`TestRenderRefusals`; evidence capture `azure-12a`).
 `azureMatrix` (both versions; `maxresults` edges and garbage; prefixes at directory and inside-segment depths;
 delimiters `/`, multi-byte, astral, empty; `startFrom` around names, inside rolled prefixes and with EE..F4
 characters including the 4,096-byte U+10000 bound; header, `Accept`, query-grammar and raw-byte refusals;
-routing, HEAD, POST, DELETE), marker cases in which each server resumes with its own marker (page 2, other
-scope, other version, truncated, flipped, padded; each source asks for one result in a scope with at least two
+routing, HEAD, POST, DELETE; the routing requests the S3 route answers compare status and headers only, as the
+S3 section holds that route's bodies through its divergence rules), marker cases in which each server resumes with its own marker (page 2, other
+scope, other version, truncated, flipped, padded, progress byte set to 1; each source asks for one result in a scope with at least two
 entries, and a case whose sources agree without a marker is reported as skipped, not passed), marker walks at `-walks` sizes (default 1, 7, 5000), and a
 seeded random set. `azureComparator` requires the same status and classified headers (`Content-Type`,
 `x-ms-version`, `x-ms-error-code`, `x-ms-client-request-id`, `Allow`, `x-swath-replay-error`), a well-formed
@@ -537,7 +541,7 @@ comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorrupte
 | provider order, flat and delimited, against brute force (rollup and walk stores) | `azure` `TestProviderOrderMatchesUTF16`, `TestStartFromInsideRolledPrefix`, `TestCompareIsUTF16OrderForValidNames`, `TestInvalidUTF8NamesKeepATotalOrder` |
 | store reads | `azure` `TestLongStartFromCostBound`, `TestDeepLeadByteBoundsRetireEmptyPartsWithAFewProbes`, `TestNamesWithoutLeadBytesKeepOneRangeAndOneRead`, `TestSwappedBranchesReuseRowsAlreadyRead`, `TestFallbackBatchesFlatEntriesUnderDelimiter` |
 | page limit, shapes, counts, engagement | `azure` `TestFiveThousandPageLimitAndMarkerScope`, `TestInjectedLatencyShapes`, `TestPageReportsBlobAndPrefixCounts`, `TestEngagementPaths`; `server` `TestAzureEngagementMeters` |
-| markers | `azure` `TestMarkerGolden`, `TestMarkerDecodeLeniency` |
+| markers | `azure` `TestMarkerGolden`, `TestMarkerDecodeLeniency`, `TestMarkerProgressIsRetained` |
 | request checks and their order | `azure` `TestParseRefusalOrder`, `TestAcceptRule`, `TestRequestLineText` |
 | bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals`, `TestUnrenderableYearsAndNegativeEpoch`, `TestHTTPDatePadsSingleDigitDay` |
 | client request id | `azure` `TestClientRequestIDLength`; `server` `TestAzureErrorEchoUsesTheClientIDRule` |
@@ -546,6 +550,6 @@ comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorrupte
 | the evidence comparator itself | `azure` `TestComparatorAcceptsTheProfile`, `TestComparatorOmitsNativeOrMetadata`, `TestComparatorAcceptsTheRenderer`, `TestComparatorRefusesChanges`, `TestComparatorWalkBoundaries`, `TestComparatorRefusesCrossPagePrefixRepeat`, `TestNamespaceMapping`, `TestExchangeChecksVersionClientIDAndErrorCode`, `TestWalkChecksVersionAndPreamble`, `TestWalkRequestsCarryClientIDAndRefuseDuplicates`, `TestPageParsing` |
 | latency key | `azure` `TestLatencyKeyGolden` |
 | routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
-| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself`, `TestMarkerCasesRunOrSkip` |
+| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself`, `TestMarkerCasesRunOrSkip`, `TestProgressMarkerCaseKeepsProgress` |
 | native captures | `azure` `TestAzureEvidenceReplay` (fixture tier), `TestEvidenceRejectsCorruptedReplayResults`, `TestPinRules`, `TestPinAdjustments` |
 | the official SDK | `azure` `TestSDKDecodesEncodedNamesAndProperties`, `TestSDKConsumesFiveThousandPages`, `TestSDKFixtureFaultAndRetries`; the SDK runs of `TestAzureEvidenceReplay` |

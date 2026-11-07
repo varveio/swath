@@ -90,7 +90,7 @@ func nonNil(s string) []byte {
 // List serves one page.
 func (p *Pager) List(ctx context.Context, r *Request) (*Result, error) {
 	prefix, delimiter := []byte(r.Prefix), []byte(r.Delimiter)
-	bind := binding(r, p.FixtureIdentity)
+	ms := markerState{binding: binding(r, p.FixtureIdentity)}
 	if r.MaxResultsSet {
 		if n, err := strconv.ParseInt(r.MaxResults, 10, 64); err == nil && n > MaxPageSize {
 			p.record("page_limit_clamped", "requested_above_5000")
@@ -101,11 +101,12 @@ func (p *Pager) List(ctx context.Context, r *Request) (*Result, error) {
 	}
 	lower := later(boundary{prefix, true}, boundary{nonNil(r.StartFrom), true})
 	if r.Marker != "" {
-		m, err := decodeMarker(r.Marker, bind)
+		m, err := decodeMarker(r.Marker, ms.binding)
 		if err != nil {
 			return nil, fail(Malformed, "invalid_marker")
 		}
 		lower = later(lower, boundary{m.boundary, m.inclusive})
+		ms.progress = m.progress
 	}
 	if !bytes.HasPrefix(lower.key, prefix) {
 		// At or after the prefix in provider order but outside it: past
@@ -120,9 +121,9 @@ func (p *Pager) List(ctx context.Context, r *Request) (*Result, error) {
 		}
 		p.record("flat", reason)
 		c := newCursor(p.rowItems, p.firstKey, rangesFrom(lower.key, lower.inclusive, prefix))
-		return p.page(ctx, r, nil, c, bind)
+		return p.page(ctx, r, nil, c, ms)
 	}
-	return p.delimited(ctx, r, prefix, delimiter, lower, bind)
+	return p.delimited(ctx, r, prefix, delimiter, lower, ms)
 }
 
 // delimited serves a delimiter page. A lower bound inside a rolled prefix
@@ -130,7 +131,7 @@ func (p *Pager) List(ctx context.Context, r *Request) (*Result, error) {
 // names is at or after the bound, then continues after the subtree, so
 // every byte range read later holds whole rolled subtrees and no prefix is
 // listed twice.
-func (p *Pager) delimited(ctx context.Context, r *Request, prefix, delimiter []byte, lower boundary, bind []byte) (*Result, error) {
+func (p *Pager) delimited(ctx context.Context, r *Request, prefix, delimiter []byte, lower boundary, ms markerState) (*Result, error) {
 	var leading []item
 	from, inclusive := lower.key, lower.inclusive
 	for from != nil {
@@ -158,14 +159,15 @@ func (p *Pager) delimited(ctx context.Context, r *Request, prefix, delimiter []b
 	if from != nil {
 		c = newCursor(p.rollups(prefix, delimiter), p.firstKey, rangesFrom(from, inclusive, prefix))
 	}
-	return p.page(ctx, r, leading, c, bind)
+	return p.page(ctx, r, leading, c, ms)
 }
 
 // page takes one page: the leading items first, then the cursor's. A page
 // that ends on a Blob resumes after its name; one that ends on a
 // BlobPrefix resumes at the prefix's provider-order upper bound, so its
-// subtree is skipped.
-func (p *Pager) page(ctx context.Context, r *Request, leading []item, c *cursor, bind []byte) (*Result, error) {
+// subtree is skipped. The marker keeps the progress byte the request
+// resumed with.
+func (p *Pager) page(ctx context.Context, r *Request, leading []item, c *cursor, ms markerState) (*Result, error) {
 	res := &Result{Request: r, Entries: make([]Entry, 0, min(r.PageSize, 1024)), onPath: p.OnPath}
 	var last item
 	more := false
@@ -201,9 +203,9 @@ func (p *Pager) page(ctx context.Context, r *Request, leading []item, c *cursor,
 	}
 	if more {
 		if last.isPrefix() {
-			res.NextMarker = encodeMarker(true, upperOf(last.name), bind)
+			res.NextMarker = ms.encode(true, upperOf(last.name))
 		} else {
-			res.NextMarker = encodeMarker(false, last.name, bind)
+			res.NextMarker = ms.encode(false, last.name)
 		}
 	}
 	return res, nil

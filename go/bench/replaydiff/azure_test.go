@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,36 @@ func TestDroppedPrefixIsAnInvalidMarker(t *testing.T) {
 	}}
 	if r := d.markerCase(same); r.Pass || !strings.Contains(r.Error, "changed scope was accepted") {
 		t.Errorf("%+v", r)
+	}
+}
+
+// TestProgressMarkerCaseKeepsProgress pins what the "marker progress 1"
+// case sends and requires: its follow-up resumes with the source's marker
+// with progress 1 (flag and boundary unchanged; the binding too, or the
+// route would refuse it), and the route's next marker keeps progress 1,
+// which the comparator's marker effect then holds the two servers to.
+func TestProgressMarkerCaseKeepsProgress(t *testing.T) {
+	tg := &target{name: "a", base: azureServer(t, false, "a", "b", "c"), client: &http.Client{}}
+	_, marks := azureMatrix([][]byte{[]byte("a"), []byte("b"), []byte("c")}, rand.New(rand.NewPCG(1, 1)), 10)
+	i := slices.IndexFunc(marks, func(m azureMarkerCase) bool { return m.name == "marker progress 1" })
+	if i < 0 {
+		t.Fatal("no progress case")
+	}
+	first, err := tg.do("bkt", marks[i].source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := azureNextMarker(first.Body)
+	if got, want := markerEffect(markerWithProgress(m, 1)), strings.Replace(markerEffect(m), "progress=0", "progress=1", 1); m == "" || got != want {
+		t.Fatalf("marker %q: progressed effect %s, want %s", m, got, want)
+	}
+	next, err := tg.do("bkt", marks[i].follow(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := markerEffect(azureNextMarker(next.Body)); next.Status != 200 || !bytes.Contains(next.Body, []byte("<Name>b</Name>")) ||
+		got != "az1(flag=0 progress=1 boundary=62)" {
+		t.Fatalf("%d next marker %s: %s", next.Status, got, next.Body)
 	}
 }
 
