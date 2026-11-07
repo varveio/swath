@@ -9,18 +9,29 @@ import (
 	"time"
 )
 
-// A timer's max and percentiles describe recent samples, not the meter's
-// whole life: a scrape at the end of a measured window reads that window,
-// not the warm-up before it. The window is the one a Micrometer timer
-// publishes with its defaults (the Java server's registry), so a scrape of
-// either server covers the same span: samples go into every one of
-// windowBuffers histograms, the oldest is read, and every
-// windowExpiry/windowBuffers the oldest is cleared and the next becomes
-// the one read. A snapshot therefore covers the last 80 to 120 seconds.
+// A timer's max and percentiles, and a distribution's max, describe recent
+// samples, not the meter's whole life, with the rules of the Java server's
+// registry (Micrometer 1.17's SimpleMeterRegistry, cumulative mode), so a
+// scrape of either server at the same moment after the same samples reads
+// the same window. That registry sets every meter's expiry to its step, one
+// minute, with the default buffer length of three, and keeps two windows:
+//
+//   - the maximum (TimeWindowMax): three slots, every sample raising all
+//     three; every expiry the slot read is cleared and the next becomes
+//     the one read, and after three expiries without a rotation all are
+//     cleared at once. A maximum lasts two to three minutes.
+//   - the percentiles (TimeWindowPercentileHistogram): three histograms,
+//     every sample recorded in all three; every expiry/3 the one read is
+//     cleared and the next becomes the one read, at most three rotations
+//     at a time, the rotation clock catching up by one step per rotation.
+//     A percentile describes the last 40 to 60 seconds.
+//
+// Both rotate lazily, when a sample is recorded or the window is read, on
+// the wall clock in milliseconds from the meter's creation, as there.
 const (
-	windowExpiry  = 2 * time.Minute
-	windowBuffers = 3
-	windowStep    = windowExpiry / windowBuffers
+	windowExpiryMillis  = int64(time.Minute / time.Millisecond)
+	windowBuffers       = 3
+	histogramStepMillis = windowExpiryMillis / windowBuffers
 )
 
 // The histogram is log-linear: exact below 2^subBits nanoseconds, then
@@ -101,43 +112,90 @@ func (h *histogram) percentile(p float64) int64 {
 	return h.max
 }
 
-// timeWindow is a timer's rotating set of histograms.
-type timeWindow struct {
-	ring [windowBuffers]histogram
-	cur  int       // the buffer read
-	next time.Time // when cur is next cleared
+// windowMax is TimeWindowMax: the maximum over a rotating ring of slots.
+type windowMax struct {
+	ring [windowBuffers]float64
+	cur  int
+	last int64 // milliseconds of the last rotation
 }
 
-func newTimeWindow(now time.Time) *timeWindow {
-	return &timeWindow{next: now.Add(windowStep)}
-}
+func newWindowMax(nowMillis int64) windowMax { return windowMax{last: nowMillis} }
 
-// rotate clears the buffers whose span has passed by now.
-func (w *timeWindow) rotate(now time.Time) {
-	if now.Sub(w.next) >= windowExpiry {
-		for i := range w.ring {
-			w.ring[i].reset()
-		}
-		w.next = now.Add(windowStep)
+func (w *windowMax) rotate(nowMillis int64) {
+	since := nowMillis - w.last
+	if since < windowExpiryMillis {
 		return
 	}
-	for !now.Before(w.next) {
-		w.ring[w.cur].reset()
+	if since >= windowExpiryMillis*windowBuffers {
+		clear(w.ring[:])
+		w.cur = 0
+		w.last = nowMillis - since%windowExpiryMillis
+		return
+	}
+	for iterations := 0; ; {
+		w.ring[w.cur] = 0
 		w.cur = (w.cur + 1) % windowBuffers
-		w.next = w.next.Add(windowStep)
+		since -= windowExpiryMillis
+		w.last += windowExpiryMillis
+		iterations++
+		if since < windowExpiryMillis || iterations >= windowBuffers {
+			break
+		}
 	}
 }
 
-func (w *timeWindow) record(now time.Time, v int64) {
-	w.rotate(now)
+func (w *windowMax) record(nowMillis int64, v float64) {
+	w.rotate(nowMillis)
+	for i := range w.ring {
+		w.ring[i] = max(w.ring[i], v)
+	}
+}
+
+func (w *windowMax) read(nowMillis int64) float64 {
+	w.rotate(nowMillis)
+	return w.ring[w.cur]
+}
+
+// windowHistogram is TimeWindowPercentileHistogram's rotation over this
+// package's histogram.
+type windowHistogram struct {
+	ring [windowBuffers]histogram
+	cur  int
+	last int64 // milliseconds of the last rotation
+}
+
+func newWindowHistogram(nowMillis int64) windowHistogram { return windowHistogram{last: nowMillis} }
+
+// rotate clears at most windowBuffers histograms per call and moves the
+// rotation clock one step per histogram cleared, however long the window
+// was idle: the next call catches up further.
+func (w *windowHistogram) rotate(nowMillis int64) {
+	since := nowMillis - w.last
+	if since < histogramStepMillis {
+		return
+	}
+	for iterations := 0; ; {
+		w.ring[w.cur].reset()
+		w.cur = (w.cur + 1) % windowBuffers
+		since -= histogramStepMillis
+		w.last += histogramStepMillis
+		iterations++
+		if since < histogramStepMillis || iterations >= windowBuffers {
+			break
+		}
+	}
+}
+
+func (w *windowHistogram) record(nowMillis int64, v int64) {
+	w.rotate(nowMillis)
 	for i := range w.ring {
 		w.ring[i].record(v)
 	}
 }
 
-// read returns the window's max and the p50 and p99 in nanoseconds.
-func (w *timeWindow) read(now time.Time) (maxv, p50, p99 int64) {
-	w.rotate(now)
+// read returns the p50 and p99 in nanoseconds of the histogram read.
+func (w *windowHistogram) read(nowMillis int64) (p50, p99 int64) {
+	w.rotate(nowMillis)
 	h := &w.ring[w.cur]
-	return h.max, h.percentile(0.50), h.percentile(0.99)
+	return h.percentile(0.50), h.percentile(0.99)
 }

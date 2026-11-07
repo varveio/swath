@@ -227,11 +227,23 @@ keep-alive connection, reading a request and reading its body take `--idle-timeo
   `memory.swap.max` of the process's own cgroup and `/proc/self/status` `Cpus_allowed_list`, each a
   `{value, error}` pair: a missing, unreadable or invalid source is an explicit error.
 
-A timer's `count` and `sum_ms` cover the server's life; its `max_ms`, `p50_ms` and `p99_ms` cover recent
-samples, the window a Java server's timers publish: every sample goes into three histograms, the oldest is read,
-and every 40 seconds the oldest is cleared, so a scrape covers the last 80 to 120 seconds. The histograms are
-log-linear (32 buckets per power of two), so a percentile is within 3.1% above the sample it stands for and never
-above `max_ms`. Read a measured window's mean as the difference of two scrapes' `sum_ms` over the difference
+A timer's `count` and `sum_ms`, and a distribution's `count` and `total`, cover the server's life. A timer's
+`max_ms`, `p50_ms` and `p99_ms` and a distribution's `max` cover recent samples, by the rules of the Java server's
+registry (Micrometer's `SimpleMeterRegistry`: a one-minute expiry, three buffers), with two different windows,
+both counted from the meter's creation and rotated when a sample is recorded or the meter is read:
+
+- **The maximum** is kept in three slots, each sample raising all three. Each minute the slot read is cleared and
+  the next becomes the one read; after three minutes without a rotation all three are cleared. A sample stays
+  the maximum for two to three minutes.
+- **The percentiles** come from three histograms, each sample recorded in all three. Every 20 seconds the one read
+  is cleared and the next becomes the one read, so they describe the last 40 to 60 seconds. One rotation clears
+  at most three histograms and moves the rotation clock 20 seconds per histogram, so after a long idle spell the
+  next few scrapes keep clearing until the clock catches up.
+
+For example, after 900 ms at 0 s and 10 ms at 79 s, a scrape at 79 s reads `p50_ms` 10 and `max_ms` 900, at 121 s
+`p50_ms` 0 and `max_ms` 900, at 181 s `max_ms` 10 (`TestWindowsFollowTheJavaRegistry`). The histograms are
+log-linear (32 buckets per power of two), so a percentile is within 3.1% above the sample it stands for.
+Read a measured window's mean as the difference of two scrapes' `sum_ms` over the difference
 of their `count`. `index.load.latency` and `sortfixture.build.latency` publish no percentiles (`null`), as on
 the Java server.
 
