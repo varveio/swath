@@ -154,7 +154,11 @@ type report struct {
 	// case whose source page issued no token), with the reason: missing
 	// coverage, never a pass.
 	Skipped []string `json:"skipped,omitempty"`
-	Results []result `json:"results"`
+	// TokenBytes names the walk pages that agree in meaning but whose
+	// page tokens differ in bytes: a wire difference, reported apart
+	// from the walk's verdict.
+	TokenBytes []string `json:"token_byte_differences,omitempty"`
+	Results    []result `json:"results"`
 }
 
 func run(o options) error {
@@ -507,6 +511,9 @@ func (d *driver) write() error {
 	}
 	for _, s := range rep.Skipped {
 		fmt.Fprintf(&text, "SKIP %s\n", s)
+	}
+	for _, s := range rep.TokenBytes {
+		fmt.Fprintf(&text, "TOKEN BYTES DIFFER %s\n", s)
 	}
 	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed)
 	os.Stdout.Write(text.Bytes())

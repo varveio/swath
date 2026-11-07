@@ -5,8 +5,10 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +37,14 @@ func TestGCSComparator(t *testing.T) {
 	items := &response{200, ref.Header, []byte(strings.Replace(body, `"a"`, `"b"`, 1))}
 	if d := (gcsComparator{}).compare(ref, items); d.OK || d.Detail != "documents differ" {
 		t.Errorf("an item difference: %+v", d)
+	}
+	// Only the token's value is masked: spacing, order and escapes still
+	// count, with or without a token.
+	if equalMaskedTokens([]byte(`{"kind":"storage#objects"}`), []byte(`{"kind": "storage#objects"}`)) ||
+		equalMaskedTokens([]byte(`{"a":"x","nextPageToken":"t1"}`), []byte(`{"nextPageToken":"t2","a":"x"}`)) ||
+		equalMaskedTokens([]byte(`{"a":"\u00e9","nextPageToken":"t1"}`), []byte(`{"a":"é","nextPageToken":"t2"}`)) ||
+		!equalMaskedTokens([]byte(`{"a":"x","nextPageToken":"t1"}`), []byte(`{"a":"x","nextPageToken":"gcs1.AB-_"}`)) {
+		t.Error("token masking")
 	}
 	allow := &response{405, h("Content-Type", "application/json; charset=utf-8", "Allow", "GET"), nil}
 	if d := (gcsComparator{}).compare(allow, &response{405, h("Content-Type", "application/json; charset=utf-8"), nil}); d.OK {
@@ -133,5 +143,35 @@ func TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk(t *testing.T) {
 	}
 	if len(rep.Skipped) != tokenCases || tokenCases < 10 {
 		t.Errorf("%d skipped of %d token cases: %v", len(rep.Skipped), tokenCases, rep.Skipped)
+	}
+}
+
+// TestGCSWalkSeparatesTokenBytesFromSemantics: a walk page that differs
+// only in spacing fails; one that differs only in its token's value
+// passes, the token followed, and is listed as a token byte difference.
+func TestGCSWalkSeparatesTokenBytesFromSemantics(t *testing.T) {
+	serve := func(pages map[string]string) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			io.WriteString(w, pages[r.URL.Query().Get("pageToken")])
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	walkOf := func(ref, got map[string]string) (result, *report) {
+		rep := &report{}
+		d := &driver{o: options{bucket: "bkt"}, ref: &target{name: "ref", base: serve(ref), client: &http.Client{}},
+			got: &target{name: "got", base: serve(got), client: &http.Client{}}, comp: gcsComparator{}, rep: rep}
+		return d.gcsWalkOne(walk{Name: "w", Query: "maxResults=1"}), rep
+	}
+	res, rep := walkOf(map[string]string{"": `{"kind":"storage#objects"}`}, map[string]string{"": `{"kind": "storage#objects"}`})
+	if res.Pass || len(rep.TokenBytes) != 0 {
+		t.Errorf("spacing difference passed: %+v", res)
+	}
+	res, rep = walkOf(
+		map[string]string{"": `{"kind":"storage#objects","nextPageToken":"r1"}`, "r1": `{"kind":"storage#objects","items":[{"name":"b"}]}`},
+		map[string]string{"": `{"kind":"storage#objects","nextPageToken":"g1"}`, "g1": `{"kind":"storage#objects","items":[{"name":"b"}]}`})
+	if !res.Pass || res.Pages != 2 || len(rep.TokenBytes) != 1 {
+		t.Errorf("token-only difference: %+v %v", res, rep.TokenBytes)
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"path/filepath"
-	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -168,11 +168,13 @@ func gcsListAll(t *target, bucket string) ([][]byte, error) {
 // the same compared headers (Content-Type, x-swath-replay-*, and Allow on
 // a 405), and the same body. Both servers render compact JSON in a fixed
 // field order and issue the same token bytes for the same state, so the
-// body is compared byte for byte; when the bytes differ but the
-// documents are equal once the page tokens are masked, the difference is
-// in the tokens alone and Detail says so (still a failure: a token
-// difference is a wire difference). Walks compare tokens by effect: each
-// server follows its own tokens and every page must agree.
+// body is compared byte for byte; when the bytes differ only inside the
+// page token's value, Detail says so (still a failure: a token difference
+// is a wire difference). A walk follows each server's own tokens and
+// passes a page whose bytes agree apart from the token's value (the
+// walk judges the tokens by where they lead), listing that page in the
+// report's token_byte_differences: the walk's verdict is semantic, the
+// list is the wire fidelity.
 type gcsComparator struct{}
 
 func (gcsComparator) compare(ref, got *response) diff {
@@ -183,7 +185,7 @@ func (gcsComparator) compare(ref, got *response) diff {
 	}
 	if d.Offset >= 0 {
 		if equalMaskedTokens(ref.Body, got.Body) {
-			d.Detail = "documents equal with page tokens masked: the tokens differ"
+			d.Detail = "bytes equal with the page tokens' values masked: the tokens differ"
 		} else {
 			d.Detail = "documents differ"
 		}
@@ -191,19 +193,20 @@ func (gcsComparator) compare(ref, got *response) diff {
 	return d
 }
 
+// tokenValue is the value span of a page's nextPageToken member as the
+// servers write it (a token is base64url and '.', never escaped).
+var tokenValue = regexp.MustCompile(`"nextPageToken":"[^"\\]*"`)
+
+// maskTokenValue blanks the token's value and keeps every other byte, so
+// field order, spacing and escapes still count.
+func maskTokenValue(b []byte) []byte {
+	return tokenValue.ReplaceAll(b, []byte(`"nextPageToken":""`))
+}
+
+// equalMaskedTokens reports whether two bodies are byte-identical apart
+// from their page tokens' values.
 func equalMaskedTokens(a, b []byte) bool {
-	var x, y map[string]any
-	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
-		return false
-	}
-	_, tx := x["nextPageToken"]
-	_, ty := y["nextPageToken"]
-	if tx != ty {
-		return false
-	}
-	delete(x, "nextPageToken")
-	delete(y, "nextPageToken")
-	return reflect.DeepEqual(x, y)
+	return bytes.Equal(maskTokenValue(a), maskTokenValue(b))
 }
 
 // skip records a case that could not run as designed; it is neither
@@ -316,10 +319,14 @@ func (d *driver) gcsWalkOne(w walk) result {
 		var df diff
 		if errA == nil && errB == nil {
 			df = d.comp.compare(a, b)
-			if !df.OK && equalMaskedTokens(a.Body, b.Body) && a.Status == b.Status && len(df.HeaderDiffs) == 0 {
-				// The tokens differ in bytes; the walk decides whether
-				// they mean the same thing.
+			if !df.OK && a.Status == b.Status && len(df.HeaderDiffs) == 0 && equalMaskedTokens(a.Body, b.Body) {
+				// Every byte but the token values agrees: the walk judges
+				// the tokens by where they lead, and the byte difference
+				// is reported as a wire difference of its own.
 				df.OK = true
+				d.mu.Lock()
+				d.rep.TokenBytes = append(d.rep.TokenBytes, fmt.Sprintf("walk %q page %d", w.Name, res.Pages))
+				d.mu.Unlock()
 			}
 		}
 		if errA != nil || errB != nil || !df.OK {
