@@ -77,8 +77,12 @@ change to the text changes the decoded bytes or fails to decode, and a changed p
 altered token is `400 InvalidArgument` (`TestTokenProperties`). Live S3 refuses its own token with the last
 character replaced or four characters dropped (`TestLiveAlteredTokenIsRefused`), but of five single decoded-byte
 flips it refused one and served the rest (three from the first key, the last byte as if unaltered); this server
-refuses them all, so the live matrix's `flip-decoded` case answers `400` where S3 answers `200`. It is a checksum, not a signature: a forged token
-chooses a resume point the client could already choose with `start-after`.
+refuses them all, so the live matrix's `flip-decoded` case answers `400` where S3 answers `200`. The CRC covers
+only `flag || boundary`: it establishes that a token was not altered, and nothing about who issued it. It binds no
+bucket, fixture, scope, process or secret, so a token survives restarts, is accepted across fixtures, and a token
+a client constructs for any boundary is accepted, one outside the fixture giving an empty page
+(`TestTokenIsNotBound`). It is a checksum, not a signature or an authorization: a constructed token chooses a
+resume point the client could already choose with `start-after`.
 
 The Java server's tokens (`v2:` + base64url of flag and boundary, `v1:` + the key) carry no check and are
 refused here; for the same boundary this server issues different bytes (`TestTokenGolden` records both). The

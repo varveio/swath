@@ -33,8 +33,10 @@ import (
 // (no padding, no stray bits after the last byte, no line breaks), so
 // any change to the text changes the decoded bytes or fails to decode,
 // and a changed payload fails the checksum. It is a checksum, not a
-// signature: a client that builds a token picks an arbitrary resume
-// boundary, which start-after already allows. The Java server's tokens
+// signature or a binding: it covers only flag || boundary, so a token
+// survives restarts and is accepted by a server on another fixture, and
+// a client that builds a token picks an arbitrary resume boundary, which
+// start-after already allows (TestTokenIsNotBound). The Java server's tokens
 // ("v2:" + base64url(flag || boundary), "v1:" + base64url(boundary))
 // carry no check, so this server issues different token bytes for the
 // same boundary and refuses those forms; the differential driver
@@ -66,10 +68,11 @@ func EncodeToken(boundary []byte, inclusive bool) string {
 // (TestLiveEmptyTokenIsRefused, TestLiveErrorDocuments).
 var errInvalidToken = (&Error{Status: 400, Code: "InvalidArgument", Message: "The continuation token provided is incorrect"}).argument("continuation-token")
 
-// DecodeToken parses a token. Any string that is not a token this server
-// issued unaltered, the empty and blank strings included, is a 400
+// DecodeToken parses a token. Any string not in the token form or whose
+// checksum fails, the empty and blank strings included, is a 400
 // InvalidArgument: a continuation-token parameter that is present must
-// resume something, as on live S3.
+// resume something, as on live S3. A well-formed token is accepted
+// whoever built it.
 func DecodeToken(token string) (t Token, ok bool, err error) {
 	// The decoder skips CR and LF even when strict; a token holds neither.
 	if strings.ContainsAny(token, "\r\n") {

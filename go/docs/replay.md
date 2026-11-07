@@ -112,12 +112,15 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   the Basic Multilingual Plane (`١٢` is 12); a digit outside it (such as U+1D7D9) is not an integer.
 - Refusals, each `400 InvalidArgument` with live S3's message, checked in S3's order after `max-keys`: a `marker`
   (ListObjects V1's, even empty); an `encoding-type` other than `url` in any case (the empty one included); a
-  `continuation-token` that is empty, blank or not a token this server issued unaltered; a NUL in `prefix`, or
+  `continuation-token` that is empty, blank, not in this server's token form or whose checksum fails; a NUL in `prefix`, or
   in a `start-after` that is used (a token wins over it).
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
   omits the ignored `StartAfter`. A token is unpadded base64url of the resume boundary and a CRC-32, so a
   flipped or dropped character is refused as S3 refuses it (S3 serves some alterations of its own decoded
-  bytes; this server refuses every one). A flat page's token sent with a delimiter resumes
+  bytes; this server refuses every one). The checksum covers only the flag and the boundary: it shows a token was
+  not altered, not where it came from. No bucket, fixture, process or secret is bound in, so a token survives a
+  restart, is accepted by a server on another fixture, and one a client builds for any boundary is accepted
+  (one past the fixture's keys gives an empty page), as a `start-after` would be (`TestTokenIsNotBound`). A flat page's token sent with a delimiter resumes
   at its key and rolls up what follows, the common prefix that key falls in included; a `start-after` inside a
   common prefix passes it. Replay tokens and S3's are not interchangeable, and neither are the Java server's
   (`v2:...`), which this server refuses.
