@@ -299,6 +299,9 @@ others appear on first use.
   server instead, below), the DuckDB serving mode, and the Java server's
   `swath_replay_metrics` summary line at shutdown (logged below the Java launcher's default log level; poll the
   endpoint instead).
+- **Profiles.** `SWATH_CPUPROFILE=FILE` and `SWATH_MEMPROFILE=FILE` (the lister's variables) write a CPU and an
+  allocation profile for `go tool pprof`, covering the server's life from the startup line; both are written when
+  SIGINT or SIGTERM stops it.
 - A client that disconnects while its page is being read does not cancel the read: the page is read, rendered and
   counted as served (`2xx`, nothing in `http.errors`, no log line), and only its write fails, as on the Java
   server (`TestClientGoneFinishesThePage`). Shutdown still interrupts it. A client that leaves while its request

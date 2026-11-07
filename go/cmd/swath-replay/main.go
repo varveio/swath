@@ -19,7 +19,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"slices"
 	"strconv"
 	"strings"
@@ -260,6 +262,12 @@ func serve(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	stopProfile, err := devProfile()
+	if err != nil {
+		srv.Shutdown(cfg.StopTimeout)
+		return err
+	}
+	defer stopProfile()
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	served := make(chan error, 1)
@@ -281,6 +289,38 @@ func serve(args []string, stderr io.Writer) error {
 		}
 		return exitSignal(130)
 	}
+}
+
+// devProfile starts the CPU profile and arranges the allocation profile named
+// by the environment (SWATH_CPUPROFILE, SWATH_MEMPROFILE, the lister's
+// names), for development: both are written when the server stops.
+func devProfile() (stop func(), err error) {
+	var stops []func()
+	if path := os.Getenv("SWATH_CPUPROFILE"); path != "" {
+		f, err := os.Create(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			f.Close()
+			return nil, err
+		}
+		stops = append(stops, func() { pprof.StopCPUProfile(); f.Close() })
+	}
+	if path := os.Getenv("SWATH_MEMPROFILE"); path != "" {
+		runtime.MemProfileRate = 64 << 10
+		stops = append(stops, func() {
+			if f, err := os.Create(path); err == nil {
+				_ = pprof.Lookup("allocs").WriteTo(f, 0)
+				f.Close()
+			}
+		})
+	}
+	return func() {
+		for _, s := range stops {
+			s()
+		}
+	}, nil
 }
 
 // startServer builds and binds the server over cfg.Store, which it owns
