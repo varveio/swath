@@ -30,8 +30,21 @@ in `.tsv` is instead a key list loaded into memory (one object per line: key, si
 ETag, storage class, owner id, owner display name, checksum algorithm, checksum type; fields percent-escaped,
 `\N` for null), for tests and for listings that have no Parquet form; `bench/replaydiff -dump-tsv` writes one.
 
-`swath-replay --version` prints the build. `sort-fixture` is not built into the Go binary; sort a capture with
-the Java `swath-replay sort-fixture`.
+`swath-replay --version` prints the build.
+
+`swath-replay sort-fixture --capture PATH --output DIR [--key-limit N]` turns an unsorted capture (one Parquet
+part in the 13-column canonical schema, or a directory of `*.parquet` parts) into a sorted format-2 dataset that
+`serve` can open. `--output` must be new or empty; like the lister, the command takes the output's lock and
+leaves `.swath/` with the lock file in it. Only `OBJECT` rows are written; a duplicate key, a versioned row, an
+unknown `row_type` or a key over the cap (1,024 bytes; `--key-limit` raises it up to 4,096) is refused before
+anything is written. On success it prints one line on stdout:
+
+```
+sort_fixture rows=10000 objects=10000 skipped=0 parts=1 bytes=230500 schema=swath-replay/objects/v1 wall_ms=40 output=/data/sorted
+```
+
+A refusal is one `sort-fixture: ...` line on stderr and exit 1; a bad command line is exit 2. The capture is
+held in memory while it is sorted (about 300 bytes per row), so it suits captures of a few million rows.
 
 ## Flags
 

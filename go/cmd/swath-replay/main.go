@@ -27,6 +27,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/server"
+	"github.com/varveio/swath/go/internal/replay/sortfixture"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -38,6 +39,10 @@ var revision string
 // usageError is a bad command line: exit 2.
 type usageError struct{ error }
 
+// ownMessage is a failure whose message already names the command
+// ("sort-fixture: ..."), printed as it is: exit 1.
+type ownMessage struct{ error }
+
 func main() {
 	err := run(os.Args[1:], os.Stdout, os.Stderr)
 	var sig exitSignal
@@ -48,6 +53,9 @@ func main() {
 	case errors.As(err, new(usageError)):
 		fmt.Fprintln(os.Stderr, "swath-replay:", err)
 		os.Exit(2)
+	case errors.As(err, new(ownMessage)):
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	default:
 		fmt.Fprintln(os.Stderr, "swath-replay:", err)
 		os.Exit(1)
@@ -68,7 +76,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "serve":
 		return serve(args[1:], stderr)
 	case "sort-fixture":
-		return sortFixture(args[1:], stderr)
+		return sortFixture(args[1:], stdout, stderr)
 	case "version", "-version", "--version", "-V":
 		fmt.Fprintln(stdout, version())
 		return nil
@@ -88,7 +96,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 func usage(w io.Writer) {
 	fmt.Fprint(w, `usage:
   swath-replay serve --fixture PATH --bucket NAME [flags]   serve a fixture through the S3 route
-  swath-replay sort-fixture --capture DIR --output DIR       sort a capture into a fixture
+  swath-replay sort-fixture --capture PATH --output DIR [--key-limit N]
+                                                            sort a capture into a fixture
   swath-replay --version                                     print the build
 Run "swath-replay serve -h" for the serve flags.
 `)
@@ -121,15 +130,30 @@ func version() string {
 	return "swath-replay-go " + v + " (" + rev + ")"
 }
 
-func sortFixture(args []string, stderr io.Writer) error {
+// sortFixture sorts an unsorted capture into a format-2 fixture. The
+// summary line goes to stdout and a refusal to stderr as one line, exit 1,
+// the split a launcher script reading the summary relies on.
+func sortFixture(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("sort-fixture", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.String("capture", "", "capture directory (Parquet parts)")
-	fs.String("output", "", "output directory")
+	capture := fs.String("capture", "", "the unsorted capture: one part file or a directory of *.parquet parts")
+	output := fs.String("output", "", "the new or empty directory the sorted dataset is published into")
+	keyLimit := fs.Int("key-limit", 0, fmt.Sprintf("the key cap in bytes, at most %d (0: %d)", sortfixture.MaxKeyLimit, sortfixture.DefaultKeyLimit))
 	if err := fs.Parse(args); err != nil {
 		return usageError{err}
 	}
-	return errors.New("sort-fixture is not built in this binary; use the Java swath-replay sort-fixture")
+	switch {
+	case fs.NArg() > 0:
+		return usageError{fmt.Errorf("sort-fixture: unexpected argument %q", fs.Arg(0))}
+	case *capture == "" || *output == "":
+		return usageError{errors.New("sort-fixture: --capture and --output are required")}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if _, err := sortfixture.Run(ctx, sortfixture.Options{Capture: *capture, Output: *output, KeyLimit: *keyLimit}, stdout); err != nil {
+		return ownMessage{err}
+	}
+	return nil
 }
 
 // serveFlags are the serve command's flags, with the defaults of the

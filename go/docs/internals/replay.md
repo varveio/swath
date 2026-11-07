@@ -7,7 +7,7 @@ is [../replay.md](../replay.md).
 
 | Package | Role | Imports |
 |---|---|---|
-| `cmd/swath-replay` | flags (standard `flag`, the Java launcher's names and defaults), the startup line, signals, opening the fixture | server, latency, store, memstore |
+| `cmd/swath-replay` | flags (standard `flag`, the Java launcher's names and defaults), the startup line, signals, opening the fixture; `sort-fixture` as a thin command over `internal/replay/sortfixture` | server, latency, store, memstore, sortfixture |
 | `internal/replay/server` | the HTTP server: the S3 route's request flow, admission, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, latency, metrics, store |
 | `internal/replay/s3` | ListObjectsV2: request parsing, the pager, continuation tokens, the XML documents, the request's latency key | store |
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | – |
@@ -171,5 +171,5 @@ In the package's own tests the driver compares two Go servers over the same keys
 | latency | `latency` `TestClassify`, `TestDelayByShapeAndPerCommonPrefix`, `TestScaleDividesEveryTerm`, `TestParseRejects`, `TestJitterIsDeterministicAndBounded`; `s3` `TestLatencyKeyGolden` |
 | serving | `server` `TestServesPathStyleListObjectsV2`, `TestErrorsAreS3Answers`, `TestStoreFailureCarriesNoDetail`, `TestEchoesMaxKeysButClampsThePage`, `TestConcurrentRequests`, `TestRequestCeilingQueues`, `TestResponseCountAndBudgetRefusals`, `TestOversizedResponseIsRefusedAndTheBudgetRecovers`, `TestInjectedDelayIsADeadline`, `TestShutdownInterruptsALongDelay`, `TestUninterruptibleReadDefersStoreClose` |
 | metrics port | `server` `TestMetricsPort`, `TestAttestation`; `metrics` `TestSnapshotIsStableAndTyped` |
-| the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143) |
+| the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143), `TestSortFixtureThenServe` (a Java-era capture sorted by the command and listed through the S3 route), `TestSortFixtureRefusals` (stderr line and exit codes) |
 | the Java server | `bench/replaydiff` against the Java launcher (not a unit test: it needs the Java build and a fixture) |
