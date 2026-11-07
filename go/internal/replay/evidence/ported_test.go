@@ -277,6 +277,15 @@ func TestSDKRunReceiptNeedsEveryStep(t *testing.T) {
 	if msg := run(other); msg != "replay request query differs from captured probe" {
 		t.Errorf("another scope: %q", msg)
 	}
+	// A parameter the capture did not send is a different scope, empty
+	// or not, known or not; only the Go client's alt=json and
+	// prettyPrint=false are its own.
+	for _, extra := range []string{"versions=", "unknownParam=", "alt=xml", "prettyPrint=true", "fields="} {
+		r := []step{rstep("prefix=a&"+extra, walkPage(walkItem(replayBucket, "a", true)+","+walkItem(replayBucket, "b", true), ""), goClient)}
+		if msg := run(r); msg != "replay request query differs from captured probe" {
+			t.Errorf("%s: %q", extra, msg)
+		}
+	}
 	if msg := catch(func() { verifyRun(c, two) }); msg != "GCS walk receipt needs a walk capture" {
 		t.Errorf("as a walk: %q", msg)
 	}
