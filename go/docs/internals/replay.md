@@ -300,8 +300,9 @@ first (bucket, method, `list-type`, `max-keys`) is expected in live S3's documen
 The newline after the XML declaration is on every listing and error, so the driver inserts it after the Java
 server's declaration in every expectation and in the as-sent comparison (`declNewline`), and it alone makes no
 request a divergence (`TestDivergenceAssertsTheGoSide`). Each `Owner` in a Java page is moved before the
-`StorageClass` in front of it (`ownerFirst`; `TestOwnerOrderIsDerived` over an owner-bearing fixture, and
-`TestTestWriterPartAgainstJava` against the Java launcher). `s3DivergenceCases` adds one case per rule with a pin
+`StorageClass` in front of it (`ownerFirst`), and every `Owner` is dropped from a Java page when the request's
+`fetch-owner` is not exactly `true` (`dropOwners`); `TestOwnerOrderIsDerived` covers both over an owner-bearing
+fixture, and `TestTestWriterPartAgainstJava` against the Java launcher. `s3DivergenceCases` adds one case per rule with a pin
 from the live probe. Tests: `TestS3PlanRules`,
 `TestS3PlanFixes`, `TestJavaFirstRefusals`,
 `TestUTF8ReplacedMatchesTheRoute`, `TestTokenTranslation`, `TestDivergenceCases`,

@@ -125,6 +125,7 @@ Probed on 2026-11-07 against public `us-east-1` buckets, anonymous (`s3` `TestLi
 | a C0 control character in listing text | a hexadecimal character reference | the raw byte |
 | the XML declaration | followed by a newline | no newline |
 | `Owner` in `Contents` (`fetch-owner=true`, a recording with owners) | after `Size`, before `StorageClass` | after `StorageClass` |
+| `fetch-owner` other than exactly `true` (`TRUE`, `True`) | no `Owner` | `Owner` for `true` in any case |
 | the error document | S3's elements and messages | its own: `Resource` in place of S3's elements, other messages for `max-keys` and the method |
 | continuation tokens | unpadded base64url of the boundary and a CRC-32; an altered token is refused | `v2:` and base64url of flag and boundary (`v1:` and the key), unchecked; an altered token still decodes to a position |
 | a flat walk's token sent with `delimiter=/` | resumes at its key and relists the common prefix that holds it | resumes after that whole prefix |
