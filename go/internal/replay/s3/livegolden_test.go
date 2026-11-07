@@ -262,3 +262,20 @@ func TestLiveEncodingTypeIsChecked(t *testing.T) {
 	wantLiveError(t, "list-type=2&max-keys=abc&encoding-type=bogus", 400, "InvalidArgument", "max-keys must be an integer")
 	wantLiveError(t, "list-type=2&continuation-token=&encoding-type=bogus", 400, "InvalidArgument", msg)
 }
+
+// marker belongs to ListObjects V1: S3 answered list-type=2 with
+// marker=KEY and with marker= by 400 InvalidArgument "Marker unsupported
+// with REST.GET.BUCKET in list-type=2", after a bad max-keys and before
+// a bad encoding-type or continuation-token.
+func TestLiveMarkerIsRefused(t *testing.T) {
+	const msg = "Marker unsupported with REST.GET.BUCKET in list-type=2"
+	for _, q := range []string{"marker=r/k02", "marker=", "marker=x&encoding-type=bogus", "marker=x&continuation-token="} {
+		wantLiveError(t, "list-type=2&prefix=r/&max-keys=2&"+q, 400, "InvalidArgument", msg)
+	}
+	wantLiveError(t, "list-type=2&marker=x&max-keys=abc", 400, "InvalidArgument", "max-keys must be an integer")
+	// A malformed escape drops it, as any parameter.
+	wantLivePage(t, "list-type=2&prefix=r/&max-keys=2&marker=%ZZ",
+		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
+			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
+		"O:r/k01 O:r/k02")
+}
