@@ -209,7 +209,8 @@ func TestCaptureFailedIssuerSkipsItsWalk(t *testing.T) {
 	}
 }
 
-// TestCaptureLimits: a captured body over -capture-max-body, a gzip body
+// TestCaptureLimits: a captured body over -capture-max-body (a base64
+// body measured by its decoded length, padding not counted), a gzip body
 // that decodes past -capture-max-decoded, a line over the line limit, an
 // exchange the recorder marked as over its own limit, and a token map
 // past -capture-max-tokens each fail explicitly; the exchanges after a
@@ -239,6 +240,34 @@ func TestCaptureLimits(t *testing.T) {
 	lim.maxBody = int64(body)
 	if rep := run(exchangeItems([]capturedExchange{first}), lim); rep.Passed != 1 {
 		t.Errorf("a body at the limit: %+v", rep.Results)
+	}
+
+	// A base64 body is limited by its decoded length, padding not
+	// counted: binary bodies of one, two and three bytes past a multiple
+	// of three (two, one and no padding characters), the default limit's
+	// size among them, pass at the limit and fail one byte over it.
+	for _, n := range []int{1, 2, 3, 4, 5, 6, 16 << 20} {
+		bin := bytes.Repeat([]byte{0xff, 0x00, 0x80}, n/3+1)[:n]
+		enc := base64.StdEncoding.EncodeToString(bin)
+		x := first
+		x.Response.Body, x.Response.BodyBase64 = nil, &enc
+		lim := testLimits
+		lim.maxBody = int64(n)
+		if r, err := capturedResponse(&x, lim); err != nil || !bytes.Equal(r.Body, bin) {
+			t.Errorf("a %d-byte base64 body (%d characters) at the limit: %v", n, len(enc), err)
+		}
+		lim.maxBody = int64(n - 1)
+		if _, err := capturedResponse(&x, lim); err == nil || !strings.Contains(err.Error(), "-capture-max-body") {
+			t.Errorf("a %d-byte base64 body over a limit of %d: %v", n, n-1, err)
+		}
+	}
+	// The listing itself, base64-encoded at its own size, replays.
+	b64first := first
+	enc := base64.StdEncoding.EncodeToString([]byte(*first.Response.Body))
+	b64first.Response.Body, b64first.Response.BodyBase64 = nil, &enc
+	lim.maxBody = int64(body)
+	if rep := run(exchangeItems([]capturedExchange{b64first}), lim); rep.Passed != 1 {
+		t.Errorf("a base64 body (%d bytes, %d characters) at the limit: %+v", body, len(enc), rep.Results)
 	}
 
 	var bomb bytes.Buffer

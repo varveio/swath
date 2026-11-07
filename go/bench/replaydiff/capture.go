@@ -181,12 +181,16 @@ func capturedResponse(x *capturedExchange, lim captureLimits) (*response, error)
 		}
 		r.Body = []byte(*x.Response.Body)
 	case x.Response.BodyBase64 != nil:
-		if n := int64(base64.StdEncoding.DecodedLen(len(*x.Response.BodyBase64))); n > lim.maxBody {
-			return nil, fmt.Errorf("the captured body is about %d bytes, over the limit of %d (-capture-max-body)", n, lim.maxBody)
-		}
-		b, err := base64.StdEncoding.DecodeString(*x.Response.BodyBase64)
+		// The limit is of the decoded bytes. DecodedLen is an upper
+		// bound that counts padding as data (a one-byte body is four
+		// characters), so the body is decoded through a reader that
+		// stops one byte past the limit and its actual length checked.
+		b, err := io.ReadAll(io.LimitReader(base64.NewDecoder(base64.StdEncoding, strings.NewReader(*x.Response.BodyBase64)), lim.maxBody+1))
 		if err != nil {
 			return nil, err
+		}
+		if int64(len(b)) > lim.maxBody {
+			return nil, fmt.Errorf("the captured body is over %d bytes (-capture-max-body)", lim.maxBody)
 		}
 		r.Body = b
 	}
