@@ -421,9 +421,7 @@ func TestOversizedResponseStopsAtTheCap(t *testing.T) {
 	if r := get(t, s, "/bucket?list-type=2&max-keys=5"); r.status != 200 {
 		t.Errorf("a small page after the refusal: %d", r.status)
 	}
-	if s.budget.Charged() != 0 {
-		t.Errorf("charged %d", s.budget.Charged())
-	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
 }
 
 func TestValidate(t *testing.T) {
@@ -788,7 +786,77 @@ func TestRoutesShareTheResponseCeiling(t *testing.T) {
 			t.Errorf("%s after: %d", target, resp.StatusCode)
 		}
 	}
-	if s.budget.Charged() != 0 {
-		t.Errorf("charged %d", s.budget.Charged())
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
+}
+
+// pipelinedReader opens a connection with a small receive buffer and
+// sends n requests for target back to back without reading an answer.
+func pipelinedReader(t *testing.T, s *Server, target string, n int) net.Conn {
+	t.Helper()
+	conn := slowReader(t, s, target)
+	go func() {
+		for range n - 1 {
+			if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: replay\r\n\r\n", target); err != nil {
+				return
+			}
+		}
+	}()
+	return conn
+}
+
+// TestPipelinedSmallResponsesStayWithinTheCeiling: small answers fit the
+// server's own buffers, so a client that pipelines requests and stops
+// reading stalls the answers in the final flush, not in Write. The flush
+// happens while the response permit is held, so with a ceiling of 8 the
+// sixteen permits end up held by stalled flushes, every further request
+// (on the stalled connections or a fresh one) is refused
+// response_count_exhausted, and everything comes back on disconnect.
+func TestPipelinedSmallResponsesStayWithinTheCeiling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("receive buffer sizing")
+	}
+	keys := make([]string, 50)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%03d", i)
+	}
+	cfg := config(memstore.Keys(memstore.Options{}, keys...))
+	cfg.MaxConcurrentRequests = MinMaxConcurrentRequests
+	cfg.WriteTimeout = time.Minute
+	s := start(t, cfg)
+	var conns []net.Conn
+	for range cfg.MaxResponses() + 8 {
+		// About 4 KB an answer: well inside the server's write buffer, so
+		// each Write returns at once, and 2,000 of them are far more than
+		// the socket buffers hold.
+		conns = append(conns, pipelinedReader(t, s, "/bucket?list-type=2&max-keys=20", 2000))
+	}
+	defer func() {
+		if t.Failed() {
+			t.Logf("responses %d slots %d refused %d requests %d", s.responses.Load(), len(s.slots),
+				count(s, metrics.ResponseAdmissionRefused, "s3", "response_count_exhausted"), count(s, metrics.HTTPRequests))
+		}
+	}()
+	waitFor(t, "every response permit held by a stalled flush", func() bool {
+		return s.responses.Load() == int64(cfg.MaxResponses()) && len(s.slots) == 0 &&
+			count(s, metrics.ResponseAdmissionRefused, "s3", "response_count_exhausted") > 0
+	})
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/bucket?list-type=2&max-keys=1", s.Port()))
+	if err != nil {
+		t.Fatalf("a request past the ceiling was not answered: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "response_count_exhausted" {
+		t.Errorf("%d %v", resp.StatusCode, resp.Header)
+	}
+	if n := s.responses.Load(); n > int64(cfg.MaxResponses()) {
+		t.Errorf("%d responses outstanding", n)
+	}
+	for _, c := range conns {
+		c.Close()
+	}
+	waitFor(t, "the permits and bytes to come back", func() bool { return s.responses.Load() == 0 && s.budget.Charged() == 0 })
+	if r := get(t, s, "/bucket?list-type=2&max-keys=1"); r.status != 200 {
+		t.Errorf("after the readers left: %d", r.status)
 	}
 }

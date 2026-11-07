@@ -143,6 +143,12 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   attempts (the replay server's HTTP count), splits, empty children, overfetched keys, probes and mean active
   ranges per arm.
 
+- **Replay load tests:** `SWATH_REPLAY_LOAD=1` runs the replay server's load tests
+  (`go/internal/replay/server` `TestLoad*`: the request ceiling under the fault proxy, the reader-slot bound under
+  256 walks, no overrun at 64 walks), a few seconds each; they serve `ROOT/fixtures/synthetic-1m/sorted-rolled`
+  when `SWATH_REPLAY_FIXTURES=ROOT` is set, else a generated fixture. `bench/replayload` is the walker the
+  [replay measurements](replay.md#measurements) use.
+
 ## Replay server oracle
 
 The Go `swath-replay` ([replay.md](replay.md)) is held to the Java one by `bench/replaydiff`: both servers on one

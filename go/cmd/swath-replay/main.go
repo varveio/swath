@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/javanum"
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/server"
 	"github.com/varveio/swath/go/internal/replay/sortfixture"
@@ -246,18 +247,17 @@ func serve(args []string, stderr io.Writer) error {
 	if readers <= 0 {
 		readers = store.DefaultReaders()
 	}
-	st, mode, identity, err := openFixture(f.fixture, readers)
+	opened := time.Now()
+	st, mode, meta, err := openFixture(f.fixture, readers)
 	if err != nil {
 		return err
 	}
-	cfg.Store, cfg.ServingMode, cfg.FixtureIdentity = st, mode, identity
-	srv, err := server.New(cfg)
-	if err != nil {
-		st.Close()
-		return usageError{err}
+	cfg.Store, cfg.ServingMode, cfg.FixtureIdentity = st, mode, meta.Identity
+	if mode == "SORTED" {
+		cfg.IndexLoad, cfg.IndexEntries = time.Since(opened), meta.RowGroups
 	}
-	if err := srv.Listen(); err != nil {
-		st.Close()
+	srv, err := startServer(cfg, stderr)
+	if err != nil {
 		return err
 	}
 	sigs := make(chan os.Signal, 1)
@@ -283,30 +283,50 @@ func serve(args []string, stderr io.Writer) error {
 	}
 }
 
+// startServer builds and binds the server over cfg.Store, which it owns
+// from here: when either step fails the store is closed, the original
+// error is returned as it was (a bad configuration still a usage error),
+// and a failure to close the store is reported once on stderr rather than
+// replacing it.
+func startServer(cfg server.Config, stderr io.Writer) (*server.Server, error) {
+	srv, err := server.New(cfg)
+	if err == nil {
+		if err = srv.Listen(); err == nil {
+			return srv, nil
+		}
+	} else {
+		err = usageError{err}
+	}
+	if cerr := cfg.Store.Close(); cerr != nil {
+		fmt.Fprintf(stderr, "replay store cleanup failed after a failed start: %v\n", cerr)
+	}
+	return nil, err
+}
+
 // openFixture opens a .tsv key list in memory, anything else as a sorted
 // fixture.
-func openFixture(path string, readers int) (store.Store, string, string, error) {
+func openFixture(path string, readers int) (store.Store, string, store.Metadata, error) {
 	if strings.HasSuffix(path, ".tsv") {
 		b, err := os.ReadFile(path)
 		if err != nil {
-			return nil, "", "", err
+			return nil, "", store.Metadata{}, err
 		}
 		objs, err := memstore.ReadTSV(strings.NewReader(string(b)))
 		if err != nil {
-			return nil, "", "", err
+			return nil, "", store.Metadata{}, err
 		}
 		st, err := memstore.New(objs, memstore.Options{Rollup: true})
 		if err != nil {
-			return nil, "", "", err
+			return nil, "", store.Metadata{}, err
 		}
 		sum := sha256.Sum256(b)
-		return st, "MEMORY", hex.EncodeToString(sum[:]), nil
+		return st, "MEMORY", store.Metadata{Identity: hex.EncodeToString(sum[:])}, nil
 	}
 	st, meta, err := store.Open(context.Background(), path, store.Options{Readers: readers})
 	if err != nil {
-		return nil, "", "", fmt.Errorf("open fixture %s: %w", path, err)
+		return nil, "", store.Metadata{}, fmt.Errorf("open fixture %s: %w", path, err)
 	}
-	return st, "SORTED", meta.Identity, nil
+	return st, "SORTED", meta, nil
 }
 
 func (f *serveFlags) config() (server.Config, error) {
@@ -476,7 +496,7 @@ func startupLine(f *serveFlags, srv *server.Server, cfg server.Config, readers i
 		"inject_latency=%s latency_scale=%s metrics_endpoint=%s max_concurrent_requests=%d protocols=%s "+
 		"response_buffer_budget=%d max_response_bytes=%d max_responses=%d output_chunk_bytes=%d fixture_identity=%s "+
 		"ordering_profile=%s metadata_policy=fixture-plus-synthetic profiles=%s native_endpoints=%s",
-		f.host, srv.Port(), f.bucket, fixture, cfg.ServingMode, readers, inject, decimalString(f.latencyScale),
+		f.host, srv.Port(), f.bucket, fixture, cfg.ServingMode, readers, inject, javanum.FormatDouble(f.latencyScale),
 		metricsEndpoint, cfg.MaxConcurrentRequests, cfg.ProtocolList(), cfg.ResponseBufferBudget, cfg.MaxResponseBytes, cfg.MaxResponses(),
 		server.OutputChunkBytes, cfg.FixtureIdentity, cfg.OrderingProfile(), cfg.ProfilesString(),
 		nativeEndpoints(f, cfg, srv.Port()))
@@ -512,25 +532,4 @@ func bracketHost(advertised, host string) string {
 		return "[" + host + "]"
 	}
 	return host
-}
-
-// decimalString spells a float the way the startup line always has: at
-// least one fractional digit (1.0, 12.5), scientific notation outside
-// [1e-3, 1e7) (1.0E-4).
-func decimalString(v float64) string {
-	a := math.Abs(v)
-	if a == 0 || (a >= 1e-3 && a < 1e7) {
-		s := strconv.FormatFloat(v, 'f', -1, 64)
-		if !strings.Contains(s, ".") {
-			s += ".0"
-		}
-		return s
-	}
-	s := strconv.FormatFloat(v, 'E', -1, 64)
-	mant, exp, _ := strings.Cut(s, "E")
-	if !strings.Contains(mant, ".") {
-		mant += ".0"
-	}
-	e, _ := strconv.Atoi(exp)
-	return mant + "E" + strconv.Itoa(e)
 }

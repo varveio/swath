@@ -100,3 +100,12 @@ func TestSaturate(t *testing.T) {
 		t.Errorf("Saturate(NaN) = %d", got)
 	}
 }
+
+func TestFormatDouble(t *testing.T) {
+	for v, want := range map[float64]string{1: "1.0", 50: "50.0", 12.5: "12.5", 0.0001: "1.0E-4", 1e7: "1.0E7", 0.25: "0.25",
+		0.512: "0.512", 0.000512: "5.12E-4", 1234.5678: "1234.5678"} {
+		if got := FormatDouble(v); got != want {
+			t.Errorf("%v: %s, want %s", v, got, want)
+		}
+	}
+}

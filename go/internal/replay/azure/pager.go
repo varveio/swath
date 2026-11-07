@@ -26,6 +26,8 @@ type Result struct {
 	NextMarker string
 	// Prefixes counts the page's BlobPrefix entries.
 	Prefixes int
+	// onPath is the pager's OnPath, for the paths rendering engages.
+	onPath func(path, reason string)
 }
 
 // Pager lists one container in provider order over a range-only store.
@@ -108,7 +110,8 @@ func (p *Pager) List(ctx context.Context, r *Request) (*Result, error) {
 	if !bytes.HasPrefix(lower.key, prefix) {
 		// At or after the prefix in provider order but outside it: past
 		// the whole window.
-		return &Result{Request: r}, nil
+		p.record("empty_window", "lower_bound_past_prefix")
+		return &Result{Request: r, onPath: p.OnPath}, nil
 	}
 	if len(delimiter) == 0 {
 		reason := "prefix_window"
@@ -163,7 +166,7 @@ func (p *Pager) delimited(ctx context.Context, r *Request, prefix, delimiter []b
 // BlobPrefix resumes at the prefix's provider-order upper bound, so its
 // subtree is skipped.
 func (p *Pager) page(ctx context.Context, r *Request, leading []item, c *cursor, bind []byte) (*Result, error) {
-	res := &Result{Request: r, Entries: make([]Entry, 0, min(r.PageSize, 1024))}
+	res := &Result{Request: r, Entries: make([]Entry, 0, min(r.PageSize, 1024)), onPath: p.OnPath}
 	var last item
 	more := false
 	for i := 0; ; {

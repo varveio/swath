@@ -70,6 +70,12 @@ type azureMarkerCase struct {
 	name   string
 	source request
 	follow func(marker string) request
+	// refused marks a follow-up that changes the marker's scope: both
+	// servers must refuse it as an invalid marker, not merely agree.
+	refused bool
+	// skip, when set, says why the fixture cannot make the case
+	// meaningful; the case is reported skipped without a request.
+	skip string
 }
 
 // azureMatrix builds the scripted requests for a fixture whose keys
@@ -163,6 +169,13 @@ func azureMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) ([]request, []a
 	add("empty client request id", with([2]string{"x-ms-client-request-id", ""}), aq("maxresults", "1"))
 	add("long client request id", with([2]string{"x-ms-client-request-id", strings.Repeat("c", 1025)}), aq("maxresults", "1"))
 	add("duplicate client request id", with([2]string{"x-ms-client-request-id", "a"}, [2]string{"x-ms-client-request-id", "b"}), aq("maxresults", "1"))
+	// Raw obs-text bytes: the length limit counts each as two.
+	for _, n := range []int{512, 513} {
+		id := strings.Repeat("\xe9", n)
+		add(fmt.Sprintf("client request id %d raw 0xE9", n), with([2]string{"x-ms-client-request-id", id}), aq("maxresults", "1"))
+		add(fmt.Sprintf("client request id %d raw 0xE9 bad version", n), [][2]string{{"x-ms-version", "x"}, {"x-ms-client-request-id", id}}, aq("maxresults", "1"))
+	}
+	add("client request id mixed obs-text", with([2]string{"x-ms-client-request-id", "id-\xc3\xa9-\xff"}), aq("maxresults", "1"))
 	add("client id with bad version", [][2]string{{"x-ms-version", "x"}, {"x-ms-client-request-id", "c"}}, aq("maxresults", "1"))
 	for _, a := range []string{"application/xml", "*/*", "application/json", "application/vnd.apache.arrow.stream", "application/xml;q=0",
 		"application/xml;q=0.5", "application/xml;q=2", "application/xml;q=abc", "text/plain, application/xml", "application/xml,", ",", " ", "APPLICATION/XML;Q=1E0"} {
@@ -212,37 +225,115 @@ func azureMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) ([]request, []a
 	follow := func(params ...string) func(string) request {
 		return func(m string) request { r := base; r.Query = aq(append(params, "marker", m)...); return r }
 	}
-	pfx := ""
-	if len(prefixes) > 0 {
-		pfx = prefixes[0]
+	// The marker cases resume from a source that pages: one result per
+	// page in scopes that hold at least two names (the whole container, a
+	// directory prefix with two or more names, a startFrom at the first
+	// name). With fewer than two names there is no marker to test.
+	pfx := pagingPrefix(keys)
+	rolled := rolledPrefix(keys)
+	from := ""
+	if len(keys) > 0 {
+		from = string(keys[0])
+	}
+	noPrefix, noName := "", ""
+	if pfx == "" {
+		noPrefix = "no directory prefix holds two names: an absent and an empty prefix bind the same scope"
+	}
+	if from == "" {
+		noName = "the fixture has no name to start from"
 	}
 	marks := []azureMarkerCase{
-		{"marker page 2", src("maxresults", "3"), follow("maxresults", "3")},
-		{"marker page 2 delimiter", src("maxresults", "1", "delimiter", "/"), follow("maxresults", "1", "delimiter", "/")},
-		{"marker changed page size", src("maxresults", "3"), follow("maxresults", "7")},
-		{"marker added delimiter", src("maxresults", "3"), follow("maxresults", "3", "delimiter", "/")},
-		{"marker removed delimiter", src("maxresults", "1", "delimiter", "/"), follow("maxresults", "3")},
-		{"marker other prefix", src("maxresults", "3"), follow("maxresults", "3", "prefix", pfx)},
-		{"marker other version", src("maxresults", "3"), func(m string) request {
+		{name: "marker page 2", source: src("maxresults", "1"), follow: follow("maxresults", "1")},
+		{name: "marker page 2 delimiter", source: src("maxresults", "1", "prefix", rolled, "delimiter", "/"), follow: follow("maxresults", "1", "prefix", rolled, "delimiter", "/")},
+		{name: "marker page 2 prefix", source: src("maxresults", "1", "prefix", pfx), follow: follow("maxresults", "1", "prefix", pfx), skip: noPrefix},
+		{name: "marker changed page size", source: src("maxresults", "1"), follow: follow("maxresults", "7")},
+		{name: "marker added delimiter", source: src("maxresults", "1"), follow: follow("maxresults", "3", "delimiter", "/"), refused: true},
+		{name: "marker removed delimiter", source: src("maxresults", "1", "prefix", rolled, "delimiter", "/"), follow: follow("maxresults", "3", "prefix", rolled), refused: true},
+		{name: "marker other prefix", source: src("maxresults", "1", "prefix", pfx), follow: follow("maxresults", "3", "prefix", pfx+"zz"), refused: true, skip: noPrefix},
+		{name: "marker dropped prefix", source: src("maxresults", "1", "prefix", pfx), follow: follow("maxresults", "3"), refused: true, skip: noPrefix},
+		{name: "marker other version", source: src("maxresults", "1"), follow: func(m string) request {
 			r := follow("maxresults", "3")(m)
 			r.Header = versionHeader(azureVersions[1])
 			return r
-		}},
-		{"marker with same startFrom", src("maxresults", "3", "startFrom", pfx), follow("maxresults", "3", "startFrom", pfx)},
-		{"marker without its startFrom", src("maxresults", "3", "startFrom", pfx), follow("maxresults", "3")},
-		{"marker truncated", src("maxresults", "3"), func(m string) request { return follow("maxresults", "3")(m[:max(1, len(m)-4)]) }},
-		{"marker last char flipped", src("maxresults", "3"), func(m string) request {
+		}, refused: true},
+		{name: "marker with same startFrom", source: src("maxresults", "1", "startFrom", from), follow: follow("maxresults", "3", "startFrom", from), skip: noName},
+		{name: "marker without its startFrom", source: src("maxresults", "1", "startFrom", from), follow: follow("maxresults", "3"), refused: true, skip: noName},
+		{name: "marker truncated", source: src("maxresults", "1"), follow: func(m string) request { return follow("maxresults", "3")(m[:max(1, len(m)-4)]) }},
+		{name: "marker last char flipped", source: src("maxresults", "1"), follow: func(m string) request {
 			last := byte('A')
 			if m[len(m)-1] == 'A' {
 				last = 'B'
 			}
 			return follow("maxresults", "3")(m[:len(m)-1] + string(last))
 		}},
-		{"marker padded", src("maxresults", "3"), func(m string) request {
+		{name: "marker padded", source: src("maxresults", "1"), follow: func(m string) request {
 			return follow("maxresults", "3")(m + strings.Repeat("=", (4-(len(m)-4)%4)%4))
 		}},
 	}
 	return out, marks
+}
+
+// invalidMarker reports the route's refusal of a marker of another scope.
+func invalidMarker(r *response) bool {
+	return r.Status == 400 && values(r.Header, "x-ms-error-code") == "InvalidQueryParameterValue" &&
+		values(r.Header, "x-swath-replay-error") == "invalid_marker"
+}
+
+// pagingPrefix is the first directory prefix holding at least two names,
+// or "" (the whole container) when none does.
+func pagingPrefix(keys [][]byte) string {
+	count := map[string]int{}
+	for _, k := range keys {
+		if i := bytes.IndexByte(k, '/'); i >= 0 {
+			count[string(k[:i+1])]++
+		}
+	}
+	for _, p := range directoryPrefixes(keys) {
+		if count[p] >= 2 && echoable(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+// echoable reports whether the route accepts p as a prefix: valid UTF-8
+// without a control character other than TAB and LF, U+FFFE or U+FFFF.
+func echoable(p string) bool {
+	if !utf8.ValidString(p) {
+		return false
+	}
+	for _, r := range p {
+		if r < 0x20 && r != '\t' && r != '\n' || r == 0xfffe || r == 0xffff {
+			return false
+		}
+	}
+	return true
+}
+
+// rolledPrefix is the first prefix ("" or a directory) under which a "/"
+// listing holds at least two entries, so a one-entry delimiter page has a
+// marker; "" when none does.
+func rolledPrefix(keys [][]byte) string {
+	for _, p := range append([]string{""}, directoryPrefixes(keys)...) {
+		if !echoable(p) {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, k := range keys {
+			rest, ok := bytes.CutPrefix(k, []byte(p))
+			if !ok {
+				continue
+			}
+			if i := bytes.IndexByte(rest, '/'); i >= 0 {
+				rest = rest[:i+1]
+			}
+			seen[string(rest)] = true
+			if len(seen) >= 2 {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // azureWalks lists the marker walks: flat and delimited, the whole
@@ -355,6 +446,10 @@ func azureRandom(keys [][]byte, rng *rand.Rand, prefixes []string) request {
 
 func (d *driver) markerCase(m azureMarkerCase) result {
 	res := result{Kind: "case", Name: m.name, Method: "GET"}
+	if m.skip != "" {
+		res.Skipped = m.skip
+		return res
+	}
 	a, err := d.ref.do(d.o.bucket, m.source)
 	if err != nil {
 		res.Error = err.Error()
@@ -368,11 +463,14 @@ func (d *driver) markerCase(m azureMarkerCase) result {
 	d.count(2)
 	ma, mb := azureNextMarker(a.Body), azureNextMarker(b.Body)
 	if ma == "" || mb == "" {
+		// The case cannot run: report a differing source as a failure and
+		// an agreeing one as a skip, never as a pass.
 		if df := d.comp.compare(a, b); !df.OK {
 			res.diff = &df
+			res.Error = "source answers differ"
 			return res
 		}
-		res.Pass = true // a single page: nothing to resume
+		res.Skipped = fmt.Sprintf("no marker to resume: the source answered %d without one", a.Status)
 		return res
 	}
 	ra, rb := m.follow(ma), m.follow(mb)
@@ -390,6 +488,13 @@ func (d *driver) markerCase(m azureMarkerCase) result {
 	res.Pass = df.OK
 	if !df.OK {
 		res.diff = &df
+	}
+	if m.refused && df.OK && !invalidMarker(a) {
+		// A scope change both servers accept means the case resumed the
+		// same scope after all: it tested nothing.
+		res.Pass = false
+		res.Error = fmt.Sprintf("a changed scope was accepted: want 400 InvalidQueryParameterValue invalid_marker, got %d %s",
+			a.Status, values(a.Header, "x-swath-replay-error"))
 	}
 	return res
 }
@@ -440,9 +545,13 @@ func (d *driver) azureWalkOne(w azureWalk) result {
 
 var (
 	nextMarkerRe = regexp.MustCompile(`<NextMarker>([^<]*)</NextMarker>`)
-	anyMarkerRe  = regexp.MustCompile(`<(Next)?Marker>([^<]*)</(Next)?Marker>`)
-	endpointRe2  = regexp.MustCompile(`ServiceEndpoint="http://[^"/]*/`)
-	requestIDRe  = regexp.MustCompile(`^replay-[0-9a-f]+$`)
+	// The two marker elements are matched separately, each with its own
+	// closing tag, so a corrupted pair such as <NextMarker>...</Marker> is
+	// left as it is and compared byte for byte.
+	markerRe    = regexp.MustCompile(`<Marker>([^<]*)</Marker>`)
+	nextMarkRe  = regexp.MustCompile(`<NextMarker>([^<]*)</NextMarker>`)
+	endpointRe2 = regexp.MustCompile(`ServiceEndpoint="http://[^"/]*/`)
+	requestIDRe = regexp.MustCompile(`^replay-[0-9a-f]+$`)
 )
 
 func azureNextMarker(body []byte) string {
@@ -545,12 +654,14 @@ func (c azureComparator) compare(ref, got *response) diff {
 
 func normalizeAzure(body []byte) []byte {
 	body = endpointRe2.ReplaceAll(body, []byte(`ServiceEndpoint="http://HOST:PORT/`))
-	return anyMarkerRe.ReplaceAllFunc(body, func(m []byte) []byte {
-		s := anyMarkerRe.FindSubmatch(m)
-		tag := "Marker"
-		if len(s[1]) > 0 {
-			tag = "NextMarker"
-		}
-		return []byte("<" + tag + ">" + markerEffect(xmlUnescape(string(s[2]))) + "</" + tag + ">")
-	})
+	for _, m := range []struct {
+		re  *regexp.Regexp
+		tag string
+	}{{markerRe, "Marker"}, {nextMarkRe, "NextMarker"}} {
+		body = m.re.ReplaceAllFunc(body, func(b []byte) []byte {
+			v := m.re.FindSubmatch(b)[1]
+			return []byte("<" + m.tag + ">" + markerEffect(xmlUnescape(string(v))) + "</" + m.tag + ">")
+		})
+	}
+	return body
 }

@@ -71,6 +71,12 @@ type Config struct {
 	// serving.path meter (SORTED for a sorted fixture).
 	ServingMode     string
 	FixtureIdentity string
+	// IndexLoad is how long opening the fixture took (footers read and the
+	// routing index built) and IndexEntries the routing entries it built,
+	// for index.load.latency and index.entries; a zero IndexLoad records
+	// neither.
+	IndexLoad    time.Duration
+	IndexEntries int
 	// Log receives the slow-request and shutdown lines.
 	Log io.Writer
 	// Protocols are the enabled listing routes (ProtocolS3, ProtocolGCS,
@@ -172,6 +178,7 @@ func New(cfg Config) (*Server, error) {
 	s.reg.SetGauge(metrics.ResponseBytesPeak, func() float64 { return float64(s.budget.Peak()) })
 	s.reg.SetGauge(metrics.ResponseActive, func() float64 { return float64(s.responses.Load()) })
 	s.reg.SetGauge(metrics.ProtocolRequestsActive, func() float64 { return float64(s.s3Active.Load()) }, "s3")
+	s.initStoreMeters()
 	s.newAzureRoute()
 	s.httpSrv = &http.Server{
 		Handler:           s,

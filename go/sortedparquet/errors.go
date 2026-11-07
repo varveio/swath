@@ -4,6 +4,8 @@
 package sortedparquet
 
 import (
+	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 )
@@ -85,9 +87,34 @@ type DisorderError struct {
 	Part     string
 	RowGroup int
 	// Row is the 0-based row within the row group whose key is at or
-	// below its predecessor's.
-	Row    int64
+	// below its predecessor's, -1 when the disorder is not one row's.
+	Row int64
+	// Key is that row's key, nil when Row is -1.
+	Key []byte
+	// Detail says what is out of order, in the replay server's words: for
+	// page bounds that do not ascend, "its keys must be in strictly
+	// ascending unsigned order, but the column index reports its pages
+	// ORDER" (DESCENDING or UNORDERED); for a row, "its keys must be in strictly ascending unsigned order,
+	// but row R (HEX) is at or below its predecessor", HEX the key's bytes
+	// in lower-case hex (the replay wire contract's fixture_disordered
+	// detail; TestDisorderReasonMatchesJava pins it).
 	Detail string
+}
+
+// pageDisorder returns the *DisorderError of a row group whose key page
+// bounds do not ascend: no one row is at fault (Row -1), and the detail
+// names the order as the replay server does ("DESCENDING" or
+// "UNORDERED").
+func pageDisorder(part string, group int, order string) *DisorderError {
+	return &DisorderError{Part: part, RowGroup: group, Row: -1,
+		Detail: "its keys must be in strictly ascending unsigned order, but the column index reports its pages " + order}
+}
+
+// rowDisorder returns the *DisorderError of a row whose key is at or below
+// its predecessor's.
+func rowDisorder(part string, group int, row int64, key []byte) *DisorderError {
+	return &DisorderError{Part: part, RowGroup: group, Row: row, Key: bytes.Clone(key),
+		Detail: fmt.Sprintf("its keys must be in strictly ascending unsigned order, but row %d (%s) is at or below its predecessor", row, hex.EncodeToString(key))}
 }
 
 func (e *DisorderError) Error() string {
