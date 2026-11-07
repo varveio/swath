@@ -336,6 +336,7 @@ the fixture's row count; content was not compared in these rows.
 | | | | zstd TSV (Java: a dataset, 3 writers; Go: one file) | 256 | 154 | **284** | **1.84** | 1.1 GB |
 | idc-open-data (no injected latency) | 56.3M | n4-highcpu-16 (6 vCPU, 16 GB) | sorted Parquet | 64 | 125 | 82 | 0.66 | 0.6 GB |
 | noaa-nbm-grib2-pds | 66.4M | n4-highcpu-32 (4 vCPU, 8 GB) | sorted Parquet | 64 | 159 | 105 | 0.66 | 0.5 GB |
+| | | | TSV (one file; no Java row) | 64 | – | 112 | – | 0.4 GB |
 | nara-1950-census | 13.5M | n4-highcpu-32 | sorted Parquet | 64 | 79 | 27 | 0.34 | 0.5 GB |
 | real-changesets | 13.9M | n4-highcpu-32 | sorted Parquet | 64 | 63 | 34 | 0.54 | 0.4 GB |
 | noaa-nws-fourcastnetgfs-pds | 4.1M | n4-highcpu-16 | sorted Parquet | 64 | 48 | 12 | 0.25 | 0.4 GB |
@@ -721,8 +722,10 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   gzip and zstd), the seven filters (Go RE2, not Java regular expressions), the stderr progress display and
   statistics, `-v`/`-q`/`--color`, bearer-token authentication, the report's `cost`, `efficiency`, `args_hash`,
   `session_ms` and `stop_source`, and `--part-rotation-max-rows` are covered by unit and command tests against
-  fakes; none has been run against a live bucket or at scale, and no consumer of the report (the cloud
-  importer included) has read the new fields.
+  fakes. None has been run against a live bucket. At scale only text output has run: the study harness's
+  zstd TSV row (143M keys, one file, through replay, [above](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) and the
+  plain TSV row on nbm; the filters, the progress display, bearer tokens and row rotation have not. No consumer
+  of the report (the cloud importer included) has read the new fields.
 - **Platforms.** Windows refuses journaled runs (no directory sync,
   [internals/durability.md](internals/durability.md)); Windows and macOS builds are compiled, not run. Power
   loss is untested.

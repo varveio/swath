@@ -318,7 +318,9 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
 - **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
   committed dataset is the complete result of a live listing, exactly once per key, not a point-in-time view.
 - **Memory:** `--row-budget` bounds rows in flight, not resident memory (see Sizing).
-- **Scale:** billions of keys, runs of hours and 256 or more workers are unmeasured ([measurements](measurements.md#known-gaps)).
+- **Scale:** 256 and 512 workers and lists of up to 150M keys were measured through a key-list fake at 50 ms
+  and the scale study's replay fixtures, not against a live bucket; billions of keys and runs of hours are
+  unmeasured ([measurements](measurements.md#known-gaps)).
 
 ## When it goes wrong
 
