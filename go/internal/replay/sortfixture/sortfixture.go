@@ -53,6 +53,7 @@ import (
 	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
@@ -188,6 +189,9 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 			return stats, fmt.Errorf("sort-fixture: %s: %w", file, err)
 		}
 	}
+	if err := faults.At("captured"); err != nil { // tests: the output replaced during the read
+		return stats, err
+	}
 	objects := c.objects
 	stats.CaptureRows = int64(len(objects) + len(c.others))
 	stats.Objects, stats.Skipped = int64(len(objects)), int64(len(c.others))
@@ -233,6 +237,11 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 // in the workspace, as the lister leaves it. An output another process
 // owns was refused (journal.ErrLocked) by Run without a change.
 func write(ctx context.Context, opts Options, lock *journal.Lock, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
+	// Prepare creates data/ and the parts directory: only in the directory
+	// still locked, which reading and sorting the capture may have outlasted.
+	if err := lock.Verify(); err != nil {
+		return nil, fmt.Errorf("sort-fixture: %w", err)
+	}
 	if err := dataset.Prepare(opts.Output, "", sch.ID, false); err != nil {
 		return nil, fmt.Errorf("sort-fixture: output: %w", err)
 	}
@@ -324,6 +333,11 @@ func countRows(ctx context.Context, files []string) (objects, others int64, err 
 		total += n
 		objects += o
 	}
+	// Each group's objects are at most its rows, so this holds; it is
+	// checked here because the counts size allocations.
+	if objects < 0 || objects > total {
+		return 0, 0, fmt.Errorf("%w: %d OBJECT rows counted among %d", ErrMalformedCapture, objects, total)
+	}
 	return objects, total - objects, nil
 }
 
@@ -349,6 +363,10 @@ func countPart(ctx context.Context, name string) (objects, rows int64, err error
 	if !ok {
 		return 0, rows, nil // readCapture refuses the part
 	}
+	if leaf.MaxRepetitionLevel > 0 {
+		// Values would not be rows: refuse before counting them.
+		return 0, 0, fmt.Errorf("%w: the row_type column is repeated", ErrMalformedCapture)
+	}
 	for i, rg := range file.Metadata().RowGroups {
 		switch rowTypes := rg.Columns[leaf.ColumnIndex].MetaData.Statistics; {
 		case rg.NumRows == 0:
@@ -359,6 +377,9 @@ func countPart(ctx context.Context, name string) (objects, rows int64, err error
 			n, err := countObjects(ctx, file.RowGroups()[i].ColumnChunks()[leaf.ColumnIndex])
 			if err != nil {
 				return 0, 0, fmt.Errorf("row group %d: count row types: %w", i, err)
+			}
+			if n > rg.NumRows {
+				return 0, 0, fmt.Errorf("%w: row group %d declares %d rows and holds %d OBJECT row types", ErrMalformedCapture, i, rg.NumRows, n)
 			}
 			objects += n
 		}

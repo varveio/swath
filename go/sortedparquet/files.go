@@ -38,6 +38,10 @@ type FileCache struct {
 	idle    list.List     // *CachedFile with an open handle and no lease, oldest first
 
 	peak, opens int
+
+	// waiting, if set (by tests), is called with c.mu held each time a
+	// read is about to wait: a barrier that tells a test a waiter exists.
+	waiting func()
 }
 
 // NewFileCache returns a cache holding at most max descriptors; max below
@@ -75,6 +79,9 @@ func (c *FileCache) notifyLocked() {
 // waitLocked waits, with c.mu released, for the cache to change or ctx to
 // end.
 func (c *FileCache) waitLocked(ctx context.Context) error {
+	if c.waiting != nil {
+		c.waiting()
+	}
 	changed := c.changed
 	c.mu.Unlock()
 	defer c.mu.Lock()
