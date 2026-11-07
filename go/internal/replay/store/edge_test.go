@@ -334,3 +334,31 @@ func entriesString(entries []DelimitedEntry) string {
 	}
 	return b.String()
 }
+
+// TestPageDisorderReasonMatchesJava reads a row group whose key pages
+// descend (the rows written in reverse over many pages): the range and
+// the delimiter path both fail with row_group_disorder at row -1, no key,
+// and the replay server's detail for a column index whose pages are not
+// ascending. Before, it was a generic ErrCorrupt with no reason.
+func TestPageDisorderReasonMatchesJava(t *testing.T) {
+	keys := make([]string, 300)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%04d", len(keys)-1-i)
+	}
+	s := openParts(t, Options{}, sortedparquettest.Part{Rows: objects(keys...), PageBytes: 512})
+	check := func(how string, err error) {
+		t.Helper()
+		var disorder *sortedparquet.DisorderError
+		if Refusal(err) != "row_group_disorder" || !errors.As(err, &disorder) {
+			t.Fatalf("%s: %v (reason %q)", how, err, Refusal(err))
+		}
+		want := "its keys must be in strictly ascending unsigned order, but the column index reports its pages DESCENDING"
+		if disorder.Row != -1 || disorder.Key != nil || disorder.RowGroup != 0 || disorder.Detail != want {
+			t.Fatalf("%s: row %d key %q group %d detail %q", how, disorder.Row, disorder.Key, disorder.RowGroup, disorder.Detail)
+		}
+	}
+	_, err := s.Rows(context.Background(), []byte("k0100"), true, nil, 1, Projection{})
+	check("rows", err)
+	_, _, err = s.DelimitedRollup(context.Background(), nil, true, nil, nil, []byte("/"), 10, Projection{}, true)
+	check("rollup", err)
+}

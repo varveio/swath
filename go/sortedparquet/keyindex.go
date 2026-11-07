@@ -93,6 +93,9 @@ func (p *part) keyIndex(ctx context.Context, physical int) (*groupIndex, error) 
 		return nil, fmt.Errorf("row group %d: read key offset index: %w", physical, err)
 	}
 	index, err := checkKeyIndex(columnIndex, offsets, p.footer.Metadata().RowGroups[physical].NumRows, p.bound)
+	if order, ok := err.(errPagesOutOfOrder); ok {
+		return nil, pageDisorder(p.name, physical, string(order))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("row group %d: %w", physical, err)
 	}
@@ -136,10 +139,20 @@ func checkKeyIndex(columns parquet.ColumnIndex, offsets parquet.OffsetIndex, row
 			// A raised truncated maximum may sort above the next page's
 			// exact one, so maxima are compared only when both are exact.
 			if bytes.Compare(before.lo, lo) > 0 || !before.hiMayBeTruncated && !page.hiMayBeTruncated && bytes.Compare(before.hi, hi) > 0 {
-				return nil, corrupt("key page %d bounds descend", i)
+				order := "UNORDERED"
+				if columns.IsDescending() {
+					order = "DESCENDING"
+				}
+				return nil, errPagesOutOfOrder(order)
 			}
 		}
 		index.pages[i] = page
 	}
 	return index, nil
 }
+
+// errPagesOutOfOrder is checkKeyIndex's report of page bounds that do not
+// ascend: the order the index declares, or UNORDERED.
+type errPagesOutOfOrder string
+
+func (e errPagesOutOfOrder) Error() string { return "key page bounds are " + string(e) }
